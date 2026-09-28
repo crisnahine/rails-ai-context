@@ -16,11 +16,32 @@ module RailsAiContext
       # No lockfile yet (fresh checkout, bare directory): fall back to the
       # Gemfile's own declaration so the app still gets Mongoid treatment
       # instead of misleading ActiveRecord answers.
-      gemfile = File.join(root, "Gemfile")
-      return false unless File.exist?(gemfile)
+      RailsAiContext::Introspectors::GemfileGems.names(root).include?("mongoid")
+    end
 
-      content = RailsAiContext::SafeFile.read(gemfile)
-      !!content&.match?(/^\s*gem\s+["']mongoid["']/)
+    # The development database config/mongoid.yml names, by `database:` or the
+    # path of its `uri:`; nil when the file is absent or computes it (ERB).
+    def mongoid_database(root)
+      source = RailsAiContext::SafeFile.read(File.join(root.to_s, "config", "mongoid.yml"))
+      return nil unless source
+
+      client = YAML.safe_load(source, aliases: true).dig("development", "clients", "default") || {}
+      name = client["database"] || client["uri"].to_s[%r{\Amongodb(?:\+srv)?://[^/]+/([^/?]+)}, 1]
+      name if name.is_a?(String) && !name.include?("<%")
+    rescue StandardError, Psych::Exception
+      nil
+    end
+
+    # The class config/application.rb declares under Rails::Application,
+    # e.g. "MyApp::Application": the constant `Rails.application` is.
+    def application_class(root)
+      source = RailsAiContext::SafeFile.read(File.join(root.to_s, "config", "application.rb"))
+      return nil unless source
+
+      Introspectors::DeclaredConstant.declarations(source)
+        .find { |entry| entry.superclass == "Rails::Application" }&.name
+    rescue StandardError, ScriptError
+      nil
     end
 
     # An API-only app has no view layer, and saying "no Stimulus controllers

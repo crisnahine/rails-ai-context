@@ -3,11 +3,10 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Introspectors::Listeners::ValidationsListener do
-  def parse_and_dispatch(source)
-    result     = Prism.parse(source)
-    listener   = described_class.new
-    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-    listener.results
+  # `validates :notes, presence: false` turns a validator off; it declares none.
+  it "reads a validator option set to false as no validator" do
+    expect(parse_and_dispatch("validates :notes, presence: false, allow_nil: true")).to eq([])
+    expect(parse_and_dispatch("validates :email, uniqueness: false, length: { maximum: 5 }").map { |r| r[:kind] }).to eq(%w[length])
   end
 
   it "detects validates with presence" do
@@ -75,5 +74,63 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ValidationsListener do
   it "includes confidence tag" do
     results = parse_and_dispatch("validates :email, presence: true")
     expect(results.first[:confidence]).to eq("[VERIFIED]")
+  end
+
+  it "reads an option off an enclosing with_options block" do
+    results = parse_and_dispatch(<<~RUBY)
+      with_options on: :create_and_create_standard_variant do
+        validates :enterprise_id, presence: true
+      end
+
+      validates :name, presence: true
+    RUBY
+
+    scoped, plain = results.partition { |r| r[:attributes] == [ "enterprise_id" ] }.map(&:first)
+    expect(scoped[:options]).to include(on: :create_and_create_standard_variant)
+    expect(plain[:options]).not_to include(:on)
+  end
+
+  it "reads an option off a with_options block that takes a parameter" do
+    results = parse_and_dispatch(<<~RUBY)
+      with_options on: :publish do |publishing|
+        publishing.validates :summary, presence: true
+      end
+    RUBY
+
+    expect(results.first[:options]).to include(on: :publish)
+  end
+
+  # The walk read nothing for `validates_with`, so the static tier dropped a
+  # validation the model has.
+  it "records validates_with with the validator it names" do
+    results = parse_and_dispatch("validates_with RecordValidator, on: :create")
+
+    expect(results.first).to include(kind: "validates_with", validator: "RecordValidator", attributes: [])
+    expect(results.first[:options]).to eq(on: :create)
+  end
+
+  # A gem's macro (validates_timeliness's `validates_date`) is a validation the
+  # model declares; it is listed as that macro, with its options.
+  it "records a plugin validates_ macro under its own name" do
+    results = parse_and_dispatch(<<~RUBY)
+      validates_date :date_of_birth,
+                     presence: true,
+                     if: ->(d) { d.approved? && d.id? }
+    RUBY
+
+    expect(results.first).to include(kind: "validates_date", attributes: [ "date_of_birth" ])
+    expect(results.first[:options]).to eq(presence: true, if: "->(d) { d.approved? && d.id? }")
+  end
+
+  # Rails' `validates` takes a trailing hash expression as its options
+  # (`extract_options!`): the attribute is the literal, the options are computed.
+  it "reads a trailing non-literal argument after a literal attribute as the options" do
+    results = RailsAiContext::Introspectors::SourceIntrospector.walk_source(
+      "class Post\n  validates :title, rules.merge(if: :published?)\nend\n", { validations: described_class }
+    )[:validations]
+
+    expect(results.map { |v| v.slice(:kind, :attributes, :computed_attributes, :options_source) }).to eq(
+      [ { kind: "validates", attributes: [ "title" ], options_source: "rules.merge(if: :published?)" } ]
+    )
   end
 end

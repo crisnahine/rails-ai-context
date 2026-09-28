@@ -3,12 +3,13 @@
 module RailsAiContext
   module Serializers
     # Generates GitHub Copilot instructions.
-    # In :compact mode (default), produces ≤500 lines with MCP tool references.
-    # In :full mode, delegates to MarkdownSerializer with Copilot header.
-    class CopilotSerializer
+    # In :compact mode (default), renders the shared compact rules under the
+    # `claude_max_lines` budget. In :full mode, delegates to MarkdownSerializer.
+    class CopilotSerializer < Base
       include TestCommandDetection
       include StackOverviewHelper
       include ToolGuideHelper
+      include CompactSerializerHelper
       include ContextModeDispatch
 
       private
@@ -17,92 +18,12 @@ module RailsAiContext
         FullCopilotSerializer
       end
 
+      def context_title
+        "Copilot Context"
+      end
+
       def render_compact
-        lines = []
-        lines << "# #{context[:app_name]} - Copilot Context"
-        lines << ""
-        lines << "Rails #{context[:rails_version]} | Ruby #{context[:ruby_version]}"
-        if (notice = SectionFacts.static_notice(context))
-          lines << notice
-        end
-        lines << ""
-
-        # Stack overview
-        lines << "## Stack"
-        if (db_line = SectionFacts.database_line(context))
-          lines << db_line
-        end
-        models = Payload.models(context)
-        if (models_line = SectionFacts.models_line(context))
-          lines << models_line
-        end
-
-        routes = Payload.section(context, :routes)
-        if routes
-          app_ctrls = RouteCoverage.app_controllers(routes)
-          lines << "- Routes: #{count_phrase(RouteCoverage.app_route_count(routes), "app route")} across " \
-                   "#{count_phrase(app_ctrls.size, "controller")} " \
-                   "(#{routes[:total_routes]} total incl. framework#{RouteCoverage.suffix(routes)})"
-        end
-
-        lines.concat(full_preset_stack_lines)
-
-        # Gems by category
-        notable = Payload.notable_gems(context)
-        if notable.any?
-          notable.group_by { |g| g[:category]&.to_s || "other" }.each do |cat, list|
-            lines << "- #{cat}: #{list.map { |g| g[:name] }.join(', ')}"
-          end
-        end
-
-        lines << ""
-
-        # Models - Copilot gets more detail (up to 25 with associations)
-        if models.any?
-          lines << "## Models (#{models.size})"
-          models.keys.sort.first(25).each do |name|
-            data = models[name]
-            if (unread = SectionFacts.unread_row("- **#{name}**", data))
-              lines << unread
-              next
-            end
-
-            assocs = SectionFacts.associations_list(data).join(", ")
-            line = "- **#{name}**"
-            line += " - #{assocs}" unless assocs.empty?
-            lines << line
-          end
-          lines << "- _...#{models.size - 25} more_" if models.size > 25
-          lines << ""
-        end
-
-        # Architecture
-        if Payload.section(context, :conventions)
-          arch = Payload.architecture(context)
-          patterns = Payload.patterns(context)
-          if arch.any? || patterns.any?
-            arch_labels = arch_labels_hash
-            pattern_labels = pattern_labels_hash
-            lines << "## Architecture"
-            arch.each { |p| lines << "- #{arch_labels[p] || p}" }
-            patterns.first(10).each { |p| lines << "- #{pattern_labels[p] || p}" }
-            lines << ""
-          end
-        end
-
-        # Tools reference (respects tool_mode)
-        lines.concat(render_tools_guide)
-
-        # Conventions
-        lines << "## Conventions"
-        lines << "- Follow existing patterns and naming conventions"
-        lines << "- Use the introspection tools to check schema before writing migrations"
-        lines << "- Run `#{detect_test_command}` after changes"
-        lines << ""
-
-        lines.concat(SectionFacts.warnings(context))
-
-        lines.join("\n")
+        render_compact_rules
       end
     end
 
@@ -124,7 +45,7 @@ module RailsAiContext
       def footer
         <<~MD
           ---
-          _Auto-generated. Run `rails ai:context` to regenerate._
+          _Auto-generated. Run `#{RailsAiContext::InstallMode.command(:context)}` to regenerate._
         MD
       end
     end

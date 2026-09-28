@@ -31,7 +31,7 @@ lib/rails_ai_context/
 ## Adding a New Introspector
 
 1. Create `lib/rails_ai_context/introspectors/your_introspector.rb` (auto-loaded by Zeitwerk)
-2. Implement `#initialize(app)` and `#call` → returns a Hash (never raises)
+2. Subclass `Introspectors::Base` (it holds `app` and `root`) and implement `#call` → returns a Hash. Let it raise: the loop in `Introspector#call` records a failed section as `{ error: msg }` and warns
 3. Register it in `lib/rails_ai_context/introspector.rb` (the `INTROSPECTOR_MAP`)
 4. `extend StaticTier` and declare one: `static_tier :files_only` if `#call` runs unchanged with nothing booted, `:runtime_only` if it needs live reflection, or `:alternate_source` plus a `static_call` reading elsewhere. A mapped introspector that declares nothing fails the suite
 5. Add the key to the appropriate preset(s) in `Configuration::PRESETS` (`:full` is the default, `:standard` for core-only)
@@ -70,7 +70,7 @@ The `ToolRunner` (`lib/rails_ai_context/cli/tool_runner.rb`) handles CLI executi
 - Follow `rubocop-rails-omakase` style (run `bundle exec rubocop`)
 - Target Ruby 3.1 (the gem's floor). Ruby 3.2+ features (`Data.define`, `Regexp` `timeout:`, etc.) need a runtime-guarded fallback so 3.1 keeps working
 - Support Rails 7.0 through 8.1. Guard Rails 7.1+ APIs with `respond_to?`/`defined?` so introspectors degrade cleanly on 7.0
-- Every introspector must return a Hash and never raise - wrap errors in `{ error: msg }`
+- Every introspector returns a Hash. Let a failure raise: the loop in `Introspector#call` records it as `{ error: msg }` and warns, so no introspector wraps its own errors
 - MCP tools return `MCP::Tool::Response` objects
 - All tools must be prefixed with `rails_` and annotated as read-only
 

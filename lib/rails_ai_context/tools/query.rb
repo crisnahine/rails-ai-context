@@ -328,16 +328,22 @@ module RailsAiContext
 
         limited_sql = apply_row_limit(sql, row_limit)
 
+        run_guarded(conn, adapter, limited_sql, timeout_seconds)
+      end
+
+      # EXPLAIN goes through the adapter wrappers too (READ ONLY, timeout): EXPLAIN ANALYZE runs
+      # the plan, so `explain: true` must not hold a connection past query_timeout.
+      private_class_method def self.run_guarded(conn, adapter, sql, timeout)
         case adapter
         when /postgresql/
-          execute_postgresql(conn, limited_sql, timeout_seconds)
+          execute_postgresql(conn, sql, timeout)
         when MYSQL_ADAPTER
-          execute_mysql(conn, limited_sql, timeout_seconds)
+          execute_mysql(conn, sql, timeout)
         when /sqlite/
-          execute_sqlite(conn, limited_sql, timeout_seconds)
+          execute_sqlite(conn, sql, timeout)
         else
           # Unknown adapter -- rely on Layer 1 regex validation only
-          conn.select_all(limited_sql)
+          conn.select_all(sql)
         end
       end
 
@@ -426,18 +432,7 @@ module RailsAiContext
           [ "EXPLAIN #{sql}", :parse_generic_explain ]
         end
 
-        # Route through the adapter-specific safety wrappers so EXPLAIN inherits
-        # the same READ ONLY transaction + statement_timeout / MAX_EXECUTION_TIME
-        # the regular query path gets. Load-bearing because PostgreSQL
-        # `EXPLAIN (FORMAT JSON, ANALYZE) ...` actually executes the plan - an
-        # attacker reaches this via `explain: true` to hold a DB connection
-        # indefinitely and bypass the query_timeout guard.
-        result = case adapter
-        when /postgresql/  then execute_postgresql(conn, explain_sql, timeout)
-        when MYSQL_ADAPTER then execute_mysql(conn, explain_sql, timeout)
-        when /sqlite/      then execute_sqlite(conn, explain_sql, timeout)
-        else                    conn.select_all(explain_sql)
-        end
+        result = run_guarded(conn, adapter, explain_sql, timeout)
         parsed = send(parser, result)
 
         lines = [ "# EXPLAIN Analysis", "" ]
@@ -625,7 +620,6 @@ module RailsAiContext
           }
         }
 
-        # Return a struct-like object with columns and rows
         ResultProxy.new(columns, redacted_rows)
       end
 
@@ -707,15 +701,8 @@ module RailsAiContext
         message.lines.first&.strip || message.strip
       end
 
-      # Lightweight proxy that quacks like ActiveRecord::Result for redacted output
-      class ResultProxy
-        attr_reader :columns, :rows
-
-        def initialize(columns, rows)
-          @columns = columns
-          @rows = rows
-        end
-      end
+      # Quacks like ActiveRecord::Result for redacted output.
+      ResultProxy = Struct.new(:columns, :rows)
     end
   end
 end

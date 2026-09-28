@@ -4,15 +4,9 @@ module RailsAiContext
   module Introspectors
     # Discovers API layer setup: api_only mode, serializers, GraphQL,
     # versioning patterns, rate limiting.
-    class ApiIntrospector
+    class ApiIntrospector < Base
       extend StaticTier
       static_tier :alternate_source
-
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
 
       # Only the mode differs between the tiers: `config.api_only` is a
       # runtime read, and the assignment it comes from is in
@@ -25,8 +19,13 @@ module RailsAiContext
 
       def call
         { api_only: app.config.api_only }.merge(detections)
-      rescue => e
-        { error: e.message }
+      end
+
+      # Whether the app configures CORS, as the cors_config entry decides it:
+      # a commented-out initializer or a CORS-named file with no allow block does not.
+      def cors_configured?
+        config = detect_cors_config
+        !config.nil? && !config[:commented_out]
       end
 
       private
@@ -36,6 +35,7 @@ module RailsAiContext
           serializers: detect_serializers,
           graphql: detect_graphql,
           api_versioning: detect_versioning,
+          api_versioning_dirs: version_dirs,
           rate_limiting: detect_rate_limiting,
           openapi_spec: detect_openapi_specs,
           cors_config: detect_cors_config,
@@ -43,10 +43,6 @@ module RailsAiContext
           graphql_details: extract_graphql_details,
           pagination: detect_pagination
         }
-      end
-
-      def root
-        app.root.to_s
       end
 
       def detect_serializers
@@ -74,35 +70,134 @@ module RailsAiContext
         result
       end
 
-      # Any `serializers` directory under app/ other than app/serializers
-      # itself: `app/services/serializers/...` is the shape this missed.
+      # Any `serializers` directory in any app tree the app has, other than
+      # the `app/serializers` the classes above already came from.
       def other_serializer_dirs
-        Dir.glob(File.join(root, "app", "**", "serializers"))
+        PathResolver.dirs_for(root, "app")
+          .flat_map { |tree| Dir.glob(File.join(tree, "**", "serializers")) }
           .select { |path| File.directory?(path) }
           .map { |path| path.sub("#{root}/", "") }
-          .reject { |relative| relative == "app/serializers" }
+          .reject { |relative| PathResolver.dirs_for(root, "app/serializers").include?(File.join(root, relative)) }
+          .uniq
           .sort
-          .map { |relative| { path: relative, files: Dir.glob(File.join(root, relative, "**", "*.rb")).size } }
+          .map { |relative| { path: relative, files: serializer_files(relative).size } }
           .reject { |entry| entry[:files].zero? }
       rescue StandardError => e
         RailsAiContext.debug_fail(e, [], label: "other_serializer_dirs")
+      end
+
+      # A directory named serializers also holds ActiveRecord attribute coders,
+      # which serialize one column rather than a response.
+      CODER_METHODS = %w[dump load].freeze
+
+      def serializer_files(relative)
+        Dir.glob(File.join(root, relative, "**", "*.rb")).reject { |path| attribute_coder?(path) }
+      end
+
+      def attribute_coder?(path)
+        names = SourceIntrospector.walk(path, {
+          methods: -> { Listeners::MethodsListener.new }
+        })[:methods].map { |method| method[:name] }
+        (CODER_METHODS - names).empty?
+      rescue => e
+        RailsAiContext.debug_fail(e, false, label: "attribute_coder?")
       end
 
       def detect_graphql
         graphql_dir = File.join(root, "app/graphql")
         return nil unless Dir.exist?(graphql_dir)
 
-        types = Dir.glob(File.join(graphql_dir, "types/**/*.rb")).size
-        mutations = Dir.glob(File.join(graphql_dir, "mutations/**/*.rb")).size
-        queries = Dir.glob(File.join(graphql_dir, "queries/**/*.rb")).size
+        result = { types: concrete_graphql_files(graphql_dir, "types"),
+                   mutations: concrete_graphql_files(graphql_dir, "mutations") }
+        result[:queries] = concrete_graphql_files(graphql_dir, "queries") if Dir.exist?(File.join(graphql_dir, "queries"))
+        query_type = Dir.glob(File.join(graphql_dir, "**", "query_type.rb")).min
+        query_root = query_type && query_root_fields(query_type)
+        result[:query_root] = query_root if query_root
+        result
+      end
 
-        { types: types, mutations: mutations, queries: queries }
+      # A class that names itself in the schema is part of it; any other inherited class
+      # named like a base, or subclassing graphql-ruby itself, is the app's base.
+      def concrete_graphql_files(graphql_dir, kind)
+        declared = Dir.glob(File.join(graphql_dir, kind, "**", "*.rb")).to_h do |path|
+          declarations = DeclaredConstant.declarations(RailsAiContext::SafeFile.read(path).to_s)
+          [ path, DeclaredConstant.declaration_for(declarations, File.basename(path, ".rb").camelize) ]
+        end
+        inherited = declared.values.compact.filter_map { |d| d.superclass&.split("::")&.last }.uniq
+
+        declared.count { |path, declaration| declaration.nil? || !base_class?(path, declaration, inherited) }
+      end
+
+      # What a class puts in the schema. Only `graphql_name` says the class is
+      # itself a member: a base declares shared fields and arguments too.
+      SCHEMA_MACROS = %i[graphql_name field value argument].freeze
+
+      def base_class?(path, declaration, inherited)
+        segment = declaration.name.split("::").last
+        macros = schema_macros(path, segment)
+        return false if macros.include?(:graphql_name)
+
+        named_like_a_base = SuperclassChain.abstract_base_name?(segment)
+        graphql_base = declaration.superclass.to_s.start_with?("GraphQL::")
+        return named_like_a_base || graphql_base if inherited.include?(segment)
+
+        # Nothing inherits it: a base is one that puts nothing in the schema.
+        named_like_a_base && graphql_base && macros.empty?
+      end
+
+      # Read off the one class, not the file: a mutation base declares enums
+      # of its own beside it, and their `graphql_name` is not the base's.
+      def schema_macros(path, segment)
+        calls = class_body_calls(AstCache.parse(path)&.value, segment)
+        calls.map(&:name) & SCHEMA_MACROS
+      rescue => e
+        RailsAiContext.debug_fail(e, [], label: "schema_macros")
+      end
+
+      # An app with no queries/ directory declares them on the query root, and
+      # a macro there declares fields no static reader can count.
+      def query_root_fields(path)
+        calls = class_body_calls(AstCache.parse(path)&.value)
+        fields = calls.count { |call| call.name == :field }
+
+        entry = { file: path.sub("#{root}/", ""), fields: fields }
+        entry[:macro_declared] = true if fields.zero? && calls.any? { |call| names_a_field?(call) }
+        entry
+      rescue => e
+        RailsAiContext.debug_fail(e, nil, label: "query_root_fields")
+      end
+
+      # The class body's own calls, where `field` and app macros that declare several live.
+      # `name` picks the class out of a multi-class file; without it, the first class.
+      def class_body_calls(node, name = nil)
+        return [] unless node.is_a?(Prism::Node)
+
+        klass = find_class_node(node, name) or return []
+        Array(klass.body&.body).select { |child| child.is_a?(Prism::CallNode) && child.receiver.nil? }
+      end
+
+      def find_class_node(node, name = nil)
+        return node if node.is_a?(Prism::ClassNode) && (name.nil? || node.constant_path.slice.split("::").last == name)
+
+        node.compact_child_nodes.filter_map { |child| find_class_node(child, name) }.first
+      end
+
+      # A macro that takes a field name, `collection_and_object_by_id_fields
+      # :budget` and the like, rather than `include` or `extend`.
+      def names_a_field?(call)
+        Array(call.arguments&.arguments).first.is_a?(Prism::SymbolNode)
       end
 
       def detect_versioning
-        RailsAiContext::PathResolver.controller_dirs(root).flat_map do |controllers_dir|
-          Dir.glob(File.join(controllers_dir, "api/v*/")).map { |path| File.basename(path) }
-        end.uniq.sort
+        version_dirs.map { |path| File.basename(path) }.uniq.sort
+      end
+
+      # A Grape app keeps its versions outside app/controllers (lib/api/v3, app/api/v1).
+      def version_dirs
+        dirs = RailsAiContext::PathResolver.controller_dirs(root)
+          .flat_map { |controllers_dir| Dir.glob(File.join(controllers_dir, "api/v*/")) }
+        dirs += Dir.glob(File.join(root, "{app,lib}/api/v*/"))
+        dirs.map { |path| path.chomp("/").sub("#{root}/", "") }.uniq.sort
       end
 
       def detect_openapi_specs
@@ -127,24 +222,44 @@ module RailsAiContext
       # and an environment branch read as though all of its arms were live at
       # once.
       def detect_cors_config
-        cors_path = File.join(root, "config/initializers/cors.rb")
-        return nil unless File.exist?(cors_path)
+        cors_path = PathResolver.initializer_files(root, "cors").first
+        return nil unless cors_path
 
         source = RailsAiContext::SafeFile.read(cors_path)
-        node = source && AstCache.parse_string(source)&.value
+        parsed = source && AstCache.parse_string(source)
+        node = parsed&.value
         return nil unless node
 
         allows = []
-        collect_allow_blocks(node, allows)
+        inserts = []
+        collect_allow_blocks(node, allows, inserts)
         origins = allows.flat_map { |allow| allow[:origins].map { |o| o[:value] } }.uniq
-        return nil if origins.empty?
 
-        { file: "config/initializers/cors.rb", origins: origins, allows: allows }
+        # The name match is a CORS config only when it configures CORS: a block,
+        # an inserted middleware, or either of those left commented out.
+        commented_out = allows.empty? && inserts.empty? && node.statements.body.empty? &&
+                        commented_cors?(parsed.comments)
+        return nil if allows.empty? && inserts.empty? && !commented_out
+
+        entry = { file: cors_path.sub("#{root}/", ""), origins: origins, allows: allows }
+        entry[:inserts] = inserts.uniq if inserts.any?
+        entry[:commented_out] = true if commented_out
+        entry
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "detect_cors_config")
       end
 
-      def collect_allow_blocks(node, found)
+      # Vocabulary regex over comment text: the generated file arrives fully
+      # commented out, and so does one whose allow block is switched off.
+      def commented_cors?(comments)
+        comments.any? { |comment| comment.slice.match?(/Rack::Cors|allow do/) }
+      end
+
+      # An app can do CORS from this file with a middleware of its own rather
+      # than a rack-cors `allow` block.
+      MIDDLEWARE_INSERTS = %i[use insert insert_before insert_after unshift swap].freeze
+
+      def collect_allow_blocks(node, found, inserts)
         return unless node.is_a?(Prism::Node)
 
         if node.is_a?(Prism::CallNode) && node.name == :allow && node.block
@@ -154,30 +269,45 @@ module RailsAiContext
           return
         end
 
-        node.compact_child_nodes.each { |child| collect_allow_blocks(child, found) }
+        inserts << inserted_middleware(node) if middleware_insert?(node)
+        node.compact_child_nodes.each { |child| collect_allow_blocks(child, found, inserts) }
+      end
+
+      def middleware_insert?(node)
+        node.is_a?(Prism::CallNode) && MIDDLEWARE_INSERTS.include?(node.name) &&
+          node.receiver.is_a?(Prism::CallNode) && node.receiver.name == :middleware &&
+          inserted_middleware(node)
+      end
+
+      # The stack position comes first and the middleware last, in every verb
+      # that takes both.
+      def inserted_middleware(node)
+        constant = Array(node.arguments&.arguments).select { |arg| arg.is_a?(Prism::ConstantReadNode) || arg.is_a?(Prism::ConstantPathNode) }.last
+        constant && one_line_source(constant)
       end
 
       def collect_cors_calls(node, entry, condition)
         return unless node.is_a?(Prism::Node)
 
         case node
+        # An `else` is the branch none of the conditions picked, however many
+        # `elsif`s came before it; an `elsif` names its own condition.
         when Prism::IfNode
-          predicate = one_line_source(node.predicate)
-          collect_cors_calls(node.statements, entry, predicate)
-          collect_cors_calls(node.subsequent, entry, "else #{predicate}")
+          collect_cors_calls(node.statements, entry, one_line_source(node.predicate))
+          collect_cors_calls(node.subsequent, entry, :otherwise)
           return
         when Prism::UnlessNode
-          predicate = "not #{one_line_source(node.predicate)}"
-          collect_cors_calls(node.statements, entry, predicate)
-          collect_cors_calls(node.else_clause, entry, "else #{predicate}")
+          collect_cors_calls(node.statements, entry, "not #{one_line_source(node.predicate)}")
+          collect_cors_calls(node.else_clause, entry, :otherwise)
           return
         when Prism::CallNode
           if node.receiver.nil? && %i[origins resource].include?(node.name)
-            values = Array(node.arguments&.arguments).flat_map { |arg| literal_strings(arg) }
+            args = Array(node.arguments&.arguments)
             if node.name == :origins
-              values.each { |value| entry[:origins] << { value: value, condition: condition }.compact }
+              origin_entries(node, args).each { |origin| entry[:origins] << with_condition(origin, condition) }
             else
-              entry[:resources] << values.first if values.first
+              value = args.flat_map { |arg| literal_values(arg) }.first || one_line_source(args.first)
+              entry[:resources] << value if value
             end
           end
         end
@@ -185,17 +315,49 @@ module RailsAiContext
         node.compact_child_nodes.each { |child| collect_cors_calls(child, entry, condition) }
       end
 
-      def literal_strings(node)
+      def with_condition(origin, condition)
+        return origin.merge(otherwise: true) if condition == :otherwise
+
+        origin.merge({ condition: condition }.compact)
+      end
+
+      # An origin list the file computes - a block rack-cors calls per request,
+      # or an expression read at boot - is still a configured list.
+      def origin_entries(node, args)
+        if node.block
+          return [ { value: "a block", computed: true,
+                     echoes_request_origin: echoes_request_origin?(node.block) }.compact ]
+        end
+
+        args.flat_map do |arg|
+          values = literal_values(arg)
+          values.any? ? values.map { |value| { value: value } } : [ { value: one_line_source(arg), computed: true } ]
+        end
+      end
+
+      # `origins { |source, _env| source }` allows every origin.
+      def echoes_request_origin?(block)
+        return false unless block.is_a?(Prism::BlockNode)
+
+        first_param = block.parameters&.parameters&.requireds&.first
+        return false unless first_param.respond_to?(:name)
+
+        # The whole body, not its last line: a block that filters first and
+        # echoes second allows the origins it let through, not every origin.
+        body = Array(block.body&.body)
+        body.size == 1 && body.first.is_a?(Prism::LocalVariableReadNode) && body.first.name == first_param.name
+      end
+
+      def literal_values(node)
         case node
-        when Prism::StringNode then [ node.unescaped ]
-        when Prism::SymbolNode then [ node.value.to_s ]
-        when Prism::ArrayNode  then node.elements.flat_map { |element| literal_strings(element) }
+        when Prism::StringNode, Prism::SymbolNode then [ node.unescaped ]
+        when Prism::ArrayNode then node.elements.flat_map { |element| literal_values(element) }
         else []
         end
       end
 
       def one_line_source(node)
-        node ? node.slice.gsub(/\s+/, " ").strip : nil
+        node ? NodeSource.text(node).gsub(/\s+/, " ").strip : nil
       end
 
       def detect_api_client_generation
@@ -238,8 +400,8 @@ module RailsAiContext
 
       def detect_rate_limiting
         # Rack::Attack
-        init_path = File.join(root, "config/initializers/rack_attack.rb")
-        return { rack_attack: true } if File.exist?(init_path)
+        init_path = PathResolver.initializer_files(root, "rack_attack").first
+        return { rack_attack: true, file: init_path.sub("#{root}/", "") } if init_path
 
         # Rails 8 rate limiting - use AST to detect rate_limit macro calls
         SourceScan.each(root, kind: "app/controllers").each do |record|

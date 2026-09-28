@@ -32,7 +32,7 @@ RSpec.describe "the ai:inspect route count" do
 
   it "qualifies the total the way the generated context files do" do
     expect(invoke_rake_task("ai:inspect"))
-      .to include("Routes: 2 app routes across 1 controller (31 total incl. framework)")
+      .to include("Routes: 2 app routes across 1 routed controller (31 total incl. framework)")
   end
 
   # The summary line states both versions at once. Answering one with a

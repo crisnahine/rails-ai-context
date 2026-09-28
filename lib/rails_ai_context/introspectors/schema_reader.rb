@@ -39,10 +39,11 @@ module RailsAiContext
           end
         end
 
-        migrate_dir = File.join(root, "db", "migrate")
-        if Dir.exist?(migrate_dir) && Dir.glob(File.join(migrate_dir, "*.rb")).any?
+        migrate_dirs = MigrationReplay.migration_dirs(root)
+        if MigrationReplay.migration_files(migrate_dirs).any?
           pk_type = SchemaConventions.implicit_pk_type(root, schema_rb)
-          return from_tables(MigrationReplay.tables(migrate_dir, pk_type: pk_type), source: :migrations, path: migrate_dir)
+          return from_tables(MigrationReplay.tables(migrate_dirs, pk_type: pk_type, root: root),
+                             source: :migrations, path: migrate_dirs.first)
         end
 
         from_tables({}, source: :none, path: nil)
@@ -74,7 +75,8 @@ module RailsAiContext
         parse[:tables]
       end
 
-      # @return [Array<Hash>] { from:, to: } per declared foreign key
+      # @return [Array<Hash>] { from:, to:, column:, primary_key: } per declared
+      #   foreign key, whichever source the schema was read from
       def foreign_keys
         parse[:foreign_keys]
       end
@@ -115,7 +117,11 @@ module RailsAiContext
         @source = source
         @parse = {
           tables: tables,
-          foreign_keys: tables.flat_map { |_name, t| t[:foreign_keys] || [] },
+          # structure.sql and the replay keep from_table/to_table on the table;
+          # every reader answers the schema.rb shape, so no consumer checks both.
+          foreign_keys: tables.flat_map { |_name, t| t[:foreign_keys] || [] }.map do |fk|
+            { from: fk[:from_table], to: fk[:to_table], column: fk[:column], primary_key: fk[:primary_key] }.compact
+          end,
           enums: [],
           check_constraints: []
         }

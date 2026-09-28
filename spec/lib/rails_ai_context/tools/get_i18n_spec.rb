@@ -27,6 +27,31 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
   end
 
   describe ".call" do
+    it "says only that the page is past the end, not that there are no locale files" do
+      text = described_class.call(offset: 9999).content.first[:text]
+
+      expect(text).to include("_No items at offset 9999. Total: 4._")
+      expect(text).not_to include("No locale files found")
+    end
+
+    # A heading with nothing under it claims a list the page does not hold.
+    it "leaves out the file-list heading on a page past the end" do
+      text = described_class.call(offset: 9999).content.first[:text]
+
+      expect(text).not_to include("## Locale Files")
+    end
+
+    it "keeps the heading when the page holds files" do
+      expect(described_class.call.content.first[:text]).to include("## Locale Files")
+    end
+
+    it "still says so when the app really has no locale files" do
+      allow(described_class).to receive(:cached_context)
+        .and_return({ i18n: i18n_data.merge(locale_files: [], total_locale_files: 0) })
+
+      expect(described_class.call.content.first[:text]).to include("_No locale files found under config/locales/._")
+    end
+
     it "renders the overview header facts" do
       text = described_class.call.content.first[:text]
       expect(text).to include("# I18n")
@@ -34,6 +59,15 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
       expect(text).to include("**Backend:** I18n::Backend::Simple")
       expect(text).to include("**Available locales:** en, fr (2)")
       expect(text).to include("**Locale files:** 4")
+    end
+
+    it "says the count leaves out in-repo engine locale files" do
+      allow(described_class).to receive(:cached_context)
+        .and_return({ i18n: i18n_data.merge(in_repo_locale_files: 4025, in_repo_locale_dirs: 25) })
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("**Locale files:** 4 (4025 more under 25 in-repo engine locale dirs, not read)")
     end
 
     # Without a booted app the list is read from config/locales unless the app
@@ -159,6 +193,16 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
 
         expect(text).to include("devise.zh-cn.yml")
         expect(text).not_to include("No locale files found")
+      end
+
+      # `en-GB` is not `en`, and a substring hit rendered en's files under the
+      # asked-for locale's heading.
+      it "does not answer a locale it does not have with another one's files" do
+        text = described_class.call(locale: "en-GB").content.first[:text]
+
+        expect(text).to include("Locale 'en-GB' not found.")
+        expect(text).to include("Did you mean 'en'?")
+        expect(text).not_to include("100 keys")
       end
 
       it "returns not-found with suggestions for an unknown locale" do

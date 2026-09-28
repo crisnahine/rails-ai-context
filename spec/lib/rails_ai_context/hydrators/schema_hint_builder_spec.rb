@@ -64,6 +64,22 @@ RSpec.describe RailsAiContext::Hydrators::SchemaHintBuilder do
       expect(hint.confidence).to eq("[VERIFIED]")
     end
 
+    it "renders a composite key as its names, and an array-shaped one as the name" do
+      context[:schema][:tables]["posts"][:primary_key] = %w[tag_id account_id]
+      context[:schema][:tables]["users"][:primary_key] = [ "id" ]
+
+      expect(described_class.build("Post", context: context).primary_key).to eq("tag_id, account_id")
+      expect(described_class.build("User", context: context).primary_key).to eq("id")
+    end
+
+    it "keeps a column's array flag, and the hint prints it" do
+      context[:schema][:tables]["posts"][:columns] << { name: "tags", type: "string", array: true }
+
+      hint = described_class.build("Post", context: context)
+      expect(hint.columns.last).to eq({ name: "tags", type: "string", array: true })
+      expect(RailsAiContext::Hydrators::HydrationFormatter.format_hint(hint)).to include("`tags` string[]")
+    end
+
     it "returns nil for unknown model" do
       expect(described_class.build("Nonexistent", context: context)).to be_nil
     end

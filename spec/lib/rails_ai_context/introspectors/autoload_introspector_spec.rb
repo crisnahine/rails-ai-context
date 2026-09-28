@@ -122,6 +122,24 @@ RSpec.describe RailsAiContext::Introspectors::AutoloadIntrospector do
       end
     end
 
+    # .ai-context.json is committed: a directory no portable form names is
+    # left out, and so is this gem's own, which is not the app's.
+    context "when an autoloader roots this gem's own directory or one anywhere else" do
+      let(:gem_dir) { File.join(Gem.path.first, "gems", "doorkeeper-5.9.5", "app", "controllers") }
+      let(:own_dir) { RailsAiContext::Engine.root.join("app", "controllers").to_s }
+      let(:loader) { double("Zeitwerk::Loader", tag: "rails.once", dirs: [ own_dir, "/opt/elsewhere/app/controllers", gem_dir ]) }
+
+      before do
+        allow(Rails).to receive(:autoloaders).and_return(double("autoloaders", main: loader, once: loader))
+      end
+
+      it "keeps only the directories it can name portably" do
+        once = result[:autoloaders].find { |l| l[:name] == "once" }
+
+        expect(once[:root_dirs]).to eq([ "doorkeeper-5.9.5/app/controllers" ])
+      end
+    end
+
     # `config.autoload_lib` plus an engine leaves lib in the array twice.
     context "when Rails lists a path once per contributing railtie" do
       let(:config) do

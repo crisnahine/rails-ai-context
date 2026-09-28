@@ -80,7 +80,7 @@ module RailsAiContext
           # One decision for both fields, or a reader pattern-matching the
           # marker finds it on one and the datum on the other.
           redacted = RailsAiContext::Redaction.redact_assignment(
-            path, value: value, source: value_node&.slice
+            path, value: value, source: value_node && NodeSource.text(value_node)
           )
 
           @results << {
@@ -96,7 +96,7 @@ module RailsAiContext
         def condition_text(node)
           return nil unless node
 
-          node.slice.gsub(/\s+/, " ").strip
+          NodeSource.text(node).gsub(/\s+/, " ").strip
         end
 
         # A bare `config.jwt` reference, with or without a block. Enough to tell

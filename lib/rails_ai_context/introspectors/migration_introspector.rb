@@ -4,15 +4,9 @@ module RailsAiContext
   module Introspectors
     # Discovers migration files, pending migrations, and recent migration history.
     # Works without a database connection by parsing db/migrate/ filenames.
-    class MigrationIntrospector
+    class MigrationIntrospector < Base
       extend StaticTier
       static_tier :files_only
-
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
 
       # @return [Hash] migration info including recent, pending, and stats
       def call
@@ -27,15 +21,9 @@ module RailsAiContext
         pending = pending_migrations
         info[:pending] = pending if pending
         info
-      rescue => e
-        { error: e.message }
       end
 
       private
-
-      def root
-        app.root.to_s
-      end
 
       def migrate_dir
         File.join(root, "db/migrate")

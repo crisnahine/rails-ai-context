@@ -23,6 +23,16 @@ module RailsAiContext
         "MetaTags" => %w[set_meta_tags display_meta_tags]
       }.freeze
 
+      # Only the libraries whose gem is not named after them in lowercase.
+      FRAMEWORK_GEMS = {
+        "Turbo" => "turbo-rails",
+        "WillPaginate" => "will_paginate",
+        "SimpleForm" => "simple_form",
+        "InlineSvg" => "inline_svg",
+        "MetaTags" => "meta-tags"
+      }.freeze
+      private_constant :FRAMEWORK_GEMS
+
       input_schema(
         properties: {
           helper: {
@@ -50,6 +60,9 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(helper: nil, detail: "standard", offset: 0, limit: nil, server_context: nil)
+        blank = blank_name_response("helper", helper)
+        return blank if blank
+
         root = rails_app.root.to_s
         helper_dirs = PathResolver.dirs_for(root, "app/helpers")
         max_size = RailsAiContext.configuration.max_file_size
@@ -93,24 +106,26 @@ module RailsAiContext
       # app/helpers/concerns is its own autoload root (railties globs
       # "{*,*/concerns}"), so concerns/formattable.rb defines Formattable,
       # not Concerns::Formattable.
+      # The constant the file declares wins over the path, as in a plugin's namespaced helper.rb.
       private_class_method def self.module_name_for(file_path, helper_dirs)
-        relative_under(file_path, helper_dirs).delete_prefix("concerns/").delete_suffix(".rb").camelize
+        path_name = relative_under(file_path, helper_dirs).delete_prefix("concerns/").delete_suffix(".rb").camelize
+        Introspectors::DeclaredConstant.named(RailsAiContext::SafeFile.read(file_path), path_name)
       end
 
       private_class_method def self.show_helper(name, helper_files, helper_dirs, root, max_size, detail)
         # Find by module name (with or without namespace) or file name.
         # Exact relative-path matches win before basename fallbacks so a
         # top-level DashboardHelper isn't shadowed by admin/dashboard_helper.
+        # The app's acronyms decide the path, and this process has none of
+        # them, so paths are compared the way DeclaredConstant compares them.
         underscore = name.underscore.delete_suffix("_helper")
-        matches = helper_files.select do |f|
-          rel = relative_under(f, helper_dirs).delete_suffix(".rb")
-          rel == name.underscore || rel == "#{underscore}_helper"
-        end
+        names = [ name, "#{underscore}_helper" ]
+        on_path = ->(path) { names.any? { |n| Introspectors::DeclaredConstant.path_for?(path, n) } }
+        matches = helper_files.select { |f| module_name_for(f, helper_dirs).casecmp?(name) }
+        matches = helper_files.select { |f| on_path.call(relative_under(f, helper_dirs).delete_suffix(".rb")) } if matches.empty?
         if matches.empty?
-          matches = helper_files.select do |f|
-            basename = File.basename(f, ".rb")
-            basename == "#{underscore}_helper" || basename == underscore || basename == name.underscore
-          end
+          names << underscore
+          matches = helper_files.select { |f| on_path.call(File.basename(f, ".rb")) }
         end
         file_path = matches.first
 
@@ -268,7 +283,7 @@ module RailsAiContext
         real_views_dir = File.realpath(views_dir).to_s
         references = {}
 
-        view_files = Dir.glob(File.join(views_dir, "**", "*.{erb,haml,slim}"))
+        view_files = Dir.glob(File.join(views_dir, RailsAiContext::ViewFile::MARKUP_GLOB))
                         .filter_map { |f| safe_glob_realpath(f, real_views_dir, real_root) }
 
         method_names.each do |method_name|
@@ -294,43 +309,24 @@ module RailsAiContext
       private_class_method def self.detect_framework_helpers(real_root)
         detected = {}
 
-        # Check Gemfile for framework gems
-        gemfile_path = File.join(real_root, "Gemfile")
-        return detected unless File.exist?(gemfile_path)
-
-        gemfile = RailsAiContext::SafeFile.read(gemfile_path) || ""
+        declared = RailsAiContext::Introspectors::GemfileGems.names(real_root)
+        return detected if declared.empty?
 
         # Collect all view file content for scanning
         scan_content = ""
 
-        scan_dirs = PathResolver.dirs_for(real_root, "app/views").map { |d| [ d, "*.{erb,haml,slim}" ] } +
-                    PathResolver.dirs_for(real_root, "app/helpers").map { |d| [ d, "*.rb" ] }
+        scan_dirs = PathResolver.dirs_for(real_root, "app/views").map { |d| [ d, RailsAiContext::ViewFile::MARKUP_GLOB ] } +
+                    PathResolver.dirs_for(real_root, "app/helpers").map { |d| [ d, "**/*.rb" ] }
 
-        scan_dirs.each do |dir, extensions|
-          safe_glob(dir, "**/#{extensions}", real_root).each do |real|
+        scan_dirs.each do |dir, glob|
+          safe_glob(dir, glob, real_root).each do |real|
             scan_content += (RailsAiContext::SafeFile.read(real) || "")
           end
         end
 
         FRAMEWORK_HELPERS.each do |lib, methods|
-          gem_name = lib.downcase
-          # Check if the gem is in the Gemfile (case-insensitive, handle common gem names)
-          gem_patterns = {
-            "Devise" => /gem\s+['"]devise['"]/,
-            "Pagy" => /gem\s+['"]pagy['"]/,
-            "Turbo" => /gem\s+['"]turbo-rails['"]/,
-            "Pundit" => /gem\s+['"]pundit['"]/,
-            "CanCanCan" => /gem\s+['"]cancancan['"]/,
-            "Kaminari" => /gem\s+['"]kaminari['"]/,
-            "WillPaginate" => /gem\s+['"]will_paginate['"]/,
-            "SimpleForm" => /gem\s+['"]simple_form['"]/,
-            "Draper" => /gem\s+['"]draper['"]/,
-            "InlineSvg" => /gem\s+['"]inline_svg['"]/,
-            "MetaTags" => /gem\s+['"]meta-tags['"]/
-          }
-
-          pattern = gem_patterns[lib] || /gem\s+['"]#{Regexp.escape(gem_name)}['"]/
-          next unless gemfile.match?(pattern)
+          gem_name = FRAMEWORK_GEMS.fetch(lib) { lib.downcase }
+          next unless declared.include?(gem_name)
 
           # Find which framework methods are actually used
           used = methods.select { |m| scan_content.include?(m) }

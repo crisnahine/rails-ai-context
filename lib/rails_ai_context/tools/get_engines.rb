@@ -4,15 +4,15 @@ module RailsAiContext
   module Tools
     class GetEngines < BaseTool
       tool_name "rails_get_engines"
-      description "Get what config/routes.rb mounts - engines and plain Rack apps alike, with known-engine descriptions - and every loaded Rails::Engine subclass (routes and model counts). " \
-        "Use when: checking what is mounted where, finding an admin dashboard's path, or understanding engine-provided routes."
+      description "Get what config/routes.rb mounts - engines and plain Rack apps alike, with known-engine descriptions - the app's own in-repo engines, plugins and modules, and every loaded Rails::Engine subclass (routes and model counts). " \
+        "Use when: checking what is mounted where, finding an admin dashboard's path, listing the repository's own engines, or understanding engine-provided routes."
 
       input_schema(properties: {})
 
       guide_row(
         order: 42,
         mcp: "rails_get_engines",
-        summary: "Mounted apps (engines and Rack apps) + loaded engine classes with route/model counts"
+        summary: "Mounted apps (engines and Rack apps) + in-repo engines + loaded engine classes with route/model counts"
       )
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
@@ -37,6 +37,16 @@ module RailsAiContext
             end
           else
             lines << "_Nothing mounted in config/routes.rb._"
+          end
+
+          in_repo = RailsAiContext::Payload.in_repo_engines_with_models(cached_context)
+          if in_repo.any?
+            lines << "" << "## In-Repo Engines (#{in_repo.size})"
+            in_repo.each do |e|
+              line = "- **#{e[:name]}** at `#{e[:path]}`"
+              line += RailsAiContext::Payload.engine_model_phrase(e)
+              lines << line
+            end
           end
 
           lines << "" << "## Loaded Engine Classes"

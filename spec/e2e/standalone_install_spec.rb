@@ -63,6 +63,65 @@ RSpec.describe "E2E: standalone install", type: :e2e do
     end
   end
 
+  # The binstub activates the newest zeitwerk installed. An app that locks an
+  # older one and fails in an initializer holds both copies; each wraps
+  # Kernel#require, and every tool died with SystemStackError.
+  describe "an app that locks a different zeitwerk and fails in an initializer" do
+    around do |example|
+      app = @builder.app_path
+      skip "no zeitwerk below the newest installed (#{binstub_zeitwerk}) to lock" unless binstub_zeitwerk > locked_zeitwerk
+      saved = %w[Gemfile Gemfile.lock config/boot.rb].to_h { |f| [ f, File.read(File.join(app, f)) ] }
+      raiser = File.join(app, "config", "initializers", "zzz_e2e_raise.rb")
+
+      File.write(File.join(app, "Gemfile"), saved["Gemfile"] + %(\ngem "zeitwerk", "#{locked_zeitwerk}"\n))
+      out, status = Open3.capture2e(@builder.env, "bundle", "install", "--quiet", chdir: app)
+      raise "bundle install with the pinned zeitwerk failed:\n#{out}" unless status.success?
+      locked = Gem::Version.new(File.read(File.join(app, "Gemfile.lock"))[/^    zeitwerk \(([^)]+)\)/, 1].to_s)
+      unless locked < binstub_zeitwerk
+        raise "the app locks zeitwerk #{locked} and the binstub activates #{binstub_zeitwerk}: no second copy to test"
+      end
+
+      File.write(raiser, %(raise "E2E forced boot failure"\n))
+      # Bootsnap's load-path cache resolves `require "zeitwerk"` to the copy
+      # already loaded, which hides the second copy from this example.
+      File.write(File.join(app, "config/boot.rb"), saved["config/boot.rb"].sub(%r{^require "bootsnap/setup".*$}, ""))
+
+      example.run
+    ensure
+      FileUtils.rm_f(raiser) if raiser
+      saved&.each { |f, contents| File.write(File.join(app, f), contents) }
+    end
+
+    # 2.7 and 2.8 share the Kernel#require wrapper's internals, so two copies
+    # recurse; a 2.6 copy beside a 2.8 one fails differently.
+    def locked_zeitwerk = Gem::Version.new("2.7.5")
+
+    def binstub_zeitwerk
+      @binstub_zeitwerk ||= Gem::Version.new(Open3.capture2(
+        @builder.env, "ruby", "-e", 'puts Gem::Specification.find_all_by_name("zeitwerk").map(&:version).max'
+      ).first.strip)
+    end
+
+    it "answers a tool from the static tier" do
+      result = @cli.cli_tool("schema")
+
+      expect(result.output).not_to include("stack level too deep"), result.to_s
+      expect(result.success?).to be(true), result.to_s
+      expect(result.stdout).to include("[STATIC]"), result.to_s
+      expect(result.stdout).to match(/posts|Post/), result.to_s
+    end
+
+    it "lists every tool over MCP" do
+      mcp = E2E::McpStdioClient.new(@builder, timeout: 60).start!
+      mcp.initialize!
+      tools = mcp.list_tools.dig("result", "tools")
+
+      expect(tools&.size).to eq(RailsAiContext::Server.builtin_tools.size)
+    ensure
+      mcp&.stop!
+    end
+  end
+
   # A tree with source and no config/environment.rb is what the static tier is
   # for. init used to write the config files, then refuse at the boot gate and
   # leave the tree half set up with no context files at all.

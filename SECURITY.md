@@ -2,28 +2,7 @@
 
 ## Supported Versions
 
-| Version | Supported          |
-|---------|--------------------|
-| 5.7.x   | :white_check_mark: |
-| 5.6.x   | :white_check_mark: |
-| 5.5.x   | :white_check_mark: |
-| 5.4.x   | :white_check_mark: |
-| 5.3.x   | :white_check_mark: |
-| 5.2.x   | :white_check_mark: |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :white_check_mark: |
-| 4.7.x   | :white_check_mark: |
-| 4.6.x   | :white_check_mark: |
-| 4.5.x   | :white_check_mark: |
-| 4.4.x   | :white_check_mark: |
-| 4.3.x   | :white_check_mark: |
-| 4.2.x   | :white_check_mark: (4.2.1 includes security hardening) |
-| 4.1.x   | :white_check_mark: |
-| 4.0.x   | :white_check_mark: |
-| 3.1.x   | :white_check_mark: |
-| 3.0.x   | :x:                |
-| 2.0.x   | :x:                |
-| < 2.0   | :x:                |
+Only the latest 5.x release gets security fixes.
 
 ## Reporting a Vulnerability
 

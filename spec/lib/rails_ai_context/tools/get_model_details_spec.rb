@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
+require "fileutils"
 
 RSpec.describe RailsAiContext::Tools::GetModelDetails do
   before { described_class.reset_cache! }
@@ -51,12 +53,33 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
   end
 
   describe ".call with no params" do
+    it "reads a junk detail as standard" do
+      text = described_class.call(detail: "verbose").content.first[:text]
+
+      expect(text).to include("Models (3)")
+      expect(text).not_to include("Available models")
+    end
+
     it "defaults to standard detail level" do
       result = described_class.call
       text = result.content.first[:text]
       expect(text).to include("Models (3)")
       expect(text).to include("**User**")
       expect(text).to include("associations")
+    end
+
+    # Every model tying on association count is normal once plugin models
+    # land, and with no tie-break the page order followed the payload's.
+    it "breaks a tie on association count by name" do
+      tied = %w[Zebra Alpha Mango Beta].each_with_object({}) do |name, h|
+        h[name] = { table_name: name.downcase, associations: [ { type: "belongs_to", name: "user" } ], validations: [] }
+      end
+      allow(described_class).to receive(:cached_context).and_return({ models: tied })
+
+      text = described_class.call(detail: "summary").content.first[:text]
+      listed = text.lines.grep(/\A- \w+$/).map(&:strip)
+
+      expect(listed).to eq([ "- Alpha", "- Beta", "- Mango", "- Zebra" ])
     end
 
     it "sorts models by association count descending" do
@@ -150,6 +173,118 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       result = described_class.call(model: "  User  ")
       text = result.content.first[:text]
       expect(text).to include("# User")
+    end
+  end
+
+  # Only the validator Rails adds carries the label; a presence rule the
+  # model writes on the same name is its own declaration.
+  describe "the implicit belongs_to presence" do
+    it "labels the implicit record and not a declared one on the same name" do
+      allow(described_class).to receive(:cached_context).and_return(models: {
+        "Comment" => {
+          associations: [ { type: "belongs_to", name: "post" } ],
+          validations: [ { kind: "presence", attributes: [ "post" ], options: {}, implicit: true },
+                         { kind: "presence", attributes: [ "post" ], options: { on: :create } } ]
+        }
+      })
+
+      text = described_class.call(model: "Comment").content.first[:text]
+
+      expect(text).to include("- `presence` on post _(implicit from belongs_to)_")
+      expect(text).to include("- `presence` on post (on: :create)\n")
+    end
+  end
+
+  # Diaspora's Comment: lib/diaspora/fields/author.rb writes
+  # `validates :author, presence: true` on the belongs_to Rails already guards.
+  describe "a hand-written presence on a belongs_to name" do
+    it "shows the hand-written rule and drops the implicit duplicate" do
+      allow(described_class).to receive(:cached_context).and_return(models: {
+        "Comment" => { associations: [ { type: "belongs_to", name: "author" } ], validations: [
+          { kind: "presence", attributes: [ "author" ], options: {}, implicit: true },
+          { kind: "presence", attributes: [ "author" ], options: {} }
+        ] }
+      })
+
+      text = described_class.call(model: "Comment").content.first[:text]
+
+      expect(text).to include("- `presence` on author\n")
+      expect(text).not_to include("implicit from belongs_to")
+    end
+  end
+
+  describe "a belongs_to whose optional: is an expression" do
+    it "prints the expression and a presence conditional on it" do
+      allow(described_class).to receive(:cached_context).and_return(models: {
+        "Comment" => { associations: [ { type: "belongs_to", name: "maybe", optional: "!Rails.env.test?" } ],
+                       validations: [ { kind: "presence", attributes: [ "maybe" ], options: {}, implicit: true,
+                                        implicit_if: "optional: !Rails.env.test? is false" } ] }
+      })
+
+      text = described_class.call(model: "Comment").content.first[:text]
+
+      expect(text).to include("- `belongs_to` **maybe** [optional: !Rails.env.test?]")
+      expect(text).to include("- `presence` on maybe _(implicit from belongs_to when optional: !Rails.env.test? is false)_")
+    end
+  end
+
+  describe "a validation whose attribute is computed" do
+    it "names the expression, and the attributes it ran for when known" do
+      allow(described_class).to receive(:cached_context).and_return(models: {
+        "Form" => { associations: [], validations: [
+          { kind: "length", attributes: [], computed_attributes: %w[field], options: { maximum: "limit" } },
+          { kind: "length", attributes: %w[title], computed_attributes: %w[field], options: { maximum: 5 } }
+        ] }
+      })
+
+      text = described_class.call(model: "Form").content.first[:text]
+
+      expect(text).to include("- `length` on `field` (computed) (maximum: limit)")
+      expect(text).to include("- `length` on title (from `field`) (maximum: 5)")
+    end
+  end
+
+  describe "a custom validate method with a condition" do
+    it "prints the condition" do
+      allow(described_class).to receive(:cached_context).and_return(models: {
+        "Form" => { associations: [], validations: [], custom_validates: %w[uses_left always],
+                    custom_validate_conditions: { "uses_left" => { on: :create } } }
+      })
+
+      text = described_class.call(model: "Form").content.first[:text]
+
+      expect(text).to include("- **Custom:** `uses_left` (on: :create)")
+      expect(text).to include("- **Custom:** `always`")
+    end
+  end
+
+  describe "a concern a macro includes" do
+    it "says which macro" do
+      allow(described_class).to receive(:cached_context).and_return(models: {
+        "Account" => { associations: [], validations: [], concerns: %w[Trackable Devise::Models::Lockable WidgetGem::Widget],
+                       concern_sources: { "Devise::Models::Lockable" => "devise", "WidgetGem::Widget" => "a gem macro (booted only)" } }
+      })
+
+      text = described_class.call(model: "Account").content.first[:text]
+
+      expect(text).to include("- Trackable\n", "- Devise::Models::Lockable (from devise)",
+                              "- WidgetGem::Widget (from a gem macro (booted only))")
+    end
+  end
+
+  describe "a validation a macro or gem adds" do
+    it "names what added it" do
+      allow(described_class).to receive(:cached_context).and_return(models: {
+        "Account" => { associations: [], validations: [
+          { kind: "confirmation", attributes: [ "password" ], options: {}, added_by: "has_secure_password" },
+          { kind: "length", attributes: [ "title" ], options: { maximum: 5 }, reflection_only: true }
+        ] }
+      })
+
+      text = described_class.call(model: "Account").content.first[:text]
+
+      expect(text).to include("- `confirmation` on password _(added by has_secure_password)_")
+      expect(text).to include("- `length` on title (maximum: 5) _(reflection only: no line the source reader parses declares it)_")
     end
   end
 
@@ -327,6 +462,47 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       )
     end
 
+    it "names the condition a callback runs under" do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Reaction" => {
+            table_name: "reactions",
+            callbacks: { "after_create" => [ "notify_slack", "bust_cache" ], "before_save" => [ "stamp" ] },
+            callback_conditions: { "after_create" => [ { if: '-> { category == "vomit" }' }, nil ],
+                                   "before_save" => [ { if: :published? } ] }
+          }
+        }
+      )
+
+      text = described_class.call(model: "Reaction", detail: "full").content.first[:text]
+
+      expect(text).to include(%(:notify_slack (if: -> { category == "vomit" })))
+      # `published?` reads as an expression; the line names a method.
+      expect(text).to include(":stamp (if: :published?)")
+      expect(text).to include("bust_cache")
+      expect(text).not_to include("bust_cache (")
+    end
+
+    # Rails keeps the two declarations apart, and a lookup keyed by name alone
+    # gave both rows the condition of whichever was read last.
+    it "keeps one condition per declaration when the same method is declared twice" do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Order" => {
+            table_name: "orders",
+            callbacks: { "after_save" => %w[sync sync] },
+            callback_conditions: { "after_save" => [ { if: :a? }, { if: :b? } ] }
+          }
+        }
+      )
+
+      text = described_class.call(model: "Order", detail: "full").content.first[:text]
+
+      expect(text).to include("- `after_save`: :sync (if: :a?), :sync (if: :b?)")
+    end
+
     # A list of targets is a list of names, so the block keyword read there
     # as a callback named `do`.
     it "names a block callback with the payload's marker" do
@@ -362,6 +538,119 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).to include("- `length` on username (maximum: HARD_LIMIT)")
       expect(text).to include("- `length` on username (maximum: LOCAL_LIMIT)")
       expect(text.scan("- `length` on username (maximum: HARD_LIMIT)").size).to eq(1)
+    end
+  end
+
+  describe "a validation carrying a condition" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Edition" => {
+            table_name: "editions",
+            validations: [
+              { kind: "presence", attributes: [ "title" ], options: { if: :title_required? } },
+              { kind: "presence", attributes: [ "body" ], options: { unless: "->(record) { record.is_a?(StandardEdition) }" } },
+              { kind: "associated", attributes: [ "unpublishing" ], options: { on: :publish } }
+            ]
+          }
+        }
+      )
+    end
+
+    # `title_required?` reads as an expression where the file names a method.
+    it "keeps a symbol option spelled as the symbol it is" do
+      text = described_class.call(model: "Edition", detail: "full").content.first[:text]
+
+      expect(text).to include("- `presence` on title (if: :title_required?)")
+      expect(text).to include("- `associated` on unpublishing (on: :publish)")
+    end
+
+    it "prints a condition with no literal value as the line the file wrote" do
+      text = described_class.call(model: "Edition", detail: "full").content.first[:text]
+
+      expect(text).to include("- `presence` on body (unless: ->(record) { record.is_a?(StandardEdition) })")
+    end
+  end
+
+  # `belongs_to owner_name` passes a local; printed bare it read as the
+  # literal `belongs_to :owner_name`.
+  describe "an association whose name is computed" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Group" => {
+            table_name: "users",
+            associations: [ { type: "belongs_to", name: "owner_name", computed_name: true },
+                            { type: "has_many", name: "users" } ]
+          }
+        }
+      )
+    end
+
+    it "says the name is computed" do
+      text = described_class.call(model: "Group").content.first[:text]
+
+      expect(text).to include("- `belongs_to` **owner_name** (computed)")
+      expect(text).to include("- `has_many` **users**")
+      expect(text).not_to include("**users** (computed)")
+    end
+  end
+
+  # `validates_with RecordValidator` has no attributes, so the line read
+  # "`document` on " with nothing after it.
+  describe "a validates_with and a plugin validation macro" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Document" => {
+            table_name: "documents",
+            validations: [
+              { kind: "validates_date", attributes: [ "date_of_birth" ], options: { presence: true, if: "->(d) { d.approved? }" } },
+              { kind: "validates_with", attributes: [], validator: "RecordValidator", options: { on: :create } }
+            ]
+          }
+        }
+      )
+    end
+
+    it "names the validator class and the macro, each with its options" do
+      text = described_class.call(model: "Document").content.first[:text]
+
+      expect(text).to include("- `validates_with` RecordValidator (on: :create)")
+      expect(text).to include("- `validates_date` on date_of_birth (presence: true, if: ->(d) { d.approved? })")
+      expect(text).not_to match(/on \n/)
+    end
+  end
+
+  describe "an inclusion list of mixed types" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Edition" => {
+            table_name: "editions",
+            validations: [
+              { kind: "inclusion", attributes: [ "image_display_option" ],
+                options: { in: [ "no_image", "organisation_image", "custom_image", nil ] } },
+              { kind: "inclusion", attributes: [ "other_display_option" ],
+                options: { in: [ "no_image", "organisation_image", "custom_image", nil ] } },
+              { kind: "inclusion", attributes: [ "state" ],
+                options: { in: [ :draft, 1, "published", nil ] } }
+            ]
+          }
+        }
+      )
+    end
+
+    it "compresses a repeat of a list whose members are not comparable" do
+      text = described_class.call(model: "Edition", detail: "full").content.first[:text]
+
+      expect(text).to include("- `inclusion` on image_display_option (in: [\"no_image\", \"organisation_image\", \"custom_image\", nil])")
+      expect(text).to include("(same as image_display_option)")
+      expect(text).to include("- `inclusion` on state")
     end
   end
 
@@ -445,6 +734,69 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).to include("- **phone** [INFERRED]")
       expect(text).not_to include("- **phone** - [INFERRED]")
     end
+  end
+
+  # Diaspora's Fetchable defines only `module ClassMethods`; its methods are
+  # the concern's, and a nested class's are not.
+  it "lists a concern's ClassMethods when it has no instance methods of its own" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns", "federated"))
+      File.write(File.join(dir, "app", "models", "concerns", "federated", "fetchable.rb"), <<~RUBY)
+        module Federated
+          module Fetchable
+            module ClassMethods
+              def find_or_fetch_by(guid); end
+            end
+
+            class Drop
+              def each; end
+            end
+          end
+        end
+      RUBY
+      described_class.reset_cache!
+      allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(dir))
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Post" => { table_name: "posts", concerns: %w[Federated::Fetchable] } }
+      )
+
+      text = described_class.call(model: "Post", detail: "full").content.first[:text]
+
+      expect(text).to include("- **Federated::Fetchable** - find_or_fetch_by")
+    end
+  end
+
+  it "names a declaration a called method makes on another receiver, apart from the model's" do
+    described_class.reset_cache!
+    allow(described_class).to receive(:cached_context).and_return(
+      models: { "Proposal" => { table_name: "proposals",
+                                foreign_declarations: [ { declaration: "validates :title, length: { maximum: 80 }",
+                                                          receiver: "translation_class", from_concern: "Globalizable" },
+                                                        { declaration: "validates :description, presence: true",
+                                                          receiver: "translation_class", condition: "options.many?" } ] } }
+    )
+
+    text = described_class.call(model: "Proposal", detail: "full").content.first[:text]
+
+    expect(text).to include("## Declared on another class")
+    expect(text).to include("- `validates :title, length: { maximum: 80 }` on `translation_class` _(Globalizable)_")
+    expect(text).to include("- `validates :description, presence: true` on `translation_class` if `options.many?`")
+  end
+
+  it "names a declaration a condition holds back, apart from the counted ones" do
+    described_class.reset_cache!
+    allow(described_class).to receive(:cached_context).and_return(
+      models: { "WorkPackage" => { table_name: "work_packages", associations: [ { type: "has_many", name: "journals" } ],
+                                   conditional_declarations: [ { declaration: "has_many :custom_comments",
+                                                                 condition: "can_have_custom_comments?",
+                                                                 from_concern: "Redmine::Acts::Customizable" } ] } }
+    )
+
+    text = described_class.call(model: "WorkPackage", detail: "full").content.first[:text]
+
+    expect(text).to include("## Only under a condition the source does not decide")
+    expect(text).to include("- `has_many :custom_comments` if `can_have_custom_comments?` _(Redmine::Acts::Customizable)_")
+    expect(text).not_to include("custom_comments (computed)")
   end
 
   # The footer promises runtime-only data is marked; a concern whose file

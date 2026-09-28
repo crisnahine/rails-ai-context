@@ -23,6 +23,12 @@ RSpec.describe RailsAiContext::Serializers::SectionFacts do
       expect(described_class.auth_line(ctx)).to eq("- Auth: Devise + Rails 8 auth + Pundit + CanCanCan")
     end
 
+    it "does not name a gem for a policies directory the app does not bundle one for" do
+      ctx = { auth: { authentication: {}, authorization: { policies: [ "PostPolicy" ], ability_class: "app/models/ability.rb" } } }
+
+      expect(described_class.auth_line(ctx)).to eq("- Auth: policies in app/policies + Ability class in app/models/ability.rb")
+    end
+
     it "answers nil for a refused auth section" do
       expect(described_class.auth_line({ auth: { unavailable: "requires a booted Rails app" } })).to be_nil
     end
@@ -200,6 +206,28 @@ RSpec.describe RailsAiContext::Serializers::SectionFacts do
 
     it "says nothing when the app has one locale" do
       expect(described_class.i18n_line(i18n: { available_locales: %w[en] })).to be_nil
+    end
+  end
+
+  # An interpolated association name is its own symbol literal, so prefixing
+  # another colon spelled it `::"#{...}"`.
+  describe ".associations_list" do
+    it "marks a computed name so it cannot be read as the symbol it is not" do
+      data = { associations: [ { type: "has_one", name: ':"#{name.underscore}_search_data"', computed_name: true },
+                               { type: "belongs_to", name: "owner_name", computed_name: true },
+                               { type: "belongs_to", name: :user } ] }
+
+      expect(described_class.associations_list(data)).to eq(
+        [ 'has_one `:"#{name.underscore}_search_data"` (computed)', "belongs_to `owner_name` (computed)", "belongs_to :user" ]
+      )
+    end
+  end
+
+  describe ".validation_target" do
+    it "names computed options apart from the attribute they apply to" do
+      target = described_class.validation_target(attributes: [ "title" ], options_source: "rules.merge(if: :published?)")
+
+      expect(target).to eq("on title (options computed: `rules.merge(if: :published?)`)")
     end
   end
 end

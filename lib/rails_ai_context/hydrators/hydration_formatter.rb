@@ -30,21 +30,20 @@ module RailsAiContext
 
         if hint.columns.any?
           col_summary = hint.columns.first(10).map { |c|
-            "`#{c[:name]}` #{c[:type]}#{c[:null] == false ? ' NOT NULL' : ''}"
+            "`#{c[:name]}` #{c[:type]}#{'[]' if c[:array]}#{c[:null] == false ? ' NOT NULL' : ''}"
           }
           col_summary << "... #{hint.columns.size - 10} more" if hint.columns.size > 10
           lines << "**Columns:** #{col_summary.join(', ')}"
         end
 
         if hint.associations.any?
-          assoc_list = hint.associations.map { |a| "`#{a[:type]}` :#{a[:name]}" }
+          assoc_list = hint.associations.map { |a| "`#{a[:type]}` #{Serializers::SectionFacts.association_name(a)}" }
           lines << "**Associations:** #{assoc_list.join(', ')}"
         end
 
         if hint.validations.any?
           val_list = hint.validations.map { |v|
-            attrs = v[:attributes]&.join(", ") || ""
-            "#{v[:kind]}(#{attrs})"
+            "#{v[:kind]}(#{v[:validator] || v[:attributes]&.join(', ')})"
           }
           lines << "**Validations:** #{val_list.join(', ')}"
         end

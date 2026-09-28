@@ -8,15 +8,17 @@ module RailsAiContext
     # Detects frontend frameworks, build tools, TypeScript config, monorepo
     # layout, and component file counts from package.json, lockfiles, and
     # bundler configs (Vite, Shakapacker, Webpacker).
-    class FrontendFrameworkIntrospector
+    class FrontendFrameworkIntrospector < Base
       extend StaticTier
       static_tier :files_only
 
-      attr_reader :app
-
       MAX_PACKAGE_JSON_SIZE = 256 * 1024 # 256 KB
 
+      # Order breaks a tie, so the specific framework comes first: react comes along with
+      # preact/compat, and an app that declares preact is a Preact app.
       FRAMEWORK_MARKERS = {
+        "preact" => :preact,
+        "solid-js" => :solid,
         "react" => :react, "react-dom" => :react,
         "next" => :nextjs,
         "vue" => :vue,
@@ -24,9 +26,7 @@ module RailsAiContext
         "@angular/core" => :angular,
         "svelte" => :svelte,
         "@sveltejs/kit" => :sveltekit,
-        "react-native" => :react_native, "expo" => :expo,
-        "solid-js" => :solid,
-        "preact" => :preact
+        "react-native" => :react_native, "expo" => :expo
       }.freeze
 
       MOUNTING_MARKERS = {
@@ -53,6 +53,7 @@ module RailsAiContext
       }.freeze
 
       COMPONENT_EXTENSIONS = %w[.jsx .tsx .vue .svelte].freeze
+      COMPONENT_FILE = /(?:#{COMPONENT_EXTENSIONS.map { |ext| Regexp.escape(ext) }.join("|")})\z/
 
       SCAN_SKIP_DIRS = %w[node_modules dist build .next coverage __tests__].freeze
 
@@ -63,35 +64,30 @@ module RailsAiContext
         "@sveltejs/vite-plugin-svelte" => :svelte
       }.freeze
 
-      def initialize(app)
-        @app = app
-      end
-
       def call
         all_deps = read_package_json_deps
         frameworks = detect_frameworks(all_deps)
         mounting = detect_mounting_strategy(all_deps)
-        state = detect_state_management(all_deps)
-        testing = detect_testing(all_deps)
+        state = labels_for(STATE_MARKERS, all_deps)
+        testing = labels_for(TEST_MARKERS, all_deps)
         pkg_mgr = detect_package_manager
-        mono = detect_monorepo(all_deps)
+        mono = detect_monorepo
         build = detect_build_tool
         vite_fw = detect_vite_config_frameworks
         roots = detect_frontend_roots
-        ts = detect_typescript(roots)
-
         # Merge vite config detected frameworks into main frameworks hash
         vite_fw.each { |sym| frameworks[sym] ||= nil unless frameworks.key?(sym) }
+        frameworks = rank_frameworks(frameworks, roots)
+        ts = detect_typescript(roots)
 
         # Enrich each frontend root with component scan data
         enriched_roots = roots.map do |fr|
           full_path = File.join(root, fr[:path])
-          counts = scan_components(full_path)
-          primary_fw = frameworks.keys.first
-          version = frameworks.values.compact.first
+          counts = scan_components(full_path, component_matcher(frameworks.keys.first))
+          primary_fw, primary_version = frameworks.first
           fr.merge(
             framework: primary_fw,
-            version: version,
+            version: primary_version,
             component_count: counts.values.sum,
             component_dirs: counts
           )
@@ -109,19 +105,13 @@ module RailsAiContext
           typescript: ts,
           monorepo: mono,
           build_tool: build,
-          api_clients: detect_api_clients(all_deps),
-          component_libraries: detect_component_libraries(all_deps),
+          api_clients: labels_for(API_CLIENT_MARKERS, all_deps),
+          component_libraries: labels_for(COMPONENT_LIB_MARKERS, all_deps),
           summary: build_summary(frameworks, mounting, build, ts, total_components)
         }
-      rescue => e
-        { error: e.message }
       end
 
       private
-
-      def root
-        app.root.to_s
-      end
 
       # ---- Package.json reading ----
 
@@ -140,6 +130,56 @@ module RailsAiContext
         found
       end
 
+      # What the app is built in, not what it depends on: a config file the framework's CLI
+      # writes, then how many of its components the app holds.
+      FRAMEWORK_EVIDENCE = {
+        angular: { config: "angular.json", components: /\.component\.ts\z/ },
+        nextjs: { config: "next.config.*" },
+        nuxt: { config: "nuxt.config.*" },
+        sveltekit: { config: "svelte.config.*" },
+        svelte: { components: /\.svelte\z/ },
+        vue: { components: /\.vue\z/ },
+        react: { components: /\.[jt]sx\z/ },
+        preact: { components: /\.[jt]sx\z/ },
+        solid: { components: /\.[jt]sx\z/ }
+      }.freeze
+
+      def rank_frameworks(frameworks, roots)
+        return frameworks if frameworks.size < 2
+
+        # Only the frontend roots are counted: globbing the app root walks
+        # node_modules before anything filters it out.
+        dirs = roots.map { |fr| File.join(root, fr[:path]) }
+        ranked = frameworks.keys.each_with_index
+          .sort_by { |sym, index| [ -framework_evidence(sym, dirs), index ] }
+          .map { |sym, _index| [ sym, frameworks[sym] ] }
+        ranked.to_h
+      end
+
+      def component_matcher(framework)
+        FRAMEWORK_EVIDENCE.dig(framework, :components) || COMPONENT_FILE
+      end
+
+      def framework_evidence(sym, dirs)
+        markers = FRAMEWORK_EVIDENCE[sym]
+        return 0 unless markers
+
+        score = 0
+        if markers[:config]
+          score += 1000 if ([ root ] + dirs).uniq.any? { |dir| Dir.glob(File.join(dir, markers[:config])).any? }
+        end
+        score += dirs.sum { |dir| component_files(dir, markers[:components]).size } if markers[:components]
+        score
+      end
+
+      def component_files(dir, matcher)
+        FileWalk.each_file(dir, skip: scan_skip_dirs).select { |path| File.basename(path).match?(matcher) }
+      end
+
+      def scan_skip_dirs
+        RailsAiContext.configuration.excluded_paths + SCAN_SKIP_DIRS
+      end
+
       def detect_mounting_strategy(all_deps)
         MOUNTING_MARKERS.each do |pkg, sym|
           return sym if all_deps.key?(pkg)
@@ -147,12 +187,8 @@ module RailsAiContext
         nil
       end
 
-      def detect_state_management(all_deps)
-        STATE_MARKERS.filter_map { |pkg, label| label if all_deps.key?(pkg) }.uniq
-      end
-
-      def detect_testing(all_deps)
-        TEST_MARKERS.filter_map { |pkg, label| label if all_deps.key?(pkg) }.uniq
+      def labels_for(markers, all_deps)
+        markers.filter_map { |pkg, label| label if all_deps.key?(pkg) }.uniq
       end
 
       # ---- Package manager ----
@@ -175,10 +211,9 @@ module RailsAiContext
         path = dirs.map { |dir| File.join(dir, "tsconfig.json") }.find { |p| File.exist?(p) }
         return { enabled: false } unless path
 
-        data = parse_json(path)
-        return { enabled: false } unless data.is_a?(Hash)
+        compiler, = ModuleAliases.compiler_options(path)
+        return { enabled: false } unless compiler
 
-        compiler = data["compilerOptions"] || {}
         {
           enabled: true,
           strict: compiler["strict"] == true,
@@ -188,7 +223,9 @@ module RailsAiContext
 
       # ---- Monorepo ----
 
-      def detect_monorepo(all_deps)
+      MONOREPO_MARKERS = { "turbo.json" => "turborepo", "nx.json" => "nx", "lerna.json" => "lerna" }.freeze
+
+      def detect_monorepo
         result = { detected: false, tool: nil, workspaces: [] }
 
         # pnpm workspaces
@@ -196,32 +233,12 @@ module RailsAiContext
         if File.exist?(pnpm_ws)
           data = YAML.safe_load(RailsAiContext::SafeFile.read(pnpm_ws) || "", permitted_classes: []) rescue nil
           if data.is_a?(Hash) && data["packages"].is_a?(Array)
-            result[:detected] = true
-            result[:tool] = "pnpm"
-            result[:workspaces] = data["packages"]
-            return result
+            return result.merge(detected: true, tool: "pnpm", workspaces: data["packages"])
           end
         end
 
-        # Turborepo
-        if File.exist?(File.join(root, "turbo.json"))
-          result[:detected] = true
-          result[:tool] = "turborepo"
-          return result
-        end
-
-        # Nx
-        if File.exist?(File.join(root, "nx.json"))
-          result[:detected] = true
-          result[:tool] = "nx"
-          return result
-        end
-
-        # Lerna
-        if File.exist?(File.join(root, "lerna.json"))
-          result[:detected] = true
-          result[:tool] = "lerna"
-          return result
+        MONOREPO_MARKERS.each do |file, tool|
+          return result.merge(detected: true, tool: tool) if File.exist?(File.join(root, file))
         end
 
         # package.json workspaces
@@ -235,11 +252,7 @@ module RailsAiContext
             when Hash then ws["packages"] || []
             else []
             end
-            if packages.any?
-              result[:detected] = true
-              result[:tool] = "npm/yarn"
-              result[:workspaces] = packages
-            end
+            return result.merge(detected: true, tool: "npm/yarn", workspaces: packages) if packages.any?
           end
         end
 
@@ -275,57 +288,36 @@ module RailsAiContext
 
       # ---- Frontend roots ----
 
+      CONFIG_ROOT_READERS = {
+        "config/vite.json" => :read_vite_source_dir,
+        "config/shakapacker.yml" => :read_yaml_source_path,
+        "config/webpacker.yml" => :read_yaml_source_path
+      }.freeze
+
       def detect_frontend_roots
-        # 1. User override
         configured = RailsAiContext.configuration.respond_to?(:frontend_paths) &&
                      RailsAiContext.configuration.frontend_paths
         if configured.is_a?(Array) && configured.any?
-          return configured.filter_map do |p|
-            full = File.join(root, p)
-            next unless Dir.exist?(full)
-            next unless safe_path?(full)
-            { path: p, detected_from: "configuration" }
-          end
+          return configured.filter_map { |p| { path: p, detected_from: "configuration" } if usable_dir?(p) }
         end
 
-        # 2. Vite (config/vite.json)
-        vite_root = read_vite_source_dir
-        if vite_root
-          full = File.join(root, vite_root)
-          if Dir.exist?(full) && safe_path?(full)
-            return [ { path: vite_root, detected_from: "config/vite.json" } ]
-          end
+        CONFIG_ROOT_READERS.each do |source, reader|
+          declared = send(reader, source)
+          return [ { path: declared, detected_from: source } ] if declared && usable_dir?(declared)
         end
 
-        # 3. Shakapacker (config/shakapacker.yml)
-        shaka_root = read_yaml_source_path("config/shakapacker.yml")
-        if shaka_root
-          full = File.join(root, shaka_root)
-          if Dir.exist?(full) && safe_path?(full)
-            return [ { path: shaka_root, detected_from: "config/shakapacker.yml" } ]
-          end
-        end
-
-        # 4. Webpacker (config/webpacker.yml)
-        wp_root = read_yaml_source_path("config/webpacker.yml")
-        if wp_root
-          full = File.join(root, wp_root)
-          if Dir.exist?(full) && safe_path?(full)
-            return [ { path: wp_root, detected_from: "config/webpacker.yml" } ]
-          end
-        end
-
-        # 5. Common directories
         RailsAiContext::PackageJson::FRONTEND_DIRS.filter_map do |dir|
-          full = File.join(root, dir)
-          next unless Dir.exist?(full)
-          next unless safe_path?(full)
-          { path: dir, detected_from: "convention" }
+          { path: dir, detected_from: "convention" } if usable_dir?(dir)
         end
       end
 
-      def read_vite_source_dir
-        path = File.join(root, "config/vite.json")
+      def usable_dir?(relative)
+        full = File.join(root, relative)
+        Dir.exist?(full) && safe_path?(full)
+      end
+
+      def read_vite_source_dir(relative)
+        path = File.join(root, relative)
         return nil unless File.exist?(path)
 
         data = parse_json(path)
@@ -359,23 +351,16 @@ module RailsAiContext
 
       # ---- Component scanning ----
 
-      def scan_components(dir_path)
+      # Counted per top-level directory under the root, with the framework's
+      # own component file shape: Angular writes `*.component.ts`.
+      def scan_components(dir_path, matcher = COMPONENT_FILE)
         return {} unless Dir.exist?(dir_path)
 
         counts = Hash.new(0)
-        excluded = RailsAiContext.configuration.excluded_paths + SCAN_SKIP_DIRS
-
-        Dir.glob(File.join(dir_path, "**", "*{#{COMPONENT_EXTENSIONS.join(",")}}")).each do |file|
-          relative = file.sub("#{dir_path}/", "")
-          parts = relative.split("/")
-
-          # Skip excluded directories
-          next if parts.any? { |part| excluded.include?(part) }
-
-          top_dir = parts.size > 1 ? parts.first : "."
-          counts[top_dir] += 1
+        component_files(dir_path, matcher).each do |file|
+          parts = file.sub("#{dir_path}/", "").split("/")
+          counts[parts.size > 1 ? parts.first : "."] += 1
         end
-
         counts
       end
 
@@ -434,18 +419,6 @@ module RailsAiContext
         "primereact" => "PrimeReact", "vuetify" => "Vuetify",
         "element-plus" => "Element Plus", "naive-ui" => "Naive UI"
       }.freeze
-
-      def detect_api_clients(all_deps)
-        API_CLIENT_MARKERS.filter_map { |pkg, label| label if all_deps.key?(pkg) }.uniq
-      rescue => e
-        RailsAiContext.debug_fail(e, [], label: "detect_api_clients")
-      end
-
-      def detect_component_libraries(all_deps)
-        COMPONENT_LIB_MARKERS.filter_map { |pkg, label| label if all_deps.key?(pkg) }.uniq
-      rescue => e
-        RailsAiContext.debug_fail(e, [], label: "detect_component_libraries")
-      end
     end
   end
 end

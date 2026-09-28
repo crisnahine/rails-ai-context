@@ -21,6 +21,114 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
     end
   end
 
+  describe "the Routes section" do
+    it "lists routes drawn into an engine under that engine, apart from the total" do
+      context = { routes: { total_routes: 1, by_controller: { "posts" => [ { verb: "GET", path: "/posts", action: "index" } ] },
+                            engine_routes: [ { engine: "Spree::Core::Engine", mount: "/shop", routes: [
+                              { verb: "GET", path: "/shop/admin/orders", controller: "spree/admin/orders", action: "index" }
+                            ] } ] } }
+
+      output = described_class.new(context).call
+
+      expect(output).to include("### spree/admin/orders (in Spree::Core::Engine's table, not in the total)")
+      expect(output).to include("- `GET /shop/admin/orders` → index")
+    end
+  end
+
+  describe "the Multi-Database section" do
+    it "labels each adapter the way every other surface does" do
+      context = {
+        multi_database: {
+          multi_db: true,
+          databases: [
+            { name: "primary", adapter: "mysql2", adapter_default: true },
+            { name: "cache", adapter: "postgresql" },
+            { name: "archive", adapter: nil }
+          ]
+        }
+      }
+
+      output = described_class.new(context).call
+
+      expect(output).to include("- `primary` - MySQL by database.yml default")
+      expect(output).to include("- `cache` - PostgreSQL")
+      expect(output).to include("- `archive` - unknown")
+    end
+  end
+
+  describe "the Custom Middleware section" do
+    it "lists what an initializer inserts, and says where a listed class was inserted" do
+      context = {
+        middleware: {
+          custom_middleware: [ { class_name: "Middleware::RequestTracker", file: "lib/middleware/request_tracker.rb" } ],
+          middleware_from_initializers: [
+            { middleware: "Middleware::RequestTracker", action: "unshift", file: "config/initializers/200-first_middlewares.rb" },
+            { middleware: "Middleware::RequestTracker", action: "move_after", file: "config/environments/test.rb" },
+            { middleware: "Discourse::Cors", action: "insert_before", file: "config/initializers/008-rack-cors.rb" }
+          ]
+        }
+      }
+
+      output = described_class.new(context).call
+
+      expect(output).to include("- `Middleware::RequestTracker` (lib/middleware/request_tracker.rb) - inserted (unshift) in config/initializers/200-first_middlewares.rb, moved (move_after) in config/environments/test.rb")
+      expect(output).to include("### Stack changes from the app's config")
+      expect(output).to include("- `Discourse::Cors` inserted (insert_before) in config/initializers/008-rack-cors.rb")
+    end
+  end
+
+  describe "a middleware section with an exceptions app" do
+    it "names it apart from the stack" do
+      context = {
+        middleware: {
+          custom_middleware: [],
+          middleware_from_initializers: [],
+          exceptions_app: { class_name: "Middleware::PublicExceptions", file: "lib/middleware/public_exceptions.rb" }
+        }
+      }
+
+      output = described_class.new(context).call
+
+      expect(output).to include("- Exceptions app: `Middleware::PublicExceptions` (lib/middleware/public_exceptions.rb)")
+    end
+  end
+
+  describe "a middleware section with nothing of the app's own" do
+    it "says what the initializers change without calling any of it custom" do
+      context = {
+        middleware: {
+          custom_middleware: [],
+          middleware_from_initializers: [
+            { middleware: "ActionDispatch::Executor", action: "delete", file: "config/initializers/200-first_middlewares.rb" },
+            { middleware: "ActionDispatch::RemoteIp", action: "move_before", file: "config/application.rb" }
+          ]
+        }
+      }
+
+      output = described_class.new(context).call
+
+      expect(output).to include("- `ActionDispatch::Executor` removed in config/initializers/200-first_middlewares.rb")
+      expect(output).to include("- `ActionDispatch::RemoteIp` moved (move_before) in config/application.rb")
+      expect(output).to include("- No custom middleware in app/middleware/ or lib/middleware/")
+    end
+  end
+
+  describe "the Authentication & Authorization section" do
+    it "lists policy classes without naming a gem the app does not bundle" do
+      context = {
+        auth: { authentication: {}, authorization: { policies: %w[PostPolicy], ability_class: "app/models/ability.rb" } }
+      }
+
+      output = described_class.new(context).call
+
+      expect(output).to include("### Policy Classes (app/policies)")
+      expect(output).to include("- `PostPolicy`")
+      expect(output).to include("- Ability class: `app/models/ability.rb`")
+      expect(output).not_to include("Pundit")
+      expect(output).not_to include("CanCanCan")
+    end
+  end
+
   describe "the Controllers section" do
     it "names the strong params methods rather than dumping their permit detail" do
       context = {
@@ -100,6 +208,23 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
       expect(output).to include("- `Sidekiq::Web`\n")
       expect(output).not_to include("Sidekiq::Web` at")
     end
+
+    it "names the app's own in-repo engines under the mounts" do
+      output = described_class.new({
+        engines: { mounted_engines: [ { engine: "Sidekiq::Web", path: "/sidekiq" } ],
+                   in_repo_engines: [ { name: "budgets", path: "modules/budgets" } ] },
+        models: { "Budget" => { file: "modules/budgets/app/models/budget.rb" } }
+      }).call
+
+      expect(output).to include("### In-Repo Engines (1)")
+      expect(output).to include("- `budgets` at `modules/budgets` - 1 model")
+    end
+
+    it "leaves the in-repo heading out for an app with none" do
+      output = described_class.new({ engines: { mounted_engines: [ { engine: "Sidekiq::Web", path: "/s" } ] } }).call
+
+      expect(output).not_to include("In-Repo Engines")
+    end
   end
 
   describe "the Internationalization section" do
@@ -113,6 +238,14 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
 
     it "states a configured list plainly" do
       expect(i18n_output("config")).to include("- Available locales: en, fr")
+    end
+
+    it "says the locale file count leaves out in-repo engine locale dirs" do
+      output = described_class.new({ i18n: { default_locale: "en", available_locales: %w[en],
+                                             total_locale_files: 108, in_repo_locale_files: 2601,
+                                             in_repo_locale_dirs: 28 } }).call
+
+      expect(output).to include("- Locale files: 108 (2601 more under 28 in-repo engine locale dirs, not read)")
     end
   end
 
@@ -201,6 +334,39 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
       ctx[:schema] = { error: "boom", total_tables: 3 }
 
       expect(described_class.new(ctx).call).not_to include("## Database Schema")
+    end
+  end
+
+  describe "SECTIONS" do
+    it "names a renderer that exists for every key" do
+      missing = described_class::SECTIONS.reject do |key|
+        described_class.private_method_defined?("#{key}_section")
+      end
+
+      expect(missing).to be_empty
+    end
+  end
+
+  # The regenerate line at the foot of the file is read by whoever opens it;
+  # a standalone install has no rake task to run.
+  describe "the regenerate command in the footer" do
+    let(:minimal) do
+      { app_name: "App", rails_version: "8.0", ruby_version: "3.4", schema: {}, models: {},
+        routes: {}, gems: {}, conventions: {} }
+    end
+
+    it "names the binary in a standalone install" do
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+      output = described_class.new(minimal).call
+
+      expect(output).to include("Run `rails-ai-context context` to regenerate.")
+      expect(output).not_to include("rails ai:context")
+    end
+
+    it "names the rake task where the app bundles the gem" do
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
+
+      expect(described_class.new(minimal).call).to include("Run `rails ai:context` to regenerate.")
     end
   end
 end

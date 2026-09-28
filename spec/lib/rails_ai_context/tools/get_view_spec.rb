@@ -28,6 +28,36 @@ RSpec.describe RailsAiContext::Tools::GetView do
       expect(text).not_to include("layout)")
     end
 
+    # app/views/layouts holds the partials the layouts render, and the partial
+    # listing already counts them; counting them again as layouts made the
+    # heading claim more layouts than the app has.
+    context "with a partial under app/views/layouts" do
+      let(:partial) { Rails.root.join("app/views/layouts/_gv_footer.html.erb") }
+
+      before do
+        File.write(partial, "<footer></footer>\n")
+        described_class.reset_cache!
+      end
+
+      after do
+        FileUtils.rm_f(partial)
+        described_class.reset_cache!
+      end
+
+      it "does not count it as a layout" do
+        text = described_class.call(detail: "summary").content.first[:text]
+
+        expect(text).to match(/# Views \(\d+ templates?, \d+ partials?, 1 layout\)/)
+      end
+
+      it "leaves it out of the layouts listing" do
+        text = described_class.call(controller: "layouts", detail: "summary").content.first[:text]
+
+        expect(text).to include("layouts/application.html.erb")
+        expect(text).not_to include("_gv_footer")
+      end
+    end
+
     it "lists views for a specific controller" do
       result = described_class.call(controller: "posts", detail: "summary")
       text = result.content.first[:text]
@@ -84,6 +114,38 @@ RSpec.describe RailsAiContext::Tools::GetView do
       result = described_class.call(detail: "full")
       text = result.content.first[:text]
       expect(text).to include("controller:")
+    end
+
+    context "when the payload recorded no Phlex components" do
+      around do |example|
+        Dir.mktmpdir("phlex-fallback") do |dir|
+          @root = dir
+          FileUtils.mkdir_p(File.join(dir, "app/views/reports"))
+          File.write(File.join(dir, "app/views/reports/show.rb"), <<~RUBY)
+            class Reports::Show < ApplicationView
+              def view_template
+                render Components::Reports::Header.new
+                link_to "back", root_path
+              end
+            end
+          RUBY
+          example.run
+        end
+      end
+
+      before do
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+        allow(described_class).to receive(:cached_context).and_return(
+          view_templates: { templates: { "reports/show.rb" => { lines: 6, phlex: true } }, partials: {} }
+        )
+      end
+
+      it "falls back to reading the components and helpers off the file" do
+        text = described_class.call(controller: "reports", detail: "standard").content.first[:text]
+
+        expect(text).to include("components: Components::Reports::Header")
+        expect(text).to include("helpers: link_to")
+      end
     end
 
     context "with Phlex views" do

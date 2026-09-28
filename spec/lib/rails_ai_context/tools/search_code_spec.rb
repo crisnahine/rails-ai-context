@@ -19,6 +19,285 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
     RailsAiContext.configuration.app_root = previous_root
   end
 
+  # The fallback searched a list of extensions case-insensitively while
+  # ripgrep searched every text file case-sensitively, so one app's answer
+  # differed by a factor of seven between the two backends.
+  describe "ripgrep and the Ruby fallback" do
+    it "match the same lines" do
+      skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
+
+      files = {
+        "app/models/listing.rb" => "class Listing\n  # a listing\nend\n",
+        "lib/tasks/listings.rake" => "task :Listing\n",
+        "README.md" => "Listing docs\n",
+        "Gemfile" => "# Listing app\n",
+        ".hidden/listing.rb" => "Listing\n",
+        "app/assets/logo.png" => "\x89PNG\0\0Listing\n"
+      }
+      with_search_app(files) do |dir|
+        lines = ->(rows) { rows.map { |r| "#{r[:file]}:#{r[:line_number]}" }.sort }
+        rg = lines.call(described_class.send(:search_with_ripgrep, "Listing", dir, nil, 1000, dir, 0).first)
+        ruby = lines.call(described_class.send(:search_with_ruby, "Listing", dir, nil, 1000, dir).first)
+
+        expect(ruby).to eq(rg)
+        expect(rg).to eq(%w[Gemfile:1 README.md:1 app/models/listing.rb:1 lib/tasks/listings.rake:1])
+      end
+    end
+
+    # ripgrep reads .ignore and .rgignore in and out of a git repository, with
+    # .rgignore on top; the fallback searched what they hid.
+    it "honour the same .ignore and .rgignore files" do
+      skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
+
+      files = {
+        ".ignore" => "*.gen.rb\n",
+        ".rgignore" => "!keep.gen.rb\n",
+        "lib/.ignore" => "vendored.rb\n",
+        "a.gen.rb" => "Listing\n",
+        "keep.gen.rb" => "Listing\n",
+        "lib/vendored.rb" => "Listing\n",
+        "lib/own.rb" => "Listing\n"
+      }
+      with_search_app(files) do |dir|
+        lines = ->(rows) { rows.map { |r| r[:file] }.sort }
+        rg = lines.call(described_class.send(:search_with_ripgrep, "Listing", dir, nil, 1000, dir, 0).first)
+        ruby = lines.call(described_class.send(:search_with_ruby, "Listing", dir, nil, 1000, dir).first)
+
+        expect(ruby).to eq(rg)
+        expect(rg).to eq(%w[keep.gen.rb lib/own.rb])
+      end
+    end
+
+    # The `ignore` crate (0.4.31, dir.rs `Ignore::matched_ignore`) ranks by
+    # file type across the whole tree: any .rgignore match, deepest first,
+    # beats any .ignore match, which beats any .gitignore, then
+    # .git/info/exclude, then the global file. Depth decides only within one
+    # type. A directory it ignores is never entered.
+    {
+      "a root .ignore whitelist beats a deeper .gitignore" =>
+        [ { ".ignore" => "!keep.log\n", "sub/.gitignore" => "*.log\n" }, %w[sub/keep.log] ],
+      "a root .rgignore whitelist beats a deeper .ignore" =>
+        [ { ".rgignore" => "!keep.log\n", "sub/.ignore" => "*.log\n" }, %w[sub/keep.log] ],
+      "a deeper .gitignore beats a root .gitignore" =>
+        [ { ".gitignore" => "!*.log\n", "sub/.gitignore" => "*.log\n" }, %w[] ],
+      "a root .ignore beats .git/info/exclude" =>
+        [ { ".git/info/exclude" => "*.log\n", ".ignore" => "!keep.log\n" }, %w[sub/keep.log] ],
+      "a directory an .ignore hides is never entered, whatever it whitelists" =>
+        [ { ".ignore" => "sub/\n", "sub/.rgignore" => "!keep.log\n" }, %w[] ]
+    }.each do |layout, (ignore_files, expected)|
+      it "agree when #{layout}" do
+        skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
+
+        files = ignore_files.merge("sub/keep.log" => "Listing\n", "sub/other.log" => "Listing\n")
+        with_search_app(files) do |dir|
+          FileUtils.mkdir_p(File.join(dir, ".git", "info"))
+          File.write(File.join(dir, ".git", "info", "exclude"), ignore_files[".git/info/exclude"].to_s)
+          lines = ->(rows) { rows.map { |r| r[:file] }.sort }
+          rg = lines.call(described_class.send(:search_with_ripgrep, "Listing", dir, nil, 1000, dir, 0).first)
+          ruby = lines.call(described_class.send(:search_with_ruby, "Listing", dir, nil, 1000, dir).first)
+
+          expect(rg).to eq(expected)
+          expect(ruby).to eq(rg)
+        end
+      end
+    end
+
+    # ripgrep walks up from the searched directory to the filesystem root and
+    # reads every ancestor's ignore files; the git ones only as far as the
+    # nearest `.git`, a file or a directory (dir.rs `add_parents` and the
+    # `saw_git` guard in `matched_ignore`, ignore 0.4.31).
+    describe "ignore files outside the searched directory" do
+      def compare(search_root)
+        lines = ->(rows) { rows.map { |r| r[:file] }.sort }
+        [ lines.call(described_class.send(:search_with_ripgrep, "Qzv", search_root, nil, 1000, search_root, 0).first),
+          lines.call(described_class.send(:search_with_ruby, "Qzv", search_root, nil, 1000, search_root).first) ]
+      end
+
+      def write(root, files)
+        files.each do |rel, body|
+          FileUtils.mkdir_p(File.join(root, File.dirname(rel)))
+          File.write(File.join(root, rel), body)
+        end
+      end
+
+      before { skip "requires ripgrep" unless described_class.send(:ripgrep_available?) }
+
+      it "agree for an app nested in a larger repository" do
+        Dir.mktmpdir do |repo|
+          system("git", "init", "-q", repo, exception: true)
+          write(repo, {
+            ".gitignore" => "qzv_generated/\n",
+            "apps/.gitignore" => "*.qzvlog\n",
+            ".git/info/exclude" => "qzv_scratch/\n",
+            "apps/blog/app.rb" => "Qzv\n",
+            "apps/blog/qzv_generated/a.rb" => "Qzv\n",
+            "apps/blog/x.qzvlog" => "Qzv\n",
+            "apps/blog/qzv_scratch/b.rb" => "Qzv\n"
+          })
+          rg, ruby = compare(File.join(File.realpath(repo), "apps", "blog"))
+
+          expect(rg).to eq(%w[app.rb])
+          expect(ruby).to eq(rg)
+        end
+      end
+
+      # A worktree or a submodule has a `.git` file, and its info/exclude lives
+      # in the common git directory the `gitdir:` line leads to.
+      it "agree for an app nested in a worktree" do
+        Dir.mktmpdir do |dir|
+          main = File.join(File.realpath(dir), "main")
+          system("git", "init", "-q", main, exception: true)
+          system("git", "-C", main, "-c", "user.email=a@b.c", "-c", "user.name=t",
+                 "commit", "-q", "--allow-empty", "-m", "init", exception: true)
+          tree = File.join(File.realpath(dir), "tree")
+          system("git", "-C", main, "worktree", "add", "-q", tree, exception: true)
+          write(main, { ".git/info/exclude" => "qzv_scratch/\n" })
+          write(tree, {
+            ".gitignore" => "*.qzvlog\n",
+            "apps/blog/app.rb" => "Qzv\n",
+            "apps/blog/x.qzvlog" => "Qzv\n",
+            "apps/blog/qzv_scratch/b.rb" => "Qzv\n"
+          })
+          rg, ruby = compare(File.join(tree, "apps", "blog"))
+
+          expect(rg).to eq(%w[app.rb])
+          expect(ruby).to eq(rg)
+        end
+      end
+
+      # Inside a repository nested in the app, the app's .gitignore stops at
+      # the nested `.git`; .ignore does not.
+      it "agree for a repository nested inside the app" do
+        Dir.mktmpdir do |dir|
+          app = File.realpath(dir)
+          system("git", "init", "-q", app, exception: true)
+          system("git", "init", "-q", File.join(app, "vendor_repo"), exception: true)
+          write(app, {
+            ".gitignore" => "*.qzvlog\n",
+            ".ignore" => "*.qzvtmp\n",
+            "a.qzvlog" => "Qzv\n",
+            "vendor_repo/b.qzvlog" => "Qzv\n",
+            "vendor_repo/c.qzvtmp" => "Qzv\n",
+            "vendor_repo/d.rb" => "Qzv\n"
+          })
+          rg, ruby = compare(app)
+
+          expect(rg).to eq(%w[vendor_repo/b.qzvlog vendor_repo/d.rb])
+          expect(ruby).to eq(rg)
+        end
+      end
+    end
+
+    # ripgrep matches ignore patterns case-sensitively unless told otherwise,
+    # on a case-insensitive filesystem too; git's core.ignorecase is a git
+    # setting, not a ripgrep one.
+    it "match ignore patterns with the same case sensitivity" do
+      skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
+
+      files = { ".gitignore" => "/lib/foo/\n", "lib/Foo/bar.rb" => "Listing\n" }
+      with_search_app(files) do |dir|
+        FileUtils.mkdir_p(File.join(dir, ".git"))
+        lines = ->(rows) { rows.map { |r| r[:file] }.sort }
+        rg = lines.call(described_class.send(:search_with_ripgrep, "Listing", dir, nil, 1000, dir, 0).first)
+        ruby = lines.call(described_class.send(:search_with_ruby, "Listing", dir, nil, 1000, dir).first)
+
+        expect(rg).to include("lib/Foo/bar.rb")
+        expect(ruby).to eq(rg)
+      end
+    end
+
+    # ripgrep does not follow a symlink, to a file or to a directory, unless
+    # given --follow; the fallback reported a linked file under its target,
+    # so the target's lines came back twice.
+    it "leave symlinks alone the same way" do
+      skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
+
+      files = { "app/real.rb" => "Listing\n", "lib/inner/deep.rb" => "Listing\n" }
+      with_search_app(files) do |dir|
+        File.symlink(File.join(dir, "app", "real.rb"), File.join(dir, "app", "linked.rb"))
+        File.symlink(File.join(dir, "lib", "inner"), File.join(dir, "lib", "linked_dir"))
+        lines = ->(rows) { rows.map { |r| "#{r[:file]}:#{r[:line_number]}" }.sort }
+        rg = lines.call(described_class.send(:search_with_ripgrep, "Listing", dir, nil, 1000, dir, 0).first)
+        ruby = lines.call(described_class.send(:search_with_ruby, "Listing", dir, nil, 1000, dir).first)
+
+        expect(rg).to eq(%w[app/real.rb:1 lib/inner/deep.rb:1])
+        expect(ruby).to eq(rg)
+      end
+    end
+
+    # The fallback returned match lines only while ripgrep returned their
+    # context too, so the two answered the default call with other lines.
+    [ 0, 2, 5 ].each do |ctx|
+      it "emit the same rows with #{ctx} lines of context" do
+        skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
+
+        lines = (1..30).map { |i| [ 1, 2, 6, 14, 15, 30 ].include?(i) ? "Qzv #{i}" : "line #{i}" }
+        files = { "a.rb" => lines.join("\n") + "\n", "b/c.rb" => "x\nQzv\ny\n" }
+        with_search_app(files) do |dir|
+          rows = ->(found) { found.map { |r| [ r[:file], r[:line_number], r[:match] != false ] } }
+          rg = rows.call(described_class.send(:search_with_ripgrep, "Qzv", dir, nil, 1000, dir, ctx).first)
+          ruby = rows.call(described_class.send(:search_with_ruby, "Qzv", dir, nil, 1000, dir, ctx).first)
+
+          expect(ruby).to eq(rg)
+        end
+      end
+    end
+
+    it "cap the same rows" do
+      skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
+
+      with_search_app("a.rb" => (1..40).map { |i| i.even? ? "Qzv" : "x" }.join("\n") + "\n") do |dir|
+        rows = ->(found) { found.map { |r| [ r[:file], r[:line_number] ] } }
+        rg = rows.call(described_class.send(:search_with_ripgrep, "Qzv", dir, nil, 7, dir, 2).first)
+        ruby = rows.call(described_class.send(:search_with_ruby, "Qzv", dir, nil, 7, dir, 2).first)
+
+        expect(ruby).to eq(rg)
+      end
+    end
+
+    # A matching line in a Latin-1 file is not valid UTF-8, and splitting
+    # ripgrep's output raised, which came back as a one-row answer reading
+    # `error:0: invalid byte sequence in UTF-8`.
+    it "keep a match in a file that is not UTF-8" do
+      skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
+
+      with_search_app("app/plain.rb" => "Listing\n") do |dir|
+        File.binwrite(File.join(dir, "app", "latin.rb"), "# caf\xE9 Listing\n".b)
+        rows = described_class.send(:search_with_ripgrep, "Listing", dir, nil, 1000, dir, 0).first
+
+        expect(rows.map { |r| r[:file] }.sort).to eq(%w[app/latin.rb app/plain.rb])
+        expect(rows.map { |r| r[:file] }).not_to include("error")
+      end
+    end
+
+    # ripgrep reads an excluded path the way a .gitignore line reads: `docs`
+    # names a directory at any depth, and never `logo/` beside `log`. The
+    # fallback matched a prefix of the top-level path, so it searched a nested
+    # spec/fixtures/docs and skipped a top-level logo/ directory.
+    it "exclude the same paths" do
+      skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
+
+      files = {
+        "spec/fixtures/docs/a.json" => "Listing\n",
+        "logo/b.rb" => "Listing\n",
+        "log/c.rb" => "Listing\n",
+        "engines/shop/spec/d_spec.rb" => "Listing\n",
+        "app/e.rb" => "Listing\n"
+      }
+      with_search_app(files) do |dir|
+        lines = ->(rows) { rows.map { |r| r[:file] }.sort }
+        [ false, true ].each do |exclude_tests|
+          rg = lines.call(described_class.send(:search_with_ripgrep, "Listing", dir, nil, 1000, dir, 0,
+                                               exclude_tests: exclude_tests).first)
+          ruby = lines.call(described_class.send(:search_with_ruby, "Listing", dir, nil, 1000, dir,
+                                                 exclude_tests: exclude_tests).first)
+
+          expect(ruby).to eq(rg)
+        end
+      end
+    end
+  end
+
   describe ".call" do
     it "rejects invalid file_type with special characters" do
       result = described_class.call(pattern: "test", file_type: "rb;rm -rf /")
@@ -195,6 +474,173 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
           described_class.call(context_lines: 0, **kwargs).content.first[:text]
         end
 
+        # Whitehall: `--pattern scheduled_publication --limit 2` answered "No
+        # matches at offset 0. Total: 56+ matches." A page size is never an
+        # answer of nothing.
+        it "shows a match even when the limit is smaller than its context block" do
+          buried = <<~RB
+            class Buried
+              def one; end
+
+              def two; end
+
+              def scheduled_publication; end
+            end
+          RB
+
+          with_search_app("app/models/buried.rb" => buried) do
+            text = described_class.call(pattern: "scheduled_publication", limit: 2, context_lines: 2)
+                                  .content.first[:text]
+
+            expect(text).not_to include("No matches at offset")
+            expect(text).to match(/buried\.rb:6:.*scheduled_publication/)
+          end
+        end
+
+        # config/application.yml is figaro's secrets file. One backend read it
+        # and the other did not, and the answer that read it carried the
+        # values.
+        it "never reads a sensitive file" do
+          with_search_app("config/application.yml" => "JWT_HMAC_SECRET: aaaaaaaaaaaaaaaa\n",
+                          "app/models/user.rb" => "class User\n  JWT_HMAC_SECRET = 1\nend\n") do
+            text = text_for(pattern: "JWT_HMAC_SECRET")
+
+            expect(text).to include("user.rb")
+            expect(text).not_to include("application.yml")
+          end
+        end
+
+        # ripgrep applies .gitignore inside a git repository and not outside
+        # one, so a Ruby scan that ignores it agrees with ripgrep on nothing.
+        it "skips a gitignored file inside a git repository" do
+          files = { ".gitignore" => "generated/\n", "generated/dump.rb" => "SECRET_TOKEN = 1\n",
+                    "app/models/user.rb" => "SECRET_TOKEN = 2\n" }
+          with_search_app(files) do |dir|
+            FileUtils.mkdir_p(File.join(dir, ".git"))
+            text = text_for(pattern: "SECRET_TOKEN")
+
+            expect(text).to include("user.rb")
+            expect(text).not_to include("generated/dump.rb")
+          end
+        end
+
+        it "skips a file a nested .gitignore hides" do
+          files = { "config/.gitignore" => "local_token.rb\n", "config/local_token.rb" => "SECRET_TOKEN = 1\n",
+                    "app/models/user.rb" => "SECRET_TOKEN = 2\n" }
+          with_search_app(files) do |dir|
+            FileUtils.mkdir_p(File.join(dir, ".git"))
+            text = text_for(pattern: "SECRET_TOKEN")
+
+            expect(text).to include("user.rb")
+            expect(text).not_to include("local_token.rb")
+          end
+        end
+
+        it "reads the same file outside a git repository, the way ripgrep does" do
+          files = { ".gitignore" => "generated/\n", "generated/dump.rb" => "SECRET_TOKEN = 1\n" }
+          with_search_app(files) do
+            expect(text_for(pattern: "SECRET_TOKEN")).to include("generated/dump.rb")
+          end
+        end
+
+        # Defence in depth on the same shape: a secret in a file no pattern
+        # names still leaves through this tool's own output.
+        it "filters a credential-shaped value out of the line it returns" do
+          with_search_app("config/custom_secrets.yml" => "jwt_hmac_secret: #{'a1' * 43}\n") do
+            text = text_for(pattern: "jwt_hmac_secret")
+
+            expect(text).to include("jwt_hmac_secret")
+            expect(text).to include("[FILTERED]")
+            expect(text).not_to include("a1a1")
+          end
+        end
+
+        # Each row was redacted alone, so a PEM key's body lines came back in
+        # plaintext; the key is only a key between its markers.
+        it "filters every body line of a PEM key it returns" do
+          body = %w[MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun
+                    VTLw7onLRnrq0/IzW7yWR7QkrmBL7jTKEn5u+qKhbwKfBstIs+bMY2Zkp18gnTxK
+                    LxoS2tFczGkPLPgizskuemMghRniWaoLcyehkd3qqGElvW/VDL5AaWTg0nLVkjRo]
+          source = [ "KEY = <<~PEM", "  -----BEGIN RSA PRIVATE KEY-----", *body.map { |l| "  #{l}" },
+                     "  -----END RSA PRIVATE KEY-----", "PEM" ].join("\n") + "\n"
+          with_search_app("lib/keys/signer.rb" => source) do
+            [ { pattern: "PRIVATE KEY", context_lines: 3 }, { pattern: "LxoS2tFczGkPLPgizsk" } ].each do |args|
+              [ false, true ].each do |group_by_file|
+                text = described_class.call(**args, group_by_file: group_by_file).content.first[:text]
+                rows = text.lines.drop(1).join # the header echoes the pattern searched for
+
+                # A match inside the filtered body confirms nothing, so no row comes back.
+                expect(text).to include("No results found") if args[:pattern].start_with?("LxoS")
+                expect(rows).not_to match(/MIIEow|VTLw7on|LxoS2tF/)
+              end
+            end
+          end
+        end
+
+        # A file is as good a scope as a directory; "Path not found" for one
+        # sent the caller off to search the whole app.
+        it "searches a single file named as the path" do
+          files = { "app/models/user.rb" => "class User\n  def Qzv; end\nend\n", "app/models/post.rb" => "Qzv\n" }
+          with_search_app(files) do
+            text = described_class.call(pattern: "Qzv", path: "app/models/user.rb", context_lines: 0).content.first[:text]
+
+            expect(text).to include("app/models/user.rb:2")
+            expect(text).not_to include("post.rb")
+            expect(text).not_to include("Path not found")
+          end
+        end
+
+        it "refuses a sensitive file named as the path, or linked to by it" do
+          with_search_app("config/master.key" => "Qzv\n") do |dir|
+            File.symlink(File.join(dir, "config", "master.key"), File.join(dir, "config", "notes.txt"))
+
+            %w[config/master.key config/notes.txt].each do |path|
+              expect(described_class.call(pattern: "Qzv", path: path).content.first[:text]).to include("Path not allowed")
+            end
+          end
+        end
+
+        # The pattern ran on the raw file, so a filtered row answered whether a secret starts `3b`.
+        it "returns no row for a match that falls only inside a filtered value" do
+          source = "#!/bin/sh\nexport APP_SECRET_TOKEN=#{'3b' * 20}\necho done\n"
+          with_search_app("bin/setup" => source) do
+            %w[APP_SECRET_TOKEN=3b 3b3b3b].each do |pattern|
+              expect(text_for(pattern: pattern, context_lines: 1)).to include("No results found")
+            end
+            text = text_for(pattern: "APP_SECRET_TOKEN=", context_lines: 0)
+            expect(text).to include("1 match", "bin/setup:2: export APP_SECRET_TOKEN=[FILTERED]")
+          end
+        end
+
+        it "answers a right and a wrong guess at a secret's prefix the same way with context on" do
+          source = "class Thing\n  # foo_marker\n  API_TOKEN = \"Zx9Yq7Wk3Lp5Vn8Rt2Mb\"\n  BAR = 2\nend\n"
+          with_search_app("app/models/thing.rb" => source) do
+            right, wrong = %w[Zx9Y QQQQ].map do |guess|
+              text_for(pattern: "foo_marker|#{guess}", context_lines: 1).lines.drop(1).join
+            end
+
+            expect(right).to eq(wrong)
+            expect(right).to include(%(thing.rb:3: API_TOKEN = "[FILTERED]"))
+          end
+        end
+
+        it "shows the code after a regex that names a PEM marker" do
+          source = %(PATTERNS = [\n  { name: "RSA", regex: /-----BEGIN RSA PRIVATE KEY-----/ }\n].freeze\n\ndef scrub(data)\nend\n)
+          with_search_app("app/services/scrubber.rb" => source) do
+            expect(text_for(pattern: "def ", context_lines: 0)).to include("scrubber.rb:5: def scrub(data)")
+          end
+        end
+
+        # Ripgrep matches a line without its terminator, so `\s$` means trailing whitespace.
+        it "matches a line without its newline" do
+          with_search_app("app/models/a.rb" => "alpha\nbeta \ngamma\r\ndelta\n") do
+            text = text_for(pattern: "\\s$", context_lines: 0)
+
+            expect(text).to include("2 matches")
+            expect(text).to include("a.rb:2", "a.rb:3")
+          end
+        end
+
         it "matches the pattern literally instead of as a regex" do
           with_search_app("app/models/status.rb" => status_source) do
             text = text_for(pattern: "def reblog?", exact_match: true)
@@ -272,6 +718,24 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
     # The parenthesis the old scan required is optional in Ruby, and a model
     # whose predicates read `requesting_access? && account.present?` reported
     # calling nothing at all.
+    it "lists a scheduled enqueue among the calls a body makes" do
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+
+      source = <<~RB
+        class Order < ApplicationRecord
+          def schedule_sync
+            RefreshWorker.perform_in(5.minutes, id)
+          end
+        end
+      RB
+
+      with_search_app("app/models/order.rb" => source) do
+        text = described_class.call(pattern: "schedule_sync", match_type: "trace").content.first[:text]
+
+        expect(text).to include("`RefreshWorker.perform_in`")
+      end
+    end
+
     it "reads the calls a body makes without parentheses" do
       allow(RailsAiContext).to receive(:tier).and_return(:static)
 
@@ -586,6 +1050,78 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
 
         expect(text).to include("`GET /posts`")
       end
+    end
+  end
+  # Both backends read one exclusion list and read it the same way: a trailing
+  # slash is a directory, a slash-free entry is a basename at any depth.
+  describe "the generated-file exclusions" do
+    let(:fixture) do
+      {
+        "app/models/status.rb" => "NEEDLE_TOKEN in source\n",
+        "CLAUDE.md" => "NEEDLE_TOKEN in a generated file\n",
+        ".claude/rules/models.md" => "NEEDLE_TOKEN in a generated rule\n",
+        ".mcp.json" => "NEEDLE_TOKEN in mcp config\n",
+        ".codex/config.toml" => "NEEDLE_TOKEN in codex config\n",
+        "AGENTS.md" => "NEEDLE_TOKEN in agents\n",
+        ".ai-context.json" => "NEEDLE_TOKEN in the json export\n",
+        ".claude/settings.json" => "NEEDLE_TOKEN in a hand-written setting\n",
+        "app/services/AGENTS.md" => "NEEDLE_TOKEN in a nested generated file\n",
+        # .md is outside search_extensions, so this is the nested entry the Ruby fallback can reach.
+        "app/services/opencode.json" => "NEEDLE_TOKEN in a nested generated config\n"
+      }
+    end
+
+    before { allow(RailsAiContext).to receive(:tier).and_return(:static) }
+
+    def files_found
+      text = described_class.call(pattern: "NEEDLE_TOKEN", context_lines: 0, limit: 50).content.first[:text]
+      text.scan(/^>?\s*([^\s:]+):\d+:/).flatten.uniq.sort
+    end
+
+    it "hands ripgrep the list the Ruby fallback filters on" do
+      allow(described_class).to receive(:ripgrep_available?).and_return(true)
+      captured = nil
+      allow(Open3).to receive(:capture2) do |*args, **_kwargs|
+        captured = args
+        [ "", instance_double(Process::Status, success?: true, exitstatus: 0) ]
+      end
+
+      with_search_app(fixture) { described_class.call(pattern: "NEEDLE_TOKEN") }
+
+      globs = captured.grep(/\A--glob=!/).map { |g| g.sub("--glob=!", "") }
+      expect(globs).to include(*described_class.send(:ai_context_paths))
+      expect(globs).not_to include("**/AGENTS.md")
+    end
+
+    # RIPGREP_CONFIG_PATH can turn on --hidden; the AI tools' own directories must stay out.
+    it "excludes the directories an AI tool owns outright" do
+      allow(described_class).to receive(:ripgrep_available?).and_return(true)
+      captured = nil
+      allow(Open3).to receive(:capture2) do |*args, **_kwargs|
+        captured = args
+        [ "", instance_double(Process::Status, success?: true, exitstatus: 0) ]
+      end
+
+      with_search_app(fixture) { described_class.call(pattern: "NEEDLE_TOKEN") }
+
+      globs = captured.grep(/\A--glob=!/).map { |g| g.sub("--glob=!", "") }
+      expect(globs).to include(".claude/", ".cursor/", ".codex/")
+      expect(globs).not_to include(".github/", ".vscode/")
+    end
+
+    it "hides the same files on the ripgrep and Ruby paths" do
+      skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
+
+      with_ripgrep = with_search_app(fixture) { files_found }
+      without_ripgrep = with_search_app(fixture) do
+        allow(described_class).to receive(:ripgrep_available?).and_return(false)
+        files_found
+      end
+
+      expect(with_ripgrep).to eq(without_ripgrep)
+      expect(with_ripgrep).to include("app/models/status.rb")
+      expect(with_ripgrep).not_to include("CLAUDE.md", ".claude/rules/models.md", ".mcp.json", ".codex/config.toml")
+      expect(with_ripgrep).not_to include("app/services/AGENTS.md", "app/services/opencode.json")
     end
   end
 end

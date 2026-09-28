@@ -32,13 +32,6 @@ module RailsAiContext
           end
         end
 
-        # Register one listener onto an existing dispatcher. Returns the events.
-        def register(dispatcher, listener)
-          events_for(listener).tap do |events|
-            dispatcher.register(listener, *events) if events.any?
-          end
-        end
-
         # The listener's handlers, sorted for a stable registration order.
         def events_for(listener)
           events = listener.public_methods.grep(HANDLER_PATTERN).sort

@@ -3,13 +3,6 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener do
-  def parse_and_dispatch(source, **options)
-    result     = Prism.parse(source)
-    listener   = described_class.new(**options)
-    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-    listener.results
-  end
-
   it "detects public instance methods" do
     source = <<~RUBY
       class User

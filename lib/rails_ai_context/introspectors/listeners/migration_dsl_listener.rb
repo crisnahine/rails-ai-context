@@ -27,11 +27,24 @@ module RailsAiContext
           REFERENCE_ACTIONS | FOREIGN_KEY_ACTIONS
         ).freeze
 
+        # `table_helpers` names methods the replayed files define that forward
+        # their first argument to create_table; a call to one creates a table.
+        def initialize(table_helpers: [])
+          super()
+          @table_helpers = table_helpers
+        end
+
         def on_call_node_enter(node)
-          return unless node.receiver.nil? && ALL_ACTIONS.include?(node.name)
+          return unless node.receiver.nil?
+
+          if @table_helpers.include?(node.name)
+            args = node.arguments&.arguments || []
+            return extract_table_action(node, literal_string(args[0]), args, action: :create_table)
+          end
+          return unless ALL_ACTIONS.include?(node.name)
 
           args = node.arguments&.arguments || []
-          table = string_or_symbol(args[0])
+          table = literal_string(args[0])
 
           if SINGLE_TABLE_ACTIONS.include?(node.name)
             extract_table_action(node, table, args)
@@ -48,10 +61,10 @@ module RailsAiContext
 
         private
 
-        def extract_table_action(node, table, args)
+        def extract_table_action(node, table, args, action: node.name)
           options = extract_keyword_options(node)
           result = {
-            action:   node.name,
+            action:   action,
             table:    table,
             options:  options,
             location: node.location.start_line
@@ -59,14 +72,14 @@ module RailsAiContext
 
           # rename_table has a second positional arg for the new name
           if node.name == :rename_table
-            result[:new_name] = string_or_symbol(args[1])
+            result[:new_name] = literal_string(args[1])
           end
 
           @results << result
         end
 
         def extract_column_action(node, table, args)
-          column = string_or_symbol(args[1])
+          column = literal_string(args[1])
           options = extract_keyword_options(node)
 
           result = {
@@ -79,34 +92,38 @@ module RailsAiContext
 
           case node.name
           when :add_column
-            result[:column_type] = symbol_value(args[2])
+            result[:column_type] = literal_string(args[2])
           when :rename_column
-            result[:new_name] = string_or_symbol(args[2])
+            result[:new_name] = literal_string(args[2])
           when :change_column
-            result[:column_type] = symbol_value(args[2])
+            result[:column_type] = literal_string(args[2])
           when :change_column_null
             # The nullability is the third positional, not a keyword.
             result[:null] = boolean_value(args[2])
+          when :change_column_default
+            # The new default may be positional as well as from:/to:.
+            result[:new_default] = extract_value(args[2]) if args[2] && !args[2].is_a?(Prism::KeywordHashNode)
           end
 
           @results << result
         end
 
         def extract_index_action(node, table, args)
-          columns = resolve_columns(args[1])
+          columns = literal_strings(args[1])
           options = extract_keyword_options(node)
 
           @results << {
             action:   node.name,
             table:    table,
             columns:  columns,
+            string_key: args[1].is_a?(Prism::StringNode),
             options:  options,
             location: node.location.start_line
           }
         end
 
         def extract_reference_action(node, table, args)
-          ref = string_or_symbol(args[1])
+          ref = literal_string(args[1])
           options = extract_keyword_options(node)
 
           @results << {
@@ -119,7 +136,7 @@ module RailsAiContext
         end
 
         def extract_foreign_key_action(node, table, args)
-          to_table = string_or_symbol(args[1])
+          to_table = literal_string(args[1])
           options = extract_keyword_options(node)
 
           @results << {
@@ -129,42 +146,6 @@ module RailsAiContext
             options:  options,
             location: node.location.start_line
           }
-        end
-
-        def string_or_symbol(node)
-          case node
-          when Prism::StringNode then node.unescaped
-          when Prism::SymbolNode then node.value
-          else nil
-          end
-        end
-
-        def symbol_value(node)
-          case node
-          when Prism::SymbolNode then node.value
-          when Prism::StringNode then node.unescaped
-          else nil
-          end
-        end
-
-        def boolean_value(node)
-          case node
-          when Prism::TrueNode then true
-          when Prism::FalseNode then false
-          else nil
-          end
-        end
-
-        def resolve_columns(node)
-          case node
-          when Prism::ArrayNode
-            node.elements.filter_map { |e| string_or_symbol(e) }
-          when Prism::StringNode
-            [ node.unescaped ]
-          when Prism::SymbolNode
-            [ node.value ]
-          else []
-          end
         end
       end
     end

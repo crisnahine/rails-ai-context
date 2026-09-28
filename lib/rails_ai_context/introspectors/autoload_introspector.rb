@@ -5,17 +5,11 @@ module RailsAiContext
     # Extracts the autoloading configuration: Zeitwerk vs Classic, custom
     # inflections, autoload/eager-load paths, collapsed dirs, and ignored
     # paths. Covers RAILS_NERVOUS_SYSTEM.md §3 (Autoloading - Zeitwerk).
-    class AutoloadIntrospector
+    class AutoloadIntrospector < Base
       extend StaticTier
       static_tier :runtime_only
 
       INFLECTION_DIRECTIVES = %i[acronym plural singular irregular uncountable human].freeze
-
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
 
       # @return [Hash] autoloader configuration
       def call
@@ -29,15 +23,9 @@ module RailsAiContext
           eager_load: !!app.config.eager_load,
           custom_inflections: extract_custom_inflections
         }
-      rescue => e
-        RailsAiContext.debug_fail(e, { error: e.message }, label: "AutoloadIntrospector#call")
       end
 
       private
-
-      def root
-        app.root.to_s
-      end
 
       def zeitwerk_available?
         defined?(Zeitwerk) && defined?(Rails) && Rails.respond_to?(:autoloaders) && Rails.autoloaders.respond_to?(:main)
@@ -132,8 +120,13 @@ module RailsAiContext
 
       # Rails lists a path once per railtie that contributed it, and every
       # engine's paths sit under the machine's gem prefix rather than the app.
+      # This gem's own directories are not the app's, and a path with no
+      # portable form is left out rather than carried absolute.
       def relativize(paths)
-        PortablePath.relativize_all(paths, root)
+        own = defined?(RailsAiContext::Engine) ? "#{RailsAiContext::Engine.root}#{File::SEPARATOR}" : nil
+        app_root = "#{root}#{File::SEPARATOR}"
+        Array(paths).reject { |path| own && path.to_s.start_with?(own) && !path.to_s.start_with?(app_root) }
+                    .filter_map { |path| PortablePath.portable(path, root) }.uniq
       end
     end
   end

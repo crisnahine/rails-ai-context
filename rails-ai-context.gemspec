@@ -52,7 +52,7 @@ Gem::Specification.new do |spec|
   spec.files = Dir.chdir(__dir__) do
     IO.popen([ "git", "ls-files", "-z" ], err: IO::NULL, &:read).split("\x0").reject do |f|
       (File.expand_path(f) == __FILE__) ||
-        f.start_with?(*%w[bin/ test/ spec/ features/ .git .github appveyor Gemfile])
+        f.start_with?(*%w[bin/ demo/ gemfiles/ test/ spec/ features/ .git .github appveyor Gemfile])
     end
   end
 
@@ -63,7 +63,7 @@ Gem::Specification.new do |spec|
   # Core dependencies
   spec.add_dependency "mcp", ">= 0.13", "< 2.0"   # Official MCP Ruby SDK; schemas read via Tool#to_h (stable 0.13 to 1.x)
   spec.add_dependency "railties", ">= 7.0", "< 9.0"
-  spec.add_dependency "thor", ">= 1.0", "< 3.0"
+  spec.add_dependency "thor", ">= 1.2", "< 3.0"   # 1.0 and 1.1 reference DidYouMean::SPELL_CHECKERS, gone in Ruby 3.1
   spec.add_dependency "zeitwerk", "~> 2.6"         # Autoloading
 
   # AST foundation (Phase 1: Ground Truth Engine)

@@ -100,6 +100,34 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       expect(text).to include("Data loss")
     end
 
+    # add_index names the index index_<table>_on_<col> and fails only when
+    # that name exists. A composite index that merely contains the column is
+    # no collision, and it is exactly when the new index is worth adding.
+    describe "the duplicate-index warning" do
+      def advise(indexes)
+        allow(described_class).to receive(:cached_context).and_return({
+          schema: { tables: { "posts" => {
+            columns: [ { name: "blog_id", type: "integer" }, { name: "author_id", type: "integer" } ],
+            indexes: indexes
+          } } },
+          models: {}
+        })
+        described_class.call(action: "add_index", table: "posts", column: "author_id").content.first[:text]
+      end
+
+      it "warns when the index add_index would name already exists" do
+        text = advise([ { name: "index_posts_on_author_id", columns: %w[author_id], unique: false } ])
+
+        expect(text).to include("already exists")
+      end
+
+      it "does not warn when the column only sits in a composite index" do
+        text = advise([ { name: "index_posts_on_blog_id_and_author_id", columns: %w[blog_id author_id], unique: false } ])
+
+        expect(text).not_to include("already exists")
+      end
+    end
+
     it "generates add_index migration" do
       response = described_class.call(action: "add_index", table: "posts", column: "title")
       text = response.content.first[:text]

@@ -70,7 +70,22 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
       after { FileUtils.rm_f(init_path) }
 
       it "detects rack_attack rate limiting" do
-        expect(result[:rate_limiting]).to eq({ rack_attack: true })
+        expect(result[:rate_limiting]).to eq({ rack_attack: true, file: "config/initializers/rack_attack.rb" })
+      end
+    end
+
+    context "with a rack-attack initializer spelled with a hyphen and a load-order prefix" do
+      let(:init_path) { File.join(Rails.root, "config/initializers/009-rack-attack.rb") }
+
+      before do
+        FileUtils.mkdir_p(File.dirname(init_path))
+        File.write(init_path, "# Rack::Attack config")
+      end
+
+      after { FileUtils.rm_f(init_path) }
+
+      it "detects it and names the file the app has" do
+        expect(result[:rate_limiting]).to eq({ rack_attack: true, file: "config/initializers/009-rack-attack.rb" })
       end
     end
 
@@ -108,9 +123,325 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
       end
     end
 
+    context "with a serializer layer inside an in-repo engine" do
+      let(:engine_dir) { File.join(Rails.root, "engines/billing/app/services/serializers") }
+
+      before do
+        FileUtils.mkdir_p(engine_dir)
+        File.write(File.join(engine_dir, "invoice_serializer.rb"), "class InvoiceSerializer; end\n")
+      end
+
+      after { FileUtils.rm_rf(File.join(Rails.root, "engines")) }
+
+      it "names it the way it names the app's own" do
+        expect(result[:serializers][:serializer_dirs])
+          .to include({ path: "engines/billing/app/services/serializers", files: 1 })
+      end
+    end
+
+    context "with an ActiveRecord coder under app/models/serializers" do
+      let(:coder_dir) { File.join(Rails.root, "app/models/serializers") }
+
+      before do
+        FileUtils.mkdir_p(coder_dir)
+        File.write(File.join(coder_dir, "indifferent_hash_serializer.rb"), <<~RUBY)
+          module Serializers
+            module IndifferentHashSerializer
+              module_function
+
+              def dump(hash) = hash
+
+              def load(value) = value.to_h.with_indifferent_access
+            end
+          end
+        RUBY
+      end
+
+      after { FileUtils.rm_rf(coder_dir) }
+
+      it "does not call it a serializer layer" do
+        expect(result[:serializers][:serializer_dirs]).to be_nil
+      end
+    end
+
+    context "with a Grape API under lib/api" do
+      let(:grape_dir) { File.join(Rails.root, "lib/api/v3/work_packages") }
+
+      before do
+        FileUtils.mkdir_p(grape_dir)
+        File.write(File.join(grape_dir, "api.rb"), "module API; module V3; class WorkPackagesAPI < ::API::OpenProjectAPI; end; end; end\n")
+      end
+
+      after { FileUtils.rm_rf(File.join(Rails.root, "lib/api")) }
+
+      it "reports the version and the directory it came from" do
+        expect(result[:api_versioning]).to include("v3")
+        expect(result[:api_versioning_dirs]).to include("lib/api/v3")
+      end
+    end
+
+    context "with a GraphQL schema whose query fields come from a macro" do
+      let(:graphql_dir) { File.join(Rails.root, "app/graphql") }
+
+      before do
+        FileUtils.mkdir_p(File.join(graphql_dir, "types"))
+        FileUtils.mkdir_p(File.join(graphql_dir, "mutations"))
+        File.write(File.join(graphql_dir, "types/base_object.rb"), "module Types; class BaseObject; end; end\n")
+        File.write(File.join(graphql_dir, "types/user_type.rb"), "module Types; class UserType < BaseObject; end; end\n")
+        File.write(File.join(graphql_dir, "mutations/base_mutation.rb"),
+                   "module Mutations; class BaseMutation < GraphQL::Schema::RelayClassicMutation; end; end\n")
+        File.write(File.join(graphql_dir, "types/query_type.rb"), <<~RUBY)
+          module Types
+            class QueryType < Types::BaseObject
+              collection_and_object_by_id_fields :user, Types::UserType
+            end
+          end
+        RUBY
+      end
+
+      after { FileUtils.rm_rf(graphql_dir) }
+
+      it "counts a concrete type that subclasses graphql-ruby directly" do
+        File.write(File.join(graphql_dir, "types/speed_grader_settings_type.rb"),
+                   "module Types; class SpeedGraderSettingsType < GraphQL::Schema::Object; end; end\n")
+
+        expect(result[:graphql][:types]).to eq(3)
+      end
+
+      it "counts a type whose file also declares a graphql-ruby loader" do
+        File.write(File.join(graphql_dir, "types/learning_outcome_type.rb"), <<~RUBY)
+          module Types
+            class LearningOutcomeType < Types::BaseObject
+              class AssessedLoader < GraphQL::Batch::Loader
+              end
+            end
+          end
+        RUBY
+
+        expect(result[:graphql][:types]).to eq(3)
+      end
+
+      it "counts a type that names itself in the schema even when something inherits it" do
+        File.write(File.join(graphql_dir, "types/assignment_type.rb"), <<~RUBY)
+          module Types
+            class AssignmentType < Types::BaseObject
+              graphql_name "Assignment"
+            end
+          end
+        RUBY
+        File.write(File.join(graphql_dir, "types/quiz_assignment_type.rb"),
+                   "module Types; class QuizAssignmentType < Types::AssignmentType; end; end\n")
+
+        expect(result[:graphql][:types]).to eq(4)
+      end
+
+      it "counts a Base-named graphql-ruby subclass that puts values in the schema" do
+        File.write(File.join(graphql_dir, "types/base_currency_type.rb"), <<~RUBY)
+          module Types
+            class BaseCurrencyType < GraphQL::Schema::Enum
+              value "USD"
+              value "EUR"
+            end
+          end
+        RUBY
+
+        expect(result[:graphql][:types]).to eq(3)
+      end
+
+      it "leaves out a base that puts nothing in the schema, inherited or not" do
+        File.write(File.join(graphql_dir, "types/base_scalar.rb"),
+                   "module Types; class BaseScalar < GraphQL::Schema::Scalar; end; end\n")
+
+        expect(result[:graphql][:types]).to eq(2)
+      end
+
+      it "counts a type whose name starts with Base but which nothing inherits from" do
+        File.write(File.join(graphql_dir, "types/base_currency_type.rb"),
+                   "module Types; class BaseCurrencyType < Types::BaseObject; end; end\n")
+
+        expect(result[:graphql][:types]).to eq(3)
+      end
+
+      it "leaves out the base classes and says the query fields are not countable" do
+        graphql = result[:graphql]
+
+        expect(graphql[:types]).to eq(2)
+        expect(graphql[:mutations]).to eq(0)
+        expect(graphql).not_to have_key(:queries)
+        expect(graphql[:query_root]).to eq(
+          { file: "app/graphql/types/query_type.rb", fields: 0, macro_declared: true }
+        )
+      end
+    end
+
     describe "cors_config" do
+      context "with an if/elsif/else chain of origins" do
+        let(:cors_path) { File.join(Rails.root, "config/initializers/cors.rb") }
+
+        before do
+          FileUtils.mkdir_p(File.dirname(cors_path))
+          File.write(cors_path, <<~RUBY)
+            Rails.application.config.middleware.insert_before 0, Rack::Cors do
+              allow do
+                if Rails.env.production?
+                  origins "https://app.example.com"
+                elsif Rails.env.staging?
+                  origins "https://staging.example.com"
+                else
+                  origins "*"
+                end
+                resource "*"
+              end
+            end
+          RUBY
+        end
+
+        after { FileUtils.rm_f(cors_path) }
+
+        it "gives each branch its own condition and marks the last as otherwise" do
+          expect(result[:cors_config][:allows].first[:origins]).to eq([
+            { value: "https://app.example.com", condition: "Rails.env.production?" },
+            { value: "https://staging.example.com", condition: "Rails.env.staging?" },
+            { value: "*", otherwise: true }
+          ])
+        end
+      end
+
       it "returns nil when no cors initializer exists" do
         expect(result[:cors_config]).to be_nil
+      end
+
+      context "with the allow block commented out and no gem named" do
+        let(:cors_path) { File.join(Rails.root, "config/initializers/cors.rb") }
+
+        before do
+          FileUtils.mkdir_p(File.dirname(cors_path))
+          File.write(cors_path, <<~RUBY)
+            # allow do
+            #   origins "example.com"
+            #   resource "*", headers: :any
+            # end
+          RUBY
+        end
+
+        after { FileUtils.rm_f(cors_path) }
+
+        it "reads it as a CORS config with nothing active in it" do
+          expect(result[:cors_config]).to eq(
+            { file: "config/initializers/cors.rb", origins: [], allows: [], commented_out: true }
+          )
+        end
+      end
+
+      context "with an initializer whose name matches but configures no CORS" do
+        let(:cors_path) { File.join(Rails.root, "config/initializers/legacy_cors.rb") }
+
+        before do
+          FileUtils.mkdir_p(File.dirname(cors_path))
+          File.write(cors_path, "Rails.application.config.x.legacy_cors_reporting = true\n")
+        end
+
+        after { FileUtils.rm_f(cors_path) }
+
+        it "is not a CORS config" do
+          expect(result[:cors_config]).to be_nil
+        end
+      end
+
+      context "with an initializer that defines its own CORS middleware" do
+        let(:cors_path) { File.join(Rails.root, "config/initializers/008-rack-cors.rb") }
+
+        before do
+          FileUtils.mkdir_p(File.dirname(cors_path))
+          File.write(cors_path, <<~RUBY)
+            class Discourse::Cors
+              def call(env)
+              end
+            end
+
+            Rails.configuration.middleware.insert_before ActionDispatch::Flash, Discourse::Cors
+          RUBY
+        end
+
+        after { FileUtils.rm_f(cors_path) }
+
+        it "names the file and the middleware it inserts" do
+          cors = result[:cors_config]
+
+          expect(cors[:file]).to eq("config/initializers/008-rack-cors.rb")
+          expect(cors[:allows]).to eq([])
+          expect(cors[:inserts]).to eq([ "Discourse::Cors" ])
+        end
+      end
+
+      context "with the generated initializer left commented out" do
+        let(:cors_path) { File.join(Rails.root, "config/initializers/cors.rb") }
+
+        before do
+          FileUtils.mkdir_p(File.dirname(cors_path))
+          File.write(cors_path, "# Rails.application.config.middleware.insert_before 0, Rack::Cors do\n#   allow do\n#   end\n# end\n")
+        end
+
+        after { FileUtils.rm_f(cors_path) }
+
+        it "says the file is there with nothing active in it" do
+          cors = result[:cors_config]
+
+          expect(cors[:file]).to eq("config/initializers/cors.rb")
+          expect(cors[:commented_out]).to be true
+        end
+      end
+
+      context "with an origins block that filters before echoing" do
+        let(:cors_path) { File.join(Rails.root, "config/initializers/cors.rb") }
+
+        before do
+          FileUtils.mkdir_p(File.dirname(cors_path))
+          File.write(cors_path, <<~RUBY)
+            Rails.application.config.middleware.insert_before 0, Rack::Cors do
+              allow do
+                origins do |source, env|
+                  next false unless Allowlist.allows?(env)
+
+                  source
+                end
+
+                resource "/api/*"
+              end
+            end
+          RUBY
+        end
+
+        after { FileUtils.rm_f(cors_path) }
+
+        it "does not call it an echo of every origin" do
+          origin = result[:cors_config][:allows].first[:origins].first
+
+          expect(origin[:computed]).to be true
+          expect(origin[:echoes_request_origin]).to be false
+        end
+      end
+
+      context "with the initializer named after the gem" do
+        let(:cors_path) { File.join(Rails.root, "config/initializers/rack-cors.rb") }
+
+        before do
+          FileUtils.mkdir_p(File.dirname(cors_path))
+          File.write(cors_path, <<~RUBY)
+            Rails.application.config.middleware.insert_after Rails::Rack::Logger, Rack::Cors do
+              allow do
+                origins "example.com"
+                resource "/api/v3*"
+              end
+            end
+          RUBY
+        end
+
+        after { FileUtils.rm_f(cors_path) }
+
+        it "reads it under the name the app gives it" do
+          expect(result[:cors_config][:file]).to eq("config/initializers/rack-cors.rb")
+        end
       end
 
       context "with cors initializer" do
@@ -172,11 +503,52 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
           expect(allows.first[:resources]).to eq([ "*" ])
           expect(allows.first[:origins]).to contain_exactly(
             { value: "https://app.example.com", condition: "Rails.env.production?" },
-            { value: "*", condition: "else Rails.env.production?" }
+            { value: "*", otherwise: true }
           )
           expect(allows.last[:resources]).to eq([ "/api/v1/public/items" ])
           expect(allows.last[:origins]).to eq([ { value: "*" } ])
         end
+      end
+    end
+
+    context "with origins computed rather than listed" do
+      let(:cors_path) { File.join(Rails.root, "config/initializers/cors.rb") }
+
+      before do
+        FileUtils.mkdir_p(File.dirname(cors_path))
+        File.write(cors_path, <<~RUBY)
+          Rails.application.config.middleware.insert_before(0, Rack::Cors) do
+            allow do
+              origins do |source, _env|
+                source
+              end
+
+              resource "/openapi.yml"
+
+              %w[articles comments].each do |name|
+                resource "/api/\#{name}/*"
+              end
+            end
+
+            allow do
+              origins ENV["EXTRA_ORIGINS"].to_s.split(",")
+              resource "/api/articles/*"
+            end
+          end
+        RUBY
+      end
+
+      after { FileUtils.rm_f(cors_path) }
+
+      it "reports the config and says the origins are computed" do
+        cors = result[:cors_config]
+
+        expect(cors[:file]).to eq("config/initializers/cors.rb")
+        expect(cors[:allows].first[:resources]).to eq([ "/openapi.yml", "\"/api/\#{name}/*\"" ])
+        expect(cors[:allows].first[:origins])
+          .to eq([ { value: "a block", computed: true, echoes_request_origin: true } ])
+        expect(cors[:allows].last[:origins])
+          .to eq([ { value: "ENV[\"EXTRA_ORIGINS\"].to_s.split(\",\")", computed: true } ])
       end
     end
 

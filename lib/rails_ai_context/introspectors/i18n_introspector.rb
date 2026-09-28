@@ -5,7 +5,7 @@ require "yaml"
 module RailsAiContext
   module Introspectors
     # Discovers internationalization setup: locales, backends, key counts.
-    class I18nIntrospector
+    class I18nIntrospector < Base
       extend StaticTier
       static_tier :alternate_source
 
@@ -27,12 +27,6 @@ module RailsAiContext
         parse_error: true, locales: [], key_count: 0, key_paths: []
       }.freeze
 
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
-
       def call
         coverage, untranslated = detect_locale_coverage
         result = {
@@ -44,10 +38,9 @@ module RailsAiContext
           locale_coverage: coverage,
           locales_without_translations: untranslated
         }
+        result.merge!(in_repo_locale_counts)
         result.merge!(detect_fallback_config)
         result
-      rescue => e
-        { error: e.message }
       end
 
       # The locale files are the same files either way; only the list of
@@ -72,12 +65,20 @@ module RailsAiContext
           locales_without_translations: untranslated,
           fallbacks: nil,
           unavailable_sections: %w[backend fallbacks]
-        }
-      rescue => e
-        { error: e.message }
+        }.merge(in_repo_locale_counts)
       end
 
       private
+
+      # An in-repo engine's config/locales can dwarf the app's, and parsing them costs most
+      # of a run for keys no app-level question asks, so only the count is reported.
+      def in_repo_locale_counts
+        dirs = PathResolver.locale_roots(root).map { |dir| File.join(dir, "config", "locales") }
+        return {} if dirs.empty?
+
+        files = dirs.sum { |dir| Dir.glob(File.join(dir, "**/*.{yml,yaml,rb}")).size }
+        { in_repo_locale_dirs: dirs.size, in_repo_locale_files: files }
+      end
 
       # Every top-level key across config/locales - the population Rails builds
       # available_locales from while the app leaves the setting alone. The
@@ -189,10 +190,6 @@ module RailsAiContext
         value.map(&:to_s).uniq.sort
       end
 
-      def root
-        app.root.to_s
-      end
-
       def extract_locale_files
         dir = File.join(root, "config/locales")
         return [] unless Dir.exist?(dir)
@@ -251,7 +248,7 @@ module RailsAiContext
         locales.reject { |l| l == default }.each do |locale|
           locale_keys = key_paths_for_locale(locale)
           translated = (default_keys & locale_keys).size
-          pct = ((translated.to_f / default_keys.size) * 100).round(1)
+          pct = Percent.floor(translated, default_keys.size)
 
           # Below the rounding floor there is nothing to show but zeroes. Rails
           # lists a locale per language when the app keeps a language-name

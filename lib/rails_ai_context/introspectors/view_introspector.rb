@@ -4,15 +4,9 @@ module RailsAiContext
   module Introspectors
     # Scans view layer: layouts, templates, partials, helpers,
     # view components, and template engine detection.
-    class ViewIntrospector
+    class ViewIntrospector < Base
       extend StaticTier
       static_tier :files_only
-
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
 
       def call
         {
@@ -24,48 +18,79 @@ module RailsAiContext
           template_engines: detect_template_engines,
           form_builders_detected: detect_form_builders,
           component_usage: detect_component_usage,
-          layout_mapping: extract_layout_mapping,
           conditional_layouts: detect_conditional_layouts
         }
-      rescue => e
-        { error: e.message }
       end
 
       private
 
-      def root
-        app.root.to_s
-      end
-
-      def views_dir
-        File.join(root, "app/views")
+      # Every view file across every views root, an in-repo engine's or plugin's
+      # included, named the way the app renders it.
+      def view_files(glob = "**/*")
+        @view_files ||= {}
+        @view_files[glob] ||= RailsAiContext::ViewFile.each(root, glob)
       end
 
       def extract_layouts
-        dir = File.join(views_dir, "layouts")
-        return [] unless Dir.exist?(dir)
-
-        Dir.glob(File.join(dir, "*")).filter_map do |path|
-          next unless File.file?(path)
+        view_files("layouts/*").filter_map do |path, _relative|
+          next unless File.file?(path) && RailsAiContext::ViewFile.layout?(path)
           content = RailsAiContext::SafeFile.read(path)
           unless content
             next { name: File.basename(path) }
           end
-          yields = content.scan(/<%=?\s*(?:yield|content_for)\s*[:(]?\s*:?(\w*)/).flatten.reject(&:empty?)
+          yields = layout_yields(path, content)
           entry = { name: File.basename(path) }
           entry[:yields] = yields unless yields.empty?
           entry
-        end.sort_by { |l| l[:name] }
+        end.uniq { |l| l[:name] }.sort_by { |l| l[:name] }
+      end
+
+      YIELD = /\byield\b(?:\s*\(?\s*(?::(\w+)|["'](\w+)["']))?/
+      # `content_for?(:x)` asks; `content_for(:x)` alone reads. With a value or a block it sets.
+      CONTENT_FOR = /\bcontent_for(\?)?\s*\(?\s*(?::(\w+)|["'](\w+)["'])\s*(?:(,)|\)?\s*(do\b|\{))?/
+      # The unnamed `yield`, where the action's own template lands.
+      MAIN_YIELD = "(main)"
+      # A HAML or Slim line's Ruby: after `=`, `-`, `!=`, `==`, `&=` or `~`, bare or after a tag.
+      HAML_RUBY = /\A\s*(?:[%.#][\w.#:-]*(?:\{[^}]*\}|\([^)]*\))*)?\s*(?:!=|==|&=|=|~|-)\s?(.*)/
+      SLIM_RUBY = /\A\s*(?:[\w.#:-]+(?:\{[^}]*\}|\([^)]*\)|\[[^\]]*\])*)?\s*(?:!=|==|&=|=|~|-)\s?(.*)/
+
+      def layout_yields(path, content)
+        ruby = layout_ruby(path, ViewTemplateIntrospector.strip_markup_comments(content))
+        found = []
+        ruby.scan(Regexp.union(YIELD, CONTENT_FOR)) do
+          m = Regexp.last_match
+          if m[0].start_with?("yield")
+            found << (m[1] || m[2] || MAIN_YIELD)
+          elsif m[3] || !(m[6] || m[7])
+            found << (m[4] || m[5])
+          end
+        end
+        found.uniq
+      end
+
+      HAML_ATTRIBUTES = /\{(?:[^{}]|\{[^{}]*\})*\}/
+      SLIM_ATTRIBUTE = /[\w-]+=(\([^)]*\)|[^\s"'][^\s]*)/
+
+      # Only the Ruby a layout runs: ERB tag bodies; HAML and Slim code after
+      # an operator, plus a HAML attribute hash or a Slim attribute value.
+      def layout_ruby(path, text)
+        return RailsAiContext::ErbSource.tag_bodies(text) if path.end_with?(".erb")
+
+        slim = path.end_with?(".slim")
+        text.each_line.flat_map { |line|
+          attributes = if slim
+            line.scan(SLIM_ATTRIBUTE).flatten
+          else
+            line.match?(/\A\s*[%.#]/) ? line.scan(HAML_ATTRIBUTES) : []
+          end
+          attributes + [ line[slim ? SLIM_RUBY : HAML_RUBY, 1] ].compact
+        }.join("\n")
       end
 
       def extract_templates
-        return {} unless Dir.exist?(views_dir)
-
         templates = {}
-        Dir.glob(File.join(views_dir, "**/*")).each do |path|
-          next if File.directory?(path)
+        view_files.each do |path, relative|
           next unless RailsAiContext::ViewFile.template?(path)
-          relative = path.sub("#{views_dir}/", "")
           next if relative.start_with?("layouts/")
           next if File.basename(relative).start_with?("_")
 
@@ -78,13 +103,11 @@ module RailsAiContext
       end
 
       def extract_partials
-        return { shared: [], per_controller: {} } unless Dir.exist?(views_dir)
-
         shared = []
         per_controller = {}
 
-        Dir.glob(File.join(views_dir, "**/_*")).each do |path|
-          relative = path.sub("#{views_dir}/", "")
+        view_files("**/_*").each do |path, relative|
+          next unless RailsAiContext::ViewFile.template?(path)
           dir = File.dirname(relative)
           name = File.basename(relative)
 
@@ -127,10 +150,7 @@ module RailsAiContext
       end
 
       def detect_template_engines
-        return [] unless Dir.exist?(views_dir)
-
-        extensions = Dir.glob(File.join(views_dir, "**/*")).filter_map do |path|
-          next if File.directory?(path)
+        extensions = view_files.filter_map do |path, _relative|
           ext = File.extname(path).delete(".")
           ext unless ext.empty?
         end
@@ -151,13 +171,10 @@ module RailsAiContext
       }.freeze
 
       def detect_form_builders
-        return {} unless Dir.exist?(views_dir)
-
         # The glob spans ERB, HAML, Slim and Phlex `.rb`, and only the last has
         # a Ruby AST. One text matcher keeps the count consistent across them.
         counts = Hash.new(0)
-        view_files = Dir.glob(File.join(views_dir, "**/*.{erb,haml,slim,rb}"))
-        view_files.each do |path|
+        view_files("**/*.{erb,haml,slim,rb}").each do |path, _relative|
           content = RailsAiContext::SafeFile.read(path) or next
           FORM_BUILDER_PATTERNS.each do |name, pattern|
             count = content.scan(pattern).size
@@ -171,11 +188,8 @@ module RailsAiContext
       end
 
       def detect_component_usage
-        return [] unless Dir.exist?(views_dir)
-
         components = Set.new
-        view_files = Dir.glob(File.join(views_dir, "**/*.{erb,haml,slim,rb}"))
-        view_files.each do |path|
+        view_files("**/*.{erb,haml,slim,rb}").each do |path, _relative|
           content = RailsAiContext::SafeFile.read(path) or next
           # Same mixed-extension glob as above: text matching, not AST.
           # Match render ComponentName.new(...) or render(ComponentName.new(...))
@@ -187,21 +201,6 @@ module RailsAiContext
         components.to_a.sort
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "detect_component_usage")
-      end
-
-      def extract_layout_mapping
-        dir = File.join(views_dir, "layouts")
-        return [] unless Dir.exist?(dir)
-
-        Dir.glob(File.join(dir, "*")).filter_map do |path|
-          next unless File.file?(path)
-          basename = File.basename(path)
-          # Strip template extensions to get the layout name
-          name = basename.sub(/\.(html|xml|json)\.(erb|haml|slim)\z/, "").sub(/\.(erb|haml|slim)\z/, "")
-          name
-        end.uniq.sort
-      rescue => e
-        RailsAiContext.debug_fail(e, [], label: "extract_layout_mapping")
       end
 
       def detect_conditional_layouts
@@ -234,7 +233,7 @@ module RailsAiContext
             layouts << entry
           end
         rescue => e
-          $stderr.puts "[rails-ai-context] detect_conditional_layouts failed: #{e.message}" if ENV["DEBUG"]
+          RailsAiContext.debug_fail(e, label: "detect_conditional_layouts")
         end
         layouts
       rescue => e

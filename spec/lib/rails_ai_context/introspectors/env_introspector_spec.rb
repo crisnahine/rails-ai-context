@@ -77,5 +77,76 @@ RSpec.describe RailsAiContext::Introspectors::EnvIntrospector do
         expect(entry[:set]).to eq(false)
       end
     end
+
+    # rails_get_env and the context JSON answered one question two ways: the
+    # introspector read config/database.yml's ERB, the tool did not.
+    context "beside rails_get_env" do
+      let(:db_path) { File.join(Rails.root, "config/database_pa_s.yml") }
+
+      before do
+        File.write(db_path, %(default:\n  host: <%= ENV["PA_S_DATABASE_HOST"] %>\n))
+      end
+
+      after { FileUtils.rm_f(db_path) }
+
+      it "reads its names through the tool's own reader" do
+        tool_names = RailsAiContext::Introspectors::EnvReferences.scan(Rails.root.to_s).values.flatten.map { |v| v[:name] }
+        introspected = result[:referenced_in_code].map { |e| e[:name] }
+
+        expect(tool_names).to include("PA_S_DATABASE_HOST")
+        expect(introspected).to include("PA_S_DATABASE_HOST")
+      end
+    end
+
+    # Huginn's DATABASE_HOST and friends are read in database.yml's ERB tags.
+    context "when a YAML file reads ENV in its ERB tags" do
+      let(:fixture_path) { File.join(Rails.root, "config/pa_q_database.yml") }
+
+      before do
+        File.write(fixture_path, <<~YAML)
+          # host: <%= ENV["COMMENTED_OUT_HOST"] %>
+          default:
+            host: <%= ENV["PA_Q_DATABASE_HOST"] || "localhost" %>
+            port: <%= ENV.fetch("PA_Q_DATABASE_PORT", 5432) %>
+            socket: <%#= ENV["PA_Q_ERB_COMMENT"] %>
+        YAML
+      end
+
+      after { FileUtils.rm_f(fixture_path) }
+
+      it "reports the vars the tags read" do
+        names = result[:referenced_in_code].map { |e| e[:name] }
+
+        expect(names).to include("PA_Q_DATABASE_HOST", "PA_Q_DATABASE_PORT")
+        expect(names).not_to include("PA_Q_ERB_COMMENT")
+        entry = result[:referenced_in_code].find { |e| e[:name] == "PA_Q_DATABASE_HOST" }
+        expect(entry[:files]).to include("config/pa_q_database.yml")
+      end
+    end
+  end
+end
+
+# Canvas keeps 126MB of locale YAML, half of it spelling "ENV" as text, and
+# the scan read and parsed every file: 11s of a static run for no answer.
+RSpec.describe RailsAiContext::Introspectors::EnvReferences do
+  it "reads no locale file and parses no YAML without an ERB tag" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "config", "locales"))
+      File.write(File.join(dir, "config", "locales", "en.yml"), "en:\n  env: \"ENV\"\n")
+      File.write(File.join(dir, "config", "plain.yml"), "key: ENV_NAME\n")
+      File.write(File.join(dir, "config", "database.yml"), "url: <%= ENV[\"DATABASE_URL\"] %>\n")
+      read = []
+      allow(RailsAiContext::SafeFile).to receive(:read).and_wrap_original do |original, path, *rest|
+        read << File.basename(path.to_s)
+        original.call(path, *rest)
+      end
+      allow(RailsAiContext::ErbSource).to receive(:ruby_in_place).and_call_original
+
+      found = described_class.scan(dir)
+
+      expect(found.values.flatten.map { |ref| ref[:name] }).to eq([ "DATABASE_URL" ])
+      expect(read).not_to include("en.yml")
+      expect(RailsAiContext::ErbSource).to have_received(:ruby_in_place).once
+    end
   end
 end

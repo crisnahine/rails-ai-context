@@ -22,25 +22,55 @@ module RailsAiContext
 
       NONE = { table_name: nil, table_name_prefix: nil, table_name_suffix: nil }.freeze
 
+      PREFIX_INDEX = Concurrent::Map.new
+      APP_AFFIXES = Concurrent::Map.new
+
+      # {"RssPolling" => "rss_polling_"}: the engine prefix no model file says.
+      # ponytail: reads `lib/**/engine.rb` only; walk lib wholesale if an app needs more.
+      def namespace_prefixes(root)
+        root = File.expand_path(root.to_s)
+        PREFIX_INDEX.compute_if_absent(root) { read_namespace_prefixes(root) }
+      end
+
+      # A table an option writes as that source (a habtm join_table), read the
+      # way a table_name assignment is; nil for any other expression.
+      def affixed(expression, own, root)
+        statements = AstCache.parse_string(expression.to_s)&.value&.statements&.body
+        statements&.size == 1 ? affixed_node(statements.first, own, root) : nil
+      end
+
+      def clear_namespace_prefixes
+        PREFIX_INDEX.clear
+        APP_AFFIXES.clear
+      end
+
+      # {table_name_prefix: "op_"}: what config/application.rb sets on
+      # config.active_record, the class attribute's value in every model.
+      def app_affixes(root)
+        return {} unless root
+
+        root = File.expand_path(root.to_s)
+        APP_AFFIXES.compute_if_absent(root) { read_app_affixes(root) }
+      end
+
       # All three declarations of one class body, read in one walk.
       #
       # @param source [String] the file's source
       # @param name [String] the qualified name of the class or module
       # @return [Hash] the three, each nil when this scope declares none
-      def declarations(source, name)
+      # @param root [String, nil] the app, whose configured affixes a table
+      #   name interpolating table_name_prefix or table_name_suffix reads
+      def declarations(source, name, root = nil)
         read(source, name) do |body|
-          {
-            table_name: assigned(body, :table_name=),
-            table_name_prefix: affix(body, :table_name_prefix),
-            table_name_suffix: affix(body, :table_name_suffix)
-          }
+          own = { table_name_prefix: affix(body, :table_name_prefix), table_name_suffix: affix(body, :table_name_suffix) }
+          { table_name: assigned(body, :table_name=) || interpolated(body, own, root) }.merge(own)
         end || NONE
       end
 
       # @return [String, nil] the table the class assigns itself, nil when it
       #   assigns none or computes one
-      def explicit(source, class_name)
-        declarations(source, class_name)[:table_name]
+      def explicit(source, class_name, root = nil)
+        declarations(source, class_name, root)[:table_name]
       end
 
       # Rails derives the table through the app's own inflector, and the file's
@@ -59,6 +89,31 @@ module RailsAiContext
         model_name.to_s.split("::").last.to_s.underscore.pluralize
       end
 
+      # The class an association names, read as Rails' compute_type reads it:
+      # a leading `::` is top level; otherwise the owner's own namespace, each
+      # enclosing one, then top level. The block answers a candidate with the
+      # model's spelling, or nil when no model has that name.
+      def resolve_class(candidate, owner)
+        name = candidate.to_s.delete_prefix("::")
+        scope = candidate.to_s.start_with?("::") ? [] : owner.to_s.split("::")
+        until scope.empty?
+          hit = yield("#{scope.join('::')}::#{name}")
+          return hit if hit
+
+          scope.pop
+        end
+        yield(name) || name
+      end
+
+      # The model a derived name means, spelled the way the model set spells
+      # it: `AiBuyerMatch` from a name is `AIBuyerMatch` where the app declares
+      # the acronym. Nil when no model answers.
+      def model_for(candidate, owner, models)
+        index = models.keys.to_h { |key| [ key.to_s.downcase, key.to_s ] }
+        found = resolve_class(candidate, owner) { |name| index[name.downcase] }
+        found if index.key?(found.to_s.downcase)
+      end
+
       # The table a caller's model name refers to: the one the model tier
       # recorded, which already knows the prefix and the STI parent, and the
       # convention only when no model answers to that name.
@@ -70,6 +125,61 @@ module RailsAiContext
         end
 
         recorded ? recorded.last[:table_name] : derive(name)
+      end
+
+      def read_namespace_prefixes(root)
+        engine_files(root).each_with_object({}) do |path, found|
+          source = SafeFile.read(path, max_size: RailsAiContext.configuration.max_file_size)
+          next unless source&.include?("isolate_namespace")
+
+          isolated_namespaces(source).each do |namespace|
+            found[namespace] ||= declarations(source, namespace)[:table_name_prefix] ||
+                                 "#{namespace.underscore.tr('/', '_')}_"
+          end
+        end
+      rescue StandardError, ScriptError => e
+        RailsAiContext.debug_fail(e, {}, label: "namespace_prefixes")
+      end
+
+      def read_app_affixes(root)
+        path = File.join(root, "config", "application.rb")
+        return {} unless File.file?(path)
+
+        Array(SourceIntrospector.walk(path, { config: Listeners::ConfigAssignmentListener })[:config])
+          .each_with_object({}) do |entry, found|
+            path = entry[:path]
+            next unless path.size == 2 && path.first == :active_record && entry[:value].is_a?(String)
+
+            found[path.last] = entry[:value] if %i[table_name_prefix table_name_suffix].include?(path.last)
+          end
+      rescue StandardError, ScriptError => e
+        RailsAiContext.debug_fail(e, {}, label: "app_affixes")
+      end
+
+      def engine_files(root)
+        roots = [ root ] + PathResolver.code_roots(root)
+        roots.flat_map { |dir| Dir.glob(File.join(dir, "lib", "**", "engine.rb")) }.uniq.sort
+      end
+
+      # Every `isolate_namespace Foo::Bar` in the file, by the constant's own
+      # spelling. A computed argument names nothing readable and is skipped.
+      def isolated_namespaces(source)
+        root = AstCache.parse_string(source)&.value
+        return [] unless root
+
+        calls = []
+        collect_isolate_calls(root, calls)
+        calls
+      end
+
+      def collect_isolate_calls(node, found)
+        if node.is_a?(Prism::CallNode) && node.name == :isolate_namespace
+          argument = node.arguments&.arguments&.first
+          if argument.is_a?(Prism::ConstantReadNode) || argument.is_a?(Prism::ConstantPathNode)
+            found << argument.slice.delete_prefix("::")
+          end
+        end
+        node.child_nodes.compact.each { |child| collect_isolate_calls(child, found) }
       end
 
       def affix(body, name)
@@ -126,6 +236,37 @@ module RailsAiContext
         call && literal(call.arguments&.arguments)
       end
 
+      # `self.table_name = "#{table_name_prefix}users#{table_name_suffix}"`: the class's
+      # own affix, else the app's configured one.
+      def interpolated(body, own, root)
+        call = body.find do |node|
+          node.is_a?(Prism::CallNode) && node.name == :table_name= && node.receiver.is_a?(Prism::SelfNode)
+        end
+        args = call&.arguments&.arguments
+        args&.size == 1 ? affixed_node(args.first, own, root) : nil
+      end
+
+      def affixed_node(string, own, root)
+        return nil unless string.is_a?(Prism::InterpolatedStringNode)
+
+        string.parts.map do |part|
+          next part.unescaped if part.is_a?(Prism::StringNode)
+
+          key = affix_read(part) or return nil
+          own[key] || app_affixes(root)[key] || ""
+        end.join
+      end
+
+      def affix_read(part)
+        return nil unless part.is_a?(Prism::EmbeddedStatementsNode) && part.statements&.body&.size == 1
+
+        call = part.statements.body.first
+        return nil unless call.is_a?(Prism::CallNode) && call.arguments.nil? && call.block.nil?
+        return nil unless call.receiver.nil? || call.receiver.is_a?(Prism::SelfNode)
+
+        call.name if %i[table_name_prefix table_name_suffix].include?(call.name)
+      end
+
       # `def self.table_name_prefix; "x"; end` - the form Rails documents and
       # the one apps write. A method that computes its value answers nothing.
       def returned(body, name)
@@ -144,7 +285,9 @@ module RailsAiContext
       end
 
       private_class_method :affix, :read, :body_of, :descend, :statements, :segment,
-                           :assigned, :returned, :literal
+                           :assigned, :returned, :literal, :read_namespace_prefixes, :read_app_affixes,
+                           :interpolated, :affixed_node, :affix_read,
+                           :engine_files, :collect_isolate_calls
     end
   end
 end

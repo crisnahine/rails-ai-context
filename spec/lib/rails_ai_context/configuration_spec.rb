@@ -77,6 +77,20 @@ RSpec.describe RailsAiContext::Configuration do
     it "raises on unknown preset" do
       expect { config.preset = :unknown }.to raise_error(ArgumentError, /Unknown preset/)
     end
+  end
+
+  describe "#claude_max_lines=" do
+    # A budget of zero or less has no reading that produces a file, and the
+    # renderer answered it with the whole file under a "trimmed" note.
+    it "raises on zero and on a negative budget" do
+      expect { config.claude_max_lines = 0 }.to raise_error(ArgumentError, /claude_max_lines must be positive/)
+      expect { config.claude_max_lines = -5 }.to raise_error(ArgumentError, /claude_max_lines must be positive/)
+    end
+
+    it "coerces a numeric string the way the sibling budgets do" do
+      config.claude_max_lines = "200"
+      expect(config.claude_max_lines).to eq(200)
+    end
 
     it "allows adding introspectors after preset" do
       config.preset = :standard

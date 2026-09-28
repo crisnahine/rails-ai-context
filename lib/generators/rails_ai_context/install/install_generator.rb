@@ -31,8 +31,6 @@ end
 module RailsAiContext
   module Generators
     class InstallGenerator < Rails::Generators::Base
-      source_root File.expand_path("templates", __dir__)
-
       desc "Install rails-ai-context: creates initializer, MCP config, and generates initial context files."
 
       class_option :defaults, type: :boolean, default: false,
@@ -161,7 +159,7 @@ module RailsAiContext
             # config.max_test_file_size = 1_000_000    # Test file read (1MB)
             # config.max_schema_file_size = 10_000_000 # schema.rb parse (10MB)
             # config.max_view_total_size = 10_000_000  # Doctor view-size threshold (10MB)
-            # config.max_view_file_size = 1_000_000    # Named in that doctor fix line (1MB)
+            # config.max_view_file_size = 1_000_000    # Accepted and stored; no check reads it (1MB)
             # config.max_search_results = 200          # Max search results per call
             # config.max_validate_files = 50           # Max files per validate call
         SECTION
@@ -219,11 +217,12 @@ module RailsAiContext
         SECTION
         "Search" => <<~SECTION,
             # ── Search ────────────────────────────────────────────────────────
-            # File extensions the Ruby fallback searches (ripgrep searches every file)
+            # Narrow the Ruby fallback to these extensions. Unset, it searches
+            # every file, as ripgrep does, so the two backends agree.
             # config.search_extensions = %w[rb js erb yml yaml json ts tsx vue svelte haml slim]
 
             # Where to look for concern source files. Left unset, every
-            # app/*/concerns directory is discovered. Setting this replaces
+            # app/concerns and app/*/concerns directory is discovered. Setting this replaces
             # that list, so it can narrow as well as reach outside app/.
             # config.concern_paths = %w[app/models/concerns lib/concerns]
         SECTION
@@ -259,18 +258,13 @@ module RailsAiContext
       # The install program's voice on this entry: Thor's say with colours,
       # ask_safe so --defaults answers every prompt with its default.
       def program_surface
-        @program_surface ||= begin
-          generator = self
-          surface = Object.new
-          surface.define_singleton_method(:say) do |text = "", level = :plain|
+        @program_surface ||= RailsAiContext::Install::Surface.new(
+          lambda { |text, level|
             colour = { emph: :yellow, ok: :green, warn: :red, muted: :yellow }[level]
-            colour ? generator.say(text, colour) : generator.say(text)
-          end
-          surface.define_singleton_method(:ask) do |prompt|
-            generator.send(:ask_safe, prompt)
-          end
-          surface
-        end
+            colour ? say(text, colour) : say(text)
+          },
+          ->(prompt) { ask_safe(prompt) }
+        )
       end
 
       def create_new_initializer(path)

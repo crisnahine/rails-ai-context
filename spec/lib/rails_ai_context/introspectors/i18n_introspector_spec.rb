@@ -143,6 +143,56 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       end
     end
 
+    it "counts an in-repo engine's locale files without reading them" do
+      result = static_result("en.yml" => "en:\n  hello: Hello\n") do |dir|
+        FileUtils.mkdir_p(File.join(dir, "plugins", "chat", "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "plugins", "chat", "config", "locales"))
+        FileUtils.touch(File.join(dir, "plugins", "chat", "plugin.rb"))
+        File.write(File.join(dir, "plugins", "chat", "config", "locales", "client.fr.yml"), "fr:\n  hi: Salut\n")
+      end
+
+      expect(result[:in_repo_locale_dirs]).to eq(1)
+      expect(result[:in_repo_locale_files]).to eq(1)
+      expect(result[:total_locale_files]).to eq(1)
+      expect(result[:available_locales]).to eq(%w[en])
+    end
+
+    # 16 of Discourse's 44 plugins with locales have no app/ at all.
+    it "counts a plugin's locale files when the plugin has no app directory" do
+      result = static_result("en.yml" => "en:\n  hello: Hello\n") do |dir|
+        FileUtils.mkdir_p(File.join(dir, "plugins", "styleguide", "config", "locales"))
+        FileUtils.touch(File.join(dir, "plugins", "styleguide", "plugin.rb"))
+        File.write(File.join(dir, "plugins", "styleguide", "config", "locales", "client.en.yml"), "en:\n  a: A\n")
+        FileUtils.mkdir_p(File.join(dir, "frontend", "config", "locales"))
+        File.write(File.join(dir, "frontend", "config", "locales", "x.en.yml"), "en:\n  b: B\n")
+      end
+
+      expect(result[:in_repo_locale_dirs]).to eq(1)
+      expect(result[:in_repo_locale_files]).to eq(1)
+    end
+
+    # Mastodon's `be` translates 2728 of 2729 keys, and rounding read that as
+    # 100.0% on the same line that says one key is missing.
+    it "floors a coverage short of complete below 100" do
+      keys = (1..40).map { |i| "  k#{i}: v" }.join("\n")
+      result = static_result(
+        "en.yml" => "en:\n#{keys}\n  last: v\n",
+        "be.yml" => "be:\n#{keys}\n"
+      )
+
+      expect(result[:locale_coverage]["be"][:missing]).to eq(1)
+      expect(result[:locale_coverage]["be"][:coverage_pct]).to eq(97.5)
+    end
+
+    it "reports 100.0 only for a locale that misses nothing" do
+      result = static_result(
+        "en.yml" => "en:\n  a: v\n  b: v\n",
+        "es.yml" => "es:\n  a: v\n  b: v\n"
+      )
+
+      expect(result[:locale_coverage]["es"][:coverage_pct]).to eq(100.0)
+    end
+
     it "reads the available locales from the files on disk" do
       result = static_result(
         "en.yml" => "en:\n  hello: Hello\n  bye: Bye\n",

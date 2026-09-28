@@ -162,4 +162,26 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
       expect(result).to eq([ { name: "products", bytes: 1024 } ])
     end
   end
+  # SQLite reports no table sizes, so this is the only reachable seam for the
+  # byte labels the database section prints.
+  describe "byte labels" do
+    it "labels sizes in English whatever the app's locale is" do
+      with_comma_separator_locale do
+        expect(described_class.send(:human_size, 1_500_000)).to eq("1.43 MB")
+      end
+    end
+
+    it "still labels sizes when the app's locales leave out English" do
+      with_german_only_locales do
+        expect(described_class.send(:human_size, 1_500_000)).to eq("1.43 MB")
+      end
+    end
+
+    it "labels sizes the way the rest of the gem does" do
+      expect(described_class.send(:human_size, nil)).to eq("0 Bytes")
+      expect(described_class.send(:human_size, 0)).to eq("0 Bytes")
+      expect(described_class.send(:human_size, 1_048_576)).to eq("1 MB")
+      expect(described_class.send(:human_size, 1_500_000)).to eq("1.43 MB")
+    end
+  end
 end

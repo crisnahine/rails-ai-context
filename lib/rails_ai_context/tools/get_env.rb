@@ -27,7 +27,7 @@ module RailsAiContext
 
       # `ENV.fetch("PORT", defaults[:port])`: a fallback with no printable
       # value, which is still a site that never raises KeyError.
-      COMPUTED_DEFAULT = :computed
+      COMPUTED_DEFAULT = Introspectors::EnvReferences::COMPUTED_DEFAULT
 
       def self.call(detail: "standard", server_context: nil)
         root = rails_app.root.to_s
@@ -79,10 +79,10 @@ module RailsAiContext
       end
 
       # Named in the answer, because a name missing from it is otherwise
-      # indistinguishable from a name the app does not read. `database.yml`
-      # and the other files on `sensitive_patterns` are never opened.
+      # indistinguishable from a name the app does not read.
       SCAN_NOTE = "_Scanned `app`, `config` and `lib` for `.rb`, `.rake`, `.erb` and config `.yml`. " \
-        "Files matching `sensitive_patterns` (config/database.yml, credentials, keys) are never read._"
+        "Config YAML on `sensitive_patterns` (config/database.yml) is read for the ENV names in its ERB tags only; " \
+        "credentials, keys and the rest are never read._"
 
       private_class_method def self.format_standard(env_vars, env_example, external_services, credentials_keys, encrypted_columns)
         lines = [ "# Environment Configuration", "" ]
@@ -100,7 +100,7 @@ module RailsAiContext
             lines << "## #{group}"
             vars.sort.each do |name|
               sites = sites_by_variable[name] || []
-              defaults = sites.map { |v| v[:default] }.uniq
+              defaults = sites.reject { |v| v[:default_unread] }.map { |v| v[:default] }.uniq
               entry = "- `#{name}`"
               entry += if disagree?(sites)
                 # A site with no default argument raises KeyError when the
@@ -189,8 +189,9 @@ module RailsAiContext
             relative = file.sub("#{root}/", "")
             vars.each do |v|
               var_details[v[:name]] ||= { files: [], defaults: [] }
-              var_details[v[:name]][:files] << { file: relative, line: v[:line], default: v[:default], bracket: v[:bracket] }
-              var_details[v[:name]][:defaults] << v[:default]
+              var_details[v[:name]][:files] << { file: relative, line: v[:line], default: v[:default],
+                                                  bracket: v[:bracket], default_unread: v[:default_unread] }
+              var_details[v[:name]][:defaults] << v[:default] unless v[:default_unread]
             end
           end
 
@@ -214,6 +215,8 @@ module RailsAiContext
               file_locations = v[:files].map { |f|
                 at = f[:line] ? "#{f[:file]}:#{f[:line]}" : f[:file]
                 next at unless disagree?(v[:files])
+                next "#{at} default not read" if f[:default_unread]
+
                 case f[:default]
                 when String then "#{at} default: `#{f[:default]}`"
                 when COMPUTED_DEFAULT then "#{at} default computed at runtime"
@@ -221,8 +224,11 @@ module RailsAiContext
                 end
               }.uniq
               entry = "- `#{v[:name]}`"
-              entry += " (default: `#{defaults.first}`)" if defaults.size == 1 && defaults.first.is_a?(String)
-              entry += " (#{DEFAULTS_DIFFER})" if disagree?(v[:files])
+              if disagree?(v[:files])
+                entry += " (#{DEFAULTS_DIFFER})"
+              elsif defaults.size == 1 && defaults.first.is_a?(String)
+                entry += " (default: `#{defaults.first}`)"
+              end
               entry += " (#{file_locations.join(', ')})"
               lines << entry
             end
@@ -272,82 +278,8 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
-      # An app reads ENV from more than its Ruby: `config/database.yml` and
-      # `config/newrelic.yml` through ERB, a rake task, a view. Scanning `.rb`
-      # alone left those names out of the very answer someone writes a
-      # `.env.example` from, with nothing saying a file type was skipped.
-      SCAN_PATTERNS = {
-        "app"       => %w[**/*.rb **/*.erb],
-        "config"    => %w[**/*.rb **/*.yml **/*.yaml],
-        "lib"       => %w[**/*.rb **/*.rake]
-      }.freeze
-
-      private_class_method def self.scan_files(root, real_root)
-        SCAN_PATTERNS.flat_map do |dir_name, patterns|
-          dir = File.join(root, dir_name)
-          next [] unless Dir.exist?(dir)
-
-          patterns.flat_map { |pattern| safe_glob(dir, pattern, real_root) }
-        end.uniq
-      end
-
-      # ERB tags carry the Ruby of a `.yml` or `.erb` file.
-      private_class_method def self.ruby_source(file, source)
-        return source if file.end_with?(".rb", ".rake")
-
-        RailsAiContext::ErbSource.ruby_in_place(source)
-      end
-
       private_class_method def self.scan_env_vars(root)
-        env_vars = {}
-        real_root = File.realpath(root).to_s
-
-        scan_files(root, real_root).each do |file|
-          source = safe_read(file)
-          next unless source
-          next unless source.include?("ENV")
-
-          vars = env_references(ruby_source(file, source))
-          env_vars[file] = vars if vars.any?
-        end
-
-        env_vars
-      end
-
-      # The parser decides what counts as a name. A line scan matched whatever
-      # sat between the quotes, so an app that builds its variable names by
-      # interpolation - the normal shape for one carrying several Redis
-      # connections - had `#{prefix}URL` reported as a variable, in the very
-      # tool someone reaches for when writing a .env.example. Comments come out
-      # for free, including one trailing a line that also reads ENV.
-      private_class_method def self.env_references(source)
-        ast = Introspectors::SourceIntrospector.walk_source(
-          source, { env: -> { Introspectors::Listeners::EnvAccessListener.new } }
-        )
-
-        (ast[:env] || []).filter_map do |entry|
-          name = entry[:key]
-          # The parser already guaranteed a literal, so this only has to reject
-          # what is not a variable name at all. Deliberately looser than
-          # EnvIntrospector's uppercase rule: that one filters a catalogue of
-          # known Rails variables, while this lists whatever the app reads, and
-          # a lowercase `ENV["port"]` is still a variable the app reads.
-          next unless name.match?(/\A[A-Za-z_][A-Za-z0-9_]*\z/)
-
-          var = { name: name, line: entry[:location] }
-          # `ENV["X"]` answers nil when unset; only a fetch without a default raises.
-          var[:bracket] = true if entry[:method] == "[]"
-          # The listener writes a `nil` default as the string "nil", which
-          # redaction then treated as a value worth hiding.
-          if entry[:default]
-            var[:default] = entry[:default] == "nil" ? "nil" : RailsAiContext::Redaction.value(name, entry[:default])
-          elsif entry[:has_default]
-            var[:default] = COMPUTED_DEFAULT
-          end
-          var
-        end
-      rescue => e
-        RailsAiContext.debug_fail(e, [], label: "env_references")
+        Introspectors::EnvReferences.scan(root)
       end
 
       private_class_method def self.scan_env_example(root)
@@ -462,7 +394,6 @@ module RailsAiContext
 
       private_class_method def self.detect_external_services(root, env_names)
         services = []
-        gemfile_path = File.join(root, "Gemfile")
 
         # Service detection rules: gem name → service name + detection method
         service_gems = {
@@ -493,10 +424,10 @@ module RailsAiContext
           "recaptcha" => { name: "reCAPTCHA", env_prefix: "RECAPTCHA_" }
         }
 
-        gemfile = safe_read(gemfile_path)
-        if gemfile
+        declared = RailsAiContext::Introspectors::GemfileGems.names(root)
+        if declared.any?
           service_gems.each do |gem_name, info|
-            next unless gemfile.match?(/gem\s+["']#{Regexp.escape(gem_name)}["']/)
+            next unless declared.include?(gem_name)
             services << {
               name: info[:name],
               gem: gem_name,
@@ -705,8 +636,13 @@ module RailsAiContext
       # Whether the sites answer an unset variable differently. `ENV["X"]` and
       # `ENV.fetch("X", nil)` both answer nil, so they agree; a fetch with no
       # default raises, which is the difference a reader needs to see.
+      # A site in a sensitive file was read for its name only, so its default
+      # is unknown rather than different.
+      # A default read only as a name is its own unknown value beside a read one,
+      # and the same unknown beside another unread one.
       private_class_method def self.disagree?(sites)
-        sites.map { |v| v[:bracket] || v[:default] == "nil" ? :nil_when_unset : v[:default] }.uniq.size > 1
+        sites.map { |v| v[:default_unread] ? :unread : (v[:bracket] || v[:default] == "nil" ? :nil_when_unset : v[:default]) }
+             .uniq.size > 1
       end
     end
   end

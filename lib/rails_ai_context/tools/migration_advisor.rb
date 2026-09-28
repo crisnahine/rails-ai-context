@@ -470,11 +470,11 @@ module RailsAiContext
             next unless data.is_a?(Hash)
 
             Array(data[:associations]).grep(Hash).each do |a|
-              next unless owners.include?(a[:class_name].to_s) ||
+              next unless owners.include?(a[:class_name].to_s.delete_prefix("::")) ||
                 a[:name].to_s.pluralize == table ||
                 a[:name].to_s.singularize == table.singularize
 
-              rows << "- **#{name}** - #{a[:macro] || a[:type]} :#{a[:name]}"
+              rows << "- **#{name}** - #{a[:macro] || a[:type]} #{Serializers::SectionFacts.association_name(a)}"
             end
           end
 
@@ -489,8 +489,8 @@ module RailsAiContext
           named = models.select { |_, d| d.is_a?(Hash) && d[:table_name].to_s == table }.keys.map(&:to_s)
           return named if named.any?
 
-          derived = table.singularize.camelize
-          models.key?(derived.to_sym) || models.key?(derived) ? [ derived ] : []
+          derived = Introspectors::TableName.model_for(table.singularize.camelize, nil, models)
+          derived ? [ derived ] : []
         end
 
         def column_exists?(table, column)
@@ -511,9 +511,12 @@ module RailsAiContext
           table_data = schema[:tables][table]
           return false unless table_data
 
+          # add_index collides only with the name it would give the index; a
+          # composite index containing the column is no duplicate.
+          default_name = RailsAiContext::Introspectors::SchemaConventions.default_index_name(table, [ column ])
           (table_data[:indexes] || []).any? { |idx|
-            cols = idx[:columns] || [ idx[:column] ].compact
-            cols.map(&:to_s).include?(column.to_s)
+            cols = (idx[:columns] || [ idx[:column] ].compact).map(&:to_s)
+            idx[:name].to_s == default_name || (idx[:name].nil? && cols == [ column.to_s ])
           }
         end
 

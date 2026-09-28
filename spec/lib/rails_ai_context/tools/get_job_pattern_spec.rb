@@ -17,6 +17,14 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text).to include("ExampleJob")
     end
 
+    # The scan boundary bounds a jobs listing exactly as it bounds a worker
+    # listing, and OpenProject - 74 jobs, no Sidekiq config - was shown one
+    # with no word about what had not been read.
+    it "says which directories the listing was read from" do
+      text = described_class.call.content.first[:text]
+      expect(text).to include(described_class::NOT_COVERED)
+    end
+
     it "lists jobs with queue names for detail:summary" do
       result = described_class.call(detail: "summary")
       text = result.content.first[:text]
@@ -296,6 +304,17 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
         text = described_class.call(job: "SendWelcomeEmail").content.first[:text]
         expect(text).to include("No jobs found")
       end
+
+      # The empty answer names the base it left out, the way a listing does,
+      # and the name it offers then answers.
+      it "names the base it left out, and answers for it by name" do
+        listing = described_class.call.content.first[:text]
+        expect(listing).to include("_Base classes not counted as jobs: ApplicationJob.")
+
+        page = described_class.call(job: "ApplicationJob").content.first[:text]
+        expect(page).to include("# ApplicationJob")
+        expect(page).to include("not counted as a job of its own")
+      end
     end
 
     # An app can run all its async work through Sidekiq workers in app/workers/,
@@ -352,6 +371,14 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
         it "says the listing does not cover workers the introspector never saw" do
           text = described_class.call.content.first[:text]
           expect(text).to include(described_class::NOT_COVERED)
+        end
+
+        # A caveat that named app/workers alone while the scan also read
+        # app/jobs and app/sidekiq told a reader the wrong thing about which
+        # confident negative they were holding.
+        it "names every directory the scan reads" do
+          expect(described_class::NOT_COVERED)
+            .to include(*RailsAiContext::Introspectors::JobIntrospector::JOB_DIRS)
         end
       end
 
@@ -453,6 +480,495 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
     end
   end
 
+  # A job the introspector could not place is still listed, and the listing
+  # has to say so rather than let it read as an ActiveJob job.
+  describe "a job whose base class the scan could not resolve" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    before do
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "jobs"))
+      File.write(File.join(tmpdir, "app", "jobs", "archive.rb"), <<~RUBY)
+        class Archive
+          @queue = :file_serve
+
+          def self.perform(id)
+            Upload.find(id).archive!
+          end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "jobs", "send_email_job.rb"), <<~RUBY)
+        class SendEmailJob < ActiveJob::Base
+          queue_as :default
+
+          def perform(id); end
+        end
+      RUBY
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "marks it in the listing" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("**Archive** [unknown base]")
+      expect(text).to include("**SendEmailJob** [default]")
+    end
+
+    it "counts it under its own heading in the queue summary" do
+      text = described_class.call(detail: "summary").content.first[:text]
+
+      expect(text).to include("- Archive [unknown base]")
+      expect(text).to include("**Queues:** unknown(1), default(1)")
+    end
+
+    it "says so on the job's own page" do
+      text = described_class.call(job: "Archive").content.first[:text]
+
+      expect(text).to include("no ActiveJob or Sidekiq ancestry")
+    end
+  end
+
+  # The job's own file was skipped by a substring of its underscored name: a
+  # job under an acronym folder listed itself, and a helper whose name merely
+  # contained the job's was dropped.
+  describe "who enqueues a job" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    before do
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "workers", "activitypub"))
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "services"))
+      File.write(File.join(tmpdir, "app", "workers", "activitypub", "sync_job.rb"), <<~RUBY)
+        class ActivityPub::SyncJob
+          include Sidekiq::Job
+
+          def perform(id)
+            ActivityPub::SyncJob.perform_async(id + 1) if id < 3
+          end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "services", "activity_pub_sync_job_helper.rb"), <<~RUBY)
+        class ActivityPubSyncJobHelper
+          def self.call(id) = ActivityPub::SyncJob.perform_async(id)
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "services", "other_sync.rb"), <<~RUBY)
+        class OtherSync
+          def self.call(id) = Admin::ActivityPub::SyncJob.perform_async(id)
+        end
+      RUBY
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    # Read off the call nodes: a call written in a comment enqueues nothing,
+    # `Job.set(...)` is the job's own call whatever follows it, and Sidekiq's
+    # scheduling calls enqueue too.
+    it "counts the calls the code makes, not the words in its comments" do
+      File.write(File.join(tmpdir, "app", "services", "commented.rb"), <<~RUBY)
+        class Commented
+          # ActivityPub::SyncJob.perform_async(id) used to run here
+          def self.call(id); end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "services", "delayed.rb"), <<~RUBY)
+        class Delayed
+          def self.call(id)
+            ::ActivityPub::SyncJob.set(queue: :low).perform_async(id)
+          end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "services", "scheduled.rb"), <<~RUBY)
+        class Scheduled
+          def self.call(id) = ActivityPub::SyncJob.perform_in(5.minutes, id)
+        end
+      RUBY
+
+      text = described_class.call(job: "ActivityPub::SyncJob").content.first[:text]
+      enqueuers = text[/## Enqueued By\n(.*?)(\n\n|\z)/m, 1].to_s
+
+      expect(enqueuers).to include("app/services/delayed.rb")
+      expect(enqueuers).to include("app/services/scheduled.rb")
+      expect(enqueuers).not_to include("app/services/commented.rb")
+    end
+
+    # A worker enqueued from six files had three listed. Sidekiq's bulk push and ActiveJob's perform_all_later of
+    # the job's instances are enqueues too.
+    it "counts a bulk push and a perform_all_later of the job's instances" do
+      File.write(File.join(tmpdir, "app", "services", "bulk.rb"), <<~RUBY)
+        class Bulk
+          def self.call(ids) = ActivityPub::SyncJob.perform_bulk(ids.map { |id| [ id ] })
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "services", "all_later.rb"), <<~RUBY)
+        class AllLater
+          def self.call(ids) = ActiveJob.perform_all_later(ids.map { |id| ActivityPub::SyncJob.new(id) })
+        end
+      RUBY
+
+      text = described_class.call(job: "ActivityPub::SyncJob").content.first[:text]
+      enqueuers = text[/## Enqueued By\n(.*?)(\n\n|\z)/m, 1].to_s
+
+      expect(enqueuers).to include("app/services/bulk.rb")
+      expect(enqueuers).to include("app/services/all_later.rb")
+    end
+
+    # A backfill worker enqueued from a rake task read as enqueued by nothing
+    # when only .rb files were read. Rake tasks, bin/ and
+    # script/ programs and the seeds run the app's Ruby too.
+    it "reads the rake tasks, bin/, script/ and seeds the app runs" do
+      FileUtils.mkdir_p(File.join(tmpdir, "lib", "tasks", "archived"))
+      FileUtils.mkdir_p(File.join(tmpdir, "bin"))
+      FileUtils.mkdir_p(File.join(tmpdir, "script"))
+      FileUtils.mkdir_p(File.join(tmpdir, "db"))
+      File.write(File.join(tmpdir, "lib", "tasks", "archived", "backfill.rake"), <<~RUBY)
+        namespace :backfill do
+          task sync: :environment do
+            ActivityPub::SyncJob.perform_async(1)
+          end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "bin", "resync"), "#!/usr/bin/env ruby\nActivityPub::SyncJob.perform_async(2)\n")
+      File.write(File.join(tmpdir, "script", "resync_all.rb"), "ActivityPub::SyncJob.perform_async(3)\n")
+      File.write(File.join(tmpdir, "db", "seeds.rb"), "ActivityPub::SyncJob.perform_async(4)\n")
+
+      text = described_class.call(job: "ActivityPub::SyncJob").content.first[:text]
+      enqueuers = text[/## Enqueued By\n(.*?)(\n\n|\z)/m, 1].to_s
+
+      expect(enqueuers).to include("lib/tasks/archived/backfill.rake", "bin/resync", "script/resync_all.rb", "db/seeds.rb")
+    end
+
+    # Migrations enqueue backfills too; db/ was read for the seeds alone.
+    it "reads the migrations and anything else under db/" do
+      FileUtils.mkdir_p(File.join(tmpdir, "db", "migrate"))
+      File.write(File.join(tmpdir, "db", "migrate", "20230322131827_backfill.rb"), <<~RUBY)
+        class Backfill < ActiveRecord::Migration[7.0]
+          def up = ActivityPub::SyncJob.perform_async
+        end
+      RUBY
+
+      text = described_class.call(job: "ActivityPub::SyncJob").content.first[:text]
+
+      expect(text[/## Enqueued By\n(.*?)(\n\n|\z)/m, 1].to_s).to include("db/migrate/20230322131827_backfill.rb")
+    end
+
+    # The list stopped at twenty with no word that it had.
+    it "says how many more callers there are past the ones it names" do
+      25.times do |i|
+        File.write(File.join(tmpdir, "app", "services", "caller_#{i}.rb"),
+                   "class Caller#{i}\n  def self.call = ActivityPub::SyncJob.perform_async(#{i})\nend\n")
+      end
+
+      text = described_class.call(job: "ActivityPub::SyncJob").content.first[:text]
+      enqueuers = text[/## Enqueued By\n(.*?)(\n\n|\z)/m, 1].to_s
+
+      expect(enqueuers.lines.grep(/\A- /).size).to eq(20)
+      expect(enqueuers).to match(/_\.\.\.and \d+ more\._/)
+    end
+
+    it "leaves out the job's own file and keeps a caller whose name contains the job's" do
+      text = described_class.call(job: "ActivityPub::SyncJob").content.first[:text]
+      enqueuers = text[/## Enqueued By\n(.*?)(\n\n|\z)/m, 1].to_s
+
+      expect(enqueuers).to include("app/services/activity_pub_sync_job_helper.rb")
+      expect(enqueuers).not_to include("app/workers/activitypub/sync_job.rb")
+      expect(enqueuers).not_to include("app/services/other_sync.rb")
+    end
+  end
+
+  # Ruby resolves a bare constant from the enclosing namespace outward: inside
+  # `module Admin`, `SyncJob.perform_later` is Admin::SyncJob where that
+  # exists, and is nobody's call to the top-level SyncJob.
+  describe "a caller naming a job relative to its namespace" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    before do
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "jobs", "admin"))
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "controllers", "admin"))
+      File.write(File.join(tmpdir, "app", "jobs", "sync_job.rb"), "class SyncJob < ActiveJob::Base\n  def perform; end\nend\n")
+      File.write(File.join(tmpdir, "app", "jobs", "admin", "sync_job.rb"), <<~RUBY)
+        module Admin
+          class SyncJob < ActiveJob::Base
+            def perform; end
+          end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "controllers", "admin", "reports_controller.rb"), <<~RUBY)
+        module Admin
+          class ReportsController < ApplicationController
+            def create = SyncJob.perform_later
+          end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "controllers", "reports_controller.rb"), <<~RUBY)
+        class ReportsController < ApplicationController
+          def create = SyncJob.perform_later
+        end
+      RUBY
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    def enqueuers_of(job)
+      described_class.call(job: job).content.first[:text][/## Enqueued By\n(.*?)(\n\n|\z)/m, 1].to_s
+    end
+
+    it "credits the namespaced job with the call its namespace resolves to" do
+      expect(enqueuers_of("Admin::SyncJob")).to include("app/controllers/admin/reports_controller.rb")
+      expect(enqueuers_of("Admin::SyncJob")).not_to include("app/controllers/reports_controller.rb")
+    end
+
+    # A callback block runs in the class body, and a block does not change
+    # Module.nesting: the job it names resolves from the class around it,
+    # exactly as in a method.
+    it "resolves a call in a class-body callback block from the class around it" do
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "models", "admin"))
+      File.write(File.join(tmpdir, "app", "models", "admin", "report.rb"), <<~RUBY)
+        module Admin
+          class Report < ApplicationRecord
+            after_commit { SyncJob.perform_later }
+          end
+        end
+      RUBY
+
+      expect(enqueuers_of("Admin::SyncJob")).to include("app/models/admin/report.rb")
+      expect(enqueuers_of("SyncJob")).not_to include("app/models/admin/report.rb")
+    end
+
+    # `class Admin::Exports` puts only Admin::Exports on Module.nesting, not
+    # Admin: a bare SyncJob there is the top-level job, where the nested
+    # `module Admin; class Exports` form would find Admin::SyncJob.
+    it "reads a compact class name's scope the way Ruby does" do
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "services", "admin"))
+      File.write(File.join(tmpdir, "app", "services", "admin", "exports.rb"), <<~RUBY)
+        class Admin::Exports
+          def self.call = SyncJob.perform_later
+        end
+      RUBY
+
+      expect(enqueuers_of("SyncJob")).to include("app/services/admin/exports.rb")
+      expect(enqueuers_of("Admin::SyncJob")).not_to include("app/services/admin/exports.rb")
+    end
+
+    it "does not credit the top-level job with it" do
+      expect(enqueuers_of("SyncJob")).to include("app/controllers/reports_controller.rb")
+      expect(enqueuers_of("SyncJob")).not_to include("app/controllers/admin/reports_controller.rb")
+    end
+  end
+
+  # Diaspora's 43 workers each printed their bases' two long sidekiq_options
+  # expressions - about 60 repeated lines of the same text. An inherited
+  # option is named once with where it comes from, its value only when short;
+  # the base's own page carries the whole expression.
+  describe "options a worker inherits" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    before do
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "workers", "mail"))
+      File.write(File.join(tmpdir, "app", "workers", "base_worker.rb"), <<~RUBY)
+        class BaseWorker
+          include Sidekiq::Worker
+
+          sidekiq_options backtrace: (bt = AppConfig.environment.sidekiq.backtrace.get) && bt.to_i,
+                          retry:     (rt = AppConfig.environment.sidekiq.retry.get) && rt.to_i
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "workers", "mail", "notifier_base_worker.rb"), <<~RUBY)
+        module Mail
+          class NotifierBaseWorker < ::BaseWorker
+            sidekiq_options queue: :low
+          end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "workers", "mail", "liked_worker.rb"), <<~RUBY)
+        module Mail
+          class LikedWorker < NotifierBaseWorker
+            sidekiq_options unique: true
+
+            def perform(id); end
+          end
+        end
+      RUBY
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "names an inherited option once, with its source, and its value only when short" do
+      text = described_class.call(detail: "summary").content.first[:text]
+
+      expect(text).to include("- **Mail::LikedWorker** [unique: true; queue: low (from Mail::NotifierBaseWorker); " \
+                              "backtrace, retry (from BaseWorker)]")
+      expect(text).not_to include("AppConfig.environment.sidekiq.retry.get) && rt.to_i, queue")
+    end
+
+    it "keeps the whole expression on the base's own page" do
+      text = described_class.call(job: "BaseWorker").content.first[:text]
+
+      expect(text).to include("retry: (rt = AppConfig.environment.sidekiq.retry.get) && rt.to_i")
+    end
+  end
+
+  # Discourse enqueues through a helper of its own: `Jobs.enqueue(:process_post)`
+  # names Jobs::ProcessPost by a symbol, `enqueue_in(delay, name)` puts the
+  # delay first, and "chat/foo" spells a namespaced job. None of it names the
+  # constant, so no enqueuer was ever listed.
+  describe "enqueues through the app's own helper" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    before do
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "jobs", "regular", "chat"))
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "models"))
+      FileUtils.mkdir_p(File.join(tmpdir, "lib"))
+      File.write(File.join(tmpdir, "app", "jobs", "base.rb"), <<~RUBY)
+        module Jobs
+          def self.enqueue(job, opts = {})
+            klass = job.instance_of?(Class) ? job : "::Jobs::\#{job.to_s.camelcase}".constantize
+            klass.perform_async(opts)
+          end
+
+          def self.enqueue_in(secs, job_name, opts = {})
+            enqueue(job_name, opts.merge!(delay_for: secs))
+          end
+
+          class Base
+            include Sidekiq::Worker
+          end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "jobs", "regular", "process_post.rb"), <<~RUBY)
+        module Jobs
+          class ProcessPost < ::Jobs::Base
+            def execute(args); end
+          end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "jobs", "regular", "chat", "notify.rb"), <<~RUBY)
+        module Jobs
+          module Chat
+            class Notify < ::Jobs::Base
+              def execute(args); end
+            end
+          end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "jobs", "regular", "unused.rb"), <<~RUBY)
+        module Jobs
+          class Unused < ::Jobs::Base
+            def execute(args); end
+          end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "models", "post.rb"), <<~RUBY)
+        class Post
+          def rebake! = Jobs.enqueue(:process_post, post_id: id)
+          def notify = Jobs.enqueue("chat/notify", post_id: id)
+        end
+      RUBY
+      File.write(File.join(tmpdir, "lib", "post_revisor.rb"), <<~RUBY)
+        class PostRevisor
+          def revise = ::Jobs.enqueue_in(5.seconds, :process_post, post_id: 1)
+          def notify = Jobs.enqueue(Jobs::Chat::Notify, post_id: 1)
+        end
+      RUBY
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    def enqueuers_of(job)
+      described_class.call(job: job).content.first[:text][/## Enqueued By\n(.*?)(\n\n|\z)/m, 1].to_s
+    end
+
+    it "lists a caller that names the job by the helper's symbol, before or after a delay" do
+      enqueuers = enqueuers_of("Jobs::ProcessPost")
+
+      expect(enqueuers).to include("app/models/post.rb")
+      expect(enqueuers).to include("lib/post_revisor.rb")
+    end
+
+    it "resolves a namespaced spelling and a class argument" do
+      enqueuers = enqueuers_of("Jobs::Chat::Notify")
+
+      expect(enqueuers).to include("app/models/post.rb")
+      expect(enqueuers).to include("lib/post_revisor.rb")
+    end
+
+    # An absent section read as "nothing enqueues it" whether or not anything
+    # had been looked for.
+    it "says so when it finds no enqueue call" do
+      text = described_class.call(job: "Jobs::Unused").content.first[:text]
+
+      expect(text).to include("## Enqueued By")
+      expect(text).to include("_No enqueue calls found in app/, lib/ (rake tasks included), bin/, script/ or db/ (migrations and seeds)")
+    end
+  end
+
+  # Discourse's 236 jobs implement `execute`; `perform` is on Jobs::Base and
+  # runs it. Reading only `perform` left every one of them with no signature
+  # and no guard clauses.
+  describe "a worker whose entry point is execute" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    before do
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "jobs", "regular"))
+      File.write(File.join(tmpdir, "app", "jobs", "base.rb"), <<~RUBY)
+        module Jobs
+          class Base
+            include Sidekiq::Worker
+
+            def perform(*args); end
+          end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "jobs", "regular", "anonymize_user.rb"), <<~RUBY)
+        module Jobs
+          class AnonymizeUser < ::Jobs::Base
+            sidekiq_options queue: "low"
+
+            def execute(args)
+              return if args[:user_id].nil?
+
+              UserAnonymizer.new(args[:user_id]).make_anonymous
+            end
+          end
+        end
+      RUBY
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "reads the signature off execute in the listing" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("**Jobs::AnonymizeUser** [queue: low]")
+      expect(text).to include("execute(args)")
+    end
+
+    it "reads its guards and its calls on its own page" do
+      text = described_class.call(job: "Jobs::AnonymizeUser").content.first[:text]
+
+      expect(text).to include("execute(args)")
+      expect(text).to include("return if args[:user_id].nil?")
+      expect(text).to include("UserAnonymizer.new")
+    end
+  end
+
   # An app can run every piece of background work through Sidekiq workers,
   # which are not ActiveJob descendants and do not live in app/jobs.
   describe "an app whose background work is Sidekiq workers" do
@@ -522,6 +1038,177 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text).to include("**Throttle:** concurrency { limit: 1 }, threshold { limit: 10, period: 1.minute }")
     end
 
+    # A Sidekiq class listed as a worker rather than a job showed less about
+    # itself than the job listing had: no size, no retries, and nothing about
+    # what it calls.
+    it "shows the worker's size, retries and calls, as the job listing did" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("(9 lines)")
+      expect(text).to include("→ Account.find")
+    end
+
+    # An ActiveInteraction service is invoked with .run / .run!, and the verb
+    # list had neither, so a worker whose whole body is one service call
+    # showed nothing under calls.
+    it "names a service the worker runs" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("Billing::Invoices::Create.run")
+    end
+
+    # The record carried the first source line of the macro, so a retry_on
+    # written across lines printed as "ActiveRecord::Deadlocked," - a dangling
+    # comma, no macro name and none of its options.
+    it "prints a multi-line retry the way the single job page does" do
+      File.write(File.join(tmpdir, "app", "workers", "billing", "invoices", "slow_worker.rb"), <<~RUBY)
+        class Billing::Invoices::SlowWorker
+          include Sidekiq::Job
+
+          retry_on ActiveRecord::Deadlocked,
+                   wait: 5.seconds,
+                   attempts: 3
+
+          def perform(id); end
+        end
+      RUBY
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("**Billing::Invoices::SlowWorker** (9 lines) - retry_on ActiveRecord::Deadlocked, attempts: 3, wait: 5.seconds")
+    end
+
+    # The jobs listing dropped the bases with no word, while the service and
+    # mailer listings named theirs.
+    it "names the base classes it left out, in the words the other listings use" do
+      File.write(File.join(tmpdir, "app", "workers", "billing", "invoices", "base_worker.rb"), <<~RUBY)
+        class Billing::Invoices::BaseWorker
+          include Sidekiq::Job
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "workers", "billing", "invoices", "retry_worker.rb"), <<~RUBY)
+        class Billing::Invoices::RetryWorker < Billing::Invoices::BaseWorker
+          def perform(id); end
+        end
+      RUBY
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("_Base classes not counted as jobs: Billing::Invoices::BaseWorker. " \
+                              "Ask for one by name for what it defines._")
+      expect(text).not_to include("**Billing::Invoices::BaseWorker**")
+    end
+
+    # The listing says a base can be asked for by name, the way the service
+    # listing does, and asking answered "not found" with an unrelated
+    # suggestion.
+    it "answers a base class asked for by name" do
+      File.write(File.join(tmpdir, "app", "workers", "billing", "invoices", "base_worker.rb"), <<~RUBY)
+        class Billing::Invoices::BaseWorker
+          include Sidekiq::Job
+          sidekiq_options queue: :default
+
+          def perform(id)
+            raise NotImplementedError
+          end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "workers", "billing", "invoices", "retry_worker.rb"), <<~RUBY)
+        class Billing::Invoices::RetryWorker < Billing::Invoices::BaseWorker
+          def perform(id); end
+        end
+      RUBY
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+      text = described_class.call(job: "Billing::Invoices::BaseWorker").content.first[:text]
+
+      expect(text).to include("# Billing::Invoices::BaseWorker")
+      expect(text).to include("app/workers/billing/invoices/base_worker.rb")
+      expect(text).to include("other jobs inherit from it")
+      expect(text).not_to include("not found")
+    end
+
+    # A base worker that throttles every worker below it with a mixin and a
+    # sidekiq_throttle had a page naming neither, nor who inherits it.
+    it "shows a base's mixins, throttle and heirs" do
+      File.write(File.join(tmpdir, "app", "workers", "billing", "invoices", "base_worker.rb"), <<~RUBY)
+        class Billing::Invoices::BaseWorker
+          include Sidekiq::Worker
+          include Sidekiq::Throttled::Worker
+
+          sidekiq_throttle(
+            concurrency: { limit: 1 }
+          )
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "workers", "billing", "invoices", "archive_worker.rb"), <<~RUBY)
+        class Billing::Invoices::ArchiveWorker < Billing::Invoices::BaseWorker
+          def perform(id); end
+        end
+      RUBY
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+      text = described_class.call(job: "Billing::Invoices::BaseWorker").content.first[:text]
+
+      expect(text).to include("- `include Sidekiq::Throttled::Worker`")
+      expect(text).to include("- `sidekiq_throttle(concurrency: { limit: 1 })`")
+      expect(text).to include("**Inherited by (1):** Billing::Invoices::ArchiveWorker")
+    end
+
+    # Mastodon's Fasp::BaseWorker declares the queue every Fasp worker runs on,
+    # and its own page left it out: the file, "not counted as a job", nothing
+    # it declares.
+    it "shows what a base declares for the jobs that inherit it" do
+      File.write(File.join(tmpdir, "app", "workers", "billing", "invoices", "base_worker.rb"), <<~RUBY)
+        class Billing::Invoices::BaseWorker
+          include Sidekiq::Worker
+
+          sidekiq_options queue: 'fasp', retry: 3
+          retry_on Net::OpenTimeout, attempts: 2
+
+          private
+
+          def with_provider(provider); end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "workers", "billing", "invoices", "retry_worker.rb"), <<~RUBY)
+        class Billing::Invoices::RetryWorker < Billing::Invoices::BaseWorker
+          def perform(id); end
+        end
+      RUBY
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+      text = described_class.call(job: "Billing::Invoices::BaseWorker").content.first[:text]
+
+      expect(text).to include("**Queue:** `fasp`")
+      expect(text).to include("**Options:** queue: fasp, retry: 3")
+      expect(text).to include("- retry_on Net::OpenTimeout, attempts: 2")
+      expect(text).to include("- sidekiq retry: 3")
+    end
+
+    # 346 files re-read on Discourse to print what the walk had already parsed.
+    it "prints them from the record, without reading the file again" do
+      FileUtils.rm_rf(File.join(tmpdir, "app", "workers"))
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("(9 lines)")
+      expect(text).to include("→ Account.find")
+    end
+
+    it "leaves them out at summary detail" do
+      text = described_class.call(detail: "summary").content.first[:text]
+
+      expect(text).not_to include("(9 lines)")
+    end
+
     # A worker record with no file cannot be read from disk, and joining nil
     # onto the root raises rather than answering.
     it "answers with what it holds when the worker record carries no file" do
@@ -540,6 +1227,21 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
 
       expect(text).to include("not found")
       expect(text).to include("Billing::Invoices::CreateWorker")
+    end
+  end
+
+  # A scheduled enqueue and the app's own helper enqueue as surely as
+  # perform_later does, and a comment naming one does not.
+  describe "the job enqueue side effect" do
+    before do
+      allow(described_class).to receive(:cached_context)
+        .and_return(jobs: { enqueue_helpers: [ { owner: "Jobs", method: "enqueue", job_arg: 0 } ] })
+    end
+
+    it "is read off the enqueue calls" do
+      expect(described_class.send(:extract_side_effects, "RefreshWorker.perform_in(5.minutes)")).to include("job enqueue")
+      expect(described_class.send(:extract_side_effects, "Jobs.enqueue(:process_post)")).to include("job enqueue")
+      expect(described_class.send(:extract_side_effects, "# SyncJob.perform_later\nx = 1")).not_to include("job enqueue")
     end
   end
 end

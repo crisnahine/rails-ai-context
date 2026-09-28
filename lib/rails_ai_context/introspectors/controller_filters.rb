@@ -16,6 +16,11 @@ module RailsAiContext
         skip_before_action skip_after_action skip_around_action append_after_action
       ].freeze
 
+      LISTENERS = {
+        filters: -> { Listeners::GenericMacroListener.new(*MACROS) },
+        mixins: Listeners::MixinsListener
+      }.freeze
+
       module_function
 
       # @param source [String] one controller's Ruby source
@@ -26,10 +31,38 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "controller filter read")
       end
 
+      # The class body's filters and every included concern's, in Rails' order: an `include`
+      # adds its concern's filters where it stands, each named in `from_concern`.
+      #
+      # @param within [String] the class's constant, for a namespace-relative `include`
+      # @param cache [Hash, nil] see ConcernMacros.collect
+      # @return [Array(Array<Hash>, Array<String>)] the filters, and the
+      #   included modules whose file could not be read
+      def with_concerns(source, root:, within:, cache: nil)
+        walked = SourceIntrospector.walk_source(source, LISTENERS)
+        mixins = Array(walked[:mixins])
+        # One walk, so a concern two includes reach is added once, as Ruby does.
+        collected, unread, _hidden, _calls, placement = ConcernMacros.collect(
+          root, mixins, keys: [ :filters ], prefer: "controller", within: within, cache: cache, listeners: LISTENERS
+        )
+        line_of = mixins.reverse.to_h { |mixin| [ mixin[:name], mixin[:location].to_i ] }
+        placed = Array(walked[:filters]).map { |entry| [ entry[:location].to_i, -1, entry ] } +
+                 Array(collected[:filters]).map do |entry|
+                   top, order = placement[entry[:from_concern]]
+                   [ line_of[top].to_i, order.to_i, entry ]
+                 end
+        filters = placed.each_with_index.sort_by { |(line, order, _), index| [ line, order, index ] }
+                        .filter_map do |(_, _, entry), _|
+          filter = record(entry)
+          filter && entry[:from_concern] ? filter.merge(from_concern: entry[:from_concern]) : filter
+        end
+        [ filters, unread ]
+      rescue => e
+        RailsAiContext.debug_fail(e, [ [], [] ], label: "controller filter read with concerns")
+      end
+
       def walk(source)
-        SourceIntrospector.walk_source(source, {
-          filters: -> { Listeners::GenericMacroListener.new(*MACROS) }
-        })[:filters] || []
+        SourceIntrospector.walk_source(source, LISTENERS.slice(:filters))[:filters] || []
       end
 
       def record(entry)
@@ -53,20 +86,26 @@ module RailsAiContext
 
       def constraints(entry)
         opts = entry[:options] || {}
+        sources = entry[:option_values] || {}
         out = {}
         only = normalize(opts[:only])
         except = normalize(opts[:except])
         out[:only] = only if only&.any?
         out[:except] = except if except&.any?
-        out[:unless] = opts[:unless].to_s if opts[:unless]
+        out[:unless] = condition_text(opts[:unless], sources[:unless]) if opts[:unless]
         if opts[:if]
-          # A lambda has no literal value, so `opts[:if]` is "[INFERRED]". When
-          # the condition compares action_name the AST can say which action it
-          # names; report that instead of nothing.
+          # When the condition compares action_name the AST can say which
+          # action it names; that is worth more than the line itself.
           actions = action_condition(entry[:option_nodes]&.[](:if))
-          out[:if] = actions ? %(action_name == "#{actions.first}") : opts[:if].to_s
+          out[:if] = actions ? %(action_name == "#{actions.first}") : condition_text(opts[:if], sources[:if])
         end
         out
+      end
+
+      # A lambda has no literal value, so the line the file holds is what
+      # there is to print. A symbol stays one, so the renderer can spell it.
+      def condition_text(value, source)
+        value.to_s == RailsAiContext::Confidence::INFERRED ? source.to_s : value
       end
 
       def normalize(value)
@@ -88,7 +127,7 @@ module RailsAiContext
 
         case node.arguments&.arguments&.first
         when Prism::StringNode then [ node.arguments.arguments.first.unescaped ]
-        when Prism::SymbolNode then [ node.arguments.arguments.first.value.to_s ]
+        when Prism::SymbolNode then [ node.arguments.arguments.first.unescaped ]
         end
       end
 
@@ -101,7 +140,7 @@ module RailsAiContext
         statements.body.first
       end
 
-      private_class_method :walk, :record, :constraints, :normalize, :action_condition, :lambda_body
+      private_class_method :walk, :record, :constraints, :condition_text, :normalize, :action_condition, :lambda_body
     end
   end
 end

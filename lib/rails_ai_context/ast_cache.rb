@@ -8,10 +8,13 @@ module RailsAiContext
   # Thread-safe AST parse cache backed by Concurrent::Map.
   # Keyed by path + content hash + mtime - automatically invalidates
   # when file content changes. Used by all Prism-based introspectors.
+  # A settled file's stat stands in for the read and hash (see RACY_WINDOW).
   #
-  # Bounded: evicts oldest entries when MAX_SIZE is exceeded.
+  # Bounded: evicts entries when MAX_SIZE is exceeded, and a file's recorded
+  # stat goes with its parse.
   module AstCache
     STORE = Concurrent::Map.new
+    SEEN = Concurrent::Map.new # path => [stat signature, STORE key, whether the stat can be trusted]
     MAX_SIZE = 500
     EVICTION_MUTEX = Mutex.new
 
@@ -25,6 +28,16 @@ module RailsAiContext
     # Reads content first, then checks size - avoids TOCTOU race where the
     # file could change between File.size and File.read.
     def self.parse(path)
+      # An unchanged file answers from its stat: the same concern file reaches
+      # every model's walk, and reading and hashing it each time dominated the
+      # model tier on Canvas. Within one run the stat is asked once.
+      signature = RunCache.fetch([ :stat_signature, path.to_s ]) { stat_signature(path) }
+      seen = SEEN[path]
+      if seen && seen[2] && seen.first == signature && (cached = STORE[seen[1]])
+        return cached
+      end
+
+      read_at = Time.now
       content = File.read(path)
       size = content.bytesize
       raise ArgumentError, "File too large for AST parsing: #{path} (#{size} bytes, max #{MAX_PARSE_SIZE})" if size > MAX_PARSE_SIZE
@@ -33,18 +46,43 @@ module RailsAiContext
       key   = "#{path}:#{Digest::SHA256.hexdigest(content)}:#{mtime}"
 
       cached = STORE[key]
-      return cached if cached
-
-      # Evict BEFORE inserting to avoid running inside compute_if_absent
-      evict_if_full
-
-      STORE.compute_if_absent(key) { Prism.parse(content) }
+      unless cached
+        # Evict BEFORE inserting to avoid running inside compute_if_absent
+        evict_if_full
+        cached = STORE.compute_if_absent(key) { Prism.parse(content) }
+      end
+      SEEN[path] = [ signature, key, settled?(signature, read_at) ]
+      cached
     end
 
-    # Parse a Ruby source string, cached by content digest. The name always
-    # promised a cache; the implementation was a bypass, so a controller was
-    # parsed up to ten times per static run because every extractor received
-    # the text and re-parsed it.
+    # A filesystem stamps mtime from a clock coarser than the reads around it
+    # (1ms to 4ms on Linux, a second on HFS+ and ext3), so a same-size rewrite
+    # inside one tick keeps the whole stat. As git does with its index, a stat
+    # is trusted only for a file already this much older than the read.
+    # ponytail: two seconds covers 1s mtimes (HFS+, ext3); a filesystem whose
+    # clock is coarser still, or one another host writes with a skewed clock,
+    # needs a wider window.
+    RACY_WINDOW = 2
+
+    def self.settled?(signature, read_at)
+      Time.at(signature[0], signature[1], :nsec) < read_at - RACY_WINDOW
+    end
+    private_class_method :settled?
+
+    def self.stat_signature(path)
+      stat = File.stat(path)
+      [ stat.mtime.to_i, stat.mtime.nsec, stat.size, stat.ino ]
+    end
+    private_class_method :stat_signature
+
+    # A one-shot parse that stores nothing: for a scan reading thousands of
+    # files once, whose entries would only evict what other readers reuse.
+    def self.parse_uncached(source)
+      Prism.parse(source)
+    end
+
+    # Parse a Ruby source string, cached by content digest, so every extractor
+    # handed the same text shares one parse.
     def self.parse_string(source)
       return Prism.parse(source) if source.bytesize > MAX_PARSE_SIZE
 
@@ -61,6 +99,7 @@ module RailsAiContext
     # Clear the entire cache.
     def self.clear
       STORE.clear
+      SEEN.clear
     end
 
     # Number of cached entries (for diagnostics).
@@ -74,7 +113,10 @@ module RailsAiContext
       EVICTION_MUTEX.synchronize do
         return if STORE.size < MAX_SIZE
         keys = STORE.keys
-        keys.first(keys.size / 4).each { |k| STORE.delete(k) }
+        evicted = keys.first(keys.size / 4).each { |k| STORE.delete(k) }.to_set
+        # A stat that points at an evicted parse can only send the next call to
+        # read the file, so it goes with it, and SEEN stays within MAX_SIZE.
+        SEEN.each_pair { |path, entry| SEEN.delete(path) if evicted.include?(entry[1]) }
       end
     end
     private_class_method :evict_if_full

@@ -105,7 +105,7 @@ module RailsAiContext
           table_arg = args[0]
           return unless table_arg.is_a?(Prism::StringNode)
 
-          columns = resolve_index_columns(args[1])
+          columns = literal_strings(args[1])
           options = extract_keyword_options(node)
 
           @results << {
@@ -172,10 +172,7 @@ module RailsAiContext
           name_arg = args.first
           return unless name_arg.is_a?(Prism::StringNode) || name_arg.is_a?(Prism::SymbolNode)
 
-          col_name = case name_arg
-          when Prism::StringNode then name_arg.unescaped
-          when Prism::SymbolNode then name_arg.value
-          end
+          col_name = literal_string(name_arg)
 
           options = extract_keyword_options(node)
 
@@ -188,47 +185,23 @@ module RailsAiContext
             # A proc default (`default: -> { "now()" }`) has no literal value,
             # so keep its source for callers that report defaults verbatim.
             default_source: default_source(node),
+            default_proc: proc_default?(node),
             location:    node.location.start_line
           }
         end
 
-        def default_source(node)
-          args = node.arguments&.arguments || []
-          assoc = args.grep(Prism::KeywordHashNode)
-                      .flat_map(&:elements)
-                      .find { |e| e.is_a?(Prism::AssocNode) && extract_key(e.key) == :default }
-          assoc&.value&.slice
-        end
-
         def extract_index(node)
           args = node.arguments&.arguments || []
-          columns = resolve_index_columns(args.first)
+          columns = literal_strings(args.first)
           options = extract_keyword_options(node)
 
           @results << {
             type:     :index,
             columns:  columns,
+            string_key: args.first.is_a?(Prism::StringNode),
             options:  options,
             location: node.location.start_line
           }
-        end
-
-        def resolve_index_columns(arg)
-          case arg
-          when Prism::ArrayNode
-            arg.elements.filter_map { |e|
-              case e
-              when Prism::StringNode then e.unescaped
-              when Prism::SymbolNode then e.value
-              else nil
-              end
-            }
-          when Prism::StringNode
-            [ arg.unescaped ]
-          when Prism::SymbolNode
-            [ arg.value ]
-          else []
-          end
         end
       end
     end

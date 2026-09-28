@@ -3,7 +3,7 @@
 module RailsAiContext
   module Introspectors
     # Scans for Hotwire/Turbo usage: frames, streams, model broadcasts.
-    class TurboIntrospector
+    class TurboIntrospector < Base
       extend StaticTier
       static_tier :files_only
 
@@ -20,12 +20,6 @@ module RailsAiContext
         recede_or_redirect_back_or_to resume_or_redirect_back_or_to refresh_or_redirect_back_or_to
       ])
 
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
-
       def call
         broadcasts = scan_broadcasts
         {
@@ -41,15 +35,9 @@ module RailsAiContext
           turbo_stream_responses: extract_turbo_stream_responses,
           turbo_native: detect_turbo_native
         }
-      rescue => e
-        { error: e.message }
       end
 
       private
-
-      def root
-        app.root.to_s
-      end
 
       def views_dir
         File.join(root, "app/views")
@@ -79,21 +67,37 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "extract_stream_subscriptions")
       end
 
+      # One read of every views root per run, in path order, for every views collector.
+      # ponytail: holds every markup view's text for the call; stream per file if memory matters.
+      def view_files
+        return @view_files if defined?(@view_files)
+
+        # Memoized only once complete: a raise part way through would leave later collectors
+        # reading a truncated list.
+        files = []
+        RailsAiContext::ViewFile.each(root, RailsAiContext::ViewFile::MARKUP_GLOB).each do |path, relative|
+          real = File.realpath(path)
+          next unless SafePath.contained?(real, File.realpath(views_root_of(path)))
+
+          content = RailsAiContext::SafeFile.read(real) or next
+          files << { file: path.sub("#{root}/", ""), relative: relative, content: content }
+        rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
+          next
+        end
+        @view_files = files
+      end
+
+      # The views root a path was found under, for the containment check that
+      # keeps a symlink escaping the tree out of the answer.
+      def views_root_of(path)
+        PathResolver.view_dirs(root).find { |dir| path.start_with?("#{dir}/") } || views_dir
+      end
+
       # Views are not Ruby, so they are read line by line. Files are yielded
       # in path order with their root-relative name and 1-based line.
       def each_view_line
-        return unless Dir.exist?(views_dir)
-
-        real_views = File.realpath(views_dir)
-        Dir.glob(File.join(views_dir, "**/*.{erb,haml,slim}")).sort.each do |path|
-          real = File.realpath(path)
-          next unless SafePath.contained?(real, real_views)
-
-          content = RailsAiContext::SafeFile.read(real) or next
-          file = path.sub("#{root}/", "")
-          content.each_line.with_index(1) { |line, line_num| yield file, line, line_num }
-        rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
-          next
+        view_files.each do |entry|
+          entry[:content].each_line.with_index(1) { |line, line_num| yield entry[:file], line, line_num }
         end
       end
 
@@ -117,22 +121,13 @@ module RailsAiContext
       # Splits on commas outside any bracket, so `[a, :b]` and `f(x, :y)` stay
       # one argument.
       def top_level_arguments(text)
-        args = []
-        depth = 0
-        start = 0
-        text.each_char.with_index do |ch, i|
-          case ch
-          when "(", "[", "{" then depth += 1
-          when ")", "]", "}" then depth -= 1
-          when ","
-            if depth.zero?
-              args << text[start...i].strip
-              start = i + 1
-            end
-          end
+        args = [ +"" ]
+        RailsAiContext::Brackets.each_top_level(text, comments: :ruby) do |piece, kind|
+          next if kind == :comment
+
+          kind == :char && piece == "," ? args << +"" : args.last << piece
         end
-        args << text[start..].to_s.strip
-        args.reject(&:empty?)
+        args.map(&:strip).reject(&:empty?)
       end
 
       def frame_src(line)
@@ -166,18 +161,16 @@ module RailsAiContext
       end
 
       def extract_turbo_stream_templates
-        return [] unless Dir.exist?(views_dir)
+        stream_templates.map { |_path, relative| relative }.sort
+      end
 
-        Dir.glob(File.join(views_dir, "**/*.turbo_stream.erb")).filter_map do |path|
-          path.sub("#{views_dir}/", "")
-        end.sort
+      def stream_templates
+        RailsAiContext::ViewFile.each(root, "**/*.turbo_stream.erb")
       end
 
       def extract_stream_actions
         actions = Hash.new(0)
-        return actions unless Dir.exist?(views_dir)
-
-        Dir.glob(File.join(views_dir, "**", "*.turbo_stream.erb")).each do |path|
+        stream_templates.each do |path, _relative|
           content = RailsAiContext::SafeFile.read(path) or next
           content.scan(/turbo_stream\.(\w+)/).each { |action| actions[action[0]] += 1 }
           content.scan(/<turbo-stream\s+action=["'](\w+)["']/).each { |action| actions[action[0]] += 1 }
@@ -231,8 +224,8 @@ module RailsAiContext
         end
       end
 
-      # app/models/concerns is an autoload root, so its path name carries no
-      # `Concerns::` segment.
+      # A concerns directory is an autoload root, so its path name carries no
+      # `Concerns::` segment; every scan here names a class through this.
       def owner_name(record)
         DeclaredConstant.resolve(record.source, record.path_name.delete_prefix("Concerns::"))
       end
@@ -268,10 +261,7 @@ module RailsAiContext
       end
 
       def detect_morph_meta
-        layouts_dir = File.join(root, "app/views/layouts")
-        return false unless Dir.exist?(layouts_dir)
-
-        Dir.glob(File.join(layouts_dir, "*.{erb,haml,slim}")).any? do |path|
+        RailsAiContext::ViewFile.each(root, "layouts/*.{erb,haml,slim}").any? do |path, _relative|
           content = RailsAiContext::SafeFile.read(path) or next
           content.include?('name="turbo-refresh-method"') && content.include?('content="morph"')
         end
@@ -283,13 +273,10 @@ module RailsAiContext
         return [] unless Dir.exist?(views_dir)
 
         elements = []
-        Dir.glob(File.join(views_dir, "**/*.{erb,haml,slim}")).each do |path|
-          content = RailsAiContext::SafeFile.read(path) or next
-          relative = path.sub("#{views_dir}/", "")
-
-          content.scan(/<[^>]*data-turbo-permanent[^>]*>/i).each do |tag|
+        view_files.each do |entry|
+          entry[:content].scan(/<[^>]*data-turbo-permanent[^>]*>/i).each do |tag|
             id = tag.match(/id=["']([^"']+)["']/)&.send(:[], 1)
-            elements << { file: relative, id: id }
+            elements << { file: entry[:relative], id: id }
           end
         end
 
@@ -302,10 +289,11 @@ module RailsAiContext
         return { "data-turbo-false": 0, "data-turbo-action": 0, "data-turbo-preload": 0 } unless Dir.exist?(views_dir)
 
         counts = { "data-turbo-false": 0, "data-turbo-action": 0, "data-turbo-preload": 0 }
-        Dir.glob(File.join(views_dir, "**/*.{erb,haml,slim}")).each do |path|
-          content = RailsAiContext::SafeFile.read(path) or next
-          counts[:"data-turbo-false"] += content.scan(/data-turbo=["']false["']/).size
-          counts[:"data-turbo-action"] += content.scan(/data-turbo-action=["'][^"']*["']/).size
+        view_files.each do |entry|
+          content = entry[:content]
+          counts[:"data-turbo-false"] += content.scan(ViewTemplateIntrospector.data_attr("data-turbo")).count { |m| m[0] == "false" }
+          counts[:"data-turbo-false"] += content.scan(/data-turbo["']?\s*(?:=>|=|:)\s*false\b/).size
+          counts[:"data-turbo-action"] += content.scan(ViewTemplateIntrospector.data_attr("data-turbo-action")).size
           # Also count Rails data hash syntax: data: { turbo_action: ... }
           counts[:"data-turbo-action"] += content.scan(/turbo_action:\s*["'][^"']*["']/).size
           counts[:"data-turbo-preload"] += content.scan(/data-turbo-preload/).size
@@ -314,12 +302,6 @@ module RailsAiContext
         counts
       rescue => e
         RailsAiContext.debug_fail(e, { "data-turbo-false": 0, "data-turbo-action": 0, "data-turbo-preload": 0 }, label: "extract_turbo_drive_settings")
-      end
-
-      # Concerns stay in: a native include or a turbo_stream response can
-      # live in one.
-      def controller_sources
-        SourceScan.each(root, kind: "app/controllers", skip_concerns: false)
       end
 
       # One walk over app/controllers feeding every collector that needs it,
@@ -337,12 +319,16 @@ module RailsAiContext
         navigation = []
         responses = []
 
-        each_controller_record do |record|
-          source = record.source
-          guarded { include_found ||= native_navigation_included?(source) }
-          guarded { helpers << record.file if source.match?(NATIVE_HELPER) }
-          guarded { source.scan(NATIVE_NAVIGATION) { |m| navigation << { file: record.file, method: m } } }
-          guarded { responses.concat(stream_responses_in(record)) }
+        # Concerns stay in: a native include or turbo_stream response can live in one.
+        # A raise mid-walk keeps the entries already collected.
+        guarded do
+          SourceScan.each(root, kind: "app/controllers", skip_concerns: false) do |record|
+            source = record.source
+            guarded { include_found ||= native_navigation_included?(source) }
+            guarded { helpers << record.file if source.match?(NATIVE_HELPER) }
+            guarded { source.scan(NATIVE_NAVIGATION) { |m| navigation << { file: record.file, method: m } } }
+            guarded { responses.concat(stream_responses_in(record)) }
+          end
         end
 
         # Each list is ordered under its own collector's rescue: an entry the
@@ -369,12 +355,6 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, nil, label: "scan_controllers collector")
       end
 
-      def each_controller_record(&block)
-        controller_sources.each(&block)
-      rescue => e
-        RailsAiContext.debug_fail(e, nil, label: "scan_controllers")
-      end
-
       def native_navigation_included?(source)
         walked = SourceIntrospector.walk_source(source, {
           includes: -> { Listeners::GenericMacroListener.new(:include) }
@@ -385,7 +365,7 @@ module RailsAiContext
       # Tying a `format.turbo_stream` call to the action it sits in needs
       # block scope, which the listeners do not track. Line scanning stays.
       def stream_responses_in(record)
-        controller_name = DeclaredConstant.resolve(record.source, record.path_name)
+        controller_name = owner_name(record)
 
         found = []
         current_action = nil
@@ -417,9 +397,8 @@ module RailsAiContext
         return 0 unless Dir.exist?(views_dir)
 
         count = 0
-        Dir.glob(File.join(views_dir, "**/*.{erb,haml,slim}")).each do |path|
-          content = RailsAiContext::SafeFile.read(path) or next
-          count += content.scan(/turbo_native_app\?|hotwire_native_app\?/).size
+        view_files.each do |entry|
+          count += entry[:content].scan(/turbo_native_app\?|hotwire_native_app\?/).size
         end
 
         count

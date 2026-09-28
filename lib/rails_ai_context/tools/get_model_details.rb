@@ -50,8 +50,8 @@ module RailsAiContext
             return text_response(format_model(key, data))
           end
 
-          # Pagination - sort by association count (most connected first)
-          all_names = models.keys.sort_by { |m| -(models[m][:associations]&.size || 0) }
+          # Most connected first, the one ranking every key-model list uses.
+          all_names = Payload.models_by_connection(models)
           page = paginate(all_names, offset: offset, limit: limit, default_limit: 50)
           paginated = page[:items]
 
@@ -100,10 +100,6 @@ module RailsAiContext
             end
             lines << "" << "_Use `model:\"Name\"` for validations, scopes, callbacks, and more._#{pagination_hint}"
             text_response(lines.join("\n"))
-
-          else
-            model_list = paginated.map { |m| "- #{m}" }.join("\n")
-            text_response("# Available models (#{page[:total]})\n\n#{model_list}#{pagination_hint}")
           end
         end
       end
@@ -194,9 +190,12 @@ module RailsAiContext
             end
           end
 
-          if data[:embeds]&.any?
+          # embeds_many and embeds_one are listed under Associations too.
+          listed = Array(data[:associations]).map { |a| a[:name].to_s }
+          embeds = Array(data[:embeds]).reject { |e| listed.include?(e[:name].to_s) }
+          if embeds.any?
             lines << "" << "## Embedded relations"
-            data[:embeds].each do |e|
+            embeds.each do |e|
               lines << "- `#{e[:type]}` **#{e[:name]}**"
             end
           end
@@ -207,10 +206,12 @@ module RailsAiContext
           lines << "" << "## Associations"
           data[:associations].each do |a|
             detail = "- `#{a[:type]}` **#{a[:name]}**"
-            detail += " (class: #{a[:class_name]})" if a[:class_name] && a[:class_name] != a[:name].to_s.classify
+            detail += " (computed)" if a[:computed_name]
+            shown = a[:class_name]&.delete_prefix("::")
+            detail += " (class: #{shown})" if shown && shown != a[:name].to_s.classify
             detail += " through: #{a[:through]}" if a[:through]
             detail += " [polymorphic]" if a[:polymorphic]
-            detail += " [optional]" if a[:optional]
+            detail += (a[:optional] == true ? " [optional]" : " [optional: #{a[:optional]}]") if a[:optional]
             detail += " dependent: #{a[:dependent]}" if a[:dependent]
             detail += " (fk: #{a[:foreign_key]})" if a[:foreign_key] && a[:type] == "belongs_to"
             detail += " [UNAVAILABLE: #{a[:unavailable]}]" if a[:unavailable]
@@ -221,48 +222,52 @@ module RailsAiContext
         # Validations - compress repeated inclusion lists, deduplicate same kind+attribute
         if data[:validations]&.any?
           lines << "" << "## Validations"
-          # Identify belongs_to association names for labeling implicit validations
-          belongs_to_names = (data[:associations] || [])
-            .select { |a| a[:type] == "belongs_to" && a[:optional] != true }
-            .map { |a| a[:name] }
-            .to_set
-
           # The options are part of the key: a model can validate one
           # attribute twice under different conditions, and the two rules are
           # different declarations, not a repeat of one.
           seen_validations = Set.new
           seen_inclusions = {}
+          # An unconditional presence rule the app writes on a belongs_to name
+          # is the implicit one written out; a conditional one is not.
+          written = data[:validations].select do |v|
+            !v[:implicit] && v[:kind].to_s == "presence" && ((v[:options] || {}).keys.map(&:to_sym) & %i[if unless on]).empty?
+          end.flat_map { |v| v[:attributes] }
           data[:validations].each do |v|
+            next if v[:implicit] && (v[:attributes] & written).any?
+
             dedup_key = [ v[:kind].to_s, v[:attributes].sort, v[:options] ]
             next if seen_validations.include?(dedup_key)
             seen_validations << dedup_key
             attrs = v[:attributes].join(", ")
 
-            # Label implicit belongs_to presence validations
-            implicit = v[:kind] == "presence" && v[:attributes].size == 1 && belongs_to_names.include?(v[:attributes].first)
-            implicit_label = implicit ? " _(implicit from belongs_to)_" : ""
+            implicit_label = if v[:implicit_if] then " _(implicit from belongs_to when #{v[:implicit_if]})_"
+            elsif v[:implicit] then " _(implicit from belongs_to)_"
+            elsif v[:added_by] then " _(added by #{v[:added_by]})_"
+            elsif v[:reflection_only] then " _(reflection only: no line the source reader parses declares it)_"
+            else ""
+            end
 
             if v[:options]&.any?
-              # Filter out message: "required" from implicit belongs_to validations
-              filtered_opts = v[:options].reject { |k, val| implicit && k.to_s == "message" && val.to_s == "required" }
-              compressed_opts = filtered_opts.map do |k, val|
+              compressed_opts = v[:options].map do |k, val|
                 if k.to_s == "in" && val.is_a?(Array) && val.size > 3
-                  key = val.sort.join(",")
+                  # Inclusion lists mix strings, symbols, numbers and nil, which `sort` fails on.
+                  key = val.map(&:inspect).sort.join(",")
                   if seen_inclusions[key]
                     "#{k}: (same as #{seen_inclusions[key]})"
                   else
                     seen_inclusions[key] = attrs
-                    "#{k}: #{val}"
+                    "#{k}: #{option_text(val)}"
                   end
                 else
-                  "#{k}: #{val}"
+                  "#{k}: #{option_text(val)}"
                 end
               end
               opts = compressed_opts.any? ? " (#{compressed_opts.join(', ')})" : ""
             else
               opts = ""
             end
-            lines << "- `#{v[:kind]}` on #{attrs}#{opts}#{implicit_label}"
+            target = Serializers::SectionFacts.validation_target(v)
+            lines << "- `#{v[:kind]}`#{" #{target}" unless target.empty?}#{opts}#{implicit_label}"
           end
         end
 
@@ -270,12 +275,10 @@ module RailsAiContext
         if data[:custom_validates]&.any?
           lines << "" << "## Validations" unless data[:validations]&.any?
           bodies = extract_custom_validate_bodies(name, data[:custom_validates])
+          conditions = data[:custom_validate_conditions] || {}
           data[:custom_validates].each do |v|
-            if bodies[v]
-              lines << "- **Custom:** `#{v}` → #{bodies[v]}"
-            else
-              lines << "- **Custom:** `#{v}`"
-            end
+            tail = callback_condition_tail(conditions[v.to_s] || conditions[v.to_sym])
+            lines << "- **Custom:** `#{v}`#{tail}#{" → #{bodies[v]}" if bodies[v]}"
           end
         end
 
@@ -288,7 +291,7 @@ module RailsAiContext
               entries = values.map { |k, v| "#{k}(#{v})" }.join(", ")
               lines << "- `#{attr}`: #{entries} [#{backing}]"
             else
-              lines << "- `#{attr}`: #{Array(values).join(', ')}"
+              lines << "- `#{attr}`: #{Serializers::SectionFacts.enum_values(values)}"
             end
           end
         end
@@ -311,8 +314,13 @@ module RailsAiContext
         # Callbacks
         if data[:callbacks]&.any?
           lines << "" << "## Callbacks"
+          conditions = data[:callback_conditions] || {}
           data[:callbacks].each do |type, methods|
-            lines << "- `#{callback_type_label(type)}`: #{methods.map { |m| callback_target(m.to_s) }.join(', ')}"
+            per_type = Array(conditions[type.to_s])
+            targets = methods.each_with_index.map do |m, i|
+              "#{callback_target(m.to_s)}#{callback_condition_tail(per_type[i])}"
+            end
+            lines << "- `#{callback_type_label(type)}`: #{targets.join(', ')}"
           end
         end
 
@@ -385,17 +393,33 @@ module RailsAiContext
         hidden = data[:concerns_hidden].to_i
         if data[:concerns]&.any? || hidden.positive?
           lines << "" << "## Concerns"
+          sources = data[:concern_sources] || {}
           Array(data[:concerns]).each do |c|
+            from = sources[c] || sources[c.to_s.to_sym]
+            label = from ? " (from #{from})" : ""
             methods = extract_concern_methods(c)
             if methods&.any?
-              lines << "- **#{c}** - #{methods.join(', ')}"
+              lines << "- **#{c}**#{label} - #{methods.join(', ')}"
             else
-              lines << "- #{c}"
+              lines << "- #{c}#{label}"
             end
           end
           unread = data[:concerns_unread]
           lines << unread_concerns_line(unread) if unread&.any?
           lines << "_#{count_phrase(hidden, "concern")} hidden by `excluded_concerns`._" if hidden.positive?
+        end
+
+        # Declared only under a condition the source does not decide, or by a
+        # called method on another receiver: named, and left out of every count above.
+        { conditional_declarations: "Only under a condition the source does not decide",
+          foreign_declarations: "Declared on another class" }.each do |key, heading|
+          next unless data[key]&.any?
+
+          lines << "" << "## #{heading}"
+          data[key].each do |c|
+            lines << "- `#{c[:declaration]}`#{" on `#{c[:receiver]}`" if c[:receiver]}#{" if `#{c[:condition]}`" if c[:condition]}" \
+                     "#{" _(#{c[:from_concern]})_" if c[:from_concern]}"
+          end
         end
 
         # Class methods - only show methods defined in the actual model file
@@ -546,8 +570,16 @@ module RailsAiContext
         source = RailsAiContext::SafeFile.read(path)
         return nil unless source
 
-        methods = Introspectors::ActionResolver.public_methods_from_source(source).map { |m| m.split("(").first }
-        methods.empty? ? nil : methods
+        # The concern module's own methods, not a nested class's; a concern
+        # that has none of its own is its `module ClassMethods`.
+        all = Introspectors::ActionResolver.methods_in(source)
+        owner = Introspectors::DeclaredConstant.named(source, concern_name)
+        methods = [ owner, "#{owner}::ClassMethods" ].lazy.map do |candidate|
+          Introspectors::ActionResolver.own_methods(all, candidate)
+            .select { |m| m[:scope] == :instance && m[:visibility] == :public && !m[:name].to_s.start_with?("_") }
+            .map { |m| m[:name].to_s }.uniq
+        end.find(&:any?)
+        methods&.any? ? methods : nil
       end
 
       private_class_method def self.extract_model_structure(model_name)

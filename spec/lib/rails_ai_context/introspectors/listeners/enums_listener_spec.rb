@@ -3,11 +3,10 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Introspectors::Listeners::EnumsListener do
-  def parse_and_dispatch(source)
-    result     = Prism.parse(source)
-    listener   = described_class.new
-    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-    listener.results
+  it "keeps a computed enum's values as their source" do
+    expect(parse_and_dispatch("enum :status, Statuses.to_h").first[:values]).to eq("Statuses.to_h")
+    expect(parse_and_dispatch("enum kind: KINDS").first[:values]).to eq("KINDS")
+    expect(parse_and_dispatch("enum priority: %i[low high].freeze").first[:values]).to eq(%i[low high])
   end
 
   it "detects Rails 7+ enum syntax" do
@@ -15,6 +14,11 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::EnumsListener do
     expect(results.size).to eq(1)
     expect(results.first[:name]).to eq("role")
     expect(results.first[:values]).to include(admin: 0, member: 1)
+  end
+
+  it "names an escaped enum by what the symbol means, not by its source text" do
+    results = parse_and_dispatch(%q(enum :"order\u0020status", { open: 0 }))
+    expect(results.first[:name]).to eq("order status")
   end
 
   it "detects Rails 7+ enum with prefix option" do

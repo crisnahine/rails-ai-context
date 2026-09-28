@@ -102,6 +102,33 @@ RSpec.describe RailsAiContext::Introspectors::FrontendFrameworkIntrospector do
       it "returns empty workspaces when not a monorepo" do
         expect(result[:monorepo][:workspaces]).to eq([])
       end
+
+      context "with turbo.json, nx.json and lerna.json all present" do
+        let(:paths) { %w[turbo.json nx.json lerna.json].map { |f| File.join(Rails.root, f) } }
+
+        before { paths.each { |p| File.write(p, "{}") } }
+        after { paths.each { |p| FileUtils.rm_f(p) } }
+
+        it "reports turborepo" do
+          expect(result[:monorepo]).to include(detected: true, tool: "turborepo", workspaces: [])
+        end
+
+        context "without turbo.json" do
+          before { FileUtils.rm_f(paths.first) }
+
+          it "reports nx" do
+            expect(result[:monorepo][:tool]).to eq("nx")
+          end
+        end
+
+        context "with only lerna.json" do
+          before { paths.first(2).each { |p| FileUtils.rm_f(p) } }
+
+          it "reports lerna" do
+            expect(result[:monorepo][:tool]).to eq("lerna")
+          end
+        end
+      end
     end
 
     describe "build tool" do
@@ -288,6 +315,87 @@ RSpec.describe RailsAiContext::Introspectors::FrontendFrameworkIntrospector do
     end
   end
 
+  # An Angular app that also depends on react read as React, because the
+  # marker list decided the primary framework.
+  describe "an app that depends on two frameworks" do
+    it "puts the framework the app is built in first and keeps the other" do
+      require "tmpdir"
+      Dir.mktmpdir do |tmp|
+        root = File.realpath(tmp)
+        FileUtils.mkdir_p(File.join(root, "frontend/src/app/work_packages"))
+        File.write(File.join(root, "frontend/package.json"), <<~JSON)
+          { "dependencies": { "@angular/core": "^22.0.7", "react": "^19.2.6" } }
+        JSON
+        File.write(File.join(root, "frontend/angular.json"), "{}")
+        3.times do |i|
+          File.write(File.join(root, "frontend/src/app/work_packages/wp#{i}.component.ts"), "")
+        end
+        File.write(File.join(root, "frontend/src/app/widget.tsx"), "")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+
+        expect(result[:frameworks].keys).to eq([ :angular, :react ])
+      end
+    end
+  end
+
+  describe "a Preact app that also lists react" do
+    it "reads as Preact and credits the components to it" do
+      require "tmpdir"
+      Dir.mktmpdir do |tmp|
+        root = File.realpath(tmp)
+        FileUtils.mkdir_p(File.join(root, "app/javascript/components"))
+        File.write(File.join(root, "package.json"),
+                   '{ "dependencies": { "preact": "^10.20.2", "react": "^17.0.0" } }')
+        3.times { |i| File.write(File.join(root, "app/javascript/components/c#{i}.jsx"), "") }
+
+        result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+
+        expect(result[:frameworks].keys.first).to eq(:preact)
+        expect(result[:frontend_roots].first[:version]).to eq("^10.20.2")
+      end
+    end
+  end
+
+  describe "an Angular app's frontend root" do
+    it "counts the components its own framework writes" do
+      require "tmpdir"
+      Dir.mktmpdir do |tmp|
+        root = File.realpath(tmp)
+        FileUtils.mkdir_p(File.join(root, "frontend/src/app/work_packages"))
+        FileUtils.mkdir_p(File.join(root, "frontend/node_modules/react-dom"))
+        File.write(File.join(root, "frontend/package.json"),
+                   '{ "dependencies": { "@angular/core": "^22.0.7", "react": "^19.2.6" } }')
+        File.write(File.join(root, "frontend/angular.json"), "{}")
+        3.times { |i| File.write(File.join(root, "frontend/src/app/work_packages/wp#{i}.component.ts"), "") }
+        File.write(File.join(root, "frontend/node_modules/react-dom/index.component.ts"), "")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+
+        expect(result[:frontend_roots].first[:component_count]).to eq(3)
+      end
+    end
+  end
+
+  describe "a frontend root's framework and version" do
+    it "takes the version off the framework it names, not off whichever entry has one" do
+      require "tmpdir"
+      Dir.mktmpdir do |tmp|
+        root = File.realpath(tmp)
+        FileUtils.mkdir_p(File.join(root, "app/frontend/components"))
+        File.write(File.join(root, "package.json"), '{ "dependencies": { "react": "^19.2.6" } }')
+        File.write(File.join(root, "vite.config.ts"), "import vue from '@vitejs/plugin-vue'\n")
+        2.times { |i| File.write(File.join(root, "app/frontend/components/w#{i}.vue"), "") }
+
+        result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+        frontend = result[:frontend_roots].first
+
+        expect(frontend[:framework]).to eq(:vue)
+        expect(frontend[:version]).to be_nil
+      end
+    end
+  end
+
   # A Rails-shaped webpacker config keeps its shared settings behind a YAML
   # anchor, and a reader that refuses aliases silently falls back to the
   # convention path.
@@ -349,6 +457,24 @@ RSpec.describe RailsAiContext::Introspectors::FrontendFrameworkIntrospector do
   end
 
   describe "frontend roots" do
+    it "prefers the vite source dir over a shakapacker one" do
+      require "tmpdir"
+      Dir.mktmpdir do |tmp|
+        root = File.realpath(tmp)
+        FileUtils.mkdir_p(File.join(root, "config"))
+        FileUtils.mkdir_p(File.join(root, "app/vite"))
+        FileUtils.mkdir_p(File.join(root, "app/packs"))
+        File.write(File.join(root, "config/vite.json"), JSON.generate("all" => { "sourceCodeDir" => "app/vite" }))
+        File.write(File.join(root, "config/shakapacker.yml"), "default:\n  source_path: app/packs\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+
+        expect(result[:frontend_roots]).to match([
+          a_hash_including(path: "app/vite", detected_from: "config/vite.json")
+        ])
+      end
+    end
+
     it "does not count a frontend root that resolves outside the app root" do
       Dir.mktmpdir("frontend") do |dir|
         dir = File.realpath(dir)
@@ -359,6 +485,46 @@ RSpec.describe RailsAiContext::Introspectors::FrontendFrameworkIntrospector do
 
         result = described_class.new(RailsAiContext::StaticApp.new(app_root)).call
         expect(result[:frontend_roots].to_s).not_to include("javascript")
+      end
+    end
+  end
+
+  describe "a tsconfig written the way tsc --init and shared base configs write it" do
+    def typescript_in(root)
+      described_class.new(RailsAiContext::StaticApp.new(root)).call[:typescript]
+    end
+
+    it "reads one with comments and trailing commas" do
+      Dir.mktmpdir do |root|
+        File.write(File.join(root, "tsconfig.json"), <<~JSONC)
+          {
+            "compilerOptions": {
+              /* Visit https://aka.ms/tsconfig to read more about this file */
+              "strict": true, // enable all strict type-checking options
+              "paths": { "@/*": ["./app/javascript/*"], },
+            },
+          }
+        JSONC
+
+        expect(typescript_in(root)).to eq(enabled: true, strict: true, path_aliases: { "@/*" => [ "./app/javascript/*" ] })
+      end
+    end
+
+    it "takes strict and paths from the config it extends, the child's own values winning" do
+      Dir.mktmpdir do |root|
+        File.write(File.join(root, "tsconfig.base.json"),
+                   %({ "compilerOptions": { "strict": true, "paths": { "~base/*": ["./shared/*"] } } }))
+        File.write(File.join(root, "tsconfig.json"), %({ "extends": "./tsconfig.base.json", "compilerOptions": { "target": "es2022" } }))
+
+        expect(typescript_in(root)).to eq(enabled: true, strict: true, path_aliases: { "~base/*" => [ "./shared/*" ] })
+      end
+    end
+
+    it "is disabled when the tsconfig cannot be read even as JSON with comments" do
+      Dir.mktmpdir do |root|
+        File.write(File.join(root, "tsconfig.json"), "{ not json")
+
+        expect(typescript_in(root)).to eq(enabled: false)
       end
     end
   end

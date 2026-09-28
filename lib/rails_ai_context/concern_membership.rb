@@ -7,7 +7,15 @@ module RailsAiContext
   # dropped the `excluded_concerns` config, and the two tiers of the
   # controller answer used different rules entirely.
   module ConcernMembership
-    STDLIB = %w[Kernel JSON PP Marshal MessagePack].freeze
+    STDLIB = %w[Kernel JSON PP Marshal MessagePack ERB].freeze
+    # The hooks Ruby runs on the module itself for each way of mixing it in,
+    # so what their bodies declare is every includer's.
+    HOOKS_BY_MACRO = {
+      include: %w[included append_features], prepend: %w[prepended prepend_features], extend: %w[extended]
+    }.freeze
+    MIXIN_HOOKS = HOOKS_BY_MACRO.values.flatten.freeze
+    # The block ActiveSupport::Concern runs for each.
+    CONCERN_BLOCKS = { include: :included, prepend: :prepended }.freeze
     FRAMEWORK_PREFIXES = %w[
       ActiveModel:: ActiveRecord:: ActiveSupport::
       ActionController:: ActionDispatch:: AbstractController::
@@ -48,6 +56,22 @@ module RailsAiContext
 
     def payload(names)
       Array(names).select { |name| payload?(name) }
+    end
+
+    # Matched on the last segment: `module Edition; module Featurable` and
+    # `module Edition::Featurable` both write one constant.
+    def own_mixins(mixins, name)
+      return Array(mixins) if Array(mixins).none? { |mixin| mixin.key?(:owner) }
+
+      own = own_owner(mixins, name)
+      # `Other.include X` written in the body mixes into Other.
+      Array(mixins).select { |mixin| own && !mixin[:receiver] && Array(mixin[:owner]).join("::") == own }
+    end
+
+    def own_owner(records, name)
+      short = name.to_s.split("::").last.to_s
+      Array(records).map { |record| Array(record[:owner]).join("::") }
+                    .select { |owner| owner.split("::").last.to_s.casecmp?(short) }.min_by(&:length)
     end
 
     # Static reading: only the mixins reflection would report, by the

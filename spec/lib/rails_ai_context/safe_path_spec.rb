@@ -139,6 +139,22 @@ RSpec.describe RailsAiContext::SafePath do
       include_examples "blocks", "config/credentials/production.yml.enc"
     end
 
+    # Each of these is a secrets file by its own tool's convention, and each
+    # is the file that tool tells you to gitignore.
+    describe "secret files of the config gems" do
+      include_examples "blocks", "config/application.yml"       # figaro
+      include_examples "blocks", ".envrc"                       # direnv
+      include_examples "blocks", "config/settings.local.yml"    # config gem
+      include_examples "blocks", "config/settings/production.local.yml"
+      include_examples "blocks", "config/secrets.yml.enc"       # Rails 5.1
+      include_examples "blocks", "config/secrets.production.yml"
+      include_examples "blocks", "certs/apns.p8"                # Apple auth key
+      include_examples "blocks", "docker/secrets.env"           # compose env_file
+      include_examples "allows", "features/support/env.rb"
+      # The placeholder beside a secrets file exists to be read.
+      include_examples "allows", "config/application.example.yml"
+    end
+
     describe "connection and credential files" do
       include_examples "blocks", "config/database.yml"
       include_examples "blocks", "config/secrets.yml"

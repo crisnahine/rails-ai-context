@@ -368,91 +368,53 @@ module RailsAiContext
         def gather_context(parsed, classification, file, line, action)
           lines = []
 
-          # Controller context from action: parameter
-          if action
-            ctrl, act = action.split("#", 2)
-            if ctrl && act
-              begin
-                ctrl_class = ctrl.end_with?("Controller") ? ctrl : "#{ctrl.camelize}Controller"
-                result = GetControllers.call(controller: ctrl_class, action: act)
-                unless empty?(result)
-                  lines << "## Controller Context"
-                  lines << response_text(result)
-                  lines << ""
-                end
-              rescue => e
-                lines << "## Controller Context"
-                lines << "_Could not load: #{e.message}_"
-                lines << ""
-              end
+          ctrl, act = action.split("#", 2) if action
+          if ctrl && act
+            add_section(lines, "Controller Context", report_error: true) do
+              ctrl_class = ctrl.end_with?("Controller") ? ctrl : "#{ctrl.camelize}Controller"
+              GetControllers.call(controller: ctrl_class, action: act)
             end
           end
 
-          # File context
           if file && line
-            begin
-              result = GetEditContext.call(file: file, near: parsed[:method_name] || line.to_s)
-              unless empty?(result)
-                lines << "## Code Context"
-                lines << response_text(result)
-                lines << ""
-              end
-            rescue => e
-              lines << "## Code Context"
-              lines << "_Could not load: #{e.message}_"
-              lines << ""
+            add_section(lines, "Code Context", report_error: true) do
+              GetEditContext.call(file: file, near: parsed[:method_name] || line.to_s)
             end
           end
 
-          # Schema context for schema_mismatch errors
           if classification[:type] == :schema_mismatch
-            # Try to extract table name from error
             table = parsed[:message].match(/(?:table|relation)\s+["']?(\w+)["']?/i)&.[](1)
-            if table
-              begin
-                result = GetSchema.call(table: table)
-                unless empty?(result)
-                  lines << "## Schema Context"
-                  lines << response_text(result)
-                  lines << ""
-                end
-              rescue => e; $stderr.puts "[rails-ai-context] Diagnosis step skipped: #{e.message}" if ENV["DEBUG"]; end
-            end
+            add_section(lines, "Schema Context") { GetSchema.call(table: table) } if table
           end
 
-          # Model context for validation errors
           if classification[:type] == :validation_failure
-            # Try to extract model from file path or error
-            model_name = if file&.match?(%r{app/models/(.+)\.rb})
-              file.match(%r{app/models/(.+)\.rb})[1].camelize
-            end
-            if model_name
-              begin
-                result = GetModelDetails.call(model: model_name)
-                unless empty?(result)
-                  lines << "## Model Context"
-                  lines << response_text(result)
-                  lines << ""
-                end
-              rescue => e; $stderr.puts "[rails-ai-context] Diagnosis step skipped: #{e.message}" if ENV["DEBUG"]; end
-            end
+            model_name = file&.match(%r{app/models/(.+)\.rb})&.[](1)&.camelize
+            add_section(lines, "Model Context") { GetModelDetails.call(model: model_name) } if model_name
           end
 
-          # Trace method if we know the method name
           if parsed[:method_name] && lines.none? { |l| l.include?("Code Context") }
-            begin
+            add_section(lines, "Method Trace") do
               result = SearchCode.call(pattern: parsed[:method_name], match_type: "trace")
               # A trace that found callers but no `def` is still not the
               # method's definition, which is what this section promises.
-              unless empty?(result) || definition_missing?(result)
-                lines << "## Method Trace"
-                lines << response_text(result)
-                lines << ""
-              end
-            rescue => e; $stderr.puts "[rails-ai-context] Diagnosis step skipped: #{e.message}" if ENV["DEBUG"]; end
+              definition_missing?(result) ? nil : result
+            end
           end
 
           lines
+        end
+
+        # A sub-tool's answer as a titled section. An empty answer adds nothing;
+        # a raise either says why in the section or is dropped under DEBUG.
+        def add_section(lines, title, report_error: false)
+          result = yield
+          return if result.nil? || empty?(result)
+
+          lines << "## #{title}" << response_text(result) << ""
+        rescue => e
+          return RailsAiContext.debug_fail(e, nil, label: "diagnose #{title}") unless report_error
+
+          lines << "## #{title}" << "_Could not load: #{e.message}_" << ""
         end
 
         # Infer a specific diagnosis from the error + context
@@ -480,7 +442,7 @@ module RailsAiContext
                          "This variable may not be set in all code paths - check if it's assigned before use, " \
                          "or use `#{receiver}&.#{method}` for safe navigation."
                 end
-              rescue => e; $stderr.puts "[rails-ai-context] Diagnosis step skipped: #{e.message}" if ENV["DEBUG"]; end
+              rescue => e; RailsAiContext.debug_fail(e, nil, label: "diagnose specific cause"); end
             end
           end
 
@@ -497,7 +459,7 @@ module RailsAiContext
                          "The record with the given ID doesn't exist or doesn't belong to the current user. " \
                          "Check if the record was deleted or if the user is authorized to access it."
                 end
-              rescue => e; $stderr.puts "[rails-ai-context] Diagnosis step skipped: #{e.message}" if ENV["DEBUG"]; end
+              rescue => e; RailsAiContext.debug_fail(e, nil, label: "diagnose specific cause"); end
             end
           end
 

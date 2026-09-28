@@ -24,10 +24,11 @@ module RailsAiContext
 
       attr_reader :tool_class, :raw_args, :json_mode, :error
 
-      def initialize(tool_name, raw_args, json_mode: false)
+      def initialize(tool_name, raw_args, json_mode: false, environment: nil)
         @tool_class = resolve_tool(tool_name)
         @raw_args = raw_args
         @json_mode = json_mode
+        @environment = environment
         @error = false
         @missing_required = false
         @out_of_type = {}
@@ -46,7 +47,11 @@ module RailsAiContext
         lines = [ "Available tools:", "" ]
         available_tools.each do |tool|
           short = short_name(tool.tool_name)
-          desc = truncate_at_word(tool.description_value.to_s, 79)
+          full = tool.description_value.to_s
+          desc = full.truncate(79, separator: " ", omission: "...")
+          # A cut landing after a sentence or a dash would otherwise print
+          # four dots, or a dash with nothing after it.
+          desc = desc.sub(/[\s.,;:-]+\.\.\.\z/, "...") unless desc == full
           lines << "  #{short.ljust(24)} #{desc}"
         end
         lines << ""
@@ -63,25 +68,13 @@ module RailsAiContext
         lines.join("\n")
       end
 
-      # Truncate at the last whole word within `limit` chars and append "..."
-      # so descriptions never cut off mid-word. Returns `text` unchanged when
-      # it already fits.
-      def self.truncate_at_word(text, limit)
-        return text if text.length <= limit
-
-        cut = text[0...limit]
-        boundary = cut.rindex(" ")
-        cut = cut[0...boundary] if boundary
-        "#{cut}..."
-      end
-
       # Filtered tool list respecting skip_tools config.
+      # The MCP server's rule: skip_tools removes built-ins only, and a built-in
+      # comes before a custom tool of the same name, so skip_tools is how a
+      # custom tool replaces one.
       def self.available_tools
         skip = RailsAiContext.configuration.skip_tools
-        tools = Server.builtin_tools
-        tools += Server.resolve_custom_tools
-        return tools if skip.empty?
-        tools.reject { |t| skip.include?(t.tool_name) }
+        Server.builtin_tools.reject { |t| skip.include?(t.tool_name) } + Server.resolve_custom_tools
       end
 
       # Generate help for a specific tool from its input_schema.
@@ -135,25 +128,41 @@ module RailsAiContext
         tool_class.input_schema_value&.to_h || {}
       end
 
+      # The tool a name spells, loading that one class rather than all 45, in
+      # available_tools' order: an unskipped built-in, then a custom tool. A
+      # miss falls back to the full list, which also carries the suggestion.
+      def direct_tool(name)
+        skip = RailsAiContext.configuration.skip_tools
+        custom = Server.resolve_custom_tools
+        [ name, "rails_#{name}", "rails_get_#{name}" ].each do |candidate|
+          found = (builtin_tool(candidate) unless skip.include?(candidate)) ||
+                  custom.find { |tool| tool.tool_name == candidate }
+          return found if found
+        end
+        nil
+      end
+
+      def builtin_tool(tool_name)
+        const = tool_name.delete_prefix("rails_").split("_").map(&:capitalize).join
+        return nil unless const.match?(/\A[A-Z]\w*\z/) && Tools.const_defined?(const, false)
+
+        tool = Tools.const_get(const, false)
+        tool if tool.is_a?(Class) && tool < Tools::BaseTool && !tool.abstract? && tool.tool_name == tool_name
+      end
+
       # Resolve tool name: tries short → medium → full form.
       # "schema" → "rails_get_schema", "search_code" → "rails_search_code"
       def resolve_tool(name)
+        direct = direct_tool(name)
+        return direct if direct
+
         tools = self.class.available_tools
-        tool_names = tools.map(&:tool_name)
 
-        # Try exact match
-        found = tools.find { |t| t.tool_name == name }
-        return found if found
+        [ name, "rails_#{name}", "rails_get_#{name}" ].each do |candidate|
+          found = tools.find { |t| t.tool_name == candidate }
+          return found if found
+        end
 
-        # Try rails_ prefix
-        found = tools.find { |t| t.tool_name == "rails_#{name}" }
-        return found if found
-
-        # Try rails_get_ prefix
-        found = tools.find { |t| t.tool_name == "rails_get_#{name}" }
-        return found if found
-
-        # Try case-insensitive short name match
         found = tools.find { |t| self.class.short_name(t.tool_name) == name }
         return found if found
 
@@ -181,7 +190,7 @@ module RailsAiContext
         when Hash
                    raw_args.transform_keys(&:to_sym).except(:server_context)
         when Array
-                   return parse_cli_args(raw_args).except(:server_context)
+                   return with_environment(parse_cli_args(raw_args).except(:server_context))
         else
                    {}
         end
@@ -193,7 +202,16 @@ module RailsAiContext
           kwargs[key] = coerce_value(value, prop, key)
         end
 
-        kwargs
+        with_environment(kwargs)
+      end
+
+      # `--environment` sets RAILS_ENV, so it never arrives as a tool argument; a tool that
+      # declares the parameter gets it, unless an explicit `environment=` was given.
+      def with_environment(kwargs)
+        return kwargs if @environment.nil? || kwargs.key?(:environment)
+        return kwargs unless (tool_schema[:properties] || {}).key?(:environment)
+
+        kwargs.merge(environment: @environment)
       end
 
       # Parse ["--table", "users", "--detail", "full", "--app-only"] into { table: "users", ... }

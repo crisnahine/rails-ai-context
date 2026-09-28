@@ -166,6 +166,18 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
       expect(cache[:timestamp]).to be_nil
       expect(cache[:fingerprint]).to be_nil
     end
+
+    # LiveReload calls this and nothing else, so a plugin directory added
+    # under a long-lived MCP server is only seen if these two go with it.
+    it "clears the code-root and namespace-prefix indexes too" do
+      RailsAiContext::PathResolver::CODE_ROOTS["/tmp/gone"] = [ "/tmp/gone/plugins/x" ]
+      RailsAiContext::Introspectors::TableName::PREFIX_INDEX["/tmp/gone"] = { "X" => "x_" }
+
+      described_class.reset_all_caches!
+
+      expect(RailsAiContext::PathResolver::CODE_ROOTS["/tmp/gone"]).to be_nil
+      expect(RailsAiContext::Introspectors::TableName::PREFIX_INDEX["/tmp/gone"]).to be_nil
+    end
   end
 
   describe "static tier banner" do
@@ -219,6 +231,36 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
       text = RailsAiContext::Tools::GetSchema.text_response("body").content.first[:text]
       expect(text).to include("Static mode (no config/environment.rb in /tmp/app)")
       expect(text).not_to include("App boot failed")
+    end
+
+    # A boot failure naming a hundred gems was 61% of a sweep's bytes: every
+    # answer carried the whole list. The banner the CLI prints once and
+    # `doctor` keep it; the footer keeps enough to name the failure.
+    context "with a boot error longer than a footer can carry" do
+      let(:reason) { "Bundler::GemNotFound: Could not find #{(1..80).map { |i| "gem-#{i}-1.0.0" }.join(', ')} in locally installed gems" }
+
+      before { RailsAiContext.static_reason = reason }
+
+      it "keeps the head of the reason and points at doctor for the rest" do
+        text = RailsAiContext::Tools::GetSchema.text_response("body").content.first[:text]
+
+        expect(text).to include("App boot failed (Bundler::GemNotFound: Could not find gem-1-1.0.0")
+        expect(text).not_to include("gem-80-1.0.0")
+        expect(text).to include("rails-ai-context doctor")
+        expect(text.length - "body".length).to be < 400
+      end
+
+      it "shortens the reason an unavailable section names too" do
+        note = RailsAiContext::Introspectors::StaticTier.unavailable_reason
+
+        expect(note).to include("Bundler::GemNotFound")
+        expect(note).not_to include("gem-80-1.0.0")
+      end
+
+      # The full text still has one home the caller can reach.
+      it "leaves the recorded reason whole" do
+        expect(RailsAiContext.static_reason).to eq(reason)
+      end
     end
 
     # The kind decides the headline, not the shape of the reason string.

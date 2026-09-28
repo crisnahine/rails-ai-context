@@ -486,6 +486,28 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(records.last[:only]).to eq(%w[admin])
     end
 
+    # A compiled callback keeps its condition in a Proc, so the booted tier
+    # reads conditions from the class body the way the static tier does. The
+    # two tiers answering one line differently is the failure to prevent.
+    it "names a lambda filter condition the way the static tier names it" do
+      ctrl = Class.new(ActionController::Base) do
+        before_action :require_signature, if: -> { request.format == :json }
+      end
+      ctrl.define_singleton_method(:name) { "StatusesController" }
+      source = <<~RUBY
+        class StatusesController < ActionController::Base
+          before_action :require_signature, if: -> { request.format == :json }
+        end
+      RUBY
+      allow(introspector).to receive(:read_source) { |k| k == ctrl ? source : nil }
+
+      booted = introspector.send(:extract_filters, ctrl, source).find { |f| f[:name] == "require_signature" }
+      static = introspector.send(:extract_filters_from_source, source).find { |f| f[:name] == "require_signature" }
+
+      expect(booted[:if]).to eq("-> { request.format == :json }")
+      expect(static[:if]).to eq(booted[:if])
+    end
+
     # Rebuilding the list put every name the body declares behind every name
     # it only inherits, so a prepended filter was reported last, and only
     # when the body also carried a skip. The routes hint shows the first
@@ -1030,6 +1052,270 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         .to eq("packs/billing/app/controllers/billing_invoices_controller.rb")
     ensure
       FileUtils.rm_rf(File.join(Rails.root, "packs"))
+    end
+  end
+
+  # An app's Api::V1::Admin::BaseController listed its own before_action
+  # target, a predicate, and a method taking a required argument as actions.
+  describe "a controller whose public methods are not all actions" do
+    let(:source) do
+      <<~RUBY
+        class Api::V1::Admin::BaseController < ApplicationController
+          before_action :authenticate_admin
+
+          def index
+          end
+
+          def authority?
+            true
+          end
+
+          def create_event(event_name)
+          end
+
+          def authenticate_admin
+          end
+        end
+      RUBY
+    end
+
+    it "lists only the actions in the static tier" do
+      details = introspector.send(:extract_details_from_source,
+                                  double(file: "app/controllers/api/v1/admin/base_controller.rb"),
+                                  "Api::V1::Admin::BaseController", source)
+
+      expect(details[:actions]).to eq(%w[index])
+      expect(details[:filters].map { |f| f[:name] }).to include("authenticate_admin")
+    end
+
+    it "lists only the actions in the booted tier" do
+      ctrl = Class.new(ActionController::Base) do
+        before_action :authenticate_admin
+
+        def index; end
+        def authority? = true
+        def create_event(event_name); end
+        def authenticate_admin; end
+      end
+      ctrl.define_singleton_method(:name) { "Api::V1::Admin::BaseController" }
+      allow(introspector).to receive(:read_source) { |k| k == ctrl ? source : nil }
+
+      expect(introspector.send(:extract_controller_details, ctrl)[:actions]).to eq(%w[index])
+    end
+
+    # Mastodon's Api::V2::Admin::AccountsController inherits nine actions its
+    # routes do not name, and Auth::OmniauthCallbacksController's
+    # after_sign_in_path_for(resource) is no action; the static tier knew both.
+    it "marks what the booted class inherits, and drops a method that needs an argument" do
+      parent = Class.new(ActionController::Base) do
+        def index; end
+        def show; end
+        def after_sign_in_path_for(resource) = resource
+      end
+      parent.define_singleton_method(:name) { "AccountsV1Controller" }
+      child = Class.new(parent)
+      child.define_singleton_method(:name) { "AccountsV2Controller" }
+      allow(introspector).to receive(:read_source) do |k|
+        k == child ? "class AccountsV2Controller < AccountsV1Controller\nend\n" : nil
+      end
+
+      details = introspector.send(:extract_controller_details, child)
+      section = { controllers: { "AccountsV2Controller" => details } }
+      described_class.apply_routes(section, { by_controller: { "accounts_v2" => [ { action: "index" } ] } }, Dir.tmpdir)
+
+      expect(details[:actions]).to eq(%w[index])
+    end
+  end
+
+  # OpenProject: WorkPackagePrioritiesController read "(no public actions)"
+  # and DocumentTypesController only `delete_dialog`, though both inherit
+  # eight actions from Admin::Settings::EnumerationsControllerBase - a file
+  # the listing never read, because its name does not end in _controller.rb.
+  describe "actions inherited from an app base controller" do
+    def write(dir, path, body)
+      full = File.join(dir, "app", "controllers", path)
+      FileUtils.mkdir_p(File.dirname(full))
+      File.write(full, body)
+    end
+
+    it "gives each controller its own actions and every app ancestor's, less its own filters" do
+      Dir.mktmpdir do |dir|
+        write(dir, "admin/settings/enumerations_controller_base.rb", <<~RUBY)
+          module Admin::Settings
+            class EnumerationsControllerBase < ApplicationController
+              def index; end
+              def new; end
+              def move; end
+            end
+          end
+        RUBY
+        write(dir, "admin/settings/work_package_priorities_controller.rb", <<~RUBY)
+          module Admin::Settings
+            class WorkPackagePrioritiesController < EnumerationsControllerBase
+            end
+          end
+        RUBY
+        write(dir, "documents/document_types_controller.rb", <<~RUBY)
+          module Documents
+            class DocumentTypesController < ::Admin::Settings::EnumerationsControllerBase
+              before_action :move
+
+              def delete_dialog; end
+            end
+          end
+        RUBY
+        write(dir, "concerns/paginated.rb", "module Paginated\n  def page; end\nend\n")
+        write(dir, "queries/params_parser.rb", "module Queries\n  class ParamsParser\n    def parse; end\n  end\nend\n")
+        write(dir, "api/v3/grids/grids_api.rb",
+              "module API\n  module V3\n    module Grids\n      class GridsAPI < ::API::OpenProjectAPI\n      end\n    end\n  end\nend\n")
+
+        listing = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:controllers]
+
+        expect(listing["Admin::Settings::WorkPackagePrioritiesController"][:actions]).to eq(%w[index move new])
+        expect(listing["Documents::DocumentTypesController"][:actions]).to eq(%w[delete_dialog index new])
+        expect(listing).to have_key("Admin::Settings::EnumerationsControllerBase")
+        expect(listing.keys).not_to include("Paginated", "Queries::ParamsParser")
+        expect(listing.keys.grep(/grids/i)).to be_empty
+      end
+    end
+  end
+
+  # OFN's Admin::OrderCyclesController routes `incoming` and ships
+  # incoming.html.haml with no method: Rails renders the template.
+  describe ".apply_routes" do
+    it "adds a routed action that has a template and no method" do
+      Dir.mktmpdir do |dir|
+        views = File.join(dir, "app", "views", "admin", "order_cycles")
+        FileUtils.mkdir_p(views)
+        %w[incoming.html.haml edit.html.haml _form.html.haml index.html.haml].each { |f| File.write(File.join(views, f), "") }
+        section = { controllers: { "Admin::OrderCyclesController" => { actions: %w[index update] } } }
+        routes = { by_controller: { "admin/order_cycles" => [
+          { verb: "GET", action: "index" }, { verb: "GET", action: "incoming" },
+          { verb: "GET", action: "edit" }, { verb: "GET", action: "outgoing" }, { verb: "GET", action: "_form" }
+        ] } }
+
+        described_class.apply_routes(section, routes, dir)
+
+        expect(section[:controllers]["Admin::OrderCyclesController"][:actions]).to eq(%w[edit incoming index update])
+      end
+    end
+
+    # An app's Api::V1::Admin::BaseController overrides paper_trail's public
+    # hooks; every admin controller inherits them and no route names them.
+    it "drops an inherited method no route names, and keeps a routed one" do
+      section = { controllers: {
+        "Admin::AddressesController" => { actions: %w[edit info_for_paper_trail list],
+                                          inherited_actions: %w[info_for_paper_trail list] },
+        "Admin::UnroutedController" => { actions: %w[info_for_paper_trail], inherited_actions: %w[info_for_paper_trail],
+                                         file: "app/controllers/admin/unrouted_controller.rb" }
+      } }
+      routes = { by_controller: { "admin/addresses" => [ { action: "edit" }, { action: "list" } ] } }
+
+      described_class.apply_routes(section, routes, Dir.tmpdir)
+
+      expect(section[:controllers]["Admin::AddressesController"]).to eq(actions: %w[edit list])
+      expect(section[:controllers]["Admin::UnroutedController"][:actions]).to eq([])
+    end
+
+    # OFN draws Spree's admin routes into Spree::Core::Engine's table.
+    it "judges a controller by the routes an engine's table gives it" do
+      section = { controllers: { "Spree::Admin::ProductsController" => {
+        actions: %w[destroy edit update_positions], inherited_actions: %w[destroy update_positions],
+        file: "app/controllers/spree/admin/products_controller.rb"
+      } } }
+      routes = { by_controller: { "posts" => [ { action: "index" } ] },
+                 engine_routes: [ { engine: "Spree::Core::Engine", mount: "/", routes: [
+                   { verb: "GET", path: "/admin/products/:id/edit", controller: "spree/admin/products", action: "edit" },
+                   { verb: "POST", path: "/admin/products/update_positions", controller: "spree/admin/products",
+                     action: "update_positions" }
+                 ] } ] }
+
+      described_class.apply_routes(section, routes, Dir.tmpdir)
+
+      expect(section[:controllers]["Spree::Admin::ProductsController"][:actions]).to eq(%w[edit update_positions])
+    end
+
+    # Mastodon's inflection spells ActivityPub:: as activitypub/.
+    it "reads the controller's route path off its file" do
+      section = { controllers: { "ActivityPub::LikesController" => {
+        actions: %w[doorkeeper_forbidden_render_options index], inherited_actions: %w[doorkeeper_forbidden_render_options],
+        file: "app/controllers/activitypub/likes_controller.rb"
+      } } }
+      routes = { by_controller: { "activitypub/likes" => [ { action: "index" } ] } }
+
+      described_class.apply_routes(section, routes, Dir.tmpdir)
+
+      expect(section[:controllers]["ActivityPub::LikesController"][:actions]).to eq(%w[index])
+    end
+
+    # An app's Api::V1::BaseController defines paper_trail's public hooks and
+    # is never routed; its subclasses are.
+    it "keeps on an unrouted base only what its subclasses are routed for" do
+      section = { controllers: {
+        "Api::BaseController" => { actions: %w[index info_for_paper_trail], parent_class: "ApplicationController" },
+        "Api::PostsController" => { actions: %w[index info_for_paper_trail], parent_class: "Api::BaseController",
+                                    inherited_actions: %w[index info_for_paper_trail] },
+        "Admin::BaseController" => { actions: %w[helper], parent_class: "ApplicationController" },
+        "Admin::ThingsController" => { actions: %w[helper], parent_class: "Admin::BaseController" }
+      } }
+      routes = { by_controller: { "api/posts" => [ { action: "index" } ] } }
+
+      described_class.apply_routes(section, routes, Dir.tmpdir)
+
+      expect(section[:controllers]["Api::BaseController"][:actions]).to eq(%w[index])
+      expect(section[:controllers]["Api::PostsController"][:actions]).to eq(%w[index])
+      expect(section[:controllers]["Admin::BaseController"][:actions]).to eq(%w[helper])
+    end
+
+    # OAuth::UserinfoController inherits doorkeeper's public render hooks.
+    it "keeps on an unrouted controller only what it defines itself, when routes are known" do
+      section = { controllers: {
+        "OAuth::UserinfoController" => { actions: %w[doorkeeper_forbidden_render_options show],
+                                         inherited_actions: %w[doorkeeper_forbidden_render_options],
+                                         file: "app/controllers/oauth/userinfo_controller.rb" },
+        # OpenProject's modules/costs routes this in modules/costs/config/routes.rb.
+        "Admin::CostsSettingsController" => { actions: %w[show update], inherited_actions: %w[show update],
+                                              file: "modules/costs/app/controllers/admin/costs_settings_controller.rb" }
+      } }
+
+      described_class.apply_routes(section, { by_controller: { "home" => [ { action: "index" } ] } }, Dir.tmpdir)
+
+      expect(section[:controllers]["OAuth::UserinfoController"][:actions]).to eq(%w[show])
+      expect(section[:controllers]["Admin::CostsSettingsController"][:actions]).to eq(%w[show update])
+    end
+
+    # Whitehall's ContactTranslationsController gets create, update and
+    # destroy from TranslationControllerConcern; its helper is no action.
+    it "lists what an included controller concern offers, and the routes keep the routed ones" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        File.write(File.join(dir, "app", "controllers", "concerns", "translation_concern.rb"),
+                   "module TranslationConcern\n  extend ActiveSupport::Concern\n  def create; end\n  def translation_locale; end\nend\n")
+        File.write(File.join(dir, "app", "controllers", "contact_translations_controller.rb"),
+                   "class ContactTranslationsController < ApplicationController\n  include TranslationConcern\n  def index; end\nend\n")
+
+        section = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        described_class.apply_routes(section, { by_controller: { "contact_translations" => [
+          { action: "index" }, { action: "create" }
+        ] } }, dir)
+
+        expect(section[:controllers]["ContactTranslationsController"][:actions]).to eq(%w[create index])
+      end
+    end
+
+    it "records which actions were inherited, for the routes to settle" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "admin"))
+        File.write(File.join(dir, "app", "controllers", "admin", "base_controller.rb"),
+                   "class Admin::BaseController < ApplicationController\n  def product_name; end\nend\n")
+        File.write(File.join(dir, "app", "controllers", "admin", "things_controller.rb"),
+                   "class Admin::ThingsController < Admin::BaseController\n  def index; end\nend\n")
+
+        things = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:controllers]["Admin::ThingsController"]
+
+        expect(things[:actions]).to eq(%w[index product_name])
+        expect(things[:inherited_actions]).to eq(%w[product_name])
+      end
     end
   end
 end

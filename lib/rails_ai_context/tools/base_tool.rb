@@ -1,6 +1,10 @@
 # frozen_string_literal: true
 
+require "did_you_mean"
+
 require "mcp"
+require "active_support"
+require "active_support/number_helper"
 
 module RailsAiContext
   module Tools
@@ -27,6 +31,7 @@ module RailsAiContext
 
       class << self
         include CountPhrase
+        include RailsAiContext::OptionText
 
         attr_reader :descendants, :registry_mutex
 
@@ -43,47 +48,21 @@ module RailsAiContext
           @abstract == true
         end
 
-        # All non-abstract tool classes. Triggers eager loading first.
+        # Sorted so load order never reaches tool --list or tools/list.
         def registered_tools
           eager_load!
-          registry_mutex.synchronize { descendants.reject(&:abstract?) }
+          registry_mutex.synchronize { descendants.reject(&:abstract?) }.sort_by { |tool| tool.tool_name.to_s }
         end
 
         private
 
+        # The registry mutex is deliberately not held: const_get triggers a
+        # Zeitwerk autoload, whose `inherited` callback takes that mutex itself.
         def eager_load!
-          # Double-checked locking: fast path avoids mutex for common case.
           return if @eager_loaded
 
-          # Collect constants to load OUTSIDE the mutex, then load them.
-          # const_get triggers Zeitwerk autoload → inherited → mutex.synchronize,
-          # so we must NOT hold the mutex during const_get (avoids deadlock).
-          consts_to_load = registry_mutex.synchronize do
-            return if @eager_loaded # re-check inside mutex
-
-            Dir[File.join(__dir__, "*.rb")].filter_map do |path|
-              basename = File.basename(path, ".rb")
-              next if basename == "base_tool"
-              basename.split("_").map(&:capitalize).join.to_sym
-            end
-          end
-
-          # Load outside mutex - inherited callbacks acquire the mutex individually.
-          # Use inherit: false so top-level constants (Set, Hash, etc.) don't
-          # shadow tool classes that Zeitwerk hasn't autoloaded yet.
-          consts_to_load.each do |const|
-            RailsAiContext::Tools.const_get(const, false)
-          rescue NameError => e
-            # Only skip if the constant itself doesn't exist (filename/constant mismatch).
-            # Re-raise if the error came from inside the loaded file (a real bug).
-            if e.name == const && !RailsAiContext::Tools.const_defined?(const, false)
-              $stderr.puts "[rails-ai-context] eager_load! skipped #{const}: #{e.message}" if ENV["DEBUG"]
-            else
-              raise
-            end
-          end
-
-          registry_mutex.synchronize { @eager_loaded = true }
+          Tools.constants.each { |const| Tools.const_get(const, false) }
+          @eager_loaded = true
         end
       end
 
@@ -140,14 +119,15 @@ module RailsAiContext
           RailsAiContext.configuration
         end
 
-        # The current environment name without requiring a booted app:
-        # Rails.env when a real Rails is loaded and responds to it, the
-        # ambient RAILS_ENV otherwise. Tools that only need the environment
-        # name (not the full StringInquirer API) use this instead of a bare
-        # `Rails.env` reference, which would NameError under --no-boot or
-        # early boot death.
+        # A bare `Rails.env` raises NameError under --no-boot or early boot death.
         def rails_env_name
-          defined?(Rails) && Rails.respond_to?(:env) ? Rails.env : (ENV["RAILS_ENV"] || "development")
+          RailsAiContext.environment_name
+        end
+
+        # The app's own enqueue helpers (`Jobs.enqueue(:x)`), as the jobs section read them.
+        def enqueue_helpers
+          jobs = cached_context[:jobs]
+          jobs.is_a?(Hash) ? Array(jobs[:enqueue_helpers]) : []
         end
 
         # Cache introspection results with TTL + fingerprint invalidation.
@@ -201,6 +181,8 @@ module RailsAiContext
           reset_cache!
           session_reset!
           AstCache.clear
+          PathResolver.clear_code_roots
+          Introspectors::TableName.clear_namespace_prefixes
         end
 
         # ── Session context helpers ──────────────────────────────────────
@@ -402,6 +384,25 @@ module RailsAiContext
           Confidence.unavailable(section_data[:unavailable])
         end
 
+        # A blank name is not a name: looked up, it matched a file called
+        # helper.rb through a `_helper` probe and crashed on the empty path it
+        # left. Every by-name lookup answers it before looking; nil for a real
+        # name or none.
+        def blank_name_response(param, value, kind: param)
+          return nil unless value.is_a?(String) && value.strip.empty?
+
+          text_response("The #{kind} name is blank. Give one, or omit `#{param}` to list them all.")
+        end
+
+        # A listing that drops a base class says so, or a reader goes looking for it.
+        def bases_note(kind, names)
+          names = Array(names).compact
+          return nil if names.empty?
+
+          "_Base classes not counted as #{kind}: #{names.join(', ')}. " \
+            "Ask for one by name for what it defines._"
+        end
+
         # A key the introspector named as unanswered has no finding behind it,
         # so a negative or empty rendering would state a fact nobody checked.
         def unanswered?(data, key)
@@ -459,7 +460,7 @@ module RailsAiContext
         def static_tier_note
           return nil unless RailsAiContext.static_tier?
 
-          reason = RailsAiContext.static_reason
+          reason = RailsAiContext.static_reason_brief
           # Only a boot that actually ran can be called a failure; the other
           # kinds describe the tree or the flag they were asked for.
           headline = case RailsAiContext.static_kind
@@ -477,7 +478,7 @@ module RailsAiContext
         def static_tier_refusal(capability)
           return nil unless RailsAiContext.static_tier?
 
-          reason = RailsAiContext.static_reason
+          reason = RailsAiContext.static_reason_brief
           remedy = case RailsAiContext.static_kind
           when :requested then "Rerun without `--no-boot`."
           when :source_only then "This tree has no `config/environment.rb`; add one (or run from the app root) for runtime data."
@@ -511,24 +512,63 @@ module RailsAiContext
           # so it would otherwise surface an arbitrary "Did you mean" suggestion
           # for input that isn't a typo at all - just missing.
           return [] if input.to_s.strip.empty?
+
+          exact = exact_matches(input, available)
+          return exact if exact.any?
+
+          spelled = spelling_matches(input, available)
+          return spelled if spelled.any?
+
+          # Containment catches an abbreviation (`prod` for production). Shortest first, so `post`
+          # does not answer with `post_comments`.
           downcased = input.downcase
-          underscored = input.underscore.downcase
-          wanted = [ downcased, underscored ]
+          containing = available.select { |a| a.downcase.include?(downcased) || downcased.include?(a.downcase) }
+          containing.any? ? [ containing.min_by(&:length) ] : []
+        end
 
-          # Exact case-insensitive match, on the full name and on the
-          # demodulized one, in underscore and classify variants alike.
-          exact = available.select do |a|
-            forms = [ a, a.split("::").last ].flat_map { |f| [ f.downcase, f.underscore.downcase ] }
-            forms.intersect?(wanted)
-          end
-          return exact.sort_by { |a| [ a.length, a ] } if exact.any?
+        # Full names, then last segments: a wrong namespace is a near miss on the segment.
+        def spelling_matches(input, available)
+          checker = ::DidYouMean::SpellChecker
+          found = checker.new(dictionary: available).correct(input.to_s)
+          return found if found.any?
 
-          # Substring match - prefer shortest (most specific) to avoid post → post_comments
-          substring_matches = available.select { |a| a.downcase.include?(downcased) || downcased.include?(a.downcase) }
-          return [ substring_matches.min_by(&:length) ] if substring_matches.any?
+          # A spell checker never suggests the word you typed, so the segment
+          # spelled right under the wrong namespace is matched before asking it.
+          needle = input.to_s.split("::").last.to_s
+          by_segment = available.group_by { |name| name.split("::").last }
+          near = by_segment.keys.select { |segment| segment.casecmp?(needle) }
+          near = checker.new(dictionary: by_segment.keys).correct(needle) if near.empty?
+          near.flat_map { |segment| by_segment[segment] }
+        end
 
-          # Prefix match
-          Array(available.find { |a| a.downcase.start_with?(downcased[0..2]) })
+        # Case-insensitive on the full and demodulized name, never a substring: a substring hit is
+        # another thing's answer. Two namespaces holding one short name match nothing.
+        def find_exact_match(input, available)
+          matches = exact_matches(input, available)
+          matches.first if matches.one?
+        end
+
+        # Whole segments, never a substring: `posts` is not `blog_posts`. `tail:` makes the match
+        # end the path, so `admin/orders` is not `admin/orders/ai_data`.
+        def path_segments_match?(path, name, tail: false)
+          needle = name.to_s.downcase.split("/").reject(&:empty?)
+          segments = path.to_s.downcase.split("/")
+          return false if needle.empty? || needle.size > segments.size
+          return segments.last(needle.size) == needle if tail
+
+          segments.each_cons(needle.size).any? { |run| run == needle }
+        end
+
+        # The full name wins over a demodulized one: `Mailer` names the
+        # top-level Mailer, not Dashboard::Mailer beside it.
+        def exact_matches(input, available)
+          return [] if input.to_s.strip.empty?
+
+          wanted = [ input.downcase, input.underscore.downcase ]
+          forms = ->(name) { [ name.downcase, name.underscore.downcase ] }
+          full = available.select { |a| forms.call(a).intersect?(wanted) }
+          short = available.select { |a| forms.call(a.split("::").last).intersect?(wanted) }
+          (full.any? ? full : short).sort_by { |a| [ a.length, a ] }
         end
 
         # Cache key for paginated responses - lets agents detect stale data between pages
@@ -607,6 +647,40 @@ module RailsAiContext
                  &.find { |key| RailsAiContext::FixtureKeys.name?(key) }
         end
 
+        # Fixture set from `set_fixture_class`, then the table name, then the pluralized class
+        # name (a model with table `node` can keep its fixtures in nodes.yml).
+        #
+        # @return [Array(String, String), nil] [fixture set, key]
+        def model_fixture(model_name, table, tests_data)
+          sets = fixture_class_sets(model_name) + [ table.to_s, model_name.to_s.underscore.pluralize ]
+          sets.uniq.each do |set|
+            key = fixture_key_for(set, tests_data)
+            return [ set, key ] if key
+          end
+          nil
+        end
+
+        # The helpers a suite loads, where `set_fixture_class` is called.
+        FIXTURE_HELPER_GLOBS = %w[
+          test/test_helper.rb test/support/**/*.rb
+          spec/rails_helper.rb spec/spec_helper.rb spec/support/**/*.rb
+        ].freeze
+
+        def fixture_class_sets(model_name)
+          root = rails_app.root.to_s
+          helpers = FIXTURE_HELPER_GLOBS.flat_map { |glob| Dir.glob(File.join(root, glob)) }.uniq.sort
+          helpers.flat_map do |helper|
+            hits = RailsAiContext::Introspectors::SourceIntrospector.walk(helper, {
+              sets: -> { RailsAiContext::Introspectors::Listeners::GenericMacroListener.new(:set_fixture_class) }
+            })[:sets]
+            hits.flat_map do |hit|
+              hit[:options].select { |_set, klass| klass.to_s.delete_prefix("::") == model_name.to_s }.keys.map(&:to_s)
+            end
+          end
+        rescue => e
+          RailsAiContext.debug_fail(e, [], label: "fixture_class_sets")
+        end
+
         # A callback target is a method name, an inline block, or a callback
         # object. Only the first is a symbol, so only the first takes a colon.
         # A block has no name, so it keeps the payload's marker wherever a
@@ -616,6 +690,14 @@ module RailsAiContext
           return method if inline_block_callback?(method)
 
           method_name?(method) ? ":#{method}" : method
+        end
+
+        # The `if:`/`unless:` a callback carries. Without it a conditional
+        # callback reads as one that always runs.
+        def callback_condition_tail(conditions)
+          return "" unless conditions.is_a?(Hash) && conditions.any?
+
+          " (#{conditions.map { |key, value| "#{key}: #{option_text(value)}" }.join(', ')})"
         end
 
         def inline_block_callback?(method)
@@ -650,13 +732,8 @@ module RailsAiContext
         def callback_options_tail(options)
           return "" unless options.is_a?(Hash) && options.any?
 
-          ", " + options.map { |key, value| "#{key}: #{callback_option_value(value)}" }.join(", ")
-        end
-
-        # A value the walk could not resolve is a marker, not a string the
-        # app wrote, so it is printed bare the way every other marker is.
-        def callback_option_value(value)
-          value == RailsAiContext::Confidence::INFERRED ? value : value.inspect
+          pairs = options.map { |key, value| "#{key}: #{option_text(value)}" }
+          ", #{pairs.join(', ')}"
         end
 
         # What the session record should remember about this call. SafeCall
@@ -763,6 +840,13 @@ module RailsAiContext
         end
 
         private
+
+        # English units whatever the locale, unless the app offers no English at all.
+        def human_size(bytes)
+          ActiveSupport::NumberHelper.number_to_human_size(bytes.to_i, locale: :en)
+        rescue I18n::InvalidLocale
+          ActiveSupport::NumberHelper.number_to_human_size(bytes.to_i)
+        end
 
         # Every answered call is recorded so session_context(action:"status")
         # can list it. SessionContext itself is skipped to avoid recursion.
@@ -884,23 +968,6 @@ module RailsAiContext
           klass.define_attribute_methods
         rescue StandardError => e
           RailsAiContext.debug_fail(e, nil, label: "define_attribute_methods")
-        end
-
-        # Merge duplicate PUT/PATCH entries for the same path+action into a
-        # single "PATCH|PUT" entry (Rails generates both for every `resources`
-        # update route). Public: the VFS routes resource uses it too, so route
-        # counts stay consistent across every surface that reports them.
-        public def dedupe_put_patch_routes(actions)
-          deduped = []
-          actions.each do |r|
-            existing = deduped.find { |d| d[:path] == r[:path] && d[:action] == r[:action] }
-            if existing && %w[PUT PATCH].include?(r[:verb]) && %w[PUT PATCH].include?(existing[:verb])
-              existing[:verb] = "PATCH|PUT"
-            else
-              deduped << r.dup
-            end
-          end
-          deduped
         end
       end
     end

@@ -6,15 +6,9 @@ module RailsAiContext
     # database: pool size, checkout timeout, reaping, prepared_statements,
     # advisory_locks, read-replica flag. Covers RAILS_NERVOUS_SYSTEM.md
     # §10 (ActiveRecord - Connections & Adapters).
-    class ConnectionPoolIntrospector
+    class ConnectionPoolIntrospector < Base
       extend StaticTier
       static_tier :runtime_only
-
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
 
       def call
         return { skipped: true, reason: "ActiveRecord not available" } unless defined?(ActiveRecord::Base)
@@ -24,18 +18,12 @@ module RailsAiContext
           pool_handlers: detect_pool_handlers,
           automatic_shard_selector: detect_automatic_shard_selector
         }
-      rescue => e
-        RailsAiContext.debug_fail(e, { error: e.message }, label: "ConnectionPoolIntrospector#call")
       end
 
       private
 
-      def root
-        app.root.to_s
-      end
-
       def extract_databases
-        configs = ActiveRecord::Base.configurations.configs_for(env_name: Rails.env)
+        configs = ActiveRecord::Base.configurations.configs_for(env_name: Rails.env, include_hidden: true)
         configs.map do |cfg|
           entry = { name: cfg.name, adapter: cfg.adapter }
           entry[:replica] = !!cfg.replica? if cfg.respond_to?(:replica?)
@@ -103,19 +91,13 @@ module RailsAiContext
         handler = ActiveRecord::Base.connection_handler
         return [] unless handler.respond_to?(:connection_pool_list)
 
-        roles = []
-        roles << { role: "writing", pool_count: handler.connection_pool_list(:writing).size } if can_list?(handler, :writing)
-        roles << { role: "reading", pool_count: handler.connection_pool_list(:reading).size } if can_list?(handler, :reading)
-        roles
+        %w[writing reading].filter_map do |role|
+          { role: role, pool_count: handler.connection_pool_list(role.to_sym).size }
+        rescue StandardError
+          nil
+        end
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "detect_pool_handlers")
-      end
-
-      def can_list?(handler, role)
-        handler.connection_pool_list(role)
-        true
-      rescue StandardError
-        false
       end
 
       # Rails 7.1+ introduced ActiveRecord::Middleware::ShardSelector.

@@ -5,6 +5,45 @@ require "tmpdir"
 require "fileutils"
 
 RSpec.describe RailsAiContext::Tools::GetControllers do
+  # SafeCall normalizes `detail` before the tool body runs, so a junk value
+  # reaches the standard listing rather than falling out of the case.
+  describe "a detail value no tool declares" do
+    before { described_class.reset_cache! }
+
+    it "renders the standard listing and says the value was refused" do
+      allow(described_class).to receive(:cached_context).and_return(
+        controllers: { controllers: { "PostsController" => { parent_class: "ApplicationController", actions: %w[index] } } }
+      )
+
+      text = described_class.call(detail: "zzz").content.first[:text]
+
+      expect(text).to include("- **PostsController**")
+      expect(text).to include("_Use `controller:\"Name\"` for filters and strong params")
+      expect(text).to include("is not a valid `detail`")
+    end
+  end
+
+  describe "a filter a concern declares" do
+    before { described_class.reset_cache! }
+
+    it "names the concern, and says which included modules it could not read" do
+      allow(described_class).to receive(:cached_context).and_return(
+        controllers: { controllers: { "AboutController" => {
+          parent_class: "ActionController::Base", actions: %w[show],
+          filters: [ { name: "set_referer_header", kind: "before", declared: true,
+                       from_concern: "WebAppControllerConcern" } ],
+          concerns_unread: [ "Pundit::Authorization" ]
+        } } }
+      )
+
+      text = described_class.call(controller: "AboutController").content.first[:text]
+
+      expect(text).to include("- `before` **set_referer_header** _(from WebAppControllerConcern)_")
+      expect(text).to include("1 included module not read, so a filter declared there is missing " \
+                              "from this list: Pundit::Authorization")
+    end
+  end
+
   # A group of top-level controllers shares no namespace, so the heading was
   # the bare count - and two such groups in one document carried the same
   # heading, naming nothing and repeating.
@@ -614,6 +653,98 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(single).to include("**require_functional!** _(from ApplicationController)_ (skipped unless: limited_federation_mode?)")
       expect(single).not_to include("~~require_functional!~~")
     end
+
+    # The colon is what says the app named a method rather than writing an
+    # expression, and callbacks and validations both print it.
+    it "spells a symbol skip condition as the symbol it is" do
+      stub_controllers({
+        "ApplicationController" => {
+          actions: [], strong_params: [],
+          filters: [ { kind: "before", name: "require_functional!", declared: true } ]
+        },
+        "AccountsController" => {
+          actions: %w[show], parent_class: "ApplicationController", strong_params: [],
+          filters: [ { kind: "before", name: "require_functional!", skipped: true, unless: :limited_federation_mode? } ]
+        }
+      })
+
+      single = described_class.call(controller: "AccountsController").content.first[:text]
+
+      expect(single).to include("(skipped unless: :limited_federation_mode?)")
+    end
+
+    # The example above hands the tool a record written by hand, so the colon
+    # it checks could come from the spec rather than from the reader. This one
+    # builds the record the way the introspector does, out of source.
+    it "spells a symbol skip condition as the symbol it is, reading the record off source" do
+      source = <<~RUBY
+        class AccountsController < ApplicationController
+          skip_before_action :require_functional!, unless: :limited_federation_mode?
+        end
+      RUBY
+      stub_controllers({
+        "ApplicationController" => {
+          actions: [], strong_params: [],
+          filters: [ { kind: "before", name: "require_functional!", declared: true } ]
+        },
+        "AccountsController" => {
+          actions: %w[show], parent_class: "ApplicationController", strong_params: [],
+          filters: RailsAiContext::Introspectors::ControllerFilters.from_source(source)
+        }
+      })
+
+      single = described_class.call(controller: "AccountsController").content.first[:text]
+
+      expect(single).to include("(skipped unless: :limited_federation_mode?)")
+      expect(single).not_to include("unless: limited_federation_mode?")
+    end
+
+    # An `if:` on a filter that runs was never printed, so a filter that runs
+    # on some requests read as one that runs on every request.
+    it "names the condition a declared filter runs under" do
+      source = <<~RUBY
+        class AccountsController < ApplicationController
+          before_action :require_account_signature!, if: -> { request.format == :json }
+          before_action :store_referrer, except: :raise_not_found, if: :devise_controller?
+        end
+      RUBY
+      stub_controllers({
+        "AccountsController" => {
+          actions: %w[show raise_not_found], strong_params: [],
+          filters: RailsAiContext::Introspectors::ControllerFilters.from_source(source)
+        }
+      })
+
+      single = described_class.call(controller: "AccountsController").content.first[:text]
+
+      expect(single).to include("**require_account_signature!** (if: -> { request.format == :json })")
+      expect(single).to include("**store_referrer** (except: raise_not_found) (if: :devise_controller?)")
+    end
+
+    # A marker says nothing about when the skip applies; the line does.
+    it "names a lambda skip condition with the line the file wrote" do
+      stub_controllers({
+        "ApplicationController" => {
+          actions: [],
+          filters: [ { kind: "around", name: "set_locale", declared: true } ],
+          strong_params: []
+        },
+        "AccountsController" => {
+          actions: %w[show],
+          parent_class: "ApplicationController",
+          filters: [
+            { kind: "around", name: "set_locale", skipped: true,
+              if: "-> { [:json, :rss].include?(request.format&.to_sym) }" }
+          ],
+          strong_params: []
+        }
+      })
+
+      single = described_class.call(controller: "AccountsController").content.first[:text]
+
+      expect(single).to include("(skipped if: -> { [:json, :rss].include?(request.format&.to_sym) })")
+      expect(single).not_to include("[INFERRED]")
+    end
   end
 
   describe "an action calling a protected method" do
@@ -756,6 +887,28 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       }
 
       expect(reads_for(rich, "RichController")).to eq(reads_for(bare, "BareController"))
+    end
+  end
+
+  describe "the render map's enqueue side effects" do
+    before do
+      allow(described_class).to receive(:cached_context)
+        .and_return(jobs: { enqueue_helpers: [ { owner: "Jobs", method: "enqueue", job_arg: 0 } ] })
+    end
+
+    it "names every enqueue call, a scheduled one and the app's helper included" do
+      code = <<~RUBY
+        def create
+          # AuditJob.perform_later
+          RefreshWorker.perform_in(5.minutes, 1)
+          Jobs.enqueue(:process_post)
+          NotifyJob.set(wait: 1.hour).perform_later
+        end
+      RUBY
+
+      expect(described_class.send(:extract_render_map, code)[:side_effects]).to eq(
+        [ "RefreshWorker.perform_in", "Jobs.enqueue", "NotifyJob.set(wait: 1.hour).perform_later" ]
+      )
     end
   end
 end

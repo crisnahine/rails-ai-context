@@ -33,6 +33,19 @@ def abort_boot_failure(result, timeout)
   exit 1
 end unless defined?(abort_boot_failure)
 
+# Boots through Rake's environment task so app hooks run, with boot output kept off
+# stdout (the JSON-RPC stream); the guard adds the timeout and the rescue.
+def boot_and_serve(transport)
+  timeout = RailsAiContext::BootManager.env_timeout
+  result = RailsAiContext::BootManager.guard(timeout: timeout) do
+    Rake::Task["environment"].invoke
+  end
+  abort_boot_failure(result, timeout) unless result.booted?
+  require "rails_ai_context"
+
+  RailsAiContext.start_mcp_server(transport: transport)
+end unless defined?(boot_and_serve)
+
 def apply_context_mode_override
   if ENV["CONTEXT_MODE"]
     mode = ENV["CONTEXT_MODE"].to_sym
@@ -44,18 +57,16 @@ end unless defined?(apply_context_mode_override)
 # The install program's voice on this entry: plain puts, an emoji on the
 # outcomes the task has always marked.
 def install_surface
-  @rails_ai_context_install_surface ||= begin
-    surface = Object.new
-    def surface.say(text = "", level = :plain)
+  @rails_ai_context_install_surface ||= RailsAiContext::Install::Surface.new(
+    lambda { |text, level|
       prefix = { ok: "✅ ", warn: "⚠️  " }[level]
       puts "#{prefix}#{text}"
-    end
-    def surface.ask(prompt)
+    },
+    lambda { |prompt|
       print "#{prompt} "
       $stdin.gets&.strip
-    end
-    surface
-  end
+    }
+  )
 end unless defined?(install_surface)
 
 def prompt_ai_tools
@@ -327,30 +338,12 @@ namespace :ai do
 
   desc "Start the MCP server (stdio transport, auto-discovered by configured AI tools)"
   task :serve do
-    # Boot inside the task so app boot output (initializer puts, deprecation
-    # warnings) is quarantined to stderr - stdout carries the JSON-RPC stream.
-    # Through Rake's environment task, not BootManager.boot!, so app hooks on
-    # that task still run; the guard adds the timeout and the rescue.
-    timeout = RailsAiContext::BootManager.env_timeout
-    result = RailsAiContext::BootManager.guard(timeout: timeout) do
-      Rake::Task["environment"].invoke
-    end
-    abort_boot_failure(result, timeout) unless result.booted?
-    require "rails_ai_context"
-
-    RailsAiContext.start_mcp_server(transport: :stdio)
+    boot_and_serve(:stdio)
   end
 
   desc "Start the MCP server with HTTP transport"
   task :serve_http do
-    timeout = RailsAiContext::BootManager.env_timeout
-    result = RailsAiContext::BootManager.guard(timeout: timeout) do
-      Rake::Task["environment"].invoke
-    end
-    abort_boot_failure(result, timeout) unless result.booted?
-    require "rails_ai_context"
-
-    RailsAiContext.start_mcp_server(transport: :http)
+    boot_and_serve(:http)
   end
 
   desc "Print introspection summary to stdout (useful for debugging)"
@@ -378,10 +371,9 @@ namespace :ai do
     end
 
     if (routes = RailsAiContext::Payload.section(context, :routes))
-      app_ctrls = RailsAiContext::RouteCoverage.app_controllers(routes)
       puts "🛤️  Routes: " \
            "#{RailsAiContext::CountPhrase.call(RailsAiContext::RouteCoverage.app_route_count(routes), "app route")} " \
-           "across #{RailsAiContext::CountPhrase.call(app_ctrls.size, "controller")} " \
+           "across #{RailsAiContext::RouteCoverage.controller_phrase(routes)} " \
            "(#{routes[:total_routes]} total incl. framework#{RailsAiContext::RouteCoverage.suffix(routes)})"
     end
 

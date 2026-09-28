@@ -35,6 +35,9 @@ module RailsAiContext
         end
 
         root = rails_app.root.to_s
+        # Every views root the app has, so a partial an in-repo engine or
+        # plugin keeps is found the way one under app/views is.
+        view_dirs = RailsAiContext::PathResolver.view_dirs(root)
         views_dir = File.join(root, "app", "views")
 
         # Only the caller string is judged here; the candidate search below
@@ -45,17 +48,28 @@ module RailsAiContext
         when :sensitive then return error_response("Path not allowed: #{partial} (sensitive file)")
         end
 
-        unless Dir.exist?(views_dir)
+        if view_dirs.empty?
           note = api_only_note("app/views")
           return text_response(note) if note
 
           return text_response("No app/views/ directory found.")
         end
 
-        located = resolve_partial_path(views_dir, partial)
+        # A bare name is a name, not a path: an app has several `_form`, and the first in sorted
+        # order would give one directory's locals for another's.
+        same_name = view_dirs.flat_map { |dir| bare_name_matches(dir, partial) }
+        if same_name.size > 1
+          return empty_response(
+            [ "Partial '#{partial}' matches #{count_phrase(same_name.size, 'file')}:", "",
+              *same_name.map { |f| "- `#{view_relative(f, view_dirs)}`" }, "",
+              "_Pass one with its directory, e.g. `#{view_relative(same_name.first, view_dirs).sub(%r{/_}, "/").sub(/\..*\z/, "")}`._" ].join("\n")
+          )
+        end
+
+        located = view_dirs.lazy.filter_map { |dir| resolve_partial_path(dir, partial) }.first
 
         unless located
-          available = find_available_partials(views_dir, root)
+          available = view_dirs.flat_map { |dir| find_available_partials(dir, root) }.uniq.sort.first(30)
           return not_found_response("Partial", partial, available,
             recovery_tool: "Call rails_get_view(detail:\"summary\") to see all views and partials")
         end
@@ -69,18 +83,18 @@ module RailsAiContext
         return text_response("Could not read partial file.") unless source
 
         relative_path = located.relative
-        partial_name = relative_path.delete_prefix("app/views/")
+        partial_name = relative_path.sub(%r{\A.*app/views/}, "")
 
         # Parse the partial's interface
         magic_locals = extract_magic_comment_locals(source)
-        render_sites = find_render_sites(views_dir, partial, root)
+        render_sites = view_dirs.flat_map { |dir| find_render_sites(dir, partial, root) }
         method_calls = {}
 
         # Primary: locals from render call sites (ground truth)
         render_locals = render_sites.flat_map { |rs| rs[:locals] || [] }.uniq
 
         # Secondary: local_assigns checks + defined? guards in partial source
-        source_locals = extract_local_variable_references(source)
+        source_locals = extract_local_variable_references(source, Introspectors::HelperNames.for(root))
 
         # Combine: render-site locals first, then source-detected locals
         # Filter out noise: single chars, capitalized words, known helpers
@@ -94,10 +108,9 @@ module RailsAiContext
         case detail
         when "summary"
           format_summary(partial_name, all_locals, magic_locals, render_sites)
-        when "standard"
-          format_standard(partial_name, relative_path, source, all_locals, magic_locals, render_sites, method_calls)
-        when "full"
-          format_full(partial_name, relative_path, source, all_locals, magic_locals, render_sites, method_calls)
+        else
+          format_detail(partial_name, relative_path, source, all_locals, magic_locals, render_sites, method_calls,
+                        full: RailsAiContext::DetailLevel.full?(detail))
         end
       end
 
@@ -118,96 +131,58 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
-      private_class_method def self.format_standard(partial_name, relative_path, source, all_locals, magic_locals, render_sites, method_calls)
+      private_class_method def self.format_detail(partial_name, relative_path, source, all_locals, magic_locals, render_sites, method_calls, full:)
         lines = [ "# Partial: #{partial_name}", "" ]
         lines << "**File:** `#{relative_path}` (#{count_phrase(source.lines.size, "line")})"
 
-        # Magic comment locals
         if magic_locals.any?
           lines << "**Declared locals** (Rails 7.1+ magic comment): #{magic_locals.join(', ')}"
         end
 
-        # All locals with method calls
         if all_locals.any?
           lines << "" << "## Local Variables"
           all_locals.each do |local|
             methods = method_calls[local]
             if methods&.any?
-              more = methods.size > 10 ? ", ...and #{methods.size - 10} more" : ""
-              lines << "- **#{local}** - calls: #{methods.first(10).join(', ')}#{more}"
+              shown = full ? methods : methods.first(10)
+              more = !full && methods.size > 10 ? ", ...and #{methods.size - 10} more" : ""
+              lines << "- **#{local}** - calls: #{shown.join(', ')}#{more}"
             else
               lines << "- **#{local}**"
             end
           end
-        else
+        elsif !full
           lines << "" << "_No local variables detected in this partial._"
         end
 
-        # Render sites with locals passed
         if render_sites.any?
+          cap = full ? 25 : 15
           lines << "" << "## Rendered From (#{render_sites.size})"
-          render_sites.first(15).each do |site|
+          render_sites.first(cap).each do |site|
             locals_str = site[:locals].any? ? " - locals: #{site[:locals].join(', ')}" : ""
             lines << "- `#{site[:file]}:#{site[:line]}`#{locals_str}"
+            next unless full && site[:snippet]
+
+            lines << "  ```erb"
+            lines << "  #{site[:snippet].strip}"
+            lines << "  ```"
           end
-          if render_sites.size > 15
-            lines << "- _...and #{render_sites.size - 15} more_"
+          if render_sites.size > cap
+            lines << "- _...and #{render_sites.size - cap} more_"
           end
-        else
+        elsif !full
           lines << "" << "_No render calls found for this partial._"
         end
 
-        # Cross-reference hints
-        lines << ""
-        lines << "_Next: `rails_get_view(path:\"#{partial_name}\")` for full file content_"
-
-        text_response(lines.join("\n"))
-      end
-
-      private_class_method def self.format_full(partial_name, relative_path, source, all_locals, magic_locals, render_sites, method_calls)
-        lines = [ "# Partial: #{partial_name}", "" ]
-        lines << "**File:** `#{relative_path}` (#{count_phrase(source.lines.size, "line")})"
-
-        # Magic comment locals
-        if magic_locals.any?
-          lines << "**Declared locals** (Rails 7.1+ magic comment): #{magic_locals.join(', ')}"
+        if full
+          lines << "" << "## Source"
+          lines << "```erb"
+          lines << source
+          lines << "```"
+        else
+          lines << ""
+          lines << "_Next: `rails_get_view(path:\"#{partial_name}\")` for full file content_"
         end
-
-        # All locals with method calls
-        if all_locals.any?
-          lines << "" << "## Local Variables"
-          all_locals.each do |local|
-            methods = method_calls[local]
-            if methods&.any?
-              lines << "- **#{local}** - calls: #{methods.join(', ')}"
-            else
-              lines << "- **#{local}**"
-            end
-          end
-        end
-
-        # Render sites with locals passed
-        if render_sites.any?
-          lines << "" << "## Rendered From (#{render_sites.size})"
-          render_sites.first(25).each do |site|
-            locals_str = site[:locals].any? ? " - locals: #{site[:locals].join(', ')}" : ""
-            lines << "- `#{site[:file]}:#{site[:line]}`#{locals_str}"
-            if site[:snippet]
-              lines << "  ```erb"
-              lines << "  #{site[:snippet].strip}"
-              lines << "  ```"
-            end
-          end
-          if render_sites.size > 25
-            lines << "- _...and #{render_sites.size - 25} more_"
-          end
-        end
-
-        # Full partial source
-        lines << "" << "## Source"
-        lines << "```erb"
-        lines << source
-        lines << "```"
 
         text_response(lines.join("\n"))
       end
@@ -236,16 +211,29 @@ module RailsAiContext
 
         found = candidates.find { |c| File.file?(c) }
 
-        # Fallback: if no directory was specified and direct lookup failed,
-        # search recursively for the partial across all view directories
-        if found.nil? && dir_parts.empty?
-          found = Dir.glob(File.join(views_dir, "**", "#{prefixed_basename}.*")).sort.find { |c| File.file?(c) }
-        end
+        found = bare_name_matches(views_dir, partial).first if found.nil? && dir_parts.empty?
 
         return nil unless found
 
         located = RailsAiContext::SafePath.locate(found.delete_prefix(views_dir + File::SEPARATOR), under: views_dir, root: rails_app.root.to_s)
         located.ok? || located.refusal == :too_large ? located : nil
+      end
+
+      # A view file's name as the app renders it: its path under whichever
+      # views root holds it.
+      private_class_method def self.view_relative(path, view_dirs)
+        dir = view_dirs.find { |d| path.start_with?(d + File::SEPARATOR) }
+        dir ? path.delete_prefix(dir + File::SEPARATOR) : path
+      end
+
+      # Every partial of this name anywhere under app/views, for a caller who
+      # gave a name with no directory. Empty for a path: that names one file.
+      private_class_method def self.bare_name_matches(views_dir, partial)
+        name = partial.to_s.strip
+        return [] if name.include?("/")
+
+        name = "_#{name}" unless name.start_with?("_")
+        Dir.glob(File.join(views_dir, "**", "#{name}.*")).sort.select { |c| File.file?(c) }
       end
 
       # Extract locals declared via Rails 7.1+ magic comment: <%# locals: (name:, title: "default") %>
@@ -269,7 +257,7 @@ module RailsAiContext
 
       # Extract local variable references from ERB source.
       # Locals are variables NOT prefixed with @ and NOT known Ruby/Rails globals.
-      private_class_method def self.extract_local_variable_references(source)
+      private_class_method def self.extract_local_variable_references(source, helpers = Set.new)
         locals = Set.new
         # Known non-local identifiers to exclude
         known_non_locals = Set.new(%w[
@@ -313,7 +301,7 @@ module RailsAiContext
           # 1. Standalone ERB output: <%= local_name %> or <%= local_name.method %>
           if (m = code.match(/\A\s*([a-z_]\w*)\s*(?:\z|\.|\()/))
             name = m[1]
-            locals << name unless known_non_locals.include?(name) || block_params.include?(name)
+            locals << name unless known_non_locals.include?(name) || block_params.include?(name) || helpers.include?(name)
           end
 
           # 2. defined?(local) guard pattern
@@ -373,7 +361,7 @@ module RailsAiContext
             []
           end
 
-        view_files = Dir.glob(File.join(views_dir, "**", "*.{erb,haml,slim}")).sort
+        view_files = Dir.glob(File.join(views_dir, RailsAiContext::ViewFile::MARKUP_GLOB)).sort
 
         view_files.each do |file|
           content = safe_read(file)
@@ -490,7 +478,7 @@ module RailsAiContext
 
       # Find available partials for fuzzy matching in not_found_response.
       private_class_method def self.find_available_partials(views_dir, root)
-        Dir.glob(File.join(views_dir, "**", "_*")).select { |f| File.file?(f) }.map do |f|
+        Dir.glob(File.join(views_dir, "**", "_*")).select { |f| File.file?(f) && RailsAiContext::ViewFile.template?(f) }.map do |f|
           relative = f.sub("#{views_dir}/", "")
           # Strip underscore prefix and extension for display
           parts = relative.split("/")

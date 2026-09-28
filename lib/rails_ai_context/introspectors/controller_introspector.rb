@@ -6,18 +6,12 @@ module RailsAiContext
     # respond_to formats, concerns, actions, and API detection.
     # Uses source-file parsing (not just Ruby reflection) so that
     # changes made mid-session are always visible.
-    class ControllerIntrospector
+    class ControllerIntrospector < Base
       extend StaticTier
       static_tier :alternate_source
 
-      attr_reader :app
-
       def excluded_filters
         RailsAiContext.configuration.excluded_filters
-      end
-
-      def initialize(app)
-        @app = app
       end
 
       def call
@@ -39,14 +33,12 @@ module RailsAiContext
           next if result.key?(path_name)
 
           name, details = detail_for(record, path_name)
-          next if result.key?(name)
+          next if name.nil? || result.key?(name)
 
           result[name] = details
         end
 
         { controllers: fill_inherited_actions(result) }
-      rescue => e
-        { error: e.message }
       end
 
       # Static tier: every controller goes through the source-only extractor;
@@ -56,6 +48,8 @@ module RailsAiContext
         # its name as well as its details.
         result = discover_from_filesystem.each_with_object({}) do |(path_name, record), hash|
           name, details = detail_for(record, path_name)
+          next if name.nil?
+
           hash[name] = details[:error] ? details : details.merge(confidence: Confidence::STATIC)
         rescue => e
           hash[path_name] = { error: e.message }
@@ -64,22 +58,93 @@ module RailsAiContext
           controllers: fill_inherited_actions(result),
           note: "Parsed statically from app/controllers (app not booted)"
         }
-      rescue => e
-        { error: e.message }
+      end
+
+      # Rails renders a routed action's template when the controller has no method for it,
+      # and a public base method no route names for this controller is a helper.
+      def self.apply_routes(section, routes, root)
+        return unless section.is_a?(Hash) && section[:controllers].is_a?(Hash)
+
+        by_controller = RouteCoverage.all_by_controller(routes)
+        controllers = section[:controllers]
+        # Underscored names stay out, as they do for methods; so do partials.
+        routed_for = controllers.to_h do |name, info|
+          path = controller_path(name, info.is_a?(Hash) ? info[:file] : nil)
+          [ name, Array(by_controller[path]).map { |r| r[:action].to_s }.reject { |a| a.start_with?("_") } ]
+        end
+        by_subclasses = routed_by_subclasses(controllers, routed_for)
+        controllers.each do |name, info|
+          next unless info.is_a?(Hash) && info[:actions].is_a?(Array)
+
+          inherited = Array(info.delete(:inherited_actions))
+          path = controller_path(name, info[:file])
+          routed = routed_for[name]
+          # A base is never routed itself; what its subclasses route is its
+          # actions. With none of them routed, the table says nothing about it.
+          if routed.empty?
+            if by_subclasses[name]&.any?
+              info[:actions] &= by_subclasses[name]
+            elsif by_controller.any? && info[:file].to_s.start_with?("app/controllers/")
+              # Unrouted and no one's base: only what it defines itself may be
+              # an action. An engine's or module's controller is routed by a
+              # route file the static walk may not read, so it is left alone.
+              info[:actions] -= inherited
+            end
+            next
+          end
+
+          info[:actions] -= inherited - routed
+          dir = File.join(root.to_s, "app", "views", path)
+          next unless Dir.exist?(dir)
+
+          extra = (routed & Dir.children(dir).map { |f| f.split(".").first }) - info[:actions]
+          info[:actions] = (info[:actions] + extra).sort if extra.any?
+        end
+      end
+
+      # {base => every action a subclass of it is routed for}, for each
+      # controller another one in the listing inherits from.
+      def self.routed_by_subclasses(controllers, routed_for)
+        controllers.each_with_object({}) do |(name, info), found|
+          seen = Set.new
+          parent = info.is_a?(Hash) && ActionResolver.resolve_entry_name(controllers, info[:parent_class], name)
+          while parent && controllers.key?(parent) && seen.add?(parent)
+            (found[parent] ||= Set.new).merge(routed_for[name])
+            parent_info = controllers[parent]
+            parent = parent_info.is_a?(Hash) && ActionResolver.resolve_entry_name(controllers, parent_info[:parent_class], parent)
+          end
+        end.transform_values(&:to_a)
+      end
+
+      # The file's path, where there is one: `ActivityPub::` lives in activitypub/, which
+      # underscoring the name misses without the app's inflections.
+      def self.controller_path(name, file)
+        from_file = file.to_s[%r{app/controllers/(.+)_controller\.rb\z}, 1]
+        from_file || name.delete_suffix("Controller").underscore
       end
 
       private
 
       # One file cannot see its ancestor, so the inherited answer is filled in
       # over the finished listing, walked by the parent name each entry
-      # carries. Only entries with no actions of their own are touched.
+      # carries. Every walk reads the listing as it was, before any entry took
+      # on its ancestors' actions, and the child's own filters come off the
+      # union: an inherited method the child names in a callback is a filter.
       def fill_inherited_actions(result)
-        result.each do |name, info|
-          next unless info.is_a?(Hash) && Array(info[:actions]).empty?
+        unions = result.each_with_object({}) do |(name, info), acc|
+          next unless info.is_a?(Hash)
 
           inherited = ActionResolver.inherited_actions_by_name(result, info[:parent_class],
                                                                kind: :controller, within: name)
-          info[:actions] = inherited if inherited.any?
+          next if inherited.empty?
+
+          own = Array(info[:actions]) - Array(info[:inherited_actions])
+          union = ActionResolver.deliverable_actions((Array(info[:actions]) | inherited).sort, filter_names(info[:filters]))
+          acc[name] = [ union, union - own ]
+        end
+        unions.each do |name, (actions, inherited_only)|
+          result[name][:actions] = actions
+          result[name][:inherited_actions] = inherited_only if inherited_only.any?
         end
         result
       end
@@ -89,9 +154,16 @@ module RailsAiContext
       def detail_for(record, path_name)
         source = SafeFile.read(record.path)
         return [ path_name, { error: "unreadable" } ] unless source
+        return nil unless record.path.end_with?("_controller.rb") || subclasses_a_controller?(source)
 
         name = DeclaredConstant.resolve(source, path_name)
         [ name, extract_details_from_source(record, name, source) ]
+      end
+
+      # A file not named *_controller.rb is a controller only if it subclasses one: a mixin,
+      # a plain helper class or a Grape API is not.
+      def subclasses_a_controller?(source)
+        DeclaredConstant.declarations(source).any? { |d| d.superclass.to_s.split("::").last.to_s.end_with?("Controller") }
       end
 
       def discover_controllers
@@ -112,7 +184,9 @@ module RailsAiContext
       # throws away. Callers resolve the declared constant where they need it.
       def discover_from_filesystem
         SourceScan.paths(app.root, kind: "app/controllers").each_with_object({}) do |record, result|
-          next unless record.path.end_with?("_controller.rb")
+          # A base the app names by what it is (`enumerations_controller_base.rb`)
+          # is a controller all the same; a concern is not.
+          next unless record.path.end_with?(".rb") && !record.path.include?("/concerns/")
           next if record.path_name == "ApplicationController"
           next if record.path_name.start_with?("Rails::", "ActionMailbox::", "ActiveStorage::")
 
@@ -127,12 +201,19 @@ module RailsAiContext
         relative_file = record.file
         parent = parent_class_of(source, class_name)
         rate_limit = rate_limit_entry(source)
+        filters, unread = ControllerFilters.with_concerns(source, root: app.root.to_s, within: class_name,
+                                                                  cache: (@concern_cache ||= {}))
+        concerns = extract_concerns_from_source(source)
+        own = ActionResolver.actions_from_source(source, class_name: class_name, filters: filter_names(filters))
+        mixed_in = concern_actions(concerns, class_name, filters) - own
         details = {
           parent_class: parent,
           api_controller: parent.include?("API"),
-          actions: ActionResolver.actions_from_source(source, class_name: class_name),
-          filters: extract_filters_from_source(source),
-          concerns: extract_concerns_from_source(source),
+          actions: (own + mixed_in).sort,
+          inherited_actions: mixed_in.presence,
+          filters: filters,
+          concerns: concerns,
+          concerns_unread: unread.presence,
           strong_params: extract_strong_params(source),
           respond_to_formats: extract_respond_to(source),
           rescue_from: extract_rescue_from(source),
@@ -149,13 +230,20 @@ module RailsAiContext
       def extract_controller_details(ctrl)
         source = read_source(ctrl)
         rate_limit = rate_limit_entry(source)
+        filters = extract_filters(ctrl, source)
+        concerns = extract_concerns(ctrl)
+        actions = extract_actions(ctrl, source, filters) | concern_actions(concerns, ctrl.name, filters)
+        # What the file does not define itself is inherited or mixed in, for
+        # the routes to settle as they do for a statically read entry.
+        own = source ? ActionResolver.actions_from_source(source, class_name: ctrl.name, filters: filter_names(filters)) : actions
 
         {
           parent_class: ctrl.superclass.name,
           api_controller: api_controller?(ctrl),
-          actions: extract_actions(ctrl, source),
-          filters: extract_filters(ctrl, source),
-          concerns: extract_concerns(ctrl),
+          actions: actions.sort,
+          inherited_actions: (actions - own).presence,
+          filters: filters,
+          concerns: concerns,
           strong_params: extract_strong_params(source),
           respond_to_formats: extract_respond_to(source),
           rescue_from: extract_rescue_from(source),
@@ -185,9 +273,30 @@ module RailsAiContext
       # path. `rails g devise:controllers` is the live reflection case: the
       # app owns the file, every action in it is commented out, and the gem
       # class supplies them.
-      def extract_actions(ctrl, source = nil)
+      # The filters are read first and handed over: a method a `before_action`
+      # names is that filter, not an action Rails would route to.
+      def extract_actions(ctrl, source = nil, filters = [])
         ActionResolver.resolve(ctrl, source: source, kind: :controller,
-                               read_source: method(:read_source))
+                               read_source: method(:read_source),
+                               filters: filter_names(filters))
+      end
+
+      # What an app controller concern (Whitehall's TranslationControllerConcern)
+      # would have Rails dispatch to; the routes decide which are actions.
+      def concern_actions(concerns, within, filters)
+        Array(concerns).flat_map do |concern|
+          path = ConcernPaths.find_file(app.root.to_s, concern.to_s, prefer: "controller", within: within)
+          next [] unless path
+
+          offered = (@concern_actions ||= {})[path] ||= (source = SafeFile.read(path)) ? ActionResolver.module_actions(source) : []
+          ActionResolver.deliverable_actions(offered, filter_names(filters))
+        end.uniq
+      rescue => e
+        RailsAiContext.debug_fail(e, [], label: "concern_actions")
+      end
+
+      def filter_names(filters)
+        Array(filters).map { |f| f.is_a?(Hash) ? f[:name] : f }.compact.map(&:to_s)
       end
 
       # Hybrid approach: reflection for complete filter names (handles inheritance + skips),
@@ -298,12 +407,12 @@ module RailsAiContext
       # e.g., `unless: :devise_controller?` on a Devise controller means the filter doesn't apply.
       def filter_excluded_by_condition?(ctrl, filter)
         # unless: :devise_controller? - filter does NOT apply to Devise controllers
-        if filter[:unless] == "devise_controller?"
+        if filter[:unless].to_s == "devise_controller?"
           return true if devise_controller?(ctrl)
         end
 
         # if: :devise_controller? - filter ONLY applies to Devise controllers
-        if filter[:if] == "devise_controller?"
+        if filter[:if].to_s == "devise_controller?"
           return true unless devise_controller?(ctrl)
         end
 
@@ -414,7 +523,7 @@ module RailsAiContext
         args.each do |arg|
           case arg
           when Prism::SymbolNode
-            permits << arg.value.to_s
+            permits << arg.unescaped
           when Prism::KeywordHashNode
             arg.elements.each do |assoc|
               next unless assoc.is_a?(Prism::AssocNode)
@@ -455,7 +564,7 @@ module RailsAiContext
         args.each do |arg|
           case arg
           when Prism::SymbolNode
-            permits << arg.value.to_s
+            permits << arg.unescaped
           when Prism::KeywordHashNode, Prism::HashNode
             arg.elements.each do |assoc|
               next unless assoc.is_a?(Prism::AssocNode)
@@ -479,7 +588,7 @@ module RailsAiContext
         array_node.elements.each do |el|
           case el
           when Prism::SymbolNode
-            permits << el.value.to_s
+            permits << el.unescaped
           when Prism::ArrayNode
             # Doubly-wrapped array marks an array-of-hashes attribute
             nested[key] = expect_symbol_values(el)
@@ -500,7 +609,7 @@ module RailsAiContext
       def expect_symbol_values(array_node)
         array_node.elements.flat_map do |el|
           case el
-          when Prism::SymbolNode then [ el.value.to_s ]
+          when Prism::SymbolNode then [ el.unescaped ]
           when Prism::ArrayNode then expect_symbol_values(el)
           else []
           end
@@ -509,7 +618,7 @@ module RailsAiContext
 
       def extract_ast_value(node)
         case node
-        when Prism::SymbolNode       then node.value.to_s
+        when Prism::SymbolNode       then node.unescaped
         when Prism::StringNode       then node.unescaped
         when Prism::IntegerNode      then node.value
         when Prism::ConstantReadNode then node.name.to_s

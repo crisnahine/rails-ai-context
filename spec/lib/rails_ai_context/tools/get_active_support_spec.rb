@@ -41,6 +41,39 @@ RSpec.describe RailsAiContext::Tools::GetActiveSupport do
       expect(text).to include("**Authenticatable**")
     end
 
+    # A validator class in app/models/concerns is not a concern, and counting
+    # it here made this tool answer a different total than rails_get_concern.
+    it "counts and lists a validator apart from the concerns" do
+      active_support_data[:concerns]["app/models/concerns"] << {
+        name: "EmailValidator", file: "app/models/concerns/email_validator.rb",
+        kind: "class", superclass: "ActiveModel::EachValidator",
+        validator: "ActiveModel::EachValidator", included_blocks: 0, class_methods_block: false
+      }
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("## Concerns (2)")
+      expect(text).to include("## Validators (1)")
+      expect(text).to include("**EmailValidator** (`app/models/concerns/email_validator.rb`, < ActiveModel::EachValidator)")
+    end
+
+    # "No concerns found" directly above a list of the files it found reads
+    # as a contradiction.
+    it "says a directory of validators holds no concerns rather than nothing at all" do
+      active_support_data[:concerns] = {
+        "app/models/concerns" => [
+          { name: "EmailValidator", file: "app/models/concerns/email_validator.rb",
+            kind: "class", superclass: "ActiveModel::EachValidator",
+            validator: "ActiveModel::EachValidator", included_blocks: 0, class_methods_block: false }
+        ]
+      }
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("_Every module under app/**/concerns is a validator, listed below._")
+      expect(text).not_to include("_No concerns found under app/**/concerns._")
+    end
+
     it "renders deprecators" do
       text = described_class.call.content.first[:text]
       expect(text).to include("## Deprecators")

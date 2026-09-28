@@ -52,7 +52,7 @@ module RailsAiContext
             lines = [ "# Test Infrastructure", "" ]
             lines << "- **Framework:** #{data[:framework]}"
             lines << "- **Factories:** #{count_phrase(data[:factories][:count], "file")}" if data[:factories]
-            lines << "- **Fixtures:** #{count_phrase(data[:fixtures][:count], "file")}" if data[:fixtures]
+            lines << "- **Fixtures:** #{RailsAiContext::TestFramework.fixture_phrase(data[:fixtures])}" if data[:fixtures]
             if data[:test_files]&.any?
               total = data[:test_files].values.sum { |v| v[:count] }
               lines << "- **Test files:** #{total} across #{count_phrase(data[:test_files].size, "category")}"
@@ -64,7 +64,7 @@ module RailsAiContext
             lines = [ "# Test Infrastructure", "" ]
             lines << "- **Framework:** #{data[:framework]}"
             lines << "- **Factories:** #{data[:factories][:location]} (#{count_phrase(data[:factories][:count], "file")})" if data[:factories]
-            lines << "- **Fixtures:** #{data[:fixtures][:location]} (#{count_phrase(data[:fixtures][:count], "file")})" if data[:fixtures]
+            lines << "- **Fixtures:** #{data[:fixtures][:location]} (#{RailsAiContext::TestFramework.fixture_phrase(data[:fixtures])})" if data[:fixtures]
             lines << "- **System tests:** #{data[:system_tests][:location]}" if data[:system_tests]
             lines << "- **CI:** #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
             lines << "- **Coverage:** #{data[:coverage]}" if data[:coverage]
@@ -76,12 +76,7 @@ module RailsAiContext
               end
             end
 
-            if data[:factory_traits]&.any?
-              lines << "" << "## Factory Traits"
-              data[:factory_traits].first(15).each do |trait|
-                lines << "- #{trait}"
-              end
-            end
+            lines.concat(trait_lines(data[:factory_traits], 15))
 
             if data[:test_helpers]&.any?
               lines << "" << "## Test Helpers"
@@ -100,12 +95,7 @@ module RailsAiContext
             lines << "- **CI:** #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
             lines << "- **Coverage:** #{data[:coverage]}" if data[:coverage]
 
-            if data[:factory_traits]&.any?
-              lines << "" << "## Factory Traits"
-              data[:factory_traits].first(20).each do |trait|
-                lines << "- #{trait}"
-              end
-            end
+            lines.concat(trait_lines(data[:factory_traits], 20))
 
             if data[:fixture_names]&.any?
               lines << "" << "## Fixtures"
@@ -187,7 +177,6 @@ module RailsAiContext
           name.to_s.tr("/", "::").underscore.sub(/_controller$/, "")
         end
         # For models, also try singular form (posts → post)
-        snake_singular = snake.singularize
         # A model or controller name is never a path. Without this the name is
         # interpolated into a spec path, which cannot escape the root but
         # answers "No test file found for /etc/passwd" at exit 0 where every
@@ -195,32 +184,8 @@ module RailsAiContext
         refused = refuse_unsafe_paths([ name ])
         return refused if refused
 
-        candidates = case type
-        when :model
-          base = [
-            "spec/models/#{snake}_spec.rb",
-            "test/models/#{snake}_test.rb",
-            "spec/models/concerns/#{snake}_spec.rb",
-            "test/models/concerns/#{snake}_test.rb"
-          ]
-          if snake != snake_singular
-            base += [
-              "spec/models/#{snake_singular}_spec.rb",
-              "test/models/#{snake_singular}_test.rb",
-              "spec/models/concerns/#{snake_singular}_spec.rb",
-              "test/models/concerns/#{snake_singular}_test.rb"
-            ]
-          end
-          base
-        when :controller
-          [
-            "spec/controllers/#{snake}_controller_spec.rb",
-            "spec/requests/#{snake}_spec.rb",
-            "test/controllers/#{snake}_controller_test.rb",
-            # Also try without namespace prefix for flat test dirs
-            "spec/requests/#{snake.split('/').last}_spec.rb"
-          ]
-        end
+        candidates = RailsAiContext::TestFramework.candidates(rails_app.root.to_s, type, snake, cached_context)
+        exercising = type == :controller ? exercising_tests(snake, candidates) : []
 
         contained = []
         candidates.each do |rel|
@@ -229,18 +194,17 @@ module RailsAiContext
           next unless content
 
           # Summary/standard: return just test names (saves 2000+ tokens vs full source)
-          if RailsAiContext::DetailLevel.summary?(detail) || RailsAiContext::DetailLevel.normalize(detail) == RailsAiContext::DetailLevel::STANDARD
-            test_names = content.each_line.filter_map do |line|
-              if line.match?(/^\s*(test|it|describe|context|specify)\s+["']/)
-                "- #{line.strip}"
-              elsif line.match?(/^\s*def\s+test_/)
-                "- #{line.strip}"
-              end
-            end
-            return text_response("# #{rel} (#{count_phrase(test_names.size, "test")})\n\n#{test_names.join("\n")}")
+          answer = if names_only?(detail)
+            listed = examples(content)
+            "# #{rel} (#{count_phrase(listed.size, "test")})\n\n#{listed.join("\n")}"
+          else
+            "# #{rel}\n\n```ruby\n#{content}\n```"
           end
+          return text_response(answer + exercising_section(exercising, "## Also exercised by"))
+        end
 
-          return text_response("# #{rel}\n\n```ruby\n#{content}\n```")
+        if exercising.any?
+          return text_response("# Tests that exercise #{name}" + exercising_section(exercising, nil, names: true))
         end
 
         # A refused candidate was never read, so listing it reads as a search
@@ -251,6 +215,84 @@ module RailsAiContext
         end
 
         empty_response("No test file found for #{name}. Searched: #{contained.join(', ')}#{nearby_tests_hint(contained)}")
+      end
+
+      # Where a controller is driven from outside its own test, and what each
+      # kind of test is called.
+      EXERCISING_DIRS = {
+        "spec/system" => "system", "spec/features" => "feature", "spec/requests" => "request",
+        "test/system" => "system", "test/integration" => "integration"
+      }.freeze
+      MAX_EXERCISING = 10
+
+      # System, feature and request tests that exercise a controller: named for
+      # its route key, or reaching one of its routes by helper or literal path.
+      # Mastodon tests AboutController only through spec/system/about_spec.rb.
+      #
+      # @return [Array<Array(String, String, String)>] [path, kind, source]
+      private_class_method def self.exercising_tests(snake, primary)
+        root = rails_app.root.to_s
+        real_root = File.realpath(root)
+        routes = Array(RouteCoverage.all_by_controller(cached_context[:routes])[snake])
+        helpers = routes.filter_map { |route| route[:name] }.uniq
+        paths = routes.map { |route| route[:path].to_s.delete_suffix("(.:format)") }.reject { |path| path.include?(":") }.uniq
+        reaches = Regexp.union(helpers.map { |helper| /\b#{Regexp.escape(helper)}_(?:path|url)\b/ } +
+                               paths.map { |path| /["']#{Regexp.escape(path)}["']/ })
+
+        found = EXERCISING_DIRS.flat_map do |dir, kind|
+          safe_glob(File.join(root, dir), "**/*_{spec,test}.rb", real_root).sort.filter_map do |real|
+            rel = real.delete_prefix("#{real_root}/")
+            next if primary.include?(rel)
+
+            source = RailsAiContext::SafeFile.read(real, max_size: max_test_file_size) or next
+            named = rel.delete_prefix("#{dir}/").sub(/_(?:spec|test)\.rb\z/, "") == snake
+            [ rel, kind, source, named ] if named || source.match?(reaches)
+          end
+        end
+        # A test named for the controller first, then those reaching its routes.
+        found.sort_by { |rel, _kind, _source, named| [ named ? 0 : 1, rel ] }.map { |row| row.first(3) }
+      rescue => e
+        RailsAiContext.debug_fail(e, [], label: "exercising_tests")
+      end
+
+      # One line per exercising test, its kind and size, and its test names
+      # when they are the whole answer.
+      private_class_method def self.exercising_section(found, heading, names: false)
+        return "" if found.empty?
+
+        lines = heading ? [ "", "", heading, "" ] : [ "", "" ]
+        found.first(MAX_EXERCISING).each do |rel, kind, source|
+          listed = examples(source)
+          lines << "- `#{rel}` (#{kind}, #{count_phrase(listed.size, "test")})"
+          listed.each { |test| lines << "  #{test}" } if names
+        end
+        lines << "- ... #{found.size - MAX_EXERCISING} more" if found.size > MAX_EXERCISING
+        lines.join("\n")
+      end
+
+      private_class_method def self.names_only?(detail)
+        RailsAiContext::DetailLevel.summary?(detail) ||
+          RailsAiContext::DetailLevel.normalize(detail) == RailsAiContext::DetailLevel::STANDARD
+      end
+
+      # The calls that define an example, pending and focused ones included.
+      EXAMPLE_METHODS = %i[it specify example scenario its test xit xspecify xexample xscenario fit fspecify fexample fscenario].freeze
+
+      # The examples a test file runs, one line each: `it`, `specify`,
+      # `scenario` and the rest, `test "..."` and `def test_*`, one-liners
+      # included. The describe and context blocks around them group examples;
+      # they are not tests. The count is these lines, so the two agree.
+      private_class_method def self.examples(content)
+        found = RailsAiContext::Introspectors::SourceIntrospector.walk_source(content, {
+          examples: -> { RailsAiContext::Introspectors::Listeners::GenericMacroListener.new(*EXAMPLE_METHODS) },
+          methods: -> { RailsAiContext::Introspectors::Listeners::MethodsListener.new }
+        })
+        lines = content.lines
+        numbers = found[:examples].map { |hit| hit[:location] } +
+                  found[:methods].select { |method| method[:name].to_s.start_with?("test_") }.map { |method| method[:location] }
+        numbers.sort.map { |number| "- #{lines[number - 1].to_s.strip}" }
+      rescue => e
+        RailsAiContext.debug_fail(e, [], label: "examples")
       end
 
       # Nearby test files, to help the agent find the right one. The glob base
@@ -271,6 +313,13 @@ module RailsAiContext
         nearby.any? ? "\n\nFiles in test directory: #{nearby.join(', ')}" : ""
       rescue SystemCallError
         ""
+      end
+
+      private_class_method def self.trait_lines(traits, limit)
+        return [] unless traits.is_a?(Hash) && traits.any?
+
+        [ "", "## Factory Traits" ] +
+          traits.first(limit).map { |file, names| "- **#{file}:** #{Array(names).join(", ")}" }
       end
 
       # Generate a test template based on the app's actual test patterns

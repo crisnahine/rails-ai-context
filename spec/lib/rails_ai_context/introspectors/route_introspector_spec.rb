@@ -62,6 +62,53 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
     end
   end
 
+  # The static tier lists what an app draws into an engine; booted, the
+  # engine's own table holds it, read under the mount like `bin/rails routes`.
+  describe "a booted app that mounts an engine" do
+    # Anonymous, and named only for the example: a named engine class stays
+    # in Rails::Engine.subclasses for the rest of the run, and the engines
+    # section of every later context then lists it.
+    let(:engine) { Class.new(::Rails::Engine) }
+
+    before do
+      allow(engine).to receive(:name).and_return("PauShop::Engine")
+      engine.routes.draw { resources :products, only: [ :index, :update ] }
+    end
+
+    # Railtie#subclasses leaves out abstract railties, so the class is retired
+    # even before it is garbage collected.
+    after { engine.define_singleton_method(:abstract_railtie?) { true } }
+
+    let(:route_set) do
+      mounted = engine
+      ActionDispatch::Routing::RouteSet.new.tap do |set|
+        set.draw do
+          get "orders" => "orders#index"
+          scope "/store" do
+            mount mounted, at: "/shop", as: "storefront"
+          end
+          mount mounted, at: "/shop2", as: "storefront2"
+        end
+      end
+    end
+
+    let(:app_double) { double("app", routes: route_set, routes_reloader: nil, root: Rails.root) }
+
+    it "lists the engine's table under its mount and proxy, apart from the app's count" do
+      result = described_class.new(app_double).call
+
+      expect(result[:total_routes]).to eq(1)
+      expect(result[:engine_routes]).to match([ a_hash_including(
+        engine: "PauShop::Engine", mount: "/store/shop", whole_table: true, also_mounted_at: [ "/shop2" ],
+        routes: contain_exactly(
+          a_hash_including(verb: "GET", path: "/store/shop/products", controller: "products", action: "index",
+                           name: "storefront.products"),
+          a_hash_including(verb: "PATCH|PUT", path: "/store/shop/products/:id", action: "update")
+        )
+      ) ])
+    end
+  end
+
   # `mount` is `match(path, to: app, via: :all, anchor: false)`, so both forms
   # build the same endpoint. Keeping only Rails::Engine subclasses left every
   # plain Rack app counted in the header and named nowhere.
@@ -228,6 +275,224 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       end
     end
 
+    # OFN lists its route files in config.paths["config/routes.rb"]; reading
+    # config/routes.rb alone answered 69 routes of ~260 and none of its mounts.
+    it "reads the route files config/application.rb registers, in order" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "routes"))
+        File.write(File.join(dir, "config", "application.rb"), <<~RUBY)
+          module Shop
+            class Application < Rails::Application
+              config.paths["config/routes.rb"] = %w(
+                config/routes/api.rb
+                config/routes.rb
+                config/routes/admin.rb
+              ).map { |relative_path| Rails.root.join(relative_path) }
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "config", "routes.rb"), "Rails.application.routes.draw do\n  resources :posts, only: [:index]\nend\n")
+        File.write(File.join(dir, "config", "routes", "api.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            namespace :api do
+              resources :orders, only: [:index]
+            end
+            mount Rswag::Ui::Engine => "/api-docs"
+          end
+        RUBY
+        File.write(File.join(dir, "config", "routes", "admin.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            namespace :admin do
+              resources :orders, only: [:index]
+            end
+          end
+        RUBY
+
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        result = introspector.static_call
+
+        expect(result[:total_routes]).to eq(3)
+        expect(result[:by_controller].keys).to contain_exactly("posts", "api/orders", "admin/orders")
+        expect(result[:mounted_engines]).to eq([ { engine: "Rswag::Ui::Engine", path: "/api-docs" } ])
+        expect(introspector.static_mounts.map { |m| m[:engine] }).to eq([ "Rswag::Ui::Engine" ])
+        expect(result[:note]).to include("config/routes/api.rb")
+      end
+    end
+
+    # Discourse mounts Sidekiq::Web in both arms of an if/else, inside a
+    # `scope path: nil`: one app at one path, with the path known.
+    it "names a mount once per app and path, with the path a nil scope leaves" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            scope path: nil, constraints: { format: /.*/ } do
+              if Rails.env.development?
+                mount Sidekiq::Web => "/sidekiq"
+              else
+                mount Sidekiq::Web => "/sidekiq", constraints: AdminConstraint.new
+              end
+            end
+            mount Flipper::UI.app(Flipper) => "/flags"
+            mount Flipper::UI.app(Flipper), at: "/admin/flags"
+          end
+        RUBY
+
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        result = introspector.static_call
+
+        expect(result[:mounted_engines]).to eq([
+          { engine: "Sidekiq::Web", path: "/sidekiq" },
+          { engine: "Flipper::UI.app", path: "/flags" },
+          { engine: "Flipper::UI.app", path: "/admin/flags" }
+        ])
+        expect(introspector.static_mounts.size).to eq(3)
+      end
+    end
+
+    # The booted tier reads Rails.application.routes, which holds a mounted
+    # engine's routes only as the mount. The routes an app draws into an
+    # engine are listed with the engine, under the path it is mounted at,
+    # named through its route proxy, and left out of the app's count.
+    it "files routes drawn into an engine under its mount, apart from the app's" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            resources :posts, only: [:index]
+            mount Spree::Core::Engine, at: "/shop"
+          end
+
+          Spree::Core::Engine.routes.draw do
+            namespace :admin do
+              resources :orders, only: [:index]
+            end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:total_routes]).to eq(1)
+        expect(result[:by_controller].keys).to eq([ "posts" ])
+        expect(result[:engine_routes]).to match([ a_hash_including(
+          engine: "Spree::Core::Engine", mount: "/shop",
+          routes: [ a_hash_including(verb: "GET", path: "/shop/admin/orders", controller: "spree/admin/orders",
+                                     action: "index", name: "spree.admin_orders") ]
+        ) ])
+      end
+    end
+
+    # The app's table merges each update's PATCH and PUT, so an engine's
+    # count beside it merges them too.
+    it "merges an engine route's PATCH and PUT the way the app count does" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            mount Spree::Core::Engine, at: "/"
+          end
+
+          Spree::Core::Engine.routes.draw do
+            resources :orders, only: [:update]
+          end
+        RUBY
+
+        routes = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:engine_routes].first[:routes]
+
+        expect(routes.map { |r| [ r[:verb], r[:path] ] }).to eq([ [ "PATCH|PUT", "/orders/:id" ] ])
+      end
+    end
+
+    # Rails names an engine's route proxy after the mount's `as:`, else the
+    # engine's engine_name; any other name raises NameError when called.
+    it "names the route proxy the way Rails names the mount" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "lib", "blog"))
+        File.write(File.join(dir, "lib", "blog", "engine.rb"), <<~RUBY)
+          module Blog
+            class Engine < ::Rails::Engine
+              isolate_namespace Blog
+            end
+          end
+        RUBY
+        FileUtils.mkdir_p(File.join(dir, "lib", "wiki"))
+        File.write(File.join(dir, "lib", "wiki", "engine.rb"), "module Wiki\n  class Engine < ::Rails::Engine\n  end\nend\n")
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            mount ::Shop::Engine, at: "/shop", as: "storefront"
+            mount Blog::Engine => "/blog"
+            mount Wiki::Engine => "/wiki"
+          end
+
+          Shop::Engine.routes.draw { resources :products, only: [:index] }
+          Blog::Engine.routes.draw { resources :posts, only: [:index] }
+          Wiki::Engine.routes.draw { resources :pages, only: [:index] }
+        RUBY
+
+        groups = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:engine_routes]
+
+        expect(groups.flat_map { |g| g[:routes].map { |r| r[:name] } }).to contain_exactly(
+          "storefront.products", "blog.posts", "wiki_engine.pages"
+        )
+      end
+    end
+
+    # A devise_for drawn into Spree's table is missing from the engine's
+    # count as it would be from the app's, and says so there.
+    it "counts what an engine draw could not expand with that engine" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            mount Spree::Core::Engine, at: "/"
+          end
+
+          Spree::Core::Engine.routes.draw do
+            devise_for :spree_user
+            resources :orders, only: [:index]
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:engine_routes].first[:dynamic_routes]).to eq(1)
+        expect(result).not_to have_key(:dynamic_routes)
+      end
+    end
+
+    it "names every path an engine is mounted at" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            mount Blog::Engine, at: "/blog"
+            mount Blog::Engine, at: "/blog2", as: "blog2"
+          end
+
+          Blog::Engine.routes.draw { resources :posts, only: [:index] }
+        RUBY
+
+        group = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:engine_routes].first
+
+        expect(group).to include(mount: "/blog", also_mounted_at: [ "/blog2" ])
+      end
+    end
+
+    it "says a route file list the app computes was not read" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "application.rb"),
+                   "config.paths[\"config/routes.rb\"].concat(tenant_route_files)\n")
+        File.write(File.join(dir, "config", "routes.rb"), "Rails.application.routes.draw do\n  resources :posts, only: [:index]\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:total_routes]).to eq(1)
+        expect(result[:note]).to include("computes")
+      end
+    end
+
     # Rails registers PATCH and PUT separately for one update action, and every
     # surface that lists routes merges them. The static total did not, so the
     # generated files said "8 total" where rails_get_routes said 7 on the same
@@ -243,7 +508,7 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
         merged = result[:by_controller].values.sum do |actions|
-          RailsAiContext::Tools::BaseTool.dedupe_put_patch_routes(actions).size
+          RailsAiContext::RouteCoverage.dedupe_put_patch_routes(actions).size
         end
         expect(result[:total_routes]).to eq(merged)
         expect(result[:total_routes]).to eq(7)
@@ -293,6 +558,60 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
         expect(result[:total_routes]).to eq(0)
+        expect(result[:dynamic_routes]).to eq(1)
+      end
+    end
+
+    # Canvas draws its API through `ApiRouteSet::V1.draw(self)`, whose class
+    # prefixes each verb route's path and `as:` name.
+    it "prefixes routes drawn through an app class with the prefixes the class returns" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "lib"))
+        File.write(File.join(dir, "lib", "api_route_set.rb"), <<~RUBY)
+          class ApiRouteSet
+            def self.prefix
+              raise ArgumentError, "prefix required"
+            end
+
+            def mapper_prefix
+              ""
+            end
+
+            class V1 < ::ApiRouteSet
+              def self.prefix
+                "/api/v1"
+              end
+
+              def mapper_prefix
+                "api_v1_"
+              end
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            ApiRouteSet::V1.draw(self) do
+              scope(controller: :courses) do
+                get "courses", action: :index, as: "courses"
+              end
+            end
+            ApiRouteSet.draw(self, "/api/lti") do
+              post "tools/:tool_id/grade", controller: :lti_api, action: :grade, as: "lti_grade"
+            end
+            ApiRouteSet.draw(self) do
+              get "orphans", controller: :orphans, action: :index
+            end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        routes = result[:by_controller].flat_map { |c, entries| entries.map { |r| [ r[:path], "#{c}##{r[:action]}", r[:name] ] } }
+        expect(routes).to contain_exactly(
+          [ "/api/v1/courses", "courses#index", "api_v1_courses" ],
+          [ "/api/lti/tools/:tool_id/grade", "lti_api#grade", "lti_grade" ]
+        )
         expect(result[:dynamic_routes]).to eq(1)
       end
     end
@@ -371,6 +690,47 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
             "reports" => "get \"/reports\", to: \"reports#index\"\n"
           }
           expect(build_app(dir, main: main, drawn: nested).static_call[:total_routes]).to eq(2)
+        end
+      end
+
+      # Rails runs the drawn file inside the mapper as it stands at the draw,
+      # so the file's routes take the enclosing scope, and drawing it again
+      # under another scope routes it again there, without the names the
+      # first draw took (a live RouteSet leaves them nil).
+      it "draws a file under each scope that draws it" do
+        Dir.mktmpdir do |dir|
+          scoped = <<~RUBY
+            Rails.application.routes.draw do
+              namespace :api, defaults: { format: "json" } do
+                scope module: :v1 do
+                  draw :api
+                end
+                scope module: :v0 do
+                  draw :api
+                end
+              end
+            end
+          RUBY
+          api = { "api" => <<~RUBY }
+            resources :articles, only: [:show] do
+              collection { get :search }
+            end
+            mount Sidekiq::Web => "sidekiq"
+          RUBY
+          result = build_app(dir, main: scoped, drawn: api).static_call
+
+          routes = result[:by_controller].flat_map do |controller, entries|
+            entries.map { |r| [ controller, r[:path], r[:name] ] }
+          end
+          expect(routes).to contain_exactly(
+            [ "api/v1/articles", "/api/articles/search", "search_api_articles" ],
+            [ "api/v1/articles", "/api/articles/:id", "api_article" ],
+            [ "api/v0/articles", "/api/articles/search", nil ],
+            [ "api/v0/articles", "/api/articles/:id", nil ]
+          )
+          expect(result[:mounted_engines]).to eq([ { engine: "Sidekiq::Web", path: "/api/sidekiq" } ])
+          expect(result).not_to have_key(:dynamic_routes)
+          expect(result[:note]).to include("1 file it draws")
         end
       end
 
@@ -456,6 +816,23 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
         Dir.mktmpdir do |dir|
           cycle = { "admin" => "draw(:other)\n", "other" => "draw(:admin)\n" }
           expect { build_app(dir, main: main, drawn: cycle).static_call }.not_to raise_error
+        end
+      end
+
+      it "counts an in-repo engine's own routes.rb as a file it did not read" do
+        Dir.mktmpdir do |dir|
+          introspector = build_app(dir, main: "Rails.application.routes.draw do\n  resources :posts\nend\n")
+          FileUtils.mkdir_p(File.join(dir, "plugins", "chat", "app", "models"))
+          FileUtils.mkdir_p(File.join(dir, "plugins", "chat", "config"))
+          FileUtils.touch(File.join(dir, "plugins", "chat", "plugin.rb"))
+          File.write(File.join(dir, "plugins", "chat", "config", "routes.rb"),
+                     "Chat::Engine.routes.draw do\n  resources :messages\nend\n")
+
+          result = introspector.static_call
+
+          expect(result[:in_repo_route_files]).to eq(1)
+          expect(RailsAiContext::RouteCoverage.suffix(result))
+            .to eq(", 1 in-repo engine route file not read")
         end
       end
 

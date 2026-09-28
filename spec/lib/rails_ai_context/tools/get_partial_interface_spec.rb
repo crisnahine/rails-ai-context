@@ -28,6 +28,18 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       allow(described_class).to receive(:cached_context).and_return({})
     end
 
+    it "offers only templates as available partials" do
+      File.write(File.join(@root, "app/views/pdfs/_banner.png"), "not a template")
+      FileUtils.mkdir_p(File.join(@root, "app/views/pdfs/_bits"))
+
+      text = described_class.call(partial: "missing/thing").content.first[:text]
+      available = text[/^Available: .*$/]
+
+      expect(available).to include("pdfs/summary_fields")
+      expect(available).not_to include("pdfs/banner")
+      expect(available).not_to include("pdfs/bits")
+    end
+
     it "resolves a .text.erb partial by its Rails name" do
       text = described_class.call(partial: "reports/ai_data/header").content.first[:text]
 
@@ -39,6 +51,145 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       text = described_class.call(partial: "pdfs/summary_fields").content.first[:text]
 
       expect(text).to include("...and 8 more")
+    end
+  end
+
+  describe "a partial that calls the app's own helpers" do
+    around do |example|
+      Dir.mktmpdir("partial-interface") do |dir|
+        @root = dir
+        FileUtils.mkdir_p(File.join(dir, "app/views/layouts"))
+        File.write(File.join(dir, "app/views/layouts/_head.html.erb"),
+                   "<%= theme_color_meta_tags %>\n<%= canonical_link_tag %>\n<%= admin_badge %>\n<%= title %>\n")
+        FileUtils.mkdir_p(File.join(dir, "app/helpers"))
+        File.write(File.join(dir, "app/helpers/application_helper.rb"),
+                   "module ApplicationHelper\n  include CanonicalURL::Helpers\n\n  def theme_color_meta_tags = nil\nend\n")
+        FileUtils.mkdir_p(File.join(dir, "plugins/chat/app/helpers"))
+        FileUtils.mkdir_p(File.join(dir, "plugins/chat/app/models"))
+        File.write(File.join(dir, "plugins/chat/plugin.rb"), "# plugin\n")
+        File.write(File.join(dir, "plugins/chat/app/helpers/badges_helper.rb"),
+                   "module BadgesHelper\n  def admin_badge = nil\nend\n")
+        FileUtils.mkdir_p(File.join(dir, "lib"))
+        File.write(File.join(dir, "lib/canonical_url.rb"),
+                   "module CanonicalURL\n  module Helpers\n    def canonical_link_tag(url = nil) = nil\n  end\nend\n")
+        RailsAiContext::PathResolver.clear_code_roots
+        example.run
+      end
+    end
+
+    before do
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    it "reads a call to a helper the app defines, in app/helpers or a lib module they include, as no local" do
+      text = described_class.call(partial: "layouts/head").content.first[:text]
+      locals = text[/## Local Variables\n(.*?)\n\n/m, 1].to_s
+
+      expect(locals).to include("title")
+      expect(locals).not_to include("canonical_link_tag", "theme_color_meta_tags", "admin_badge")
+    end
+  end
+
+  describe "the standard and full renderings" do
+    around do |example|
+      Dir.mktmpdir("partial-render") do |dir|
+        @root = dir
+        FileUtils.mkdir_p(File.join(dir, "app/views/widgets"))
+        File.write(File.join(dir, "app/views/widgets/_card.html.erb"), <<~ERB)
+          <%# locals: (widget:, size:) %>
+          <div class="<%= size %>"><%= widget.title %><%= widget.body %></div>
+        ERB
+        File.write(File.join(dir, "app/views/widgets/index.html.erb"),
+                   "<%= render \"widgets/card\", widget: @widget, size: \"lg\" %>\n")
+        example.run
+      end
+    end
+
+    before do
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    it "renders the standard detail byte for byte" do
+      text = described_class.call(partial: "widgets/card", detail: "standard").content.first[:text]
+
+      expect(text).to eq(<<~MD.chomp)
+        # Partial: widgets/_card.html.erb
+
+        **File:** `app/views/widgets/_card.html.erb` (2 lines)
+        **Declared locals** (Rails 7.1+ magic comment): widget, size
+
+        ## Local Variables
+        - **size**
+        - **widget** - calls: body, title
+
+        ## Rendered From (1)
+        - `app/views/widgets/index.html.erb:1` - locals: widget, size
+
+        _Next: `rails_get_view(path:"widgets/_card.html.erb")` for full file content_
+      MD
+    end
+
+    it "renders the full detail byte for byte" do
+      text = described_class.call(partial: "widgets/card", detail: "full").content.first[:text]
+
+      expect(text).to eq(<<~MD.chomp)
+        # Partial: widgets/_card.html.erb
+
+        **File:** `app/views/widgets/_card.html.erb` (2 lines)
+        **Declared locals** (Rails 7.1+ magic comment): widget, size
+
+        ## Local Variables
+        - **size**
+        - **widget** - calls: body, title
+
+        ## Rendered From (1)
+        - `app/views/widgets/index.html.erb:1` - locals: widget, size
+          ```erb
+          <%= render "widgets/card", widget: @widget, size: "lg" %>
+          ```
+
+        ## Source
+        ```erb
+        <%# locals: (widget:, size:) %>
+        <div class="<%= size %>"><%= widget.title %><%= widget.body %></div>
+
+        ```
+      MD
+    end
+
+    it "caps the render-site list per detail level" do
+      (1..26).each do |i|
+        File.write(File.join(@root, "app/views/widgets/page#{format('%02d', i)}.html.erb"),
+                   "<%= render \"widgets/card\", widget: @widget, size: \"lg\" %>\n")
+      end
+
+      standard = described_class.call(partial: "widgets/card", detail: "standard").content.first[:text]
+      full = described_class.call(partial: "widgets/card", detail: "full").content.first[:text]
+
+      expect(standard.scan("- `app/views/widgets/").size).to eq(15)
+      expect(full.scan("- `app/views/widgets/").size).to eq(25)
+      expect(standard).to include("_...and 12 more_")
+      expect(full).to include("_...and 2 more_")
+    end
+
+    it "says so when nothing renders the partial and it declares no locals" do
+      File.write(File.join(@root, "app/views/widgets/_bare.html.erb"), "<p>hi</p>\n")
+
+      text = described_class.call(partial: "widgets/bare", detail: "standard").content.first[:text]
+
+      expect(text).to include("_No local variables detected in this partial._")
+      expect(text).to include("_No render calls found for this partial._")
+    end
+
+    it "leaves both notes out of the full rendering" do
+      File.write(File.join(@root, "app/views/widgets/_bare.html.erb"), "<p>hi</p>\n")
+
+      text = described_class.call(partial: "widgets/bare", detail: "full").content.first[:text]
+
+      expect(text).not_to include("_No local variables detected")
+      expect(text).not_to include("_No render calls found")
     end
   end
 
@@ -92,6 +243,24 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       text = result.content.first[:text]
       # edit.html.erb renders the form partial
       expect(text).to include("Rendered From")
+    end
+
+    # Every Rails app has several `_form`, and answering a bare name with the
+    # first one in sorted order gave one directory's locals for another's.
+    it "asks which one instead of picking a bare name's first match" do
+      views_dir = Rails.root.join("app", "views")
+      dirs = %w[gpi_a gpi_b].map { |d| views_dir.join("#{d}_#{Process.pid}") }
+      dirs.each do |dir|
+        FileUtils.mkdir_p(dir)
+        File.write(dir.join("_ambiguous_widget.html.erb"), "<%= widget %>")
+      end
+
+      text = described_class.call(partial: "ambiguous_widget").content.first[:text]
+
+      expect(text).to include("matches")
+      dirs.each { |dir| expect(text).to include("#{File.basename(dir)}/_ambiguous_widget.html.erb") }
+    ensure
+      dirs&.each { |dir| FileUtils.rm_rf(dir) }
     end
 
     it "returns not-found for unknown partial" do

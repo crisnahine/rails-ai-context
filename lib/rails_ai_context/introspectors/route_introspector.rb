@@ -4,19 +4,13 @@ module RailsAiContext
   module Introspectors
     # Extracts route information from the Rails router including
     # HTTP verb, path, controller#action, and route constraints.
-    class RouteIntrospector
+    class RouteIntrospector < Base
       extend StaticTier
       static_tier :alternate_source
 
       # A drawn file can draw again. Rails allows it; this stops a cycle of
       # symlinked or mutually-drawing files from walking forever.
       MAX_DRAW_DEPTH = 5
-
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
 
       # @return [Hash] routes grouped by controller
       def call
@@ -28,7 +22,7 @@ module RailsAiContext
           # them: Rails registers PATCH and PUT separately for one update
           # action, and a raw total here left the generated context files
           # quoting a grand total their own app-route number cannot reach.
-          total_routes: Tools::BaseTool.dedupe_put_patch_routes(routes).size,
+          total_routes: RouteCoverage.dedupe_put_patch_routes(routes).size,
           by_controller: group_by_controller(routes),
           api_namespaces: api_namespaces(routes),
           mounted_engines: detect_mounted_engines,
@@ -42,9 +36,9 @@ module RailsAiContext
           # tier already counts it as a construct it did not expand.
           dynamic = count_controllerless_constructs
           result[:dynamic_routes] = dynamic if dynamic.positive?
+          engine_routes = booted_engine_routes
+          result[:engine_routes] = engine_routes if engine_routes.any?
         end
-      rescue => e
-        { error: e.message }
       end
 
       # Static tier: answer route questions from config/routes.rb and the
@@ -55,21 +49,24 @@ module RailsAiContext
       # redirect target) are counted in :dynamic_routes rather than
       # fabricated.
       def static_call
-        routes_path = File.join(app.root.to_s, "config", "routes.rb")
-        return { error: "config/routes.rb not found in #{app.root}" } unless File.exist?(routes_path)
+        top_files, computed = route_files
+        return { error: "config/routes.rb not found in #{app.root}" } if top_files.empty?
 
-        records, mounts, files = walk_routes_file(routes_path)
-        entries = records.select { |r| r[:type] == :route }
+        records, mounts, files = walk_route_files(top_files)
+        # What an app draws into an engine's table is the engine's, which the
+        # booted tier's Rails.application.routes holds only as the mount.
+        app_records, engine_records = records.partition { |r| r[:engine].nil? }
+        entries = app_records.select { |r| r[:type] == :route }
         # A followed `draw` is no longer unexpanded - its routes are in the
         # list above. Counting it would overstate what is missing by exactly
         # the number of files this pass just read.
-        dynamic = records.count { |r| r[:type] == :dynamic && !r[:followed] }
+        dynamic = app_records.count { |r| r[:type] == :dynamic && !r[:followed] }
 
         result = {
           # Merged, for the reason `call` gives above: a raw total here made the
           # generated files say "8 total" where rails_get_routes, which merges
           # for itself, said 7 on the same `resources :posts`.
-          total_routes: Tools::BaseTool.dedupe_put_patch_routes(entries).size,
+          total_routes: RouteCoverage.dedupe_put_patch_routes(entries).size,
           by_controller: group_by_controller(entries),
           api_namespaces: api_namespaces(entries),
           mounted_engines: mounts.map { |m| { engine: m[:engine], path: m[:path] } },
@@ -77,13 +74,24 @@ module RailsAiContext
           # construction, so the booted tier's count has a static answer too.
           unrouted_mounts: mounts.size,
           root_route: static_root_route(entries),
-          note: "Parsed statically from #{static_sources_phrase(files)} (app not booted)",
+          note: "Parsed statically from #{static_sources_phrase(files, top_files)}" \
+                "#{computed ? ', plus route files config/application.rb computes (not read)' : ''} (app not booted)",
           confidence: Confidence::STATIC
         }
         result[:dynamic_routes] = dynamic if dynamic.positive?
+        engine_routes = engine_route_groups(engine_records, mounts)
+        result[:engine_routes] = engine_routes if engine_routes.any?
+        unread = in_repo_route_files.size
+        result[:in_repo_route_files] = unread if unread.positive?
         result
-      rescue => e
-        { error: e.message }
+      end
+
+      # An in-repo engine's routes.rb draws into its own table, which only boot can place, so
+      # the count says those routes were skipped instead of reading as the whole total.
+      def in_repo_route_files
+        PathResolver.code_roots(app.root.to_s)
+          .map { |dir| File.join(dir, "config", "routes.rb") }
+          .select { |path| File.exist?(path) }
       end
 
       # What config/routes.rb and every file it draws mount, from source. The
@@ -92,11 +100,113 @@ module RailsAiContext
       #
       # @return [Array<Hash>] { engine:, path:, location: } per mounted app
       def static_mounts
-        routes_path = File.join(app.root.to_s, "config", "routes.rb")
-        return [] unless File.exist?(routes_path)
-
-        _records, mounts, _files = walk_routes_file(routes_path)
+        top_files, _computed = route_files
+        _records, mounts, _files = walk_route_files(top_files)
         mounts
+      end
+
+      # Routes drawn into each engine, under the path the app mounts it at and
+      # named through the engine's route proxy (`spree.admin_orders_path`).
+      def engine_route_groups(engine_records, mounts)
+        engine_records.group_by { |r| r[:engine] }.map do |engine, records|
+          routes = records.select { |r| r[:type] == :route }
+          dynamic = records.count { |r| r[:type] == :dynamic && !r[:followed] }
+          mount_records = mounts.select { |m| m[:engine] == engine }
+          mount_record = mount_records.first
+          mount = mount_record&.dig(:path)
+          proxy = route_proxy(engine, mount_record)
+          {
+            engine: engine,
+            mount: mount,
+            # Merged like the app's table, so the two counts beside each other count alike.
+            routes: RouteCoverage.dedupe_put_patch_routes(routes.map do |route|
+              route.except(:engine).merge(
+                path: mount && mount != "/" ? "#{mount.chomp("/")}#{route[:path]}" : route[:path],
+                name: route[:name] && "#{proxy}.#{route[:name]}"
+              ).compact
+            end),
+            dynamic_routes: dynamic.positive? ? dynamic : nil,
+            also_mounted_at: mount_records.drop(1).map { |m| m[:path] }.presence
+          }.compact
+        end
+      end
+
+      # Rails names the proxy after the mount: its `as:`, else the engine's
+      # engine_name, under the names of the scopes around it.
+      def route_proxy(engine, mount)
+        name = mount&.dig(:as) || engine_name(engine)
+        [ mount&.dig(:name_prefix), name ].compact.join("_")
+      end
+
+      # `engine_name "x"`, else `isolate_namespace Mod` as mod, else Rails'
+      # railtie name from the class (wiki/engine -> wiki_engine).
+      def engine_name(engine)
+        path = PathResolver.file_for_constant(app.root.to_s, engine)
+        # An engine outside the repo has no file here to read its name from.
+        return Listeners::RoutesDslListener.engine_namespace(engine) unless path
+
+        source = SafeFile.read(path)
+        declared = AstWalk.each(AstCache.parse_string(source).value)
+          .find { |n| n.is_a?(Prism::CallNode) && n.receiver.nil? && n.name == :engine_name }&.then { |c| literal_arg(c) }
+        isolated = TableName.isolated_namespaces(source).first
+        declared || isolated&.underscore&.tr("/", "_") || engine.underscore.tr("/", "_")
+      rescue StandardError, ScriptError => e
+        RailsAiContext.debug_fail(e, Listeners::RoutesDslListener.engine_namespace(engine), label: "engine_name #{engine}")
+      end
+
+      def literal_arg(call)
+        arg = call.arguments&.arguments&.first
+        arg.unescaped if arg.is_a?(Prism::SymbolNode) || arg.is_a?(Prism::StringNode)
+      end
+
+      # Rails' route files in its order: config/routes.rb or config.paths["config/routes.rb"]
+      # from application.rb. Returns [paths, whether part of the list is computed].
+      def route_files
+        root = app.root.to_s
+        list = [ "config/routes.rb" ]
+        computed = false
+        app_rb = File.join(root, "config", "application.rb")
+        if File.file?(app_rb)
+          SourceIntrospector.walk(app_rb, { files: Listeners::RouteFilesListener })[:files].each do |entry|
+            computed ||= entry[:computed] == true
+            found = Array(entry[:paths]) + Array(entry[:globs]).flat_map { |glob| Dir.glob(glob, base: root).sort }
+            list =
+              case entry[:op]
+              when :set then found
+              when :prepend then found + list
+              else list + found
+              end
+          end
+        end
+        [ contained_route_files(root, list), computed ]
+      end
+
+      def contained_route_files(root, list)
+        real_root = File.realpath(root)
+        list.filter_map do |relative|
+          path = File.expand_path(relative, root)
+          next unless File.file?(path)
+
+          path if SafePath.contained?(File.realpath(path), real_root)
+        end.uniq
+      rescue SystemCallError
+        []
+      end
+
+      # Both arms of an if/else can mount one app at one path; a mount is
+      # named once per app and path.
+      def walk_route_files(top_files)
+        already_read = []
+        @route_names = Set.new
+        records, mounts, files = top_files.each_with_object([ [], [], [] ]) do |path, (all_records, all_mounts, all_files)|
+          next if already_read.include?([ path, [] ])
+
+          sub_records, sub_mounts, sub_files = walk_routes_file(path, already_read)
+          all_records.concat(sub_records)
+          all_mounts.concat(sub_mounts)
+          all_files.concat(sub_files)
+        end
+        [ records, mounts.uniq { |mount| [ mount[:engine], mount[:path] ] }, files.uniq ]
       end
 
       private
@@ -108,13 +218,16 @@ module RailsAiContext
       # it is a plain file read.
       #
       # Returns the merged records, mounts, and the files actually read.
-      def walk_routes_file(path, already_read = [], depth = 0)
+      # A drawn file runs inside the scope its `draw` sits in, so it is walked
+      # with that scope, and read once per scope that draws it.
+      def walk_routes_file(path, already_read = [], depth = 0, draw = {})
         return [ [], [], [] ] if depth > MAX_DRAW_DEPTH
 
-        already_read << path
+        scope = draw[:scope] || []
+        already_read << [ path, scope ]
         ast = SourceIntrospector.walk(path, {
-          routes: -> { Listeners::RoutesDslListener.new },
-          mounts: -> { Listeners::MountListener.new }
+          routes: -> { Listeners::RoutesDslListener.new(scope: scope, route_set: method(:route_set_prefixes), names: @route_names) },
+          mounts: -> { Listeners::MountListener.new(prefix: draw[:prefix], name_prefix: draw[:name_prefix]) }
         })
         records = ast[:routes] || []
         mounts = ast[:mounts] || []
@@ -124,16 +237,16 @@ module RailsAiContext
           target = draw_target_path(record[:target])
           next unless target
 
-          # Two files can draw the same third one, and a cycle brings the walk
-          # back to a file it started at. Both mean the routes are already in
+          # Two files can draw the same third one under one scope, and a cycle
+          # brings the walk back to a file it started at. Both mean the routes are already in
           # the list, so the draw is expanded even though this branch will not
           # read it again - and this is also what stops the recursion.
-          if already_read.include?(target)
+          if already_read.include?([ target, record[:scope] ])
             record[:followed] = true
             next
           end
 
-          sub_records, sub_mounts, sub_files = walk_draw_target(target, already_read, depth)
+          sub_records, sub_mounts, sub_files = walk_draw_target(target, already_read, depth, record)
           # Only the depth cap and an unreadable file get here, and both mean
           # routes are missing. Marking the draw followed would drop the caveat
           # precisely where it is needed.
@@ -148,16 +261,59 @@ module RailsAiContext
         [ records, mounts, files ]
       end
 
+      # `ApiRouteSet::V1.draw(self)` hands the block to an app class. Its
+      # `self.prefix` and `mapper_prefix`, when they return a literal, are the
+      # path and name prefixes; a class the app does not define answers nil.
+      def route_set_prefixes(name)
+        @route_set_prefixes ||= {}
+        return @route_set_prefixes[name] if @route_set_prefixes.key?(name)
+
+        @route_set_prefixes[name] = read_route_set(name)
+      end
+
+      def read_route_set(name)
+        path = PathResolver.namespace_files(app.root.to_s, name).first
+        return unless path
+
+        classes = DeclaredConstant.constants(AstCache.parse(path).value)
+          .each_with_object({}) { |(qualified, node), found| found[qualified] ||= node if node.is_a?(Prism::ClassNode) }
+        return unless classes.key?(name)
+
+        { prefix: literal_method(classes, name, :prefix, singleton: true),
+          name_prefix: literal_method(classes, name, :mapper_prefix, singleton: false) }
+      rescue StandardError, ScriptError => e
+        RailsAiContext.debug_fail(e, nil, label: "route set #{name}")
+      end
+
+      # The string a method returns when its body is that one literal, looked
+      # up through superclasses defined in the same file.
+      def literal_method(classes, name, method, singleton:, seen: [])
+        klass = classes[name]
+        return if klass.nil? || seen.include?(name)
+
+        found = Array(klass.body&.body).find do |d|
+          d.is_a?(Prism::DefNode) && d.name == method && d.receiver.is_a?(Prism::SelfNode) == singleton
+        end
+        if found
+          body = Array(found.body&.body)
+          return body.first.unescaped if body.size == 1 && body.first.is_a?(Prism::StringNode)
+
+          return
+        end
+
+        parent = klass.superclass&.slice&.delete_prefix("::")
+        parent && literal_method(classes, parent, method, singleton: singleton, seen: seen + [ name ])
+      end
+
       # A drawn file that cannot be parsed - over AstCache's size ceiling, or
       # syntax-broken - must cost its own routes, not the routing table. Before
       # this walk existed only config/routes.rb could fail the whole section;
       # letting the raise through would hand that power to every file it draws.
       # The draw stays unmarked, so the count already says routes are missing.
-      def walk_draw_target(target, already_read, depth)
-        walk_routes_file(target, already_read, depth + 1)
+      def walk_draw_target(target, already_read, depth, draw)
+        walk_routes_file(target, already_read, depth + 1, draw)
       rescue StandardError, ScriptError => e
-        $stderr.puts "[rails-ai-context] draw target #{target} skipped: #{e.message}" if ENV["DEBUG"]
-        [ [], [], [] ]
+        RailsAiContext.debug_fail(e, [ [], [], [] ], label: "draw target #{target}")
       end
 
       # `draw(:"admin/users")` is legal and resolves under config/routes/, but
@@ -182,19 +338,53 @@ module RailsAiContext
         nil
       end
 
-      def static_sources_phrase(files)
+      def static_sources_phrase(files, top_files = files.first(1))
         root = "#{app.root}#{File::SEPARATOR}"
         names = files.map { |f| f.delete_prefix(root) }
-        return names.first if names.size == 1
+        tops = top_files.map { |f| f.delete_prefix(root) }
+        drawn = names.size - tops.size
+        lead = tops.size == 1 ? tops.first : "#{tops.join(', ')} (config.paths)"
+        return lead if drawn <= 0
 
-        "#{names.first} and #{CountPhrase.call(names.size - 1, "file")} it draws"
+        "#{lead} and #{CountPhrase.call(drawn, "file")} #{tops.size == 1 ? 'it draws' : 'they draw'}"
       end
 
       def extract_routes
         # Force Rails to reload routes if routes.rb has changed
         app.routes_reloader&.execute_if_updated rescue nil
 
-        app.routes.routes.filter_map do |route|
+        table_routes(app.routes)
+      end
+
+      # Booted, each mounted engine's table under its mount and the mount's
+      # name, as `bin/rails routes` prints it. Boot holds one table per engine,
+      # so this is the whole of it, gem-drawn routes included.
+      def booted_engine_routes
+        groups = mounted_routes.filter_map do |mount|
+          engine = mount.app.respond_to?(:app) ? mount.app.app : mount.app
+          next unless engine.is_a?(Class) && engine < ::Rails::Engine
+
+          prefix = mount_path(mount).chomp("/")
+          rows = table_routes(engine.routes).map do |route|
+            path = route[:path] == "/" && !prefix.empty? ? prefix : "#{prefix}#{route[:path]}"
+            route.merge(path: path, name: route[:name] && "#{mount.name}.#{route[:name]}").compact
+          end
+          next if rows.empty?
+
+          { engine: engine.name, mount: mount_path(mount), whole_table: true,
+            routes: RouteCoverage.dedupe_put_patch_routes(rows) }
+        end
+        # One group per engine, listed under its first mount; the rest are named.
+        groups.group_by { |group| group[:engine] }.map do |_engine, same|
+          others = same.drop(1).map { |group| group[:mount] }
+          others.any? ? same.first.merge(also_mounted_at: others) : same.first
+        end
+      rescue => e
+        RailsAiContext.debug_fail(e, [], label: "booted_engine_routes")
+      end
+
+      def table_routes(route_set)
+        route_set.routes.filter_map do |route|
           # Journey::Route exposes the flag as a plain attribute reader
           # (`internal`), not a predicate - a respond_to?(:internal?) guard
           # never matches and would let Rails' info/mailers routes through.

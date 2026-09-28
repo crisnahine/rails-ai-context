@@ -55,8 +55,8 @@ RSpec.describe RailsAiContext::Tools::GetGems do
       it "includes config hints for known gems" do
         result = described_class.call
         text = result.content.first[:text]
-        expect(text).to include("config/initializers/devise.rb")
         expect(text).to include("config/storage.yml")
+        expect(text).not_to include("config/initializers/devise.rb")
       end
 
       # The app names its file sidekiq_production.yml, and the hint pointed
@@ -179,6 +179,83 @@ RSpec.describe RailsAiContext::Tools::GetGems do
       api_pos = text.index("## Api")
       auth_pos = text.index("## Auth")
       expect(api_pos).to be < auth_pos
+    end
+  end
+
+  describe "a config hint names a file the app has" do
+    around do |example|
+      Dir.mktmpdir("gem-config-hints") do |dir|
+        @root = dir
+        FileUtils.mkdir_p(File.join(dir, "config/initializers"))
+        FileUtils.mkdir_p(File.join(dir, "app/policies"))
+        File.write(File.join(dir, "config/initializers/3_omniauth.rb"), "")
+        File.write(File.join(dir, "config/initializers/devise.rb"), "")
+        File.write(File.join(dir, "config/initializers/001-redis.rb"), "")
+        example.run
+      end
+    end
+
+    before do
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      gems_data[:notable_gems] = [
+        { name: "devise", version: "4.9.3", category: "auth", note: "Authentication framework" },
+        { name: "omniauth", version: "2.1.0", category: "auth", note: "Multi-provider auth" },
+        { name: "pundit", version: "2.3.1", category: "auth", note: "Authorization framework" },
+        { name: "pg_search", version: "2.3.6", category: "database", note: "Postgres search" },
+        { name: "redis", version: "5.1.0", category: "database", note: "Redis client" },
+        { name: "aws-sdk-s3", version: "1.140.0", category: "files", note: "AWS S3 storage" }
+      ]
+    end
+
+    it "does not print the path twice when the note already names it" do
+      gems_data[:notable_gems] = [
+        { name: "rack-cors", version: "2.0.2", category: "utilities",
+          note: "CORS middleware. Origins and resources in config/initializers/rack-cors.rb." }
+      ]
+      FileUtils.touch(File.join(@root, "config/initializers/rack-cors.rb"))
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("Origins and resources in config/initializers/rack-cors.rb.")
+      expect(text).not_to include("_(config:")
+    end
+
+    it "finds an initializer the app numbered" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("_(config: config/initializers/3_omniauth.rb)_")
+    end
+
+    it "prints no hint for a config file the app does not have" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("**redis**")
+      expect(text).not_to include("config/storage.yml")
+    end
+
+    it "finds an initializer with a hyphenated load-order prefix" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("_(config: config/initializers/001-redis.rb)_")
+    end
+
+    it "still names an initializer the app spells plainly" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("_(config: config/initializers/devise.rb)_")
+    end
+
+    it "keeps a directory convention the app has" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("_(config: app/policies/)_")
+    end
+
+    it "drops a directory convention the app lacks" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("**pg_search**")
+      expect(text).not_to include("include PgSearch::Model")
     end
   end
 

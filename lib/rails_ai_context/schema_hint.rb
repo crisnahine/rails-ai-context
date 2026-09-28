@@ -12,17 +12,5 @@ module RailsAiContext
     :validations,   # [{kind: "presence", attributes: ["title"]}, ...]
     :primary_key,   # "id"
     :confidence     # "[VERIFIED]", "[STATIC]" or "[INFERRED]"
-  ) do
-    def verified?
-      confidence == "[VERIFIED]"
-    end
-
-    def column_names
-      columns.map { |c| c[:name] }
-    end
-
-    def association_names
-      associations.map { |a| a[:name] }
-    end
-  end
+  )
 end

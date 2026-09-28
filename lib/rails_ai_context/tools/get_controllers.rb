@@ -159,10 +159,6 @@ module RailsAiContext
             end
             lines << pagination_hint unless pagination_hint.empty?
             text_response(lines.join("\n"))
-
-          else
-            list = paginated_names.map { |c| "- #{c}" }.join("\n")
-            text_response("# Controllers (#{page[:total]})\n\n#{list}#{pagination_hint}")
           end
         end
       end
@@ -364,12 +360,10 @@ module RailsAiContext
       end
 
       private_class_method def self.filter_line(filter)
-        line = "- `#{filter[:kind]}` **#{filter[:name]}**"
-        line += " _(from #{filter[:from]})_" if filter[:from]
-        line += " _(#{filter[:provenance]})_" if !filter[:from] && filter[:provenance]
+        line = "- `#{filter[:kind]}` **#{filter[:name]}**#{Serializers::SectionFacts.filter_origin(filter)}"
         line += " (only: #{filter[:only].join(', ')})" if filter[:only]&.any?
         line += " (except: #{filter[:except].join(', ')})" if filter[:except]&.any?
-        line + Serializers::SectionFacts.skip_condition_tail(filter)
+        line + Serializers::SectionFacts.filter_condition_tail(filter)
       end
 
       # Extract render map from action source: redirects, renders, and side effects
@@ -377,8 +371,9 @@ module RailsAiContext
         redirects = []
         renders = []
         side_effects = []
+        enqueues = Introspectors::SourceCalls.enqueue_calls(code, enqueue_helpers).group_by { |hit| hit[:line] }
 
-        code.each_line do |line|
+        code.each_line.with_index(1) do |line, number|
           stripped = line.strip
 
           # Detect redirect_to calls
@@ -412,9 +407,7 @@ module RailsAiContext
             obj = stripped.match(/(\S+)\.destroy/)&.send(:[], 1) || "object"
             side_effects << "#{obj}.destroy"
           end
-          if (m = stripped.match(/(\S+)\.perform_later/))
-            side_effects << "#{m[1]}.perform_later"
-          end
+          Array(enqueues[number]).each { |hit| side_effects << "#{hit[:receiver]}.#{hit[:name]}" }
           if (m = stripped.match(/(\S+)\.(increment_\w+[!]?)/))
             side_effects << "#{m[1]}.#{m[2]}"
           end
@@ -460,6 +453,11 @@ module RailsAiContext
           chain[:own].each { |f| lines << filter_line(f) }
           chain[:skipped].each { |skipped| lines << "- ~~#{skipped}~~ _(skipped)_" }
         end
+        if info[:concerns_unread]&.any?
+          lines << "" << "_#{RailsAiContext::Confidence::UNAVAILABLE} " \
+                         "#{CountPhrase.call(info[:concerns_unread].size, "included module")} not read, " \
+                         "so a filter declared there is missing from this list: #{info[:concerns_unread].join(', ')}_"
+        end
 
         if info[:strong_params]&.any?
           lines << "" << "## Strong Params"
@@ -501,8 +499,9 @@ module RailsAiContext
         ctrl_path = RailsAiContext::Payload.controller_route_key(ctx, name)
         # The model is a guess off the path, so it is only offered when the
         # payload carries one by that name.
-        model_name = ctrl_path.split("/").last.singularize.camelize
-        model_name = nil unless RailsAiContext::Payload.models(ctx).key?(model_name)
+        model_name = RailsAiContext::Introspectors::TableName.model_for(
+          ctrl_path.split("/").last.singularize.camelize, nil, RailsAiContext::Payload.models(ctx)
+        )
         lines << ""
         lines << "_Next: `rails_get_routes(controller:\"#{ctrl_path}\")` for routes"
         lines << " | `rails_get_model_details(model:\"#{model_name}\")` for model" if model_name

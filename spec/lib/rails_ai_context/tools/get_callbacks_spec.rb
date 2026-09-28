@@ -29,6 +29,56 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
     allow(described_class).to receive(:cached_context).and_return({ models: models })
   end
 
+  # No example carried the key the introspector fills for a conditional
+  # callback, so the tool could have dropped every condition and stayed green.
+  # One `after_commit on: %i[create update] do` block showed as two callbacks.
+  describe "one after_commit declared for several events" do
+    it "is one callback with its events" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "listing.rb"),
+                   "class Listing < ApplicationRecord\n  after_commit on: %i[create update] do\n    sync\n  end\nend\n")
+        models = RailsAiContext::Introspectors::ModelIntrospector.new(RailsAiContext::StaticApp.new(dir)).static_call
+        described_class.reset_cache!
+        allow(described_class).to receive(:cached_context).and_return(models: models)
+
+        text = described_class.call(model: "Listing").content.first[:text]
+
+        expect(text.scan("[inline_block]").size).to eq(1)
+        expect(text).to include("on: [:create, :update]")
+      end
+    end
+  end
+
+  describe "a conditional callback" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Order" => {
+            callbacks: { "after_save" => %w[sync sync], "before_save" => %w[stamp] },
+            callback_conditions: { "after_save" => [ { if: :a? }, { if: '-> { b? }' } ] },
+            concerns: []
+          }
+        }
+      )
+    end
+
+    it "names each declaration's own condition" do
+      text = described_class.call(model: "Order", detail: "standard").content.first[:text]
+
+      expect(text).to include("`:sync` (if: :a?), `:sync` (if: -> { b? })")
+      expect(text).to include("`:stamp`")
+      expect(text).not_to include("`:stamp` (")
+    end
+
+    it "names the conditions in the listing too" do
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("(if: :a?)")
+    end
+  end
+
   # The payload key the introspector fills, built the way it builds it, so
   # these render what a real run would hand the tool.
   def payload_concern_callbacks(root, concern_name)
@@ -339,12 +389,12 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
       expect(text.scan("after_commit :sync, on: [:create, :update]").size).to eq(1)
     end
 
-    # A quoted marker reads as a string the app wrote.
-    it "leaves an unresolved option value unquoted" do
+    # A marker says nothing about when the callback runs; the line does.
+    it "names a lambda condition with the line the file wrote" do
       text = described_class.call(model: "Status", detail: "standard").content.first[:text]
 
-      expect(text).to include("before_validation :relax_policy, if: [INFERRED]")
-      expect(text).not_to include(%(if: "[INFERRED]"))
+      expect(text).to include("before_validation :relax_policy, if: -> { quote_policy? }")
+      expect(text).not_to include("[INFERRED]")
     end
 
     it "attaches no method source to a block callback at detail:full" do

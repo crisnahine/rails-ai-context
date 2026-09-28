@@ -9,10 +9,72 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
     end
   end
 
+  # A first-three-characters prefix scan answered
+  # `Api::V1::Admin::UserController` with `Api::V1::AddressesController`,
+  # because both start with "api". Ruby's own spell checker knows what a typo
+  # looks like.
+  describe ".find_closest_matches" do
+    def suggest(input, available)
+      described_class.send(:find_closest_matches, input, available)
+    end
+
+    it "suggests the nearest name, not one sharing three characters" do
+      available = %w[Api::V1::AddressesController Api::V1::Admin::UsersController]
+
+      expect(suggest("Api::V1::Admin::UserController", available).first)
+        .to eq("Api::V1::Admin::UsersController")
+    end
+
+    it "suggests a name with a letter missing" do
+      expect(suggest("Lsting", %w[Listing Payment User])).to eq(%w[Listing])
+    end
+
+    it "suggests over the last segment when the namespace is wrong" do
+      expect(suggest("Billing::Invoice", %w[Admin::Invoice User]).first).to eq("Admin::Invoice")
+    end
+
+    it "suggests the app's own locale for a one-letter query" do
+      expect(suggest("e", %w[en])).to eq(%w[en])
+      expect(suggest("e", %w[en de fr])).to eq(%w[en])
+    end
+
+    it "still suggests the whole name an abbreviation stands for" do
+      expect(suggest("prod", %w[development production staging])).to eq(%w[production])
+      expect(suggest("en-GB", %w[en fr])).to eq(%w[en])
+    end
+
+    it "suggests nothing for a name nothing resembles" do
+      expect(suggest("zzqqxx", %w[Listing Payment])).to eq([])
+    end
+
+    it "answers the exact match rather than a suggestion" do
+      expect(suggest("Listing", %w[Listing ListingItem])).to eq(%w[Listing])
+    end
+  end
+
   describe ".registered_tools" do
     it "returns all 45 built-in tool classes" do
       tools = described_class.registered_tools
       expect(tools.size).to eq(45)
+    end
+
+    # Registration order is reversed here so the sort has something to undo.
+    it "lists the tools in tool_name order whatever order they registered in" do
+      registered = described_class.registered_tools
+      allow(described_class).to receive(:descendants).and_return(registered.reverse)
+
+      names = described_class.registered_tools.map(&:tool_name)
+
+      expect(names).to eq(registered.map(&:tool_name).sort)
+      expect(names.size).to eq(45)
+    end
+
+    it "sorts past a tool that has no name yet" do
+      registered = described_class.registered_tools
+      nameless = double("tool", tool_name: nil, abstract?: false)
+      allow(described_class).to receive(:descendants).and_return(registered + [ nameless ])
+
+      expect(described_class.registered_tools.first).to be(nameless)
     end
 
     it "excludes BaseTool itself" do
@@ -40,6 +102,8 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
   end
 
   describe ".descendants" do
+    before { described_class.registered_tools }
+
     it "tracks all subclasses" do
       expect(described_class.descendants).to be_an(Array)
       expect(described_class.descendants.size).to eq(45)

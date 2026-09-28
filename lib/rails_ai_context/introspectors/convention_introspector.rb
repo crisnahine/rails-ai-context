@@ -4,15 +4,9 @@ module RailsAiContext
   module Introspectors
     # Detects high-level Rails conventions and patterns in use,
     # giving AI assistants critical context about the app's architecture.
-    class ConventionIntrospector
+    class ConventionIntrospector < Base
       extend StaticTier
       static_tier :runtime_only
-
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
 
       # @return [Hash] detected conventions and patterns
       def call
@@ -27,14 +21,10 @@ module RailsAiContext
 
       private
 
-      def root
-        app.root.to_s
-      end
-
       def detect_architecture
         arch = []
         arch << "api_only" if app.config.api_only
-        arch << "hotwire" if dir_exists?("app/javascript/controllers") || gem_present?("turbo-rails")
+        arch << "hotwire" if stimulus? || gem_present?("turbo-rails")
         arch << "graphql" if dir_exists?("app/graphql")
         arch << "grape_api" if dir_exists?("app/api")
         arch << "service_objects" if dir_exists?("app/services")
@@ -43,7 +33,7 @@ module RailsAiContext
         arch << "presenters" if dir_exists?("app/presenters") || dir_exists?("app/decorators")
         arch << "view_components" if dir_exists?("app/components")
         arch << "phlex" if gem_present?("phlex-rails")
-        arch << "stimulus" if dir_exists?("app/javascript/controllers")
+        arch << "stimulus" if stimulus?
         arch << "importmaps" if file_exists?("config/importmap.rb")
         arch << "concerns_models" if concern_files_exist?("app/models/concerns")
         arch << "concerns_controllers" if concern_files_exist?("app/controllers/concerns")
@@ -80,6 +70,18 @@ module RailsAiContext
           all_macros = Set.new
           all_association_options = []
 
+          app_model_names = model_records.filter_map do |record|
+            DeclaredConstant.resolve(record.source, record.path_name) if DeclaredConstant.declares_class?(record.source)
+          end
+          # Source-choosing, so a structure.sql app answers these schema
+          # questions instead of falling to the looser source scans below.
+          schema = SchemaReader.for(root)
+          schema_readable = schema.tables.any?
+
+          has_sti_subclass = false
+          has_inheritance_column = false
+          has_current_attributes = false
+
           model_records.each do |record|
             ast = SourceIntrospector.walk_source(record.source, {
               macros: -> {
@@ -94,28 +96,16 @@ module RailsAiContext
                 )
               },
               builtin_macros: Listeners::MacrosListener,
-              associations: Listeners::AssociationsListener
+              associations: Listeners::AssociationsListener,
+              # self.inheritance_column= is an assignment via CallNode with self receiver
+              inheritance: -> { Listeners::ChainedCallListener.new(:inheritance_column=) }
             })
 
             ast[:macros].each { |h| all_macros << h[:macro] }
             ast[:builtin_macros].each { |h| all_macros << h[:macro] }
             ast[:associations].each { |a| all_association_options << a[:options] }
-          end
+            has_inheritance_column = true if ast[:inheritance].any? { |call| sti_column?(call[:values].first) }
 
-          # STI detection via AST: extract parent class from ClassNode, check schema
-          app_model_names = model_records.filter_map do |record|
-            DeclaredConstant.resolve(record.source, record.path_name) if DeclaredConstant.declares_class?(record.source)
-          end
-          # Source-choosing, so a structure.sql app answers these schema
-          # questions instead of falling to the looser source scans below.
-          schema = SchemaReader.for(root)
-          schema_readable = schema.tables.any?
-
-          has_sti_subclass = false
-          has_inheritance_column = false
-          has_current_attributes = false
-
-          model_records.each do |record|
             superclass = extract_superclass_path(record.source)
             if superclass && superclass != "ApplicationRecord" && app_model?(superclass, app_model_names)
               # Only the dump says whether the parent table carries a type
@@ -125,12 +115,6 @@ module RailsAiContext
             end
 
             has_current_attributes = true if superclass == "ActiveSupport::CurrentAttributes"
-
-            # self.inheritance_column= is an assignment via CallNode with self receiver
-            inheritance_check = SourceIntrospector.walk_source(record.source, {
-              inh: -> { Listeners::ChainedCallListener.new(:inheritance_column=) }
-            })
-            has_inheritance_column = true if inheritance_check[:inh].any?
           end
 
           # A soft-delete column is a schema fact, so prefer the dump. Apps on
@@ -270,10 +254,23 @@ module RailsAiContext
         [ parent.demodulize.underscore.pluralize, parent.underscore.tr("/", "_").pluralize ].uniq
       end
 
+      # `self.inheritance_column = nil`, `false` or `:_type_disabled` is how an
+      # app turns STI off, so only a column name says it is on.
+      def sti_column?(value)
+        !value.nil? && !%w[false _type_disabled].include?(value.to_s)
+      end
+
       # The full superclass path (e.g. "ActiveSupport::CurrentAttributes") of
       # the first class in the file that names one.
+
       def extract_superclass_path(source)
         DeclaredConstant.declarations(source).filter_map(&:superclass).first
+      end
+
+      def stimulus?
+        return @stimulus if defined?(@stimulus)
+
+        @stimulus = StimulusIntrospector.used?(root.to_s)
       end
 
       def dir_exists?(relative_path)
@@ -281,10 +278,13 @@ module RailsAiContext
       end
 
       # A freshly-generated Rails app ships empty concerns/ directories (holding
-      # only a .keep file), so directory existence alone isn't evidence the
-      # pattern is in use. Require at least one real Ruby file inside.
+      # only a .keep file), and some apps keep only validator classes there
+      # (one app keeps 37), so the claim needs one file that declares no class: a module.
       def concern_files_exist?(relative_path)
-        Dir.glob(File.join(root, relative_path, "**", "*.rb")).any?
+        Dir.glob(File.join(root, relative_path, "**", "*.rb")).any? do |path|
+          source = SafeFile.read(path)
+          source && !DeclaredConstant.declares_class?(source)
+        end
       end
 
       def file_exists?(relative_path)

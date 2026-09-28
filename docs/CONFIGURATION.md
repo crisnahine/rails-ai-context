@@ -88,7 +88,7 @@ config file is written. Before v5.27.0 an empty list wrote every tool's files.
 | `introspectors` | Array of symbols | (from preset) | Override the introspector list directly |
 | `generate_root_files` | Boolean | `true` | Set `false` to generate split rules only, no root CLAUDE.md/AGENTS.md |
 | `anti_hallucination_rules` | Boolean | `true` | Embed 6-rule verification protocol in generated context files |
-| `claude_max_lines` | Integer | `150` | Max lines for compact context files |
+| `claude_max_lines` | Integer | `150` | Max non-blank lines in a compact context file's gem-managed block, the `<!-- BEGIN/END rails-ai-context -->` markers included. Over budget, data lines are cut and the Commands, Warnings, Rules and MCP-tools sections kept whole |
 
 ### MCP Server
 
@@ -102,7 +102,7 @@ config file is written. Before v5.27.0 an empty list wrote every tool's files.
 | `auto_mount` | Boolean | `false` | - | Auto-mount Rack middleware for HTTP transport |
 | `http_path` | String | `"/mcp"` | - | HTTP endpoint path |
 | `http_bind` | String | `"127.0.0.1"` | - | HTTP bind address |
-| `http_port` | Integer | `6029` | 1–65535 | HTTP listen port |
+| `http_port` | Integer | `6029` | 1 to 65535 | HTTP listen port |
 
 ### Cross-Tool Hydration
 
@@ -122,7 +122,7 @@ config file is written. Before v5.27.0 an empty list wrote every tool's files.
 | `excluded_middleware` | Array | 25 framework middleware | Middleware to skip in listing |
 | `excluded_paths` | Array | `["node_modules", "tmp", "log", "vendor", ".git", "doc", "docs"]` | Paths excluded from search |
 | `excluded_association_names` | Array | 7 framework associations | Association names to hide from model output |
-| `excluded_concerns` | Array of Regex or String | Framework concerns | Concerns to hide everywhere they are listed |
+| `excluded_concerns` | Array of Regex or String | Framework concerns | Concerns to hide everywhere they are listed. Each default names a whole namespace (`ActiveRecord` and `ActiveRecord::...`), so an app module such as `ActiveRecordLikeInterface` is not hidden |
 
 A hidden concern's associations, scopes, callbacks and macros are hidden with
 it: both tiers merge what a concern declared into the model, and the walk
@@ -140,13 +140,13 @@ takes the filter out on some requests only, so the filter keeps its place in
 the chain and the line names the condition instead:
 
 ```
-- `before` **require_functional!** (skipped unless: limited_federation_mode?)
+- `before` **require_functional!** (skipped unless: :limited_federation_mode?)
 ```
 
-A condition written as a lambda has no name to print and reads `[INFERRED]`,
-the same way a filter's own `if:` does. A skip carrying `only:` or `except:`
-takes the filter out on those actions only, so a whole-controller answer
-keeps the filter and names them:
+A condition written as a lambda prints the line the file holds, collapsed to
+one line, the same way a filter's own `if:` does. A skip carrying `only:` or
+`except:` takes the filter out on those actions only, so a whole-controller
+answer keeps the filter and names them:
 
 ```
 - `before` **authenticate!** (skipped on: index)
@@ -163,7 +163,7 @@ filter either runs or is struck through.
 | `max_test_file_size` | Integer | `1_000_000` (1 MB) | Test file read limit |
 | `max_schema_file_size` | Integer | `10_000_000` (10 MB) | Schema file read limit |
 | `max_view_total_size` | Integer | `10_000_000` (10 MB) | Doctor threshold: `app/views` above this warns. Not a read cap |
-| `max_view_file_size` | Integer | `1_000_000` (1 MB) | Named in that doctor warning's fix line. Not a read cap |
+| `max_view_file_size` | Integer | `1_000_000` (1 MB) | Accepted and stored; no check reads it. Not a read cap |
 
 ### Search
 
@@ -171,10 +171,16 @@ filter either runs or is struck through.
 |:-------|:-----|:--------|:------------|
 | `max_search_results` | Integer | `200` | Maximum lines a search may emit, matches and context together |
 | `max_validate_files` | Integer | `50` | Maximum files for validation |
-| `search_extensions` | Array | `["rb", "js", "erb", "yml", "yaml", "json", "ts", "tsx", "vue", "svelte", "haml", "slim"]` | File extensions the Ruby fallback searches (ripgrep, when installed, searches every file) |
-| `concern_paths` | Array | `nil` (discovers `app/*/concerns`) | Paths to scan for concerns. Setting it replaces discovery, so it can narrow as well as widen |
+| `search_extensions` | Array | `nil` | Narrows the Ruby fallback to these extensions. Unset, the fallback searches every non-hidden, non-binary file, as ripgrep does, so both backends return the same lines |
+| `concern_paths` | Array | `nil` (discovers `app/concerns` and `app/*/concerns`) | Paths to scan for concerns. Setting it replaces discovery, so it can narrow as well as widen |
 | `frontend_paths` | Array | `nil` (auto-detect) | Override frontend file paths |
 | `extra_app_paths` | Array | `[]` | Extra directories under the app root to treat as application code |
+
+Directories that carry their own Rails tree - `plugins/*`, `modules/*`,
+`gems/plugins/*`, `engines/*`, anything up to three levels down holding an
+`app/` plus a gemspec, a `plugin.rb` or a `lib/**/engine.rb` - are found from
+the layout and need no configuration. `extra_app_paths` is for a tree that
+fits neither that shape nor the conventional one.
 
 ### Instrumentation
 
@@ -190,7 +196,7 @@ filter either runs or is struck through.
 | Option | Type | Default | Validation | Description |
 |:-------|:-----|:--------|:-----------|:------------|
 | `query_timeout` | Integer | `5` | - | SQL query timeout in seconds |
-| `query_row_limit` | Integer | `100` | 1–1000 | Maximum rows returned |
+| `query_row_limit` | Integer | `100` | 1 to 1000 | Maximum rows returned |
 | `query_redacted_columns` | Array | 14 patterns | - | Column names that cause a query to be rejected |
 | `query_allowed_columns` | Array | `[]` | - | Column names exempted from the built-in sensitive list |
 | `allow_query_in_production` | Boolean | `false` | - | Allow `rails_query` tool in production |
@@ -205,7 +211,7 @@ filter either runs or is struck through.
 
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
-| `sensitive_patterns` | Array | 27 patterns | File patterns blocked from search/read (`.env*`, `*.key`, `*.pem`, `config/credentials.yml.enc`, `.ssh/*`, etc.) |
+| `sensitive_patterns` | Array | 34 patterns | File patterns blocked from search/read (`.env*`, `*.env`, `.envrc`, `*.key`, `*.pem`, `config/credentials.yml.enc`, `config/application.yml`, `config/settings.local.yml`, `.ssh/*`, etc.) |
 
 ### Extensibility
 

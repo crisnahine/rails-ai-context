@@ -78,4 +78,21 @@ RSpec.describe RailsAiContext::Introspectors::InitializerIntrospector do
       end
     end
   end
+
+  describe "initializers the app does not own" do
+    subject(:result) { introspector.call }
+
+    it "leaves this gem's own initializers out" do
+      expect(result[:initializers].map { |i| i[:owner] }).not_to include("RailsAiContext::Engine")
+      expect(result[:by_owner]).not_to have_key("RailsAiContext::Engine")
+    end
+
+    it "carries no source that has no portable form" do
+      initializer = Rails::Initializable::Initializer.new("pau.elsewhere", Rails.application, before: nil, after: nil) { nil }
+      allow(initializer.instance_variable_get(:@block)).to receive(:source_location).and_return([ "/opt/elsewhere/engine.rb", 3 ])
+      allow(Rails.application).to receive(:initializers).and_return([ initializer ])
+
+      expect(result[:initializers].first).not_to have_key(:source)
+    end
+  end
 end

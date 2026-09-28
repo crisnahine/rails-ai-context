@@ -34,6 +34,79 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
     end
   end
 
+  # `--environment` is the binary's own RAILS_ENV flag, so it ate the value
+  # before env_config saw its `environment` parameter: the answer named prod as
+  # the current environment and then listed all three, at exit 0.
+  it "gives --environment to a tool that declares the parameter" do
+    exe = File.expand_path("../exe/rails-ai-context", __dir__)
+    lib = File.expand_path("../lib", __dir__)
+
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "config", "environments"))
+      File.write(File.join(dir, "config", "application.rb"),
+                 "module EnvApp\n  class Application < Rails::Application\n  end\nend\n")
+      %w[development test prod].each do |env|
+        File.write(File.join(dir, "config", "environments", "#{env}.rb"),
+                   "Rails.application.configure do\n  config.log_level = :debug\nend\n")
+      end
+
+      out = `cd #{dir} && ruby -I #{lib} #{exe} tool env_config --environment prod --no-boot 2>&1`
+
+      expect(out).to include("## prod"), out
+      expect(out).not_to include("## development")
+      expect(out).not_to include("## test")
+    end
+  end
+
+  # Booted, `--environment prod` also became RAILS_ENV and the app failed to
+  # boot in an environment it has no database for. For a tool that declares
+  # the parameter the flag is the tool's alone; the env var still sets
+  # RAILS_ENV.
+  describe "--environment after a tool that declares it" do
+    def env_app(dir)
+      FileUtils.mkdir_p(File.join(dir, "config", "environments"))
+      File.write(File.join(dir, "config", "application.rb"),
+                 "module EnvApp\n  class Application < Rails::Application\n  end\nend\n")
+      %w[development prod].each do |env|
+        File.write(File.join(dir, "config", "environments", "#{env}.rb"), "Rails.application.configure do\nend\n")
+      end
+    end
+
+    let(:exe) { File.expand_path("../exe/rails-ai-context", __dir__) }
+    let(:lib) { File.expand_path("../lib", __dir__) }
+
+    it "does not set RAILS_ENV from the flag" do
+      Dir.mktmpdir do |dir|
+        env_app(dir)
+        out = `cd #{dir} && env -u RAILS_ENV -u RACK_ENV ruby -I #{lib} #{exe} tool env_config --environment prod --no-boot 2>&1`
+
+        expect(out).to include("_Current: **development**"), out
+        expect(out).to include("## prod")
+      end
+    end
+
+    it "still reads RAILS_ENV from the environment variable" do
+      Dir.mktmpdir do |dir|
+        env_app(dir)
+        out = `cd #{dir} && RAILS_ENV=prod ruby -I #{lib} #{exe} tool env_config --no-boot 2>&1`
+
+        expect(out).to include("_Current: **prod**"), out
+      end
+    end
+  end
+
+  # The binary decides before boot, without the gem loaded, which tools own
+  # `--environment`; the list is a constant, so it has to match the schemas.
+  it "names exactly the built-in tools that declare an environment parameter" do
+    source = File.read(File.expand_path("../exe/rails-ai-context", __dir__))
+    listed = source[/ENVIRONMENT_PARAM_TOOLS = %w\[([^\]]*)\]/, 1].to_s.split
+    declared = RailsAiContext::Server.builtin_tools
+      .select { |tool| (tool.input_schema_value&.to_h || {}).fetch(:properties, {}).key?(:environment) }
+      .map { |tool| RailsAiContext::CLI::ToolRunner.short_name(tool.tool_name) }
+
+    expect(listed.sort).to eq(declared.sort)
+  end
+
   # An engine keeps its dummy app under spec/dummy, so its root has app/ and
   # no config/. There is real source to read there, and the guard against an
   # empty directory must not take the whole repo shape with it.
@@ -359,6 +432,73 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       expect($?.exitstatus).to eq(1), out
       expect(out).to include("Unknown format: bogus")
       expect(out).not_to include("Introspecting Rails app")
+    end
+  end
+
+  # One rescue on dispatch answers every command, so what the commands that
+  # never had one do, and what Thor's own refusals say, is pinned here.
+  describe "commands that carry no rescue of their own" do
+    let(:exe) { File.expand_path("../exe/rails-ai-context", __dir__) }
+    let(:lib) { File.expand_path("../lib", __dir__) }
+
+    it "prints the version and exits 0" do
+      out = `ruby -I #{lib} #{exe} version 2>&1`
+      expect($?.exitstatus).to eq(0), out
+      expect(out).to include("rails-ai-context v")
+    end
+
+    it "refuses init outside a Rails app in its own words" do
+      Dir.mktmpdir do |dir|
+        out = `cd #{dir} && ruby -I #{lib} #{exe} init < /dev/null 2>&1`
+        expect($?.exitstatus).to eq(1), out
+        expect(out).to include("No Rails app found in")
+        expect(out).to include("Run this command from your Rails app root directory.")
+      end
+    end
+
+    # init wrote its config files and then died in a Ruby backtrace when
+    # generating context hit a path it could not write.
+    it "answers an unexpected init failure in one line on stderr" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+        FileUtils.mkdir_p(File.join(dir, "CLAUDE.md"))
+
+        err = `cd #{dir} && ruby -I #{lib} #{exe} init < /dev/null 2>&1 >/dev/null`
+
+        expect($?.exitstatus).to eq(1), err
+        expect(err.lines.last).to start_with("Error: Is a directory")
+        expect(err).not_to match(/^\s+from /)
+        expect(err).not_to include("(Errno::EISDIR)")
+      end
+    end
+
+    # The one line is the answer; the frames behind it are one env var away,
+    # the same way a boot failure spells it.
+    it "prints the frames behind that failure under DEBUG" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+        FileUtils.mkdir_p(File.join(dir, "CLAUDE.md"))
+
+        err = `cd #{dir} && DEBUG=1 ruby -I #{lib} #{exe} init < /dev/null 2>&1 >/dev/null`
+
+        expect($?.exitstatus).to eq(1), err
+        expect(err).to include("Error: Is a directory")
+        expect(err).to match(%r{^\s+\S+/lib/rails_ai_context/\S+\.rb:\d+}), err
+      end
+    end
+
+    it "leaves an unknown command to Thor" do
+      out = `ruby -I #{lib} #{exe} bogus 2>&1`
+      expect($?.exitstatus).to eq(1), out
+      expect(out).to eq(%(Could not find command "bogus".\n))
+    end
+
+    it "prints the command list and exits 0" do
+      out = `ruby -I #{lib} #{exe} help 2>&1`
+      expect($?.exitstatus).to eq(0), out
+      expect(out).to include("rails-ai-context version")
     end
   end
 

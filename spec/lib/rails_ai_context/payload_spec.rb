@@ -3,6 +3,32 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Payload do
+  # Discourse was headed by Chat::NullUser, carrying User's 85 associations.
+  describe ".models_by_connection" do
+    # OpenProject's User adds 24 associations to Principal's 10 and stayed
+    # off the list while every subclass sank.
+    it "ranks a subclass by the associations it adds to its parent" do
+      models = {
+        "Principal" => { associations: Array.new(2) { |i| { name: "p#{i}" } } },
+        "User" => { associations: Array.new(5) { |i| { name: "u#{i}" } }, parent_model: "Principal" },
+        "Group" => { associations: Array.new(2) { |i| { name: "p#{i}" } }, parent_model: "Principal" }
+      }
+
+      expect(described_class.models_by_connection(models)).to eq(%w[User Principal Group])
+    end
+
+    it "ranks a subclass that adds nothing after a model that ties with it" do
+      models = {
+        "User" => { associations: Array.new(3) { |i| { name: "a#{i}" } } },
+        "Chat::NullUser" => { associations: Array.new(3) { |i| { name: "a#{i}" } }, parent_model: "User" },
+        "Topic" => { associations: [] },
+        "Report" => { associations: [ { name: "x" } ], parent_model: "ExternalBase" }
+      }
+
+      expect(described_class.models_by_connection(models)).to eq(%w[User Report Topic Chat::NullUser])
+    end
+  end
+
   describe "key pinning" do
     # Every reader's key pair, checked against what the producing
     # introspector actually emits for the static fixture app. A payload
@@ -307,13 +333,12 @@ RSpec.describe RailsAiContext::Payload do
     end
   end
 
-  # A job in a pack has no conventional path to fall back to, so these
-  # answer only what the tier recorded.
-  describe ".job_file and .mailer_file" do
+  # A job in a pack has no conventional path to fall back to, so this
+  # answers only what the tier recorded.
+  describe ".job_file" do
     let(:context) do
       { jobs: {
-        jobs: [ { name: "InvoiceJob", file: "packs/billing/app/jobs/invoice_job.rb" }, { name: "PlacelessJob" } ],
-        mailers: [ { name: "UserMailer", file: "app/mailers/user_mailer.rb" } ]
+        jobs: [ { name: "InvoiceJob", file: "packs/billing/app/jobs/invoice_job.rb" }, { name: "PlacelessJob" } ]
       } }
     end
 
@@ -321,14 +346,72 @@ RSpec.describe RailsAiContext::Payload do
       expect(described_class.job_file(context, "InvoiceJob")).to eq("packs/billing/app/jobs/invoice_job.rb")
     end
 
-    it "reads the file a mailer was read from" do
-      expect(described_class.mailer_file(context, "UserMailer")).to eq("app/mailers/user_mailer.rb")
-    end
-
     it "answers nil for an entry that carried none, and for a name nobody recorded" do
       expect(described_class.job_file(context, "PlacelessJob")).to be_nil
       expect(described_class.job_file(context, "Nope")).to be_nil
-      expect(described_class.mailer_file({}, "UserMailer")).to be_nil
+    end
+  end
+  # OpenProject's modules/reporting holds 64 .rb files under app/models and two
+  # models. A file count read as a model count, and the 30 engine counts summed
+  # to 346 against 274 models app-wide.
+  describe ".in_repo_engines_with_models" do
+    let(:ctx) do
+      {
+        engines: { in_repo_engines: [
+          { name: "reporting", path: "modules/reporting" },
+          { name: "budgets", path: "modules/budgets" },
+          { name: "avatars", path: "modules/avatars" }
+        ] },
+        models: {
+          "CostQuery" => { file: "modules/reporting/app/models/cost_query.rb" },
+          "CostQuery::Filter" => { file: "modules/reporting/app/models/cost_query/filter.rb" },
+          "Budget" => { file: "modules/budgets/app/models/budget.rb" },
+          "Post" => { file: "app/models/post.rb" }
+        }
+      }
+    end
+
+    it "counts the models the model scan filed under each engine's path" do
+      expect(described_class.in_repo_engines_with_models(ctx)).to eq([
+        { name: "reporting", path: "modules/reporting", model_count: 2 },
+        { name: "budgets", path: "modules/budgets", model_count: 1 },
+        { name: "avatars", path: "modules/avatars", model_count: 0 }
+      ])
+    end
+
+    it "never counts a model outside the engine's path" do
+      counts = described_class.in_repo_engines_with_models(ctx).sum { |e| e[:model_count] }
+
+      expect(counts).to be <= described_class.models(ctx).size
+    end
+
+    # A path prefix is a path, not a string prefix: modules/budget must not
+    # swallow modules/budgets.
+    it "matches on the path boundary" do
+      ctx = { engines: { in_repo_engines: [ { name: "budget", path: "modules/budget" } ] },
+              models: { "Budget" => { file: "modules/budgets/app/models/budget.rb" } } }
+
+      expect(described_class.in_repo_engines_with_models(ctx).first[:model_count]).to eq(0)
+    end
+
+    # A models section that failed says nothing about how many models an
+    # engine holds, and 0 would read as a fact.
+    it "gives no count when the models section failed" do
+      failed = ctx.merge(models: { error: "boom" })
+
+      expect(described_class.in_repo_engines_with_models(failed).map { |e| e[:model_count] })
+        .to eq([ nil, nil, nil ])
+    end
+
+    it "gives no count when there is no models section at all" do
+      absent = ctx.except(:models)
+
+      expect(described_class.in_repo_engines_with_models(absent).map { |e| e[:model_count] })
+        .to eq([ nil, nil, nil ])
+    end
+
+    it "answers an empty list for an app with no in-repo engines" do
+      expect(described_class.in_repo_engines_with_models({})).to eq([])
     end
   end
 end

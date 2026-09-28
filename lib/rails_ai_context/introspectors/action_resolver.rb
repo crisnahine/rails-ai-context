@@ -20,18 +20,14 @@ module RailsAiContext
               (defined?(ActionController::Base) && k == ActionController::Base) ||
               (defined?(ActionController::API) && k == ActionController::API)
           },
-          app_base: ->(name) {
-            name == "ApplicationController" || name.end_with?("::ApplicationController")
-          }
+          app_base: ->(name) { SuperclassChain.conventional_base?(name, "ApplicationController") }
         },
         mailer: {
           framework: ->(k) {
             k.name.to_s.start_with?("ActionMailer::", "AbstractController::") ||
               (defined?(ActionMailer::Base) && k == ActionMailer::Base)
           },
-          app_base: ->(name) {
-            name == "ApplicationMailer" || name.end_with?("::ApplicationMailer")
-          }
+          app_base: ->(name) { SuperclassChain.conventional_base?(name, "ApplicationMailer") }
         }
       }.freeze
 
@@ -79,10 +75,39 @@ module RailsAiContext
         names.sort
       end
 
-      def actions_from_source(source, class_name:, skip_underscored: true)
-        own_actions(methods_in(source), class_name: class_name, skip_underscored: skip_underscored)
+      # A method an action callback names is a filter, and a predicate or bang name returns
+      # something other than a message; both tiers subtract them here so they agree.
+      def deliverable_actions(actions, filters)
+        named = filters.map(&:to_s)
+        actions.reject { |a| a.end_with?("?", "!") || named.include?(a) }
+      end
+
+      # Required: a bare name or a keyword with no default; `=`, `*`, `**` and `&` are optional.
+      REQUIRED_PARAM = /\A[a-z_]\w*:?\z/
+
+      # Rails dispatches an action with `send(name)`, so a method that needs
+      # an argument cannot be one however public it is.
+      def requires_argument?(method)
+        parameter_list(method).split(",").any? { |param| param.strip.match?(REQUIRED_PARAM) }
+      end
+
+      def actions_from_source(source, class_name:, skip_underscored: true, filters: [])
+        dispatchable_names(own_methods(methods_in(source), class_name), skip_underscored: skip_underscored, filters: filters)
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "ActionResolver.actions_from_source")
+      end
+
+      # The same rule over a mixin's own methods: what a controller concern
+      # gives every includer that Rails would dispatch to.
+      def module_actions(source, filters: [])
+        dispatchable_names(own_methods_in(source, nil), filters: filters)
+      end
+
+      def dispatchable_names(methods, skip_underscored: true, filters: [])
+        methods = methods.select { |m| m[:scope] == :instance && m[:visibility] == :public }
+        methods = methods.reject { |m| m[:name].start_with?("_") } if skip_underscored
+        dispatchable = methods.reject { |m| requires_argument?(m) }.map { |m| m[:name] }
+        deliverable_actions(dispatchable, filters).sort
       end
 
       # The same reading with signatures, for the tools that show a file's
@@ -107,6 +132,13 @@ module RailsAiContext
         own_methods_in(source, owner)
           .select { |m| m[:scope] == :class && (m[:visibility] == :public || m[:signature].to_s.start_with?("self.")) }
           .map { |m| signature(m) }.uniq
+      end
+
+      # `perform`, or `execute` where a base class owns perform and calls it.
+      # ponytail: those two names only; another base's entry point reads as no signature.
+      def entry_point(methods)
+        instance = methods.select { |m| m[:scope] == :instance }
+        instance.find { |m| m[:name] == "perform" } || instance.find { |m| m[:name] == "execute" }
       end
 
       # The method as written, minus a `self.` receiver: `build(attrs)`.
@@ -237,14 +269,14 @@ module RailsAiContext
       # none defines one, because reflection would only overwrite that answer
       # with helpers. `read_source` maps an ancestor class to its source, nil
       # when the app does not own the file.
-      def resolve(klass, source:, kind:, read_source:)
-        own = source ? actions_from_source(source, class_name: klass.name) : []
+      def resolve(klass, source:, kind:, read_source:, filters: [])
+        own = source ? actions_from_source(source, class_name: klass.name, filters: filters) : []
         return own if own.any?
 
-        inherited, unreadable = inherited_actions(klass, kind: kind, read_source: read_source)
+        inherited, unreadable = inherited_actions(klass, kind: kind, read_source: read_source, filters: filters)
         return inherited if inherited.any?
 
-        return reflected_actions(klass, kind: kind) if unreadable || source.nil?
+        return reflected_actions(klass, kind: kind, filters: filters) if unreadable || source.nil?
 
         []
       rescue => e
@@ -258,13 +290,13 @@ module RailsAiContext
       # produced the helpers-as-actions leak. Returns the actions and whether
       # the walk passed an ancestor whose source it could not read, which is
       # what tells an empty answer apart from one this app cannot see.
-      def inherited_actions(klass, kind:, read_source:)
+      def inherited_actions(klass, kind:, read_source:, filters: [])
         unreadable = false
         k = klass.superclass
         while k&.name && !framework?(k, kind: kind) && !app_base?(k, kind: kind)
           src = read_source.call(k)
           if src
-            actions = actions_from_source(src, class_name: k.name)
+            actions = actions_from_source(src, class_name: k.name, filters: filters)
             return [ actions, unreadable ] if actions.any?
           else
             unreadable = true
@@ -274,36 +306,32 @@ module RailsAiContext
         [ [], unreadable ]
       end
 
-      # The same nearest-app-ancestor answer for a tier that has no classes:
-      # the listing's own entries, walked by the parent name each carries. A
-      # name the listing does not hold is the app base, a gem's controller or
-      # the framework, and ends the walk.
+      # Every app ancestor's actions, up to the app base: Rails routes to an inherited public
+      # method too, and an intermediate base is where a controller family keeps shared ones.
       def inherited_actions_by_name(entries, parent_name, kind:, within: nil)
         seen = Set.new
+        found = []
         name = resolve_entry_name(entries, parent_name, within)
         while name && !seen.include?(name) && !app_base_name?(name, kind: kind)
           seen << name
           info = entries[name]
-          return [] unless info.is_a?(Hash)
+          break unless info.is_a?(Hash)
 
-          actions = Array(info[:actions])
-          return actions if actions.any?
-
+          found.concat(Array(info[:actions]))
           name = resolve_entry_name(entries, info[:parent_class], name)
         end
-        []
+        found.uniq.sort
       end
 
       # Ruby resolves a bare superclass from the enclosing namespace outward,
       # so `module Settings; class ProfileController < BaseController` keys the
       # listing under Settings::BaseController even when a top-level
-      # BaseController exists too. A name already spelled with a namespace is
-      # taken as written, or it would be re-prefixed onto the child's own
-      # namespace, and a name nothing resolves is handed back as written, so
-      # the app-base check still sees it.
+      # BaseController exists too. A qualified name the listing holds is taken as written, one
+      # it lacks resolves outward too, and a rooted or unresolved name comes back as written.
       def resolve_entry_name(entries, name, within)
-        name = name&.to_s
-        return name if name.nil? || within.nil? || name.include?("::")
+        rooted = name.to_s.start_with?("::")
+        name = name&.to_s&.delete_prefix("::")
+        return name if name.nil? || within.nil? || rooted || (name.include?("::") && entries.key?(name))
 
         scope = within.to_s.split("::")[0..-2]
         while scope.any?
@@ -320,11 +348,29 @@ module RailsAiContext
       # mounted on the app's own base therefore arrives carrying every public
       # method that base and its concerns define; the base's own answer is
       # exactly that set, so subtracting it leaves what the class contributes.
-      def reflected_actions(klass, kind:)
+      def reflected_actions(klass, kind:, filters: [])
         actions = klass.action_methods.to_a.map(&:to_s)
         base = app_base_for(klass, kind: kind)
         actions -= base.action_methods.to_a.map(&:to_s) if base
-        actions.sort
+        # Rails dispatches a controller action with no arguments; a mailer action takes them.
+        actions = actions.reject { |name| needs_argument?(klass, name) } if kind == :controller
+        # A mail action is one a mailer class defines, as the static tier reads
+        # it; a mixed-in module's methods (ActiveSupport::Concern's own API
+        # included by mistake, a Redis helper) never are.
+        actions = actions.select { |name| defined_by_class?(klass, name) } if kind == :mailer
+        deliverable_actions(actions, filters).sort
+      end
+
+      def defined_by_class?(klass, name)
+        return true unless klass.respond_to?(:method_defined?) && klass.method_defined?(name)
+
+        klass.instance_method(name).owner.is_a?(Class)
+      end
+
+      def needs_argument?(klass, name)
+        return false unless klass.respond_to?(:method_defined?) && klass.method_defined?(name)
+
+        klass.instance_method(name).parameters.any? { |type, _| %i[req keyreq].include?(type) }
       end
 
       def app_base_for(klass, kind:)

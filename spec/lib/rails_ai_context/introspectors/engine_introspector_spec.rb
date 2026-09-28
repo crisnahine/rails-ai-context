@@ -151,4 +151,96 @@ RSpec.describe RailsAiContext::Introspectors::EngineIntrospector do
       expect(result[:mounted_engines]).to be_an(Array)
     end
   end
+
+  describe "in-repo engines" do
+    it "names each in-repo code root with its path" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config/routes.rb"), "Rails.application.routes.draw do\nend\n")
+        FileUtils.mkdir_p(File.join(dir, "modules/budgets/app/models"))
+        FileUtils.touch(File.join(dir, "modules/budgets/budgets.gemspec"))
+        FileUtils.touch(File.join(dir, "modules/budgets/app/models/budget.rb"))
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:in_repo_engines]).to eq([ { name: "budgets", path: "modules/budgets" } ])
+      end
+    end
+
+    # Only the models section knows which of an engine's files are models, so
+    # the count is Payload's to fill in - see Payload.in_repo_engines_with_models.
+    it "carries no model count of its own" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config/routes.rb"), "Rails.application.routes.draw do\nend\n")
+        FileUtils.mkdir_p(File.join(dir, "modules/documents/app/models"))
+        FileUtils.touch(File.join(dir, "modules/documents/documents.gemspec"))
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:in_repo_engines].first.keys).to eq(%i[name path])
+      end
+    end
+
+    it "answers empty for an app with no in-repo code roots" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config/routes.rb"), "Rails.application.routes.draw do\nend\n")
+
+        expect(described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:in_repo_engines]).to eq([])
+      end
+    end
+  end
+
+  # The loaded-engine count was every .rb under app/models, concerns and plain
+  # modules included.
+  describe "a loaded engine's model count" do
+    it "counts models by the rule the models section uses" do
+      Dir.mktmpdir do |dir|
+        models = File.join(dir, "app", "models")
+        FileUtils.mkdir_p(File.join(models, "concerns"))
+        File.write(File.join(models, "application_record.rb"),
+                   "class ApplicationRecord < ActiveRecord::Base\n  self.abstract_class = true\nend\n")
+        File.write(File.join(models, "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+        File.write(File.join(models, "gadget.rb"), "class Gadget < ApplicationRecord\nend\n")
+        File.write(File.join(models, "price_calculator.rb"), "class PriceCalculator\nend\n")
+        File.write(File.join(models, "concerns", "sluggable.rb"), "module Sluggable\nend\n")
+        engine = double("engine", name: "Shop::Engine", root: Pathname.new(dir))
+        allow(Rails::Engine).to receive(:subclasses).and_return([ engine ])
+        # The app's excluded_models hide framework models from its own list;
+        # an engine's models are still the engine's (ActiveStorage::Blob).
+        allow(RailsAiContext.configuration).to receive(:excluded_models).and_return(%w[Widget])
+
+        loaded = described_class.new(Rails.application).send(:discover_rails_engines)
+
+        expect(loaded.find { |e| e[:name] == "Shop::Engine" }[:model_count]).to eq(2)
+      end
+    end
+  end
+
+  # .ai-context.json is committed: an engine's root is carried relative to
+  # the app or to its gem, and never as this machine's absolute path.
+  describe "an engine's root" do
+    def root_for(path)
+      engine = double("engine", name: "Pau::Engine", root: Pathname.new(path))
+      allow(Rails::Engine).to receive(:subclasses).and_return([ engine ])
+      described_class.new(Rails.application).send(:discover_rails_engines).first[:root]
+    end
+
+    it "is app-relative inside the app, and . for the app itself" do
+      expect(root_for(File.join(Rails.root.to_s, "engines", "pau"))).to eq("engines/pau")
+      expect(root_for(Rails.root.to_s)).to eq(".")
+    end
+
+    it "names the gem for an engine unpacked in a gem directory" do
+      gem_root = RailsAiContext::PortablePath.gem_roots.first
+      expect(root_for(File.join(gem_root, "pau-1.0"))).to eq("pau-1.0")
+    end
+
+    it "is left out for an engine rooted anywhere else" do
+      Dir.mktmpdir do |dir|
+        expect(root_for(dir)).to be_nil
+      end
+    end
+  end
 end

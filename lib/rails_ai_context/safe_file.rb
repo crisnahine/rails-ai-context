@@ -21,10 +21,14 @@ module RailsAiContext
     end
 
     def self.read(path, max_size: nil)
-      return nil unless path && File.file?(path)
+      return nil unless path
+
+      # One stat for both questions: a run over a large app calls this tens of thousands of times.
+      stat = File.stat(path)
+      return nil unless stat.file?
 
       limit = max_size || RailsAiContext.configuration.max_file_size
-      return nil if File.size(path) > limit
+      return nil if stat.size > limit
 
       # The encoding options only apply while TRANSCODING; a file read as
       # UTF-8 that contains invalid bytes comes back tagged UTF-8 but

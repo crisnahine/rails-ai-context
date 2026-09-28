@@ -4,20 +4,14 @@ module RailsAiContext
   module Introspectors
     # Collects approximate row counts from PostgreSQL's pg_stat_user_tables.
     # Only activates for PostgreSQL adapter; returns { skipped: true } otherwise.
-    class DatabaseStatsIntrospector
+    class DatabaseStatsIntrospector < Base
       extend StaticTier
       static_tier :runtime_only
-
-      attr_reader :app
 
       # Trilogy is Rails 8's default MySQL adapter (`adapter_name` reports
       # "Trilogy", not "Mysql2") - matching only /mysql/ silently skips
       # stats collection for every Trilogy app.
       MYSQL_ADAPTER = /mysql|trilogy/i
-
-      def initialize(app)
-        @app = app
-      end
 
       def call
         return { skipped: true, reason: "ActiveRecord not available" } unless defined?(ActiveRecord::Base)
@@ -33,8 +27,6 @@ module RailsAiContext
         else
           { skipped: true, reason: "Stats not available for adapter: #{adapter}" }
         end
-      rescue => e
-        { error: e.message }
       end
 
       private
@@ -56,8 +48,6 @@ module RailsAiContext
         end
 
         { adapter: "postgresql", tables: tables, total_tables: tables.size }
-      rescue => e
-        RailsAiContext.debug_fail(e, { error: e.message }, label: "collect_postgresql_stats")
       end
 
       def collect_mysql_stats
@@ -75,8 +65,6 @@ module RailsAiContext
         end
 
         { adapter: "mysql", tables: tables, total_tables: tables.size }
-      rescue => e
-        RailsAiContext.debug_fail(e, { error: e.message }, label: "collect_mysql_stats")
       end
 
       def collect_sqlite_stats
@@ -90,8 +78,6 @@ module RailsAiContext
         end.sort_by { |t| -t[:approximate_rows] }
 
         { adapter: "sqlite", tables: tables, total_tables: tables.size }
-      rescue => e
-        RailsAiContext.debug_fail(e, { error: e.message }, label: "collect_sqlite_stats")
       end
     end
   end

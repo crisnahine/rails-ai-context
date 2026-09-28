@@ -193,8 +193,11 @@ module RailsAiContext
       # Log to stderr so we don't pollute the JSON-RPC channel on stdout
       $stderr.puts "[rails-ai-context] MCP server started (stdio transport)"
       $stderr.puts tool_banner(server)
+      RailsAiContext.stdio_open = true
       maybe_start_live_reload(server)
       transport.open
+    ensure
+      RailsAiContext.stdio_open = false
     end
 
     def start_http(server)

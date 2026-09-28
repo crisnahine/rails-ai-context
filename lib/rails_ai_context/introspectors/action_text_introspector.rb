@@ -3,15 +3,9 @@
 module RailsAiContext
   module Introspectors
     # Discovers Action Text usage: rich text fields per model.
-    class ActionTextIntrospector
+    class ActionTextIntrospector < Base
       extend StaticTier
       static_tier :files_only
-
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
 
       def call
         {
@@ -19,15 +13,9 @@ module RailsAiContext
           rich_text_fields: extract_rich_text_fields,
           trix_customizations: detect_trix_customizations
         }
-      rescue => e
-        { error: e.message }
       end
 
       private
-
-      def root
-        app.root.to_s
-      end
 
       def detect_trix_customizations
         customs = []

@@ -53,6 +53,103 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
         File.write(File.join(tmpdir, "Gemfile.lock"), lockfile_content)
       end
 
+      describe "a note names only a file the app has" do
+        let(:lockfile_content) do
+          <<~LOCK
+            GEM
+              remote: https://rubygems.org/
+              specs:
+                rack-cors (2.0.2)
+                sprockets-rails (3.5.2)
+
+            PLATFORMS
+              ruby
+
+            DEPENDENCIES
+              rails
+          LOCK
+        end
+
+        def note_for(name)
+          introspector.call[:notable_gems].find { |gem| gem[:name] == name }[:note]
+        end
+
+        it "names the initializer the app spells with a hyphen" do
+          FileUtils.mkdir_p(File.join(tmpdir, "config/initializers"))
+          File.write(File.join(tmpdir, "config/initializers/rack-cors.rb"), "")
+
+          expect(note_for("rack-cors")).to include("config/initializers/rack-cors.rb")
+        end
+
+        it "drops the path when the file is nowhere" do
+          expect(note_for("sprockets-rails")).to eq("Asset pipeline via Sprockets.")
+          expect(note_for("rack-cors")).to eq("CORS middleware.")
+        end
+
+        context "with a note that is one sentence" do
+          let(:lockfile_content) do
+            <<~LOCK
+              GEM
+                remote: https://rubygems.org/
+                specs:
+                  pundit (2.4.0)
+                  stimulus-rails (1.3.4)
+                  mongoid (9.0.2)
+
+              PLATFORMS
+                ruby
+
+              DEPENDENCIES
+                rails
+            LOCK
+          end
+
+          it "drops the path clause and keeps what the gem is" do
+            expect(note_for("pundit")).to eq("Authorization via Pundit policies.")
+            expect(note_for("stimulus-rails")).to eq("Stimulus.js controllers.")
+          end
+
+          it "keeps a path the note names because the app does not have it" do
+            expect(note_for("mongoid")).to eq("MongoDB ODM - schema lives in the documents, not db/schema.rb.")
+          end
+        end
+      end
+
+      it "reads the Gemfile through the one Gemfile reader" do
+        File.write(File.join(tmpdir, "Gemfile"), "gem \"house_style\", path: \"vendor/house_style\"\n")
+        expect(RailsAiContext::Introspectors::GemfileGems).to receive(:entries).once.and_call_original
+
+        expect(introspector.call[:local_gems]).to eq([ { name: "house_style", source: "path", location: "vendor/house_style" } ])
+      end
+
+      it "walks the Gemfile once when the walk raises" do
+        File.write(File.join(tmpdir, "Gemfile"), "gem \"devise\"\n")
+        expect(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk).once.and_raise(ArgumentError, "boom")
+
+        result = introspector.call
+        expect(result[:local_gems]).to eq([])
+        expect(result[:gem_groups]).to eq({})
+      end
+
+      it "reads the local gems and the groups out of the Gemfile" do
+        File.write(File.join(tmpdir, "Gemfile"), <<~RUBY)
+          gem "devise"
+          gem "house_style", path: "vendor/house_style"
+          gem "pagy", git: "https://example.test/pagy.git"
+          group :test do
+            gem "rspec-rails"
+          end
+        RUBY
+
+        result = introspector.call
+
+        expect(result[:local_gems]).to contain_exactly(
+          { name: "house_style", source: "path", location: "vendor/house_style" },
+          { name: "pagy", source: "git", location: "https://example.test/pagy.git" }
+        )
+        expect(result[:gem_groups]).to eq({ "test" => [ "rspec-rails" ] })
+      end
+
       it "returns total gem count" do
         result = introspector.call
         expect(result[:total_gems]).to eq(10)
@@ -164,6 +261,7 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
         result = introspector.call
 
         expect(result[:declared_ruby_version]).to eq("3.3.4p94")
+        expect(result[:declared_ruby_version_source]).to eq("Gemfile.lock")
         expect(result).not_to have_key(:ruby_version)
       end
     end

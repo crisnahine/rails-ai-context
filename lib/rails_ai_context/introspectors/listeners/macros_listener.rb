@@ -8,6 +8,8 @@ module RailsAiContext
       # store, has_one_attached, has_many_attached, has_rich_text,
       # broadcasts, generates_token_for, attribute, etc.
       class MacrosListener < BaseListener
+        include WithOptionsScope
+
         SIMPLE_MACROS = %i[
           has_secure_password
         ].to_set.freeze
@@ -22,7 +24,7 @@ module RailsAiContext
         ].to_set.freeze
 
         def on_call_node_enter(node)
-          return unless node.receiver.nil?
+          return unless in_scope?(node)
 
           if SIMPLE_MACROS.include?(node.name)
             @results << {
@@ -104,14 +106,14 @@ module RailsAiContext
 
           type_arg = args[1]
           type = case type_arg
-          when Prism::SymbolNode then type_arg.value
+          when Prism::SymbolNode then type_arg.unescaped
           end
 
           options = extract_keyword_options(node)
 
           @results << {
             macro:      :attribute,
-            attribute:  name_arg.value,
+            attribute:  name_arg.unescaped,
             type:       type,
             options:    options,
             location:   node.location.start_line,

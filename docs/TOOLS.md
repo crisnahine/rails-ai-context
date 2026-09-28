@@ -70,28 +70,32 @@ Individual lookup tools accept a **`detail`** parameter: `summary` (compact), `s
 
 ### `rails_search_code`
 
-Search your codebase with regex, ripgrep acceleration, and sensitive file blocking.
+Search your codebase with regex, ripgrep acceleration, and sensitive file blocking. Every line returned passes through redaction, so in a file no pattern names a string literal under a secret-named key (8+ characters, unless it is clearly not a credential: a message, URL, path, placeholder, version, date, header, env or parameter name, or a translation) or in a known credential format (vendor tokens, JWTs, a PEM or PGP private key) reads as `[FILTERED]`; code, ENV lookups, ERB and placeholders are never rewritten, so the text stays usable as the text to replace. A match that falls only inside a filtered value is not returned, so a pattern cannot confirm what a secret starts with.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `pattern` | string | *required* | Regex pattern to search for |
-| `path` | string | - | Subdirectory to search in (relative to Rails root) |
+| `path` | string | - | Subdirectory or file to search (relative to Rails root); a file is searched whatever its type or ignore files say, as ripgrep does, unless it is sensitive |
 | `match_type` | enum | `any` | `any`, `definition`, `class`, `call`, `trace` |
 | `file_type` | string | - | Filter by extension (`rb`, `erb`, `js`, etc.) |
 | `exact_match` | boolean | `false` | Literal, whole-word match. `def reblog?` does not match `def reblog` |
 | `exclude_tests` | boolean | `false` | Skip test/spec directories |
 | `group_by_file` | boolean | `false` | Group results by file with counts |
-| `context_lines` | integer | `2` | Lines of context around each match, max 5. Needs ripgrep; without it the search returns match lines only |
+| `context_lines` | integer | `2` | Lines of context around each match, max 5 |
 | `offset` | integer | `0` | Skip this many emitted lines |
-| `limit` | integer | auto | Max lines to return; the default is sized in matches |
+| `limit` | integer | auto | Max lines to return; the default is sized in matches, and a limit too small for one match and its context still returns that match |
 
-The header counts matches, not emitted lines, so below the cap it does not move with `context_lines`. When the search hits `max_search_results` (a cap on emitted lines) the header says `first N lines scanned` and marks the count `N+`: it is then the matches among the lines that were scanned, a floor rather than the total, so it falls as `context_lines` grows. `offset` and `limit` count lines, so a search with context returns more lines than matches; without ripgrep there are no context lines, so lines and matches are the same thing.
+The header counts matches, not emitted lines, so below the cap it does not move with `context_lines`. When the search hits `max_search_results` (a cap on emitted lines) the header says `first N lines scanned` and marks the count `N+`: it is then the matches among the lines that were scanned, a floor rather than the total, so it falls as `context_lines` grows. `offset` and `limit` count lines, so a search with context returns more lines than matches. A limit smaller than one match's context block would hold only context, so the page starts at the next match instead and says so.
 
 > **Trace mode** returns definition + source code + every caller grouped by type + tests - replaces 4-5 sequential file reads.
 
+Without ripgrep on the PATH, the Ruby fallback returns the rows ripgrep would, context lines and the line cap included, from the files ripgrep would search: no hidden files, no symlinks followed, no binary files (a NUL byte in the first 64 KiB), and ignore files read with ripgrep's precedence, where the file type decides before depth: any `.rgignore`, then any `.ignore`, then any `.gitignore`, then `.git/info/exclude`, then the global excludes file, the deepest file first within a type. `.ignore` and `.rgignore` apply everywhere, including the directories above the app; the git files apply only inside a repository and only as far up as the nearest `.git` (a file for a worktree or submodule), whose `info/exclude` is the only one read. Patterns match case-sensitively.
+
+Redaction treats a value under a secret-named key as a secret unless it is clearly something else: shorter than eight characters (four under a password-type key: `password`, `passwd`, `pass`, `pin`, `passphrase`), containing whitespace (a message; not under `passphrase`), a URL, an email address or a hostname (not under a password-type key), a URL query (`?mode=safe`) or a path (two slashes, no `+` or `=`), a placeholder (`<token>`, `${VAR}`, `%{var}`, a `{name}` slot, `xxxx`, `your-...`, `put-your-key-here`), a version (`2.4.1`, `v2`) or a date, an HTTP header name (`X-Api-Key`; not under a password-type key), an env name (capitals joined by `_`, led by `_` or `HTTP_` or naming a secret word, like `_DISCOURSE_API`), a name spelled from a secret word (`user_api_key`; not under a password-type key, where `admin_password` is the password), the key's own name (an enum's `password: 'password'`), or not ASCII. Keys ending `_url`, `_error`, `_use` and the like describe a secret rather than hold one. A call or block whose first argument names a secret holds its value too (`ENV.fetch("SECRET_KEY_BASE", "...")`, `let(:api_key) { "..." }`, `option :client_secret, default: "..."`, a `credentials.fetch` default); a ternary's `? "a" : "b"` is two values, not a key and its value. Under a name that ends in `_KEY`, `Key` or `key` without a secret word (`ALGOLIA_ADMIN_KEY`, `apiKey`), a value is filtered only when it looks like a credential: a run of 16+ characters mixing letters and digits, or a known token format; a cache or i18n key (`views/posts/1`, `users.index.title`), a storage key (`wp-content/uploads/...`), a word, a path or a header name is kept. Log lines use the same rule. An unquoted `NAME=value` with a secret-named name, in any file (shell, Dockerfile `ENV`, compose, env, code), has its value filtered unless it is `$VAR`, `${...}`, `#{...}` or ERB; the value ends at the first quote, bracket, `&`, `,`, `;` or space, so in a URL query (`?token=...&page=2`) only the value goes. A `:name=` setter symbol and a `(?<=name=` lookbehind are not assignments. In an example file (`*.example`, `*.sample`, `*.template`) a value under a secret-named key is kept only when it is plainly a placeholder: a placeholder shape above, or up to 20 characters of words with no digits (`changeme`, `your_password_here`). Locale files are filtered only for credential formats.
+
 ### `rails_get_edit_context`
 
-Method-aware code extraction with surrounding class context.
+Method-aware code extraction with surrounding class context. Every line returned passes through redaction, so in a file no pattern names a string literal under a secret-named key (8+ characters, unless it is clearly not a credential: a message, URL, path, placeholder, version, date, header, env or parameter name, or a translation) or in a known credential format (vendor tokens, JWTs, a PEM or PGP private key) reads as `[FILTERED]`; code, ENV lookups, ERB and placeholders are never rewritten, so the text stays usable as the text to replace.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -145,6 +149,12 @@ a table `db/schema.rb` declares and the connected database does not have is
 named as a migration that has not run, and the listing header says when the
 two table counts disagree.
 
+Column hints follow the leftmost-prefix rule: `[indexed]` means some index leads
+with the column, so a lookup on it alone can use one; `[unique]` means a unique
+index covers the column alone; `[unique with x]` names the partners of a
+composite unique index; `[in index after x]` marks a column that only trails
+`x` in a plain index. An expression key is named as the expression.
+
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `table` | string | - | Specific table (omit for overview) |
@@ -182,11 +192,15 @@ its concerns), not the order Rails registered them in.
 Concern methods, source code, and which models include it. A class under
 `app/models/concerns` that subclasses `ActiveModel::Validator` is listed as a
 validator rather than a concern, and its users are the models that name it in
-`validates_with`.
+`validates_with`. The rule reads the class the file is named for, so a concern
+that nests its own validator class stays a concern. Every concern is named by
+the constant its file declares, so an app inflection (`sdg/tag_list.rb`
+declaring `SDG::TagList`) is answered under the name the app has.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `concern` | string | *required* | Concern name (e.g., `Trackable`, `Searchable`) |
+| `name` | string | - | Concern name (e.g., `Trackable`, `Admin::ExportControllerConcern`). Omit to list all concerns |
+| `type` | string | `all` | A type the listing's headings print: `model`, `controller`, `mailer` and the rest for `app/*/concerns`; the root a concern outside every concerns directory lives in (`service`, `lib`, ...); `other` for `app/concerns` or a configured directory. A type the app does not have is answered with the types it has |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
@@ -209,7 +223,8 @@ Controller actions with inherited filters, render map, strong params. Includes s
 
 Routes with code-ready helpers (`post_path(@record)`) and required params. A
 fully qualified controller key answers with its own routes only; a short name
-still matches every controller that carries it. Rack apps attached with `mount`
+reaches the controller whose trailing segments it spells, and not the ones that
+merely start with it. Rack apps attached with `mount`
 or `match ... to:` are named with the path they answer on, when the source
 spells one out.
 
@@ -236,7 +251,21 @@ View templates with instance variables, Turbo frames, Stimulus controllers, part
 
 ### `rails_get_stimulus`
 
-Stimulus controller data-attributes (with dashes, not underscores) + targets + values + actions + reverse view lookup.
+Stimulus controller data-attributes (with dashes, not underscores) + targets +
+values + actions + reverse view lookup. Controllers are read from `app/javascript`,
+`app/frontend`, `app/webpacker`, `frontend`, `client` and `app/components`
+sidecars alike, packs and in-repo engines included, and both file conventions
+count (`*_controller.js` and `*.controller.ts`). Outside a JS root's own
+`controllers/` directory the source has to name Stimulus, so a React component
+or an AngularJS controller with the same filename is not counted. Outside
+`app/javascript/controllers` the identifier the path gives is a guess, since an
+app's own loader can strip a segment the path still carries, so it is checked
+against the identifiers the templates and components name (`data-controller`,
+targets, action descriptors, a `content_controller` helper) and corrected to
+the one they use. A guess no template confirms is marked inferred, and takes
+the naming rule of its directory when one is known: a loader that imports the
+directory by a derived path (`import(`./dynamic/${path}.controller.ts`)`), or
+two or more confirmed neighbours that all drop the directory's segment.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -249,7 +278,7 @@ What locals to pass to a partial and what methods are called on them.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `partial` | string | *required* | Partial path (e.g., `users/form`) |
+| `partial` | string | *required* | Partial path (e.g., `users/form`); a bare name that matches several partials lists them instead of answering |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
 ### `rails_get_turbo_map`
@@ -281,6 +310,7 @@ Test fixtures, relationships, and template matching your project's patterns.
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `model` | string | - | Model to find tests for |
+| `controller` | string | - | Controller to find tests for: its controller or request spec, then the system, feature, request and integration tests named for it or reaching its routes, each labelled by type |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
 ### `rails_generate_test`
@@ -353,7 +383,9 @@ Database config, auth framework, assets, cache, queue, Action Cable.
 
 ### `rails_get_gems`
 
-Notable gems with versions, categories, and config file locations.
+Notable gems with versions, categories, and config file locations. A config
+location is printed only when the app has that file, and an initializer is
+found under a load-order prefix too (`config/initializers/3_omniauth.rb`).
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -361,7 +393,7 @@ Notable gems with versions, categories, and config file locations.
 
 ### `rails_get_env`
 
-Environment variables + credentials keys (values are never exposed). Scans `.rb`, `.rake`, ERB views and config YAML under `app`, `config` and `lib`; files matching `sensitive_patterns` (`config/database.yml`, credentials, keys) are never read, and the answer says so. A variable whose call sites pass different defaults is labelled as such rather than with one site's default; `detail:"full"` names each site's.
+Environment variables + credentials keys (values are never exposed). Scans `.rb`, `.rake`, ERB views and config YAML under `app`, `config` and `lib`; files matching `sensitive_patterns` (`config/database.yml`, credentials, keys) are never read, and the answer says so. A variable whose call sites pass different defaults is labelled as such rather than with one site's default; `detail:"full"` names each site's. A default is redacted by the rule a source literal gets: a credential format under any name, a URL's password, and under a secret-named variable a value that is not clearly something else, so an address, URL or hostname default prints as written.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -382,7 +414,9 @@ ActiveInteraction's inputs include the ones it inherits, with the filters
 nested inside a `hash` filter shown under it. Callers are read from every
 `app/` and `lib/` tree, and on a booted app from any other directory it
 autoloads, and the page says when the twenty-caller display cap or the scan's
-own file ceiling left the list partial.
+own file ceiling left the list partial. A module under
+`app/services/concerns/` is a concern rather than a service object, so
+`rails_get_concern` lists it and this tool does not.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -391,11 +425,19 @@ own file ceiling left the list partial.
 
 ### `rails_get_job_pattern`
 
-Background job queue, retries, guard clauses, broadcasts, schedules. Sidekiq
-workers under `app/workers` are listed alongside the ActiveJob jobs, with
-their `sidekiq_options`, any `sidekiq_throttle`, and the `perform` signature. A
-worker that inherits its Sidekiq mixin from a base worker is one of them, and
-`job:` answers a worker name as well as a job name.
+Background job queue, retries, guard clauses, broadcasts, schedules. Jobs are
+read from `app/jobs`, `app/workers` and `app/sidekiq` alike, packs and in-repo
+engines included: ActiveJob subclasses are listed as jobs and Sidekiq classes
+as workers, whichever directory each one lives in. A worker carries its
+`sidekiq_options`, any `sidekiq_throttle`, and the `perform` signature, and a
+worker that inherits its Sidekiq mixin from a base worker is one of them. A class whose
+ancestry reaches neither, but which declares `perform` - a Resque job, a PORO
+enqueued by hand - is listed marked `[unknown base]`. An abstract base another
+job inherits from is not counted as a job; the listing names the ones it left
+out, in the sentence the service and mailer listings use, and `job:` answers
+for one of them with what every job below it inherits: its queue, options,
+retries, mixins, throttle and callbacks, and which jobs inherit it. `job:`
+answers a worker name as well as a job name.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -404,7 +446,7 @@ worker that inherits its Sidekiq mixin from a base worker is one of them, and
 
 ### `rails_get_component_catalog`
 
-ViewComponent/Phlex components: props, slots, previews, sidecar assets, usage examples.
+ViewComponent/Phlex components: props, slots, previews, sidecar assets, usage examples. Components are read from every `app/components`, packs and in-repo engines included. The type follows the superclass chain through the app's own base classes; anything the chain cannot place is counted in the header rather than left out of it. A short name several components share is answered with the list of them and a request for the full one. A base-named component other components inherit from is named on a bases line rather than counted, and previews are read from the default directories and the ones the config sets.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -417,23 +459,23 @@ I18n setup: default/available locales, backend, locale files with key counts, pe
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `locale` | string | - | Show only this locale's files and coverage |
+| `locale` | string | - | Show only this locale's files and coverage, by exact name |
 | `offset` | integer | `0` | Pagination offset over locale files |
 | `limit` | integer | `50` | Max locale files to return |
 
 ### `rails_get_mailers`
 
-ActionMailer mailers: every mailer class with its delivery actions and delivery method.
+ActionMailer mailers: every mailer class with its delivery actions and delivery method. A mailer that declares no action of its own - one taking them from a gem base or a mixin, or one called through class methods - is listed with where its actions come from rather than left out. A base other mailers inherit from is not one: it leaves the listing, and a line above names the ones left out. Asked for by name, a base answers with what every mailer below it inherits - its layout, helpers, defaults, callbacks and mixins as the app wrote them, the methods it defines - and which mailers inherit it.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `mailer` | string | - | Specific mailer name |
+| `mailer` | string | - | One mailer, by exact name |
 | `offset` | integer | `0` | Pagination offset |
 | `limit` | integer | `50` | Max mailers to return |
 
 ### `rails_get_engines`
 
-What `config/routes.rb` mounts - engines and plain Rack apps alike, with known-engine descriptions, each with the path it answers on when the source spells one out - and loaded engine classes with route/model counts.
+What `config/routes.rb` mounts - engines and plain Rack apps alike, with known-engine descriptions, each with the path it answers on when the source spells one out - the app's own in-repo engines, plugins and modules read from the tree, each with the models the model scan filed under its path, and loaded engine classes with route/model counts.
 
 *No parameters.*
 
@@ -445,7 +487,7 @@ Autoloading setup: Zeitwerk vs Classic mode, autoloaders with collapsed/ignored 
 
 ### `rails_get_active_support`
 
-ActiveSupport surface: concerns registry, deprecators, MessageVerifier/MessageEncryptor usage, tagged logging, subscribed `on_load` hooks, cache store.
+ActiveSupport surface: concerns registry, deprecators, MessageVerifier/MessageEncryptor usage, tagged logging, subscribed `on_load` hooks, cache store. Validator classes living among the concerns are counted and listed apart from them, as `rails_get_concern` does.
 
 *No parameters.*
 
@@ -455,7 +497,7 @@ Per-environment configuration from `config/environments/*.rb`: notable toggles (
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `environment` | string | - | Specific environment (e.g. `production`) |
+| `environment` | string | - | One environment, by exact name (e.g. `production`) |
 | `offset` | integer | `0` | Skip this many config keys per environment |
 | `limit` | integer | `50` | Max config keys listed per environment |
 

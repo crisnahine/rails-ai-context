@@ -27,21 +27,26 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(service: nil, detail: "standard", server_context: nil)
+        blank = blank_name_response("service", service)
+        return blank if blank
+
         root = rails_app.root.to_s
         service_dirs = PathResolver.dirs_for(root, "app/services")
 
         if service_dirs.empty?
-          return text_response("No services directory found. Searched app/services/, packs/*/app/services/ and engines/*/app/services/. " \
+          searched = PathResolver.search_patterns(root, "app/services").map { |pattern| "#{pattern}/" }
+          return text_response("No services directory found. Searched #{searched.join(', ')}. " \
             "This app may not use the service objects pattern.")
         end
 
         real_root = File.realpath(root).to_s
         real_service_dirs = service_dirs.map { |d| File.realpath(d).to_s }
 
+        # A module in a concerns directory is a concern, not a service; the generated files'
+        # Services line uses the same rule.
         service_files = service_dirs.flat_map { |d| safe_glob(d, "**/*.rb", real_root) }.uniq.sort
-        if service_files.empty?
-          return text_response("A services directory exists but contains no Ruby files.")
-        end
+          .reject { |f| Introspectors::ServiceClasses.concern?(relative_under(f, real_service_dirs)) }
+        return no_services_response if service_files.empty?
 
         # One lookup for the whole call: it walks the service tree on first
         # use and only a class whose superclass is not ActiveInteraction::Base
@@ -94,7 +99,9 @@ module RailsAiContext
         file = matches.first
 
         unless file
-          available = service_files.map { |f| constant_for(f, service_dirs) }.uniq
+          # The constants the files declare, as the listing names them: the
+          # camelized path spells Activitypub:: where Mastodon writes ActivityPub::.
+          available = service_files.filter_map { |f| (source = safe_read(f)) && name_and_superclass(source, f, service_dirs).first }.uniq
           return not_found_response("Service", service, available.sort,
             recovery_tool: "Call rails_get_service_pattern(detail:\"summary\") to see all services")
         end
@@ -106,7 +113,7 @@ module RailsAiContext
 
         relative = file.sub("#{root}/", "")
         line_count = source.lines.size
-        class_name = service_class_name(source, file, service_dirs)
+        class_name, = name_and_superclass(source, file, service_dirs)
 
         lines = [ "# #{class_name}", "" ]
         lines << "**File:** `#{relative}` (#{count_phrase(line_count, "line")})"
@@ -172,43 +179,53 @@ module RailsAiContext
       end
 
       private_class_method def self.format_service_listing(service_files, service_dirs, root, detail, lookup)
-        # Detect common pattern across all services
-        pattern_stats = { initialize_call: 0, initialize_single_method: 0, class_method_call: 0, result_object: 0, active_interaction: 0, total: 0 }
         service_data = []
 
         service_files.each do |file|
           source = safe_read(file)
           next unless source
+          next if Introspectors::ServiceClasses.concern?(nil, source)
 
-          relative = file.sub("#{root}/", "")
-          class_name = service_class_name(source, file, service_dirs)
-          line_count = source.lines.size
+          class_name, superclass = name_and_superclass(source, file, service_dirs)
+          next if Introspectors::ServiceClasses.mailer?(source, class_name, superclass, lookup)
+
           owned = owned_methods(source, constant_for(file, service_dirs))
           public_methods = extract_public_methods(owned)
           init_params = extract_initialize_params(owned)
 
-          pattern_stats[:total] += 1
-          has_initialize = !init_params.nil?
-          pattern_stats[:initialize_call] += 1 if has_initialize && public_methods.any? { |m| m.start_with?("call") }
-          pattern_stats[:initialize_single_method] += 1 if has_initialize && public_methods.size == 1
-          pattern_stats[:class_method_call] += 1 if owned.any? { |m| m[:scope] == :class && m[:name] == "call" }
-          pattern_stats[:result_object] += 1 if source.match?(/Result\.new|OpenStruct\.new|Struct\.new|\.success|\.failure/)
-          pattern_stats[:active_interaction] += 1 if Introspectors::Interaction.interaction?(source, lookup: lookup)
-
           service_data << {
-            file: relative,
+            file: file.sub("#{root}/", ""),
             class_name: class_name,
-            line_count: line_count,
+            superclass: superclass,
+            line_count: source.lines.size,
             public_methods: public_methods,
-            init_params: init_params
+            init_params: init_params,
+            class_method_call: owned.any? { |m| m[:scope] == :class && m[:name] == "call" },
+            result_object: source.match?(/Result\.new|OpenStruct\.new|Struct\.new|\.success|\.failure/),
+            active_interaction: Introspectors::Interaction.interaction?(source, lookup: lookup),
+            entryless: Introspectors::ServiceClasses.entryless_module?(source, class_name)
           }
         end
 
+        # A module other classes mix in is a concern in all but directory, and
+        # the generated files' Services line leaves it out by the same rule.
+        mixins = Introspectors::ServiceClasses.mixed_in(root, service_data.select { |s| s[:entryless] }.map { |s| s[:class_name] })
+        service_data = service_data.reject { |s| mixins.include?(s[:class_name]) }
+
+        bases = base_class_names(service_data)
+        service_data = service_data.reject { |s| bases.include?(s[:class_name]) }
+        # A directory of base classes alone has no service anybody calls, and
+        # still names the bases it left out.
+        return no_services_response(bases) if service_data.empty?
+
         total = service_data.size
         lines = [ "# Service Objects (#{total})", "" ]
+        if bases.any?
+          lines << bases_note("services", bases) << ""
+        end
 
         # Pattern detection
-        detected = detect_common_pattern(pattern_stats)
+        detected = detect_common_pattern(pattern_stats(service_data))
         lines << "**Common pattern:** #{detected}" if detected
         lines << ""
 
@@ -251,6 +268,36 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
+      private_class_method def self.pattern_stats(service_data)
+        stats = { initialize_call: 0, initialize_single_method: 0, class_method_call: 0, result_object: 0, active_interaction: 0, total: service_data.size }
+        service_data.each do |s|
+          has_initialize = !s[:init_params].nil?
+          stats[:initialize_call] += 1 if has_initialize && s[:public_methods].any? { |m| m.start_with?("call") }
+          stats[:initialize_single_method] += 1 if has_initialize && s[:public_methods].size == 1
+          stats[:class_method_call] += 1 if s[:class_method_call]
+          stats[:result_object] += 1 if s[:result_object]
+          stats[:active_interaction] += 1 if s[:active_interaction]
+        end
+        stats
+      end
+
+      private_class_method def self.no_services_response(bases = [])
+        text_response([ "A services directory exists but contains no service objects.",
+                        bases_note("services", bases) ].compact.join("\n\n"))
+      end
+
+      # A base class is not a service a caller invokes: counted as one it
+      # inflates the total and the pattern denominator beside it.
+      private_class_method def self.base_class_names(service_data)
+        Introspectors::ServiceClasses.abstract_names(service_data.map { |s| [ s[:class_name], s[:superclass] ] })
+      end
+
+      # The class this file declares and the superclass it names, from the one
+      # parse the generated files' Services line reads them with.
+      private_class_method def self.name_and_superclass(source, file, service_dirs)
+        Introspectors::ServiceClasses.declaration(source, constant_for(file, service_dirs))
+      end
+
       # Zeitwerk requires the constant to match the path, and only the path
       # carries the namespace: `admin/suspend_service.rb` is `Admin::SuspendService`,
       # which no single `class` line in the file spells out.
@@ -263,26 +310,19 @@ module RailsAiContext
         relative_under(file, service_dirs).delete_prefix("concerns/").delete_suffix(".rb").camelize
       end
 
-      # The name the file's own class or module declares, resolved against the
-      # path the way every other static name is. A regex over raw source read
-      # the word after "class" in a comment, never matched `module`, and its
-      # basename fallback dropped the namespace every nested service carries.
-      private_class_method def self.service_class_name(source, file, service_dirs)
-        Introspectors::DeclaredConstant.resolve(source, constant_for(file, service_dirs))
-      end
-
       # Exact relative path first. A bare name with no namespace may still
       # match on basename, but `Users::Create` must never answer with
       # `api/v1/addresses/create.rb` just because it sorts first.
       private_class_method def self.match_service_files(service, service_files, service_dirs)
-        snake = service.underscore.delete_suffix(".rb")
+        name = service.delete_suffix(".rb")
         relative_of = ->(f) { relative_under(f, service_dirs).delete_suffix(".rb") }
-
-        exact = service_files.select { |f| relative_of.call(f) == snake }
+        # The app's acronyms decide the path, and this process has none of
+        # them: compare the way DeclaredConstant does.
+        exact = service_files.select { |f| Introspectors::DeclaredConstant.path_for?(relative_of.call(f), name) }
         return exact if exact.any?
-        return [] if snake.include?("/")
+        return [] if name.include?("::") || name.include?("/")
 
-        service_files.select { |f| relative_of.call(f).split("/").last == snake }
+        service_files.select { |f| Introspectors::DeclaredConstant.path_for?(relative_of.call(f).split("/").last, name) }
       end
 
       # ActiveInteraction declares its interface as filter macros rather than
@@ -355,18 +395,11 @@ module RailsAiContext
       end
 
       private_class_method def self.extract_dependencies(source, own_class_name)
-        deps = Set.new
-
-        # Class.new(...) or Class.call(...) or Class.perform_later(...)
-        source.scan(/([A-Z][\w:]+)\.(new|call|perform_later|perform_async|perform_now|create|find|where)\b/).each do |match|
-          cls = match[0]
-          next if cls == own_class_name
-          next if %w[Rails ActiveRecord ApplicationRecord File Dir ENV String Integer Float Array Hash Set Time Date DateTime URI Regexp].include?(cls)
-          deps << cls
-        end
+        deps = Set.new(Introspectors::SourceCalls.classes(source, own: own_class_name))
 
         # Mailers are invoked through their action name (PostMailer.published_email),
-        # which the verb whitelist above can't anticipate.
+        # which no verb list can anticipate.
+        # regex over .rb content: vocabulary classification, a mailer call carries no verb to match.
         source.scan(/([A-Z][\w:]*Mailer)\.\w+/).each do |match|
           cls = match[0]
           next if cls == own_class_name || cls == "ActionMailer"
@@ -403,7 +436,7 @@ module RailsAiContext
         effects << "database write (destroy)" if source.match?(/\.destroy[!]?/)
         effects << "database write (delete)" if source.match?(/\.delete\b/)
         effects << "email delivery (deliver)" if source.match?(/\.deliver_later|\.deliver_now/)
-        effects << "job enqueue" if source.match?(/\.perform_later|\.perform_async/)
+        effects << "job enqueue" if Introspectors::SourceCalls.enqueue_calls(source, enqueue_helpers).any?
         effects << "Turbo broadcast" if source.match?(/broadcast_|Turbo::StreamsChannel/)
         effects << "HTTP request" if source.match?(/Faraday|Net::HTTP|HTTParty|RestClient|\.post\(|\.get\(/)
         effects << "file write" if source.match?(/File\.write|File\.open.*["']w/)
@@ -452,7 +485,7 @@ module RailsAiContext
         callers = Set.new
         search_dirs = caller_search_dirs(real_root)
         # A bare `include?` matched `Billing::Invoices::Create` inside
-        # `Workers::Billing::Invoices::CreateOrUpdateSheetWorker`, and the
+        # `Workers::Billing::Invoices::CreateReminderWorker`, and the
         # underscored-path skip dropped the one real caller, whose path
         # contains the service's own path as a prefix.
         reference = /(?<![\w:])(?:::)?#{Regexp.escape(class_name)}(?![\w:])/

@@ -38,6 +38,95 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
       expect(text).to include("page_title")
     end
 
+    context "framework helper detection" do
+      around do |example|
+        Dir.mktmpdir("helper-frameworks") do |dir|
+          @root = dir
+          FileUtils.mkdir_p(File.join(dir, "app/views/posts"))
+          FileUtils.mkdir_p(File.join(dir, "app/helpers"))
+          File.write(File.join(dir, "app/helpers/application_helper.rb"),
+                     "module ApplicationHelper\n  def page_title = \"t\"\nend\n")
+          File.write(File.join(dir, "Gemfile"), <<~GEMFILE)
+            gem "devise"
+            gem "turbo-rails"
+            gem "will_paginate"
+            gem "simple_form"
+            gem "inline_svg"
+            gem "meta-tags"
+            gem "pagy"
+            # gem "pundit"
+          GEMFILE
+          File.write(File.join(dir, "app/views/posts/index.html.erb"), <<~ERB)
+            <%= current_user %>
+            <%= turbo_frame_tag "posts" %>
+            <%= will_paginate @posts %>
+            <%= simple_form_for @post %>
+            <%= inline_svg_tag "logo.svg" %>
+            <%= display_meta_tags %>
+          <%= policy(@post) %>
+          ERB
+          example.run
+        end
+      end
+
+      before do
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+        allow(described_class).to receive(:cached_context).and_return({})
+      end
+
+      it "names the gems whose Gemfile entry does not match the library name" do
+        text = described_class.call(detail: "full").content.first[:text]
+
+        expect(text).to include("**Devise:** current_user")
+        expect(text).to include("**Turbo:** turbo_frame_tag")
+        expect(text).to include("**WillPaginate:** will_paginate")
+        expect(text).to include("**SimpleForm:** simple_form_for")
+        expect(text).to include("**InlineSvg:** inline_svg_tag")
+        expect(text).to include("**MetaTags:** display_meta_tags")
+      end
+
+      it "leaves out a gem the Gemfile only names in a comment" do
+        text = described_class.call(detail: "full").content.first[:text]
+
+        expect(text).not_to include("**Pundit:**")
+      end
+    end
+
+    # An app that registers an acronym keeps JsonLdHelper in jsonld_helper.rb;
+    # underscoring the name here, knowing none of the app's acronyms, looked
+    # for json_ld_helper.rb.
+    context "with a helper the app names through an acronym" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "helpers", "activitypub"))
+        File.write(File.join(tmpdir, "app", "helpers", "jsonld_helper.rb"), <<~RUBY)
+          module JsonLdHelper
+            def context_url; end
+          end
+        RUBY
+        File.write(File.join(tmpdir, "app", "helpers", "activitypub", "links_helper.rb"), <<~RUBY)
+          module ActivityPub::LinksHelper
+            def actor_url; end
+          end
+        RUBY
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "finds it by the name the app writes" do
+        text = described_class.call(helper: "JsonLdHelper").content.first[:text]
+        expect(text).to include("context_url")
+        expect(text).not_to include("not found")
+      end
+
+      it "finds a helper under an acronym namespace" do
+        text = described_class.call(helper: "ActivityPub::LinksHelper").content.first[:text]
+        expect(text).to include("actor_url")
+      end
+    end
+
     it "shows specific helper by module name" do
       result = described_class.call(helper: "ApplicationHelper")
       text = result.content.first[:text]
@@ -235,6 +324,40 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
           expect(text).to include("Same file name, different module")
           expect(text).to include("Reports::DashboardHelper")
           expect(text).to include("app/helpers/reports/dashboard_helper.rb")
+        end
+      end
+    end
+
+    # A Discourse plugin nests its tree under its own namespace:
+    # plugins/discourse-chat-integration/app/helpers/helper.rb declares
+    # DiscourseChatIntegration::Helper, which the path names "Helper".
+    context "when a plugin's helper declares a namespace its path does not carry" do
+      def plugin_app(root)
+        plugin = File.join(root, "plugins", "discourse-chat-integration")
+        FileUtils.mkdir_p(File.join(plugin, "app", "helpers"))
+        File.write(File.join(plugin, "plugin.rb"), "# name: discourse-chat-integration\n")
+        File.write(File.join(plugin, "app", "helpers", "helper.rb"), <<~RUBY)
+          module DiscourseChatIntegration
+            module Helper
+              def self.process_command; end
+
+              def channel_name; end
+            end
+          end
+        RUBY
+        FileUtils.mkdir_p(File.join(root, "app", "helpers"))
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+      end
+
+      it "lists it and answers it under the constant the file declares" do
+        Dir.mktmpdir do |root|
+          plugin_app(root)
+
+          expect(described_class.call.content.first[:text]).to include("DiscourseChatIntegration::Helper")
+
+          text = described_class.call(helper: "DiscourseChatIntegration::Helper").content.first[:text]
+          expect(text).to include("# DiscourseChatIntegration::Helper")
+          expect(text).to include("channel_name")
         end
       end
     end

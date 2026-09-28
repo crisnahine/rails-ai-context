@@ -9,14 +9,8 @@ module RailsAiContext
     # Generated files:
     #   app/models/AGENTS.md      - model listing, loaded when editing models
     #   app/controllers/AGENTS.md - controller listing, loaded when editing controllers
-    class OpencodeRulesSerializer
+    class OpencodeRulesSerializer < Base
       include StackOverviewHelper
-
-      attr_reader :context
-
-      def initialize(context)
-        @context = context
-      end
 
       RULE_FILES = {
         "app/models/AGENTS.md" => { renderer: :render_models_reference, reason: "no models" },
@@ -108,11 +102,11 @@ module RailsAiContext
         lines.concat(render_compact_controllers_list(app_controllers, limit: 25, with_actions: true))
 
         # List service objects
-        services = detect_service_files
+        services = service_names
         lines << "" << "**Services:** #{services.join(', ')}" if services.any?
 
         # List jobs
-        jobs = detect_job_files
+        jobs = job_names
         lines << "**Jobs:** #{jobs.join(', ')}" if jobs.any?
 
         lines << ""

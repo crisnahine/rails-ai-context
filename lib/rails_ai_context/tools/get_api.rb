@@ -62,7 +62,7 @@ module RailsAiContext
           parts << "Versions: #{data[:api_versioning].join(', ')}" if versioning?(data)
           rate = rate_limiting_label(data[:rate_limiting])
           parts << "Rate limiting: #{rate}" if rate
-          parts << "CORS configured (#{data[:cors_config][:file]})" if data[:cors_config].is_a?(Hash)
+          parts << cors_summary(data[:cors_config]) if data[:cors_config].is_a?(Hash)
           parts << "Pagination: #{data[:pagination].join(', ')}" if pagination?(data)
 
           summary = parts.join(". ")
@@ -98,8 +98,12 @@ module RailsAiContext
         end
 
         def versioning_line(data)
-          return "#{data[:api_versioning].join(', ')} (app/controllers/api/)" if versioning?(data)
-          "not detected (no app/controllers/api/v* directories)"
+          if versioning?(data)
+            dirs = Array(data[:api_versioning_dirs])
+            source = dirs.any? ? dirs.join(", ") : "app/controllers/api/"
+            return "#{data[:api_versioning].join(', ')} (#{source})"
+          end
+          "not detected (no api/v* directories under app/controllers, app/api or lib/api)"
         end
 
         def rate_limiting_line(data)
@@ -206,12 +210,21 @@ module RailsAiContext
         end
 
         def graphql_label(graphql)
-          "#{count_phrase(graphql[:types], "type")}, #{count_phrase(graphql[:mutations], "mutation")}, #{count_phrase(graphql[:queries], "query")} (app/graphql)"
+          parts = [ count_phrase(graphql[:types], "type"), count_phrase(graphql[:mutations], "mutation") ]
+          parts << count_phrase(graphql[:queries], "query") if graphql[:queries]
+          parts << query_root_label(graphql[:query_root]) if !graphql[:queries] && graphql[:query_root]
+          "#{parts.join(', ')} (app/graphql)"
+        end
+
+        def query_root_label(query_root)
+          return "query fields declared through a macro in #{query_root[:file]}, not counted" if query_root[:macro_declared]
+
+          "#{count_phrase(query_root[:fields], "query field")} in #{query_root[:file]}"
         end
 
         def rate_limiting_label(rate)
           return nil unless rate.is_a?(Hash)
-          return "Rack::Attack (config/initializers/rack_attack.rb)" if rate[:rack_attack]
+          return "Rack::Attack (#{rate[:file] || 'config/initializers/rack_attack.rb'})" if rate[:rack_attack]
           return "Rails rate_limit macro (controller-level)" if rate[:rails_rate_limiting]
           nil
         end
@@ -220,13 +233,16 @@ module RailsAiContext
         # absent and when it exists with no active origins call (Rails --api
         # generates it fully commented out), so the empty state covers both.
         def cors_line(cors)
-          return "not detected (no CORS initializer with active origins)" unless cors.is_a?(Hash)
+          return "not detected (no CORS initializer)" unless cors.is_a?(Hash)
 
           allows = Array(cors[:allows])
           return cors_allow_lines(cors, allows) if allows.any?
 
           origins = Array(cors[:origins]).map(&:to_s)
-          origins.any? ? "#{cors[:file]} (origins: #{origins.join(', ')})" : cors[:file].to_s
+          return "#{cors[:file]} (origins: #{origins.join(', ')})" if origins.any?
+          return "#{cors[:file]} (no allow block; inserts #{Array(cors[:inserts]).join(', ')})" if cors[:inserts]
+
+          "#{cors[:file]} (every line commented out, no CORS rules active)"
         end
 
         # One line per `allow` block: a flat origin list read as though every
@@ -235,12 +251,31 @@ module RailsAiContext
           rows = allows.map do |allow|
             resources = Array(allow[:resources])
             origins = Array(allow[:origins]).map do |origin|
-              origin[:condition] ? "#{origin[:value]} if #{origin[:condition]}" : origin[:value].to_s
+              value = origin_label(origin)
+              next "#{value} otherwise" if origin[:otherwise]
+
+              origin[:condition] ? "#{value} if #{origin[:condition]}" : value
             end
             scope = resources.any? ? resources.join(", ") : "(no resource)"
             "  - `#{scope}` → #{origins.any? ? origins.join(', ') : '(no origins)'}"
           end
           ([ "#{cors[:file]} (#{count_phrase(allows.size, "allow block")})" ] + rows).join("\n")
+        end
+
+        # An origin list the initializer computes is still a configured list;
+        # a block that hands back the request origin allows all of them.
+        def cors_summary(cors)
+          return "CORS initializer with nothing active in it (#{cors[:file]})" if cors[:commented_out]
+
+          "CORS configured (#{cors[:file]})"
+        end
+
+        def origin_label(origin)
+          return origin[:value].to_s unless origin[:computed]
+          return "#{origin[:value]} (computed)" unless origin.key?(:echoes_request_origin)
+          return "computed by a block that echoes the request Origin header (any origin is allowed)" if origin[:echoes_request_origin]
+
+          "computed by a block"
         end
 
         def missing_areas(data)

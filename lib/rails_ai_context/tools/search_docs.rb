@@ -101,11 +101,7 @@ module RailsAiContext
           return text_response("No documentation found for '#{query}'. Try broader terms like 'active record', 'routing', or 'testing'.")
         end
 
-        if fetch
-          format_fetch_results(results, query, source, branch)
-        else
-          format_results(results, query, source, branch)
-        end
+        format_results(results, query, source, branch, fetch: fetch)
       end
 
       class << self
@@ -172,9 +168,9 @@ module RailsAiContext
           end
         end
 
-        def format_results(results, query, source, branch)
+        def format_results(results, query, source, branch, fetch: false)
           lines = []
-          lines << "# Rails Documentation Search: \"#{query}\""
+          lines << "# Rails Documentation Search: \"#{query}\"#{" (fetched)" if fetch}"
           lines << "Found #{count_phrase(results.size, "result")} (#{source})"
           lines << ""
 
@@ -182,27 +178,12 @@ module RailsAiContext
             topic = r[:topic]
             url = url_for(topic, branch)
             lines << "## #{i + 1}. #{topic['title']} [#{topic['source']}]"
-            lines << topic["summary"] if topic["summary"]
-            lines << "→ #{url}"
-            lines << ""
-          end
-
-          text_response(lines.join("\n"))
-        end
-
-        def format_fetch_results(results, query, source, branch)
-          lines = []
-          lines << "# Rails Documentation Search: \"#{query}\" (fetched)"
-          lines << "Found #{count_phrase(results.size, "result")} (#{source})"
-          lines << ""
-
-          results.each_with_index do |r, i|
-            topic = r[:topic]
-            url = url_for(topic, branch)
-            lines << "## #{i + 1}. #{topic['title']} [#{topic['source']}]"
-
-            content = fetch_content(topic, branch, url)
-            lines << content
+            if fetch
+              lines << fetch_content(topic, branch, url)
+            else
+              lines << topic["summary"] if topic["summary"]
+              lines << "→ #{url}"
+            end
             lines << ""
           end
 

@@ -28,6 +28,12 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
+      STANDARD_SECTIONS = %i[stack data_model auth key_flows jobs frontend testing getting_started].freeze
+      FULL_SECTIONS = %i[
+        stack data_model auth key_flows jobs frontend payments realtime storage api devops i18n engines env
+        testing getting_started
+      ].freeze
+
       def self.call(detail: "standard", server_context: nil)
         ctx = cached_context
 
@@ -90,47 +96,24 @@ module RailsAiContext
 
           tests = Payload.section(ctx, :tests)
           if tests
-            parts << "tested with #{tests[:framework] || 'unknown framework'}"
+            framework = tests[:framework]
+            parts << (RailsAiContext::TestFramework.none?(framework) ? "with no tests yet" : "tested with #{framework || 'unknown framework'}")
           end
 
           parts.join(" ") + "."
         end
 
-        # ── Standard: structured walkthrough ─────────────────────────────
-
         def compose_standard(ctx)
-          lines = [ "# Welcome to #{ctx[:app_name] || 'This Rails App'}", "" ]
-          lines.concat(section_stack(ctx))
-          lines.concat(section_data_model(ctx))
-          lines.concat(section_auth(ctx))
-          lines.concat(section_key_flows(ctx))
-          lines.concat(section_jobs(ctx))
-          lines.concat(section_frontend(ctx))
-          lines.concat(section_testing(ctx))
-          lines.concat(section_getting_started(ctx))
-          lines.join("\n")
+          compose_sections(ctx, "# Welcome to #{ctx[:app_name] || 'This Rails App'}", STANDARD_SECTIONS)
         end
 
-        # ── Full: standard + all subsystems ──────────────────────────────
-
         def compose_full(ctx)
-          lines = [ "# Welcome to #{ctx[:app_name] || 'This Rails App'} (Full Walkthrough)", "" ]
-          lines.concat(section_stack(ctx))
-          lines.concat(section_data_model(ctx))
-          lines.concat(section_auth(ctx))
-          lines.concat(section_key_flows(ctx))
-          lines.concat(section_jobs(ctx))
-          lines.concat(section_frontend(ctx))
-          lines.concat(section_payments(ctx))
-          lines.concat(section_realtime(ctx))
-          lines.concat(section_storage(ctx))
-          lines.concat(section_api(ctx))
-          lines.concat(section_devops(ctx))
-          lines.concat(section_i18n(ctx))
-          lines.concat(section_engines(ctx))
-          lines.concat(section_env(ctx))
-          lines.concat(section_testing(ctx))
-          lines.concat(section_getting_started(ctx))
+          compose_sections(ctx, "# Welcome to #{ctx[:app_name] || 'This Rails App'} (Full Walkthrough)", FULL_SECTIONS)
+        end
+
+        def compose_sections(ctx, heading, sections)
+          lines = [ heading, "" ]
+          sections.each { |name| lines.concat(send(:"section_#{name}", ctx)) }
           lines.join("\n")
         end
 
@@ -141,8 +124,11 @@ module RailsAiContext
           schema = Payload.section(ctx, :schema)
           if schema
             # Prefer live adapter from config over static_parse from schema introspector
-            adapter = resolve_db_adapter(ctx, schema)
+            adapter = RailsAiContext::SchemaAdapter.label(ctx)
             db = "#{adapter} (#{count_phrase(schema[:total_tables].to_i, 'table')})"
+          elsif RailsAiContext::AppKind.mongoid?(rails_app.root)
+            database = RailsAiContext::AppKind.mongoid_database(rails_app.root)
+            db = "MongoDB through Mongoid#{" (database #{database})" if database}"
           else
             db = "unknown"
           end
@@ -286,7 +272,7 @@ module RailsAiContext
           framework_count = RouteCoverage.framework_route_count(routes)
           framework_note = framework_count > 0 ? " (plus #{count_phrase(framework_count, 'framework route')})" : ""
           lines << "Total: #{count_phrase(app_route_count, 'app route')} across " \
-                   "#{count_phrase(app_ctrls.size, 'controller')}#{framework_note}" \
+                   "#{RouteCoverage.controller_phrase(routes)}#{framework_note}" \
                    "#{RailsAiContext::RouteCoverage.suffix(routes)}."
           lines << ""
           lines
@@ -377,7 +363,7 @@ module RailsAiContext
 
           factories = tests[:factories]
           fixtures = tests[:fixtures]
-          lines << "Data setup: #{factories ? "FactoryBot (#{count_phrase(factories[:count].to_i, 'factory')})" : fixtures ? "fixtures (#{count_phrase(fixtures[:count].to_i, 'file')})" : "inline"}."
+          lines << "Data setup: #{factories ? "FactoryBot (#{factory_phrase(tests)})" : fixtures ? "fixtures (#{RailsAiContext::TestFramework.fixture_phrase(fixtures)})" : "inline"}."
 
           ci = tests[:ci_config]
           lines << "CI: #{ci.join(', ')}." if ci&.any?
@@ -385,28 +371,39 @@ module RailsAiContext
           coverage = tests[:coverage]
           lines << "Coverage: #{coverage}." if coverage
 
-          test_cmd = framework == "rspec" ? "bundle exec rspec" : "rails test"
+          test_cmd = RailsAiContext::TestFramework.command(framework)
           lines << "" << "Run tests: `#{test_cmd}`"
           lines << ""
           lines
         end
 
+        # The factories a suite defines, and the files they sit in: one file
+        # commonly defines several, so the file count is not the factory count.
+        def factory_phrase(tests)
+          files = count_phrase(tests[:factories][:count].to_i, "file")
+          names = tests[:factory_names]
+          return files unless names.is_a?(Hash) && names.any?
+
+          # A factory named in a loop defines at least one, so the count is a floor.
+          computed = tests[:computed_factories].to_i
+          phrase = count_phrase(names.values.sum { |list| Array(list).size } + computed, "factory", plural: "factories")
+          "#{computed.positive? ? floor_phrase(phrase) : phrase} in #{files}"
+        end
+
         def section_getting_started(ctx)
-          test_cmd = (ctx[:tests].is_a?(Hash) && ctx[:tests][:framework] == "rspec") ? "bundle exec rspec" : "rails test"
-          # bin/dev only exists in apps generated with a JS/CSS watcher;
-          # recommending it elsewhere sends readers to a missing script.
-          server_cmd = File.exist?(rails_app.root.join("bin", "dev")) ? "bin/dev  # or rails server" : "rails server"
+          test_cmd = RailsAiContext::TestFramework.command(ctx[:tests].is_a?(Hash) ? ctx[:tests][:framework] : nil)
+          server_cmd = RailsAiContext::AppCommands.server(rails_app.root)
           [
             "## Getting Started", "",
             "```bash",
             "git clone <repo-url>",
             "cd #{File.basename(rails_app.root.to_s)}",
             "bundle install",
-            "rails db:setup",
+            RailsAiContext::AppCommands.setup(rails_app.root),
             server_cmd,
             "#{test_cmd}  # verify everything works",
             "```", ""
-          ]
+          ].compact
         end
 
         # ── Full-only sections ───────────────────────────────────────────
@@ -583,26 +580,7 @@ module RailsAiContext
         # Those aren't hand-written rules, so the count deserves a qualifier.
         def all_implicit_belongs_to_validations?(data)
           validations = data[:validations] || []
-          return false if validations.empty?
-
-          belongs_to_names = (data[:associations] || [])
-            .select { |a| a.is_a?(Hash) && a[:type].to_s == "belongs_to" }
-            .map { |a| a[:name].to_s }
-          return false if belongs_to_names.empty?
-
-          validations.all? do |v|
-            next false unless v.is_a?(Hash)
-            kind = (v[:kind] || v["kind"]).to_s
-            attrs = Array(v[:attributes] || v["attributes"]).map(&:to_s)
-            kind == "presence" && attrs.any? && attrs.all? { |attr| belongs_to_names.include?(attr) }
-          end
-        end
-
-        # The gems loop here let the LAST match win, so an app carrying both pg
-        # and sqlite3 was told SQLite by onboard and PostgreSQL by the
-        # generated files. One seam, one answer.
-        def resolve_db_adapter(ctx, _schema = nil)
-          RailsAiContext::SchemaAdapter.label(ctx)
+          validations.any? && validations.all? { |v| v.is_a?(Hash) && v[:implicit] }
         end
 
         # Statically the Ruby version is the one the app declares, not one
@@ -640,11 +618,9 @@ module RailsAiContext
         end
 
         def central_models(models, limit = 5)
-          models
-            .select { |_, d| d.is_a?(Hash) && !d[:error] }
-            .sort_by { |_, d| -(d[:associations]&.size || 0) }
+          Payload.models_by_connection(models)
+            .select { |name| models[name].is_a?(Hash) && !models[name][:error] }
             .first(limit)
-            .map(&:first)
         end
 
         # Quick one-line frontend summary from conventions

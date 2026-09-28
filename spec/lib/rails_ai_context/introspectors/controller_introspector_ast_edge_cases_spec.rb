@@ -5,11 +5,6 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge cases" do
   let(:introspector) { described_class.new(Rails.application) }
 
-  # Helper: extract from source-only path (no class loading)
-  def extract_from_source(source)
-    introspector.send(:extract_details_from_source_string, source)
-  end
-
   # ────────────────────────────────────────────────────────────
   # Edge case 1: Inline before_action block (no symbol arg)
   # The old regex matched `before_action :symbol_name`.
@@ -369,6 +364,24 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
   end
 
   # ────────────────────────────────────────────────────────────
+  describe "a permitted key written as a quoted symbol" do
+    it "names it by the symbol it builds, not by its source text" do
+      source = <<~'RUBY'
+        class QuotedController < ApplicationController
+          private
+
+          def quoted_params
+            params.require(:thing).permit(:"line\tone", :"sub key" => [ :"deep\tone" ])
+          end
+        end
+      RUBY
+      entry = introspector.send(:extract_strong_params, source).first
+
+      expect(entry[:permits]).to include("line\tone")
+      expect(entry[:nested]).to eq({ "sub key" => [ "deep\tone" ] })
+    end
+  end
+
   # Edge case 9: Strong params - params.permit without require
   # ────────────────────────────────────────────────────────────
   describe "params.permit without require" do
@@ -717,7 +730,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
       expect(filter).not_to have_key(:only)
     end
 
-    it "leaves other conditions as they were" do
+    it "keeps a condition it cannot name as the line the file wrote" do
       source = <<~RUBY
         class GuardedController < ApplicationController
           before_action :verify_captcha, if: -> { current_user.suspicious? }
@@ -725,7 +738,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
       RUBY
 
       filter = introspector.send(:extract_filters_from_source, source).first
-      expect(filter[:if]).to eq(RailsAiContext::Confidence::INFERRED)
+      expect(filter[:if]).to eq("-> { current_user.suspicious? }")
     end
 
     it "keeps a symbol condition readable" do
@@ -736,7 +749,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
       RUBY
 
       filter = introspector.send(:extract_filters_from_source, source).first
-      expect(filter[:if]).to eq("signed_in?")
+      expect(filter[:if]).to eq(:signed_in?)
     end
   end
 

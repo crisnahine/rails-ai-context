@@ -100,6 +100,16 @@ RSpec.describe RailsAiContext::Tools::GetEnvConfig do
         expect(text).not_to include("## development")
       end
 
+      # An app can have both `production` and `production_replica`; a
+      # substring hit answered an abbreviation with whichever is shortest.
+      it "does not answer an abbreviation with a whole environment" do
+        text = described_class.call(environment: "prod").content.first[:text]
+
+        expect(text).to include("Environment 'prod' not found.")
+        expect(text).to include("Did you mean 'production'?")
+        expect(text).not_to include("## production\n")
+      end
+
       it "returns not-found for an unknown environment" do
         text = described_class.call(environment: "qa").content.first[:text]
         expect(text).to include("Environment 'qa' not found.")

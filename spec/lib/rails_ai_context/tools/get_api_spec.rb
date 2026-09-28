@@ -94,11 +94,26 @@ RSpec.describe RailsAiContext::Tools::GetApi do
         expect(text).to include("**GraphQL:** 12 types, 4 mutations, 2 queries (app/graphql)")
       end
 
+      it "says where query fields live when there is no queries directory" do
+        api_data[:graphql] = { types: 12, mutations: 4,
+                               query_root: { file: "app/graphql/types/query_type.rb", fields: 0, macro_declared: true } }
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("12 types, 4 mutations, query fields declared through a macro in app/graphql/types/query_type.rb, not counted")
+      end
+
       it "includes API versioning" do
         result = described_class.call(detail: "standard")
         text = result.content.first[:text]
 
         expect(text).to include("**Versioning:** v1, v2 (app/controllers/api/)")
+      end
+
+      it "names the directories a version came from" do
+        api_data[:api_versioning_dirs] = [ "app/controllers/api/v1", "lib/api/v3" ]
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("**Versioning:** v1, v2 (app/controllers/api/v1, lib/api/v3)")
       end
 
       it "includes rate limiting" do
@@ -113,6 +128,57 @@ RSpec.describe RailsAiContext::Tools::GetApi do
         text = result.content.first[:text]
 
         expect(text).to include("**CORS:** config/initializers/cors.rb (origins: example.com, *)")
+      end
+
+      it "says an origins block echoes the request origin" do
+        api_data[:cors_config] = {
+          file: "config/initializers/cors.rb",
+          origins: [ "a block" ],
+          allows: [ { origins: [ { value: "a block", computed: true, echoes_request_origin: true } ],
+                      resources: [ "/openapi.yml" ] } ]
+        }
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("computed by a block that echoes the request Origin header (any origin is allowed)")
+      end
+
+      it "names the middleware a CORS initializer with no allow block inserts" do
+        api_data[:cors_config] = { file: "config/initializers/008-rack-cors.rb", origins: [], allows: [],
+                                   inserts: [ "Discourse::Cors" ] }
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("**CORS:** config/initializers/008-rack-cors.rb (no allow block; inserts Discourse::Cors)")
+      end
+
+      it "says the same thing in the summary and in the detail" do
+        api_data[:cors_config] = { file: "config/initializers/cors.rb", origins: [], allows: [], commented_out: true }
+        summary = described_class.call(detail: "summary").content.first[:text]
+        standard = described_class.call(detail: "standard").content.first[:text]
+
+        expect(summary).to include("CORS initializer with nothing active in it (config/initializers/cors.rb)")
+        expect(standard).to include("every line commented out, no CORS rules active")
+        expect(summary).not_to include("CORS configured")
+      end
+
+      it "says a generated CORS initializer is still commented out" do
+        api_data[:cors_config] = { file: "config/initializers/cors.rb", origins: [], allows: [], commented_out: true }
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("**CORS:** config/initializers/cors.rb (every line commented out, no CORS rules active)")
+      end
+
+      it "reads a branch no condition picked as otherwise" do
+        api_data[:cors_config] = {
+          file: "config/initializers/cors.rb", origins: [],
+          allows: [ { resources: [ "*" ], origins: [
+            { value: "https://app.example.com", condition: "Rails.env.production?" },
+            { value: "*", otherwise: true }
+          ] } ]
+        }
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("`*` → https://app.example.com if Rails.env.production?, * otherwise")
+        expect(text).not_to include("if else")
       end
 
       it "includes pagination gems" do
@@ -222,9 +288,9 @@ RSpec.describe RailsAiContext::Tools::GetApi do
         expect(text).to include("**Mode:** Full-stack app (config.api_only = false)")
         expect(text).to include("**Serialization:** Jbuilder (3 templates)")
         expect(text).to include("**GraphQL:** not detected (no app/graphql directory)")
-        expect(text).to include("**Versioning:** not detected (no app/controllers/api/v* directories)")
+        expect(text).to include("**Versioning:** not detected (no api/v* directories under app/controllers, app/api or lib/api)")
         expect(text).to include("**Rate limiting:** not detected (no Rack::Attack initializer, no rate_limit macro)")
-        expect(text).to include("**CORS:** not detected (no CORS initializer with active origins)")
+        expect(text).to include("**CORS:** not detected (no CORS initializer)")
         expect(text).to include("**Pagination:** no pagination gem detected (pagy/kaminari/will_paginate)")
       end
 

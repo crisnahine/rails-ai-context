@@ -4,15 +4,9 @@ module RailsAiContext
   module Serializers
     # Generates .github/instructions/*.instructions.md files with applyTo frontmatter
     # for GitHub Copilot path-specific instructions.
-    class CopilotInstructionsSerializer
+    class CopilotInstructionsSerializer < Base
       include StackOverviewHelper
       include ToolGuideHelper
-
-      attr_reader :context
-
-      def initialize(context)
-        @context = context
-      end
 
       RULE_FILES = {
         "rails-context.instructions.md" => { renderer: :render_context_instructions, reason: "nothing to document" },

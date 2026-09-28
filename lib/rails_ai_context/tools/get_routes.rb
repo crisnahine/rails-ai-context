@@ -60,14 +60,45 @@ module RailsAiContext
       # A mounted app answers on a path and has no controller#action, so
       # no controller group can hold it. Counting it and then dropping it left
       # the one endpoint a reader was looking for named nowhere.
-      private_class_method def self.mounted_apps_lines(mounted_apps)
-        return [] if mounted_apps.empty?
+      private_class_method def self.mounted_apps_lines(mounted_apps, engine_routes = [])
+        lines = []
+        unless mounted_apps.empty?
+          lines << "" << "## Mounted Apps (#{mounted_apps.size})"
+          mounted_apps.each do |app|
+            lines << (app[:path] ? "- **#{app[:engine]}** at `#{app[:path]}`" : "- **#{app[:engine]}**")
+          end
+          lines << "_A mounted app's own routes are in its table, not in the count above._"
+        end
+        lines.concat(engine_routes_lines(engine_routes))
+      end
 
-        lines = [ "", "## Mounted Apps (#{mounted_apps.size})" ]
-        mounted_apps.each do |app|
-          lines << (app[:path] ? "- **#{app[:engine]}** at `#{app[:path]}`" : "- **#{app[:engine]}**")
+      # Routes in an engine's table are counted apart from the app's on both tiers. Booted
+      # reads the engine's whole table; static reads what the app's route files draw into it.
+      private_class_method def self.engine_routes_lines(engine_routes)
+        groups = Array(engine_routes)
+        return [] if groups.empty?
+
+        lines = [ "", "## Routes drawn into mounted engines" ]
+        groups.each do |group|
+          at = group[:mount] ? " at `#{group[:mount]}`" : " (not mounted by the app's routes)"
+          at += " (also #{group[:also_mounted_at].map { |path| "`#{path}`" }.join(', ')})" if group[:also_mounted_at]
+          whole = group[:whole_table] ? " in the engine's whole table, gem-drawn ones included" : ""
+          unexpanded = group[:dynamic_routes].to_i.positive? ? ", #{count_phrase(group[:dynamic_routes], "dynamic construct")} not expanded" : ""
+          lines << "- **#{group[:engine]}**#{at}: #{count_phrase(Array(group[:routes]).size, "route")}#{whole}#{unexpanded}, not in the count above"
         end
         lines
+      end
+
+      # The routes a controller filter matches in the engines' tables, one
+      # group per controller labelled with its engine, listed like the app's.
+      private_class_method def self.engine_controller_groups(engine_routes, needles)
+        Array(engine_routes).each_with_object({}) do |group, found|
+          matches = Array(group[:routes]).select { |r| needles.any? { |n| path_segments_match?(r[:controller].to_s, n, tail: true) } }
+          where = group[:mount] ? "" : ", not mounted by the app's routes"
+          matches.group_by { |r| r[:controller] }.each do |ctrl, rows|
+            found["#{ctrl} (in #{group[:engine]}'s table#{where})"] = rows
+          end
+        end
       end
 
       def self.call(controller: nil, detail: "standard", limit: nil, offset: 0, app_only: true, server_context: nil)
@@ -90,7 +121,7 @@ module RailsAiContext
           excluded_framework_count = 0
           if app_only
             framework_ctrls = by_controller.select { |k, _| framework_controller?(k) }
-            excluded_framework_count = framework_ctrls.values.sum { |actions| dedupe_put_patch_routes(actions).size }
+            excluded_framework_count = framework_ctrls.values.sum { |actions| RailsAiContext::RouteCoverage.dedupe_put_patch_routes(actions).size }
             by_controller = by_controller.reject { |k, _| framework_controller?(k) }
           end
 
@@ -98,21 +129,25 @@ module RailsAiContext
           if controller
             normalized = RailsAiContext::Payload.controller_route_key(ctx, controller)
             normalized_alt = RailsAiContext::Payload.route_needle(controller)
-            # Exact first. The loose match is what makes a short name work,
-            # and it swept `api/v1/admin/orders/ai_data` in with the fully
-            # qualified `api/v1/admin/orders` - a separate class with its own
-            # filter chain.
-            # A name that normalizes to nothing matches nothing: the empty
-            # string is a substring of every key.
+            # Exact first, then a trailing run of segments, so a short name reaches a namespaced
+            # controller. Never a substring: `orders` must not catch `orders/ai_data`.
             needles = [ normalized, normalized_alt ].map(&:to_s).reject(&:empty?)
             exact = by_controller.select { |k, _| needles.include?(k.downcase) }
-            filtered = exact.any? ? exact : by_controller.select { |k, _| needles.any? { |n| k.downcase.include?(n) } }
-            return empty_response("No routes for '#{controller}'. Controllers: #{by_controller.keys.sort.join(', ')}") if filtered.empty?
+            filtered = exact.any? ? exact : by_controller.select { |k, _|
+              needles.any? { |n| path_segments_match?(k, n, tail: true) }
+            }
+            filtered = filtered.merge(engine_controller_groups(routes[:engine_routes], needles))
+            if filtered.empty?
+              # The whole controller list would bury the sentence saying the name matched none.
+              known = by_controller.keys.sort
+              return empty_response("No routes for '#{controller}'. Controllers: " \
+                                    "#{known.first(20).join(', ')}#{" ... and #{known.size - 20} more" if known.size > 20}")
+            end
             by_controller = filtered
           end
 
           # Combine PUT/PATCH duplicates (Rails generates both for update routes)
-          by_controller = by_controller.transform_values { |actions| dedupe_put_patch_routes(actions) }
+          by_controller = by_controller.transform_values { |actions| RailsAiContext::RouteCoverage.dedupe_put_patch_routes(actions) }
           filtered_total = by_controller.values.sum(&:size)
           count_label = count_phrase(filtered_total, "route")
           if excluded_framework_count > 0 && controller.nil?
@@ -174,7 +209,7 @@ module RailsAiContext
               lines << "- _#{fw_names} framework routes: #{total_fw} total_"
             end
 
-            lines.concat(mounted_apps_lines(mounted_apps))
+            lines.concat(mounted_apps_lines(mounted_apps, controller ? [] : routes[:engine_routes]))
 
             if routes[:api_namespaces]&.any?
               lines << "" << "API namespaces: #{routes[:api_namespaces].join(', ')}"
@@ -232,7 +267,7 @@ module RailsAiContext
               lines << "- `#{r[:verb]}` `#{r[:path]}` → #{r[:action]}#{helper_part}#{params_part}"
             end
 
-            lines.concat(mounted_apps_lines(mounted_apps))
+            lines.concat(mounted_apps_lines(mounted_apps, controller ? [] : routes[:engine_routes]))
 
             if excluded_framework_count > 0 && controller.nil?
               lines << "" << "_#{count_phrase(excluded_framework_count, "framework route")} hidden. " \
@@ -252,7 +287,7 @@ module RailsAiContext
             page[:items].each do |r|
               lines << "| #{r[:verb]} | `#{r[:path]}` | #{r[:_ctrl]}##{r[:action]} | #{r[:name] || '-'} |"
             end
-            lines.concat(mounted_apps_lines(mounted_apps))
+            lines.concat(mounted_apps_lines(mounted_apps, controller ? [] : routes[:engine_routes]))
 
             if routes[:api_namespaces]&.any?
               lines << "" << "## API namespaces: #{routes[:api_namespaces].join(', ')}"

@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "rbconfig"
 require_relative "../boot_manager"
 
 module RailsAiContext
@@ -15,20 +16,25 @@ module RailsAiContext
       # branch on a fact instead of parsing the reason text.
       Outcome = Struct.new(:tier, :reason, :kind, :messages, keyword_init: true)
 
-      # The MCP SDK reads these from Gem.loaded_specs at tool-call time
-      # (Gem.loaded_specs["json-schema"].full_gem_path); Bundler.setup strips
-      # them in a standalone install, so they are captured before boot and
-      # re-registered after.
-      STANDALONE_REQUIRED_GEMS = %w[mcp json-schema addressable public_suffix].freeze
-
       NO_APP_HINT = "Run this command from your Rails app root directory (or pass --app-path)."
 
+      # A restored gem path must land ahead of these, or a gem with a
+      # default-gem twin (prism, json) loads half from Ruby and half from itself.
+      RUBY_OWN_DIRS = %w[
+        rubylibdir rubyarchdir sitelibdir sitearchdir vendorlibdir vendorarchdir
+      ].filter_map { |key| RbConfig::CONFIG[key] }.freeze
+
       class << self
-        # Framework specs the binary stripped from $LOAD_PATH before anything
-        # loaded. App-less entries splice them back by hand.
-        attr_accessor :stripped_framework_specs
+        # Every gem the binstub activated, stashed by the binary before it
+        # cleared the registry. Nothing else can re-add their load paths.
+        attr_accessor :preboot_gem_specs
+
+        # Their specs stay unregistered: that is how an app-less entry knows to
+        # splice their load paths back.
+        attr_accessor :preboot_framework_names
       end
-      self.stripped_framework_specs = {}
+      self.preboot_gem_specs = {}
+      self.preboot_framework_names = []
 
       # The boot tier needs config/environment.rb. The static tier only needs
       # source: an engine keeps its dummy app under spec/dummy, so its root
@@ -62,13 +68,17 @@ module RailsAiContext
 
         # Bundler.setup (in config/boot.rb) strips $LOAD_PATH and the spec
         # registry to Gemfile-resolved gems; in a standalone install that
-        # removes this gem and its MCP deps, so both are captured first.
+        # removes this gem and its MCP deps, so both are captured first and
+        # always restored: every branch below needs the gem loadable.
         pre_boot_paths = $LOAD_PATH.dup
-        pre_boot_specs = capture_standalone_specs
-        drop_conflicting_gem_activations!(messages)
-
+        pre_boot_specs = preboot_gem_specs.reject { |name, _| preboot_framework_names.include?(name) }
         timeout = BootManager.env_timeout
-        result = BootManager.boot!(app_root: root, timeout: timeout)
+        begin
+          drop_conflicting_gem_activations!(messages)
+          result = BootManager.boot!(app_root: root, timeout: timeout)
+        ensure
+          restore_standalone_environment!(pre_boot_paths, pre_boot_specs, messages)
+        end
 
         unless result.booted?
           return boot_failed(result, root, timeout, messages) unless allow_static
@@ -80,11 +90,9 @@ module RailsAiContext
           result.configure_hint.each { |line| messages << "[rails-ai-context]   #{line}" }
           messages << "[rails-ai-context] Serving static analysis; runtime-only data is marked [UNAVAILABLE]."
           messages << "[rails-ai-context] Run `rails-ai-context doctor` for boot diagnostics."
-          restore_standalone_environment!(pre_boot_paths, pre_boot_specs, messages)
           return enter_static(result.failure_summary, :boot_failed, root, messages)
         end
 
-        restore_standalone_environment!(pre_boot_paths, pre_boot_specs, messages)
         require "rails_ai_context"
 
         if defined?(::Rails::VERSION::MAJOR) && ::Rails::VERSION::MAJOR >= 9
@@ -97,12 +105,9 @@ module RailsAiContext
         Outcome.new(tier: :booted, reason: nil, messages: messages)
       end
 
-      # Loads the gem with no booted app. Framework gems whose load paths the
-      # binary stripped are spliced back from the stashed specs - except any
-      # gem a completed Bundler.setup already resolved, whose pinned paths
-      # must keep winning over the newest installed version.
+      # Splices the stripped load paths back, minus what a completed Bundler.setup pinned.
       def self.require_gem_without_app!
-        stripped_framework_specs.each do |name, spec|
+        preboot_gem_specs.each do |name, spec|
           next if Gem.loaded_specs.key?(name)
 
           spec.full_require_paths.each { |p| $LOAD_PATH.unshift(p) unless $LOAD_PATH.include?(p) }
@@ -176,42 +181,42 @@ module RailsAiContext
       end
       private_class_method :enter_static
 
-      # Gem::Specification.find_by_name only sees Gemfile-resolved gems once
-      # Bundler.setup has run, so the specs are looked up before boot.
-      def self.capture_standalone_specs
-        return {} unless defined?(Gem) && Gem.respond_to?(:loaded_specs)
-
-        STANDALONE_REQUIRED_GEMS.each_with_object({}) do |gem_name, acc|
-          spec = Gem::Specification.find_by_name(gem_name)
-          acc[gem_name] = spec if spec
-        rescue Gem::MissingSpecError, Gem::LoadError
-          # Not installed at all; the downstream require gives the clearer error.
-          next
-        end
-      end
-      private_class_method :capture_standalone_specs
-
       # The binary pre-activates stdlib gems (psych via yaml, date) before the
       # app's Bundler.setup runs, and a different pin raises `Gem::LoadError:
       # already activated psych 5.4.0`. Dropping every registration except
       # bundler's lets the app activate what it resolves; loaded code stays
       # (require is idempotent). No-op under `bundle exec`, where Bundler
       # already governs activation.
+      #
+      # Their $LOAD_PATH entries go with them: Bundler adds its own paths
+      # behind these, so they would answer `require` ahead of the app's pins.
       def self.drop_conflicting_gem_activations!(messages)
         return if ENV["BUNDLE_BIN_PATH"]
         return unless defined?(Gem) && Gem.respond_to?(:loaded_specs)
 
+        preboot_gem_specs.each do |name, spec|
+          next if name == "bundler"
+
+          spec.full_require_paths.each { |path| $LOAD_PATH.delete(path) }
+        end
         Gem.loaded_specs.delete_if { |name, _| name != "bundler" }
       rescue => e
         messages << "[rails-ai-context] drop_conflicting_gem_activations! failed: #{e.message}" if ENV["DEBUG"]
       end
       private_class_method :drop_conflicting_gem_activations!
 
+      # Once the app's bundle is on the load path its gems may be loaded, so it keeps
+      # the front and this gem's paths go behind it; else the pre-boot order returns whole.
       def self.restore_standalone_environment!(pre_boot_paths, pre_boot_specs, messages)
-        (pre_boot_paths - $LOAD_PATH).each { |p| $LOAD_PATH << p }
+        if ($LOAD_PATH - pre_boot_paths).any?
+          splice_before_ruby_dirs!(pre_boot_paths - $LOAD_PATH)
+        else
+          $LOAD_PATH.replace(pre_boot_paths)
+        end
         pre_boot_specs.each { |name, spec| Gem.loaded_specs[name] ||= spec }
+        warn_unsupported_app_versions(pre_boot_specs, messages)
 
-        missing = STANDALONE_REQUIRED_GEMS.reject { |g| Gem.loaded_specs.key?(g) }
+        missing = pre_boot_specs.keys.reject { |name| Gem.loaded_specs.key?(name) }
         return if missing.none? || ENV["BUNDLE_BIN_PATH"]
 
         messages << "[rails-ai-context] WARNING: standalone CLI could not restore gemspec(s): #{missing.join(', ')}."
@@ -219,6 +224,29 @@ module RailsAiContext
         messages << "[rails-ai-context]   Try `gem install rails-ai-context` to ensure all transitive deps are installed."
       end
       private_class_method :restore_standalone_environment!
+
+      # The app's copy of a dependency stays in use, since two copies in one process
+      # is a mixed load; it is named when outside what the gemspec supports.
+      def self.warn_unsupported_app_versions(pre_boot_specs, messages)
+        own = pre_boot_specs["rails-ai-context"] or return
+
+        own.runtime_dependencies.each do |dep|
+          app = Gem.loaded_specs[dep.name]
+          next if app.nil? || app.equal?(pre_boot_specs[dep.name]) || dep.requirement.satisfied_by?(app.version)
+
+          messages << "[rails-ai-context] WARNING: the app locks #{dep.name} #{app.version}; " \
+                      "this gem needs #{dep.name} #{dep.requirement}. Tools that use it may fail."
+        end
+      end
+      private_class_method :warn_unsupported_app_versions
+
+      def self.splice_before_ruby_dirs!(paths)
+        return if paths.empty?
+
+        index = $LOAD_PATH.index { |path| RUBY_OWN_DIRS.include?(path) } || $LOAD_PATH.size
+        $LOAD_PATH.insert(index, *paths)
+      end
+      private_class_method :splice_before_ruby_dirs!
     end
   end
 end

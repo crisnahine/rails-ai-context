@@ -29,6 +29,52 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
     end
   end
 
+  # Loading all 45 tools to find one was a tenth of a one-tool CLI call.
+  describe "resolving a name the tool classes spell" do
+    it "loads no tool list for a short, medium or full name" do
+      allow(described_class).to receive(:available_tools).and_call_original
+
+      %w[schema get_schema rails_get_schema search_code rails_validate].each do |name|
+        expect(described_class.new(name, []).send(:tool_class).tool_name).to start_with("rails_")
+      end
+
+      expect(described_class).not_to have_received(:available_tools)
+    end
+
+    it "still refuses a skipped tool" do
+      allow(RailsAiContext.configuration).to receive(:skip_tools).and_return([ "rails_get_schema" ])
+
+      expect { described_class.new("schema", []) }.to raise_error(/Unknown tool 'schema'/)
+    end
+
+    it "suggests the closest name for a miss" do
+      expect { described_class.new("shema", []) }.to raise_error(/Did you mean 'schema'/)
+    end
+  end
+
+  # The MCP server keeps the built-in when a custom tool claims its name and
+  # lets skip_tools hand the name over; the CLI has to answer the same.
+  describe "a custom tool claiming a built-in's name" do
+    # A stand-in rather than a BaseTool subclass, which would enrol itself in
+    # the registry every later example reads.
+    let(:custom) { double("MyApp::SchemaTool", tool_name: "rails_get_schema") }
+
+    before { allow(RailsAiContext::Server).to receive(:resolve_custom_tools).and_return([ custom ]) }
+
+    it "resolves to the built-in, as the MCP server serves it" do
+      expect(described_class.new("schema", []).tool_class).to eq(RailsAiContext::Tools::GetSchema)
+      expect(described_class.available_tools.find { |t| t.tool_name == "rails_get_schema" })
+        .to eq(RailsAiContext::Tools::GetSchema)
+    end
+
+    it "resolves to the custom tool once skip_tools names the built-in" do
+      allow(RailsAiContext.configuration).to receive(:skip_tools).and_return([ "rails_get_schema" ])
+
+      expect(described_class.new("schema", []).tool_class).to eq(custom)
+      expect(described_class.available_tools).to include(custom)
+    end
+  end
+
   describe ".short_name" do
     it "strips rails_get_ prefix" do
       expect(described_class.short_name("rails_get_schema")).to eq("schema")
@@ -73,23 +119,30 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
     it "truncates a long description at a word boundary with an ellipsis" do
       list = described_class.tool_list
       full_description = RailsAiContext::Tools::AnalyzeFeature.description_value.to_s
-      expected = described_class.truncate_at_word(full_description, 79)
-      expect(list).to include(expected)
+
+      expect(list).to include("Full-stack feature analysis: models, controllers, routes, services, jobs...")
       # The old bug cut mid-word with no "...": guard against that regressing.
       expect(list).not_to include(full_description[0..79])
     end
-  end
 
-  describe ".truncate_at_word" do
-    it "leaves short text unchanged" do
-      expect(described_class.truncate_at_word("short text", 79)).to eq("short text")
+    # A cut landing right after a sentence left the period in front of the
+    # ellipsis, printing four dots.
+    it "drops the trailing punctuation a cut lands on" do
+      list = described_class.tool_list
+
+      expect(list).to include("Read recent log entries with level filtering and sensitive data redaction...")
+      expect(list).not_to include("....")
+      expect(list).not_to include(" -...")
     end
 
-    it "truncates long text at the last whole word and appends an ellipsis" do
-      text = "Full-stack feature analysis: models, controllers, routes, services, jobs, views, tests"
-      result = described_class.truncate_at_word(text, 79)
-      expect(result).to eq("Full-stack feature analysis: models, controllers, routes, services, jobs,...")
-      expect(text).to start_with(result.delete_suffix("..."))
+    it "keeps every description line inside the column width" do
+      rows = described_class.tool_list.lines.grep(/\A {2}\S/).map(&:chomp)
+      descriptions = rows.map do |row|
+        name = row.strip.split(/\s/, 2).first
+        row.sub(/\A {2}#{Regexp.escape(name)} +/, "")
+      end
+
+      expect(descriptions).to all(satisfy { |d| d.length <= 79 })
     end
   end
 

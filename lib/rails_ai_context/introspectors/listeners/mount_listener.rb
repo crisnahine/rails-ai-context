@@ -19,16 +19,17 @@ module RailsAiContext
         # The blocks that prefix every path drawn inside them.
         SCOPE_MACROS = %i[namespace scope].freeze
 
-        def initialize
-          super
-          @scopes = []
+        # `prefix` and `name_prefix` are the path and route name a `draw` of this file sits under.
+        def initialize(prefix: nil, name_prefix: nil)
+          super()
+          @scopes = [ { node: nil, prefix: prefix && prefix != "/" ? prefix : nil, name: name_prefix } ]
         end
 
         def on_call_node_enter(node)
           return unless node.receiver.nil?
 
           if node.block && SCOPE_MACROS.include?(node.name)
-            @scopes << { node: node, prefix: scope_prefix(node) }
+            @scopes << { node: node, prefix: scope_prefix(node), name: scope_name(node) }
             return
           end
 
@@ -40,11 +41,15 @@ module RailsAiContext
           engine, path = node.name == :mount ? [ resolve_engine(args), resolve_path(args) ] : resolve_rack_endpoint(args)
           return unless engine
 
-          @results << {
-            engine:   engine,
-            path:     prefixed_path(path),
-            location: node.location.start_line
-          }
+          record = { engine: engine, path: prefixed_path(path), location: node.location.start_line }
+          # The mount's route name, which names an engine's route proxy.
+          if node.name == :mount
+            as = extract_keyword_nodes(node)[:as]
+            record[:as] = as.unescaped if as.is_a?(Prism::SymbolNode) || as.is_a?(Prism::StringNode)
+            names = @scopes.filter_map { |scope| scope[:name] }.reject(&:empty?)
+            record[:name_prefix] = names.join("_") if names.any?
+          end
+          @results << record
         end
 
         def on_call_node_leave(node)
@@ -63,11 +68,13 @@ module RailsAiContext
           path_node = extract_keyword_nodes(node)[:path]
           # `path: ADMIN_PATH` or `path: "/v#{n}"` is a prefix too, and one this
           # walk cannot read.
+          # `path: nil` is Rails' way of adding no segment, which is known.
+          return nil if path_node.is_a?(Prism::NilNode)
           return :unknown if path_node && !path_node.is_a?(Prism::StringNode) && !path_node.is_a?(Prism::SymbolNode)
 
           options = { path: path_node && extract_value(path_node) }
           literal = case first
-          when Prism::SymbolNode then first.value
+          when Prism::SymbolNode then first.unescaped
           when Prism::StringNode then first.unescaped
           end
 
@@ -87,6 +94,17 @@ module RailsAiContext
           end
         end
 
+        # What a scope adds to the names inside it: `namespace :admin` adds
+        # admin, a scope only its `as:`.
+        def scope_name(node)
+          as = extract_keyword_nodes(node)[:as]
+          return as.unescaped if as.is_a?(Prism::SymbolNode) || as.is_a?(Prism::StringNode)
+          return unless node.name == :namespace
+
+          first = node.arguments&.arguments&.first
+          first.unescaped if first.is_a?(Prism::SymbolNode) || first.is_a?(Prism::StringNode)
+        end
+
         # A first positional argument that is not a literal string or symbol
         # is a prefix expression: `scope PREFIX do`, `scope "/v#{version}" do`.
         def positional_prefix?(node)
@@ -102,7 +120,7 @@ module RailsAiContext
           return path if prefixes.empty? || path.nil?
 
           joined = "#{prefixes.join.chomp("/")}/#{path.to_s.delete_prefix("/")}"
-          joined == "/" ? joined : joined.chomp("/")
+          normalize_route_path(joined == "/" ? joined : joined.chomp("/"))
         end
 
         def resolve_rack_endpoint(args)

@@ -24,6 +24,11 @@ RSpec.describe RailsAiContext::Serializers::TestCommandDetection do
       expect(helper.detect_test_command).to eq("bundle exec rspec")
     end
 
+    it "runs rspec when the app runs both suites" do
+      helper = test_class.new({ tests: { framework: "rspec, minitest" } })
+      expect(helper.detect_test_command).to eq("bundle exec rspec")
+    end
+
     it "returns rails test when framework is minitest" do
       helper = test_class.new({ tests: { framework: "minitest" } })
       expect(helper.detect_test_command).to eq("rails test")

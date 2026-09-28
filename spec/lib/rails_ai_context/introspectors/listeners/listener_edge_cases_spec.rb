@@ -7,13 +7,6 @@ RSpec.describe "Listener edge cases" do
   # ── GenericMacroListener ──────────────────────────────────────────────
 
   describe RailsAiContext::Introspectors::Listeners::GenericMacroListener do
-    def parse_and_dispatch(source, *methods)
-      result     = Prism.parse(source)
-      listener   = described_class.new(*methods)
-      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-      listener.results
-    end
-
     it "extracts a string arg as a symbol (gem \"rails\" style)" do
       results = parse_and_dispatch('gem "rails"', :gem)
       expect(results.size).to eq(1)
@@ -24,13 +17,6 @@ RSpec.describe "Listener edge cases" do
   # ── ChainedCallListener ──────────────────────────────────────────────
 
   describe RailsAiContext::Introspectors::Listeners::ChainedCallListener do
-    def parse_and_dispatch(source, *methods)
-      result     = Prism.parse(source)
-      listener   = described_class.new(*methods)
-      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-      listener.results
-    end
-
     it "detects a deeply nested method chain (a.b.c.variant(:thumb))" do
       results = parse_and_dispatch("a.b.c.variant(:thumb)", :variant)
       expect(results.size).to eq(1)
@@ -42,13 +28,6 @@ RSpec.describe "Listener edge cases" do
   # ── EnvAccessListener ────────────────────────────────────────────────
 
   describe RailsAiContext::Introspectors::Listeners::EnvAccessListener do
-    def parse_and_dispatch(source)
-      result     = Prism.parse(source)
-      listener   = described_class.new
-      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-      listener.results
-    end
-
     it "detects ENV.fetch with block default and reports has_default: true" do
       results = parse_and_dispatch('ENV.fetch("RAILS_ENV") { "development" }')
       expect(results.size).to eq(1)
@@ -59,13 +38,6 @@ RSpec.describe "Listener edge cases" do
   # ── MountListener ────────────────────────────────────────────────────
 
   describe RailsAiContext::Introspectors::Listeners::MountListener do
-    def parse_and_dispatch(source)
-      result     = Prism.parse(source)
-      listener   = described_class.new
-      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-      listener.results
-    end
-
     it "detects mount with hash rocket syntax and extracts both engine and path" do
       results = parse_and_dispatch('mount Sidekiq::Web => "/sidekiq"')
       expect(results.size).to eq(1)
@@ -76,13 +48,6 @@ RSpec.describe "Listener edge cases" do
   # ── GemfileDslListener ──────────────────────────────────────────────
 
   describe RailsAiContext::Introspectors::Listeners::GemfileDslListener do
-    def parse_and_dispatch(source)
-      result     = Prism.parse(source)
-      listener   = described_class.new
-      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-      listener.results
-    end
-
     it "extracts version, require: false, and array group from a complex gem line" do
       results = parse_and_dispatch('gem "rails", "~> 7.1", require: false, group: [:dev, :test]')
       gems = results.select { |r| r[:type] == :gem }
@@ -99,13 +64,6 @@ RSpec.describe "Listener edge cases" do
   # ── SchemaDslListener ───────────────────────────────────────────────
 
   describe RailsAiContext::Introspectors::Listeners::SchemaDslListener do
-    def parse_and_dispatch(source)
-      result     = Prism.parse(source)
-      listener   = described_class.new
-      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-      listener.results
-    end
-
     it "detects t.references with foreign_key and null options" do
       results = parse_and_dispatch('t.references :user, foreign_key: true, null: false')
       cols = results.select { |r| r[:type] == :column }
@@ -121,13 +79,6 @@ RSpec.describe "Listener edge cases" do
   # ── MigrationDslListener ────────────────────────────────────────────
 
   describe RailsAiContext::Introspectors::Listeners::MigrationDslListener do
-    def parse_and_dispatch(source)
-      result     = Prism.parse(source)
-      listener   = described_class.new
-      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-      listener.results
-    end
-
     it "extracts add_column with type and multiple keyword options" do
       results = parse_and_dispatch('add_column :users, :role, :integer, default: 0, null: false')
 
@@ -144,13 +95,6 @@ RSpec.describe "Listener edge cases" do
   # ── RakeTaskDslListener ─────────────────────────────────────────────
 
   describe RailsAiContext::Introspectors::Listeners::RakeTaskDslListener do
-    def parse_and_dispatch(source)
-      result     = Prism.parse(source)
-      listener   = described_class.new
-      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-      listener.results
-    end
-
     it "extracts task with mixed symbol and string dependencies" do
       results = parse_and_dispatch('task :seed => [:environment, "db:create"]')
       tasks = results.select { |r| r[:type] == :task }
@@ -165,13 +109,6 @@ RSpec.describe "Listener edge cases" do
   # ── MailboxRoutingListener ──────────────────────────────────────────
 
   describe RailsAiContext::Introspectors::Listeners::MailboxRoutingListener do
-    def parse_and_dispatch(source)
-      result     = Prism.parse(source)
-      listener   = described_class.new
-      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-      listener.results
-    end
-
     it "detects routing with a regex containing pipe" do
       results = parse_and_dispatch('routing /forward|bounce/i => :handle')
       routing = results.select { |r| r[:type] == :routing }
@@ -185,13 +122,6 @@ RSpec.describe "Listener edge cases" do
   # ── MiddlewareConfigListener ────────────────────────────────────────
 
   describe RailsAiContext::Introspectors::Listeners::MiddlewareConfigListener do
-    def parse_and_dispatch(source)
-      result     = Prism.parse(source)
-      listener   = described_class.new
-      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-      listener.results
-    end
-
     it "detects config.middleware.insert with a numeric index arg" do
       results = parse_and_dispatch("config.middleware.insert 0, Rack::Deflater")
 

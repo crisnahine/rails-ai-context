@@ -43,7 +43,7 @@ module RailsAiContext
           return unless predicate.is_a?(Prism::InstanceVariableReadNode)
 
           values = node.conditions.grep(Prism::WhenNode).flat_map { |when_node|
-            when_node.conditions.filter_map { |condition| literal_name(condition) }
+            when_node.conditions.filter_map { |condition| literal_string(condition) }
           }
           return if values.empty?
 
@@ -98,18 +98,11 @@ module RailsAiContext
         def table_values(node)
           case node
           when Prism::HashNode
-            node.elements.grep(Prism::AssocNode).filter_map { |assoc| literal_name(assoc.key) }
+            node.elements.grep(Prism::AssocNode).filter_map { |assoc| literal_string(assoc.key) }
           when Prism::ArrayNode
-            node.elements.filter_map { |element| literal_name(element) }
+            node.elements.filter_map { |element| literal_string(element) }
           else
             []
-          end
-        end
-
-        def literal_name(node)
-          case node
-          when Prism::SymbolNode then node.value.to_s
-          when Prism::StringNode then node.unescaped
           end
         end
       end

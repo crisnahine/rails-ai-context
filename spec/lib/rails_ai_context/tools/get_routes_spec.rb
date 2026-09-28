@@ -31,6 +31,104 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
     })
   end
 
+  describe "routes an app draws into a mounted engine" do
+    let(:engine_routes) do
+      [ { engine: "Spree::Core::Engine", mount: "/shop", routes: [
+        { verb: "GET", path: "/shop/admin/orders", controller: "spree/admin/orders", action: "index",
+          name: "spree.admin_orders" }
+      ] } ]
+    end
+
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        routes: { total_routes: 9, by_controller: by_controller, api_namespaces: [],
+                  mounted_engines: [ { engine: "Spree::Core::Engine", path: "/shop" } ], unrouted_mounts: 1,
+                  engine_routes: engine_routes }
+      })
+    end
+
+    it "names them with the engine, apart from the app's count" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("## Routes drawn into mounted engines")
+      expect(text).to include("**Spree::Core::Engine** at `/shop`: 1 route, not in the count above")
+      expect(text).to include("_A mounted app's own routes are in its table, not in the count above._")
+    end
+
+    # OFN: `orders` names api/v0/orders in the app and spree/admin/orders in Spree's table.
+    it "lists the engine's matches beside the app's for a short name, labelled" do
+      allow(described_class).to receive(:cached_context).and_return({
+        routes: { total_routes: 1, api_namespaces: [], engine_routes: engine_routes,
+                  by_controller: { "api/v0/orders" => [ { verb: "GET", path: "/api/v0/orders", action: "index", name: "api_v0_orders" } ] } }
+      })
+
+      text = described_class.call(controller: "orders").content.first[:text]
+
+      expect(text).to include("`GET` `/api/v0/orders` → index")
+      expect(text).to include("# Routes (2 routes)")
+      expect(text).to include("## spree/admin/orders (in Spree::Core::Engine's table)")
+      expect(text).to include("`GET` `/shop/admin/orders` → index `spree.admin_orders_path`")
+    end
+
+    # Engine rows are listed like the app's: detail levels, paging and the
+    # helper hints apply to both.
+    it "lists engine rows at the detail asked for, with the app rows' hints" do
+      groups = [ { engine: "Blog::Engine", routes: [
+        { verb: "GET", path: "/posts/:id", controller: "posts", action: "show", name: "blog.post" },
+        { verb: "GET", path: "/posts", controller: "posts", action: "index", name: "blog.posts" }
+      ] } ]
+      allow(described_class).to receive(:cached_context).and_return({
+        routes: { total_routes: 0, by_controller: {}, api_namespaces: [], engine_routes: groups }
+      })
+
+      standard = described_class.call(controller: "posts").content.first[:text]
+      summary = described_class.call(controller: "posts", detail: "summary").content.first[:text]
+      paged = described_class.call(controller: "posts", limit: 1).content.first[:text]
+
+      expect(standard).to include("## posts (in Blog::Engine's table, not mounted by the app's routes)")
+      expect(standard).to include("`GET` `/posts/:id` → show `blog.post_path(@record)` [id]")
+      expect(summary).to include("**posts (in Blog::Engine's table, not mounted by the app's routes)** - 2 routes")
+      expect(paged).not_to include("`/posts` → index")
+    end
+
+    it "names the other paths an engine group is mounted at" do
+      groups = engine_routes.map { |g| g.merge(also_mounted_at: [ "/shop2" ]) }
+      allow(described_class).to receive(:cached_context).and_return({
+        routes: { total_routes: 9, by_controller: by_controller, api_namespaces: [], engine_routes: groups }
+      })
+
+      expect(described_class.call.content.first[:text]).to include("**Spree::Core::Engine** at `/shop` (also `/shop2`): 1 route")
+    end
+
+    it "says how many constructs an engine group did not expand" do
+      groups = engine_routes.map { |g| g.merge(dynamic_routes: 2) }
+      allow(described_class).to receive(:cached_context).and_return({
+        routes: { total_routes: 9, by_controller: by_controller, api_namespaces: [], engine_routes: groups }
+      })
+
+      expect(described_class.call.content.first[:text])
+        .to include("**Spree::Core::Engine** at `/shop`: 1 route, 2 dynamic constructs not expanded, not in the count above")
+    end
+
+    it "says a booted engine group is the engine's whole table" do
+      booted = engine_routes.map { |g| g.merge(whole_table: true) }
+      allow(described_class).to receive(:cached_context).and_return({
+        routes: { total_routes: 9, by_controller: by_controller, api_namespaces: [], engine_routes: booted }
+      })
+
+      expect(described_class.call.content.first[:text])
+        .to include("**Spree::Core::Engine** at `/shop`: 1 route in the engine's whole table, gem-drawn ones included, not in the count above")
+    end
+
+    it "answers a controller filter with the engine's routes, named through its proxy" do
+      text = described_class.call(controller: "spree/admin/orders").content.first[:text]
+
+      expect(text).to include("Spree::Core::Engine")
+      expect(text).to include("`GET` `/shop/admin/orders` → index")
+      expect(text).to include("spree.admin_orders")
+    end
+  end
+
   # A controller nested under another controller's name has its own class and
   # its own filter chain, and a substring filter swept it in with the parent.
   describe "a fully qualified controller whose name prefixes another" do
@@ -62,10 +160,29 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
       expect(text).not_to include("ai_data")
     end
 
-    it "still answers a short name with every controller that carries it" do
+    # A short name reaches the controller whose last segment it is, and stops
+    # there: `orders` is not the name of `api/v1/admin/orders/ai_data`, whose
+    # own short name is `ai_data`.
+    it "answers a short name with the controller it names, not the ones it prefixes" do
       text = described_class.call(controller: "orders").content.first[:text]
 
-      expect(text).to include("# Routes (3 routes)")
+      expect(text).to include("# Routes (1 route)")
+      expect(text).to include("api/v1/admin/orders")
+      expect(text).not_to include("ai_data")
+    end
+
+    # The needle is segments, not characters: `rders` is no part of any name,
+    # and a name of no segments filters nothing.
+    it "answers nothing for a name that is not a whole segment" do
+      text = described_class.call(controller: "rders").content.first[:text]
+
+      expect(text).to include("No routes for 'rders'")
+    end
+
+    it "answers the nested controller by its own short name" do
+      text = described_class.call(controller: "ai_data").content.first[:text]
+
+      expect(text).to include("# Routes (2 routes)")
       expect(text).to include("api/v1/admin/orders/ai_data")
     end
   end

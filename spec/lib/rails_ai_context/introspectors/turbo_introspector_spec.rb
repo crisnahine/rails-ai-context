@@ -61,6 +61,22 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
         expect(result[:turbo_drive_settings][:"data-turbo-action"]).to be >= 1
       end
 
+      it "counts the HAML and Ruby-hash spellings of data-turbo" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app/views/posts"))
+          File.write(File.join(dir, "app/views/posts/index.html.haml"),
+                     %(%a{ "data-turbo": "false", "data-turbo-action" => "replace" } x\n))
+          File.write(File.join(dir, "app/views/posts/show.html.erb"),
+                     %(<%= link_to "x", "/", data: { "data-turbo" => "false" } %>\n) +
+                     %(<%= link_to "y", "/", "data-turbo": false %>\n))
+
+          counts = described_class.new(double(root: dir)).send(:extract_turbo_drive_settings)
+
+          expect(counts[:"data-turbo-false"]).to eq(3)
+          expect(counts[:"data-turbo-action"]).to eq(1)
+        end
+      end
+
       it "counts an attribute in a layout once, not twice" do
         Dir.mktmpdir do |dir|
           FileUtils.mkdir_p(File.join(dir, "app/views/layouts"))
@@ -257,6 +273,58 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
     end
   end
 
+  describe "a read that raises part way through the view walk" do
+    it "does not leave the later collectors reading a truncated view list" do
+      Dir.mktmpdir do |dir|
+        views = File.join(dir, "app", "views", "posts")
+        FileUtils.mkdir_p(views)
+        File.write(File.join(views, "show.html.erb"), %(<div data-turbo-permanent id="inside"></div>\n))
+
+        raised = false
+        allow(RailsAiContext::SafeFile).to receive(:read).and_wrap_original do |original, *args, **opts|
+          if !raised && args.first.to_s.end_with?("show.html.erb")
+            raised = true
+            raise "transient read failure"
+          end
+          original.call(*args, **opts)
+        end
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:turbo_frames]).to eq([])
+        expect(result[:permanent_elements]).to eq([ { file: "posts/show.html.erb", id: "inside" } ])
+      end
+    end
+  end
+
+  describe "a view symlinked out of app/views" do
+    it "counts the in-tree view and not the escaping one" do
+      Dir.mktmpdir do |dir|
+        views = File.join(dir, "app", "views", "posts")
+        outside = File.join(dir, "outside")
+        FileUtils.mkdir_p(views)
+        FileUtils.mkdir_p(outside)
+
+        markup = lambda do |id|
+          <<~ERB
+            <div data-turbo-permanent id="#{id}"></div>
+            <a data-turbo="false">x</a>
+            <% if turbo_native_app? %><% end %>
+          ERB
+        end
+        File.write(File.join(views, "show.html.erb"), markup.call("inside"))
+        File.write(File.join(outside, "escaped.html.erb"), markup.call("escaped"))
+        File.symlink(File.join(outside, "escaped.html.erb"), File.join(views, "escaped.html.erb"))
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:permanent_elements]).to eq([ { file: "posts/show.html.erb", id: "inside" } ])
+        expect(result[:turbo_drive_settings][:"data-turbo-false"]).to eq(1)
+        expect(result[:turbo_native][:native_conditionals]).to eq(1)
+      end
+    end
+  end
+
   describe "concerns and the model walk" do
     def app_in(dir)
       RailsAiContext::StaticApp.new(dir)
@@ -406,6 +474,42 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
 
         broadcasts = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:model_broadcasts]
         expect(broadcasts.map { |b| b[:model] }).to contain_exactly("Admin::Note", "Invoice")
+      end
+    end
+  end
+
+  describe "a turbo_stream response declared in a controller concern" do
+    it "names the concern without the Concerns:: segment" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/controllers/concerns/op_turbo"))
+        File.write(File.join(dir, "app/controllers/concerns/op_turbo/component_stream.rb"), <<~RUBY)
+          module OpTurbo
+            module ComponentStream
+              def update
+                respond_to { |format| format.turbo_stream }
+              end
+            end
+          end
+        RUBY
+
+        responses = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:turbo_stream_responses]
+
+        expect(responses.map { |r| r[:controller] }).to eq([ "OpTurbo::ComponentStream" ])
+      end
+    end
+  end
+
+  describe "a frame id or stream name holding a comma or a bracket inside a string" do
+    it "splits the arguments at the call's own commas only" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/views/posts"))
+        File.write(File.join(dir, "app/views/posts/show.html.erb"),
+                   %{<%= turbo_frame_tag "a, (b", src: "/x" %>\n<%= turbo_stream_from "room, (1", :chat %>\n})
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:turbo_frames].map { |f| f[:id] }).to eq([ "a, (b" ])
+        expect(result[:stream_subscriptions].map { |s| s[:stream] }).to eq([ "room, (1, chat" ])
       end
     end
   end

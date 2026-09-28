@@ -4,14 +4,12 @@ require "spec_helper"
 
 RSpec.describe RailsAiContext::Serializers::CopilotInstructionsSerializer do
   let(:context) do
-    {
-      app_name: "TestApp", rails_version: "8.0", ruby_version: "3.4",
+    serializer_context(
       schema: { adapter: "postgresql", total_tables: 5 },
       routes: { total_routes: 30 },
-      gems: {}, conventions: {},
       models: { "User" => { associations: [ { type: "has_many", name: "posts" } ], validations: [] } },
       controllers: { controllers: { "UsersController" => { actions: %w[index show] } } }
-    }
+    )
   end
 
   it "generates .github/instructions/*.instructions.md with applyTo" do

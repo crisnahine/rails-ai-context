@@ -6,6 +6,8 @@ module RailsAiContext
       # Detects ActiveRecord callback declarations via Prism AST:
       # before_validation, after_save, after_commit, etc.
       class CallbacksListener < BaseListener
+        include WithOptionsScope
+
         CALLBACK_METHODS = %i[
           before_validation after_validation
           before_save after_save around_save
@@ -22,9 +24,11 @@ module RailsAiContext
         NAME_SHAPED = /\A[A-Za-z_]\w*(::[A-Za-z_]\w*)*[?!]?\z/
 
         def on_call_node_enter(node)
-          return unless CALLBACK_METHODS.include?(node.name) && node.receiver.nil?
+          return unless CALLBACK_METHODS.include?(node.name) && in_scope?(node)
 
-          options = extract_keyword_options(node)
+          # Sources, not literals: a lambda condition reads as the line the
+          # file holds rather than as a marker.
+          options = scope_options(receiver_name(node)).merge(extract_keyword_sources(node))
           callback_types = resolve_callback_types(node.name, options)
           methods = extract_symbol_args(node)
 
@@ -37,9 +41,8 @@ module RailsAiContext
 
         private
 
-        # `around_create Mastodon::Snowflake::Callbacks` names a real target
-        # and was dropped entirely; a lambda names nothing and its source
-        # slice spans lines, so it reports as a block like `after_create do`.
+        # `around_create Snowflake::Callbacks` names a real target;
+        # a lambda names nothing, so it reports as a block.
         def emit_without_symbol_args(node, callback_types, options)
           positional = extract_arg_values(node).map(&:to_s)
           targets = positional.grep(NAME_SHAPED)
@@ -70,15 +73,11 @@ module RailsAiContext
           end
         end
 
-        # Resolve after_commit with on: option to specific types.
-        # Returns an array of type strings - one per event.
+        # `after_commit on: :create` is the after_commit_on_create type. One
+        # declaration for several events stays one callback, its on: kept.
         def resolve_callback_types(name, options)
-          if name == :after_commit && options[:on]
-            events = Array(options[:on])
-            events.map { |e| "after_commit_on_#{e}" }
-          else
-            [ name.to_s ]
-          end
+          events = Array(options[:on])
+          name == :after_commit && events.one? ? [ "after_commit_on_#{events.first}" ] : [ name.to_s ]
         end
       end
     end

@@ -109,7 +109,7 @@ module RailsAiContext
         "query_objects" => "Query objects (app/queries/)",
         "presenters" => "Presenters/Decorators",
         "view_components" => "ViewComponent (app/components/)",
-        "stimulus" => "Stimulus controllers (app/javascript/controllers/)",
+        "stimulus" => "Stimulus controllers",
         "importmaps" => "Import maps (no JS bundler)",
         "docker" => "Dockerized",
         "kamal" => "Kamal deployment",
@@ -217,26 +217,11 @@ module RailsAiContext
           content = RailsAiContext::SafeFile.read(path) or next
           controller_name = File.basename(path, ".rb")
 
-          # Authorization: can_*? method calls with redirect + alert
-          content.scan(/\b(can_\w+\??)/).each do |match|
-            auth_checks << match[0] unless auth_checks.include?(match[0])
-          end
-
-          # Authorization denials: redirect_to ... alert: "..."
-          content.scan(/redirect_to\s+.+?,\s*alert:\s*"([^"]*)"/).each do |match|
-            denial = "redirect_to ..., alert: \"#{match[0]}\""
-            auth_denials << denial unless auth_denials.include?(denial)
-          end
-
-          # Flash notices: redirect_to ... notice: "..."
-          content.scan(/notice:\s*"([^"]*)"/).each do |match|
-            flash_notices << match[0] unless flash_notices.include?(match[0])
-          end
-
-          # Flash alerts: redirect_to ... alert: "..."
-          content.scan(/alert:\s*"([^"]*)"/).each do |match|
-            flash_alerts << match[0] unless flash_alerts.include?(match[0])
-          end
+          auth_checks.concat(content.scan(/\b(can_\w+\??)/).flatten)
+          auth_denials.concat(content.scan(/redirect_to\s+.+?,\s*alert:\s*"([^"]*)"/).flatten
+            .map { |a| "redirect_to ..., alert: \"#{a}\"" })
+          flash_notices.concat(content.scan(/notice:\s*"([^"]*)"/).flatten)
+          flash_alerts.concat(content.scan(/alert:\s*"([^"]*)"/).flatten)
 
           # Not-found handling: set_* methods that rescue or redirect on missing records
           content.scan(/def\s+(set_\w+).*?(?=\n\s*def\s|\n\s*end\s*\z)/m).each do |match_data|
@@ -292,14 +277,14 @@ module RailsAiContext
 
         if auth_checks.any? || auth_denials.any?
           sections << "" << "### Authorization"
-          auth_checks.first(5).each { |c| sections << "- Check: `#{c}`" }
-          auth_denials.first(5).each { |d| sections << "- Deny: #{d}" }
+          auth_checks.uniq.first(5).each { |c| sections << "- Check: `#{c}`" }
+          auth_denials.uniq.first(5).each { |d| sections << "- Deny: #{d}" }
         end
 
         if flash_notices.any? || flash_alerts.any?
           sections << "" << "### Flash Messages"
-          flash_notices.first(5).each { |n| sections << "- Success: notice: \"#{n}\"" }
-          flash_alerts.first(5).each { |a| sections << "- Failure: alert: \"#{a}\"" }
+          flash_notices.uniq.first(5).each { |n| sections << "- Success: notice: \"#{n}\"" }
+          flash_alerts.uniq.first(5).each { |a| sections << "- Failure: alert: \"#{a}\"" }
         end
 
         if not_found_patterns.any?
@@ -401,7 +386,7 @@ module RailsAiContext
 
         sections
       rescue => e
-        [] # Graceful degradation - never break the tool
+        RailsAiContext.debug_fail(e, [], label: "detect_app_patterns")
       end
 
       private_class_method def self.detect_locale_info
@@ -411,7 +396,14 @@ module RailsAiContext
 
         real_root = File.realpath(rails_app.root).to_s
         locale_files = safe_glob(locales_dir, "**/*.{yml,yaml,rb}", real_root)
-        locales = locale_files.map { |f| File.basename(f, ".*").split(".").first }.uniq.sort
+        # The locales each file declares, as the i18n section read them; a
+        # file's name gives the locale only as its last part (devise.en.yml).
+        read = RailsAiContext::Payload.section(cached_context, :i18n)&.dig(:locale_files)
+        locales = if read.is_a?(Array) && read.any? { |f| f.is_a?(Hash) && f[:locales] }
+          read.flat_map { |f| Array(f[:locales]) }
+        else
+          locale_files.map { |f| File.basename(f, ".*").split(".").last }
+        end.uniq.sort
 
         return info if locales.empty?
 
@@ -457,6 +449,15 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "detect_locale_info")
       end
 
+      TEST_SIGNALS = {
+        devise: /Devise::Test::IntegrationHelpers/,
+        sign_in: /sign_in/,
+        assert_select: /assert_select/,
+        assert_response: /assert_response/,
+        auth_test: /requires?\s+authentication/i
+      }.freeze
+      private_constant :TEST_SIGNALS
+
       private_class_method def self.detect_test_pattern
         sections = []
         test_dir = rails_app.root.join("test", "controllers").to_s
@@ -466,51 +467,30 @@ module RailsAiContext
         test_files = safe_glob(test_dir, "**/*_test.rb", real_root)
         return sections if test_files.empty?
 
-        has_devise = false
-        has_sign_in = false
-        has_assert_select = false
-        has_assert_response = false
-        has_auth_test = false
+        found = {}
         detected_in = []
 
         test_files.first(5).each do |path|
           content = RailsAiContext::SafeFile.read(path) or next
-          file_signals = false
-          if content.include?("Devise::Test::IntegrationHelpers")
-            has_devise = true
-            file_signals = true
-          end
-          if content.include?("sign_in")
-            has_sign_in = true
-            file_signals = true
-          end
-          if content.include?("assert_select")
-            has_assert_select = true
-            file_signals = true
-          end
-          if content.include?("assert_response")
-            has_assert_response = true
-            file_signals = true
-          end
-          if content.match?(/requires?\s+authentication/i)
-            has_auth_test = true
-            file_signals = true
-          end
+          hits = TEST_SIGNALS.select { |_, signal| content.match?(signal) }
+          next if hits.empty?
+
+          found.update(hits)
           # Only credit files that actually contributed a signal - an empty
           # scaffold test says nothing about the app's test pattern.
-          detected_in << File.basename(path, ".rb").camelize.sub(/Test$/, "") if file_signals
+          detected_in << File.basename(path, ".rb").camelize.sub(/Test$/, "")
         end
 
-        return sections unless has_assert_response
+        return sections unless found[:assert_response]
 
         sections << "" << "### Controller Test Pattern (follow this for new tests)"
         sections << "```ruby"
         sections << "require \"test_helper\""
         sections << ""
         sections << "class [Feature]ControllerTest < ActionDispatch::IntegrationTest"
-        sections << "  include Devise::Test::IntegrationHelpers" if has_devise
+        sections << "  include Devise::Test::IntegrationHelpers" if found[:devise]
         sections << ""
-        if has_auth_test
+        if found[:auth_test]
           sections << "  test \"requires authentication\" do"
           sections << "    get [path]"
           sections << "    assert_response :redirect"
@@ -518,10 +498,10 @@ module RailsAiContext
           sections << ""
         end
         sections << "  test \"[action] renders page\" do"
-        sections << "    sign_in users(:one)" if has_sign_in
+        sections << "    sign_in users(:one)" if found[:sign_in]
         sections << "    get [path]"
         sections << "    assert_response :success"
-        sections << "    assert_select \"h1\", \"[Expected Title]\"" if has_assert_select
+        sections << "    assert_select \"h1\", \"[Expected Title]\"" if found[:assert_select]
         sections << "  end"
         sections << "end"
         sections << "```"

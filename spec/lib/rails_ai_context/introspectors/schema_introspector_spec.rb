@@ -10,6 +10,33 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
   let(:introspector) { described_class.new(app) }
 
   describe "#call" do
+    # A blog that is connected but not yet migrated: the answer comes from the
+    # files, and the database is there.
+    context "when connected to a database with no tables yet" do
+      it "says the database is connected, not that there is no connection" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db", "migrate"))
+          File.write(File.join(dir, "db", "migrate", "20260901000000_create_posts.rb"), <<~RUBY)
+            class CreatePosts < ActiveRecord::Migration[8.1]
+              def change
+                create_table :posts do |t|
+                  t.string :title
+                end
+              end
+            end
+          RUBY
+          blog = described_class.new(RailsAiContext::StaticApp.new(dir))
+          allow(blog).to receive(:active_record_connected?).and_return(true)
+          allow(blog).to receive(:table_names).and_return([])
+
+          note = blog.call[:note].to_s
+
+          expect(note).to include("connected, no tables yet")
+          expect(note).not_to include("no DB connection")
+        end
+      end
+    end
+
     context "when ActiveRecord is not connected and no schema file" do
       before do
         allow(introspector).to receive(:active_record_connected?).and_return(false)
@@ -203,6 +230,44 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(result[:declared_tables]).to be_nil
       end
 
+      it "names a bigint column the way db/schema.rb does" do
+        connection = ActiveRecord::Base.connection
+        connection.create_table(:pa_q_blobs, force: true) do |t|
+          t.bigint :filesize
+          t.integer :views
+        end
+
+        columns = introspector.send(:extract_columns, "pa_q_blobs")
+
+        expect(columns).to include(a_hash_including(name: "filesize", type: "bigint"))
+        expect(columns.find { |c| c[:name] == "filesize" }).not_to have_key(:limit)
+        expect(columns).to include(a_hash_including(name: "views", type: "integer"))
+      ensure
+        ActiveRecord::Base.connection.drop_table(:pa_q_blobs, if_exists: true)
+      end
+
+      # PostgreSQL reports an array column's default as its literal (`{}`);
+      # the static tier reads it as Rails dumps it, and both keep the flag.
+      it "reads a PostgreSQL array column as the static tier does" do
+        metadata = double(sql_type: "character varying[]")
+        column = double(name: "tags", type: :string, null: true, default: '{a,"b c"}', limit: nil, precision: nil,
+                        scale: nil, comment: nil, array?: true, sql_type_metadata: metadata)
+        allow(ActiveRecord::Base.connection).to receive(:columns).with("pa_v_things").and_return([ column ])
+
+        expect(introspector.send(:extract_columns, "pa_v_things"))
+          .to eq([ { name: "tags", type: "string", null: true, default: '["a", "b c"]', array: true } ])
+      end
+
+      # ActiveRecord gives an expression index's columns as one String; the
+      # static readers split it into keys, and every consumer maps the list.
+      it "reads an expression index's columns as the static readers do" do
+        index = double(name: "idx_lower_email", columns: "lower((email)::text), id", unique: true, where: nil)
+        allow(ActiveRecord::Base.connection).to receive(:indexes).with("pa_v_people").and_return([ index ])
+
+        expect(introspector.send(:extract_indexes, "pa_v_people"))
+          .to eq([ { name: "idx_lower_email", columns: [ "lower((email)::text)", "id" ], unique: true } ])
+      end
+
       it "extracts columns with normalized types" do
         result = introspector.call
         user_cols = result[:tables]["users"][:columns]
@@ -347,6 +412,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
               t.string "name"
               t.index ["user_id", "is_default"], name: "index_user_profiles_on_user_id_and_is_default"
               t.index ["user_id"], name: "index_user_profiles_on_user_id", unique: true
+              t.index ["name"], name: "index_user_profiles_on_name", unique: true, where: "(is_default IS TRUE)"
             end
           end
         RUBY
@@ -362,6 +428,13 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         composite_idx = indexes.find { |i| i[:name] == "index_user_profiles_on_user_id_and_is_default" }
         expect(composite_idx).not_to be_nil
         expect(composite_idx[:columns]).to eq(%w[user_id is_default])
+      end
+
+      it "carries a partial index's where: condition" do
+        indexes = introspector.call[:tables]["user_profiles"][:indexes]
+
+        expect(indexes.find { |i| i[:name] == "index_user_profiles_on_name" }[:where]).to eq("(is_default IS TRUE)")
+        expect(indexes.find { |i| i[:name] == "index_user_profiles_on_user_id" }).not_to have_key(:where)
       end
 
       it "parses t.index with unique flag" do
@@ -574,6 +647,64 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         result = introspector.call
         expect(result[:adapter]).to eq("static_parse")
         expect(result[:note]).to include("migration")
+      end
+
+      it "says nothing about unnamed tables when every create_table named one" do
+        expect(introspector.call[:note]).not_to include("unnamed")
+      end
+
+      # A create_table whose name is computed makes a table the replay cannot
+      # name, and the count said the schema was whole.
+      it "says how many create_table calls it could not name" do
+        File.write(File.join(fixture_path, "db", "migrate", "20250101000004_create_dynamic.rb"), <<~RUBY)
+          class CreateDynamic < ActiveRecord::Migration[8.0]
+            def change
+              create_table computed_name do |t|
+                t.string :x
+              end
+            end
+          end
+        RUBY
+
+        expect(introspector.call[:note]).to include("1 create_table call left unnamed")
+      end
+
+      it "says how many added columns it could not name" do
+        File.write(File.join(fixture_path, "db", "migrate", "20250101000005_add_dynamic.rb"), <<~RUBY)
+          class AddDynamic < ActiveRecord::Migration[8.0]
+            def change
+              add_column :posts, computed_column, :string
+            end
+          end
+        RUBY
+
+        expect(introspector.call[:note]).to include("1 added column left unnamed")
+      end
+
+      it "says how many migration helper calls it could not replay" do
+        FileUtils.mkdir_p(File.join(fixture_path, "lib", "acme"))
+        File.write(File.join(fixture_path, "lib", "acme", "slow_helpers.rb"), <<~RUBY)
+          module Acme
+            module SlowHelpers
+              def swap_type(table, column, type)
+                add_column table, "tmp", type
+                remove_column table, column
+              end
+            end
+          end
+        RUBY
+        File.write(File.join(fixture_path, "db", "migrate", "20250101000006_use_helper.rb"), <<~RUBY)
+          class UseHelper < ActiveRecord::Migration[8.0]
+            extend Acme::SlowHelpers
+            def up
+              swap_type :posts, :title, :text
+            end
+          end
+        RUBY
+
+        expect(introspector.call[:note]).to include("1 migration helper call not replayed")
+      ensure
+        FileUtils.rm_rf(File.join(fixture_path, "lib", "acme"))
       end
 
       it "reconstructs tables from create_table migrations" do

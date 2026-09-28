@@ -7,6 +7,8 @@ module RailsAiContext
     # one surface renders while another drops makes a half-failed run look
     # clean on the surface that dropped it.
     module SectionFacts
+      extend RailsAiContext::OptionText
+
       module_function
 
       # A file generated without booting the app carries different counts from
@@ -47,6 +49,10 @@ module RailsAiContext
         parts << "Rails 8 auth" if auth.dig(:authentication, :rails_auth)
         parts << "Pundit" if auth.dig(:authorization, :pundit)&.any?
         parts << "CanCanCan" if auth.dig(:authorization, :cancancan)
+        # No gem behind it, so it is named as a directory, not a framework.
+        parts << "policies in app/policies" if auth.dig(:authorization, :policies)&.any?
+        ability = auth.dig(:authorization, :ability_class)
+        parts << "Ability class in #{ability}" if ability
         parts.any? ? "- Auth: #{parts.join(' + ')}" : nil
       end
 
@@ -61,10 +67,48 @@ module RailsAiContext
         parts.any? ? "- Assets: #{parts.join(', ')}" : nil
       end
 
+      # Every bucket is named even when empty, plus the remainder: a total the named buckets
+      # do not add up to reads as Phlex, or as nothing.
+      def component_buckets(summary)
+        buckets = [ "#{summary[:view_component].to_i} ViewComponent", "#{summary[:phlex].to_i} Phlex" ]
+        unclassified = summary[:unclassified].to_i
+        buckets << "#{unclassified} of no known base class" if unclassified > 0
+        buckets
+      end
+
       def associations_list(model_data)
         (model_data[:associations] || [])
           .select { |a| a.is_a?(Hash) }
-          .map { |a| "#{a[:type]} :#{a[:name]}" }
+          .map { |a| "#{a[:type]} #{association_name(a)}" }
+      end
+
+      # The validator class a `validates_with` names, else the attributes; never a bare "on ".
+      # An enum's values as a reader names them; computed ones as their source.
+      def enum_values(values)
+        case values
+        when Hash then values.keys.join(", ")
+        when String then "`#{values}` (computed)"
+        else Array(values).join(", ")
+        end
+      end
+
+      def validation_target(validation)
+        attrs = Array(validation[:attributes]).join(", ")
+        computed = Array(validation[:computed_attributes]).map { |source| "`#{source}`" }.join(", ")
+        attrs = attrs.empty? ? "#{computed} (computed)" : "#{attrs} (from #{computed})" unless computed.empty?
+        attrs += " (options computed: `#{validation[:options_source]}`)" if validation[:options_source]
+        target = validation[:validator].to_s
+        target += " on #{attrs}" if !target.empty? && !attrs.empty?
+        target.empty? ? (attrs.empty? ? "" : "on #{attrs}") : target
+      end
+
+      # A computed name prints as its source, marked: read as a symbol, `owner_name` names
+      # an association no model declares.
+      def association_name(association)
+        return "`#{association[:name]}` (computed)" if association[:computed_name]
+
+        name = association[:name].to_s
+        name.start_with?(":") ? name : ":#{name}"
       end
 
       # The introspector records each strong-params method as a hash of its
@@ -115,17 +159,36 @@ module RailsAiContext
 
       def chain_filter_parts(ctx, name, root)
         chain = ActionFilters.for_controller(ctx, name, root: root)
-        (chain[:inherited] + chain[:own]).map { |f| "#{f[:kind]} #{f[:name]}#{skip_condition_tail(f)}" } +
+        (chain[:inherited] + chain[:own]).map { |f| "#{f[:kind]} #{f[:name]}#{filter_condition_tail(f)}" } +
           chain[:skipped].map { |skipped| "~~#{skipped}~~ _(skipped)_" }
+      end
+
+      # Where a filter is declared: an ancestor, a concern, or a concern an
+      # ancestor includes.
+      def filter_origin(filter)
+        concern, from = filter.values_at(:from_concern, :from)
+        if concern && from then " _(from #{concern} via #{from})_"
+        elsif concern || from then " _(from #{concern || from})_"
+        elsif filter[:provenance] then " _(#{filter[:provenance]})_"
+        else ""
+        end
       end
 
       # A skip carrying if:/unless: or only:/except: leaves the filter in the
       # chain, so the line says where the class takes it out instead of
       # striking it through.
+      # The filter's own condition first, then what a skip of it takes out.
+      def filter_condition_tail(filter)
+        own = +""
+        own << " (if: #{option_text(filter[:if])})" if filter[:if]
+        own << " (unless: #{option_text(filter[:unless])})" if filter[:unless]
+        own + skip_condition_tail(filter)
+      end
+
       def skip_condition_tail(filter)
         tail = +""
-        tail << " (skipped if: #{filter[:skipped_if]})" if filter[:skipped_if]
-        tail << " (skipped unless: #{filter[:skipped_unless]})" if filter[:skipped_unless]
+        tail << " (skipped if: #{option_text(filter[:skipped_if])})" if filter[:skipped_if]
+        tail << " (skipped unless: #{option_text(filter[:skipped_unless])})" if filter[:skipped_unless]
         tail << " (skipped on: #{filter[:skipped_on]})" if filter[:skipped_on]
         tail << " (skipped except: #{filter[:skipped_except]})" if filter[:skipped_except]
         tail
@@ -177,11 +240,28 @@ module RailsAiContext
         return nil unless locales.size > 1
 
         qualifier = locales_from_files?(i18n_data) ? " from locale files" : ""
-        "- I18n: #{CountPhrase.call(locales.size, "locale")}#{qualifier} (#{locales.first(5).join(', ')})"
+        "- I18n: #{CountPhrase.call(locales.size, "locale")}#{qualifier} " \
+          "(#{locales.first(5).join(', ')})#{unread_locale_clause(i18n_data)}"
+      end
+
+      # Counts dirs, not files: "N more" beside a locale count reads as N more locales.
+      def unread_locale_clause(i18n_data)
+        return "" unless i18n_data[:in_repo_locale_files].to_i.positive?
+
+        "; #{CountPhrase.call(i18n_data[:in_repo_locale_dirs], 'in-repo engine locale dir')} not read"
       end
 
       def locales_from_files?(i18n_data)
         i18n_data[:available_locales_source] == "locale_files"
+      end
+
+      # What a locale file count leaves out, for every surface that prints one.
+      def unread_locale_note(i18n_data)
+        unread = i18n_data[:in_repo_locale_files].to_i
+        return "" unless unread.positive?
+
+        " (#{unread} more under #{CountPhrase.call(i18n_data[:in_repo_locale_dirs], 'in-repo engine locale dir')}, " \
+          "not read)"
       end
 
       # Introspector failures, so a half-failed run cannot read as a clean

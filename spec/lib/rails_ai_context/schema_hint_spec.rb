@@ -37,29 +37,6 @@ RSpec.describe RailsAiContext::SchemaHint do
     expect(hint.primary_key).to eq("id")
     expect(hint.confidence).to eq("[VERIFIED]")
   end
-
-  describe "#verified?" do
-    it "returns true for VERIFIED confidence" do
-      expect(hint.verified?).to be true
-    end
-
-    it "returns false for INFERRED confidence" do
-      inferred = described_class.new(**hint.to_h.merge(confidence: "[INFERRED]"))
-      expect(inferred.verified?).to be false
-    end
-  end
-
-  describe "#column_names" do
-    it "returns array of column name strings" do
-      expect(hint.column_names).to eq(%w[id title body])
-    end
-  end
-
-  describe "#association_names" do
-    it "returns array of association name strings" do
-      expect(hint.association_names).to eq(%w[comments user])
-    end
-  end
 end
 
 RSpec.describe RailsAiContext::HydrationResult do

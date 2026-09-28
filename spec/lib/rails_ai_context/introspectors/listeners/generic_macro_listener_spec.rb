@@ -4,13 +4,6 @@ require "spec_helper"
 require "prism"
 
 RSpec.describe RailsAiContext::Introspectors::Listeners::GenericMacroListener do
-  def parse_and_dispatch(source, *methods)
-    result     = Prism.parse(source)
-    listener   = described_class.new(*methods)
-    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-    listener.results
-  end
-
   it "detects specified macro calls" do
     results = parse_and_dispatch(<<~RUBY, :before_action, :after_action)
       before_action :authenticate!
@@ -25,6 +18,11 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::GenericMacroListener do
   it "extracts symbol args" do
     results = parse_and_dispatch("before_action :auth, :set_locale", :before_action)
     expect(results.first[:args]).to eq([ :auth, :set_locale ])
+  end
+
+  it "reads an escaped symbol arg as the characters it names" do
+    results = parse_and_dispatch('before_action :"set\tlocale"', :before_action)
+    expect(results.first[:args]).to eq([ :"set\tlocale" ])
   end
 
   it "extracts keyword options" do

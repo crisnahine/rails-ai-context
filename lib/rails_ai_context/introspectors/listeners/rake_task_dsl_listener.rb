@@ -53,7 +53,7 @@ module RailsAiContext
 
           case first
           when Prism::SymbolNode
-            name = first.value.to_s
+            name = first.unescaped
             deps = extract_task_deps(args)
             # Check for task arguments: task :name, [:arg1, :arg2] => :environment
             # Prism parses this as SymbolNode + KeywordHashNode where key is ArrayNode
@@ -87,9 +87,9 @@ module RailsAiContext
               next unless assoc.is_a?(Prism::AssocNode) && assoc.key.is_a?(Prism::ArrayNode)
 
               task_args = assoc.key.elements.filter_map { |e|
-                e.is_a?(Prism::SymbolNode) ? e.value.to_s : nil
+                e.is_a?(Prism::SymbolNode) ? e.unescaped : nil
               }
-              deps = resolve_deps(assoc.value)
+              deps = literal_strings(assoc.value)
               return [ task_args, deps ]
             end
           end
@@ -108,36 +108,17 @@ module RailsAiContext
           assoc = hash_node.elements.first
           return [ nil, [] ] unless assoc.is_a?(Prism::AssocNode)
 
-          name = case assoc.key
-          when Prism::SymbolNode then assoc.key.value.to_s
-          when Prism::StringNode then assoc.key.unescaped
-          else nil
-          end
+          name = literal_string(assoc.key)
 
-          deps = resolve_deps(assoc.value)
+          deps = literal_strings(assoc.value)
           [ name, deps ]
         end
 
         def extract_deps_from_hash_values(hash_node)
           hash_node.elements.flat_map { |assoc|
             next [] unless assoc.is_a?(Prism::AssocNode)
-            resolve_deps(assoc.value)
+            literal_strings(assoc.value)
           }
-        end
-
-        def resolve_deps(node)
-          case node
-          when Prism::SymbolNode then [ node.value.to_s ]
-          when Prism::StringNode then [ node.unescaped ]
-          when Prism::ArrayNode
-            node.elements.filter_map { |e|
-              case e
-              when Prism::SymbolNode then e.value.to_s
-              when Prism::StringNode then e.unescaped
-              end
-            }
-          else []
-          end
         end
       end
     end

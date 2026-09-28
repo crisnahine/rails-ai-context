@@ -103,9 +103,9 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
   describe "a fetch whose fallback is an expression" do
     let(:env_vars) do
       {
-        "#{root}/config/puma.rb" => described_class.send(:env_references, %(port ENV.fetch("PORT", defaults[:port])\n)),
-        "#{root}/config/web.rb" => described_class.send(:env_references, %(ENV.fetch("PORT", "3000")\n)),
-        "#{root}/config/strict.rb" => described_class.send(:env_references, %(ENV.fetch("PORT")\n))
+        "#{root}/config/puma.rb" => RailsAiContext::Introspectors::EnvReferences.references(%(port ENV.fetch("PORT", defaults[:port])\n)),
+        "#{root}/config/web.rb" => RailsAiContext::Introspectors::EnvReferences.references(%(ENV.fetch("PORT", "3000")\n)),
+        "#{root}/config/strict.rb" => RailsAiContext::Introspectors::EnvReferences.references(%(ENV.fetch("PORT")\n))
       }
     end
 
@@ -121,9 +121,9 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     # which is the one thing "no default" is there to warn about.
     it "tells a bracket read from a fetch that raises" do
       allow(described_class).to receive(:scan_env_vars).and_return(
-        "#{root}/config/web.rb" => described_class.send(:env_references, %(ENV.fetch("PORT", "3000")\n)),
-        "#{root}/config/strict.rb" => described_class.send(:env_references, %(ENV.fetch("PORT")\n)),
-        "#{root}/config/loose.rb" => described_class.send(:env_references, %(ENV["PORT"]\n))
+        "#{root}/config/web.rb" => RailsAiContext::Introspectors::EnvReferences.references(%(ENV.fetch("PORT", "3000")\n)),
+        "#{root}/config/strict.rb" => RailsAiContext::Introspectors::EnvReferences.references(%(ENV.fetch("PORT")\n)),
+        "#{root}/config/loose.rb" => RailsAiContext::Introspectors::EnvReferences.references(%(ENV["PORT"]\n))
       )
 
       text = described_class.call(detail: "full").content.first[:text]
@@ -135,8 +135,8 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     # Neither raises and both answer nil, so they agree.
     it "does not call a bracket read and a nil fetch a disagreement" do
       allow(described_class).to receive(:scan_env_vars).and_return(
-        "#{root}/config/a.rb" => described_class.send(:env_references, %(ENV["SITE"]\n)),
-        "#{root}/config/b.rb" => described_class.send(:env_references, %(ENV.fetch("SITE", nil)\n))
+        "#{root}/config/a.rb" => RailsAiContext::Introspectors::EnvReferences.references(%(ENV["SITE"]\n)),
+        "#{root}/config/b.rb" => RailsAiContext::Introspectors::EnvReferences.references(%(ENV.fetch("SITE", nil)\n))
       )
 
       expect(described_class.call.content.first[:text]).not_to include("defaults differ")
@@ -145,7 +145,7 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
 
     it "prints no default when that is every site's" do
       allow(described_class).to receive(:scan_env_vars).and_return(
-        "#{root}/config/puma.rb" => described_class.send(:env_references, %(ENV.fetch("PORT", defaults[:port])\n))
+        "#{root}/config/puma.rb" => RailsAiContext::Introspectors::EnvReferences.references(%(ENV.fetch("PORT", defaults[:port])\n))
       )
 
       text = described_class.call.content.first[:text]
@@ -535,12 +535,66 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
                                "RAKE_ONLY_VAR", "VIEW_ONLY_VAR")
     end
 
-    # config/database.yml is on `sensitive_patterns`, so it stays unread and
-    # the answer says so rather than leaving the gap unexplained.
-    it "still does not open a sensitive config file" do
+    # config/database.yml is on `sensitive_patterns` for its values. The ENV
+    # names in its ERB tags are not values, and Huginn's DATABASE_HOST is only
+    # there, so the names are read and nothing else is.
+    it "reads only the ENV names in a sensitive config file's ERB tags" do
       FileUtils.mkdir_p(File.join(tmpdir, "config"))
-      File.write(File.join(tmpdir, "config", "database.yml"),
-                 %(production:\n  password: <%= ENV['DB_PASSWORD'] %>\n))
+      File.write(File.join(tmpdir, "config", "database.yml"), <<~YAML)
+        production:
+          host: <%= ENV["DATABASE_HOST"] %>
+          password: <%= ENV.fetch("DB_PASSWORD", "hunter2") %>
+          username: literal_user
+      YAML
+
+      vars = described_class.send(:scan_env_vars, tmpdir).values.flatten
+
+      expect(vars.map { |v| v[:name] }).to contain_exactly("DATABASE_HOST", "DB_PASSWORD")
+      expect(vars.to_s).not_to include("hunter2")
+      expect(vars.to_s).not_to include("literal_user")
+    end
+
+    # A default read only as a name is unknown, so it cannot be named as
+    # the variable's, and its site says so beside the one that was read.
+    it "does not fold a default it did not read under another site's" do
+      FileUtils.mkdir_p(File.join(tmpdir, "config", "initializers"))
+      File.write(File.join(tmpdir, "config", "database.yml"), %(production:\n  port: <%= ENV.fetch("PA_W_DB_PORT", "5432") %>\n))
+      File.write(File.join(tmpdir, "config", "initializers", "envs.rb"), %(PORT = ENV.fetch("PA_W_DB_PORT", "6000")\n))
+      env_vars = described_class.send(:scan_env_vars, tmpdir)
+      allow(described_class).to receive(:scan_env_vars).and_return(env_vars)
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmpdir)))
+
+      standard = described_class.call(detail: "standard").content.first[:text]
+      full = described_class.call(detail: "full").content.first[:text]
+
+      expect(standard).not_to include("(default: `6000`)")
+      expect(standard).to include("defaults differ")
+      expect(full).not_to include("(default: `6000`)")
+      expect(full).to include("config/database.yml:2 default not read").and include("config/initializers/envs.rb:1 default: `6000`")
+      expect(full).not_to include("5432")
+    end
+
+    # "no default" says the line raises KeyError; this one has a default the
+    # scan never read.
+    it "labels a site whose default it did not read as unread in full detail" do
+      FileUtils.mkdir_p(File.join(tmpdir, "config", "initializers"))
+      File.write(File.join(tmpdir, "config", "database.yml"), %(production:\n  host: <%= ENV.fetch("PA_U_DBX_HOST", "db.internal") %>\n))
+      File.write(File.join(tmpdir, "config", "initializers", "db.rb"), %(A = ENV.fetch("PA_U_DBX_HOST")\nB = ENV.fetch("PA_U_DBX_HOST", "other")\n))
+      env_vars = described_class.send(:scan_env_vars, tmpdir)
+      allow(described_class).to receive(:scan_env_vars).and_return(env_vars)
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmpdir)))
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("config/database.yml:2 default not read")
+      expect(text).not_to include("config/database.yml:2 no default")
+      expect(text).not_to include("db.internal")
+    end
+
+    it "never opens a sensitive file that is not config YAML" do
+      File.write(File.join(tmpdir, ".env"), %(SECRET=<%= ENV["NOT_READ"] %>\n))
+      FileUtils.mkdir_p(File.join(tmpdir, "config"))
+      File.write(File.join(tmpdir, "config", "master.key"), %(<%= ENV["ALSO_NOT_READ"] %>\n))
 
       names = described_class.send(:scan_env_vars, tmpdir).values.flatten.map { |v| v[:name] }
 
@@ -735,6 +789,21 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
 
         expect(services.first[:name]).to eq("Stripe")
         expect(services.first[:env_vars]).to eq(%w[STRIPE_PUBLISHABLE_KEY STRIPE_SECRET_KEY])
+      end
+    end
+  end
+
+  describe "a service the Gemfile only names in a comment" do
+    it "is not detected" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile"), "gem \"stripe\"\n# gem \"twilio-ruby\"\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+        allow(described_class).to receive(:detect_external_services).and_call_original
+
+        names = described_class.send(:detect_external_services, dir, []).map { |s| s[:name] }
+
+        expect(names).to include("Stripe")
+        expect(names).not_to include("Twilio")
       end
     end
   end

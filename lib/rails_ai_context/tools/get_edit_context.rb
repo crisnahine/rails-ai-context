@@ -69,7 +69,7 @@ module RailsAiContext
         # Find all matching lines
         matches = []
         source_lines.each_with_index do |line, idx|
-          matches << idx if line.include?(near) || line.match?(/\b#{Regexp.escape(near)}\b/)
+          matches << idx if line.include?(near)
         end
 
         if matches.empty?
@@ -94,8 +94,11 @@ module RailsAiContext
           end_idx = [ end_idx, method_end ].max
         end
 
-        context_code = source_lines[start_idx..end_idx].map.with_index do |line, i|
-          "#{(start_idx + i + 1).to_s.rjust(4)}  #{line.rstrip}"
+        # Source leaving the app passes through Redaction, the whole file at once, so a window
+        # opening inside a PEM key still knows it is inside one.
+        redacted = RailsAiContext::Redaction.redact_source_lines(source_lines.map(&:rstrip), path: file)
+        context_code = redacted[start_idx..end_idx].map.with_index do |line, i|
+          "#{(start_idx + i + 1).to_s.rjust(4)}  #{line}"
         end.join("\n")
 
         lang = case file

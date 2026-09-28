@@ -12,6 +12,8 @@ module RailsAiContext
       # entry missing from that hash lost its reason silently.
       RuleFile = Struct.new(:path, :content, :reason)
 
+      IN_REPO_ENGINES_SHOWN = 5
+
       # Returns an array of summary lines for full-preset introspectors.
       # Each line is only added if the introspector returned meaningful data.
       def full_preset_stack_lines(ctx = context)
@@ -42,7 +44,9 @@ module RailsAiContext
 
         attachments = Payload.storage_attachments(ctx)
         if attachments.any?
-          lines << "- Storage: ActiveStorage (#{count_phrase(attachments.size, "model")} with attachments)"
+          # One entry per attachment, so the models are the distinct owners.
+          models = attachments.map { |a| a[:model] }.uniq.size
+          lines << "- Storage: ActiveStorage (#{count_phrase(models, "model")} with #{count_phrase(attachments.size, "attachment")})"
         end
 
         rich_text = Payload.rich_text_fields(ctx)
@@ -53,8 +57,22 @@ module RailsAiContext
 
         # What routes.rb mounts, engine or plain Rack app: the key predates
         # the widening, the line should not.
-        mounted = Payload.mounted_engines(ctx).map { |e| e[:engine] }.compact.first(5)
-        lines << "- Mounted: #{mounted.join(', ')}" if mounted.any?
+        # One name per app, however many paths mount it.
+        mounted = Payload.mounted_engines(ctx).filter_map { |e| e[:engine] }.tally
+        if mounted.any?
+          shown = mounted.first(5).map { |name, paths| paths > 1 ? "#{name} (#{paths} paths)" : name }
+          shown << "...#{mounted.size - 5} more" if mounted.size > 5
+          lines << "- Mounted: #{shown.join(', ')}"
+        end
+
+        # What routes.rb mounts is not what the repository holds: an in-repo
+        # engine is often mounted by its own initializer, or not at all.
+        in_repo = Payload.in_repo_engines(ctx).filter_map { |e| e[:name] }
+        if in_repo.any?
+          shown = in_repo.first(IN_REPO_ENGINES_SHOWN)
+          shown += [ "...#{in_repo.size - IN_REPO_ENGINES_SHOWN} more" ] if in_repo.size > IN_REPO_ENGINES_SHOWN
+          lines << "- In-repo engines: #{in_repo.size} (#{shown.join(', ')})"
+        end
 
         raw_databases = Payload.section(ctx, :multi_database)&.dig(:databases)
         db_list = raw_databases.is_a?(Hash) ? raw_databases.keys : Array(raw_databases)
@@ -66,10 +84,8 @@ module RailsAiContext
         components = Payload.section(ctx, :components)
         if components && components.dig(:summary, :total).to_i > 0
           summary = components[:summary]
-          parts = [ count_phrase(summary[:total], "component") ]
-          parts << count_phrase(summary[:view_component].to_i, "ViewComponent") if summary[:view_component].to_i > 0
-          parts << "#{summary[:phlex]} Phlex" if summary[:phlex].to_i > 0
-          lines << "- Components: #{parts.join(', ')}"
+          lines << "- Components: #{count_phrase(summary[:total], "component")} " \
+            "(#{SectionFacts.component_buckets(summary).join(', ')})"
         end
 
         perf = Payload.section(ctx, :performance)
@@ -117,9 +133,9 @@ module RailsAiContext
         lines.concat(full_preset_stack_lines)
 
         if app_dirs
-          services = detect_service_files
+          services = service_names
           lines << "- Services: #{services.join(', ')}" if services.any?
-          jobs = detect_job_files
+          jobs = job_names
           lines << "- Jobs: #{jobs.join(', ')}" if jobs.any?
         end
 
@@ -222,35 +238,37 @@ module RailsAiContext
         { written: written, skipped: skipped, not_applicable: not_applicable }
       end
 
-      # Shared utility: resolve the project root directory.
-      # Used by serializers that scan app/ for services, jobs, controllers, etc.
       def project_root
         defined?(Rails) && Rails.respond_to?(:root) && Rails.root ? Rails.root.to_s : Dir.pwd
       end
 
-      # Scan app/services/ for service object class names. The root
-      # parameter is the test seam - specs point it at a fixture tree.
-      def detect_service_files(root = project_root)
-        dir = File.join(root, "app", "services")
-        return [] unless Dir.exist?(dir)
-        Dir.glob(File.join(dir, "*.rb"))
-          .map { |f| File.basename(f, ".rb").camelize }
-          .reject { |s| s == "ApplicationService" }
-      rescue => e
-        $stderr.puts "[rails-ai-context] Service file scan skipped: #{e.message}" if ENV["DEBUG"]
-        []
+      # Keyed by the context object: every serializer in one run shares it, and
+      # a later run (watch, a new fingerprint) brings a new one.
+      SERVICE_NAMES = ObjectSpace::WeakMap.new
+
+      # The same scan rails_get_service_pattern lists from. Several files print the line and
+      # a large app's scan takes most of a second, so a run pays for it once.
+      def service_names(root = project_root)
+        per_run = (SERVICE_NAMES[context] ||= {})
+        per_run[root.to_s] ||= capped(Introspectors::ServiceClasses.names(root)).freeze
       end
 
-      # Scan app/jobs/ for job class names.
-      def detect_job_files(root = project_root)
-        dir = File.join(root, "app", "jobs")
-        return [] unless Dir.exist?(dir)
-        Dir.glob(File.join(dir, "*.rb"))
-          .map { |f| File.basename(f, ".rb").camelize }
-          .reject { |j| j == "ApplicationJob" }
-      rescue => e
-        $stderr.puts "[rails-ai-context] Job file scan skipped: #{e.message}" if ENV["DEBUG"]
-        []
+      NAMES_SHOWN = 12
+
+      # The jobs and Sidekiq workers the introspector recorded, so this line
+      # and rails_get_job_pattern name the same set.
+      def job_names
+        jobs = Payload.section(context, :jobs)
+        return [] unless jobs
+
+        capped((Array(jobs[:jobs]) + Array(jobs[:workers])).filter_map { |job| job[:name] if job.is_a?(Hash) })
+      end
+
+      # A large app's services take one line of a generated file, not kilobytes of it.
+      def capped(names)
+        return names if names.size <= NAMES_SHOWN
+
+        names.first(NAMES_SHOWN) + [ "...#{names.size - NAMES_SHOWN} more" ]
       end
 
       # The filters ApplicationController runs on every request, through the
@@ -262,20 +280,12 @@ module RailsAiContext
         source = ActionFilters.base_controller_source("ApplicationController", root)
         return [] unless source
 
-        Introspectors::ControllerFilters.from_source(source)
+        Introspectors::ControllerFilters.with_concerns(source, root: root.to_s, within: "ApplicationController").first
           .select { |filter| filter[:kind] == "before" && !filter[:skipped] }
           .reject { |filter| filter[:only] || filter[:except] || filter[:if] || filter[:unless] }
           .map { |filter| filter[:name] }
       rescue => e
-        $stderr.puts "[rails-ai-context] Before actions scan skipped: #{e.message}" if ENV["DEBUG"]
-        []
-      end
-
-      # One seam for every surface that names the database, so the generated
-      # files, the tools and the rake task cannot answer differently for one
-      # app. See RailsAiContext::SchemaAdapter.
-      def database_adapter_label(_schema = nil)
-        SchemaAdapter.label(context)
+        RailsAiContext.debug_fail(e, [], label: "Before actions scan")
       end
     end
   end

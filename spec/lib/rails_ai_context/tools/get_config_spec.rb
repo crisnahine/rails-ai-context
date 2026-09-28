@@ -47,6 +47,20 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
     })
   end
 
+  context "when running in the static tier" do
+    before do
+      allow(described_class).to receive(:cached_context)
+        .and_return({ config: { unavailable: "requires a booted Rails app" } })
+      allow(Rails).to receive(:configuration).and_raise(NameError, "no booted app")
+    end
+
+    it "refuses before reading any runtime configuration" do
+      text = described_class.call.content.first[:text]
+      expect(text).to include("[UNAVAILABLE: requires a booted Rails app]")
+      expect(text).not_to include("**Database:**")
+    end
+  end
+
   describe ".call" do
     it "returns application configuration" do
       result = described_class.call
@@ -93,6 +107,51 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
       expect(text).to include("Rack::Attack")
       # Default Rails middleware should be filtered out
       expect(text).not_to include("ActionDispatch::HostAuthorization")
+    end
+
+    context "with a middleware section to split the stack against" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return({
+          config: config_data,
+          gems: gems_data,
+          auth: auth_data,
+          middleware: {
+            custom_middleware: [ { class_name: "CustomRateLimiter", file: "app/middleware/custom_rate_limiter.rb" } ],
+            middleware_from_initializers: [
+              { middleware: "Rack::Attack", action: "use", file: "config/initializers/rack_attack.rb" }
+            ]
+          }
+        })
+      end
+
+      it "names the app's own classes with their files and the rest as stack additions" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("## Custom Middleware")
+        expect(text).to include("- `CustomRateLimiter` (app/middleware/custom_rate_limiter.rb)")
+        expect(text).to include("### Added to the stack")
+        expect(text).to include("- `Rack::Attack`")
+      end
+    end
+
+    context "with no custom middleware of the app's own" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return({
+          config: config_data,
+          gems: gems_data,
+          auth: auth_data,
+          middleware: { custom_middleware: [], middleware_from_initializers: [] }
+        })
+      end
+
+      it "says so rather than calling every gem middleware custom" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("- No custom middleware in app/middleware/ or lib/middleware/")
+        expect(text).to include("### Added to the stack")
+        expect(text).to include("- `CustomRateLimiter`")
+        expect(text).to include("- `Rack::Attack`")
+      end
     end
 
     it "lists all initializers, including stock ones" do

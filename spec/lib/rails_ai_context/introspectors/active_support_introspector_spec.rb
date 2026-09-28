@@ -72,6 +72,26 @@ RSpec.describe RailsAiContext::Introspectors::ActiveSupportIntrospector do
         expect(concern[:class_methods_block]).to eq(true)
       end
 
+      # Two concerns of the same basename in different namespaces printed as
+      # one name, and a reader could not tell which module was meant.
+      it "names a namespaced concern by its path below the concerns directory" do
+        nested = File.join(concerns_dir, "test_edition")
+        FileUtils.mkdir_p(nested)
+        File.write(File.join(nested, "test_trackable.rb"), <<~RUBY)
+          module TestEdition
+            module TestTrackable
+              extend ActiveSupport::Concern
+            end
+          end
+        RUBY
+
+        names = result[:concerns]["app/models/concerns"].map { |e| e[:name] }
+
+        expect(names).to include("TestEdition::TestTrackable", "TestTrackable")
+      ensure
+        FileUtils.rm_rf(nested)
+      end
+
       # Some apps keep every ActiveModel validator in app/models/concerns.
       # None of them is a module, and all of them read as "plain module".
       it "says a class in the concerns directory is a class" do

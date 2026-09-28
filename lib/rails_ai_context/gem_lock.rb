@@ -16,18 +16,34 @@ module RailsAiContext
     SPEC_LINE = /\A {4}(\S+) \(([^)]+)\)\s*\z/
     DEPENDENCY_LINE = /\A {2}(\S+?)!?(?: \(.*\))?\s*\z/
     RUBY_LINE = /\A\s+ruby (\S+)/
+    REMOTE_LINE = /\A {2}remote: (.+?)\s*\z/
     GEMFILE_RUBY_LINE = /^\s*ruby\s+(["'])([^"']+)\1/
     PLAIN_VERSION = /\A\d+(?:\.\d+)*\S*\z/
+    TOOL_VERSIONS_RUBY = /^ruby[ \t]+(\S+)/
+    # Bundler's order: what the lockfile resolved, what the Gemfile asked for, then the
+    # version-manager files the shell picks when neither says.
+    RUBY_SOURCES = [ "Gemfile.lock", "Gemfile", ".ruby-version", ".tool-versions" ].freeze
 
     class Spec
-      attr_reader :ruby_version, :reason
+      # `remote:` of each PATH section, as the lockfile writes it.
+      attr_reader :ruby_versions, :reason, :path_remotes
 
-      def initialize(versions, ruby_version: nil, reason: nil, absent: false, direct: nil)
+      def initialize(versions, ruby_versions: {}, reason: nil, absent: false, direct: nil, path_remotes: [])
         @versions = versions
-        @ruby_version = ruby_version
+        @path_remotes = path_remotes
+        @ruby_versions = ruby_versions
         @reason = reason
         @absent = absent
         @direct = direct || Set.new
+      end
+
+      # Several files may name a version and they often disagree, so the source is kept too.
+      def ruby_version
+        @ruby_versions.values.first
+      end
+
+      def ruby_version_source
+        @ruby_versions.keys.first
       end
 
       # No lockfile, and a lockfile that named no gem, are both "the app's
@@ -76,9 +92,10 @@ module RailsAiContext
     module_function
 
     def for(root)
-      path = File.join(root.to_s, "Gemfile.lock")
-      gemfile = File.join(root.to_s, "Gemfile")
-      stamp = [ mtime(path), mtime(gemfile) ]
+      root = root.to_s
+      path = File.join(root, "Gemfile.lock")
+      gemfile = File.join(root, "Gemfile")
+      stamp = RUBY_SOURCES.map { |name| mtime(File.join(root, name)) }
 
       MUTEX.synchronize do
         cached = CACHE[path]
@@ -88,9 +105,9 @@ module RailsAiContext
         # and the Gemfile answers the second whether or not a lockfile answers
         # the first.
         spec = if stamp.first
-          parse(path, gemfile)
+          parse(path, gemfile, root)
         else
-          Spec.new({}, ruby_version: gemfile_ruby_version(gemfile),
+          Spec.new({}, ruby_versions: declared_ruby_versions(nil, root),
                        reason: "No Gemfile.lock found", absent: true)
         end
         CACHE[path] = { stamp: stamp, spec: spec }
@@ -105,7 +122,7 @@ module RailsAiContext
     end
     private_class_method :mtime
 
-    def parse(path, gemfile)
+    def parse(path, gemfile, root)
       content = SafeFile.read(path, max_size: MAX_SIZE)
       return Spec.new({}, reason: "Gemfile.lock could not be read") unless content
 
@@ -114,11 +131,16 @@ module RailsAiContext
       ruby_version = nil
       in_specs = false
       in_dependencies = false
+      in_path = false
+      path_remotes = []
       specs_section = false
       content.each_line do |line|
         if line.match?(/\A\S/)
           in_specs = false
           in_dependencies = line.start_with?("DEPENDENCIES")
+          in_path = line.strip == "PATH"
+        elsif in_path && (match = line.match(REMOTE_LINE))
+          path_remotes << match[1].strip
         elsif in_dependencies && (match = line.match(DEPENDENCY_LINE))
           direct << match[1]
         elsif line.strip == "specs:"
@@ -138,7 +160,7 @@ module RailsAiContext
       # and answering it as an app with no gems denies every gem it holds.
       return Spec.new({}, reason: "Gemfile.lock has no specs section") unless specs_section
 
-      Spec.new(versions, ruby_version: ruby_version || gemfile_ruby_version(gemfile), direct: direct)
+      Spec.new(versions, ruby_versions: declared_ruby_versions(ruby_version, root), direct: direct, path_remotes: path_remotes)
     end
     private_class_method :parse
 
@@ -153,5 +175,29 @@ module RailsAiContext
       declared if declared&.match?(PLAIN_VERSION)
     end
     private_class_method :gemfile_ruby_version
+
+    def declared_ruby_versions(locked, root)
+      {
+        "Gemfile.lock" => locked,
+        "Gemfile" => gemfile_ruby_version(File.join(root, "Gemfile")),
+        ".ruby-version" => ruby_version_file(File.join(root, ".ruby-version")),
+        ".tool-versions" => tool_versions_ruby(File.join(root, ".tool-versions"))
+      }.compact
+    end
+    private_class_method :declared_ruby_versions
+
+    # `.ruby-version` is one line, written either bare or engine-prefixed.
+    def ruby_version_file(path)
+      declared = SafeFile.read(path, max_size: MAX_SIZE)&.strip&.sub(/\Aruby-/, "")
+      declared if declared&.match?(PLAIN_VERSION)
+    end
+    private_class_method :ruby_version_file
+
+    def tool_versions_ruby(path)
+      content = SafeFile.read(path, max_size: MAX_SIZE)
+      declared = content&.[](TOOL_VERSIONS_RUBY, 1)
+      declared if declared&.match?(PLAIN_VERSION)
+    end
+    private_class_method :tool_versions_ruby
   end
 end

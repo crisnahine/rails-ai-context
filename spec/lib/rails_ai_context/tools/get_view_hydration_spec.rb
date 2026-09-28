@@ -65,6 +65,19 @@ RSpec.describe RailsAiContext::Tools::GetView, "hydration" do
       expect(text).to include("Post")
     end
 
+    it "reads each template once" do
+      reads = Hash.new(0)
+      allow(RailsAiContext::SafeFile).to receive(:read).and_wrap_original do |orig, path, **kwargs|
+        reads[path.to_s] += 1
+        orig.call(path, **kwargs)
+      end
+
+      described_class.call(controller: "posts", detail: "standard")
+
+      expect(reads.keys.grep(%r{app/views/})).not_to be_empty
+      expect(reads.values).to all(eq(1))
+    end
+
     it "includes column information in schema hints" do
       result = described_class.call(controller: "posts", detail: "standard")
       text = result.content.first[:text]

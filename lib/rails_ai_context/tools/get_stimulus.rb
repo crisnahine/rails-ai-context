@@ -39,28 +39,29 @@ module RailsAiContext
         fetch_section(:stimulus, subject: "Stimulus introspection") do |data|
           all_controllers = data[:controllers] || []
           if all_controllers.empty?
-            note = api_only_note("app/javascript/controllers")
+            note = api_only_note("Stimulus")
             return text_response(note) if note
 
-            return text_response("No Stimulus controllers found.")
+            roots = RailsAiContext::Introspectors::StimulusIntrospector::JS_ROOTS.join(", ")
+            return text_response("No Stimulus controllers found under #{roots}.")
           end
 
-          # Specific controller - accepts both dash and underscore naming
-          # (HTML uses data-controller="weekly-chart", file is weekly_chart_controller.js)
+          # Specific controller, however it is spelled: the identifier with
+          # dashes or underscores, PascalCase, or the path the file sits at.
           if controller
-            normalized = controller.downcase.tr("-", "_").delete_suffix("_controller")
-            # Also handle PascalCase: PostStatus → post_status
-            underscored = controller.underscore.downcase.tr("-", "_").delete_suffix("_controller")
-            ctrl = all_controllers.find { |c|
-              name_norm = c[:name]&.downcase&.tr("-", "_")
-              name_norm == normalized || name_norm == underscored
-            }
-            unless ctrl
+            found = lookup_controllers(all_controllers, controller)
+            if found.empty?
               names = all_controllers.map { |c| c[:name] }.sort
               return not_found_response("Stimulus controller", controller, names,
-                recovery_tool: "Call rails_get_stimulus(detail:\"summary\") to see all controllers. Note: use dashes in HTML, underscores for lookup.")
+                recovery_tool: "Call rails_get_stimulus(detail:\"summary\") to see all controllers. The identifier resolves with dashes or underscores, and so does the file's path or name.")
             end
-            return text_response(format_controller_full(ctrl))
+            if found.size > 1
+              lines = [ "Stimulus controller '#{controller}' matches #{found.size} controllers:", "" ]
+              lines.concat(found.map { |c| "- **#{c[:name]}** (`#{c[:file] || c[:package]}`)" })
+              lines << "" << "_Pass one of these names._"
+              return text_response(lines.join("\n"))
+            end
+            return text_response(format_controller_full(found.first))
           end
 
           # Pagination
@@ -74,11 +75,18 @@ module RailsAiContext
           end
 
           pagination_hint = page[:offset] + page[:limit] < total ? "\n_Showing #{controllers.size} of #{total}. Use `offset:#{page[:offset] + page[:limit]}` for more. cache_key: #{cache_key}_" : ""
+          # A controller registered from a package has no source here to read,
+          # so it is named with its package rather than filed as lifecycle-only.
+          own = controllers.reject { |c| c[:package] }
+          packaged = controllers.select { |c| c[:package] }
+          pagination_hint = "\n_Registered from a package (source not read): #{packaged.map { |c| "#{c[:name]} (`#{c[:package]}`)" }.join(', ')}_#{pagination_hint}" if packaged.any?
+          inferred = controllers.select { |c| c[:identifier_inferred] }.map { |c| c[:name] }
+          pagination_hint = "\n_Names inferred from the file path: these sit outside `app/javascript/controllers`, where the app's own loader decides the identifier, and no view or component writes the derived name: #{inferred.join(', ')}_#{pagination_hint}" if inferred.any?
 
           case detail
           when "summary"
-            active = controllers.select { |c| (c[:targets] || []).any? || (c[:actions] || []).any? || (c[:values].is_a?(Hash) ? c[:values] : {}).any? }
-            empty = controllers.reject { |c| (c[:targets] || []).any? || (c[:actions] || []).any? || (c[:values].is_a?(Hash) ? c[:values] : {}).any? }
+            active = own.select { |c| (c[:targets] || []).any? || (c[:actions] || []).any? || (c[:values].is_a?(Hash) ? c[:values] : {}).any? }
+            empty = own.reject { |c| (c[:targets] || []).any? || (c[:actions] || []).any? || (c[:values].is_a?(Hash) ? c[:values] : {}).any? }
 
             lines = [ "# Stimulus Controllers (#{total})", "" ]
             active.each do |ctrl|
@@ -99,8 +107,8 @@ module RailsAiContext
             text_response(lines.join("\n"))
 
           when "standard"
-            active = controllers.select { |c| (c[:targets] || []).any? || (c[:actions] || []).any? || (c[:values].is_a?(Hash) ? c[:values] : {}).any? }
-            empty = controllers.reject { |c| (c[:targets] || []).any? || (c[:actions] || []).any? || (c[:values].is_a?(Hash) ? c[:values] : {}).any? }
+            active = own.select { |c| (c[:targets] || []).any? || (c[:actions] || []).any? || (c[:values].is_a?(Hash) ? c[:values] : {}).any? }
+            empty = own.reject { |c| (c[:targets] || []).any? || (c[:actions] || []).any? || (c[:values].is_a?(Hash) ? c[:values] : {}).any? }
 
             lines = [ "# Stimulus Controllers (#{total})", "" ]
             active.each do |ctrl|
@@ -152,6 +160,33 @@ module RailsAiContext
         end
       end
 
+      # Tightest reading first (name, path spelling, file, end of the file's path, single
+      # underscores); every controller the first matching reading finds is returned.
+      private_class_method def self.lookup_controllers(controllers, asked)
+        keys = [ lookup_key(asked), lookup_key(asked.underscore) ].uniq
+        readings = [
+          ->(c) { keys.include?(lookup_key(c[:name])) },
+          ->(c) { c[:path_name] && keys.include?(lookup_key(c[:path_name])) },
+          ->(c) { c[:file] && keys.include?(lookup_key(c[:file])) },
+          ->(c) { c[:file] && keys.any? { |k| "--#{lookup_key(c[:file])}".end_with?("--#{k}") } },
+          ->(c) { keys.map { |k| k.gsub("--", "-") }.include?(lookup_key(c[:name]).gsub("--", "-")) }
+        ]
+        readings.each do |reading|
+          found = controllers.select(&reading)
+          return found if found.any?
+        end
+        []
+      end
+
+      # One spelling to compare by: `users/tools/ajax_controller.js`, `users__tools__ajax`
+      # and `users--tools--ajax` all become `users--tools--ajax`.
+      private_class_method def self.lookup_key(text)
+        text.to_s.downcase
+            .sub(/\.(?:js|ts|jsx|tsx)\z/, "")
+            .sub(/[._-]controller\z/, "")
+            .gsub("/", "--").tr("_", "-")
+      end
+
       private_class_method def self.composition_lines(compositions)
         compositions.first(10).map do |comp|
           "- `#{comp[:file]}` - #{Array(comp[:controllers]).join(' + ')}"
@@ -184,6 +219,9 @@ module RailsAiContext
         lines << "- **Lifecycle:** #{lifecycle.join(', ')}" if lifecycle&.any?
 
         lines << "- **File:** #{ctrl[:file]}" if ctrl[:file]
+        lines << "- **Registered from package:** `#{ctrl[:package]}` (source not read, so no targets, values or actions)" if ctrl[:package]
+        lines << "- **Path spelling:** `#{ctrl[:path_name]}` (also resolves in a lookup)" if ctrl[:path_name]
+        lines << "- **Identifier:** inferred from the file path (outside `app/javascript/controllers`, and no view or component writes it)" if ctrl[:identifier_inferred]
 
         # HTML data-attribute format - copy-paste ready
         html_attrs = generate_html_attrs(ctrl)
@@ -197,8 +235,8 @@ module RailsAiContext
         # Reverse view lookup - where this controller is used
         views_using = find_views_using(ctrl[:name])
         if views_using.any?
-          lines << "" << "### Used in views"
-          views_using.each { |v| lines << "- `#{v}`" }
+          lines << "" << (views_using.all? { |_, view| view } ? "### Used in views" : "### Used in")
+          views_using.each { |file, _| lines << "- `#{file}`" }
         end
 
         lines.join("\n")
@@ -227,22 +265,26 @@ module RailsAiContext
         attrs
       end
 
+      # Views are named by their path under their views root, anything else from the app root.
       private_class_method def self.find_views_using(controller_name)
-        views_dir = rails_app.root.join("app", "views").to_s
-        return [] unless Dir.exist?(views_dir)
+        root = rails_app.root.to_s
+        real_root = File.realpath(root)
+        token = controller_name.to_s.tr("_", "-")
+        view_dirs = RailsAiContext::PathResolver.view_dirs(root)
 
-        real_root = File.realpath(rails_app.root).to_s
-        real_views_dir = File.realpath(views_dir).to_s
+        hits = Introspectors::StimulusIntrospector.template_files(root).filter_map do |path|
+          next unless RailsAiContext::SafePath.contained?(File.realpath(path), real_root)
 
-        pattern = "data-controller=\"#{controller_name}\""
-        # Also check for multi-controller declarations
-        alt_pattern = controller_name
+          raw = RailsAiContext::SafeFile.read(path) or next
+          next unless Introspectors::StimulusIntrospector.identifiers_in(path, raw).include?(token)
 
-        safe_glob(views_dir, "**/*.{erb,html.erb}", real_root).filter_map do |path|
-          content = RailsAiContext::SafeFile.read(path) or next
-          next unless content.include?(alt_pattern)
-          path.sub("#{real_views_dir}/", "")
-        end.first(10)
+          dir = view_dirs.find { |d| path.start_with?("#{d}/") }
+          dir ? [ path.delete_prefix("#{dir}/"), true ] : [ path.delete_prefix("#{root}/"), false ]
+        rescue SystemCallError
+          next
+        end
+        views, others = hits.partition { |_, view| view }
+        (views + others).first(10)
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "find_views_using")
       end

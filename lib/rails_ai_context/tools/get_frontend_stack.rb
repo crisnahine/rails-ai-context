@@ -226,7 +226,13 @@ module RailsAiContext
           frameworks = data[:frameworks]
           return nil unless frameworks.is_a?(Hash) && frameworks.any?
 
-          sym, version = frameworks.first
+          primary = named_framework(frameworks.first)
+          secondary = frameworks.drop(1).map { |entry| named_framework(entry) }
+          secondary.any? ? "#{primary} (also #{secondary.join(', ')})" : primary
+        end
+
+        def named_framework(entry)
+          sym, version = entry
           label = display_name(sym)
           clean_version = version.to_s.delete("^0-9.")
           clean_version.empty? ? label : "#{label} #{clean_version}"

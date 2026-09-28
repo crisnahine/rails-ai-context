@@ -34,6 +34,26 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
     end
   end
 
+  # `class ::Foo` inside `module A` declares the top-level Foo, as Ruby reads it.
+  describe "a constant named from the root scope" do
+    let(:source) { "module A\n  class ::Foo < Base\n    class Bar; end\n  end\n  class Baz; end\nend\n" }
+
+    it "declares it at the top level, and what it nests under it" do
+      expect(described_class.declared_names(source)).to eq(%w[Foo Foo::Bar A::Baz])
+    end
+
+    it "yields Module.nesting inside each body, innermost first" do
+      tree = RailsAiContext::AstCache.parse_string("module A\n  class B; end\nend\nclass A::C; end\n").value
+      expect(described_class.constants(tree).map { |name, _node, nesting| [ name, nesting ] })
+        .to eq([ [ "A", %w[A] ], [ "A::B", %w[A::B A] ], [ "A::C", %w[A::C] ] ])
+    end
+
+    it "names constants the same way" do
+      tree = RailsAiContext::AstCache.parse_string(source).value
+      expect(described_class.constants(tree).map { |name, _node| name }).to eq(%w[A Foo Foo::Bar A::Baz])
+    end
+  end
+
   describe ".resolve" do
     it "prefers the constant the source declares over the path" do
       source = "class ActivityPub::CollectionsController < ApplicationController\nend\n"
@@ -128,6 +148,110 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
       stub_const("Account", Class.new)
 
       expect(described_class.renamed?(Account)).to be(false)
+    end
+  end
+
+  # One tie-break for "which of the classes this file declares is the file
+  # named for". Four callers each wrote their own, and they disagreed.
+  describe ".declaration_for" do
+    let(:declarations) { RailsAiContext::Introspectors::DeclaredConstant.method(:declarations) }
+
+    it "prefers the declaration the path names in full" do
+      source = "class Error < StandardError; end\nclass Jobs::AnonymizeUser < Jobs::Base\nend\n"
+
+      picked = described_class.declaration_for(declarations.call(source), "Jobs::AnonymizeUser")
+
+      expect(picked.name).to eq("Jobs::AnonymizeUser")
+      expect(picked.superclass).to eq("Jobs::Base")
+    end
+
+    it "falls back to the declaration whose last segment the path names" do
+      source = "class Regular::AnonymizeUser < Jobs::Base\nend\n"
+
+      expect(described_class.declaration_for(declarations.call(source), "Jobs::AnonymizeUser").name)
+        .to eq("Regular::AnonymizeUser")
+    end
+
+    # A plugin model sits at an un-namespaced path and declares a namespaced
+    # constant, so neither the path nor its last segment matches. With one
+    # class in the file there is nothing else it could be named for, and
+    # keying it under the path lost its superclass and dropped the model.
+    it "answers the only declaration when the file declares one class" do
+      source = "class DiscourseGithubPlugin::GithubCommit < ActiveRecord::Base\nend\n"
+
+      picked = described_class.declaration_for(declarations.call(source), "GithubCommit")
+
+      expect(picked.name).to eq("DiscourseGithubPlugin::GithubCommit")
+      expect(picked.superclass).to eq("ActiveRecord::Base")
+    end
+
+    # discourse-github's grant_github_badges.rb sits at a path spelling
+    # Scheduled::GrantGithubBadges and declares one class under a name that
+    # shares no segment with it, so neither the path nor its last segment
+    # matches and the single class is the only answer there is.
+    it "answers the only declaration when its name shares no segment with the path" do
+      source = "class DiscourseGithubPlugin::UpdateJob < ::Jobs::Scheduled\nend\n"
+
+      picked = described_class.declaration_for(declarations.call(source), "Scheduled::GrantGithubBadges")
+
+      expect(picked.name).to eq("DiscourseGithubPlugin::UpdateJob")
+      expect(picked.superclass).to eq("Jobs::Scheduled")
+    end
+
+    # A class reopened with no superclass is an override or a namespace the
+    # file writes something else into, not what the file is named for.
+    it "answers nothing when the only class is a namespace holding a module" do
+      source = "module DiscourseRssPolling\n  class RssFeed\n    module FindById\n    end\n  end\nend\n"
+
+      picked = described_class.declaration_for(declarations.call(source), "DiscourseRssPolling::RssFeed::FindById")
+
+      expect(picked).to be_nil
+    end
+
+    # whitehall's asset_manager/service_helper.rb declares a module and one
+    # error class inside it; the file is the module.
+    it "answers nothing when the only class is nested inside the path's own constant" do
+      source = "module AssetManager::ServiceHelper\n  class AssetNotFound < StandardError\n  end\nend\n"
+
+      picked = described_class.declaration_for(declarations.call(source), "AssetManager::ServiceHelper")
+
+      expect(picked).to be_nil
+    end
+
+    it "answers nothing when several declarations and none is named for the path" do
+      source = "class Alpha; end\nclass Beta; end\n"
+
+      expect(described_class.declaration_for(declarations.call(source), "Gamma")).to be_nil
+    end
+  end
+
+  # The same pick without the single-class fallback: a concern file that nests
+  # a validator class declares one class, and it is not the file's own.
+  describe ".declaration_named" do
+    it "answers nothing when the one declaration is not the name asked for" do
+      source = "module Featurable\n  class FeaturedValidator < ActiveModel::Validator\n  end\nend\n"
+      declarations = RailsAiContext::Introspectors::DeclaredConstant.declarations(source)
+
+      expect(described_class.declaration_named(declarations, "Featurable")).to be_nil
+    end
+  end
+
+  # A model, controller or concern file is asked for its declarations three
+  # or four times in one run; the tree walk behind it was redone every time.
+  describe "one source asked again" do
+    it "walks the tree once" do
+      source = "module Billing\n  class Invoice < ApplicationRecord\n  end\nend\n"
+      walks = 0
+      allow(described_class).to receive(:constants).and_wrap_original do |original, root, &block|
+        walks += 1 if block
+        original.call(root, &block)
+      end
+
+      3.times { expect(described_class.declared_names(source)).to eq([ "Billing::Invoice" ]) }
+      described_class.declarations(source) << :scratch
+
+      expect(walks).to eq(1)
+      expect(described_class.declarations(source).map(&:name)).to eq([ "Billing::Invoice" ])
     end
   end
 end

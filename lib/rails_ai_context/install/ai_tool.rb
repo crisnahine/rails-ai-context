@@ -11,13 +11,10 @@ module RailsAiContext
     # Vocabulary per CONTEXT.md: "AI tool" for the assistant, "context files"
     # for what the gem generates for it.
     #
-    # context_paths lists the root file first; what follows are the
-    # split-rule targets. rules_dir is the gem-owned directory of split rule
-    # files, nil for tools whose split targets are files (the AGENTS.md
-    # pair). The writers derive from these, the same as doctor and cleanup -
-    # a moved path must change every surface at once.
+    # context_paths lists the root file first, then the split-rule targets. The writers,
+    # doctor and cleanup all read this table, so a moved path changes every surface at once.
     AiTool = Struct.new(:number, :key, :name, :files, :context_paths, :rules_dir, :mcp_config, :legacy_paths,
-                        keyword_init: true)
+                        :owned_dir, keyword_init: true)
 
     class AiTool
       ALL = [
@@ -27,7 +24,8 @@ module RailsAiContext
           context_paths: %w[CLAUDE.md .claude/rules],
           rules_dir: ".claude/rules",
           mcp_config: { path: ".mcp.json", root_key: "mcpServers", format: :mcp_json },
-          legacy_paths: [ ".claude/rules/rails-ui-patterns.md", ".claude/rules/rails-accessibility.md" ]
+          legacy_paths: [ ".claude/rules/rails-ui-patterns.md", ".claude/rules/rails-accessibility.md" ],
+          owned_dir: ".claude"
         ),
         new(
           number: "2", key: :cursor, name: "Cursor",
@@ -35,7 +33,8 @@ module RailsAiContext
           context_paths: %w[.cursor/rules .cursorrules],
           rules_dir: ".cursor/rules",
           mcp_config: { path: ".cursor/mcp.json", root_key: "mcpServers", format: :mcp_json },
-          legacy_paths: [ ".cursor/rules/rails-ui-patterns.mdc" ]
+          legacy_paths: [ ".cursor/rules/rails-ui-patterns.mdc" ],
+          owned_dir: ".cursor"
         ),
         new(
           number: "3", key: :copilot, name: "GitHub Copilot",
@@ -57,7 +56,8 @@ module RailsAiContext
           files: "AGENTS.md + .codex/config.toml",
           context_paths: %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md],
           mcp_config: { path: ".codex/config.toml", root_key: nil, format: :codex_toml },
-          legacy_paths: []
+          legacy_paths: [],
+          owned_dir: ".codex"
         )
       ].freeze
 

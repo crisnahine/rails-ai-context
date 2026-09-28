@@ -11,11 +11,9 @@ module RailsAiContext
     # Not EnvIntrospector, which reads environment variables and ENV[] usage.
     # This one reads the environment config files; that one reads the process
     # environment.
-    class EnvConfigIntrospector
+    class EnvConfigIntrospector < Base
       extend StaticTier
       static_tier :files_only
-
-      attr_reader :app
 
       # Assignments whose values are lifted into the per-env `notable` hash.
       # Keys are the config path relative to `config.` (one or two levels).
@@ -26,10 +24,6 @@ module RailsAiContext
         action_mailer.raise_delivery_errors active_storage.service
         action_cable.mount_path i18n.fallbacks
       ].freeze
-
-      def initialize(app)
-        @app = app
-      end
 
       # @return [Hash] per-environment config summary
       def call
@@ -42,15 +36,9 @@ module RailsAiContext
           count: files.size,
           environments: files
         }
-      rescue => e
-        RailsAiContext.debug_fail(e, { error: e.message }, label: "EnvConfigIntrospector#call")
       end
 
       private
-
-      def root
-        app.root.to_s
-      end
 
       def summarize(path)
         relative = path.sub("#{root}/", "")

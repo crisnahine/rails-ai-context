@@ -68,10 +68,15 @@ module RailsAiContext
           [ tool, params ]
         end
 
+        def cli_note
+          "_Note: CLI (`#{RailsAiContext::InstallMode.command(:tool)}`) runs each call in a separate process - " \
+            "session tracking only works via MCP._"
+        end
+
         def render_status
           queries = session_queries
           if queries.empty?
-            return text_response("# Session Context\n\nNo queries recorded yet. Tools will be tracked as you use them.\n\n_Use `mark:\"tool:params\"` to manually record a query._\n_Note: CLI (`rails ai:tool`) runs each call in a separate process - session tracking only works via MCP._")
+            return text_response("# Session Context\n\nNo queries recorded yet. Tools will be tracked as you use them.\n\n_Use `mark:\"tool:params\"` to manually record a query._\n#{cli_note}")
           end
 
           lines = [ "# Session Context (#{count_phrase(queries.size, "query")})", "" ]
@@ -89,7 +94,7 @@ module RailsAiContext
 
           lines << ""
           lines << "_Use `action:\"reset\"` to clear, or `action:\"summary\"` for a compressed recap._"
-          lines << "_Note: CLI (`rails ai:tool`) runs each call in a separate process - session tracking only works via MCP._"
+          lines << cli_note
           text_response(lines.join("\n"))
         end
 

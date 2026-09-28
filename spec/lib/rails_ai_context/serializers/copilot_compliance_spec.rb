@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require "spec_helper"
-require "yaml"
 
 # Validates that Copilot serializer output conforms to GitHub Copilot's instruction format.
 #
@@ -15,36 +14,7 @@ require "yaml"
 # - No order guarantee between matching instruction files
 # - Subdirectory organization allowed in .github/instructions/
 RSpec.describe "Copilot instructions compliance" do
-  let(:context) do
-    {
-      app_name: "TestApp", rails_version: "8.0", ruby_version: "3.4",
-      schema: { adapter: "postgresql", total_tables: 12 },
-      models: {
-        "User" => { associations: [ { type: :has_many, name: :posts } ], validations: [], table_name: "users", scopes: [ "active" ], constants: [] },
-        "Post" => { associations: [ { type: :belongs_to, name: :user } ], validations: [], table_name: "posts", scopes: [], constants: [] }
-      },
-      routes: { total_routes: 45, by_controller: { "users" => 7, "posts" => 5 } },
-      gems: {},
-      conventions: {},
-      controllers: {
-        controllers: {
-          "UsersController" => { actions: %w[index show new create edit update destroy] },
-          "PostsController" => { actions: %w[index show] }
-        }
-      },
-      view_templates: { templates: {}, partials: {} },
-      stimulus: {}, turbo: {}, auth: {}, api: {}, i18n: {},
-      active_storage: {}, action_text: {}, assets: {}, engines: {},
-      multi_database: {}
-    }
-  end
-
-  def parse_frontmatter(content)
-    return nil unless content.start_with?("---")
-    parts = content.split("---", 3)
-    return nil if parts.size < 3
-    YAML.safe_load(parts[1], permitted_classes: [ Symbol ])
-  end
+  let(:context) { serializer_context(routes: { total_routes: 45, by_controller: { "users" => 7, "posts" => 5 } }) }
 
   describe "root file (.github/copilot-instructions.md)" do
     let(:root_content) { RailsAiContext::Serializers::CopilotSerializer.new(context).call }

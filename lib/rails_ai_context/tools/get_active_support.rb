@@ -35,30 +35,45 @@ module RailsAiContext
       class << self
         private
 
+        # A validator in app/models/concerns is not a concern (nothing includes it); counting it
+        # would disagree with rails_get_concern's count.
         def render_concerns(lines, concerns)
           concerns = concerns || {}
-          total = concerns.values.sum(&:size)
+          validators = concerns.values.flatten.select { |m| m[:validator] }
+          total = concerns.values.sum(&:size) - validators.size
           lines << "" << "## Concerns (#{total})"
-          if concerns.any?
+          if total > 0
             concerns.each do |dir, modules|
+              modules = modules.reject { |m| m[:validator] }
+              next if modules.empty?
+
               lines << "" << "### #{dir}"
-              modules.each do |m|
-                bits = []
-                bits << "included block" if m[:included_blocks].to_i > 0
-                bits << "class_methods" if m[:class_methods_block]
-                if m[:kind] == "class"
-                  bits << [ "class", m[:superclass] && "< #{m[:superclass]}" ].compact.join(" ")
-                elsif !m[:uses_active_support_concern]
-                  bits << "plain module"
-                end
-                line = "- **#{m[:name]}**"
-                line += " (#{bits.join(', ')})" if bits.any?
-                lines << line
-              end
+              modules.each { |m| lines << concern_line(m) }
             end
+          elsif validators.any?
+            lines << "_Every module under app/**/concerns is a validator, listed below._"
           else
             lines << "_No concerns found under app/**/concerns._"
           end
+
+          return if validators.empty?
+
+          lines << "" << "## Validators (#{validators.size})"
+          validators.each { |m| lines << "- **#{m[:name]}** (`#{m[:file]}`, < #{m[:validator]})" }
+        end
+
+        def concern_line(m)
+          bits = []
+          bits << "included block" if m[:included_blocks].to_i > 0
+          bits << "class_methods" if m[:class_methods_block]
+          if m[:kind] == "class"
+            bits << [ "class", m[:superclass] && "< #{m[:superclass]}" ].compact.join(" ")
+          elsif !m[:uses_active_support_concern]
+            bits << "plain module"
+          end
+          line = "- **#{m[:name]}**"
+          line += " (#{bits.join(', ')})" if bits.any?
+          line
         end
 
         # A section the introspector could not reach says so under its own

@@ -2,9 +2,10 @@
 
 require "spec_helper"
 
-# Three places reconstruct a namespaced constant name from a Prism node. They must
-# all answer the same string, and that string is the source text with the root
-# scope operator dropped.
+# Two listeners reconstruct a namespaced constant name from a Prism node, and
+# DeclaredConstant reads it for everything else. They must all answer the same
+# string, and that string is the source text with the root scope operator
+# dropped.
 RSpec.describe "constant path to string" do
   def superclass_node(source)
     Prism.parse(source).value.statements.body.first.superclass
@@ -14,16 +15,12 @@ RSpec.describe "constant path to string" do
     RailsAiContext::Introspectors::Listeners::BaseListener.allocate.send(:constant_path_string, node)
   end
 
-  def component(node)
-    RailsAiContext::Introspectors::ComponentIntrospector.allocate.send(:constant_path_to_string, node)
-  end
-
   def class_definition(node)
     RailsAiContext::Introspectors::Listeners::ClassDefinitionListener.allocate.send(:superclass_name, node)
   end
 
   def every_form(node)
-    [ base_listener(node), component(node), class_definition(node) ]
+    [ base_listener(node), class_definition(node) ]
   end
 
   {
@@ -58,6 +55,6 @@ RSpec.describe "constant path to string" do
   it "answers nil where a non-constant superclass has no name" do
     node = superclass_node("class X < Struct.new(:a)\nend")
     expect(class_definition(node)).to be_nil
-    expect(component(node)).to be_nil
+    expect(RailsAiContext::Introspectors::DeclaredConstant.declarations("class X < Struct.new(:a)\nend").first.superclass).to be_nil
   end
 end

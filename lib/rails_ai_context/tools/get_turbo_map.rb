@@ -28,12 +28,20 @@ module RailsAiContext
         summary: "Turbo Stream/Frame wiring + mismatch warnings"
       )
 
+      # Long enough to show the shape of an app's stream responses, short
+      # enough not to bury the rest of the map. `detail:"full"` prints them all.
+      STREAM_RESPONSE_CAP = 15
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       # What the filters left, in one value: every formatter needs all five.
       Found = Data.define(:model_broadcasts, :rb_broadcasts, :view_subscriptions, :view_frames, :warnings)
 
       def self.call(detail: "standard", stream: nil, controller: nil, server_context: nil)
+        # An MCP client sends "" for an argument it leaves unset, which is no
+        # filter at all - and a name of no segments matches nothing.
+        stream = nil if stream.to_s.strip.empty?
+        controller = nil if controller.to_s.delete("/").strip.empty?
         return text_response("Turbo is not installed in this app (no `turbo-rails` gem in Gemfile.lock).") if turbo_rails_absent?
 
         fetch_section(:turbo, subject: "Turbo introspection") do |data|
@@ -52,15 +60,15 @@ module RailsAiContext
 
           if controller
             ctrl_lower = controller.downcase
-            view_subscriptions = view_subscriptions.select { |s| s[:file]&.downcase&.include?(ctrl_lower) }
-            view_frames = view_frames.select { |f| f[:file]&.downcase&.include?(ctrl_lower) }
+            view_subscriptions = view_subscriptions.select { |s| controller_file?(s[:file], ctrl_lower) }
+            view_frames = view_frames.select { |f| controller_file?(f[:file], ctrl_lower) }
 
             # A broadcast belongs to the controller when it sits in its path or
             # feeds a stream one of its surviving views subscribes to (a job
             # broadcasting to a stream the controller's views listen on).
             matched_streams = view_subscriptions.map { |s| s[:stream] }.compact
             rb_broadcasts = rb_broadcasts.select { |b|
-              b[:file]&.downcase&.include?(ctrl_lower) ||
+              controller_file?(b[:file], ctrl_lower) ||
                 (b[:stream] && matched_streams.any? { |ss| streams_match?(b[:stream], ss) })
             }
           end
@@ -79,6 +87,12 @@ module RailsAiContext
           when "full" then format_full(found, turbo_data: data, filter_label: filter_label)
           end
         end
+      end
+
+      # A file belongs to a controller when the name is a whole run of its path
+      # segments - the view directory, or the controller file itself.
+      private_class_method def self.controller_file?(file, ctrl)
+        path_segments_match?(file.to_s.sub(/\.\w+(\.\w+)*\z/, "").sub(/_controller\z/, ""), ctrl)
       end
 
       # No lockfile means unknown, not absent, so this answers false there.
@@ -112,6 +126,25 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
+      # Both formatters answer an app with no Turbo the same way, and the
+      # answer is marked empty so a composing tool can read it.
+      private_class_method def self.nothing_found_response(found, turbo_data, filter_label, lines)
+        found.to_h => { model_broadcasts:, rb_broadcasts:, view_subscriptions:, view_frames: }
+        return nil unless model_broadcasts.empty? && rb_broadcasts.empty? && view_subscriptions.empty? &&
+                          view_frames.empty? && !turbo_data[:turbo_stream_responses]&.any? &&
+                          !turbo_data[:turbo_streams]&.any?
+
+        note = api_only_note("the Turbo Streams/Frames surface")
+        return text_response(note) if note
+
+        lines << if filter_label
+          "_No Turbo usage matching #{filter_label}. Try without filter to see all Turbo Streams and Frames._"
+        else
+          "_No Turbo Streams or Frames detected in this app._"
+        end
+        empty_response(lines.join("\n"))
+      end
+
       private_class_method def self.format_standard(found, turbo_data:, filter_label: nil)
         found.to_h => { model_broadcasts:, rb_broadcasts:, view_subscriptions:, view_frames:, warnings: }
         lines = [ "# Turbo Map", "" ]
@@ -119,10 +152,11 @@ module RailsAiContext
 
         # Turbo Stream responses
         if turbo_data[:turbo_stream_responses]&.any?
+          responses = turbo_data[:turbo_stream_responses]
+          shown = responses.first(STREAM_RESPONSE_CAP)
           lines << "## Turbo Stream Responses"
-          turbo_data[:turbo_stream_responses].first(15).each do |resp|
-            lines << "- `#{stream_response_label(resp)}`"
-          end
+          shown.each { |resp| lines << "- `#{stream_response_label(resp)}`" }
+          lines << "_Showing #{shown.size} of #{responses.size}. Call `rails_get_turbo_map(detail:\"full\")` for the rest._" if shown.size < responses.size
           lines << ""
         end
 
@@ -179,20 +213,8 @@ module RailsAiContext
           lines << ""
         end
 
-        has_turbo_stream_responses = turbo_data[:turbo_stream_responses]&.any?
-        has_stream_templates = turbo_data[:turbo_streams]&.any?
-
-        if model_broadcasts.empty? && rb_broadcasts.empty? && view_subscriptions.empty? && view_frames.empty? && !has_turbo_stream_responses && !has_stream_templates
-          note = api_only_note("the Turbo Streams/Frames surface")
-          return text_response(note) if note
-
-          if filter_label
-            lines << "_No Turbo usage matching #{filter_label}. Try without filter to see all Turbo Streams and Frames._"
-          else
-            lines << "_No Turbo Streams or Frames detected in this app._"
-          end
-          return empty_response(lines.join("\n"))
-        end
+        nothing = nothing_found_response(found, turbo_data, filter_label, lines)
+        return nothing if nothing
 
         lines << "_Use `detail:\"full\"` for DOM IDs and inline templates, or `stream:\"name\"` to filter._"
         text_response(lines.join("\n"))
@@ -315,20 +337,8 @@ module RailsAiContext
           lines << ""
         end
 
-        has_turbo_stream_responses = turbo_data[:turbo_stream_responses]&.any?
-        has_stream_templates = turbo_data[:turbo_streams]&.any?
-
-        if model_broadcasts.empty? && rb_broadcasts.empty? && view_subscriptions.empty? && view_frames.empty? && !has_turbo_stream_responses && !has_stream_templates
-          note = api_only_note("the Turbo Streams/Frames surface")
-          return text_response(note) if note
-
-          if filter_label
-            lines << "_No Turbo usage matching #{filter_label}. Try without filter to see all Turbo Streams and Frames._"
-          else
-            lines << "_No Turbo Streams or Frames detected in this app._"
-          end
-          return empty_response(lines.join("\n"))
-        end
+        nothing = nothing_found_response(found, turbo_data, filter_label, lines)
+        return nothing if nothing
 
         text_response(lines.join("\n"))
       end

@@ -161,6 +161,67 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
     end
   end
 
+  describe "App Patterns - controller test pattern detection" do
+    let(:tmpdir) { Dir.mktmpdir }
+    let(:tests_dir) { File.join(tmpdir, "test", "controllers") }
+
+    before do
+      FileUtils.mkdir_p(tests_dir)
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "controllers"))
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      allow(described_class).to receive(:cached_context).and_return({ conventions: {} })
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "builds the skeleton from the signals the existing tests carry" do
+      File.write(File.join(tests_dir, "posts_controller_test.rb"), <<~RUBY)
+        require "test_helper"
+
+        class PostsControllerTest < ActionDispatch::IntegrationTest
+          include Devise::Test::IntegrationHelpers
+
+          test "requires authentication" do
+            get posts_path
+            assert_response :redirect
+          end
+
+          test "index" do
+            sign_in users(:one)
+            get posts_path
+            assert_response :success
+            assert_select "h1", "Posts"
+          end
+        end
+      RUBY
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("### Controller Test Pattern (follow this for new tests)")
+      expect(text).to include("  include Devise::Test::IntegrationHelpers")
+      expect(text).to include("  test \"requires authentication\" do")
+      expect(text).to include("    sign_in users(:one)")
+      expect(text).to include("    assert_select \"h1\", \"[Expected Title]\"")
+      expect(text).to include("Detected from: PostsController")
+    end
+
+    it "renders no skeleton when no test asserts a response" do
+      File.write(File.join(tests_dir, "quiet_controller_test.rb"), <<~RUBY)
+        require "test_helper"
+
+        class QuietControllerTest < ActionDispatch::IntegrationTest
+          test "nothing" do
+            sign_in users(:one)
+          end
+        end
+      RUBY
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).not_to include("### Controller Test Pattern")
+    end
+  end
+
   describe "App Patterns - create action flow detection" do
     let(:tmpdir) { Dir.mktmpdir }
     let(:controllers_dir) { File.join(tmpdir, "app", "controllers") }
@@ -226,6 +287,27 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
         expect(text).to include("### Create Action Pattern (follow this for new actions)")
         expect(text).to include("unless current_user.can_[permission]?")
         expect(text).to include("@record = current_user.[association].build([params_method])")
+      end
+
+      # A guard or flash string repeated across controllers is one convention.
+      it "lists a repeated check and flash string once" do
+        File.write(File.join(controllers_dir, "replies_controller.rb"), <<~RUBY)
+          class RepliesController < ApplicationController
+            def create
+              unless can_comment?
+                redirect_to root_path, alert: "Not allowed"
+                return
+              end
+              redirect_to @reply, notice: "Created!"
+            end
+          end
+        RUBY
+
+        text = described_class.call.content.first[:text]
+
+        expect(text.scan("- Check: `can_comment?`").size).to eq(1)
+        expect(text.scan(%q(- Deny: redirect_to ..., alert: "Not allowed")).size).to eq(1)
+        expect(text.scan(%q(- Success: notice: "Created!")).size).to eq(1)
       end
     end
 
@@ -313,6 +395,31 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
     it "names a tool reached only through a scoped plugin package" do
       result = stack("devDependencies" => { "@tailwindcss/vite" => "^4.0.0", "@hotwired/turbo-rails" => "^8.0.0" })
       expect(result).to contain_exactly("Tailwind CSS", "Turbo")
+    end
+  end
+
+  # `validates_timeliness.en.yml` translates en; the name before the locale is the gem's.
+  describe "the locales line" do
+    def conventions_text(i18n)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "locales"))
+        File.write(File.join(dir, "config", "locales", "validates_timeliness.en.yml"), "en:\n  a: A\n")
+        File.write(File.join(dir, "config", "locales", "fr.yml"), "fr:\n  a: A\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+        context = { conventions: conventions_data }
+        context[:i18n] = i18n if i18n
+        allow(described_class).to receive(:cached_context).and_return(context)
+        return described_class.call.content.first[:text]
+      end
+    end
+
+    it "names the locales the i18n section reads from the files" do
+      i18n = { locale_files: [ { file: "validates_timeliness.en.yml", locales: [ "en" ] }, { file: "fr.yml", locales: [ "fr" ] } ] }
+      expect(conventions_text(i18n)).to include("**Locales:** en, fr (2 total)")
+    end
+
+    it "reads the locale part of a file name without the i18n section" do
+      expect(conventions_text(nil)).to include("**Locales:** en, fr (2 total)")
     end
   end
 end

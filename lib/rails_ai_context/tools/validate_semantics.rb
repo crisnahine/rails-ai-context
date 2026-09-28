@@ -1,5 +1,9 @@
 # frozen_string_literal: true
 
+require "erb"
+require "set"
+require "prism"
+
 module RailsAiContext
   module Tools
     # Semantic (Rails-aware) half of the rails_validate tool: the Prism
@@ -14,9 +18,7 @@ module RailsAiContext
 
       class RailsSemanticVisitor < Prism::Visitor
         attr_reader :render_calls, :route_helper_calls, :validates_calls,
-                    :permit_calls, :callback_registrations, :has_many_calls,
-                    :virtual_attributes,
-                    :local_method_names_by_scope, :singleton_method_names_by_scope
+                    :permit_calls, :callback_registrations, :virtual_attributes
 
         TOP_LEVEL_SCOPE = "__top_level__"
         CALLBACK_NAMES = %i[
@@ -32,7 +34,6 @@ module RailsAiContext
           @validates_calls = []
           @permit_calls = []
           @callback_registrations = []
-          @has_many_calls = []
           @virtual_attributes = Set.new
           @local_method_names_by_scope = Hash.new { |hash, key| hash[key] = Set.new }
           @singleton_method_names_by_scope = Hash.new { |hash, key| hash[key] = Set.new }
@@ -71,8 +72,12 @@ module RailsAiContext
           when :render     then extract_render(node)
           when :validates  then extract_validates(node)
           when :permit     then extract_permit(node)
-          when :has_many   then extract_has_many(node)
-          when :attribute, :attr_accessor, :attr_writer then extract_virtual_attributes(node)
+          # An encrypted attribute (Lockbox's has_encrypted keeps `<name>_ciphertext`)
+          # and a store key are attributes with no column of their own name.
+          when :attribute, :attr_accessor, :attr_writer, :has_encrypted, :encrypts, :attr_encrypted
+            extract_virtual_attributes(node)
+          when :store_accessor then extract_virtual_attributes(node, skip: 1)
+          when :store then extract_store_accessors(node)
           else
             if node.name.to_s.end_with?("_path", "_url") && node.receiver.nil?
               @route_helper_calls << {
@@ -127,7 +132,7 @@ module RailsAiContext
                 next unless elem.is_a?(Prism::AssocNode)
                 key = elem.key
                 val = elem.value
-                if key.is_a?(Prism::SymbolNode) && key.value == "partial" && val.is_a?(Prism::StringNode)
+                if key.is_a?(Prism::SymbolNode) && key.unescaped == "partial" && val.is_a?(Prism::StringNode)
                   @render_calls << { name: val.unescaped, line: node.location.start_line, explicit_partial: true }
                 end
               end
@@ -144,7 +149,7 @@ module RailsAiContext
           columns = []
           args.each do |arg|
             break unless arg.is_a?(Prism::SymbolNode)
-            columns << arg.value
+            columns << arg.unescaped
           end
           return if columns.empty? || self_defining?(args)
 
@@ -154,7 +159,7 @@ module RailsAiContext
         def self_defining?(args)
           args.grep(Prism::KeywordHashNode).any? do |hash|
             hash.elements.grep(Prism::AssocNode).any? do |element|
-              element.key.is_a?(Prism::SymbolNode) && SELF_DEFINING_VALIDATIONS.include?(element.key.value)
+              element.key.is_a?(Prism::SymbolNode) && SELF_DEFINING_VALIDATIONS.include?(element.key.unescaped)
             end
           end
         end
@@ -162,12 +167,23 @@ module RailsAiContext
         # `attribute :foo` and `attr_accessor :foo` are real readers with no
         # column behind them, and a migration for one is a column nobody
         # wants.
-        def extract_virtual_attributes(node)
+        def extract_virtual_attributes(node, skip: 0)
           return unless node.receiver.nil?
 
-          (node.arguments&.arguments || []).each do |arg|
-            @virtual_attributes << arg.value if arg.is_a?(Prism::SymbolNode)
+          (node.arguments&.arguments || []).drop(skip).each do |arg|
+            @virtual_attributes << arg.unescaped if arg.is_a?(Prism::SymbolNode)
           end
+        end
+
+        # `store :settings, accessors: [:color, :size]`
+        def extract_store_accessors(node)
+          return unless node.receiver.nil?
+
+          hash = (node.arguments&.arguments || []).find { |arg| arg.is_a?(Prism::KeywordHashNode) }
+          pair = hash&.elements&.find { |e| e.is_a?(Prism::AssocNode) && e.key.is_a?(Prism::SymbolNode) && e.key.unescaped == "accessors" }
+          return unless pair&.value.is_a?(Prism::ArrayNode)
+
+          pair.value.elements.each { |el| @virtual_attributes << el.unescaped if el.is_a?(Prism::SymbolNode) }
         end
 
         def extract_permit(node)
@@ -175,7 +191,7 @@ module RailsAiContext
           params = []
           args.each do |arg|
             case arg
-            when Prism::SymbolNode then params << arg.value
+            when Prism::SymbolNode then params << arg.unescaped
             end
           end
           # Extract model key from params.require(:model).permit(...)
@@ -184,35 +200,17 @@ module RailsAiContext
           if receiver.is_a?(Prism::CallNode) && receiver.name == :require
             req_args = receiver.arguments&.arguments || []
             first = req_args.first
-            require_key = first.value if first.is_a?(Prism::SymbolNode)
+            require_key = first.unescaped if first.is_a?(Prism::SymbolNode)
           end
           @permit_calls << { params: params, require_key: require_key, line: node.location.start_line } if params.any?
         end
 
-        def extract_has_many(node)
-          args = node.arguments&.arguments || []
-          name = nil
-          has_dependent = false
-          args.each do |arg|
-            case arg
-            when Prism::SymbolNode
-              name ||= arg.value
-            when Prism::KeywordHashNode
-              arg.elements.each do |elem|
-                next unless elem.is_a?(Prism::AssocNode) && elem.key.is_a?(Prism::SymbolNode)
-                has_dependent = true if elem.key.value == "dependent"
-              end
-            end
-          end
-          @has_many_calls << { name: name, has_dependent: has_dependent, line: node.location.start_line } if name
-        end
-
         def extract_callback(node)
           args = node.arguments&.arguments || []
-          methods = args.select { |a| a.is_a?(Prism::SymbolNode) }.map(&:value)
+          methods = args.select { |a| a.is_a?(Prism::SymbolNode) }.map(&:unescaped)
           @callback_registrations << { type: node.name.to_s, methods: methods, line: node.location.start_line } if methods.any?
         end
-      end if defined?(Prism)
+      end
 
       # ── Semantic check dispatcher ────────────────────────────────────
 
@@ -254,7 +252,7 @@ module RailsAiContext
             warnings << "AST parse failed - strong_params, callback and partial checks skipped for this file"
           end
           # Cache-only checks (no AST needed)
-          warnings.concat(check_has_many_dependent(file, context))
+          warnings.concat(check_has_many_dependent(file, context, content))
           warnings.concat(check_missing_fk_index(file, context))
           warnings.concat(check_route_action_consistency(file, context))
           warnings.concat(check_turbo_stream_channels(file, content, context))
@@ -343,58 +341,58 @@ module RailsAiContext
       ASSET_HELPER_PREFIXES = %w[image asset font stylesheet javascript audio video file compute_asset auto_discovery_link favicon].freeze
       DEVISE_HELPER_NAMES = %w[session registration password confirmation unlock omniauth_callback user_session user_registration user_password user_confirmation user_unlock].freeze
 
-      private_class_method def self.check_route_helpers_ast(file, visitor, context)
-        warnings = []
+      # Shared by the AST and regex passes: the route names this app defines,
+      # and the helper-shaped columns that are readers rather than routes.
+      private_class_method def self.route_helper_scope(file, context)
         routes = Payload.section(context, :routes)
-        return warnings unless routes && routes[:by_controller]
-        valid_names = build_route_name_set(routes)
-        return warnings if valid_names.empty?
+        return nil unless routes && routes[:by_controller]
+        valid_names = build_route_name_set(RouteCoverage.all_by_controller(routes))
+        return nil if valid_names.empty?
 
-        columns = helper_shaped_columns(file, context)
+        [ valid_names, helper_shaped_columns(file, context) ]
+      end
+
+      private_class_method def self.route_helper_warning(helper, valid_names, columns)
+        return nil if columns.include?(helper)
+
+        name = helper.sub(/_(path|url)\z/, "")
+        return nil if ASSET_HELPER_PREFIXES.any? { |p| name.start_with?(p) }
+        return nil if DEVISE_HELPER_NAMES.include?(name)
+        return nil if %w[edit new polymorphic].include?(name)
+
+        "#{helper} - route helper not found" unless valid_names.include?(name)
+      end
+
+      private_class_method def self.check_route_helpers_ast(file, visitor, context)
+        valid_names, columns = route_helper_scope(file, context)
+        return [] unless valid_names
 
         seen = Set.new
-        visitor.route_helper_calls.each do |call|
+        visitor.route_helper_calls.filter_map do |call|
           helper = call[:name]
           next if seen.include?(helper)
           seen << helper
           next if visitor.local_route_method_defined?(helper, call[:scope], call[:method_kind])
-          next if columns.include?(helper)
 
-          name = helper.sub(/_(path|url)\z/, "")
-          next if ASSET_HELPER_PREFIXES.any? { |p| name.start_with?(p) }
-          next if DEVISE_HELPER_NAMES.include?(name)
-          next if %w[edit new polymorphic].include?(name)
-
-          warnings << "#{helper} - route helper not found" unless valid_names.include?(name)
+          route_helper_warning(helper, valid_names, columns)
         end
-        warnings
       end
 
       # Regex fallback
       private_class_method def self.check_route_helpers_regex(file, content, context)
-        warnings = []
-        routes = Payload.section(context, :routes)
-        return warnings unless routes && routes[:by_controller]
-        valid_names = build_route_name_set(routes)
-        return warnings if valid_names.empty?
-
-        columns = helper_shaped_columns(file, context)
+        valid_names, columns = route_helper_scope(file, context)
+        return [] unless valid_names
 
         seen = Set.new
         local_method_names = local_route_like_method_names(content)
-        content.scan(/\b(\w+)_(path|url)\b/).each do |match|
-          name, suffix = match
+        content.scan(/\b(\w+)_(path|url)\b/).filter_map do |name, suffix|
           helper = "#{name}_#{suffix}"
           next if seen.include?(helper)
           seen << helper
           next if local_method_names.include?(helper)
-          next if columns.include?(helper)
-          next if ASSET_HELPER_PREFIXES.any? { |p| name.start_with?(p) }
-          next if DEVISE_HELPER_NAMES.include?(name)
-          next if %w[edit new polymorphic].include?(name)
-          warnings << "#{helper} - route helper not found" unless valid_names.include?(name)
+
+          route_helper_warning(helper, valid_names, columns)
         end
-        warnings
       end
 
       # A column named `shared_inbox_url` reads as a receiverless call to a
@@ -413,14 +411,16 @@ module RailsAiContext
         content.scan(/^\s*(?:(?:private|protected|public|private_class_method)\s+)*def\s+(?:self\.)?(\w+_(?:path|url))\b/).flatten.to_set
       end
 
-      private_class_method def self.build_route_name_set(routes)
+      # An engine's view calls its helpers bare, so `spree.admin_orders` counts as admin_orders.
+      private_class_method def self.build_route_name_set(by_controller)
         names = Set.new
-        routes[:by_controller].each_value do |actions|
+        by_controller.each_value do |actions|
           actions.each do |a|
             next unless a[:name]
-            names << a[:name]
-            names << "edit_#{a[:name]}"
-            names << "new_#{a[:name]}"
+            name = a[:name].split(".").last
+            names << name
+            names << "edit_#{name}"
+            names << "new_#{name}"
           end
         end
         names
@@ -507,13 +507,9 @@ module RailsAiContext
 
         visitor.permit_calls.each do |pc|
           # Infer model: prefer require_key (:post → Post), fall back to controller filename
-          model_name = if pc[:require_key]
-            pc[:require_key].to_s.classify
-          else
-            File.basename(file, ".rb").sub(/_controller$/, "").classify
-          end
-
-          model_data = models[model_name]
+          guess = pc[:require_key] ? pc[:require_key].to_s.classify : File.basename(file, ".rb").sub(/_controller$/, "").classify
+          model_name = Introspectors::TableName.model_for(guess, nil, models)
+          model_data = model_name && models[model_name]
           next unless model_data
 
           table_name = model_data[:table_name]
@@ -592,8 +588,7 @@ module RailsAiContext
 
         # Map file to controller name: app/controllers/posts_controller.rb → posts
         relative = file.sub("app/controllers/", "").sub(/_controller\.rb$/, "")
-        ctrl_key = relative.gsub("/", "::")
-        ctrl_class = RailsAiContext::Payload.controller_for_route_key(context, ctrl_key)&.first
+        ctrl_class = RailsAiContext::Payload.controller_for_route_key(context, relative)&.first
 
         # Get controller actions
         ctrl_data = controllers[:controllers] && controllers[:controllers][ctrl_class]
@@ -601,23 +596,43 @@ module RailsAiContext
         actions = Set.new(ctrl_data[:actions] || [])
 
         # Get routes pointing to this controller
-        route_controller = relative.gsub("::", "/")
-        route_actions = routes[:by_controller] && routes[:by_controller][route_controller]
+        route_actions = RouteCoverage.all_by_controller(routes)[relative]
         return warnings unless route_actions
 
-        route_actions.each do |route|
+        missing = route_actions.reject { |route| route[:action].nil? || actions.include?(route[:action].to_s) }
+        return warnings if missing.empty?
+
+        root = rails_app.root.to_s
+        chain = Introspectors::ActionPresence.read(
+          root, ctrl_class, SafeFile.read(File.join(root, "app/controllers/#{relative}_controller.rb")),
+          prefix: relative, lookup: Introspectors::ActionPresence.lookup(root, controllers[:controllers])
+        )
+        missing = missing.reject do |route|
+          action = route[:action].to_s
+          chain.defines?(action) || Introspectors::ActionPresence.template?(root, chain, action)
+        end
+        return warnings if missing.empty?
+
+        unread = chain.unread
+        if unread.any?
+          names = missing.map { |route| route[:action].to_s }.uniq
+          return warnings << "routes to #{names.join(', ')} have no method in #{ctrl_class}'s own sources or ancestors and no " \
+                             "template, but #{unread.uniq.join(', ')} #{unread.uniq.size == 1 ? 'is' : 'are'} not read here " \
+                             "(a gem or unread ancestor may define them)"
+        end
+
+        missing.each do |route|
           action = route[:action]
-          next unless action
-          unless actions.include?(action)
-            warnings << "route #{route[:verb]} #{route[:path]} \u2192 #{action} - action not found in #{ctrl_class}. Fix: add `def #{action}; end` to #{ctrl_class} or remove the route"
-          end
+          warnings << "route #{route[:verb]} #{route[:path]} \u2192 #{action} - action not found in #{ctrl_class}. Fix: add `def #{action}; end` to #{ctrl_class} or remove the route"
         end
         warnings
       end
 
       # ── CHECK 7: has_many without :dependent (cache only) ────────────
 
-      private_class_method def self.check_has_many_dependent(file, context)
+      # Only what this file declares is judged: a has_many a gem macro adds (paper_trail's
+      # `:versions`) has no line in the app to fix.
+      private_class_method def self.check_has_many_dependent(file, context, content)
         warnings = []
         return warnings unless file.start_with?("app/models/") && !file.include?("/concerns/")
 
@@ -627,11 +642,16 @@ module RailsAiContext
         model_name, model_data = RailsAiContext::Payload.model_for_file(context, file)
         return warnings unless model_data
 
+        declared = Introspectors::SourceIntrospector
+          .walk_source(content.to_s, { associations: Introspectors::Listeners::AssociationsListener })[:associations]
+          .map { |a| a[:name].to_s }.to_set
+
         (model_data[:associations] || []).each do |assoc|
           next unless assoc[:type] == "has_many"
+          next unless declared.include?(assoc[:name].to_s)
           next if assoc[:through] # through associations don't need dependent
           next if assoc[:dependent] # already has dependent
-          warnings << "has_many :#{assoc[:name]} - missing :dependent option (orphaned records risk). Fix: add `dependent: :destroy` or `:nullify`"
+          warnings << "has_many #{Serializers::SectionFacts.association_name(assoc)} - missing :dependent option (orphaned records risk). Fix: add `dependent: :destroy` or `:nullify`"
         end
         warnings
       end
@@ -646,7 +666,7 @@ module RailsAiContext
         models = Payload.models(context)
         return warnings if schema.nil? || models.empty?
 
-        model_name, model_data = RailsAiContext::Payload.model_for_file(context, file)
+        _model_name, model_data = RailsAiContext::Payload.model_for_file(context, file)
         return warnings unless model_data
 
         table_name = model_data[:table_name]
@@ -661,11 +681,7 @@ module RailsAiContext
           .compact
         fk_columns = (declared_fk_columns + assoc_fk_columns).uniq
 
-        # Build set of indexed columns (first column in any index)
-        indexed = Set.new
-        (table_data[:indexes] || []).each do |idx|
-          indexed << idx[:columns]&.first if idx[:columns]&.any?
-        end
+        indexed = Introspectors::SchemaConventions.lookup_indexed_columns(table_data)
 
         fk_columns.each do |col|
           unless indexed.include?(col)
@@ -859,27 +875,17 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "check_memory_loading")
       end
 
-      # ── CHECK 13+14: Performance warnings from introspector ────────
+      # ── CHECK 13: Performance warnings from introspector ───────────
 
       private_class_method def self.check_performance_warnings(file, context)
         warnings = []
         perf = Payload.section(context, :performance)
         return warnings unless perf
 
-        # Check 13: Model.all in controllers
         if file.start_with?("app/controllers/") && perf[:model_all_in_controllers]&.any?
           perf[:model_all_in_controllers].each do |finding|
             next unless finding.is_a?(Hash) && finding[:file]&.end_with?(File.basename(file))
             warnings << "#{finding[:model]}.all loaded in controller - consider pagination or scoping (line #{finding[:line]})"
-          end
-        end
-
-        # Check 14: Missing FK indexes on tables referenced in validated files
-        if file.start_with?("app/models/") && perf[:missing_fk_indexes]&.any?
-          model_name = RailsAiContext::Payload.model_for_file(context, file)&.first
-          perf[:missing_fk_indexes].each do |finding|
-            next unless finding.is_a?(Hash) && finding[:model] == model_name
-            warnings << "#{finding[:column]} on #{finding[:table]} - missing index on foreign key (performance)"
           end
         end
 
@@ -890,8 +896,10 @@ module RailsAiContext
 
       # ── Brakeman security scan (runs once for all files) ───────────
 
+      # @return [Hash{String => Array<String>}] findings by the validated file
+      #   they belong to
       def self.check_brakeman_security(files)
-        return [] unless brakeman_available?
+        return {} unless brakeman_available?
 
         tracker = Brakeman.run(
           app_path: rails_app.root.to_s,
@@ -901,22 +909,24 @@ module RailsAiContext
         )
 
         warnings = tracker.filtered_warnings
-        return [] if warnings.empty?
+        return {} if warnings.empty?
 
-        # Filter to only warnings in the validated files
-        normalized = files.map { |f| f.delete_prefix("/") }
-        relevant = warnings.select do |w|
-          path = w.file.relative
-          normalized.any? { |f| path == f || path.start_with?(f) }
-        end
-        return [] if relevant.empty?
+        # The validated file each warning belongs to: a caller may name a
+        # directory, and then every warning under it is that entry's.
+        normalized = files.to_h { |f| [ f.delete_prefix("/"), f ] }
+        found = {}
+        warnings.sort_by(&:confidence).each do |warning|
+          path = warning.file.relative
+          owner = normalized.find { |name, _| path == name || path.start_with?(name) }&.last
+          next unless owner
+          break if found.values.sum(&:size) >= 5
 
-        relevant.sort_by(&:confidence).first(5).map do |w|
-          loc = w.line ? "#{w.file.relative}:#{w.line}" : w.file.relative
-          "[#{w.confidence_name}] #{w.warning_type} - #{loc}: #{w.message}"
+          loc = warning.line ? "#{path}:#{warning.line}" : path
+          (found[owner] ||= []) << "[#{warning.confidence_name}] #{warning.warning_type} - #{loc}: #{warning.message}"
         end
+        found
       rescue => e
-        RailsAiContext.debug_fail(e, [], label: "check_brakeman_security")
+        RailsAiContext.debug_fail(e, {}, label: "check_brakeman_security")
       end
 
       private_class_method def self.brakeman_available?

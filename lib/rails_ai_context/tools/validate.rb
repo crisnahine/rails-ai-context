@@ -64,6 +64,9 @@ module RailsAiContext
         results = []
         passed = 0
         total = 0
+        # Brakeman scans the app once, so findings are grouped by file before the loop and print
+        # under their own file.
+        brakeman = level == "rails" ? ValidateSemantics.check_brakeman_security(files) : {}
 
         files.each do |file|
           if file.nil? || file.strip.empty?
@@ -111,13 +114,13 @@ module RailsAiContext
             rails_warnings = ValidateSemantics.check_rails_semantics(file, real_path)
             rails_warnings.each { |w| results << "  \u26A0 #{w}" }
           end
+
+          brakeman.delete(file)&.each { |w| results << "  \u26A0 #{w}" }
         end
 
-        # Run Brakeman security scan on validated files (if installed and level:"rails")
-        if level == "rails"
-          brakeman_warnings = ValidateSemantics.check_brakeman_security(files)
-          brakeman_warnings.each { |w| results << "  \u26A0 #{w}" }
-        end
+        # A finding for a file the loop never printed a heading for. The
+        # message names the file, and no indent claims it for another.
+        brakeman.each_value { |found| found.each { |w| results << "\u26A0 #{w}" } }
 
         output = results.join("\n")
         output += "\n\n#{passed}/#{total} files passed"
@@ -265,12 +268,6 @@ module RailsAiContext
 
         stack.empty? ? [ true, nil, [] ] : [ false, "unmatched '#{stack.last}' (node not available, basic check only)", [] ]
       end
-
-      # ════════════════════════════════════════════════════════════════════
-      # ── Rails-aware semantic checks (level: "rails") ─────────────────
-      # ════════════════════════════════════════════════════════════════════
-
-      # Prism AST Visitor - walks the AST once, extracts data for all checks
     end
   end
 end

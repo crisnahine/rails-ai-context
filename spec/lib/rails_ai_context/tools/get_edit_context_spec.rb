@@ -3,6 +3,26 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Tools::GetEditContext do
+  # Defence in depth: a secrets file nobody listed is still a file this tool
+  # will read, so the text it returns carries no credential-shaped value.
+  describe "a secret in a file no pattern names" do
+    it "filters the value and keeps the line" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "config"))
+        File.write(File.join(root, "config", "custom_secrets.yml"),
+                   "production:\n  jwt_hmac_secret: #{'a1' * 43}\n  pool: 5\n")
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+
+        text = described_class.call(file: "config/custom_secrets.yml", near: "jwt_hmac_secret")
+                              .content.first[:text]
+
+        expect(text).to include("jwt_hmac_secret")
+        expect(text).to include("[FILTERED]")
+        expect(text).not_to include("a1a1")
+        expect(text).to include("pool: 5")
+      end
+    end
+  end
   before { described_class.reset_cache! }
 
   describe ".call" do

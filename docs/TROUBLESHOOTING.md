@@ -202,9 +202,10 @@ config.query_redacted_columns = %w[password_digest encrypted_password]
 
 ### "Search returns no results"
 
-1. Check file extensions: `config.search_extensions` defaults to common web types
-2. Check excluded paths: `config.excluded_paths` excludes `node_modules`, `tmp`, `log`, etc.
-3. Check sensitive patterns: some files are blocked by design
+1. Check the case: the search is case-sensitive on both backends, as ripgrep is by default
+2. Check excluded paths: `config.excluded_paths` excludes `node_modules`, `tmp`, `log`, `doc` and `docs` directories at any depth
+3. Check `config.search_extensions`: when set, it narrows the Ruby fallback to those extensions
+4. Check sensitive patterns: some files are blocked by design
 
 ### "ripgrep not found" warning
 

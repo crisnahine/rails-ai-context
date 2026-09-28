@@ -83,6 +83,63 @@ RSpec.describe RailsAiContext::ActionFilters do
       end
     end
 
+    # Mastodon's AboutController runs four filters from WebAppControllerConcern
+    # and set_locale from the Localized its parent includes; the static walk
+    # read only the two class bodies and listed none of them.
+    it "carries the filters of the concerns the class and its parent include" do
+      Dir.mktmpdir do |dir|
+        app_with_base(dir)
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns", "admin"))
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"), <<~RUBY)
+          class ApplicationController < ActionController::Base
+            before_action :authenticate_user!
+            include Localized
+            include Pundit::Authorization
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "concerns", "localized.rb"), <<~RUBY)
+          module Localized
+            extend ActiveSupport::Concern
+
+            included do
+              around_action :set_locale
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "concerns", "admin", "account_lookup.rb"), <<~RUBY)
+          module Admin::AccountLookup
+            extend ActiveSupport::Concern
+
+            included do
+              before_action :set_account
+              before_action :check_account_suspension, only: [ :show ]
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "admin", "follows_controller.rb").tap { |f| FileUtils.mkdir_p(File.dirname(f)) }, <<~RUBY)
+          module Admin
+            class FollowsController < ApplicationController
+              before_action :require_admin!
+              include AccountLookup
+
+              def index; end
+              def show; end
+            end
+          end
+        RUBY
+        ctx = static_context(dir)
+
+        chain = described_class.for_controller(ctx, "Admin::FollowsController", root: dir)
+        expect(chain[:own].map { |f| [ f[:name], f[:from_concern] ] })
+          .to eq([ [ "require_admin!", nil ], [ "set_account", "AccountLookup" ],
+                   [ "check_account_suspension", "AccountLookup" ] ])
+        expect(chain[:inherited].map { |f| [ f[:name], f[:from], f[:from_concern] ] })
+          .to eq([ [ "authenticate_user!", "ApplicationController", nil ],
+                   [ "set_locale", "ApplicationController", "Localized" ] ])
+        expect(RailsAiContext::Payload.controllers(ctx)["Admin::FollowsController"][:concerns_unread]).to be_nil
+      end
+    end
+
     # A filter the class's own body declares is its own, whatever an ancestor
     # declares as well. The static list is the class's own declarations, so a
     # name in it that an ancestor also declares used to move to `inherited`
@@ -174,11 +231,11 @@ RSpec.describe RailsAiContext::ActionFilters do
         FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
         FileUtils.mkdir_p(File.join(dir, "config"))
         File.write(File.join(dir, "config", "routes.rb"), "Rails.application.routes.draw do\nend\n")
-        File.write(File.join(dir, "app", "controllers", "oauth_controller.rb"),
-                   "class OauthController < Doorkeeper::ApplicationController\n  def index; end\nend\n")
+        File.write(File.join(dir, "app", "controllers", "tokens_controller.rb"),
+                   "class TokensController < Doorkeeper::ApplicationController\n  def index; end\nend\n")
         ctx = static_context(dir)
 
-        chain = described_class.for_controller(ctx, "OauthController", root: dir)
+        chain = described_class.for_controller(ctx, "TokensController", root: dir)
 
         expect(chain[:inherited]).to be_empty
       end
@@ -399,7 +456,7 @@ RSpec.describe RailsAiContext::ActionFilters do
 
       set_locale = show[:inherited].find { |f| f[:name] == "set_locale" }
       expect(set_locale).not_to be_nil
-      expect(set_locale[:skipped_unless]).to eq("html_request?")
+      expect(set_locale[:skipped_unless]).to eq(:html_request?)
     end
   end
 
@@ -829,7 +886,7 @@ RSpec.describe RailsAiContext::ActionFilters do
       expect(inherited[:skipped_unless]).to eq("limited_federation_mode?")
     end
 
-    it "spells a lambda condition the way an inferred filter option is spelled" do
+    it "names a lambda condition with the line the file wrote" do
       ctx = { controllers: { controllers: {
         "ApplicationController" => { filters: [ { kind: "around", name: "set_locale" } ] },
         "AccountsController" => {
@@ -841,7 +898,23 @@ RSpec.describe RailsAiContext::ActionFilters do
       result = described_class.for_controller(ctx, "AccountsController")
 
       expect(result[:skipped]).to eq([])
-      expect(result[:inherited].first[:skipped_if]).to eq("[INFERRED]")
+      expect(result[:inherited].first[:skipped_if]).to eq("-> { request.format == :json }")
+    end
+
+    # A list condition is one condition written as several, and every element
+    # of it is spelled the way a single one is.
+    it "spells every element of a list condition" do
+      ctx = { controllers: { controllers: {
+        "ApplicationController" => { filters: [ { kind: "before", name: "require_functional!" } ] },
+        "AccountsController" => {
+          parent_class: "ApplicationController",
+          filters: [ { kind: "before", name: "require_functional!", skipped: true, if: [ :a?, :b? ] } ]
+        }
+      } } }
+
+      result = described_class.for_controller(ctx, "AccountsController")
+
+      expect(result[:inherited].first[:skipped_if]).to eq(":a?, :b?")
     end
 
     it "leaves an unconditional skip absolute" do

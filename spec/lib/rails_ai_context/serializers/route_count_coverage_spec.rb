@@ -73,6 +73,20 @@ RSpec.describe "route counts across every surface" do
       .to include("23 dynamic constructs not expanded")
   end
 
+  # The controller count beside a route count comes from the routing table,
+  # which names controllers the controller listing never scans; unlabelled,
+  # the two numbers read as a contradiction.
+  it "labels the controllers a route count is spread across as routed ones" do
+    expect(RailsAiContext::Serializers::ClaudeSerializer.new(context).call)
+      .to include("across 1 routed controller")
+  end
+
+  it "rails_onboard labels its controller count the same way" do
+    allow(RailsAiContext::Tools::Onboard).to receive(:cached_context).and_return(context)
+    expect(RailsAiContext::Tools::Onboard.call.content.first[:text])
+      .to include("across 1 routed controller")
+  end
+
   # A count that is the whole table must not grow a caveat.
   it "stays quiet when nothing was left unexpanded" do
     whole = context.merge(routes: routes.except(:dynamic_routes))

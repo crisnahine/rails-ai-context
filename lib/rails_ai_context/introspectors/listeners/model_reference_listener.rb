@@ -70,7 +70,7 @@ module RailsAiContext
 
           arg = node.arguments&.arguments&.first
           case arg
-          when Prism::SymbolNode then @require_keys << arg.value
+          when Prism::SymbolNode then @require_keys << arg.unescaped
           when Prism::StringNode then @require_keys << arg.unescaped
           end
         end

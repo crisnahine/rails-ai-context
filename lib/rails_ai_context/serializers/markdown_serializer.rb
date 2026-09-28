@@ -4,48 +4,22 @@ module RailsAiContext
   module Serializers
     # Generates AI-friendly markdown context files from introspection data.
     # Outputs: CLAUDE.md (for Claude Code), copilot-instructions.md, etc.
-    class MarkdownSerializer
+    class MarkdownSerializer < Base
       include TestCommandDetection
       include StackOverviewHelper
 
       MARKDOWN_SPECIAL_CHARS = /([\\`*_{\}\[\]()+\-#.!~|])/
 
-      attr_reader :context
-
-      def initialize(context)
-        @context = context
-      end
+      SECTIONS = %i[
+        schema models routes jobs gems conventions controllers views turbo active_storage
+        action_text i18n config assets auth api tests rake_tasks devops action_mailbox
+        migrations seeds middleware engines multi_database
+      ].freeze
 
       # @return [String] full markdown document
       def call
-        sections = []
-        sections << header
-        sections << app_overview
-        sections << schema_section if Payload.section(context, :schema)
-        sections << models_section if Payload.section(context, :models)
-        sections << routes_section if Payload.section(context, :routes)
-        sections << jobs_section if Payload.section(context, :jobs)
-        sections << gems_section if Payload.section(context, :gems)
-        sections << conventions_section if Payload.section(context, :conventions)
-        sections << controllers_section if Payload.section(context, :controllers)
-        sections << views_section if Payload.section(context, :views)
-        sections << turbo_section if Payload.section(context, :turbo)
-        sections << active_storage_section if Payload.section(context, :active_storage)
-        sections << action_text_section if Payload.section(context, :action_text)
-        sections << i18n_section if Payload.section(context, :i18n)
-        sections << config_section if Payload.section(context, :config)
-        sections << assets_section if Payload.section(context, :assets)
-        sections << auth_section if Payload.section(context, :auth)
-        sections << api_section if Payload.section(context, :api)
-        sections << tests_section if Payload.section(context, :tests)
-        sections << rake_tasks_section if Payload.section(context, :rake_tasks)
-        sections << devops_section if Payload.section(context, :devops)
-        sections << action_mailbox_section if Payload.section(context, :action_mailbox)
-        sections << migrations_section if Payload.section(context, :migrations)
-        sections << seeds_section if Payload.section(context, :seeds)
-        sections << middleware_section if Payload.section(context, :middleware)
-        sections << engines_section if Payload.section(context, :engines)
-        sections << multi_database_section if Payload.section(context, :multi_database)
+        sections = [ header, app_overview ]
+        SECTIONS.each { |key| sections << send("#{key}_section") if Payload.section(context, key) }
         sections << warnings_section if context[:_warnings]&.any?
         sections << footer
         sections.compact.join("\n\n")
@@ -113,7 +87,7 @@ module RailsAiContext
           lines << "- Table: `#{data[:table_name]}`" if data[:table_name]
           lines << "- Associations: #{assocs}" if assocs.present?
           if data[:validations]&.any?
-            vals = data[:validations].map { |v| "#{v[:kind]} on #{v[:attributes].join(', ')}" }.join("; ")
+            vals = data[:validations].map { |v| [ v[:kind], SectionFacts.validation_target(v) ].reject(&:empty?).join(" ") }.join("; ")
             lines << "- Validations: #{vals}"
           end
           lines << "- Enums: #{data[:enums].is_a?(Hash) ? data[:enums].keys.join(', ') : Array(data[:enums]).join(', ')}" if data[:enums]&.any?
@@ -130,6 +104,12 @@ module RailsAiContext
           lines << "### #{escape_markdown(ctrl)}"
           actions.each do |r|
             lines << "- `#{r[:verb]} #{r[:path]}` → #{r[:action]}"
+          end
+        end
+        Array(routes[:engine_routes]).each do |group|
+          Array(group[:routes]).group_by { |r| r[:controller].to_s }.sort.each do |ctrl, actions|
+            lines << "### #{escape_markdown(ctrl)} (in #{group[:engine]}'s table, not in the total)"
+            actions.each { |r| lines << "- `#{r[:verb]} #{r[:path]}` → #{r[:action]}" }
           end
         end
         lines.join("\n")
@@ -266,7 +246,9 @@ module RailsAiContext
         lines = [ "## Internationalization" ]
         lines << "- Default locale: #{data[:default_locale]}"
         lines << "- #{SectionFacts.available_locales_label(data)}: #{data[:available_locales]&.join(', ')}"
-        lines << "- Locale files: #{data[:total_locale_files]}" if data[:total_locale_files]&.positive?
+        if data[:total_locale_files]&.positive?
+          lines << "- Locale files: #{data[:total_locale_files]}#{SectionFacts.unread_locale_note(data)}"
+        end
         lines.join("\n")
       end
 
@@ -314,7 +296,12 @@ module RailsAiContext
           lines << "### Pundit Policies"
           authz[:pundit].each { |p| lines << "- `#{p}`" }
         end
+        if authz[:policies]
+          lines << "### Policy Classes (app/policies)"
+          authz[:policies].each { |p| lines << "- `#{p}`" }
+        end
         lines << "- CanCanCan: Ability class detected" if authz[:cancancan]
+        lines << "- Ability class: `#{authz[:ability_class]}`" if authz[:ability_class]
         lines.join("\n")
       end
 
@@ -345,7 +332,7 @@ module RailsAiContext
         lines = [ "## Testing" ]
         lines << "- Framework: #{data[:framework]}"
         lines << "- Factories: #{data[:factories][:location]} (#{count_phrase(data[:factories][:count], "file")})" if data[:factories]
-        lines << "- Fixtures: #{data[:fixtures][:location]} (#{count_phrase(data[:fixtures][:count], "file")})" if data[:fixtures]
+        lines << "- Fixtures: #{data[:fixtures][:location]} (#{TestFramework.fixture_phrase(data[:fixtures])})" if data[:fixtures]
         lines << "- System tests: #{data[:system_tests][:location]}" if data[:system_tests]
         lines << "- CI: #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
         lines << "- Coverage: #{data[:coverage]}" if data[:coverage]
@@ -435,18 +422,52 @@ module RailsAiContext
       def middleware_section
         data = Payload.section(context, :middleware)
 
+        inserted = Array(data[:middleware_from_initializers])
+        custom = Array(data[:custom_middleware])
+
         lines = [ "## Custom Middleware" ]
-        if data[:custom_middleware]&.any?
-          data[:custom_middleware].each do |m|
+        if custom.any?
+          custom.each do |m|
             detail = "- `#{m[:class_name]}` (#{m[:file]})"
             detail += " - #{m[:detected_patterns].join(', ')}" if m[:detected_patterns]&.any?
+            label = insertion_labels(inserted, m[:class_name])
+            detail += " - #{label}" unless label.empty?
             lines << detail
           end
         else
-          lines << "- No custom middleware in app/middleware/"
+          lines << "- No custom middleware in app/middleware/ or lib/middleware/"
+        end
+        if (errors_app = data[:exceptions_app])
+          file = errors_app[:file] ? " (#{errors_app[:file]})" : ""
+          lines << "- Exceptions app: `#{errors_app[:class_name]}`#{file}"
+        end
+
+        # A class the app does not own is a change to the stack, not one of
+        # its own middlewares: a deletion, or a Rails middleware moved.
+        named = custom.map { |m| m[:class_name] }
+        rest = inserted.reject { |m| named.include?(m[:middleware]) }
+        if rest.any?
+          lines << "### Stack changes from the app's config"
+          rest.each { |m| lines << "- `#{m[:middleware]}` #{stack_change_label(m)}" }
         end
 
         lines.join("\n")
+      end
+
+      # Every place the config puts a middleware the app also keeps a file
+      # for, so the class is not listed twice and no change is dropped.
+      def insertion_labels(inserted, class_name)
+        inserted.select { |m| m[:middleware] == class_name }.map { |m| stack_change_label(m) }.join(", ")
+      end
+
+      def stack_change_label(entry)
+        verb = case entry[:action]
+        when "delete" then "removed"
+        when "move_before", "move_after" then "moved (#{entry[:action]})"
+        when "swap" then "swapped in (swap)"
+        else "inserted (#{entry[:action]})"
+        end
+        "#{verb} in #{entry[:file]}"
       end
 
       def engines_section
@@ -463,6 +484,15 @@ module RailsAiContext
           lines << "- Nothing mounted"
         end
 
+        in_repo = Payload.in_repo_engines_with_models(context)
+        if in_repo.any?
+          lines << "" << "### In-Repo Engines (#{in_repo.size})"
+          in_repo.each do |e|
+            count = Payload.engine_model_phrase(e)
+            lines << "- `#{e[:name]}` at `#{e[:path]}`#{count}"
+          end
+        end
+
         lines.join("\n")
       end
 
@@ -474,7 +504,7 @@ module RailsAiContext
         if data[:databases]&.any?
           data[:databases].each do |db|
             replica = db[:replica] ? " (replica)" : ""
-            lines << "- `#{db[:name]}` - #{db[:adapter]}#{replica}"
+            lines << "- `#{db[:name]}` - #{SchemaAdapter.database_label(db) || "unknown"}#{replica}"
           end
         end
 
@@ -504,7 +534,7 @@ module RailsAiContext
       def footer
         <<~MD
           ---
-          _This context file is auto-generated. Run `rails ai:context` to regenerate._
+          _This context file is auto-generated. Run `#{RailsAiContext::InstallMode.command(:context)}` to regenerate._
         MD
       end
 

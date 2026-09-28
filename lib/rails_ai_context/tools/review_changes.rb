@@ -213,7 +213,7 @@ module RailsAiContext
             begin
               result = GetModelDetails.call(model: model_name, detail: "standard")
               lines << "" << "**Model context:** #{model_name}" unless empty?(result)
-            rescue => e; $stderr.puts "[rails-ai-context] Context lookup skipped: #{e.message}" if ENV["DEBUG"]; end
+            rescue => e; RailsAiContext.debug_fail(e, nil, label: "review_changes context lookup"); end
 
           when :controller
             ctrl_name = File.basename(file, ".rb").camelize
@@ -221,7 +221,7 @@ module RailsAiContext
             begin
               result = GetRoutes.call(controller: snake, detail: "summary")
               lines << "" << "**Routes:**" << response_text(result) unless empty?(result)
-            rescue => e; $stderr.puts "[rails-ai-context] Context lookup skipped: #{e.message}" if ENV["DEBUG"]; end
+            rescue => e; RailsAiContext.debug_fail(e, nil, label: "review_changes context lookup"); end
 
           when :migration
             # Parse migration for table/column info
@@ -236,7 +236,7 @@ module RailsAiContext
                     begin
                       result = GetSchema.call(table: t, detail: "summary")
                       lines << "  #{t}: #{response_text(result).lines.first&.strip}" unless empty?(result)
-                    rescue => e; $stderr.puts "[rails-ai-context] Context lookup skipped: #{e.message}" if ENV["DEBUG"]; end
+                    rescue => e; RailsAiContext.debug_fail(e, nil, label: "review_changes context lookup"); end
                   end
                 end
               end
@@ -246,7 +246,7 @@ module RailsAiContext
             begin
               result = GetRoutes.call(detail: "summary")
               lines << "" << "**Current routes:** #{response_text(result).lines.first&.strip}"
-            rescue => e; $stderr.puts "[rails-ai-context] Context lookup skipped: #{e.message}" if ENV["DEBUG"]; end
+            rescue => e; RailsAiContext.debug_fail(e, nil, label: "review_changes context lookup"); end
           end
 
           lines << ""

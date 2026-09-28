@@ -18,11 +18,10 @@ module RailsAiContext
 
     # The one scope: everything the fingerprint walks is also everything the
     # watcher watches.
-    WATCHED_DIRS = %w[
+    WATCHED_DIRS = (%w[
       app/models
       app/controllers
       app/views
-      app/jobs
       app/mailers
       app/channels
       app/components
@@ -33,17 +32,17 @@ module RailsAiContext
       config
       db
       lib/tasks
-    ].freeze
+    ] + Introspectors::JobIntrospector::JOB_DIRS).freeze
 
     # The kinds whose homes PathResolver resolves beyond the conventional
     # tree - packs/*, engines/* and configured extras. Derived at compute
     # time so an edit in a pack invalidates the cache the way one in app/
     # does; a stale answer that looks fresh is the failure this exists to
     # prevent.
-    RESOLVED_KINDS = %w[
-      app/models app/controllers app/views app/jobs app/mailers
+    RESOLVED_KINDS = (%w[
+      app/models app/controllers app/views app/mailers
       app/channels app/components app/helpers app/services
-    ].freeze
+    ] + Introspectors::JobIntrospector::JOB_DIRS).freeze
 
     # The file kinds a change can hide in. One list, so a walk that reports
     # a change and a walk that names it read the same tree.
@@ -103,14 +102,15 @@ module RailsAiContext
         conventional = WATCHED_DIRS.map { |dir| File.join(root, dir) }
         resolved = RESOLVED_KINDS.flat_map { |kind| PathResolver.dirs_for(root, kind) }
 
-        (conventional + resolved + ConcernPaths.resolve(root)).uniq.select { |dir| Dir.exist?(dir) }
+        (conventional + resolved + ConcernPaths.resolve(root) + stimulus_dirs(root))
+          .uniq.select { |dir| Dir.exist?(dir) }
       end
 
-      # The manifests, absolute and existing. Most sit at the app root, which
-      # no watcher can follow - Listen recurses with no opt-out, so watching
-      # the root would walk node_modules - so these are fingerprinted only.
-      def watched_files(root)
-        WATCHED_FILES.map { |file| File.join(root, file) }.select { |path| File.exist?(path) }
+      # The controller homes the Stimulus introspector reads, so an edit under
+      # app/webpacker or frontend/ invalidates the cache like one in app/javascript.
+      def stimulus_dirs(root)
+        Introspectors::StimulusIntrospector.controller_paths(root.to_s)
+                                           .map { |path, _js_root| File.dirname(path) }.uniq
       end
 
       # Which watched directories hold a file newer than the given time,
