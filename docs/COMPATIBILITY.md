@@ -211,7 +211,11 @@ Proof sources:
    In the v5.30.0 release QA: Mastodon, Discourse, OpenProject, Canvas, Forem,
    Whitehall, Consul, OpenFoodNetwork, Huginn, Errbit, Diaspora and Plots2 in
    the static and failed-boot tiers, and the same private app in every tier
-   and both install paths.
+   and both install paths. In the v5.30.1 release QA: the same private app on
+   PostgreSQL 17 with a partitioned table added, booted and static from
+   schema.rb and structure.sql, a Rails 7.2 app whose schema.rb carries no
+   partition marker, and Discourse, Mastodon, OpenFoodNetwork and Forem
+   answering as before.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified
