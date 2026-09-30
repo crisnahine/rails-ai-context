@@ -52,6 +52,7 @@ module RailsAiContext
       warnings = []
       config.introspectors.each do |name|
         data = context[name]
+        portable_errors!(data)
         if data.is_a?(Hash) && data[:error]
           warnings << { introspector: name.to_s, error: data[:error] }
         end
@@ -133,12 +134,11 @@ module RailsAiContext
       # nothing about the database, and answering for it would be the
       # fabrication this method exists to remove.
       return if schema[:adapter].nil?
-      return unless SchemaAdapter.placeholder?(schema[:adapter])
 
       # "unknown" is a placeholder too. Swapping one for another buys nothing
       # and would bury the parse mode that at least says how the schema was read.
       resolved = SchemaAdapter.label(context)
-      return if SchemaAdapter.placeholder?(resolved)
+      return if SchemaAdapter.placeholder?(resolved) || resolved == schema[:adapter]
 
       schema[:adapter_source] = schema[:adapter]
       schema[:adapter] = resolved
@@ -175,6 +175,17 @@ module RailsAiContext
       when Introspectors::StaticTier::FILES_ONLY       then introspector.call
       when Introspectors::StaticTier::ALTERNATE_SOURCE then introspector.static_call
       else { unavailable: unavailable_reason }
+      end
+    end
+
+    # An exception message names files by absolute path, and the context is committed.
+    def portable_errors!(data)
+      case data
+      when Hash
+        data[:error] = PortablePath.relativize_text(data[:error], app.root) if data[:error].is_a?(String) && !data.frozen?
+        data.each_value { |value| portable_errors!(value) }
+      when Array
+        data.each { |value| portable_errors!(value) }
       end
     end
 

@@ -883,6 +883,14 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         FileUtils.rm_rf(db_dir)
       end
 
+      it "carries the connection's pending migrations, which name what adds the table" do
+        pending = [ { version: "20260921000000", name: "CreateOrderComments" } ]
+        allow(RailsAiContext::PendingMigrations).to receive(:live)
+          .with(File.join(fixture_path, "db", "migrate")).and_return(pending)
+
+        expect(introspector.call[:pending_migrations]).to eq(pending)
+      end
+
       # Before Rails 8 schema.rb dumps a partition as a plain table, which read
       # as a declared table the database lacks.
       it "does not count a partition the database names as missing" do

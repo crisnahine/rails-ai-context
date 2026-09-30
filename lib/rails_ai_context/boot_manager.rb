@@ -31,6 +31,20 @@ module RailsAiContext
 
     DEFAULT_TIMEOUT = 60
 
+    # Bundler names every gem the bundle lacks; an app missing its whole bundle
+    # is thousands of characters. DEBUG keeps the full list.
+    MISSING_GEMS = /\ACould not find ((?:[^\s,]+, )+[^\s,]+) in (.+)\z/
+    MISSING_GEMS_SHOWN = 3
+
+    def self.shorten_missing_gems(line)
+      match = line.to_s.match(MISSING_GEMS)
+      return line if match.nil? || ENV["DEBUG"]
+
+      gems = match[1].split(", ").uniq
+      listed = gems.size > MISSING_GEMS_SHOWN ? "#{gems.size} gems (first few: #{gems.first(MISSING_GEMS_SHOWN).join(', ')})" : gems.join(", ")
+      "Could not find #{listed} in #{match[2]}"
+    end
+
     # Ruby quotes the method name differently across versions.
     CONFIGURE_WITHOUT_GEM = /undefined method .?configure.? for (module )?RailsAiContext/
 
@@ -55,16 +69,18 @@ module RailsAiContext
       # One-line summary safe to relay to an AI client or a terminal. It
       # carries the cause too: the footer this feeds is the only place most
       # callers ever see, and a gem name with no reason is not actionable.
-      def failure_summary
+      # `full:` keeps a long missing-gem list whole, for a command that stops on the failure.
+      def failure_summary(full: false)
         return nil if booted?
 
-        summary = one_line(error)
+        summary = one_line(error, full)
         cause = root_cause
-        cause ? "#{summary} (cause: #{one_line(cause)})" : summary
+        cause ? "#{summary} (cause: #{one_line(cause, full)})" : summary
       end
 
-      def one_line(e)
-        "#{e.class}: #{e.message.to_s.lines.first&.strip}"
+      def one_line(e, full = false)
+        line = e.message.to_s.lines.first&.strip
+        "#{e.class}: #{full ? line : BootManager.shorten_missing_gems(line)}"
       end
 
       # An unguarded `RailsAiContext.configure` in config/initializers has

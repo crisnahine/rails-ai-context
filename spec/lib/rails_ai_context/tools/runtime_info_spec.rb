@@ -36,6 +36,14 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
       expect(text).to include("- 20240201000000 AddIndex")
     end
 
+    it "names the adapter as every other surface does" do
+      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("PostGIS")
+
+      text = described_class.call(section: "database").content.first[:text]
+
+      expect(text).to include("**Adapter:** PostgreSQL")
+    end
+
     it "shows database section" do
       result = described_class.call(section: "database")
       text = result.content.first[:text]
@@ -205,6 +213,27 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
 
       expect(most_used.map { |line| line[/`([^`]+)`/, 1] })
         .to eq(%w[index_comments_on_post_id index_posts_on_slug index_posts_on_title])
+    end
+
+    it "says how many unused indexes it left out" do
+      allow(described_class).to receive(:gather_index_usage).and_return(
+        (1..12).map { |n| { table: "t#{n}", index: "index_t#{n}_on_x", scans: 0 } }
+      )
+
+      text = described_class.call(section: "database", detail: "full").content.first[:text]
+
+      expect(text[/\*\*Unused indexes \(0 scans\):\*\*\n(.*?)\n\n/m, 1].lines.grep(/\A- /).size).to eq(10)
+      expect(text).to include("_2 more unused indexes..._")
+    end
+
+    it "says how many tables the summary left out" do
+      allow(described_class).to receive(:gather_table_sizes).and_return(
+        (1..7).map { |n| { name: "t#{n}", bytes: 1024 * n } }
+      )
+
+      text = described_class.call(section: "database", detail: "summary").content.first[:text]
+
+      expect(text).to include("_2 more tables..._")
     end
   end
 

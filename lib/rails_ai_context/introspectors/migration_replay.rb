@@ -211,6 +211,8 @@ module RailsAiContext
             Statements.apply_schema_column(entry, current_table, tables, pk_type)
           elsif entry[:type] == :index && current_table
             Statements.apply_schema_index(entry, current_table, tables)
+          elsif entry[:type] == :unread_call && current_table
+            SchemaConventions.note_unread_call(tables[current_table], entry[:name])
           end
         end
       end

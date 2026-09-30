@@ -54,8 +54,8 @@ module RailsAiContext
         # [^;]*? keeps the match inside one statement: with .*? a pkey-only
         # ADD CONSTRAINT would swallow up to the FOREIGN KEY of a LATER
         # statement and attribute the FK to the wrong table.
-        content.scan(/ALTER TABLE\s+(?:ONLY\s+)?(?:public\.)?[`"]?(\w+)[`"]?\s+ADD CONSTRAINT[^;]*?FOREIGN KEY\s*\([`"]?(\w+)[`"]?\)\s*REFERENCES\s+(?:public\.)?[`"]?(\w+)[`"]?\s*\([`"]?(\w+)[`"]?\)/m) do |from, col, to, pk|
-          tables[from]&.dig(:foreign_keys)&.push({ from_table: from, to_table: to, column: col, primary_key: pk })
+        content.scan(/ALTER TABLE\s+(?:ONLY\s+)?(?:public\.)?[`"]?(\w+)[`"]?\s+ADD CONSTRAINT[^;]*?FOREIGN KEY\s*\(([^)]*)\)\s*REFERENCES\s+(?:public\.)?[`"]?(\w+)[`"]?\s*\(([^)]*)\)/m) do |from, cols, to, pks|
+          tables[from]&.dig(:foreign_keys)&.push(SchemaConventions.foreign_key_entry(from, to, cols.scan(/\w+/), pks.scan(/\w+/)))
         end
 
         # pg_dump writes each partition as a table, then attaches it in exactly this form.
@@ -96,8 +96,9 @@ module RailsAiContext
         body.each_line do |line|
           line = line.strip.chomp(",")
           case line
-          when /\ACONSTRAINT\s+[`"]?\w+[`"]?\s+FOREIGN KEY\s*\([`"]?(\w+)[`"]?\)\s*REFERENCES\s+[`"]?(\w+)[`"]?\s*\([`"]?(\w+)[`"]?\)/i
-            table[:foreign_keys] << { from_table: table_name, to_table: $2, column: $1, primary_key: $3 }
+          when /\ACONSTRAINT\s+[`"]?\w+[`"]?\s+FOREIGN KEY\s*\(([^)]*)\)\s*REFERENCES\s+[`"]?(\w+)[`"]?\s*\(([^)]*)\)/i
+            columns, to, keys = $1, $2, $3
+            table[:foreign_keys] << SchemaConventions.foreign_key_entry(table_name, to, columns.scan(/\w+/), keys.scan(/\w+/))
           when /\A(UNIQUE\s+)?(?:KEY|INDEX)\s+[`"](\w+)[`"]\s*(\(.*)/i
             # Captured to locals first: the parsing below runs more regexes,
             # which would clobber $~ before the hash literal reads it.

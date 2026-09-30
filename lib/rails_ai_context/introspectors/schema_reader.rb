@@ -210,6 +210,8 @@ module RailsAiContext
           schema[:tables][current]&.dig(:columns)&.push(column_entry(event)) if current
         when :index
           schema[:tables][current]&.dig(:indexes)&.push(index_entry(event)) if current
+        when :unread_call
+          SchemaConventions.note_unread_call(schema[:tables][current], event[:name]) if current
         when :add_index
           schema[:tables][event[:table]]&.dig(:indexes)&.push(index_entry(event))
         when :foreign_key

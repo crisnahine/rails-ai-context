@@ -103,8 +103,8 @@ module RailsAiContext
           filepath = File.join(output_dir, filename)
 
           # generate_root_files = false is a deliberate omission, so it is
-          # reported rather than dropped.
-          unless generate_root
+          # reported rather than dropped. The JSON dump is no tool's root file.
+          unless generate_root || fmt == :json
             not_applicable[filepath] = "root files disabled"
             next
           end

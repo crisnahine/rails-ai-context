@@ -114,6 +114,9 @@ module RailsAiContext
 
         parsed = parse_error(error)
         classification = classify_error(parsed)
+        # A refused path is said once and then read, traced and suggested nowhere.
+        refusal = file && unsafe_path_message(file)
+        file = nil if refusal
 
         lines = [ "# Error Diagnosis", "" ]
         lines << "**Error:** `#{parsed[:exception_class] || 'Unknown'}`"
@@ -135,6 +138,7 @@ module RailsAiContext
 
         # Gather context based on parameters and error type
         context_sections = gather_context(parsed, classification, file, line, action)
+        context_sections = [ "## Code Context", refusal, "" ] + context_sections if refusal
 
         # Recent git changes
         git_section = gather_git_context(file, parsed[:file_refs])

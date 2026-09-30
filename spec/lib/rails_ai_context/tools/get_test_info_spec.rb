@@ -263,6 +263,23 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       end
     end
 
+    it "names a test file over max_test_file_size instead of calling it missing" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "test", "models"))
+        File.write(File.join(root, "test", "models", "comment_test.rb"),
+                   "class CommentTest < ActiveSupport::TestCase\n  test \"x\" do\n  end\nend\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({ tests: test_data, models: { "Comment" => {} } })
+        allow(RailsAiContext.configuration).to receive(:max_test_file_size).and_return(20)
+
+        text = described_class.call(model: "Comment").content.first[:text]
+
+        expect(text).not_to include("No test file found")
+        expect(text).to include("test/models/comment_test.rb")
+        expect(text).to include("max_test_file_size")
+      end
+    end
+
     # An app that keeps model specs in spec/models, half of them named
     # user_model_spec.rb, and has a serializer spec at
     # spec/services/serializers/.../user_spec.rb. A basename match anywhere

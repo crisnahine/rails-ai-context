@@ -438,6 +438,17 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       expect(result[:default_locale]).to eq("en")
     end
 
+    # An initializer reaches config.i18n through the application object.
+    it "takes an initializer's Rails.application.config.i18n default locale over application.rb's" do
+      result = static_result("en.yml" => "en:\n  hello: Hello\n", "es.yml" => "es:\n  hello: Hola\n") do |dir|
+        File.write(File.join(dir, "config", "application.rb"), "config.i18n.default_locale = :es\n")
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "initializers", "locale.rb"),
+                   "Rails.application.config.i18n.default_locale = :en\n")
+      end
+      expect(result[:default_locale]).to eq("en")
+    end
+
     # Two initializers, one spelling: the later file is the one that lands.
     it "takes the last bare I18n.default_locale when nothing buffers one" do
       result = static_result("en.yml" => "en:\n  hello: Hello\n", "de.yml" => "de:\n  hello: Hallo\n") do |dir|

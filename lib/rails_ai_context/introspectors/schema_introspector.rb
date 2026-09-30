@@ -31,8 +31,10 @@ module RailsAiContext
           declared_tables: declared_table_names,
           check_constraints: check_constraints,
           enum_types: enum_types,
-          generated_columns: generated_columns(schema_reader)
-        })
+          generated_columns: generated_columns(schema_reader),
+          # What names the migration behind a declared table the connection lacks.
+          pending_migrations: RailsAiContext::PendingMigrations.live(RailsAiContext::PendingMigrations.migrate_dir_for(app.root))
+        }.compact)
       end
 
       # Static tier entry: skip the connection probe entirely and answer from
@@ -355,8 +357,9 @@ module RailsAiContext
           tables[table_name] = {
             columns: declared[:columns].map { |c| static_column(c) },
             indexes: declared[:indexes].filter_map { |i| static_index(i) },
-            foreign_keys: []
-          }
+            foreign_keys: [],
+            unread_calls: declared[:unread_calls]
+          }.compact
           key = declared.dig(:options, :primary_key)
           tables[table_name][:primary_key] = SchemaConventions.primary_key_value(key) if key
         end

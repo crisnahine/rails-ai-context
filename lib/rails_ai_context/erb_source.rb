@@ -14,9 +14,14 @@ module RailsAiContext
       source.to_s.include?("<%")
     end
 
-    # The tag bodies, joined. Order is kept; line numbers are not.
+    # The code tag bodies, joined. Order is kept; line numbers are not.
     def tag_bodies(source)
-      source.to_s.scan(TAG).flatten.join("\n")
+      source.to_s.scan(TAG).flatten.reject { |body| comment?(body) }.join("\n")
+    end
+
+    # Only `<%#` (or `<%-#`) is an ERB comment; `<% # note` is code whose first line is a Ruby comment.
+    def comment?(body)
+      body.to_s.start_with?("#")
     end
 
     # The same Ruby with everything outside the tags blanked rather than
@@ -30,7 +35,7 @@ module RailsAiContext
         match = Regexp.last_match
         out << blank(text[last...match.begin(0)])
         body = match[1].to_s
-        out << (body.lstrip.start_with?("#") ? blank(body) : body)
+        out << (comment?(body) ? blank(body) : blank_comment_lines(body))
         last = match.end(0)
       end
       out << blank(text[last..].to_s)
@@ -47,5 +52,19 @@ module RailsAiContext
       text.gsub(/[^\n]/, " ")
     end
     private_class_method :blank
+
+    # Tags sharing a line are joined, so a comment left in would swallow the next tag's code.
+    def blank_comment_lines(body)
+      return body unless body.include?("#")
+
+      out = body.b
+      # Last first: a multibyte comment blanks to fewer bytes and would shift later offsets.
+      AstCache.parse_string(body).comments.reverse_each do |comment|
+        loc = comment.location
+        out[loc.start_offset...loc.end_offset] = blank(loc.slice).b
+      end
+      out.force_encoding(body.encoding)
+    end
+    private_class_method :blank_comment_lines
   end
 end

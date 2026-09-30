@@ -70,4 +70,14 @@ RSpec.describe RailsAiContext::PendingMigrations do
       expect(described_class.migrate_dir_for("/app", "/app/db/schema.sql")).to eq("/app/db/migrate")
     end
   end
+
+  describe ".live" do
+    it "asks the database once per run however many sections want the answer" do
+      allow(RailsAiContext::MigrationStatus).to receive(:pending).and_return([])
+
+      RailsAiContext::RunCache.around { 2.times { described_class.live(@migrate) } }
+
+      expect(RailsAiContext::MigrationStatus).to have_received(:pending).once
+    end
+  end
 end

@@ -43,22 +43,34 @@ module RailsAiContext
         end
       end
 
+      # SourceScan records, each loaded by the constant its file holds. Without
+      # the loader's answer (Zeitwerk < 2.6.9) the source's own declaration names
+      # it: path_name reads app/services/x.rb as Services::X.
+      def files(records)
+        loader = Rails.autoloaders.main
+        records.each do |record|
+          names = [ expected_cpath(loader, record.path) ].compact
+          names = DeclaredConstant.declarations(record.source).map(&:name) if names.empty?
+          names = [ record.path_name ] if names.empty?
+          names.each(&:constantize)
+        rescue StandardError, ScriptError => e
+          RailsAiContext.debug_fail(e, label: "load #{record.file}")
+        end
+      end
+
       # The loader declines a file it does not manage (a pack or an in-repo
       # engine runs its own), by nil or by raising; camelize still names it
       # well enough for that loader's autoload to answer.
       def cpath_for(loader, path, file)
-        if loader.respond_to?(:cpath_expected_at)
-          begin
-            cpath = loader.cpath_expected_at(file)
-            return cpath if cpath
-          rescue Zeitwerk::Error
-            nil
-          end
-        end
-
-        file.delete_prefix(path + File::SEPARATOR).sub(/\.rb\z/, "").camelize
+        expected_cpath(loader, file) || file.delete_prefix(path + File::SEPARATOR).sub(/\.rb\z/, "").camelize
       end
-      private_class_method :load_dir, :load_individually, :cpath_for
+
+      def expected_cpath(loader, file)
+        loader.cpath_expected_at(file) if loader.respond_to?(:cpath_expected_at)
+      rescue Zeitwerk::Error
+        nil
+      end
+      private_class_method :load_dir, :load_individually, :cpath_for, :expected_cpath
     end
   end
 end

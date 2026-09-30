@@ -63,6 +63,14 @@ module RailsAiContext
         (key ? leading << key.to_s : leading).to_set
       end
 
+      # A table whose block called what no reader interprets may have indexes
+      # the static schema lacks.
+      def note_unread_call(table, name)
+        return unless table
+
+        table[:unread_calls] = Array(table[:unread_calls]) | [ name.to_s ]
+      end
+
       # A key as a reader writes it beside another key: `id`, or `(id, day)`, so
       # the two sides of a foreign key stay apart.
       def key_text(value)

@@ -93,7 +93,7 @@ module RailsAiContext
           conn = ActiveRecord::Base.connection
           adapter = conn.adapter_name.downcase
           lines = [ "## Database", "" ]
-          lines << "**Adapter:** #{conn.adapter_name}"
+          lines << "**Adapter:** #{SchemaAdapter.display(conn.adapter_name)}"
 
           # Table sizes
           sizes = gather_table_sizes(conn, adapter)
@@ -101,12 +101,13 @@ module RailsAiContext
             lines << "" << "### Table Sizes"
             lines << "| Table | Size |"
             lines << "|-------|------|"
-            sizes.first(RailsAiContext::DetailLevel.summary?(detail) ? 5 : 30).each do |row|
+            shown = RailsAiContext::DetailLevel.summary?(detail) ? 5 : 30
+            sizes.first(shown).each do |row|
               lines << "| #{row[:name]} | #{human_size(row[:bytes])} |"
             end
             total = sizes.sum { |r| r[:bytes] }
             lines << "| **Total** | **#{human_size(total)}** |"
-            lines << "_#{count_phrase(sizes.size - 30, "more table")}..._" if detail != "summary" && sizes.size > 30
+            lines << "_#{count_phrase(sizes.size - shown, "more table")}..._" if sizes.size > shown
           end
 
           # Pending migrations
@@ -129,6 +130,7 @@ module RailsAiContext
               if unused.any?
                 lines << "**Unused indexes (0 scans):**"
                 unused.first(10).each { |i| lines << "- `#{i[:index]}` on `#{i[:table]}`" }
+                lines << "_#{count_phrase(unused.size - 10, "more unused index", plural: "more unused indexes")}..._" if unused.size > 10
               end
               hot = index_usage.sort_by { |i| [ -i[:scans].to_i, i[:table].to_s, i[:index].to_s ] }.first(5)
               lines << "" << "**Most used indexes:**"

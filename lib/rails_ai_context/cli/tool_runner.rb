@@ -31,6 +31,7 @@ module RailsAiContext
         @environment = environment
         @error = false
         @missing_required = false
+        @invalid_required = []
         @out_of_type = {}
       end
 
@@ -38,6 +39,8 @@ module RailsAiContext
         kwargs = build_kwargs
         schema = tool_schema
         validate_kwargs!(kwargs, schema)
+        return extract_output(invalid_required_response) if @invalid_required.any?
+
         response = tool_class.call(**kwargs)
         extract_output(response)
       end
@@ -418,7 +421,9 @@ module RailsAiContext
         end
 
         # Check enum constraints - downcase before comparing for case-insensitive match.
-        # If invalid, strip the param so the tool uses its default behavior.
+        # If invalid, strip the param so the tool uses its default behavior; a
+        # required one has no default, so the call answers with the error itself
+        # rather than letting the tool report the value as missing.
         kwargs.each do |key, value|
           prop = properties[key]
           next unless prop&.dig(:enum)
@@ -431,10 +436,24 @@ module RailsAiContext
           if matched
             kwargs[key] = matched
           else
-            $stderr.puts "Warning: '#{value}' is not a valid value for #{key}. Valid: #{prop[:enum].join(', ')}. Using default."
-            kwargs.delete(key)
+            valid = prop[:enum].join(", ")
+            if required.include?(key.to_s)
+              @invalid_required << "**Error:** `#{value}` is not a valid `#{key}`. Valid: #{valid}"
+              @missing_required = true
+            else
+              $stderr.puts "Warning: '#{value}' is not a valid value for #{key}. Valid: #{valid}. Using default."
+              kwargs.delete(key)
+            end
           end
         end
+      end
+
+      # Through the tool's own wrapper when it has one, so the static-tier banner rides along.
+      def invalid_required_response
+        text = @invalid_required.join("\n")
+        return tool_class.text_response(text) if tool_class <= Tools::BaseTool
+
+        MCP::Tool::Response.new([ { type: "text", text: text } ])
       end
 
       def blank?(value)

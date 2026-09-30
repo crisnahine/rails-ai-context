@@ -51,4 +51,13 @@ RSpec.describe "rake boot failure reporting" do
     expect(output).to include("boom")
     expect(output).not_to include("does not bundle the gem")
   end
+
+  # The task stops here, so the whole list is the one thing to act on.
+  it "names every missing gem" do
+    gems = %w[pg-1.5.4 nokogiri-1.16.0 puma-6.4.0 redis-5.0.8 sidekiq-7.2.0]
+    error = RuntimeError.new("Could not find #{gems.join(", ")} in locally installed gems")
+    result = RailsAiContext::BootManager::Result.new(status: :failed, error: error)
+
+    expect(abort_output(result)).to include(gems.join(", "))
+  end
 end

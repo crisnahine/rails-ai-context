@@ -6,6 +6,8 @@ module RailsAiContext
       # What a replay needs beyond the DSL listeners: down-only ranges (a revert
       # block is one), a block's `t.` statements, and four top-level statements.
       class MigrationReplayListener < BaseListener
+        include SchemaDslListener::TableBlock
+
         def on_def_node_enter(node)
           return unless node.name == :down
 
@@ -21,11 +23,17 @@ module RailsAiContext
         }.freeze
 
         def on_call_node_enter(node)
+          note_block(node)
           args = node.arguments&.arguments || []
           if %i[down revert].include?(node.name) && node.block
             @results << { kind: :down, range: node.location.start_line..node.location.end_line }
           elsif node.name == :column && block_column?(node.receiver)
             @results << column_definition(node, args)
+          elsif TABLE_OPS[node.name] == :remove_reference && block_column?(node.receiver)
+            # Table#remove_references drops each name it is given.
+            args.reject { |arg| arg.is_a?(Prism::KeywordHashNode) }.each do |arg|
+              @results << statement(node, :remove_reference, [ arg, *args.grep(Prism::KeywordHashNode) ]).merge(block: true)
+            end
           elsif TABLE_OPS.key?(node.name) && block_column?(node.receiver)
             @results << statement(node, TABLE_OPS[node.name], args).merge(block: true)
           elsif node.name == :create_join_table && (node.receiver.nil? || node.receiver.is_a?(Prism::LocalVariableReadNode))
@@ -97,7 +105,7 @@ module RailsAiContext
         # as a local variable or as a bare call.
         def block_column?(receiver)
           case receiver
-          when Prism::LocalVariableReadNode then receiver.name == :t
+          when Prism::LocalVariableReadNode then receiver.name == :t && table_param?(receiver)
           when Prism::CallNode then receiver.name == :t && receiver.receiver.nil?
           else false
           end

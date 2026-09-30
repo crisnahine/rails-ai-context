@@ -25,9 +25,10 @@ module RailsAiContext
       unapplied.map { |m| { version: m[:version], name: m[:name] } }
     end
 
-    # The connection's answer; nil when there is no database to ask.
+    # The connection's answer; nil when there is no database to ask. The schema
+    # and migrations sections both ask, so a run queries once.
     def live(migrate_dir)
-      MigrationStatus.pending(migrate_dir)
+      RunCache.fetch([ :pending_migrations, migrate_dir.to_s ]) { MigrationStatus.pending(migrate_dir) }
     end
 
     # Each secondary database keeps its own migrate directory, so a secondary

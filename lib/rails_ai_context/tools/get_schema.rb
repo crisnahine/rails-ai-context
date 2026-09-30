@@ -77,9 +77,11 @@ module RailsAiContext
               # The key is the caller's own string when nothing matched, and
               # the declared names are table names: `OrderComments` and
               # `order_comments` are the same request.
-              if declared_not_connected(schema).include?(table_key.to_s.underscore)
+              declared = table_key.to_s.underscore
+              if declared_not_connected(schema).include?(declared)
                 return text_response(
-                  "Table '#{table_key.to_s.underscore}' is declared in db/schema.rb and missing from the connected database. " \
+                  "Table '#{declared}' is declared in db/schema.rb and missing from the connected database. " \
+                  "#{pending_for_table(schema, declared)}" \
                   "Run `rails db:migrate`, or pass `--no-boot` to read the declaration instead."
                 )
               end
@@ -87,7 +89,7 @@ module RailsAiContext
               return not_found_response("Table", table, tables.keys.sort,
                 recovery_tool: "Call rails_get_schema(detail:\"summary\") to see all tables")
             end
-            return json_response(table_data) if format == "json"
+            return json_response(table_data.except(:unread_calls)) if format == "json"
 
             output = format_table_markdown(table_key, table_data, models_data)
             # Cross-reference hint for AI: suggest next tool call
@@ -326,6 +328,19 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "models_for_table")
       end
 
+      # The pending migrations named after the table, or all of them when none
+      # is: a migration that adds a table is not always named for it.
+      private_class_method def self.pending_for_table(schema, table)
+        pending = Array(schema[:pending_migrations])
+        return "" if pending.empty?
+
+        named = pending.select { |m| m[:name].to_s.underscore.include?(table) }
+        named = pending if named.empty?
+        shown = named.first(5).map { |m| "#{m[:version]} #{m[:name]}".strip }.join(", ")
+        more = named.size > 5 ? " (+#{named.size - 5} more)" : ""
+        "Pending: #{shown}#{more}. "
+      end
+
       # The tables db/schema.rb declares that the connected database does not
       # have. Empty unless both sides are known, which is the booted tier
       # with a schema file to read.
@@ -390,7 +405,8 @@ module RailsAiContext
       # with :tables cut down to the page the same pagination produced for
       # markdown. `detail` still decides how many tables a page holds.
       private_class_method def self.json_page_response(schema, tables, names, models = {})
-        page = names.to_h { |name| [ name, tables[name] ] }
+        # unread_calls is the static reader's note to validate; the booted tier has none.
+        page = names.to_h { |name| [ name, tables[name].is_a?(Hash) ? tables[name].except(:unread_calls) : tables[name] ] }
         coverage = model_coverage(tables, models)
         json_response(schema.merge(tables: page, gem_owned_tables: coverage[:gems], tables_without_model_file: coverage[:unclaimed]))
       end
@@ -402,6 +418,8 @@ module RailsAiContext
       private_class_method def self.model_coverage(tables, models)
         unclaimed = tables.keys.sort.select { |name| models_for_table(name, models).empty? } - habtm_join_tables(models).to_a
         unclaimed -= declared_join_tables(models).to_a if unclaimed.any?
+        # A file the walk could not read claims no table, but it is still a model file.
+        unclaimed -= models.filter_map { |_, d| d[:table_name] || Introspectors::TableName.stem(d[:file]) if d.is_a?(Hash) && d[:error] && d[:file] }
         gems = gem_owned(unclaimed)
         { gems: gems, unclaimed: unclaimed - gems.values.flatten }
       end

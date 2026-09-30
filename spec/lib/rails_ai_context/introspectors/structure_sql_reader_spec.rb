@@ -189,6 +189,40 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
       expect(my["id"]).not_to have_key(:default)
     end
   end
+  describe "composite foreign keys" do
+    # The shape the schema.rb reader gives: the names, in order, on both sides.
+    it "reads pg_dump's ADD CONSTRAINT over two columns" do
+      sql = <<~SQL
+        CREATE TABLE public.readings (
+            id bigint NOT NULL,
+            measurement_id bigint,
+            measurement_recorded_on date
+        );
+
+        ALTER TABLE ONLY public.readings
+            ADD CONSTRAINT fk_readings_measurements FOREIGN KEY (measurement_id, measurement_recorded_on) REFERENCES public.measurements(id, recorded_on);
+      SQL
+
+      expect(described_class.parse(sql)[:tables]["readings"][:foreign_keys]).to eq([
+        { from_table: "readings", to_table: "measurements",
+          column: %w[measurement_id measurement_recorded_on], primary_key: %w[id recorded_on] }
+      ])
+    end
+
+    it "reads mysqldump's inline constraint over two columns" do
+      sql = <<~SQL
+        CREATE TABLE `readings` (
+          `measurement_id` bigint DEFAULT NULL,
+          `measurement_recorded_on` date DEFAULT NULL,
+          CONSTRAINT `fk_rm` FOREIGN KEY (`measurement_id`, `measurement_recorded_on`) REFERENCES `measurements` (`id`, `recorded_on`)
+        ) ENGINE=InnoDB;
+      SQL
+
+      fk = described_class.parse(sql)[:tables]["readings"][:foreign_keys].first
+      expect(fk).to include(column: %w[measurement_id measurement_recorded_on], primary_key: %w[id recorded_on])
+    end
+  end
+
   describe "primary keys" do
     it "reads a composite key from its ADD CONSTRAINT" do
       sql = <<~SQL

@@ -107,7 +107,8 @@ module RailsAiContext
     # concerns. Singular so a filter reads `type: "mailer"`.
     def type_for(dir)
       segment = dir[%r{/app/([^/]+)/concerns/?\z}, 1]
-      segment ? segment.singularize : "other"
+      # An app root named app (Docker's /app) puts app/concerns at app/app/concerns.
+      segment && segment != "app" ? segment.singularize : "other"
     end
 
     # The path only approximates the declared constant: an app inflection makes

@@ -80,9 +80,7 @@ module RailsAiContext
         load_file | load_extension
       )\b/ix
 
-      # MySQL `SELECT ... INTO OUTFILE 'path'` / `INTO DUMPFILE 'path'`
-      # are caught by SELECT_INTO already, but make an explicit pattern so
-      # the error message is accurate.
+      # Checked before SELECT_INTO, which also matches, so the refusal names the disk write.
       BLOCKED_OUTPUT = /\bINTO\s+(OUTFILE|DUMPFILE)\b/i
 
       # Defense against the column-aliasing redaction bypass:
@@ -207,7 +205,7 @@ module RailsAiContext
       rescue ActiveRecord::ConnectionNotEstablished, ActiveRecord::NoDatabaseError => e
         text_response("Database unavailable: #{clean_error_message(e.message)}\n\n**Troubleshooting:**\n- Check `config/database.yml` for correct host/port/credentials\n- Try `RAILS_ENV=test` if the development DB is remote\n- Run `bin/rails db:create` if the database doesn't exist yet")
       rescue ActiveRecord::StatementInvalid => e
-        if e.message.match?(/timeout|statement_timeout|MAX_EXECUTION_TIME/i)
+        if e.message.match?(/timeout|statement_timeout|MAX_EXECUTION_TIME|maximum statement execution time exceeded/i)
           text_response("Query exceeded #{config.query_timeout} second timeout. Simplify the query or add indexes.")
         # Only a missing DATABASE. Postgres words a missing column and a
         # missing table the same way ("... does not exist"), and matching
@@ -265,8 +263,8 @@ module RailsAiContext
         return [ false, "Blocked: multiple statements (no semicolons)" ] if cleaned.match?(MULTI_STATEMENT)
         return [ false, "Blocked: FOR UPDATE/SHARE clause" ] if cleaned.match?(BLOCKED_CLAUSES)
         return [ false, "Blocked: sensitive SHOW command" ] if cleaned.match?(BLOCKED_SHOWS)
-        return [ false, "Blocked: SELECT INTO creates a table" ] if cleaned.match?(SELECT_INTO)
         return [ false, "Blocked: SELECT INTO OUTFILE / DUMPFILE writes to disk" ] if cleaned.match?(BLOCKED_OUTPUT)
+        return [ false, "Blocked: SELECT INTO creates a table" ] if cleaned.match?(SELECT_INTO)
 
         # Block database functions that give a filesystem/network primitive.
         # pg_read_file, lo_import, dblink, LOAD_FILE, load_extension, etc.

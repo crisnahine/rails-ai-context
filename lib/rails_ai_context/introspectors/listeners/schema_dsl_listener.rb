@@ -6,15 +6,51 @@ module RailsAiContext
       # Detects schema.rb DSL patterns via Prism AST:
       # create_table, t.string, t.index, add_foreign_key, create_enum
       class SchemaDslListener < BaseListener
+        # Whether a `t` receiver is a table: `Tag.find_each { |t| t.update! }` binds
+        # `t` to a record. A receiverless block is a table helper's, a def's `t` a helper's argument.
+        module TableBlock
+          TABLE_BLOCKS = %i[create_table change_table create_join_table].to_set.freeze
+
+          private
+
+          # The dispatcher enters a block's call before anything inside it.
+          def note_block(node)
+            params = node.block.is_a?(Prism::BlockNode) && node.block.parameters.is_a?(Prism::BlockParametersNode) &&
+                     node.block.parameters.parameters
+            return unless params
+
+            names = params.requireds.filter_map { |param| param.name if param.respond_to?(:name) }
+            table = node.receiver.nil? || TABLE_BLOCKS.include?(node.name)
+            (@blocks ||= []) << [ node.block.location, names, table ]
+          end
+
+          def table_param?(receiver)
+            offset = receiver.location.start_offset
+            _, _, table = Array(@blocks).reverse_each.find do |location, names, _|
+              names.include?(receiver.name) && offset.between?(location.start_offset, location.end_offset)
+            end
+            table.nil? || table
+          end
+        end
+
+        include TableBlock
+
+        # Each adapter's ColumnMethods (Rails 7.0 to 8.1), plus neighbor's vector types and PostGIS's.
         COLUMN_TYPES = %w[
-          string integer text boolean datetime date decimal float binary
-          references belongs_to jsonb json uuid bigint timestamp timestamptz time
-          inet cidr macaddr hstore ltree numrange tsrange daterange
-          bit bit_varying money oid xml point line lseg box path
-          polygon circle interval serial tsvector virtual primary_key
+          bigint binary boolean date datetime decimal float integer json string text time timestamp virtual
+          primary_key references belongs_to
+          bigserial bit bit_varying cidr citext daterange hstore inet interval int4range int8range jsonb ltree
+          macaddr money numrange oid point line lseg box path polygon circle serial tsrange tstzrange tsvector
+          uuid xml timestamptz enum
+          blob tinyblob mediumblob longblob tinytext mediumtext longtext
+          unsigned_integer unsigned_bigint unsigned_float unsigned_decimal
+          vector halfvec sparsevec cube
+          spatial geography geometry geometry_collection line_string multi_line_string multi_point
+          multi_polygon st_point st_polygon
         ].to_set.freeze
 
         def on_call_node_enter(node)
+          note_block(node)
           if node.receiver.nil?
             extract_top_level_call(node)
           elsif column_call?(node)
@@ -23,10 +59,27 @@ module RailsAiContext
             extract_index(node)
           elsif check_constraint_call?(node)
             extract_check_constraint(node)
+          elsif receiver_is_t?(node.receiver) && !read_elsewhere?(node.name)
+            unread_call(node)
           end
         end
 
+        # Block methods the replay reads, or that never add an index.
+        OTHER_TABLE_METHODS = %i[
+          column foreign_key remove_foreign_key remove_check_constraint rename_index
+          column_exists? index_exists? foreign_key_exists? check_constraint_exists?
+        ].to_set.freeze
+
         private
+
+        def read_elsewhere?(name)
+          OTHER_TABLE_METHODS.include?(name) || MigrationReplayListener::TABLE_OPS.key?(name)
+        end
+
+        # A block call no reader interprets may add an index or a column.
+        def unread_call(node)
+          @results << { type: :unread_call, name: node.name.to_s, location: node.location.start_line }
+        end
 
         def extract_top_level_call(node)
           case node.name
@@ -161,33 +214,36 @@ module RailsAiContext
           when Prism::CallNode
             receiver.name == :t && receiver.receiver.nil?
           when Prism::LocalVariableReadNode
-            receiver.name == :t
+            receiver.name == :t && table_param?(receiver)
           else
             false
           end
         end
 
+        # `t.references :a, :b` defines each name; primary_key's second argument is its type.
         def extract_column(node)
-          args = node.arguments&.arguments || []
-          name_arg = args.first
-          return unless name_arg.is_a?(Prism::StringNode) || name_arg.is_a?(Prism::SymbolNode)
+          # `t.string "name", { limit: 50 }` passes its options braced.
+          braced, positional = (node.arguments&.arguments || []).reject { |arg| arg.is_a?(Prism::KeywordHashNode) }
+                                                                 .partition { |arg| arg.is_a?(Prism::HashNode) }
+          positional = positional.first(1) if node.name == :primary_key
+          names = positional.map { |arg| literal_string(arg) }
+          return unread_call(node) if names.empty? || names.any?(&:nil?)
 
-          col_name = literal_string(name_arg)
-
-          options = extract_keyword_options(node)
-
-          @results << {
-            type:        :column,
-            table:       nil,
-            column_type: node.name.to_s,
-            name:        col_name,
-            options:     options,
-            # A proc default (`default: -> { "now()" }`) has no literal value,
-            # so keep its source for callers that report defaults verbatim.
-            default_source: default_source(node),
-            default_proc: proc_default?(node),
-            location:    node.location.start_line
-          }
+          options = braced.map { |hash| hash_node_to_hash(hash) }.reduce(extract_keyword_options(node), :merge)
+          names.each do |col_name|
+            @results << {
+              type:        :column,
+              table:       nil,
+              column_type: node.name.to_s,
+              name:        col_name,
+              options:     options,
+              # A proc default (`default: -> { "now()" }`) has no literal value,
+              # so keep its source for callers that report defaults verbatim.
+              default_source: default_source(node),
+              default_proc: proc_default?(node),
+              location:    node.location.start_line
+            }
+          end
         end
 
         def extract_index(node)

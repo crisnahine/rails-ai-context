@@ -28,7 +28,7 @@ module RailsAiContext
 
       # @return [Hash] async workers, mailers, and channels
       def call
-        jobs = merge_unplaced(extract_jobs, extract_jobs_from_source)
+        jobs = merge_with_source(extract_jobs, extract_jobs_from_source)
 
         {
           jobs: jobs,
@@ -77,9 +77,13 @@ module RailsAiContext
           end
 
           queue = job.queue_name
-          # Reflection holds the Proc and nothing about it; the source says
-          # what it computes.
-          queue = (job_candidates.key?(job.name) && inherited_queue(job.name)) || COMPUTED_QUEUE if queue.is_a?(Proc)
+          # ActiveJob defaults queue_name to a lambda; any other Proc is a
+          # queue_as block, and only the source says what it computes.
+          if queue.equal?(ActiveJob::Base.queue_name)
+            queue = job.queue_name_from_part(nil)
+          elsif queue.is_a?(Proc)
+            queue = (job_candidates.key?(job.name) && inherited_queue(job.name)) || COMPUTED_QUEUE
+          end
 
           {
             name: job.name,
@@ -196,14 +200,16 @@ module RailsAiContext
         }.uniq
       end
 
-      # Reflection has no Resque job or PORO to walk: neither is an ActiveJob
-      # descendant. A name reflection did answer wins.
-      def merge_unplaced(reflected, from_source)
+      # Reflection answers the queue; the source answers what reflection cannot
+      # see: retries and signatures, and the Resque jobs, POROs and jobs in roots
+      # Zeitwerk never loads. On a name both answer, reflection wins.
+      def merge_with_source(reflected, from_source)
         return from_source if reflected.empty?
 
-        known = reflected.map { |job| job[:name] }
-        unplaced = from_source.select { |job| job[:unknown_base] && !known.include?(job[:name]) }
-        (reflected + unplaced).sort_by { |job| job[:name] }
+        sourced = from_source.index_by { |job| job[:name] }
+        merged = reflected.map { |job| (sourced.delete(job[:name]) || {}).except(:unknown_base).merge(job) }
+        bases = reflected_bases.map { |base| base[:name] }
+        (merged + sourced.values.reject { |job| bases.include?(job[:name]) }).sort_by { |job| job[:name] }
       end
 
       # `descendants` is every ActiveJob subclass in the process, and the name
@@ -491,6 +497,7 @@ module RailsAiContext
         # loaded until first delivery. Without this, .descendants is empty
         # and mailers are reported as absent.
         EagerLoad.dir(app.root, kind: "app/mailers")
+        load_mailers_outside_mailer_dirs
 
         ActionMailer::Base.descendants.filter_map do |mailer|
           # `descendants` is every mailer in the process, and a gem's is not
@@ -521,6 +528,13 @@ module RailsAiContext
         end.sort_by { |m| m[:name] }
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "extract_mailers")
+      end
+
+      # A mailer in app/services or app/models loads only when something names it.
+      def load_mailers_outside_mailer_dirs
+        return if app.config.eager_load
+
+        EagerLoad.files(mailer_parent_files(SourceScan.paths(app.root, kind: "app/mailers").map(&:file).to_set))
       end
 
       # The methods this mailer registers as action callbacks. A block filter

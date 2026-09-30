@@ -45,6 +45,23 @@ RSpec.describe RailsAiContext::BootManager do
     expect(result.failure_summary).to eq("RuntimeError: missing REDIS_URL")
   end
 
+  it "counts a long missing-gem list and names only the first few" do
+    gems = (1..150).map { |i| "gem#{i}-1.0.0" }
+    message = "Could not find #{(gems + gems.first(2)).join(', ')} in locally installed gems"
+    result = described_class::Result.new(status: :failed, error: RuntimeError.new(message))
+
+    expect(result.failure_summary)
+      .to eq("RuntimeError: Could not find 150 gems (first few: gem1-1.0.0, gem2-1.0.0, gem3-1.0.0) in locally installed gems")
+    expect(result.failure_summary(full: true)).to include("gem150-1.0.0")
+  end
+
+  it "keeps a short missing-gem list whole" do
+    message = "Could not find rails-7.1.0, puma-6.0.0 in locally installed gems"
+    result = described_class::Result.new(status: :failed, error: RuntimeError.new(message))
+
+    expect(result.failure_summary).to eq("RuntimeError: #{message}")
+  end
+
   # Bundler::GemRequireError names the gem that failed to load and nothing
   # about why; the reason only lives in `cause`.
   it "names the cause of a wrapped boot failure" do

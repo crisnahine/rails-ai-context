@@ -116,9 +116,9 @@ module RailsAiContext
 
         def prefixed_path(path)
           prefixes = @scopes.filter_map { |scope| scope[:prefix] }
-          return nil if prefixes.include?(:unknown)
-          return path if prefixes.empty? || path.nil?
+          return nil if path.nil? || prefixes.include?(:unknown)
 
+          # Rails' normalize_path gives every path its leading slash, prefixed or not.
           joined = "#{prefixes.join.chomp("/")}/#{path.to_s.delete_prefix("/")}"
           normalize_route_path(joined == "/" ? joined : joined.chomp("/"))
         end
@@ -167,8 +167,7 @@ module RailsAiContext
 
               key = extract_key(assoc.key)
               if key == :at
-                val = extract_value(assoc.value)
-                return val.is_a?(String) ? val : nil
+                return literal_path(assoc.value)
               end
             end
           end
@@ -181,13 +180,21 @@ module RailsAiContext
               next unless assoc.is_a?(Prism::AssocNode)
 
               if app_name(assoc.key)
-                val = extract_value(assoc.value)
-                return val.is_a?(String) ? val : nil
+                return literal_path(assoc.value)
               end
             end
           end
 
           nil
+        end
+
+        # Only a string the source spells out: a constant or a call is a path
+        # nothing here can read, and an expression prints no path at all.
+        def literal_path(node)
+          return nil unless node.is_a?(Prism::StringNode) || node.is_a?(Prism::InterpolatedStringNode)
+
+          value = extract_value(node)
+          value == RailsAiContext::Confidence::INFERRED ? nil : value
         end
       end
     end

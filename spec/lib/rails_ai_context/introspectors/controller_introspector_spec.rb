@@ -564,9 +564,153 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(records.map { |f| [ f[:name], f[:skipped] ] })
         .to eq([ [ "audit", nil ], [ "authenticate!", true ], [ "authenticate!", nil ] ])
     end
+
+    it "marks only the kind the body declares, not every entry of that name" do
+      ctrl = Class.new(ActionController::Base) { after_action :audit_trail }
+      child = Class.new(ctrl) { before_action :audit_trail }
+      ctrl.define_singleton_method(:name) { "BaseController" }
+      child.define_singleton_method(:name) { "CouponsController" }
+      source = <<~RUBY
+        class CouponsController < BaseController
+          before_action :audit_trail
+        end
+      RUBY
+
+      records = introspector.send(:extract_filters, child, source)
+
+      expect(records.map { |f| [ f[:kind], f[:name], f[:declared] ] })
+        .to contain_exactly([ "after", "audit_trail", nil ], [ "before", "audit_trail", true ])
+    end
+
+    it "credits a filter a concern the body includes to that concern" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/controllers/concerns"))
+        File.write(File.join(dir, "app/controllers/concerns/help_tracked.rb"), <<~RUBY)
+          module HelpTracked
+            extend ActiveSupport::Concern
+            included { before_action :track_help_visit }
+          end
+        RUBY
+        ctrl = Class.new(ActionController::Base) { before_action :track_help_visit }
+        ctrl.define_singleton_method(:name) { "HelpPagesController" }
+        source = <<~RUBY
+          class HelpPagesController < ApplicationController
+            include HelpTracked
+          end
+        RUBY
+
+        in_dir = described_class.new(double("app", root: Pathname.new(dir)))
+        record = in_dir.send(:extract_filters, ctrl, source).find { |f| f[:name] == "track_help_visit" }
+
+        expect(record).to include(declared: true, from_concern: "HelpTracked")
+      end
+    end
+
+    def with_concern(body)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/controllers/concerns"))
+        File.write(File.join(dir, "app/controllers/concerns/auth.rb"), <<~RUBY)
+          module Auth
+            extend ActiveSupport::Concern
+            included { #{body} }
+          end
+        RUBY
+        yield described_class.new(double("app", root: Pathname.new(dir)))
+      end
+    end
+
+    it "credits a filter the body re-declares after a concern's to the body" do
+      with_concern("before_action :authenticate") do |in_dir|
+        ctrl = Class.new(ActionController::Base) { before_action :authenticate, only: :show }
+        ctrl.define_singleton_method(:name) { "PostsController" }
+        source = <<~RUBY
+          class PostsController < ApplicationController
+            include Auth
+            before_action :authenticate, only: :show
+          end
+        RUBY
+
+        record = in_dir.send(:extract_filters, ctrl, source).find { |f| f[:name] == "authenticate" }
+
+        expect(record).to include(declared: true, only: [ "show" ])
+        expect(record).not_to have_key(:from_concern)
+      end
+    end
+
+    it "carries a concern's only: onto the booted record" do
+      with_concern("before_action :authenticate, only: :index") do |in_dir|
+        ctrl = Class.new(ActionController::Base) { before_action :authenticate, only: :index }
+        ctrl.define_singleton_method(:name) { "PostsController" }
+        source = <<~RUBY
+          class PostsController < ApplicationController
+            include Auth
+          end
+        RUBY
+
+        record = in_dir.send(:extract_filters, ctrl, source).find { |f| f[:name] == "authenticate" }
+
+        expect(record).to include(only: [ "index" ], from_concern: "Auth")
+      end
+    end
+
+    it "does not credit a concern the parent already includes to the child" do
+      with_concern("before_action :authenticate") do |in_dir|
+        stub_const("Auth", Module.new do
+          extend ActiveSupport::Concern
+          included { before_action :authenticate }
+        end)
+        parent = Class.new(ActionController::Base) { include Auth }
+        ctrl = Class.new(parent) { include Auth }
+        ctrl.define_singleton_method(:name) { "PostsController" }
+        source = <<~RUBY
+          class PostsController < ApplicationController
+            include Auth
+          end
+        RUBY
+
+        record = in_dir.send(:extract_filters, ctrl, source).find { |f| f[:name] == "authenticate" }
+
+        expect(record).not_to have_key(:declared)
+        expect(record).not_to have_key(:from_concern)
+      end
+    end
+
+    it "credits a re-included plain module's filter to the child, whose include runs its hook again" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/controllers/concerns"))
+        File.write(File.join(dir, "app/controllers/concerns/auth.rb"),
+                   "module Auth\n  def self.included(base)\n    base.class_eval do\n      before_action :authenticate\n    end\n  end\nend\n")
+        stub_const("Auth", Module.new do
+          def self.included(base) = base.before_action(:authenticate)
+        end)
+        parent = Class.new(ActionController::Base) { include Auth }
+        ctrl = Class.new(parent) { include Auth }
+        ctrl.define_singleton_method(:name) { "PostsController" }
+        source = "class PostsController < ApplicationController\n  include Auth\nend\n"
+
+        record = described_class.new(double("app", root: Pathname.new(dir))).send(:extract_filters, ctrl, source)
+                                .find { |f| f[:name] == "authenticate" }
+
+        expect(record).to include(declared: true, from_concern: "Auth")
+      end
+    end
   end
 
   describe "#static_call" do
+    it "names a controller that failed to load by its app-relative path" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        File.write(File.join(dir, "app", "controllers", "widgets_controller.rb"), "class WidgetsController; end\n")
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        allow(introspector).to receive(:extract_details_from_source)
+          .and_raise(RuntimeError, "#{dir}/app/controllers/widgets_controller.rb:1: boom")
+
+        error = introspector.static_call[:controllers]["WidgetsController"][:error]
+
+        expect(error).to eq("app/controllers/widgets_controller.rb:1: boom")
+      end
+    end
+
     it "extracts controllers purely from source files" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers", "api"))

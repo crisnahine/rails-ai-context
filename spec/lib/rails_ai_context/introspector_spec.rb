@@ -118,6 +118,20 @@ RSpec.describe RailsAiContext::Introspector do
       )
     end
 
+    it "names a file in an error message by its app-relative path" do
+      root = Rails.root.to_s
+      allow_any_instance_of(RailsAiContext::Introspectors::GemIntrospector)
+        .to receive(:call).and_raise(RuntimeError, "cannot load #{root}/lib/broken.rb:3")
+      allow_any_instance_of(RailsAiContext::Introspectors::ComponentIntrospector)
+        .to receive(:call).and_return(components: [ { file: "app/components/a.rb", error: "undefined method in #{root}/app/components/a.rb:9" } ])
+
+      result = introspector.call
+
+      expect(result[:gems]).to eq(error: "cannot load lib/broken.rb:3")
+      expect(result[:_warnings]).to include(introspector: "gems", error: "cannot load lib/broken.rb:3")
+      expect(result.dig(:components, :components, 0, :error)).to eq("undefined method in app/components/a.rb:9")
+    end
+
     it "only includes warnings for introspectors that actually failed" do
       result = introspector.call
 
@@ -365,6 +379,12 @@ RSpec.describe RailsAiContext::Introspector do
       context = { schema: { adapter: "PostgreSQL" } }
       described_class.new(static_app).send(:resolve_schema_adapter, context)
       expect(context[:schema]).to eq(adapter: "PostgreSQL")
+    end
+
+    it "names an observed adapter by its label and keeps the observation" do
+      context = { schema: { adapter: "PostGIS" } }
+      described_class.new(static_app).send(:resolve_schema_adapter, context)
+      expect(context[:schema]).to eq(adapter: "PostgreSQL", adapter_source: "PostGIS")
     end
 
     it "leaves a failed schema section alone" do

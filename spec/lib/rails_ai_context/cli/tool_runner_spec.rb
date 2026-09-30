@@ -416,6 +416,32 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       expect(runner.error).to eq(true)
     end
 
+    it "answers a bad value on a required enum as invalid, naming the allowed values" do
+      runner = described_class.new("migration_advisor", [ "--action", "bogus", "--table", "posts" ])
+      output = runner.run
+      expect(output).to include("`bogus` is not a valid `action`. Valid: add_column")
+      expect(output).not_to include("is required")
+      expect(runner.error).to eq(true)
+    end
+
+    it "does not call a custom tool whose required enum got a bad value" do
+      custom = Class.new(MCP::Tool) do
+        tool_name "rails_probe_mode"
+        description "probe"
+        input_schema(properties: { mode: { type: "string", enum: %w[fast slow] } }, required: [ "mode" ])
+
+        def self.call(mode:)
+          MCP::Tool::Response.new([ { type: "text", text: "mode=#{mode.inspect}" } ])
+        end
+      end
+      allow(RailsAiContext::Server).to receive(:resolve_custom_tools).and_return([ custom ])
+      runner = described_class.new("rails_probe_mode", [ "--mode", "bogus" ])
+
+      output = runner.run
+      expect(output).to eq("**Error:** `bogus` is not a valid `mode`. Valid: fast, slow")
+      expect(runner.error).to eq(true)
+    end
+
     it "leaves a call that supplied its required params successful" do
       runner = described_class.new("search_code", [ "--pattern", "def" ])
       runner.run

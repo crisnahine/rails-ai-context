@@ -188,9 +188,11 @@ module RailsAiContext
         exercising = type == :controller ? exercising_tests(snake, candidates) : []
 
         contained = []
+        too_large = nil
         candidates.each do |rel|
           content, resolution = RailsAiContext::SafePath.read(rel, under: rails_app.root.to_s, max_size: max_test_file_size)
           contained << rel unless ESCAPING_REFUSALS.include?(resolution.refusal)
+          too_large ||= resolution if resolution.refusal == :too_large
           next unless content
 
           # Summary/standard: return just test names (saves 2000+ tokens vs full source)
@@ -201,6 +203,12 @@ module RailsAiContext
             "# #{rel}\n\n```ruby\n#{content}\n```"
           end
           return text_response(answer + exercising_section(exercising, "## Also exercised by"))
+        end
+
+        if too_large
+          return text_response("# #{too_large.relative}\n\n_The test file exists but was not read: #{human_size(File.size(too_large.realpath))} is over " \
+                               "`max_test_file_size` (#{human_size(max_test_file_size)})._" +
+                               exercising_section(exercising, "## Also exercised by"))
         end
 
         if exercising.any?

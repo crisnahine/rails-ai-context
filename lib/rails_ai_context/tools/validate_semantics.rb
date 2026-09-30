@@ -39,6 +39,8 @@ module RailsAiContext
           @singleton_method_names_by_scope = Hash.new { |hash, key| hash[key] = Set.new }
           @scope_stack = [ TOP_LEVEL_SCOPE ]
           @method_context_stack = []
+          @uncertain_blocks = 0
+          @hook_params = []
         end
 
         def local_route_method_defined?(helper, scope, method_kind)
@@ -64,18 +66,24 @@ module RailsAiContext
         def visit_def_node(node)
           method_kind = node.receiver ? :singleton : :instance
           method_names_for(method_kind, current_scope) << node.name.to_s
+          hook = Introspectors::Listeners::WithOptionsScope.hook_param(node)
+          @hook_params << hook if hook
           with_method_context(method_kind) { super }
+        ensure
+          @hook_params.pop if hook
         end
 
         def visit_call_node(node)
           case node.name
           when :render     then extract_render(node)
-          when :validates  then extract_validates(node)
+          when :validates  then extract_validates(node) if @uncertain_blocks.zero?
           when :permit     then extract_permit(node)
           # An encrypted attribute (Lockbox's has_encrypted keeps `<name>_ciphertext`)
           # and a store key are attributes with no column of their own name.
-          when :attribute, :attr_accessor, :attr_writer, :has_encrypted, :encrypts, :attr_encrypted
+          when :attribute, :attr_accessor, :attr_reader, :attr_writer, :has_encrypted, :encrypts, :attr_encrypted
             extract_virtual_attributes(node)
+          # `alias_attribute :name, :lastname` reads the second name's column.
+          when :alias_attribute then extract_virtual_attributes(node, only: 1)
           when :store_accessor then extract_virtual_attributes(node, skip: 1)
           when :store then extract_store_accessors(node)
           else
@@ -86,11 +94,15 @@ module RailsAiContext
                 scope: current_scope,
                 method_kind: current_method_kind
               }
-            elsif CALLBACK_NAMES.include?(node.name) && node.receiver.nil?
+            elsif CALLBACK_NAMES.include?(node.name) && node.receiver.nil? && @uncertain_blocks.zero?
               extract_callback(node)
             end
           end
+          uncertain = Introspectors::Listeners::WithOptionsScope.uncertain_block?(node) { |name| @hook_params.include?(name) }
+          @uncertain_blocks += 1 if uncertain
           super
+        ensure
+          @uncertain_blocks -= 1 if uncertain
         end
 
         private
@@ -167,10 +179,11 @@ module RailsAiContext
         # `attribute :foo` and `attr_accessor :foo` are real readers with no
         # column behind them, and a migration for one is a column nobody
         # wants.
-        def extract_virtual_attributes(node, skip: 0)
+        def extract_virtual_attributes(node, skip: 0, only: nil)
           return unless node.receiver.nil?
 
-          (node.arguments&.arguments || []).drop(skip).each do |arg|
+          args = (node.arguments&.arguments || []).drop(skip)
+          (only ? args.first(only) : args).each do |arg|
             @virtual_attributes << arg.unescaped if arg.is_a?(Prism::SymbolNode)
           end
         end
@@ -488,7 +501,7 @@ module RailsAiContext
         columns = table_columns.dup
         model_data[:associations]&.each do |a|
           columns << a[:name] if a[:name]
-          columns << a[:foreign_key] if a[:foreign_key]
+          columns.merge(Array(a[:foreign_key]))
         end
 
         { columns: columns, table_columns: table_columns, table: table_name, model: model_name, model_data: model_data }
@@ -518,7 +531,7 @@ module RailsAiContext
 
           valid = Set.new
           table_data[:columns]&.each { |c| valid << c[:name] }
-          model_data[:associations]&.each { |a| valid << a[:name]; valid << a[:foreign_key] if a[:foreign_key] }
+          model_data[:associations]&.each { |a| valid << a[:name]; valid.merge(Array(a[:foreign_key])) }
           valid.merge(%w[id _destroy created_at updated_at])
 
           # When JSONB columns exist, plain-word params may be keys inside JSONB columns.
@@ -644,6 +657,7 @@ module RailsAiContext
 
         declared = Introspectors::SourceIntrospector
           .walk_source(content.to_s, { associations: Introspectors::Listeners::AssociationsListener })[:associations]
+          .reject { |a| a[:scope_uncertain] }
           .map { |a| a[:name].to_s }.to_set
 
         (model_data[:associations] || []).each do |assoc|
@@ -671,19 +685,33 @@ module RailsAiContext
 
         table_name = model_data[:table_name]
         table_data = schema[:tables] && schema[:tables][table_name]
-        return warnings unless table_data
+        # A static table whose block called what no reader interprets has columns and indexes unknown.
+        return warnings if table_data.nil? || table_data[:unread_calls]
 
         # Only flag columns that are ACTUAL foreign keys (declared via add_foreign_key or belongs_to)
         declared_fk_columns = (table_data[:foreign_keys] || []).map { |fk| fk[:column] }
-        assoc_fk_columns = (model_data[:associations] || [])
-          .select { |a| a[:type] == "belongs_to" }
-          .map { |a| a[:foreign_key] }
-          .compact
-        fk_columns = (declared_fk_columns + assoc_fk_columns).uniq
+        belongs_to = (model_data[:associations] || []).select { |a| a[:type] == "belongs_to" && column_key?(a) }
+        table_columns = Array(table_data[:columns]).map { |c| c[:name].to_s }
+        # A key the table lacks is a broken association, not an unindexed column.
+        absent, belongs_to = belongs_to.partition do |a|
+          table_columns.any? && !(Array(a[:foreign_key]).map(&:to_s) - table_columns).empty?
+        end
+        absent.each do |a|
+          warnings << "belongs_to :#{a[:name]} - column \"#{Introspectors::SchemaConventions.key_text(a[:foreign_key])}\" not found in #{table_name} table. " \
+                      "Fix: pass `foreign_key:` naming the real column, or add the column"
+        end
+        fk_columns = (declared_fk_columns + belongs_to.map { |a| a[:foreign_key] }).uniq
 
         indexed = Introspectors::SchemaConventions.lookup_indexed_columns(table_data)
+        polymorphic_pairs = (model_data[:associations] || [])
+          .select { |a| a[:type] == "belongs_to" && a[:polymorphic] && a[:foreign_key] }
+          .to_h { |a| [ a[:foreign_key].to_s, [ (a[:foreign_type] || a.dig(:options, :foreign_type) || "#{a[:name]}_type").to_s, a[:foreign_key].to_s ] ] }
 
         fk_columns.each do |col|
+          # `t.references polymorphic: true` indexes [type, id], led by the type.
+          pair = polymorphic_pairs[col.to_s]
+          next if pair && Introspectors::SchemaConventions.leading_index?(table_data[:indexes], pair)
+
           if col.is_a?(Array)
             primary_key = { columns: Array(table_data[:primary_key] || table_data.dig(:options, :primary_key)) }
             next if Introspectors::SchemaConventions.leading_index?(Array(table_data[:indexes]) + [ primary_key ], col)
@@ -695,6 +723,14 @@ module RailsAiContext
           end
         end
         warnings
+      end
+
+      # A key the source names as columns, on a declaration the class itself makes.
+      private_class_method def self.column_key?(assoc)
+        return false if assoc[:computed_foreign_key] || assoc[:scope_uncertain]
+
+        columns = Array(assoc[:foreign_key])
+        columns.any? && columns.all? { |c| c.to_s.match?(/\A\w+\z/) }
       end
 
       # ── CHECK 9: Stimulus controller existence ───────────────────────

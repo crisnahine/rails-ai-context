@@ -51,6 +51,23 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
       expect(text).to include("Path not allowed")
     end
 
+    [ { line: 3 }, {} ].each do |extra|
+      it "refuses /etc/passwd and never suggests it#{' without a line' if extra.empty?}" do
+        text = described_class.call(error: "NoMethodError: undefined method 'foo' for nil",
+          file: "/etc/passwd", **extra).content.first[:text]
+
+        expect(text).to include("Path not allowed: /etc/passwd")
+        expect(text).not_to include('file:"/etc/passwd"')
+      end
+    end
+
+    it "words a sensitive file's refusal as every path-taking tool does" do
+      text = described_class.call(error: "NoMethodError: undefined method 'foo' for nil",
+        file: "config/master.key").content.first[:text]
+
+      expect(text).to include("Path not allowed: config/master.key (sensitive file)")
+    end
+
     # The section promises the method's definition; a trace that only found
     # call sites is not that, and the fact comes from the answer's mark.
     it "renders no method trace when the trace found no definition" do

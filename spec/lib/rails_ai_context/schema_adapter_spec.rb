@@ -172,6 +172,11 @@ RSpec.describe RailsAiContext::SchemaAdapter do
         expect(described_class.label(configured)).to eq("PostgreSQL")
       end
 
+      # The booted tier reads the connection, which says PostGIS; the two tiers must agree.
+      it "reads a connection that reports PostGIS as PostgreSQL" do
+        expect(described_class.label({ schema: { adapter: "PostGIS" } })).to eq("PostgreSQL")
+      end
+
       it "leaves column types that point both ways to the gem list" do
         tables = { "a" => { columns: [ { name: "x", type: "jsonb" }, { name: "y", type: "mediumtext" } ] } }
         context = { schema: { adapter: "static_parse", tables: tables }, gems: two_gems }

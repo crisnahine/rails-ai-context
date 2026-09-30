@@ -567,6 +567,35 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       end
     end
 
+    # A bare `assert_not valid?` on a valid fixture can never pass, so every
+    # kind either makes the record invalid first or says it cannot.
+    it "makes the record invalid before asserting each validation kind in a minitest" do
+      validation = ->(kind, attr, options = {}) { { kind: kind, attributes: [ attr ], options: options } }
+      allow(described_class).to receive(:cached_context).and_return({
+        tests: { framework: "minitest", fixture_names: { "volumes" => [ "one" ] }, factory_names: {} },
+        models: { "Volume" => { table_name: "volumes", validations: [
+          validation.call("absence", "legacy_code"),
+          validation.call("confirmation", "password"),
+          validation.call("exclusion", "slug", { in: %w[admin root] }),
+          validation.call("exclusion", "code", { in: "RESERVED" }),
+          validation.call("acceptance", "terms"),
+          validation.call("comparison", "ends_on", { greater_than: :starts_on })
+        ] } }
+      })
+
+      text = described_class.call(model: "Volume").content.first[:text]
+      body = ->(name) { text[/test "validates #{name}" do\n(.*?)\n  end/m, 1].to_s }
+
+      expect(body.call("absence of legacy_code")).to include('@volume.legacy_code = "present"')
+      expect(body.call("confirmation of password")).to include('@volume.password = "secret"')
+        .and include('@volume.password_confirmation = "different"')
+      expect(body.call("exclusion of slug")).to include('@volume.slug = "admin"')
+      expect(body.call("exclusion of code")).to include("skip")
+      expect(body.call("acceptance of terms")).to include('@volume.terms = "0"')
+      expect(body.call("comparison of ends_on")).to include("skip")
+      expect(body.call("comparison of ends_on")).not_to include("assert_not")
+    end
+
     # With no named route the URL is spelled out, and an optional group left
     # in it is a literal parenthesis and an undefined variable.
     it "spells an unnamed route's URL without its optional parts" do

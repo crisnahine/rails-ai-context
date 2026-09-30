@@ -15,6 +15,20 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MountListener do
     expect(results.first).to include(engine: "Sidekiq::Web", path: "/sidekiq")
   end
 
+  it "reads no path from a mount at an expression" do
+    [ 'mount MetricsRack => ENV.fetch("QA_METRICS_PATH", "/qa_metrics")',
+      "mount MetricsRack, at: ENV.fetch(\"P\")",
+      "mount MetricsRack, at: METRICS_PATH",
+      "mount MetricsRack => METRICS_PATH",
+      'mount MetricsRack, at: "/m#{n}"' ].each do |code|
+      expect(parse_and_dispatch(code).first).to include(engine: "MetricsRack", path: nil), code
+    end
+  end
+
+  it "writes a path given without its leading slash the way Rails does" do
+    expect(parse_and_dispatch("mount PgHero::Engine, at: 'pghero'").first).to include(path: "/pghero")
+  end
+
   it "detects mount with simple constant" do
     results = parse_and_dispatch('mount GrapeApi, at: "/api"')
     expect(results.size).to eq(1)

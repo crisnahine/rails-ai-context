@@ -439,6 +439,34 @@ RSpec.describe RailsAiContext::Tools::Validate do
     end
   end
 
+  describe "has_many inside a block the model may not run" do
+    it "leaves the association out of the :dependent check" do
+      previous_root = RailsAiContext.configuration.app_root
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "group.rb"), <<~RUBY)
+          class Group < ApplicationRecord
+            has_details_table do
+              has_many :members
+            end
+
+            has_many :invites
+          end
+        RUBY
+        RailsAiContext.configuration.app_root = dir
+
+        text = described_class.call(files: [ "app/models/group.rb" ], level: "rails").content.first[:text]
+
+        expect(text).to include("has_many :invites - missing :dependent option")
+        expect(text).not_to include("has_many :members - missing :dependent option")
+      end
+    ensure
+      RailsAiContext.configuration.app_root = previous_root
+    end
+  end
+
   # paper_trail adds `has_many :versions` through `has_paper_trail`; reflection
   # lists it, and the fix the warning asked for belongs in no line the app wrote.
   describe "a has_many a gem adds to the model" do

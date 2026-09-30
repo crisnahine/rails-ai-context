@@ -133,4 +133,18 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ValidationsListener do
       [ { kind: "validates", attributes: [ "title" ], options_source: "rules.merge(if: :published?)" } ]
     )
   end
+
+  # state_machines evaluates a state's block on the model, so reflection lists the validator.
+  it "reads a validation inside a state_machine state block, unmarked" do
+    results = parse_and_dispatch(<<~RUBY)
+      state_machine :status, initial: :new do
+        state :done do
+          validates :finished_at, presence: true
+        end
+      end
+    RUBY
+
+    expect(results.map { |r| r[:attributes] }).to eq([ [ "finished_at" ] ])
+    expect(results.first).not_to have_key(:scope_uncertain)
+  end
 end

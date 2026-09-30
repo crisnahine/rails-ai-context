@@ -47,6 +47,41 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       expect(text).to include("reports/ai_data/_header.text.erb")
     end
 
+    it "finds a render(partial:) call written with parentheses, on one line or over several" do
+      File.write(File.join(@root, "app/views/reports/ai_data/split.html.erb"), <<~ERB)
+        <p>x</p>
+        <%= render(
+              partial: "reports/ai_data/header",
+              locals: { title: @title }
+            ) %>
+        <%= render(partial: "reports/ai_data/header", locals: { order: @order }) %>
+      ERB
+
+      text = described_class.call(partial: "reports/ai_data/header", detail: "full").content.first[:text]
+
+      expect(text).to include("`app/views/reports/ai_data/split.html.erb:2` - locals: title")
+      expect(text).to include("`app/views/reports/ai_data/split.html.erb:6` - locals: order")
+    end
+
+    it "ends a snippet at the call's own last line" do
+      File.write(File.join(@root, "app/views/reports/ai_data/badge.html.haml"),
+                 "%div\n  = render \"reports/ai_data/header\", title: 1\n  %p next line\n")
+
+      text = described_class.call(partial: "reports/ai_data/header", detail: "full").content.first[:text]
+
+      expect(text).to include("app/views/reports/ai_data/badge.html.haml:2")
+      expect(text).not_to include("next line")
+    end
+
+    it "counts a render nested in another render's arguments as one site" do
+      File.write(File.join(@root, "app/views/reports/ai_data/nested.html.erb"),
+                 "<%= render \"reports/ai_data/header\", a: render(\"reports/ai_data/header\") %>\n")
+
+      text = described_class.call(partial: "reports/ai_data/header", detail: "full").content.first[:text]
+
+      expect(text.scan("nested.html.erb:1").size).to eq(1)
+    end
+
     it "says how many calls the list left out" do
       text = described_class.call(partial: "pdfs/summary_fields").content.first[:text]
 

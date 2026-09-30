@@ -75,18 +75,28 @@ module RailsAiContext
       # Routes in an engine's table are counted apart from the app's on both tiers. Booted
       # reads the engine's whole table; static reads what the app's route files draw into it.
       private_class_method def self.engine_routes_lines(engine_routes)
-        groups = Array(engine_routes)
-        return [] if groups.empty?
-
-        lines = [ "", "## Routes drawn into mounted engines" ]
-        groups.each do |group|
-          at = group[:mount] ? " at `#{group[:mount]}`" : " (not mounted by the app's routes)"
-          at += " (also #{group[:also_mounted_at].map { |path| "`#{path}`" }.join(', ')})" if group[:also_mounted_at]
+        unread, drawn = Array(engine_routes).partition { |group| group[:unavailable] }
+        lines = []
+        lines << "" << "## Routes drawn into mounted engines" if drawn.any?
+        drawn.each do |group|
           whole = group[:whole_table] ? " in the engine's whole table, gem-drawn ones included" : ""
           unexpanded = group[:dynamic_routes].to_i.positive? ? ", #{count_phrase(group[:dynamic_routes], "dynamic construct")} not expanded" : ""
-          lines << "- **#{group[:engine]}**#{at}: #{count_phrase(Array(group[:routes]).size, "route")}#{whole}#{unexpanded}, not in the count above"
+          lines << "- **#{group[:engine]}**#{mounted_at(group)}: #{count_phrase(Array(group[:routes]).size, "route")}#{whole}#{unexpanded}, not in the count above"
+        end
+        lines << "" << "## Mounted engines whose routes were not read" if unread.any?
+        unread.each do |group|
+          lines << "- **#{group[:engine]}**#{mounted_at(group)}: #{RailsAiContext::Confidence.unavailable(group[:unavailable])}"
         end
         lines
+      end
+
+      private_class_method def self.mounted_at(group)
+        at = if group[:mount] then " at `#{group[:mount]}`"
+        elsif group[:mount_computed] then " at a path the routes compute"
+        else " (not mounted by the app's routes)"
+        end
+        at += " (also #{group[:also_mounted_at].map { |path| "`#{path}`" }.join(', ')})" if group[:also_mounted_at]
+        at
       end
 
       # The routes a controller filter matches in the engines' tables, one
@@ -94,7 +104,7 @@ module RailsAiContext
       private_class_method def self.engine_controller_groups(engine_routes, needles)
         Array(engine_routes).each_with_object({}) do |group, found|
           matches = Array(group[:routes]).select { |r| needles.any? { |n| path_segments_match?(r[:controller].to_s, n, tail: true) } }
-          where = group[:mount] ? "" : ", not mounted by the app's routes"
+          where = group[:mount] || group[:mount_computed] ? "" : ", not mounted by the app's routes"
           matches.group_by { |r| r[:controller] }.each do |ctrl, rows|
             found["#{ctrl} (in #{group[:engine]}'s table#{where})"] = rows
           end

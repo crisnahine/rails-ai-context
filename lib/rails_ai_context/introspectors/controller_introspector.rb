@@ -21,7 +21,7 @@ module RailsAiContext
         result = controllers.each_with_object({}) do |ctrl, hash|
           hash[ctrl.name] = extract_controller_details(ctrl)
         rescue => e
-          hash[ctrl.name] = { error: e.message }
+          hash[ctrl.name] = { error: portable_message(e) }
         end
 
         # Discover controllers from filesystem that may not be loaded as classes.
@@ -52,7 +52,7 @@ module RailsAiContext
 
           hash[name] = details[:error] ? details : details.merge(confidence: Confidence::STATIC)
         rescue => e
-          hash[path_name] = { error: e.message }
+          hash[path_name] = { error: portable_message(e) }
         end
         {
           controllers: fill_inherited_actions(result),
@@ -224,7 +224,12 @@ module RailsAiContext
         }.compact
         details
       rescue => e
-        { error: e.message }
+        { error: portable_message(e) }
+      end
+
+      # The context is committed, so a load error names the file as the app does.
+      def portable_message(error)
+        PortablePath.relativize_text(error.message, app.root)
       end
 
       def extract_controller_details(ctrl)
@@ -313,7 +318,7 @@ module RailsAiContext
             # Collect only/except constraints from source files in the inheritance chain
             source_constraints = collect_source_constraints(ctrl, source)
             reflection_filters.each do |f|
-              if (sc = source_constraints[f[:name]])
+              if (sc = source_constraints[[ f[:kind], f[:name] ]])
                 f[:only] = sc[:only] if sc[:only]&.any?
                 f[:except] = sc[:except] if sc[:except]&.any?
                 f[:unless] = sc[:unless] if sc[:unless]
@@ -324,7 +329,7 @@ module RailsAiContext
             # Evaluate known runtime conditions to remove inapplicable filters
             reflection_filters.reject! { |f| filter_excluded_by_condition?(ctrl, f) }
 
-            return merge_own_source(reflection_filters, source || read_source(ctrl))
+            return merge_own_source(reflection_filters, source || read_source(ctrl), ctrl)
           end
         end
 
@@ -349,12 +354,8 @@ module RailsAiContext
         while klass&.name && !ActionResolver.framework?(klass, kind: :controller)
           src = (klass == ctrl) ? (current_source || read_source(klass)) : read_source(klass)
           if src
-            extract_filters_from_source(src).each do |sf|
-              next if sf[:skipped]
-
-              # First definition wins (most specific controller in chain)
-              constraints[sf[:name]] ||= sf
-            end
+            # Within one body the last declaration wins; across the chain the most specific class does.
+            effective_declarations(own_filters(src, klass.name)).each { |key, sf| constraints[key] ||= sf }
           end
           klass = klass.superclass
         end
@@ -371,17 +372,43 @@ module RailsAiContext
       # spliced in beside the record it takes out, and the body's order
       # decides only whether the skip reads before or after a re-declaration
       # of the same name.
-      def merge_own_source(filters, source)
+      # A concern the body includes declares as the body does, so it is read
+      # the way the static tier reads it and keeps its `from_concern`.
+      def merge_own_source(filters, source, ctrl)
         return filters unless source
 
-        own = extract_filters_from_source(source)
-        declared = own.reject { |f| f[:skipped] }.map { |f| f[:name] }.to_set
-        by_name = filters.group_by { |f| f[:name] }
-        declared.each { |name| Array(by_name[name]).each { |f| f[:declared] = true } }
+        own = own_filters(source, ctrl.name).reject { |f| inherited_concern?(ctrl, f[:from_concern]) }
+        # Kind and name: `after_action :audit` inherited beside an own
+        # `before_action :audit` is still the ancestor's.
+        by_key = filters.group_by { |f| [ f[:kind], f[:name] ] }
+        effective_declarations(own).each do |key, declared|
+          Array(by_key[key]).each do |f|
+            f[:declared] = true
+            declared[:from_concern] ? f[:from_concern] = declared[:from_concern] : f.delete(:from_concern)
+          end
+        end
         skips = own.select { |f| f[:skipped] }
         return filters if skips.empty?
 
         splice_skips(filters, own, skips)
+      end
+
+      # ActiveSupport::Concern skips a module already in the ancestors; a plain module's hook runs again.
+      def inherited_concern?(ctrl, label)
+        return false unless label && ctrl.superclass
+
+        mod = SuperclassChain.resolve_in_scope(ctrl.name, label) { |candidate| candidate.safe_constantize }
+        mod.is_a?(ActiveSupport::Concern) && ctrl.superclass.include?(mod)
+      end
+
+      def own_filters(source, within)
+        ControllerFilters.with_concerns(source, root: app.root.to_s, within: within.to_s,
+                                                cache: (@concern_cache ||= {})).first
+      end
+
+      # A later declaration of the same kind and name replaces the earlier one, as Rails does.
+      def effective_declarations(own)
+        own.reject { |f| f[:skipped] }.to_h { |f| [ [ f[:kind], f[:name] ], f ] }
       end
 
       def splice_skips(filters, own, skips)

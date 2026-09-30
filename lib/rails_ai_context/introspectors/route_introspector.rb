@@ -53,6 +53,9 @@ module RailsAiContext
         return { error: "config/routes.rb not found in #{app.root}" } if top_files.empty?
 
         records, mounts, files = walk_route_files(top_files)
+        in_repo = in_repo_routes(mounts)
+        records += in_repo.values.flat_map(&:first)
+        mounts = (mounts + in_repo.values.flat_map(&:last)).uniq { |mount| [ mount[:engine], mount[:path] ] }
         # What an app draws into an engine's table is the engine's, which the
         # booted tier's Rails.application.routes holds only as the mount.
         app_records, engine_records = records.partition { |r| r[:engine].nil? }
@@ -79,19 +82,49 @@ module RailsAiContext
           confidence: Confidence::STATIC
         }
         result[:dynamic_routes] = dynamic if dynamic.positive?
-        engine_routes = engine_route_groups(engine_records, mounts)
+        engine_routes = engine_route_groups(engine_records, mounts) + unread_engine_tables(engine_records, mounts)
         result[:engine_routes] = engine_routes if engine_routes.any?
-        unread = in_repo_route_files.size
+        unread = (in_repo_route_files - in_repo.keys).size
         result[:in_repo_route_files] = unread if unread.positive?
         result
       end
 
-      # An in-repo engine's routes.rb draws into its own table, which only boot can place, so
-      # the count says those routes were skipped instead of reading as the whole total.
+      # Every routes.rb under an in-repo engine or plugin root. One the app does not mount has
+      # no place in the static table, so the count says it was skipped.
       def in_repo_route_files
         PathResolver.code_roots(app.root.to_s)
           .map { |dir| File.join(dir, "config", "routes.rb") }
           .select { |path| File.exist?(path) }
+      end
+
+      # Rails loads every engine's routes.rb. One that appends to the app's own
+      # table adds app routes; one that draws into an engine the app mounts is
+      # placed under the mount.
+      # @return [Hash] path => [records, mounts], for files read into the app's table
+      def in_repo_routes(mounts)
+        walked = in_repo_route_files.to_h { |path| [ path, walk_routes_file(path) ] }
+        app_files = walked.keys.select { |path| app_route_file?(path) }.to_set
+        mounted = (mounts + app_files.flat_map { |path| walked[path][1] }).map { |m| m[:engine] }.to_set
+        walked.each_with_object({}) do |(path, (records, file_mounts, _files)), found|
+          app = app_files.include?(path)
+          kept = records.select { |r| r[:engine] ? mounted.include?(r[:engine]) : app }
+          file_mounts = app ? file_mounts : []
+          # A file that draws nothing (all commented out) has nothing left unread.
+          found[path] = [ kept, file_mounts ] if kept.any? || file_mounts.any? || records.empty?
+        end
+      end
+
+      # `Rails.application.routes` or `X::Application.routes`, drawn, appended or prepended.
+      def app_route_file?(path)
+        AstWalk.each(AstCache.parse_string(SafeFile.read(path).to_s).value).any? do |node|
+          next false unless node.is_a?(Prism::CallNode) && %i[draw append prepend].include?(node.name) && node.block
+
+          routes = node.receiver
+          routes.is_a?(Prism::CallNode) && routes.name == :routes &&
+            routes.receiver&.slice.to_s.delete_prefix("::").match?(/\A(Rails\.application|(\w+::)*Application)\z/)
+        end
+      rescue StandardError, ScriptError => e
+        RailsAiContext.debug_fail(e, false, label: "app_route_file? #{path}")
       end
 
       # What config/routes.rb and every file it draws mount, from source. The
@@ -126,9 +159,34 @@ module RailsAiContext
               ).compact
             end),
             dynamic_routes: dynamic.positive? ? dynamic : nil,
+            mount_computed: (true if mount_record && mount.nil?),
             also_mounted_at: mount_records.drop(1).map { |m| m[:path] }.presence
           }.compact
         end
+      end
+
+      # An engine the app draws nothing into still has its own table, drawn in
+      # its own code, which only boot reads. A mounted Rack app has no table at all.
+      def unread_engine_tables(engine_records, mounts)
+        drawn = engine_records.map { |r| r[:engine] }.to_set
+        roots = PathResolver.autoload_roots(app.root.to_s) + PathResolver.path_gem_libs(app.root.to_s)
+        mounts.reject { |m| drawn.include?(m[:engine]) }
+          .group_by { |m| m[:engine] }
+          .select { |engine, _| engine_constant?(engine, roots) }
+          .map do |engine, same|
+            { engine: engine, mount: same.first[:path], mount_computed: (true unless same.first[:path]), routes: [],
+              also_mounted_at: same.drop(1).map { |m| m[:path] }.presence,
+              unavailable: "the engine's own routes are read only with the app booted" }.compact
+          end
+      end
+
+      # The app's own definition says whether it subclasses Rails::Engine; a
+      # gem's constant is read nowhere here, so its name is all there is.
+      def engine_constant?(name, roots)
+        path = PathResolver.file_for_constant(app.root.to_s, name, roots: roots)
+        return name.to_s.match?(/(?:\A|::)Engine\z/) unless path
+
+        SafeFile.read(path).to_s.match?(/<\s*(?:::)?Rails::Engine\b/)
       end
 
       # Rails names the proxy after the mount: its `as:`, else the engine's

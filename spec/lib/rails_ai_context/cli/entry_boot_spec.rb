@@ -335,6 +335,27 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
         end
       end
 
+      it "gives a command that needs the boot the whole missing-gem list" do
+        gems = (1..10).map { |i| "gem#{i}-1.0" }
+        allow(RailsAiContext::BootManager).to receive(:boot!).and_return(
+          RailsAiContext::BootManager::Result.new(status: :failed,
+                                                  error: RuntimeError.new("Could not find #{gems.join(', ')} in locally installed gems"))
+        )
+        failing_app do |dir|
+          expect(described_class.call(root: dir, allow_static: false).messages.join).to include("gem10-1.0")
+          expect(described_class.call(root: dir, allow_static: true).messages.join).not_to include("gem10-1.0")
+        end
+      end
+
+      it "names the failure once" do
+        failing_app do |dir|
+          messages = described_class.call(root: dir, allow_static: true).messages
+
+          expect(messages.count { |line| line.include?("boom") }).to eq(1)
+          expect(messages).to include("[rails-ai-context] static tier active")
+        end
+      end
+
       # The app calls RailsAiContext.configure but does not bundle the gem, so
       # the constant is the bare namespace the binary opened. Both branches
       # must say so: the static banner sends the user to doctor, and doctor

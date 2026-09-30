@@ -2,6 +2,7 @@
 
 require "spec_helper"
 require "timeout"
+require "open3"
 
 # Runtime smoke test: every registered tool must execute via ToolRunner
 # against the combustion fixture without raising. Tools are allowed to
@@ -507,5 +508,58 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
     expect(help).to include("--no-boot")
     expect(help).to include("--app-path")
     expect(help).to include("--environment")
+  end
+
+  # The port the HTTP server announces, read off stderr before it binds.
+  describe "serve port" do
+    let(:exe) { File.expand_path("../exe/rails-ai-context", __dir__) }
+    let(:lib) { File.expand_path("../lib", __dir__) }
+
+    def announced_port(dir, *args)
+      Open3.popen3("ruby", "-I", lib, exe, "serve", *args, "--no-boot", chdir: dir) do |stdin, _out, err, wait|
+        stdin.close
+        Timeout.timeout(60) do
+          while (line = err.gets)
+            return line[/starting on [^:]+:(\d+)/, 1] if line.include?("starting on")
+          end
+        end
+      ensure
+        Process.kill("KILL", wait.pid) rescue nil
+      end
+    end
+
+    def app_dir(dir, yaml = nil)
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget\nend\n")
+      File.write(File.join(dir, ".rails-ai-context.yml"), yaml) if yaml
+    end
+
+    it "honours --port under the streamable_http alias" do
+      Dir.mktmpdir do |dir|
+        app_dir(dir)
+        expect(announced_port(dir, "--transport", "streamable_http", "--port", "6123")).to eq("6123")
+      end
+    end
+
+    it "reads http_port from the config file when --port is left out" do
+      Dir.mktmpdir do |dir|
+        app_dir(dir, "http_port: 6124\n")
+        expect(announced_port(dir, "--transport", "http")).to eq("6124")
+      end
+    end
+
+    it "lets an explicit --port beat the config file" do
+      Dir.mktmpdir do |dir|
+        app_dir(dir, "http_port: 6124\n")
+        expect(announced_port(dir, "--transport", "http", "--port", "6125")).to eq("6125")
+      end
+    end
+
+    it "falls back to 6029" do
+      Dir.mktmpdir do |dir|
+        app_dir(dir)
+        expect(announced_port(dir, "--transport", "http")).to eq("6029")
+      end
+    end
   end
 end

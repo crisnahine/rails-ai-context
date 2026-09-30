@@ -58,6 +58,57 @@ RSpec.describe RailsAiContext::Introspectors::SchemaReader do
       expect(column[:type]).to eq("references")
     end
 
+    it "expands every name of one reference call" do
+      reader = reader_for(<<~RUBY)
+        create_table "posts" do |t|
+          t.references "author", "editor"
+          t.string "title", "slug"
+        end
+      RUBY
+
+      expect(reader.tables["posts"][:columns].map { |c| c[:name] }).to eq(%w[author_id editor_id title slug])
+    end
+
+    it "marks a table whose block calls a method the reader does not read" do
+      reader = reader_for(<<~RUBY)
+        create_table "posts" do |t|
+          t.bigint "account_id"
+          t.replica_identity_index
+        end
+      RUBY
+
+      expect(reader.tables["posts"][:unread_calls]).to eq(%w[replica_identity_index])
+    end
+
+    it "reads every column method the adapters and the vector and PostGIS gems define" do
+      reader = reader_for(<<~RUBY)
+        create_table "users" do |t|
+          t.citext "email", null: false
+          t.enum "status", enum_type: "status_kind"
+          t.int4range "ages"
+          t.int8range "big_ages"
+          t.tstzrange "during"
+          t.bigserial "seq"
+          t.geometry "shape"
+          t.geography "area"
+          t.st_point "loc", geographic: true
+          t.multi_polygon "zones"
+          t.vector "embedding", limit: 1536
+          t.halfvec "half"
+          t.mediumtext "body"
+          t.unsigned_integer "hits"
+          t.string "name", { limit: 50 }
+          t.column_exists? "x"
+          t.index_exists? "x"
+          t.rename_index "a", "b"
+        end
+      RUBY
+
+      table = reader.tables["users"]
+      expect(table[:unread_calls]).to be_nil
+      expect(table[:columns].map { |c| c[:name] }).to eq(%w[email status ages big_ages during seq shape area loc zones embedding half body hits name])
+    end
+
     it "collects in-table indexes as column lists" do
       reader = reader_for(<<~RUBY)
         create_table "profiles" do |t|

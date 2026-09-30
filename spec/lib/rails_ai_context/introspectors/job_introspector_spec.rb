@@ -1407,9 +1407,12 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       double(name, name: name, queue_name: "default", priority: nil, descendants: subclasses)
     end
 
+    # The fixture app's own job files are merged in from source; these
+    # examples are about what reflection reports.
     def names_reported_for(*jobs)
+      source_only = described_class.new(Rails.application).static_call[:jobs].map { |j| j[:name] } - jobs.map(&:name)
       allow(ActiveJob::Base).to receive(:descendants).and_return(jobs)
-      described_class.new(Rails.application).call[:jobs].map { |j| j[:name] }
+      described_class.new(Rails.application).call[:jobs].map { |j| j[:name] } - source_only
     end
 
     let(:app_job_file) { File.join(Rails.root, "app", "jobs", "example_job.rb") }
@@ -1495,6 +1498,67 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       end
     end
 
+    # ActiveJob 7.0+ defaults queue_name to a lambda, so every job without a
+    # queue_as holds a Proc.
+    it "reads the framework's default queue lambda as the default queue" do
+      default_job = job("DefaultQueueJob", defined_in: app_job_file)
+      allow(default_job).to receive(:queue_name).and_return(ActiveJob::Base.queue_name)
+      allow(default_job).to receive(:queue_name_from_part).with(nil).and_return("default")
+      allow(ActiveJob::Base).to receive(:descendants).and_return([ default_job ])
+
+      jobs = described_class.new(Rails.application).call[:jobs]
+
+      expect(jobs.find { |j| j[:name] == "DefaultQueueJob" }[:queue]).to eq("default")
+    end
+
+    def with_job_file(name, source)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "jobs"))
+        file = File.join(dir, "app", "jobs", "#{name.underscore}.rb")
+        File.write(file, source)
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(dir))
+        yield file
+      end
+    end
+
+    # Reflection knows the queue and nothing about the retry policy; the
+    # source carries it, and the booted record must not lose it.
+    it "keeps the retries the source declares on a reflected job" do
+      with_job_file("DigestJob", <<~RUBY) do |file|
+        class DigestJob < ApplicationJob
+          retry_on ActiveRecord::Deadlocked,
+                   attempts: 3
+
+          def perform(id); end
+        end
+      RUBY
+        allow(ActiveJob::Base).to receive(:descendants).and_return([ job("DigestJob", defined_in: file) ])
+
+        record = described_class.new(Rails.application).call[:jobs].find { |j| j[:name] == "DigestJob" }
+
+        expect(record).to include(queue: "default", perform_signature: "id")
+        expect(record[:retries]).to eq([ "retry_on ActiveRecord::Deadlocked, attempts: 3" ])
+      end
+    end
+
+    # A job in a root Zeitwerk does not manage never loads, so reflection
+    # cannot list it; the source still can.
+    it "keeps an ActiveJob job reflection never loaded" do
+      with_job_file("UnloadedJob", <<~RUBY) do
+        class UnloadedJob < ApplicationJob
+          queue_as :chat
+
+          def perform; end
+        end
+      RUBY
+        allow(ActiveJob::Base).to receive(:descendants).and_return([ job("RuntimeProbeJob", defined_in: nil) ])
+
+        jobs = described_class.new(Rails.application).call[:jobs]
+
+        expect(jobs.map { |j| [ j[:name], j[:queue] ] }).to eq([ [ "RuntimeProbeJob", "default" ], [ "UnloadedJob", "chat" ] ])
+      end
+    end
+
     it "keeps the app's job while dropping the gem's in one pass" do
       gem_file = File.join(Gem.loaded_specs["rspec-core"].full_gem_path, "lib", "rspec", "core.rb")
       reported = names_reported_for(
@@ -1560,6 +1624,26 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(entry[:actions]).to eq([])
       expect(entry[:class_actions]).to eq(%w[blast])
       expect(entry[:parent_class]).to eq("ApplicationMailer")
+    end
+
+    # Without eager loading, a mailer kept in app/services or app/models loads
+    # only when something names it, so it is loaded by the constant its file holds.
+    it "loads a mailer kept outside app/mailers before reading descendants" do
+      path = File.join(Rails.root, "app", "models", "services_probe_mailer.rb")
+      File.write(path, <<~RUBY)
+        class ServicesProbeMailer < ApplicationMailer
+          def weekly = mail(to: "a@b.c")
+        end
+      RUBY
+      Object.autoload(:ServicesProbeMailer, path)
+      loader = Rails.autoloaders.main
+      allow(loader).to receive(:cpath_expected_at).and_call_original
+
+      expect(mailers.find { |m| m[:name] == "ServicesProbeMailer" }&.dig(:actions)).to eq(%w[weekly])
+      expect(loader).to have_received(:cpath_expected_at).with(path)
+    ensure
+      FileUtils.rm_f(path)
+      Object.send(:remove_const, :ServicesProbeMailer) if Object.const_defined?(:ServicesProbeMailer, false)
     end
 
     # `action_methods` is every public instance method a mailer defines, so

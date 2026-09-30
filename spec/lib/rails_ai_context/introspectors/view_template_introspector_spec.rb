@@ -153,6 +153,11 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
       expect(described_class.ivars_in("<%= @post.title %> <%= @user %>")).to eq(%w[post user])
     end
 
+    it "reads a code tag whose first line is a Ruby comment" do
+      expect(described_class.ivars_in("<%\n  # the list\n  items = @posts.select(&:published?)\n%>")).to eq(%w[posts])
+      expect(described_class.ivars_in("<% # note\n @x.each do |y| %>")).to eq(%w[x])
+    end
+
     it "drops the locals ERB sets itself" do
       expect(described_class.ivars_in("<%= @output_buffer %><%= @post %>")).to eq(%w[post])
     end

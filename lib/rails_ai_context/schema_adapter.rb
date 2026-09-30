@@ -49,13 +49,18 @@ module RailsAiContext
       context = {} unless context.is_a?(Hash)
       schema = context[:schema]
       observed = schema.is_a?(Hash) ? schema[:adapter] : nil
-      return observed unless placeholder?(observed)
+      return display(observed) unless placeholder?(observed)
 
       # Best first: the app's own database config, which needs no connection.
       # Then what the schema proves, then the example database files (often SQLite for
       # convenience), and last the Gemfile, which is a guess.
       from_configurations(context) || from_dialect(schema) || from_column_types(schema) ||
         from_examples(context) || from_gems(context) || "unknown"
+    end
+
+    # A connection's adapter_name as the other surfaces name it (PostGIS is PostgreSQL).
+    def display(adapter_name)
+      DIALECTS.fetch(adapter_name.to_s.downcase, adapter_name)
     end
 
     def label_with_reason(context)

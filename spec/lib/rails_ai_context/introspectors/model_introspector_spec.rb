@@ -921,6 +921,35 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    it "keeps a composite foreign key as a column list, and marks one a constant names" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "line.rb"), <<~RUBY)
+          class Line < ApplicationRecord
+            belongs_to :order, foreign_key: [:shop_id, :order_id]
+            belongs_to :author, foreign_key: AUTHOR_KEY
+            belongs_to :account, foreign_key: :account_ref
+          end
+        RUBY
+
+        by_name = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Line"][:associations].to_h { |a| [ a[:name], a ] }
+
+        expect(by_name["order"][:foreign_key]).to eq(%w[shop_id order_id])
+        expect(by_name["author"][:computed_foreign_key]).to be(true)
+        expect(by_name["account"]).to include(foreign_key: "account_ref")
+        expect(by_name["account"]).not_to have_key(:computed_foreign_key)
+      end
+    end
+
+    it "keeps a reflected composite foreign key as a column list" do
+      assoc = double(name: :order, macro: :belongs_to, class_name: "Order",
+                     foreign_key: %i[shop_id order_id], options: { foreign_key: %i[shop_id order_id] })
+
+      detail = described_class.new(RailsAiContext::StaticApp.new(Dir.pwd)).send(:association_detail, assoc)
+
+      expect(detail[:foreign_key]).to eq(%w[shop_id order_id])
+    end
+
     it "records a reflected class_name written with a leading :: as written" do
       assoc = double(name: :api_token, macro: :has_one, class_name: "::Token::API",
                      foreign_key: "user_id", options: { class_name: "::Token::API" })
@@ -1208,6 +1237,27 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(by_name["favourites"][:dependent]).to eq("destroy")
         expect(by_name["account"][:optional]).to be(false)
         expect(by_name["subject"][:polymorphic]).to be(false)
+      end
+    end
+
+    # validate finds an unindexed key through this field, so a static record needs it too.
+    it "gives a belongs_to the key reflection would, declared or not" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "volume.rb"), <<~RUBY)
+          class Volume < ApplicationRecord
+            belongs_to :publisher
+            belongs_to :writer, class_name: "User", foreign_key: :author_id
+            has_many :chapters
+          end
+        RUBY
+
+        associations = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Volume"][:associations]
+        by_name = associations.to_h { |a| [ a[:name], a ] }
+
+        expect(by_name["publisher"][:foreign_key]).to eq("publisher_id")
+        expect(by_name["writer"][:foreign_key]).to eq("author_id")
+        expect(by_name["chapters"]).not_to have_key(:foreign_key)
       end
     end
 
@@ -2021,6 +2071,18 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       result = described_class.new(Rails.application).call
 
       expect(result["BrokenWidget"][:table_name]).to eq("broken_widgets")
+    end
+
+    it "states the error without the machine path of the app" do
+      allow(ActiveSupport::Inflector).to receive(:constantize).and_call_original
+      allow(ActiveSupport::Inflector).to receive(:constantize).with("BrokenWidget")
+        .and_raise(SyntaxError, "#{File.realpath(broken)}:4: syntax errors found")
+
+      error = RailsAiContext::Introspector.new(Rails.application).call.dig(:models, "BrokenWidget", :error)
+
+      expect(error).not_to include(Rails.root.to_s)
+      expect(error).not_to include(File.realpath(Rails.root.to_s))
+      expect(error).to include("app/models/broken_widget.rb")
     end
   end
 

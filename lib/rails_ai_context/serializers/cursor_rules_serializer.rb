@@ -42,6 +42,11 @@ module RailsAiContext
         # user content above/below the gem-managed block survives every
         # `rails ai:context` regeneration.
         cursorrules_path = File.join(output_dir, ".cursorrules")
+        unless RailsAiContext.configuration.generate_root_files
+          result[:not_applicable][cursorrules_path] = "root files disabled"
+          return result
+        end
+
         case SectionMarkerWriter.write_with_markers(cursorrules_path, render_cursorrules_legacy)
         when :written then result[:written] << cursorrules_path
         when :skipped then result[:skipped] << cursorrules_path

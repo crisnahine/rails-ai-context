@@ -1353,7 +1353,7 @@ end
 | `live_reload_debounce` | Float | `1.5` | Debounce interval in seconds for live reload |
 | `server_name` | String | `"rails-ai-context"` | MCP server name |
 | `server_version` | String | gem version | MCP server version |
-| `generate_root_files` | Boolean | `true` | Generate root files (CLAUDE.md, etc.) - set `false` for split rules only |
+| `generate_root_files` | Boolean | `true` | Set `false` to generate split rules only: no CLAUDE.md, AGENTS.md, .cursorrules or copilot-instructions.md (`.ai-context.json` is still written) |
 | `anti_hallucination_rules` | Boolean | `true` | Embed 6-rule Anti-Hallucination Protocol in generated context files - set `false` to skip |
 | `hydration_enabled` | Boolean | `true` | Inject schema hints into controller/view tool responses |
 | `hydration_max_hints` | Integer | `5` | Max schema hints per tool response |

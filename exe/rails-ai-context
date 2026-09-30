@@ -175,15 +175,14 @@ class RailsAiContextCLI < Thor
 
     desc "serve", "Start MCP server (stdio transport)"
     option :transport, type: :string, default: "stdio", desc: "Transport: stdio or http"
-    option :port, type: :numeric, default: 6029, desc: "HTTP port (only for http transport)"
+    option :port, type: :numeric, desc: "HTTP port (only for http transport; default: config http_port, else 6029)"
     option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
     def serve
       boot_rails!(command: "serve", allow_static: true)
 
       transport = options[:transport].to_sym
-      if transport == :http
-        ::RailsAiContext.configuration.http_port = options[:port]
-      end
+      # No Thor default: it would overwrite the config file's http_port.
+      ::RailsAiContext.configuration.http_port = options[:port] if options[:port]
 
       ::RailsAiContext.start_mcp_server(transport: transport)
     end

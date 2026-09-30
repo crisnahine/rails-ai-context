@@ -127,4 +127,27 @@ RSpec.describe RailsAiContext::Introspectors::EagerLoad do
       expect(Object.const_defined?(:ZzPackThing, false)).to be true
     end
   end
+  # Zeitwerk before 2.6.9 has no cpath_expected_at, and a record's path_name
+  # for app/ reads app/services/x_mailer.rb as Services::XMailer.
+  describe ".files without cpath_expected_at" do
+    it "loads the class the file declares" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "zz_declared_mailer.rb")
+        source = "class ZzDeclaredMailer; end\n"
+        File.write(path, source)
+        Object.autoload(:ZzDeclaredMailer, path)
+        allow(Rails.autoloaders).to receive(:main).and_return(Object.new)
+        record = RailsAiContext::Introspectors::SourceScan::Record.new(
+          path: path, file: "app/services/zz_declared_mailer.rb", path_name: "Services::ZzDeclaredMailer", source: source
+        )
+
+        described_class.files([ record ])
+
+        expect(Object.autoload?(:ZzDeclaredMailer)).to be_nil
+        expect(Object.const_defined?(:ZzDeclaredMailer, false)).to be true
+      ensure
+        Object.send(:remove_const, :ZzDeclaredMailer) if Object.const_defined?(:ZzDeclaredMailer, false)
+      end
+    end
+  end
 end

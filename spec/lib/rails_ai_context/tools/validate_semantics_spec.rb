@@ -147,6 +147,88 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
     end
   end
 
+  describe "a polymorphic belongs_to" do
+    def poly_warnings(indexes)
+      assoc = { type: "belongs_to", name: "commentable", polymorphic: true, foreign_key: "commentable_id" }
+      context = {
+        schema: { tables: { "comments" => { columns: [], indexes: indexes, foreign_keys: [] } } },
+        models: { "Comment" => { table_name: "comments", file: "app/models/comment.rb", associations: [ assoc ] } }
+      }
+      described_class.send(:check_missing_fk_index, "app/models/comment.rb", context)
+    end
+
+    it "counts the type and id index the reference creates, in either order" do
+      expect(poly_warnings([ { columns: %w[commentable_type commentable_id] } ])).to eq([])
+      expect(poly_warnings([ { columns: %w[commentable_id commentable_type] } ])).to eq([])
+    end
+
+    it "warns when no index covers the key" do
+      expect(poly_warnings([]).join).to include("commentable_id in comments - foreign key without index")
+    end
+  end
+
+  describe "a belongs_to whose key column the table does not have" do
+    def key_warnings(columns)
+      assoc = { type: "belongs_to", name: "owner", foreign_key: "owner_id" }
+      context = {
+        schema: { tables: { "predictions" => { columns: columns.map { |c| { name: c } }, indexes: [], foreign_keys: [] } } },
+        models: { "Prediction" => { table_name: "predictions", file: "app/models/prediction.rb", associations: [ assoc ] } }
+      }
+      described_class.send(:check_missing_fk_index, "app/models/prediction.rb", context)
+    end
+
+    it "says the column is missing, not that it is unindexed" do
+      text = key_warnings(%w[id owner_user_id]).join("\n")
+
+      expect(text).not_to include("without index")
+      expect(text).to include("belongs_to :owner - column \"owner_id\" not found in predictions table")
+    end
+
+    it "still asks for an index on a key column the table has" do
+      expect(key_warnings(%w[id owner_id]).join).to include("owner_id in predictions - foreign key without index")
+    end
+  end
+
+  describe "a belongs_to whose key is not a plain column name" do
+    def warnings_for(assoc, columns: %w[id shop_id order_id], indexes: [])
+      context = {
+        schema: { tables: { "lines" => { columns: columns.map { |c| { name: c } }, indexes: indexes, foreign_keys: [] } } },
+        models: { "Line" => { table_name: "lines", file: "app/models/line.rb", associations: [ { type: "belongs_to", name: "order" }.merge(assoc) ] } }
+      }
+      described_class.send(:check_missing_fk_index, "app/models/line.rb", context)
+    end
+
+    it "says nothing about a key a constant or an expression names, or one declared in a block of unknown owner" do
+      expect(warnings_for({ foreign_key: "AUTHOR_KEY", computed_foreign_key: true })).to eq([])
+      expect(warnings_for({ foreign_key: "parent_id", scope_uncertain: true })).to eq([])
+      expect(warnings_for({ foreign_key: "\"\#{PREFIX}_id\"" })).to eq([])
+    end
+
+    it "checks each column of a composite key and an index leading with them" do
+      expect(warnings_for({ foreign_key: %w[shop_id order_id] }, indexes: [ { columns: %w[shop_id order_id] } ])).to eq([])
+      expect(warnings_for({ foreign_key: %w[shop_id order_id] }).join).to include("(shop_id, order_id) in lines - foreign key without an index")
+      expect(warnings_for({ foreign_key: %w[shop_id order_id] }, columns: %w[id shop_id]).join)
+        .to include("column \"(shop_id, order_id)\" not found in lines table")
+    end
+  end
+
+  # Canvas's `t.replica_identity_index` indexes root_account_id through an app
+  # method the static schema cannot read, so its index list may be short.
+  describe "a table whose schema block called a method no reader interprets" do
+    it "claims neither a missing index nor a missing column" do
+      assoc = { type: "belongs_to", name: "root_account", foreign_key: "root_account_id" }
+      table = { columns: [ { name: "id" }, { name: "root_account_id" } ], indexes: [], foreign_keys: [],
+                unread_calls: %w[replica_identity_index] }
+      context = {
+        schema: { tables: { "summaries" => table } },
+        models: { "Summary" => { table_name: "summaries", file: "app/models/summary.rb",
+                                 associations: [ assoc, assoc.merge(name: "user", foreign_key: "user_id") ] } }
+      }
+
+      expect(described_class.send(:check_missing_fk_index, "app/models/summary.rb", context)).to eq([])
+    end
+  end
+
   describe ".check_rails_semantics" do
     it "answers cleanly for a plain file" do
       with_app_file("app/models/widget.rb", "class Widget < ApplicationRecord\nend\n") do |file, path|
@@ -198,8 +280,11 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
           class Subscription < ApplicationRecord
             attr_accessor :confirm_terms
             attribute :promo_code, :string
+            attr_reader :config_url
+            alias_attribute :title, :account_id
             validates :confirm_terms, presence: true
             validates :promo_code, presence: true
+            validates :config_url, :title, presence: true
           end
         RUBY
 
@@ -207,6 +292,52 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
           warnings = described_class.check_rails_semantics(file, path).join
           expect(warnings).not_to include("confirm_terms")
           expect(warnings).not_to include("promo_code")
+          expect(warnings).not_to include("config_url")
+          expect(warnings).not_to include("title")
+        end
+      end
+
+      # OpenProject's `has_details_table do` class_evals its block on a detail
+      # class, so a validation there reads that class's table.
+      it "says nothing about a validation inside a block run on another class" do
+        source = <<~RUBY
+          class Subscription < ApplicationRecord
+            has_details_table(foreign_key: :subscription_id) do
+              validates :parent, presence: true
+            end
+            validates :headline, presence: true
+            with_options on: :create do
+              validates :byline, presence: true
+            end
+          end
+        RUBY
+
+        with_app_file("app/models/subscription.rb", source) do |file, path|
+          warnings = described_class.check_rails_semantics(file, path).join
+          expect(warnings).not_to include("parent")
+          expect(warnings).to include("validates :headline").and include("validates :byline")
+        end
+      end
+
+      it "judges a validation in a mixin hook's class_eval and in a state_machine state block" do
+        source = <<~RUBY
+          class Subscription < ApplicationRecord
+            def self.included(base)
+              base.class_eval do
+                validates :headline, presence: true
+              end
+            end
+            state_machine :status do
+              state :done do
+                validates :byline, presence: true
+              end
+            end
+          end
+        RUBY
+
+        with_app_file("app/models/subscription.rb", source) do |file, path|
+          warnings = described_class.check_rails_semantics(file, path).join
+          expect(warnings).to include("validates :headline").and include("validates :byline")
         end
       end
 

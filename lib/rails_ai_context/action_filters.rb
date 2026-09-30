@@ -58,19 +58,25 @@ module RailsAiContext
       # The whole ancestor entry, not only its `from:`: an entry the walk
       # could not attribute carries `provenance` instead, and merging only
       # `from` dropped that on the tier the label exists for.
-      attribution_of = parent.to_h { |f| [ entry_key(f), f.slice(:from, :provenance) ] }
+      attribution_of = parent.to_h { |f| [ entry_key(f), f.slice(:from, :from_concern, :provenance) ] }
       declared_on = attribution_of
       declared_names = declared.map { |f| entry_key(f) }.to_set
 
       # A filter this body declares is its own, whatever an ancestor declares
       # as well. The runtime tier's list also carries names it only inherits,
       # and those are the ones that move: they carry no `declared` mark.
-      inherited_here = ->(f) { declared_on.key?(entry_key(f)) && !f[:declared] }
+      # An ActiveSupport::Concern an ancestor already includes does not run again, so its filters stay the ancestor's.
+      inherited_here = lambda do |f|
+        next false unless declared_on.key?(entry_key(f))
+
+        !f[:declared] || (f[:from_concern] && declared_on[entry_key(f)][:from_concern] == f[:from_concern] &&
+                          runs_once?(f[:from_concern], root, controller_name))
+      end
       own = mark_conditional_skips(applicable.reject(&inherited_here), conditions, action)
       inherited = mark_conditional_skips(
         parent.reject { |f| declared_names.include?(entry_key(f)) } +
           applicable.select(&inherited_here)
-            .map { |f| f.except(:from, :provenance).merge(attribution_of[entry_key(f)]) }, conditions, action
+            .map { |f| f.except(:from, :from_concern, :provenance).merge(attribution_of[entry_key(f)]) }, conditions, action
       )
 
       { own: own,
@@ -196,7 +202,10 @@ module RailsAiContext
         info = controllers[name]
         source = info.is_a?(Hash) ? nil : base_controller_source(name, root)
         info ||= { filters: base_filters(source, name, root) } if source
-        break unless info.is_a?(Hash)
+        unless info.is_a?(Hash)
+          name = gem_controller_base(name, root)
+          next
+        end
 
         # The class that skips a filter must not contribute it either: in the
         # booted tier its own list is the reflection list, which carries every
@@ -234,7 +243,9 @@ module RailsAiContext
                            evidence = {}, body_known = false)
       key = entry_key(filter)
       if found.key?(key)
-        found[key] = found[key].merge(from: ancestor) if filter[:declared] && !attributed.include?(key)
+        if filter[:declared] && !attributed.include?(key)
+          found[key] = found[key].except(:from_concern).merge(filter.slice(:from_concern), from: ancestor)
+        end
       else
         found[key] = filter.merge(from: ancestor)
         positions[key] = depth
@@ -363,6 +374,58 @@ module RailsAiContext
       path && SafeFile.read(path)
     end
 
+    # Gem controllers whose base class is set in the app's initializers:
+    # [gem base, setting that names its parent, the gem's default parent].
+    GEM_CONTROLLER_BASES = [
+      [ /\ADevise(::|Controller\z)/, "parent_controller=", "ApplicationController" ],
+      [ /\ADoorkeeper::(Tokens|TokenInfo|ApplicationMetal)Controller\z/, "base_metal_controller", "ActionController::API" ],
+      [ /\ADoorkeeper::/, "base_controller", "ActionController::Base" ]
+    ].freeze
+
+    # The static tier cannot read a gem's class chain, but these gems end it
+    # at a class the app names, so the walk resumes there.
+    def gem_controller_base(name, root)
+      _, setting, default = GEM_CONTROLLER_BASES.find { |pattern, _, _| name.to_s.match?(pattern) }
+      return nil unless setting
+
+      root ||= default_root
+      configured = root && RunCache.fetch([ :gem_controller_base, root.to_s, setting ]) { configured_base(root, setting) }
+      return nil if configured == :computed
+
+      (configured || default).delete_prefix("::")
+    rescue => e
+      RailsAiContext.debug_fail(e, nil, label: "ActionFilters gem_controller_base")
+    end
+
+    # ActiveSupport::Concern skips a re-include; a plain module's `self.included` runs on each.
+    # A module whose file is not found is taken for a concern.
+    def runs_once?(name, root, within)
+      root ||= default_root
+      path = root && ConcernPaths.find_file(root.to_s, name, prefer: "controller", within: within.to_s)
+      source = path && SafeFile.read(path)
+      return true unless source
+
+      RunCache.fetch([ :concern_module, path ]) do
+        Introspectors::SourceIntrospector.walk_source(source, { mixins: Introspectors::Listeners::MixinsListener })[:mixins]
+          .any? { |mixin| mixin[:macro] == :extend && mixin[:name] == "ActiveSupport::Concern" }
+      end
+    end
+
+    # The last value the initializers set; :computed when it is not a string literal.
+    def configured_base(root, setting)
+      Dir.glob(File.join(root.to_s, "config", "initializers", "**", "*.rb")).sort.filter_map do |path|
+        source = SafeFile.read(path)
+        next unless source&.include?(setting.delete_suffix("="))
+
+        tree = AstCache.parse_string(source)&.value
+        call = tree && Introspectors::AstWalk.each(tree).select { |node| node.is_a?(Prism::CallNode) && node.name == setting.to_sym }.last
+        next unless call
+
+        value = call.arguments&.arguments&.first
+        value.is_a?(Prism::StringNode) ? value.unescaped : :computed
+      end.last
+    end
+
     def base_filters(source, name, root)
       Introspectors::ControllerFilters.with_concerns(source, root: (root || default_root).to_s, within: name.to_s).first
     end
@@ -392,6 +455,6 @@ module RailsAiContext
                          :skip_calls, :base_filters, :skip_flag_records, :redeclared_names, :last_records, :own_skips,
                          :record_attribution, :conditional?, :partial?, :absolute_names, :conditions_by_name,
                          :merge_conditions, :mark_conditional_skips, :skip_tail, :action_names, :condition_text,
-                         :unplaced_conditional_skips, :evidence_skips
+                         :unplaced_conditional_skips, :evidence_skips, :gem_controller_base, :configured_base, :runs_once?
   end
 end

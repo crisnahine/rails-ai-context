@@ -131,7 +131,7 @@ module RailsAiContext
 
       def self.boot_failed(result, root, timeout, messages)
         messages << "Error: Rails app failed to boot in #{root}"
-        messages << "  #{result.failure_summary}"
+        messages << "  #{result.failure_summary(full: true)}"
         if ENV["DEBUG"]
           Array(result.error.backtrace).first(15).each { |line| messages << "    #{line}" }
           # The wrapper's frames stop at the require; the frames that name the
@@ -170,7 +170,8 @@ module RailsAiContext
         RailsAiContext.static_kind = kind
         RailsAiContext.configuration.app_root = root
         Configuration.auto_load!(root)
-        messages << "[rails-ai-context] static tier active: #{reason}"
+        # A failed boot's reason is already the line above.
+        messages << "[rails-ai-context] static tier active#{": #{reason}" unless kind == :boot_failed}"
         Outcome.new(tier: :static, reason: reason, kind: kind, messages: messages)
       rescue StandardError, ScriptError => e
         messages << "Error: #{e.message}"

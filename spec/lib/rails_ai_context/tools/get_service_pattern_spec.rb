@@ -254,6 +254,76 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
       end
     end
 
+    # A mailer and a module the services mix in are not services, by name or in a listing.
+    context "with a mailer and a mixin beside a service" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "services"))
+        File.write(File.join(tmpdir, "app", "services", "digest_mailer.rb"), <<~RUBY)
+          class DigestMailer < ApplicationMailer
+            def weekly = mail(to: "a@b.c")
+          end
+        RUBY
+        File.write(File.join(tmpdir, "app", "services", "auditable.rb"), <<~RUBY)
+          module Auditable
+            def audit! = true
+          end
+        RUBY
+        File.write(File.join(tmpdir, "app", "services", "charge_card.rb"), <<~RUBY)
+          class ChargeCard
+            include Auditable
+
+            def call = audit!
+          end
+        RUBY
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "does not answer the mailer as a service" do
+        text = described_class.call(service: "DigestMailer").content.first[:text]
+
+        expect(text).not_to include("## Public Methods")
+        expect(text).to include("Available: ChargeCard\n")
+      end
+
+      it "offers neither in a miss's alternatives" do
+        text = described_class.call(service: "Nope").content.first[:text]
+
+        expect(text).to include("Available: ChargeCard\n")
+      end
+
+      it "reads the matched file once" do
+        allow(described_class).to receive(:safe_read).and_call_original
+
+        text = described_class.call(service: "ChargeCard").content.first[:text]
+
+        expect(text).to include("# ChargeCard")
+        expect(described_class).to have_received(:safe_read).with(satisfy { |path| File.basename(path.to_s) == "charge_card.rb" }).once
+      end
+
+      # The caller scan reads the whole tree on purpose, so it is left out here.
+      it "reads no other service file and scans no mixins on a hit" do
+        allow(described_class).to receive(:find_callers).and_return([ [], false ])
+        allow(described_class).to receive(:safe_read).and_call_original
+        allow(RailsAiContext::Introspectors::ServiceClasses).to receive(:mixed_in).and_call_original
+
+        described_class.call(service: "ChargeCard")
+
+        expect(described_class).to have_received(:safe_read).once
+        expect(RailsAiContext::Introspectors::ServiceClasses).not_to have_received(:mixed_in)
+      end
+
+      it "still reads the mixin check for a matched entry-point-less module" do
+        text = described_class.call(service: "Auditable").content.first[:text]
+
+        expect(text).not_to include("## Public Methods")
+        expect(text).to include("Available: ChargeCard\n")
+      end
+    end
+
     context "with two namespaces duplicated across two roots" do
       let(:tmpdir) { Dir.mktmpdir }
 

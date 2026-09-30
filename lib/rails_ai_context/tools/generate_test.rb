@@ -393,6 +393,25 @@ module RailsAiContext
                   end
                 when "format"
                   lines << "    @#{setup_var}.#{attr} = \"invalid-format\""
+                when "absence"
+                  lines << "    @#{setup_var}.#{attr} = \"present\""
+                when "confirmation"
+                  lines << "    @#{setup_var}.#{attr} = \"secret\""
+                  lines << "    @#{setup_var}.#{attr}_confirmation = \"different\""
+                when "acceptance"
+                  lines << "    @#{setup_var}.#{attr} = \"0\""
+                when "exclusion"
+                  excluded = v.dig(:options, :in)
+                  if excluded.is_a?(Array) && excluded.any?
+                    lines << "    @#{setup_var}.#{attr} = #{excluded.first.inspect}"
+                  else
+                    lines.push("    skip \"set #{attr} to a value the exclusion list holds\"", "  end", "")
+                    next
+                  end
+                else
+                  # With no value known to break it, the assert would run on a valid record.
+                  lines.push("    skip \"implement #{v[:kind]} validation test\"", "  end", "")
+                  next
                 end
                 lines << "    assert_not @#{setup_var}.valid?#{"(:#{validation_context(v)})" if validation_context(v)}"
                 lines << "  end"

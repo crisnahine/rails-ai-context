@@ -844,7 +844,8 @@ module RailsAiContext
           type: assoc.macro.to_s,
           # A leading `::` stays: it means top level to the class resolver.
           class_name: assoc.class_name.to_s,
-          foreign_key: assoc.foreign_key.to_s
+          # Rails 7.1+ answers an Array for a composite key.
+          foreign_key: assoc.foreign_key.is_a?(Array) ? assoc.foreign_key.map(&:to_s) : assoc.foreign_key.to_s
         }
         detail[:through]    = assoc.options[:through].to_s if assoc.options[:through]
         detail[:source_type] = assoc.options[:source_type].to_s if assoc.options[:source_type]
@@ -1292,9 +1293,9 @@ module RailsAiContext
 
         shaped = assoc.merge(assoc[:name] ? { name: assoc[:name].to_s } : {})
         options = assoc[:options]
-        return shaped unless options.is_a?(Hash)
+        return with_default_foreign_key(shaped) unless options.is_a?(Hash)
 
-        LIFTED_ASSOCIATION_OPTIONS.each_with_object(shaped) do |key, acc|
+        lifted = LIFTED_ASSOCIATION_OPTIONS.each_with_object(shaped) do |key, acc|
           next unless options.key?(key) && !acc.key?(key)
 
           value = options[key]
@@ -1303,9 +1304,19 @@ module RailsAiContext
           next if value.nil?
 
           acc[key] = if BOOLEAN_ASSOCIATION_OPTIONS.include?(key) then value
+          elsif value.is_a?(Array) then value.map(&:to_s)
           else value.to_s
           end
         end
+        with_default_foreign_key(lifted)
+      end
+
+      # Reflection answers a belongs_to's key when none is declared: the name plus _id.
+      def with_default_foreign_key(assoc)
+        return assoc unless assoc[:type] == "belongs_to" && !assoc.key?(:foreign_key)
+        return assoc if assoc[:computed_name] || assoc[:name].to_s.empty?
+
+        assoc.merge(foreign_key: SchemaConventions.reference_column_name(assoc[:name]))
       end
 
       # A value that survives as itself: `in: %w[draft sent]` reached

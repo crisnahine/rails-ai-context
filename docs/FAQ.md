@@ -126,7 +126,7 @@ Yes. The file is applied first and a `configure` block wins only the keys it ass
 
 ### What's `generate_root_files`?
 
-When `true` (default), generates root files like CLAUDE.md, AGENTS.md. Set to `false` to only generate split rules (.claude/rules/, .cursor/rules/, etc.).
+When `true` (default), generates the root files: CLAUDE.md, AGENTS.md, .cursorrules and copilot-instructions.md. Set to `false` to only generate split rules (.claude/rules/, .cursor/rules/, etc.). `.ai-context.json` is written either way.
 
 ---
 

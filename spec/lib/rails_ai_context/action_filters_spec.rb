@@ -140,6 +140,148 @@ RSpec.describe RailsAiContext::ActionFilters do
       end
     end
 
+    # Ruby skips a module already in the ancestors, so its `included` block
+    # does not run for the child: the parent still declares the filter.
+    it "leaves a concern the parent already includes with the parent" do
+      Dir.mktmpdir do |dir|
+        app_with_base(dir)
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        File.write(File.join(dir, "app", "controllers", "concerns", "localized.rb"), <<~RUBY)
+          module Localized
+            extend ActiveSupport::Concern
+
+            included do
+              around_action :set_locale
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"), <<~RUBY)
+          class ApplicationController < ActionController::Base
+            include Localized
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "posts_controller.rb"), <<~RUBY)
+          class PostsController < ApplicationController
+            include Localized
+
+            def index; end
+          end
+        RUBY
+        ctx = static_context(dir)
+
+        chain = described_class.for_controller(ctx, "PostsController", root: dir)
+        expect(chain[:own].map { |f| f[:name] }).not_to include("set_locale")
+        expect(chain[:inherited].find { |f| f[:name] == "set_locale" })
+          .to include(from: "ApplicationController", from_concern: "Localized")
+      end
+    end
+
+    # A plain module's `self.included` hook runs on every include, so the child declares it again.
+    it "gives a re-included plain module's filter to the class that includes it" do
+      Dir.mktmpdir do |dir|
+        app_with_base(dir)
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        File.write(File.join(dir, "app", "controllers", "concerns", "localized.rb"), <<~RUBY)
+          module Localized
+            def self.included(base)
+              base.class_eval do
+                around_action :set_locale
+              end
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"),
+                   "class ApplicationController < ActionController::Base\n  include Localized\nend\n")
+        File.write(File.join(dir, "app", "controllers", "posts_controller.rb"),
+                   "class PostsController < ApplicationController\n  include Localized\n\n  def index; end\nend\n")
+
+        chain = described_class.for_controller(static_context(dir), "PostsController", root: dir)
+        expect(chain[:own].map { |f| f[:name] }).to include("set_locale")
+      end
+    end
+
+    it "reads the initializers once per run, however many gem controllers ask" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        path = File.join(dir, "config", "initializers", "devise.rb")
+        File.write(path, "Devise.setup do |config|\n  config.parent_controller = 'Web::BaseController'\nend\n")
+        allow(RailsAiContext::SafeFile).to receive(:read).and_call_original
+
+        RailsAiContext::RunCache.around do
+          %w[Devise::SessionsController DeviseController].each do |name|
+            expect(described_class.send(:gem_controller_base, name, dir)).to eq("Web::BaseController")
+          end
+        end
+        expect(RailsAiContext::SafeFile).to have_received(:read).with(path).once
+      end
+    end
+
+    it "ends the walk at a base_controller the initializer computes" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "initializers", "doorkeeper.rb"),
+                   "Doorkeeper.configure do\n  base_controller -> { Rails.env.test? ? 'A' : 'B' }\nend\n")
+
+        expect(described_class.send(:gem_controller_base, "Doorkeeper::ApplicationController", dir)).to be_nil
+      end
+    end
+
+    # A gem controller's base is the class its initializer names, so the chain
+    # comes back into the app, and a concern that base includes is inherited.
+    def app_with_gem_parent(dir, parent, initializer = nil)
+      app_with_base(dir)
+      FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+      File.write(File.join(dir, "app", "controllers", "concerns", "localized.rb"),
+                 "module Localized\n  extend ActiveSupport::Concern\n  included do\n    around_action :set_locale\n  end\nend\n")
+      File.write(File.join(dir, "app", "controllers", "application_controller.rb"),
+                 "class ApplicationController < ActionController::Base\n  include Localized\n  before_action :authenticate_user!\nend\n")
+      FileUtils.mkdir_p(File.join(dir, "app", "controllers", "oauth"))
+      File.write(File.join(dir, "app", "controllers", "oauth", "grants_controller.rb"),
+                 "class OAuth::GrantsController < #{parent}\n  include Localized\n  def new; end\nend\n")
+      return unless initializer
+
+      FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+      File.write(File.join(dir, "config", "initializers", "auth.rb"), initializer)
+    end
+
+    it "follows a Doorkeeper parent to the base_controller its initializer names" do
+      Dir.mktmpdir do |dir|
+        app_with_gem_parent(dir, "Doorkeeper::AuthorizationsController",
+                            "Doorkeeper.configure do\n  base_controller 'ApplicationController'\nend\n")
+        chain = described_class.for_controller(static_context(dir), "OAuth::GrantsController", root: dir)
+
+        expect(chain[:own].map { |f| f[:name] }).not_to include("set_locale")
+        expect(chain[:inherited].map { |f| [ f[:name], f[:from] ] })
+          .to include([ "set_locale", "ApplicationController" ], [ "authenticate_user!", "ApplicationController" ])
+      end
+    end
+
+    it "ends a Doorkeeper walk at its default base, which the app does not own" do
+      Dir.mktmpdir do |dir|
+        app_with_gem_parent(dir, "Doorkeeper::AuthorizationsController")
+        chain = described_class.for_controller(static_context(dir), "OAuth::GrantsController", root: dir)
+
+        expect(chain[:own].map { |f| f[:name] }).to include("set_locale")
+        expect(chain[:inherited]).to be_empty
+      end
+    end
+
+    it "follows a Devise parent to ApplicationController unless parent_controller names another" do
+      Dir.mktmpdir do |dir|
+        app_with_gem_parent(dir, "Devise::SessionsController")
+        chain = described_class.for_controller(static_context(dir), "OAuth::GrantsController", root: dir)
+
+        expect(chain[:inherited].map { |f| f[:name] }).to include("set_locale", "authenticate_user!")
+      end
+      Dir.mktmpdir do |dir|
+        app_with_gem_parent(dir, "Devise::SessionsController",
+                            "Devise.setup do |config|\n  config.parent_controller = 'ActionController::Base'\nend\n")
+        chain = described_class.for_controller(static_context(dir), "OAuth::GrantsController", root: dir)
+
+        expect(chain[:inherited]).to be_empty
+      end
+    end
+
     # A filter the class's own body declares is its own, whatever an ancestor
     # declares as well. The static list is the class's own declarations, so a
     # name in it that an ancestor also declares used to move to `inherited`
@@ -717,6 +859,20 @@ RSpec.describe RailsAiContext::ActionFilters do
 
       expect(entry).not_to have_key(:from)
       expect(entry[:provenance]).to eq("not declared in the controller chain")
+    end
+
+    it "keeps the concern an ancestor's filter came from on the booted tier's copy" do
+      chain = [ { kind: "before", name: "set_web_zone" }, { kind: "before", name: "require_staff" } ]
+      ctx = { controllers: { controllers: {
+        "Backoffice::BaseController" => { filters: [ chain.first.merge(declared: true, from_concern: "WebZoned"),
+                                                     chain.last.merge(declared: true) ] },
+        "Backoffice::CouponsController" => { parent_class: "Backoffice::BaseController", filters: chain }
+      } } }
+
+      entry = described_class.for_controller(ctx, "Backoffice::CouponsController")[:inherited]
+        .find { |f| f[:name] == "set_web_zone" }
+
+      expect(entry).to include(from: "Backoffice::BaseController", from_concern: "WebZoned")
     end
 
     # A controller whose file the walk cannot read - an engine's, a gem's -

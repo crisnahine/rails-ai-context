@@ -24,12 +24,24 @@ module RailsAiContext
             type:          node.name.to_s,
             name:          name,
             computed_name: (true unless literal),
+            computed_foreign_key: (true if computed_key?(node)),
             # Sources, not literals: `class_name: Organisation.name` names a
             # class, and the marker names nothing.
             options:       scope_options(receiver_name(node)).merge(extract_keyword_sources(node)),
             location:      node.location.start_line,
             confidence:    confidence_for(node)
           }.compact
+        end
+
+        private
+
+        # `foreign_key: AUTHOR_KEY` names a column only at run time.
+        def computed_key?(node)
+          key = extract_keyword_nodes(node)[:foreign_key]
+          return false if key.nil?
+
+          keys = key.is_a?(Prism::ArrayNode) ? key.elements : [ key ]
+          keys.empty? || keys.any? { |k| literal_string(k).nil? }
         end
       end
     end

@@ -277,7 +277,7 @@ RSpec.describe RailsAiContext::Serializers::ContextFileSerializer do
         result = described_class.new(context, format: :all).call
         root_files = result[:written].select { |f|
           base = File.basename(f)
-          %w[CLAUDE.md AGENTS.md .ai-context.json].include?(base) ||
+          %w[CLAUDE.md AGENTS.md .cursorrules].include?(base) ||
             f.end_with?("copilot-instructions.md")
         }
         expect(root_files).to be_empty
@@ -293,7 +293,20 @@ RSpec.describe RailsAiContext::Serializers::ContextFileSerializer do
 
         expect(result[:not_applicable].values.uniq).to include("root files disabled")
         left_out = result[:not_applicable].keys.map { |f| File.basename(f) }
-        expect(left_out).to include("CLAUDE.md", "AGENTS.md", ".ai-context.json", "copilot-instructions.md")
+        expect(left_out).to include("CLAUDE.md", "AGENTS.md", ".cursorrules", "copilot-instructions.md")
+      end
+    end
+
+    # The documented root files are the AI tools' instruction files; the JSON
+    # dump is no tool's root file, so switching them off leaves it written.
+    it "still writes .ai-context.json" do
+      Dir.mktmpdir do |dir|
+        allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
+        allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
+        result = described_class.new(context, format: :all).call
+
+        expect(result[:written].map { |f| File.basename(f) }).to include(".ai-context.json")
+        expect(File.exist?(File.join(dir, ".cursorrules"))).to be false
       end
     end
   end

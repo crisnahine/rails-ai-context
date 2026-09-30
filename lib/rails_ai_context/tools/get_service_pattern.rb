@@ -69,7 +69,9 @@ module RailsAiContext
       end
 
       private_class_method def self.format_single_service(service, service_files, service_dirs, root, lookup)
-        matches = match_service_files(service, service_files, service_dirs)
+        records = without_mixins(match_service_files(service, service_files, service_dirs)
+          .filter_map { |f| service_record(f, service_dirs, lookup) }, root)
+        matches = records.map { |r| r[:path] }
 
         if matches.size > 1
           # Paths are printed from the app root, not re-prefixed with
@@ -101,19 +103,20 @@ module RailsAiContext
         unless file
           # The constants the files declare, as the listing names them: the
           # camelized path spells Activitypub:: where Mastodon writes ActivityPub::.
-          available = service_files.filter_map { |f| (source = safe_read(f)) && name_and_superclass(source, f, service_dirs).first }.uniq
+          available = service_records(service_files, service_dirs, root, lookup).filter_map { |r| r[:class_name] }.uniq
           return not_found_response("Service", service, available.sort,
             recovery_tool: "Call rails_get_service_pattern(detail:\"summary\") to see all services")
         end
 
         return text_response("Service file too large to analyze.") if File.size(file) > max_file_size
 
-        source = safe_read(file)
+        record = records.find { |r| r[:path] == file }
+        source = record[:source]
         return text_response("Could not read service file.") unless source
 
         relative = file.sub("#{root}/", "")
         line_count = source.lines.size
-        class_name, = name_and_superclass(source, file, service_dirs)
+        class_name = record[:class_name]
 
         lines = [ "# #{class_name}", "" ]
         lines << "**File:** `#{relative}` (#{count_phrase(line_count, "line")})"
@@ -178,39 +181,55 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
+      # The classes the listing counts before it sets the bases apart. The by-name
+      # lookup reads the same list, so it never answers what the listing leaves out.
+      private_class_method def self.service_records(service_files, service_dirs, root, lookup)
+        without_mixins(service_files.filter_map { |file| service_record(file, service_dirs, lookup) }, root)
+      end
+
+      private_class_method def self.service_record(file, service_dirs, lookup)
+        source = safe_read(file)
+        # Kept unread so a by-name lookup can say the file is too large.
+        return { path: file } unless source
+        return if Introspectors::ServiceClasses.concern?(nil, source)
+
+        class_name, superclass = name_and_superclass(source, file, service_dirs)
+        return if Introspectors::ServiceClasses.mailer?(source, class_name, superclass, lookup)
+
+        { path: file, source: source, class_name: class_name, superclass: superclass,
+          entryless: Introspectors::ServiceClasses.entryless_module?(source, class_name) }
+      end
+
+      # A module other classes mix in is a concern in all but directory, and
+      # the generated files' Services line leaves it out by the same rule.
+      private_class_method def self.without_mixins(records, root)
+        entryless = records.select { |r| r[:entryless] }.map { |r| r[:class_name] }
+        return records if entryless.empty?
+
+        mixins = Introspectors::ServiceClasses.mixed_in(root, entryless)
+        records.reject { |r| mixins.include?(r[:class_name]) }
+      end
+
       private_class_method def self.format_service_listing(service_files, service_dirs, root, detail, lookup)
-        service_data = []
+        service_data = service_records(service_files, service_dirs, root, lookup).filter_map do |record|
+          next unless record[:source]
 
-        service_files.each do |file|
-          source = safe_read(file)
-          next unless source
-          next if Introspectors::ServiceClasses.concern?(nil, source)
-
-          class_name, superclass = name_and_superclass(source, file, service_dirs)
-          next if Introspectors::ServiceClasses.mailer?(source, class_name, superclass, lookup)
-
+          file, source = record.values_at(:path, :source)
           owned = owned_methods(source, constant_for(file, service_dirs))
-          public_methods = extract_public_methods(owned)
-          init_params = extract_initialize_params(owned)
 
-          service_data << {
+          {
             file: file.sub("#{root}/", ""),
-            class_name: class_name,
-            superclass: superclass,
+            class_name: record[:class_name],
+            superclass: record[:superclass],
             line_count: source.lines.size,
-            public_methods: public_methods,
-            init_params: init_params,
+            public_methods: extract_public_methods(owned),
+            init_params: extract_initialize_params(owned),
             class_method_call: owned.any? { |m| m[:scope] == :class && m[:name] == "call" },
             result_object: source.match?(/Result\.new|OpenStruct\.new|Struct\.new|\.success|\.failure/),
             active_interaction: Introspectors::Interaction.interaction?(source, lookup: lookup),
-            entryless: Introspectors::ServiceClasses.entryless_module?(source, class_name)
+            entryless: record[:entryless]
           }
         end
-
-        # A module other classes mix in is a concern in all but directory, and
-        # the generated files' Services line leaves it out by the same rule.
-        mixins = Introspectors::ServiceClasses.mixed_in(root, service_data.select { |s| s[:entryless] }.map { |s| s[:class_name] })
-        service_data = service_data.reject { |s| mixins.include?(s[:class_name]) }
 
         bases = base_class_names(service_data)
         service_data = service_data.reject { |s| bases.include?(s[:class_name]) }

@@ -419,6 +419,34 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(warning_line).not_to include("posts_tags")
     end
 
+    it "leaves out the table of a model file that could not be read" do
+      context = described_class.cached_context
+      context[:models]["LegacyAudit"] = { error: "file is unreadable", file: "app/models/legacy_audit.rb" }
+      allow(described_class).to receive(:cached_context).and_return(context)
+
+      expect(warning_line).not_to include("legacy_audits")
+      json = JSON.parse(described_class.call(format: "json").content.first[:text])
+      expect(json["tables_without_model_file"]).not_to include("legacy_audits")
+    end
+
+    it "keeps a static table's unread calls out of the json, which the booted tier never has" do
+      context = described_class.cached_context
+      table = context[:schema][:tables].keys.first
+      tables = context[:schema][:tables].merge(table => context[:schema][:tables][table].merge(unread_calls: %w[replica_identity_index]))
+      allow(described_class).to receive(:cached_context).and_return(context.merge(schema: context[:schema].merge(tables: tables)))
+
+      expect(described_class.call(format: "json").content.first[:text]).not_to include("unread_calls")
+      expect(described_class.call(table: table, format: "json").content.first[:text]).not_to include("unread_calls")
+    end
+
+    it "takes an unreadable model file's table from what it declares over its file name" do
+      context = described_class.cached_context
+      context[:models]["LegacyAudit"] = { error: "file is unreadable", file: "app/models/legacy_audit.rb", table_name: "audit_log" }
+      allow(described_class).to receive(:cached_context).and_return(context)
+
+      expect(warning_line).to include("legacy_audits")
+    end
+
     # The lists answer for the whole schema, whichever page and level is shown.
     %w[summary standard full].each do |level|
       it "names every unclaimed table at detail #{level}, past the page" do
@@ -617,6 +645,12 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(text).to include("declared in db/schema.rb")
       expect(text).to include("rails db:migrate")
       expect(text).not_to include("Did you mean")
+    end
+
+    it "names the pending migration that adds the table" do
+      text = described_class.call(table: "order_comments").content.first[:text]
+
+      expect(text).to include("20260920000000 CreateOrderComments")
     end
 
     it "answers the same way for the model name the tool advertises" do

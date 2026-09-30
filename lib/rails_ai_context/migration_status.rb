@@ -21,7 +21,12 @@ module RailsAiContext
       return nil unless defined?(ActiveRecord::Base)
 
       context = migration_context(migrate_dir)
-      context.open.pending_migrations.map { |m| { version: m.version.to_s, name: m.name } }
+      begin
+        context.open.pending_migrations.map { |m| { version: m.version.to_s, name: m.name } }
+      rescue ActiveRecord::MigrationError
+        # A future or duplicate version stops Rails loading the directory; the applied set still answers.
+        PendingMigrations.for(migrate_dir: migrate_dir, applied: context.get_all_versions)
+      end
     rescue => e
       RailsAiContext.debug_fail(e, nil, label: "MigrationStatus.pending")
     end

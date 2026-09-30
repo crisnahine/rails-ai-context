@@ -262,10 +262,25 @@ module RailsAiContext
             tables[table][:columns].reject! { |c| c[:name] == col[:name] }
             tables[table][:columns] << col
           end
+          add_reference_foreign_key(tables[table], table, name, options || {})
           return unless ref[:index]
 
           tables[table][:indexes].reject! { |idx| idx[:name] == ref[:index][:name] }
           tables[table][:indexes] << ref[:index]
+        end
+
+        # ReferenceDefinition's foreign_key: (7.0 to 8.1): true points at the
+        # pluralized name, a hash may name to_table: and primary_key:.
+        def add_reference_foreign_key(table_data, table, name, options)
+          fk = options[:foreign_key]
+          return if !fk || options[:polymorphic]
+
+          fk = {} unless fk.is_a?(Hash)
+          to = fk[:to_table] || name.to_s.pluralize
+          return if to == RailsAiContext::Confidence::INFERRED
+
+          (table_data[:foreign_keys] ||= []) <<
+            SchemaConventions.foreign_key_entry(table, to.to_s, SchemaConventions.reference_column_name(name), fk[:primary_key])
         end
 
         def apply_schema_index(entry, current_table, tables)

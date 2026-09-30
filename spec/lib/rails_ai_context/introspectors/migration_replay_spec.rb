@@ -831,6 +831,67 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(index_on(table, "editor_id")).to include(name: "by_editor", unique: false)
     end
 
+    # TableDefinition#references (7.0 to 8.1) defines each name it is given;
+    # Canvas's epub_exports reads three references off one call.
+    it "reads every name of one t.references call" do
+      table = replayed(<<~RUBY)
+        create_table :comments do |t|
+          t.references :export, :course, :user, foreign_key: true
+        end
+      RUBY
+
+      expect(table[:columns].map { |c| c[:name] }).to eq(%w[id export_id course_id user_id])
+      expect(table[:indexes].map { |i| i[:columns] }).to eq([ %w[export_id], %w[course_id], %w[user_id] ])
+      expect(table[:foreign_keys].map { |fk| fk[:column] }).to eq(%w[export_id course_id user_id])
+    end
+
+    it "reads every name in a change_table block, adding and removing" do
+      table = replay([
+        "create_table :comments do |t|\n  t.string :body\nend\n",
+        "change_table :comments do |t|\n  t.belongs_to :a, :b\nend\n",
+        "change_table :comments do |t|\n  t.remove_references :a, :b\nend\n"
+      ])["comments"]
+
+      expect(table[:columns].map { |c| c[:name] }).to eq(%w[id body])
+    end
+
+    # Canvas's `t.replica_identity_index` is an app method that adds an index
+    # the replay cannot see, so the table's index list may be short.
+    it "marks a table whose block calls a method the replay does not read" do
+      tables = replay([ <<~RUBY ])
+        create_table :comments do |t|
+          t.references :root_account, index: false
+          t.replica_identity_index
+          t.timestamps
+        end
+        create_table :posts do |t|
+          t.references :user
+          t.foreign_key :users
+          t.timestamps
+        end
+      RUBY
+
+      expect(tables["comments"][:unread_calls]).to eq(%w[replica_identity_index])
+      expect(tables["posts"]).not_to have_key(:unread_calls)
+    end
+
+    it "reads a call on another block's `t` as no table call" do
+      tables = replay([ <<~RUBY ])
+        class CreateTags < ActiveRecord::Migration[7.1]
+          def up
+            create_table :tags do |t|
+              t.string :name
+            end
+            Tag.find_each { |t| t.update!(slug: t.name.parameterize) }
+            Tag.all.each { |t| t.remove :name }
+          end
+        end
+      RUBY
+
+      expect(tables["tags"]).not_to have_key(:unread_calls)
+      expect(tables["tags"][:columns].map { |c| c[:name] }).to eq(%w[id name])
+    end
+
     it "indexes an add_reference too" do
       table = replay([
         "create_table :comments do |t|\n  t.string :body\nend\n",

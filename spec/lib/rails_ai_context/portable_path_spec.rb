@@ -101,4 +101,35 @@ RSpec.describe RailsAiContext::PortablePath do
       expect(described_class.relativize_all(paths, "/srv/blog")).to eq([ "lib", "app/services" ])
     end
   end
+
+  describe ".relativize_text" do
+    it "strips the root where a path starts" do
+      text = "cannot load /app/app/models/user.rb:3 (from '/app/lib/x.rb')"
+
+      expect(described_class.relativize_text(text, "/app")).to eq("cannot load app/models/user.rb:3 (from 'lib/x.rb')")
+    end
+
+    it "leaves a root that appears inside a longer path alone" do
+      engine = "/app/engines/billing/app/models/x.rb:3"
+      gem = "/usr/local/bundle/gems/devise-4.9/app/models/devise.rb"
+
+      expect(described_class.relativize_text(engine, "/app")).to eq("engines/billing/app/models/x.rb:3")
+      expect(described_class.relativize_text(gem, "/app")).to eq(gem)
+    end
+
+    it "strips the resolved root before the root it resolves from" do
+      allow(File).to receive(:realpath).and_call_original
+      allow(File).to receive(:realpath).with("/tmp/rvw_app").and_return("/private/tmp/rvw_app")
+      text = "cannot load /private/tmp/rvw_app/app/models/user.rb:3 or /tmp/rvw_app/lib/a.rb"
+
+      expect(described_class.relativize_text(text, "/tmp/rvw_app")).to eq("cannot load app/models/user.rb:3 or lib/a.rb")
+    end
+
+    it "strips the root after = and , and names the bare root as ." do
+      expect(described_class.relativize_text("path=/app/a.rb", "/app")).to eq("path=a.rb")
+      expect(described_class.relativize_text("a,/app/b.rb", "/app")).to eq("a,b.rb")
+      expect(described_class.relativize_text("dir /app", "/app")).to eq("dir .")
+      expect(described_class.relativize_text("see /application /app.rb", "/app")).to eq("see /application /app.rb")
+    end
+  end
 end

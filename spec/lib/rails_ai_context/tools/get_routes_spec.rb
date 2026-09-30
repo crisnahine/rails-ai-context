@@ -55,6 +55,30 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
       expect(text).to include("_A mounted app's own routes are in its table, not in the count above._")
     end
 
+    it "says an engine's own table was not read where it could not be" do
+      unread = [ { engine: "PgHero::Engine", mount: "/pghero", routes: [], unavailable: "the engine's own routes are read only with the app booted" } ]
+      allow(described_class).to receive(:cached_context).and_return({
+        routes: { total_routes: 9, by_controller: by_controller, api_namespaces: [], engine_routes: unread }
+      })
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("- **PgHero::Engine** at `/pghero`: [UNAVAILABLE: the engine's own routes are read only with the app booted]")
+      expect(text).not_to include("Routes drawn into mounted engines")
+    end
+
+    it "says an engine mounted at a computed path is mounted" do
+      unread = [ { engine: "PgHero::Engine", mount_computed: true, routes: [], unavailable: "the engine's own routes are read only with the app booted" } ]
+      allow(described_class).to receive(:cached_context).and_return({
+        routes: { total_routes: 9, by_controller: by_controller, api_namespaces: [], engine_routes: unread }
+      })
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("- **PgHero::Engine** at a path the routes compute:")
+      expect(text).not_to include("not mounted")
+    end
+
     # OFN: `orders` names api/v0/orders in the app and spree/admin/orders in Spree's table.
     it "lists the engine's matches beside the app's for a short name, labelled" do
       allow(described_class).to receive(:cached_context).and_return({

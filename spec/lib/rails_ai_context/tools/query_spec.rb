@@ -354,7 +354,17 @@ RSpec.describe RailsAiContext::Tools::Query do
         expect(result.content.first[:text]).not_to include("Database not found")
       end
 
-      it "still explains a database that does not exist" do
+it "reads MySQL's MAX_EXECUTION_TIME interruption as the timeout" do
+  allow(described_class).to receive(:execute_sqlite)
+    .and_raise(ActiveRecord::StatementInvalid,
+               "Mysql2::Error: Query execution was interrupted, maximum statement execution time exceeded")
+
+  result = described_class.call(sql: "SELECT SLEEP(60) FROM tags")
+
+  expect(result.content.first[:text]).to start_with("Query exceeded 5 second timeout")
+end
+
+it "still explains a database that does not exist" do
         allow(described_class).to receive(:execute_sqlite)
           .and_raise(ActiveRecord::StatementInvalid,
                      %(PG::UndefinedDatabase: ERROR:  database "racfix_nope" does not exist))
@@ -570,7 +580,7 @@ RSpec.describe RailsAiContext::Tools::Query do
       it "blocks SELECT INTO OUTFILE (MySQL)" do
         valid, error = described_class.validate_sql("SELECT 1 INTO OUTFILE '/tmp/leak.txt'")
         expect(valid).to be false
-        expect(error).to match(/OUTFILE|SELECT INTO/)
+        expect(error).to eq("Blocked: SELECT INTO OUTFILE / DUMPFILE writes to disk")
       end
     end
 

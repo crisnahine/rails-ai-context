@@ -80,6 +80,20 @@ module RailsAiContext
       relative unless relative.start_with?(File::SEPARATOR)
     end
 
+    # For free text such as an exception message, which names a file by its
+    # absolute path, often through the resolved form of the root (/private/tmp).
+    def relativize_text(text, root)
+      root = root.to_s
+      return text.to_s if root.empty?
+
+      real = File.realpath(root) rescue root
+      prefixes = [ root, real ].uniq.sort_by { |prefix| -prefix.length }.map { |prefix| Regexp.escape(prefix) }
+      alternation = prefixes.join("|")
+      text.to_s
+        .gsub(%r{(\A|[\s"'`(:\[=,])(?:#{alternation})/}, '\1')
+        .gsub(%r{(\A|[\s"'`(:\[=,])(?:#{alternation})(?=\z|[\s"'`)\],;:])}, '\1.')
+    end
+
     def relativize_all(paths, root)
       Array(paths).map { |path| relativize(path, root) }.uniq
     end

@@ -5,6 +5,128 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`generate_root_files: false` leaves out `.cursorrules` too, and always
+  writes `.ai-context.json`.** `.cursorrules` is the same compact file as
+  `CLAUDE.md` at the repo root, so it is a root file and now reports "Not
+  applicable (root files disabled)". `.ai-context.json` is data for tools, not
+  an instruction file, and is written whatever the key says.
+- **`serve --port` has no default of its own.** An explicit `--port` wins, then
+  `http_port` from the config, then 6029. The config key never reached `serve`
+  before, although `docs/STANDALONE.md` documents it, and the
+  `streamable_http` alias ignored `--port`.
+- **A PostGIS connection is labelled PostgreSQL everywhere.** The booted schema
+  said PostGIS and the static tier PostgreSQL for the same app. The raw adapter
+  name stays in `.ai-context.json` as `adapter_source`.
+- **The booted schema header lists pending migrations**, as the static tier
+  already did.
+
+### Fixed
+
+- **No machine path in an introspector's error.** A model file that could not
+  load put the absolute path of the app into `rails_get_model_details`,
+  `CLAUDE.md`, the models rules file and `.ai-context.json`, and the controller,
+  component, middleware, migration and rake-task errors did the same. Every
+  section's errors are now written relative to the app root, the resolved
+  `/private/tmp` form included.
+- **A declared, unmigrated table names the migration that adds it.** The booted
+  answer said the table was missing from the database and stopped there. Rails
+  7.2+ refuses to load a migration dated in the future, which also emptied the
+  pending list; the list now comes from the applied versions and the files.
+- **An unreadable model file still counts as the model file for its table**,
+  instead of listing the table under "Tables with no model file".
+- **The static tier carries each `belongs_to` foreign key.** Static
+  association records had none unless the source spelled one, so
+  `rails_get_model_details`, the context files and `.ai-context.json` left it
+  out, and `rails_validate` stayed silent on an unindexed key where the booted
+  tier warned. A polymorphic key indexed as `[type, id]` counts as indexed.
+- **A composite foreign key in `db/structure.sql` is read**, pg_dump and
+  mysqldump both, and renders as a column list like the schema.rb one.
+- **Minitest tests from `rails_generate_test` can pass.** Absence,
+  confirmation, acceptance and exclusion validations asserted on a valid
+  fixture; each now sets up an invalid record, or emits `skip` where it cannot.
+- **A mount at a computed path prints no path.** `mount X => ENV.fetch(...)`
+  printed `` at `[INFERRED]` ``, a bare constant printed its name as the path,
+  and a gem engine mounted that way read as "not mounted by the app's routes".
+  A path written without its leading slash gets one, as Rails does.
+- **Static routes say which engine tables they could not read.** An engine
+  whose routes live in its gem (PgHero, LetterOpenerWeb) dropped out of the
+  static answer with no note; it is listed under "Mounted engines whose routes
+  were not read". A constant the app defines counts as an engine only when it
+  subclasses `Rails::Engine`. An engine mounted at several paths is one line
+  naming each.
+- **Booted filter attribution matches the static tier.** An inherited
+  `after_action` lost its "from" credit when the child declared a
+  `before_action` of the same name, filters from a controller concern were not
+  credited to it, and a concern's `only:`/`except:`/`if:`/`unless:` and its
+  `skip_*_action` calls never reached the booted record. A body that
+  re-declares a concern's filter owns it, and a concern an ancestor already
+  includes stays the ancestor's.
+- **An ERB comment is not read for instance variables**, while a Ruby comment
+  line inside a multi-line code tag no longer hides the code after it.
+- **`rails_get_partial_interface` finds `render(partial: ...)`** with
+  parentheses, on one line or several, counts a nested render once, and a
+  multi-line snippet stops at the call's end.
+- **Jobs on Rails 7.0 to 8.1.** A job with no `queue_as` read as "computed by a
+  block", since ActiveJob's default queue is a lambda; it now shows the
+  resolved default. The booted tier dropped every `retry_on`/`discard_on`, and
+  a job in a code root Zeitwerk does not manage.
+- **A mailer outside `app/mailers` is a mailer in the booted tier too**, and
+  `rails_get_service_pattern` no longer answers a mailer, concern or mixin by
+  name when its listing leaves them out.
+- **`app/concerns` reads as `other`** when the app root directory is itself
+  named `app`, as in Docker's `/app`.
+- **The static default locale reads `Rails.application.config.i18n`** in an
+  initializer, where the last assignment wins.
+- **A bad value for a required enum fails the call.**
+  `migration_advisor --action bogus` said "action is required" and exited 0;
+  it says `bogus` is not a valid `action`, names the allowed values and exits 1.
+- **`rails_diagnose` never suggests a path it refused**, refuses it with or
+  without `--line`, and prints the tier footer once.
+- **`rails_validate` names a `belongs_to` whose key column the table lacks**
+  instead of calling that column unindexed, and says nothing about a table's
+  indexes when its schema calls a helper the reader cannot interpret (Canvas's
+  `t.replica_identity_index`), since that helper may add the index.
+- **A multi-name `t.references :a, :b, :c` adds every column**, with its index
+  and foreign key, in the schema.rb reader and the migration replay. The replay
+  also records `foreign_key: true` on a single reference, which it dropped.
+- **A declaration inside a block the model may not run is kept but not
+  trusted.** `has_details_table do belongs_to :parent end` put a `parent_id`
+  key on the model's own table, and `rails_validate` checked it there. Such
+  declarations are still listed, and `rails_validate`'s schema, column and
+  `:dependent` checks skip them. `with_options`, `included`, `class_methods`,
+  `concerning`, `state_machine` and `aasm` blocks run on the model and are
+  trusted as before.
+- **A foreign key given as a constant or an expression is not read as a column
+  name**, and a composite key stays a column list in both tiers instead of the
+  text of a Ruby array.
+- **Every column type reads as a column in the static schema**, `t.vector`,
+  `t.citext`, `t.enum`, the range and PostGIS types included, and so does a
+  column whose options sit in braces. They were left out of the table.
+- **`attr_reader` and `alias_attribute` names count as attributes** for
+  `rails_validate`'s "column not found" check.
+- **Filters inherited through a Devise or Doorkeeper controller.** The static
+  walk stopped at the gem class, so a controller under `Devise::` or
+  `Doorkeeper::` lost every filter its app base declares and was credited with
+  a concern that base already includes. It now continues at the base the gem's
+  initializer names (`parent_controller`, `base_controller`).
+- **In-repo route files are read statically.** A mounted in-repo engine's own
+  routes are listed under its mount, and a file that draws, appends or prepends
+  to the app's routes adds to the app's table; only an unmounted engine's file
+  still counts as not read.
+- **A failed boot names missing gems once.** A bundle missing many gems listed
+  every name three times; the banner now gives the count and the first few,
+  and `doctor` and `DEBUG=1` keep the full list.
+- **A test file over `max_test_file_size` is named as too large**, not missing.
+- **`rails_runtime_info` says how many rows it left out** of the unused-index
+  list and the summary table sizes, which it cut at 10 and 5 with no note.
+- **`rails_query` on MySQL** reads a `MAX_EXECUTION_TIME` interruption as the
+  timeout, and names `INTO OUTFILE`/`DUMPFILE` as a disk write.
+- The defaults in `configuration.rb`'s comments match the values it sets.
+
 ## [5.30.1] - 2026-09-28
 
 ### Fixed

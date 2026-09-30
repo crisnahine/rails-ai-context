@@ -887,15 +887,16 @@ module RailsAiContext
         #
         # @return [MCP::Tool::Response, nil] the error result, or nil to carry on
         def refuse_unsafe_paths(paths)
-          refused = Array(paths).compact.reject { |path| path.to_s.strip.empty? }.filter_map do |path|
-            refusal = RailsAiContext::SafePath.locate(path.to_s, under: rails_app.root.to_s).refusal
-            [ path, refusal ] if %i[sensitive traversal outside].include?(refusal)
-          end
-          return nil if refused.empty?
+          refused = Array(paths).compact.reject { |path| path.to_s.strip.empty? }.filter_map { |path| unsafe_path_message(path) }
+          error_response(refused.join("\n")) if refused.any?
+        end
 
-          error_response(refused.map { |path, refusal|
-            refusal == :sensitive ? "Path not allowed: #{path} (sensitive file)" : "Path not allowed: #{path}"
-          }.join("\n"))
+        # @return [String, nil] the refusal for a path the caller may not read
+        def unsafe_path_message(path)
+          case RailsAiContext::SafePath.locate(path.to_s, under: rails_app.root.to_s).refusal
+          when :traversal, :outside then "Path not allowed: #{path}"
+          when :sensitive then "Path not allowed: #{path} (sensitive file)"
+          end
         end
 
         # Resolve a Dir.glob result to a realpath that is:

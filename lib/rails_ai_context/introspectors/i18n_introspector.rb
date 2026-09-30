@@ -11,11 +11,12 @@ module RailsAiContext
 
       # Both spellings apps use: `config.i18n.default_locale = :es` in
       # application.rb or an environment file, and a bare
-      # `I18n.default_locale = :es` in an initializer.
+      # `I18n.default_locale = :es` in an initializer, which may also reach
+      # config through `Rails.application.config.i18n`.
       # Anchored past the line start so a commented example does not win:
       # GitLab ships `# config.i18n.default_locale = :de` and every coverage
       # line then measured an English app against German.
-      DEFAULT_LOCALE_ASSIGNMENT = /^[^\S\n]*(config\.i18n|I18n)\.default_locale\s*=\s*[:"']([\w-]+)/
+      DEFAULT_LOCALE_ASSIGNMENT = /^[^\S\n]*((?:(?:::)?Rails\.(?:application\.config|configuration)|config)\.i18n|I18n)\.default_locale\s*=\s*[:"']([\w-]+)/
 
       # `config.i18n.available_locales`, and only that: the listener strips the
       # root it matched, so a bare `config.available_locales` is any gem's own
@@ -102,7 +103,7 @@ module RailsAiContext
       end
 
       def spelling_of(prefix)
-        prefix.start_with?("config") ? :config : :i18n
+        prefix == "I18n" ? :i18n : :config
       end
 
       # I18n::Railtie buffers app.config.i18n and applies it from

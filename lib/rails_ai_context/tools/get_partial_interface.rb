@@ -369,7 +369,21 @@ module RailsAiContext
 
           relative = file.sub("#{root}/", "")
 
-          content.each_line.with_index(1) do |line, line_num|
+          lines = content.lines
+          # Per call, not per line: `render(` and a call split over lines are
+          # one call whose arguments the line alone does not hold.
+          covered = 0
+          Introspectors::ViewTemplateIntrospector.render_calls(content).each do |at, args|
+            args = args.split("%>", 2).first
+            # A render inside another's arguments is already part of that call's site.
+            next if at < covered
+
+            covered = at + args.length
+            line_num = content[0...at].count("\n") + 1
+            line = "render #{args.gsub(/\s+/, " ").strip}"
+            spanned = lines[(line_num - 1)..(line_num - 1 + args.chomp.count("\n"))]
+            snippet = spanned.size > 1 ? spanned.join(" ").squish : lines[line_num - 1].strip
+
             matched_line = false
             search_patterns.each do |search_name|
               # Match render "partial_name" or render partial: "partial_name"
@@ -389,10 +403,10 @@ module RailsAiContext
                 file: relative,
                 line: line_num,
                 locals: locals_passed,
-                snippet: line.strip
+                snippet: snippet
               }
               matched_line = true
-              break # one match per line is enough
+              break # one match per call is enough
             end
 
             next if matched_line
@@ -408,7 +422,7 @@ module RailsAiContext
                 file: relative,
                 line: line_num,
                 locals: [],
-                snippet: line.strip
+                snippet: snippet
               }
               break
             end

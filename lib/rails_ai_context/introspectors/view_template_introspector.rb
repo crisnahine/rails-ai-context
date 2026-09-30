@@ -368,7 +368,7 @@ module RailsAiContext
         refs = []
         # The partial or template a render call names, positionally or as a
         # keyword anywhere in its arguments, with or without parentheses.
-        render_arguments(content).each do |args|
+        self.class.render_calls(content).each do |_, args|
           named = [ args[RENDER_POSITIONAL, 2], *top_level(args).scan(RENDER_NAMED).flatten ].compact
           # An interpolated name is decided at runtime, not a partial on disk.
           refs.concat(named.select { |name| name.match?(PARTIAL_NAME) })
@@ -388,18 +388,29 @@ module RailsAiContext
         refs.uniq
       end
 
-      # Each render call's argument text: its balanced parentheses, or the rest of
-      # the line and every line a trailing comma continues onto.
-      def render_arguments(content)
+      # Each render call as [offset, argument text]: its balanced parentheses,
+      # or the rest of the line and every line a trailing comma continues onto.
+      def self.render_calls(content)
         content.to_enum(:scan, RENDER_CALL).map do
-          rest = content[Regexp.last_match.end(0)..]
+          at = Regexp.last_match.end(0)
+          rest = content[at..]
           open = rest[/\A\s*\(/]
-          next continued_line(rest) unless open
+          next [ at, continued_line(rest) ] unless open
 
           span = RailsAiContext::Brackets.span(rest, open.length - 1, comments: :ruby)
-          span ? span[1...-1] : rest[open.length..]
+          [ at, span ? span[1...-1] : rest[open.length..] ]
         end
       end
+
+      def self.continued_line(text)
+        lines = []
+        text.each_line do |line|
+          lines << line
+          break unless line.rstrip.end_with?(",", "\\")
+        end
+        lines.join
+      end
+      private_class_method :continued_line
 
       # The argument text with every nested (), [] and {} group dropped, so a
       # `template:` inside `locals: {...}` or `Foo.new(...)` is not the call's.
@@ -407,15 +418,6 @@ module RailsAiContext
         kept = +""
         RailsAiContext::Brackets.each_top_level(args, comments: :ruby) { |piece, kind| kept << piece unless %i[group comment].include?(kind) }
         kept
-      end
-
-      def continued_line(text)
-        lines = []
-        text.each_line do |line|
-          lines << line
-          break unless line.rstrip.end_with?(",", "\\")
-        end
-        lines.join
       end
 
       def extract_stimulus_refs(content)

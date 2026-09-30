@@ -25,7 +25,7 @@ def print_result(result)
 end unless defined?(print_result)
 
 def abort_boot_failure(result, timeout)
-  $stderr.puts "Error: Rails app failed to boot: #{result.failure_summary}"
+  $stderr.puts "Error: Rails app failed to boot: #{result.failure_summary(full: true)}"
   if result.error.is_a?(RailsAiContext::BootManager::BootTimeoutError)
     $stderr.puts "  If the app is healthy but slow, raise RAILS_AI_CONTEXT_BOOT_TIMEOUT (seconds, current: #{timeout})."
   end

@@ -36,7 +36,7 @@ rails-ai-context serve --transport http --port 6029   # HTTP transport
 | Option | Default | Description |
 |:-------|:--------|:------------|
 | `--transport` | `stdio` | `stdio` or `http` |
-| `--port` | `6029` | HTTP listen port |
+| `--port` | `http_port` from config, else `6029` | HTTP listen port |
 | `--no-boot` | off | Skip booting the app; answer from source alone |
 
 ### `tool`

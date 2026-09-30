@@ -128,6 +128,12 @@ RSpec.describe RailsAiContext::ConcernPaths do
     it "falls back to other for a directory outside app/" do
       expect(described_class.type_for("/srv/x/lib/concerns")).to eq("other")
     end
+
+    # An app deployed at /app (the Docker default) has app/concerns at /app/app/concerns.
+    it "reads app/concerns as other when the app root itself is named app" do
+      expect(described_class.type_for("/app/app/concerns")).to eq("other")
+      expect(described_class.type_for("/srv/app/app/models/concerns")).to eq("model")
+    end
   end
 
   describe ".find_file" do

@@ -220,7 +220,7 @@ module RailsAiContext
     # Models/tables to exclude from introspection
     attr_accessor :excluded_models
 
-    # TTL in seconds for cached introspection (default: 30)
+    # TTL in seconds for cached introspection (default: 60)
     attr_accessor :cache_ttl
 
     # Context file generation mode
@@ -262,8 +262,8 @@ module RailsAiContext
     # `generate_root_files`, which still writes the split rule files.
     attr_accessor :context_files
 
-    # Whether to generate root-level context files (CLAUDE.md, AGENTS.md, etc.)
-    # When false, only generates split rule files (.claude/rules/, .cursor/rules/, etc.)
+    # Whether to generate root-level context files (CLAUDE.md, AGENTS.md, .cursorrules,
+    # copilot-instructions.md). When false, only split rule files and .ai-context.json are written.
     attr_accessor :generate_root_files
 
     # Whether to embed the Anti-Hallucination Protocol section in generated context files.
@@ -272,14 +272,14 @@ module RailsAiContext
     attr_accessor :anti_hallucination_rules
 
     # File size limits (bytes) - increase for larger projects
-    attr_accessor :max_file_size          # Per-file read limit for tools (default: 2MB)
-    attr_accessor :max_test_file_size     # Test file read limit (default: 500KB)
+    attr_accessor :max_file_size          # Per-file read limit for tools (default: 5MB)
+    attr_accessor :max_test_file_size     # Test file read limit (default: 1MB)
     attr_accessor :max_schema_file_size   # schema.rb / structure.sql parse limit (default: 10MB)
     # Doctor thresholds, not read caps: the view tools do not stop at them.
     attr_accessor :max_view_total_size    # Size of app/views doctor warns past (default: 10MB)
     attr_accessor :max_view_file_size     # Accepted and stored; no check reads it (default: 1MB)
     attr_accessor :max_search_results     # Max lines a search may emit, matches and context together (default: 200)
-    attr_accessor :max_validate_files     # Max files per validate call (default: 20)
+    attr_accessor :max_validate_files     # Max files per validate call (default: 50)
 
     # Additional MCP tool classes to register alongside built-in tools
     attr_accessor :custom_tools

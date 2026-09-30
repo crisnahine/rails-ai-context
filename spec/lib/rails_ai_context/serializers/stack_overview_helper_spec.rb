@@ -238,7 +238,7 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
 
     it "states the gems and architecture the full rule files carry" do
       text = test_class.new(context).overview_lines.join("\n")
-      expect(text).to include("- Database: postgresql - 5 tables")
+      expect(text).to include("- Database: PostgreSQL - 5 tables")
       expect(text).to include("- Models: 1")
       expect(text).to include("- Routes: 30")
       expect(text).to include("- auth: devise")

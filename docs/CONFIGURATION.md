@@ -86,7 +86,7 @@ config file is written. Before v5.27.0 an empty list wrote every tool's files.
 | `preset` | Symbol | `:full` | `:full` (40 introspectors) or `:standard` (17 introspectors) |
 | `context_mode` | Symbol | `:compact` | `:compact` (context files capped at ~150 lines) or `:full` (no line cap) |
 | `introspectors` | Array of symbols | (from preset) | Override the introspector list directly |
-| `generate_root_files` | Boolean | `true` | Set `false` to generate split rules only, no root CLAUDE.md/AGENTS.md |
+| `generate_root_files` | Boolean | `true` | Set `false` to generate split rules only: no CLAUDE.md, AGENTS.md, .cursorrules or copilot-instructions.md (`.ai-context.json` is still written) |
 | `anti_hallucination_rules` | Boolean | `true` | Embed 6-rule verification protocol in generated context files |
 | `claude_max_lines` | Integer | `150` | Max non-blank lines in a compact context file's gem-managed block, the `<!-- BEGIN/END rails-ai-context -->` markers included. Over budget, data lines are cut and the Commands, Warnings, Rules and MCP-tools sections kept whole |
 
@@ -247,7 +247,7 @@ Lightweight subset for faster generation:
 | AI Tool | Root File | Split Rules | MCP Config |
 |:--------|:----------|:------------|:-----------|
 | Claude Code | `CLAUDE.md` | `.claude/rules/*.md` | `.mcp.json` |
-| Cursor | - | `.cursor/rules/*.mdc` | `.cursor/mcp.json` |
+| Cursor | `.cursorrules` (legacy fallback) | `.cursor/rules/*.mdc` | `.cursor/mcp.json` |
 | GitHub Copilot | `.github/copilot-instructions.md` | `.github/instructions/*.instructions.md` | `.vscode/mcp.json` |
 | OpenCode | `AGENTS.md` | `app/*/AGENTS.md` | `opencode.json` |
 | Codex CLI | (shares `AGENTS.md`) | (shares OpenCode rules) | `.codex/config.toml` |

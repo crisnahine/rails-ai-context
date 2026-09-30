@@ -35,6 +35,21 @@ RSpec.describe RailsAiContext::MigrationStatus do
       expect(pending).to eq([ { version: "20990101000000", name: "CreateWidgets" } ])
     end
 
+    # Rails 7.2+ refuses to load a directory holding a version past tomorrow,
+    # and the applied set still says which files have not run.
+    it "answers from the applied versions when Rails refuses to load the directory" do
+      skip "no migration timestamp validation before Rails 7.2" unless ActiveRecord.respond_to?(:validate_migration_timestamps=)
+
+      FileUtils.mkdir_p(migrate_dir)
+      File.write(File.join(migrate_dir, "20990101000000_create_widgets.rb"), "class CreateWidgets < ActiveRecord::Migration[7.1]\nend\n")
+      previous = ActiveRecord.validate_migration_timestamps
+      ActiveRecord.validate_migration_timestamps = true
+
+      expect(described_class.pending(migrate_dir)).to eq([ { version: "20990101000000", name: "CreateWidgets" } ])
+    ensure
+      ActiveRecord.validate_migration_timestamps = previous if ActiveRecord.respond_to?(:validate_migration_timestamps=)
+    end
+
     it "returns nil when ActiveRecord is not loaded" do
       hide_const("ActiveRecord")
       FileUtils.mkdir_p(migrate_dir)

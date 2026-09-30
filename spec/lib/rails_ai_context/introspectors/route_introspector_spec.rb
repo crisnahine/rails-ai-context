@@ -382,6 +382,64 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       end
     end
 
+    # A gem engine draws its own table in the gem, which only boot reads, so
+    # the section names it as unread rather than dropping it.
+    it "names a mounted engine whose own table it cannot read" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            mount LetterOpenerWeb::Engine, at: "/letter_opener" if Rails.env.development?
+            mount PgHero::Engine, at: "/pghero", as: :pghero
+            mount Sidekiq::Web, at: "/sidekiq"
+          end
+        RUBY
+
+        groups = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:engine_routes]
+
+        expect(groups).to contain_exactly(
+          { engine: "LetterOpenerWeb::Engine", mount: "/letter_opener", routes: [], unavailable: a_string_including("booted") },
+          { engine: "PgHero::Engine", mount: "/pghero", routes: [], unavailable: a_string_including("booted") }
+        )
+      end
+    end
+
+    it "says an engine mounted at a computed path is mounted" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            mount PgHero::Engine, at: ENV.fetch("PGHERO_PATH", "/pghero")
+          end
+        RUBY
+
+        groups = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:engine_routes]
+
+        expect(groups).to contain_exactly(a_hash_including(engine: "PgHero::Engine", mount_computed: true))
+        expect(groups.first).not_to have_key(:mount)
+      end
+    end
+
+    it "decides from the app's own definition whether a mounted constant is an engine" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "lib", "metrics"))
+        FileUtils.mkdir_p(File.join(dir, "lib", "billing"))
+        File.write(File.join(dir, "lib", "metrics", "engine.rb"), "module Metrics\n  class Engine\n    def self.call(env) = [200, {}, []]\n  end\nend\n")
+        File.write(File.join(dir, "lib", "billing", "engine.rb"), "module Billing\n  class Engine < ::Rails::Engine\n  end\nend\n")
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            mount Metrics::Engine, at: "/metrics"
+            mount Billing::Engine, at: "/billing"
+          end
+        RUBY
+
+        groups = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:engine_routes]
+
+        expect(groups.map { |g| g[:engine] }).to eq([ "Billing::Engine" ])
+      end
+    end
+
     # The app's table merges each update's PATCH and PUT, so an engine's
     # count beside it merges them too.
     it "merges an engine route's PATCH and PUT the way the app count does" do
@@ -833,6 +891,49 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
           expect(result[:in_repo_route_files]).to eq(1)
           expect(RailsAiContext::RouteCoverage.suffix(result))
             .to eq(", 1 in-repo engine route file not read")
+        end
+      end
+
+      it "reads an in-repo routes.rb that appends to the app's own table into it" do
+        Dir.mktmpdir do |dir|
+          introspector = build_app(dir, main: "Rails.application.routes.draw do\n  resources :posts, only: [:index]\nend\n")
+          { "web" => "Shop::Application.routes.append do\n  get \"/templates/:id\", to: \"web/templates#show\"\nend\n",
+            "admin" => "Rails.application.routes.prepend do\n  get \"/health\", to: \"health#show\"\nend\n",
+            "chat" => "Chat::Engine.routes.draw do\n  resources :messages\nend\n",
+            "catalog" => "# Shop::Application.routes.append do\n# end\n" }.each do |name, source|
+            FileUtils.mkdir_p(File.join(dir, "engines", name, "app", "models"))
+            FileUtils.mkdir_p(File.join(dir, "engines", name, "config"))
+            FileUtils.touch(File.join(dir, "engines", name, "#{name}.gemspec"))
+            File.write(File.join(dir, "engines", name, "config", "routes.rb"), source)
+          end
+
+          result = introspector.static_call
+
+          expect(result[:by_controller].keys).to include("posts", "web/templates", "health")
+          expect(result[:total_routes]).to eq(3)
+          expect(result[:in_repo_route_files]).to eq(1)
+        end
+      end
+
+      it "reads a mounted in-repo engine's own routes.rb under its mount" do
+        Dir.mktmpdir do |dir|
+          introspector = build_app(dir, main: "Rails.application.routes.draw do\n  mount Dfc::Engine, at: \"/dfc\"\nend\n")
+          %w[dfc chat].each do |name|
+            FileUtils.mkdir_p(File.join(dir, "engines", name, "app", "models"))
+            FileUtils.mkdir_p(File.join(dir, "engines", name, "config"))
+            FileUtils.mkdir_p(File.join(dir, "engines", name, "lib", name))
+            File.write(File.join(dir, "engines", name, "lib", name, "engine.rb"),
+                       "module #{name.capitalize}\n  class Engine < ::Rails::Engine\n  end\nend\n")
+            File.write(File.join(dir, "engines", name, "config", "routes.rb"),
+                       "#{name.capitalize}::Engine.routes.draw do\n  resources :addresses, only: [:show]\nend\n")
+          end
+
+          result = introspector.static_call
+          group = result[:engine_routes].find { |g| g[:engine] == "Dfc::Engine" }
+
+          expect(group).not_to have_key(:unavailable)
+          expect(group[:routes].map { |r| r[:path] }).to eq([ "/dfc/addresses/:id" ])
+          expect(result[:in_repo_route_files]).to eq(1)
         end
       end
 

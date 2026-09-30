@@ -169,4 +169,57 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::AssociationsListener do
 
     expect(results.first).not_to have_key(:computed_name)
   end
+
+  # OpenProject's `has_details_table do ... end` class_evals its block on a
+  # detail class; `tap` and `silence` run theirs on this one. Nothing tells them apart.
+  it "keeps a declaration inside a block passed to an unknown method, marked" do
+    results = parse_and_dispatch(<<~RUBY)
+      has_details_table(foreign_key: :principal_id) do
+        belongs_to :parent
+      end
+      Menu.define do
+        has_many :items
+      end
+      ActiveSupport::Deprecation.silence do
+        belongs_to :legacy
+      end
+      tap do
+        has_many :tapped
+      end
+      belongs_to :owner
+    RUBY
+
+    expect(results.to_h { |r| [ r[:name], r[:scope_uncertain] ] })
+      .to eq(parent: true, items: true, legacy: true, tapped: true, owner: nil)
+  end
+
+  it "still reads the blocks that run on the class itself" do
+    results = parse_and_dispatch(<<~RUBY)
+      included do
+        belongs_to :a
+      end
+      concerning :Tagging do
+        included { has_many :b }
+      end
+      class_eval { has_one :c }
+      %i[d e].each do |name|
+        has_many name
+      end
+    RUBY
+
+    expect(results.map { |r| r[:name] }).to eq([ :a, :b, :c, "name" ])
+    expect(results.none? { |r| r[:scope_uncertain] }).to be(true)
+  end
+
+  it "reads a class_eval sent to the parameter of an included hook" do
+    results = parse_and_dispatch(<<~RUBY)
+      def self.included(base)
+        base.class_eval do
+          belongs_to :a
+        end
+      end
+    RUBY
+
+    expect(results.map { |r| r[:name] }).to eq([ :a ])
+  end
 end
