@@ -215,7 +215,9 @@ Proof sources:
    PostgreSQL 17 with a partitioned table added, booted and static from
    schema.rb and structure.sql, a Rails 7.2 app whose schema.rb carries no
    partition marker, and Discourse, Mastodon, OpenFoodNetwork and Forem
-   answering as before.
+   answering as before. In the v5.30.2 release QA: 14 real apps answered by
+   v5.30.1 and by the release branch side by side, and the lab regressions on
+   SQLite in all three tiers, PostgreSQL and MySQL.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified
