@@ -34,7 +34,6 @@ module RailsAiContext
           methods = extract_symbol_args(node)
 
           if methods.any?
-            drop_redeclared(callback_types, methods.map(&:to_s))
             emit(node, callback_types, methods.map(&:to_s), options, confidence_for(node))
           else
             emit_without_symbol_args(node, callback_types, options)
@@ -47,15 +46,6 @@ module RailsAiContext
         end
 
         private
-
-        # Rails keeps one entry per kind and symbol: a later declaration
-        # removes the earlier one and takes its own place in the chain.
-        def drop_redeclared(callback_types, methods)
-          keys = callback_types.map { |type| self.class.chain_key(type) }
-          @results.reject! do |r|
-            r[:owner] == @owner_stack && methods.include?(r[:method]) && keys.include?(self.class.chain_key(r[:type]))
-          end
-        end
 
         # `around_create Snowflake::Callbacks` names a real target;
         # a lambda names nothing, so it reports as a block.

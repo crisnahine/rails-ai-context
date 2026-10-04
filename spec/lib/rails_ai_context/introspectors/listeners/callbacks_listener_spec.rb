@@ -26,21 +26,18 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::CallbacksListener do
     expect(methods).to contain_exactly("normalize_email", "set_defaults")
   end
 
-  # Rails drops a duplicate only for a symbol filter; an object or block is
-  # appended again.
-  it "replaces a redeclared symbol but keeps a repeated callback object or block" do
+  # Which declaration runs depends on which method bodies run, so the
+  # listener keeps every one and the model's chain decides.
+  it "keeps every declaration, a redeclared symbol included" do
     results = parse_and_dispatch(<<~RUBY)
       around_create Snowflake
       around_create Snowflake
-      before_save { a }
-      before_save { a }
       before_save :x, if: :a?
       before_save :x, unless: :b?
     RUBY
     expect(results.map { |r| [ r[:type], r[:method], r[:options] ] }).to eq([
       [ "around_create", "Snowflake", {} ], [ "around_create", "Snowflake", {} ],
-      [ "before_save", "[inline_block]", {} ], [ "before_save", "[inline_block]", {} ],
-      [ "before_save", "x", { unless: :b? } ]
+      [ "before_save", "x", { if: :a? } ], [ "before_save", "x", { unless: :b? } ]
     ])
   end
 

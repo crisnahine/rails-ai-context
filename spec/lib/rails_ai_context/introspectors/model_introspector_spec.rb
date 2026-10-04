@@ -1546,6 +1546,25 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    it "keeps only the later declaration of a callback declared twice" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "customer.rb"), <<~RUBY)
+          class Customer
+            include Mongoid::Document
+            before_save :sync, if: :a?
+            before_save :stamp
+            before_save :sync
+          end
+        RUBY
+
+        customer = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Customer"]
+        expect(customer.values_at(:callbacks, :callback_conditions)).to eq([ { "before_save" => %w[stamp sync] }, {} ])
+      end
+    end
+
     it "reads every embed kind and the store_in collection" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))
@@ -2693,6 +2712,66 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         )
         expect(details[:callback_conditions]).to eq("before_save" => [ nil, { unless: "-> { b? }" } ])
         expect(booted_callbacks(dir, "Order")).to eq(details[:callbacks])
+      end
+    end
+
+    # A redeclaration in a method body nothing calls never runs, so the
+    # declaration it would have replaced stays.
+    it "keeps a callback that an uncalled concern method redeclares" do
+      Dir.mktmpdir do |dir|
+        write_model(dir, "Concerns::Tracked", <<~RUBY)
+          module Tracked
+            extend ActiveSupport::Concern
+            included do
+              before_save :track
+            end
+            class_methods do
+              def tracked_loudly
+                before_save :track, if: :loud?
+              end
+            end
+          end
+        RUBY
+        write_model(dir, "Note", "class Note < ApplicationRecord\n  include Tracked\nend\n")
+
+        details = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Note"]
+
+        expect(details.values_at(:callbacks, :callback_conditions)).to eq([ { "before_save" => %w[track] }, {} ])
+        expect(booted_callbacks(dir, "Note")).to eq(details[:callbacks])
+      end
+    end
+
+    # The model's own class method declares its callback where the class
+    # calls it, and not at all when nothing does.
+    it "applies a callback in the model's own class method only where it is called" do
+      Dir.mktmpdir do |dir|
+        write_model(dir, "Quiet", <<~RUBY)
+          class Quiet < ApplicationRecord
+            before_save :track
+            def self.loud!
+              before_save :track, if: :loud?
+            end
+          end
+        RUBY
+        write_model(dir, "Loud", <<~RUBY)
+          class Loud < ApplicationRecord
+            def self.loud!
+              before_save :track, if: :loud?
+            end
+            before_save :first
+            loud!
+            before_save :last
+          end
+        RUBY
+
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(static["Quiet"].values_at(:callbacks, :callback_conditions))
+          .to eq([ { "before_save" => %w[track] }, {} ])
+        expect(static["Loud"].values_at(:callbacks, :callback_conditions))
+          .to eq([ { "before_save" => %w[first track last] }, { "before_save" => [ nil, { if: :loud? }, nil ] } ])
+        expect(booted_callbacks(dir, "Quiet")).to eq(static["Quiet"][:callbacks])
+        expect(booted_callbacks(dir, "Loud")).to eq(static["Loud"][:callbacks])
       end
     end
 

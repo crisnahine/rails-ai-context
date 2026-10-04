@@ -1449,11 +1449,29 @@ module RailsAiContext
           cache: @source_cache, calls: calls, extra: extra, file: file
         )
         ConcernMacros::Run.merge_calls(calls.included, included) if calls.respond_to?(:included)
+        own = own.merge(callbacks: called_callbacks(own, calls))
         own = without_expanded_calls(own, collected.delete(:expanded))
         own = own.merge(callbacks: placed_callbacks(own, collected.delete(:callbacks), placement)) if collected.key?(:callbacks)
         return [ own, unread, hidden, skipped ] if collected.empty?
 
         [ merge_inherited(own, collected), unread, hidden, skipped ]
+      end
+
+      # A callback inside one of the class's own methods is declared where the
+      # class calls that method, as a concern's is, and nowhere if nothing does.
+      def called_callbacks(own, calls)
+        bodies = Array(own[:methods]).select { |method| method[:location] && method[:end_location] }
+        Array(own[:callbacks]).flat_map do |cb|
+          body = bodies.select { |method| (method[:location]..method[:end_location]).cover?(cb[:location]) }
+                       .min_by { |method| method[:end_location] - method[:location] }
+          next [ cb ] unless body
+
+          Array(calls&.call&.dig(body[:name].to_s)).map do |site|
+            rank = site && calls.rank_of(site)
+            line = site&.location&.start_line
+            rank ? cb.merge(call_rank: rank, call_line: line, chain_at: [ line, 0 ]) : cb
+          end
+        end
       end
 
       # A concern's callbacks join the chain where its include line runs, and a
@@ -1883,6 +1901,7 @@ module RailsAiContext
           methods: Listeners::MethodsListener
         })
         macros = data[:mongoid] || []
+        callbacks = callback_chain(Array(data[:callbacks]))
         details = {
           confidence: Confidence::STATIC,
           mongoid: true,
@@ -1899,8 +1918,8 @@ module RailsAiContext
           # `callbacks.is_a?(Hash)` - so passing it through rendered "No models
           # with callbacks found" and then raised a TypeError on a Hash lookup
           # against an Array.
-          callbacks: group_callbacks_by_type(data[:callbacks]),
-          callback_conditions: callback_conditions(data[:callbacks]),
+          callbacks: group_callbacks_by_type(callbacks),
+          callback_conditions: callback_conditions(callbacks),
           methods: data[:methods]
         }
         collection = macros.find { |m| m[:macro] == :store_in }&.dig(:options, :collection)
