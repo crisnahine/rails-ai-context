@@ -2191,6 +2191,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
         expect(topic[:callbacks]["after_create"]).to eq([ "[inline_block]", "[inline_block]" ])
         expect(topic[:concern_callbacks].map { |c| c[:from_concern] }).to eq([ "Limited" ])
+        expect(topic[:concern_callbacks].flat_map(&:keys)).not_to include(:owner, :rank, :chain_at)
       end
     end
   end

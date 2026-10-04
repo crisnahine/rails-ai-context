@@ -1510,7 +1510,7 @@ module RailsAiContext
         Array(callbacks).map { |cb| cb.merge(rank: cb[:call_rank] || rank) }
       end
 
-      CHAIN_KEYS = %i[rank chain_at call_rank call_line rerun].freeze
+      CHAIN_KEYS = %i[rank chain_at call_rank call_line rerun owner].freeze
 
       # Rails builds the chain from the outermost base in, each class in the
       # order its body runs.
