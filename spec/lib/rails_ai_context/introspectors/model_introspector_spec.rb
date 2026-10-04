@@ -2352,6 +2352,28 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # The value is decided when the app boots, so statically the presence
+    # holds only when that expression is true.
+    it "is conditional on a setting the source cannot evaluate, app-wide or in the class" do
+      {
+        "config.load_defaults 7.1\n    config.active_record.belongs_to_required_by_default = ENV.fetch(\"R\", \"1\") == \"1\"" =>
+          [ nil, "belongs_to_required_by_default = ENV.fetch(\"R\", \"1\") == \"1\" is true" ],
+        "config.load_defaults 7.1" => [ "self.belongs_to_required_by_default = strict?",
+                                        "belongs_to_required_by_default = strict? is true" ]
+      }.each do |application, (class_line, condition)|
+        Dir.mktmpdir do |dir|
+          write_app(dir, application: application)
+          File.write(File.join(dir, "app", "models", "comment.rb"),
+                     "class Comment < ApplicationRecord\n  #{class_line}\n  belongs_to :post\n  belongs_to :user, optional: true\nend\n")
+
+          static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Comment"][:validations]
+
+          expect(static).to eq([ { kind: "presence", attributes: [ "post" ], options: {}, implicit: true,
+                                   implicit_if: condition } ]), application
+        end
+      end
+    end
+
     it "is on for load_defaults written as the running version" do
       Dir.mktmpdir do |dir|
         write_app(dir, application: "config.load_defaults Rails::VERSION::STRING.to_f")
@@ -3054,7 +3076,8 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
 
       it "keeps declaration order statically when the config cannot say, and marks it" do
-        [ nil, "config.load_defaults Rails::VERSION::STRING.to_f" ].each do |application|
+        [ nil, "config.load_defaults Rails::VERSION::STRING.to_f",
+          "config.load_defaults 7.0\n    config.active_record.run_after_transaction_callbacks_in_order_defined = ENV.key?(\"X\")" ].each do |application|
           Dir.mktmpdir do |dir|
             write_config(dir, application) if application
             write_order(dir)

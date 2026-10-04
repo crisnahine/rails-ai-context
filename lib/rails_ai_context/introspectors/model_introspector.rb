@@ -660,8 +660,7 @@ module RailsAiContext
           AstWalk.each(AstCache.parse_string(source).value) do |node|
             next unless node.is_a?(Prism::CallNode) && node.receiver.is_a?(Prism::SelfNode)
 
-            setting = required_default_literal(node)
-            return setting unless setting.nil?
+            return setting_value(node) if node.name == :belongs_to_required_by_default=
           end
         end
         nil
@@ -722,6 +721,7 @@ module RailsAiContext
           elsif !optional_value.nil? then [ name, "optional: #{optional_value} is false" ]
           elsif !required.nil? then (name if required)
           elsif !required_value.nil? then [ name, "required: #{required_value} is true" ]
+          elsif default.is_a?(String) then [ name, default ]
           elsif default then name
           end
         end
@@ -732,14 +732,14 @@ module RailsAiContext
       end
 
       # Without a `belongs_to_required_by_default =` of its own, Rails turns it
-      # on from `load_defaults 5.0`.
+      # on from `load_defaults 5.0`. True, false, or the condition it holds under.
       def belongs_to_required_by_default?
         setting = framework_setting(:belongs_to_required_by_default=, since: 5.0)
         setting.assigned ? setting.value : setting.version.to_f >= 5.0
       end
 
-      # `value` is the deciding assignment's literal (nil if not one) when
-      # `assigned`; else `load_defaults`' `version` decides.
+      # `value` is the deciding assignment's setting_value when `assigned`;
+      # else `load_defaults`' `version` decides.
       FrameworkSetting = Struct.new(:assigned, :value, :version, :read, keyword_init: true)
 
       # Application.rb then the initializers, as Rails runs them; a `load_defaults`
@@ -758,7 +758,7 @@ module RailsAiContext
 
               if node.name == setter && node.receiver
                 setting.assigned = true
-                setting.value = boolean_literal(node)
+                setting.value = setting_value(node)
               elsif node.name == :load_defaults && path == application && node.receiver&.slice.to_s == "config"
                 setting.version = defaults_version(node.arguments&.arguments&.first)
                 setting.assigned = false if setting.version.to_f >= since
@@ -769,18 +769,18 @@ module RailsAiContext
         end
       end
 
-      def boolean_literal(node)
-        { Prism::TrueNode => true, Prism::FalseNode => false }[node.arguments&.arguments&.first.class]
-      end
+      # A literal true or false as itself; any other value is decided at boot,
+      # so it reads as the condition "<setting> = <expression> is true".
+      def setting_value(node)
+        value = node.arguments&.arguments&.first
+        literal = { Prism::TrueNode => true, Prism::FalseNode => false }[value.class]
+        return literal unless literal.nil? && value
 
-      # The true or false a `belongs_to_required_by_default =` call assigns;
-      # nil for another call or a value the source cannot evaluate.
-      def required_default_literal(node)
-        boolean_literal(node) if node.name == :belongs_to_required_by_default=
+        "#{node.name.to_s.delete_suffix('=')} = #{value.slice} is true"
       end
 
       # A literal version as written; anything else (`Rails::VERSION::STRING.to_f`)
-      # is the running Rails, which is past 5.0.
+      # is the running Rails, Float::INFINITY, which each reader takes as it can.
       def defaults_version(arg)
         case arg
         when Prism::FloatNode, Prism::IntegerNode then arg.value.to_f
@@ -1579,10 +1579,10 @@ module RailsAiContext
       end
 
       # nil when the config cannot say: no config/application.rb, a version or
-      # a value that is not a literal.
+      # a value that is not a literal. A chain order has no way to carry a condition.
       def static_commits_in_order
         setting = framework_setting(:run_after_transaction_callbacks_in_order_defined=, since: 7.1)
-        return setting.value if setting.assigned
+        return (setting.value unless setting.value.is_a?(String)) if setting.assigned
         return nil if !setting.read || setting.version == Float::INFINITY
 
         setting.version.to_f >= 7.1
