@@ -1310,19 +1310,29 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
           File.write(File.join(dir, "app", "jobs", "block_job.rb"), <<~RUBY)
             class BlockJob < ActiveJob::Base
               queue_as do
+                # urgent jobs go high
                 arguments.first.urgent? ? :high : :low
               end
             end
           RUBY
+          File.write(File.join(dir, "app", "jobs", "const_job.rb"), <<~RUBY)
+            class ConstJob < ActiveJob::Base
+              QUEUE = -> { :high }
+              queue_as QUEUE
+            end
+          RUBY
+          File.write(File.join(dir, "app", "jobs", "outside_const_job.rb"), "class OutsideConstJob < ActiveJob::Base\n  queue_as Queues::HIGH\nend\n")
           File.write(File.join(dir, "app", "jobs", "brace_job.rb"), "class BraceJob < ActiveJob::Base\n  queue_as { :high }\nend\n")
           File.write(File.join(dir, "app", "jobs", "proc_job.rb"), "class ProcJob < ActiveJob::Base\n  queue_as proc { :x }\nend\n")
           File.write(File.join(dir, "app", "jobs", "proc_new_job.rb"), "class ProcNewJob < ActiveJob::Base\n  queue_as Proc.new { :x }\nend\n")
         end
 
         expect(result[:jobs].to_h { |j| [ j[:name], j[:queue] ] }).to eq(
-          "BlockJob" => "computed by a block: `do arguments.first.urgent? ? :high : :low end`",
+          "BlockJob" => "computed by a block: `do arguments.first.urgent? ? :high : :low; end`",
           "BraceJob" => "computed by a block: `{ :high }`",
+          "ConstJob" => "#{proc_label}: `-> { :high }`",
           "EnvJob" => "`ENV.fetch(\"ENV_QUEUE\", \"default\")` (computed)",
+          "OutsideConstJob" => "`Queues::HIGH` (computed)",
           "ProcessingJob" => "`processing_queue` (computed)",
           "ProcJob" => "#{proc_label}: `proc { :x }`",
           "ProcNewJob" => "#{proc_label}: `Proc.new { :x }`",
@@ -1499,11 +1509,14 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       end
     end
 
-    # The queue_name each example reads is what this Rails version stores for
-    # the declaration, not a hand-made stand-in.
-    def reflected_job(name, file, &declaration)
+    # The queue_name each example reads is what this Rails version stores when
+    # the class body runs from the file, so a Proc's text names that file.
+    def reflected_job(name, file, from: 2, to: nil)
+      source = File.readlines(file)
+      klass = Class.new(ActiveJob::Base)
+      klass.class_eval(source[(from - 1)...(to || source.size - 1)].join, file, from)
       reflected = job(name, defined_in: file)
-      allow(reflected).to receive(:queue_name).and_return(Class.new(ActiveJob::Base, &declaration).queue_name)
+      allow(reflected).to receive(:queue_name).and_return(klass.queue_name)
       allow(ActiveJob::Base).to receive(:descendants).and_return([ reflected ])
     end
 
@@ -1511,19 +1524,20 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       described_class.new(Rails.application).call[:jobs].find { |j| j[:name] == name }[:queue]
     end
 
-    it "reads a queue_as block as computed" do
+    it "reads a queue_as block as computed, with its source and without its comments" do
       with_job_file("UrgentJob", <<~RUBY) do |file|
         class UrgentJob < ActiveJob::Base
           queue_as do
+            # urgent jobs go high
             :high
           end
 
           def perform; end
         end
       RUBY
-        reflected_job("UrgentJob", file) { queue_as { :high } }
+        reflected_job("UrgentJob", file)
 
-        expect(booted_queue("UrgentJob")).to eq("computed by a block: `do :high end`")
+        expect(booted_queue("UrgentJob")).to eq("computed by a block: `do :high; end`")
       end
     end
 
@@ -1537,21 +1551,20 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
           def perform; end
         end
       RUBY
-        reflected_job("UrgentJob", file) { queue_as -> { :high } }
+        reflected_job("UrgentJob", file)
 
-        expect(booted_queue("UrgentJob"))
-          .to eq("#{proc_label}: `-> { :high }`")
+        expect(booted_queue("UrgentJob")).to eq("#{proc_label}: `-> { :high }`")
       end
     end
 
     it "never prints the Proc when the lambda's source is not found" do
-      reflected_job("ElsewhereJob", app_job_file) { queue_as -> { :high } }
+      reflected = job("ElsewhereJob", defined_in: app_job_file)
+      allow(reflected).to receive(:queue_name).and_return("#<Proc:0x0000000100000000 /nowhere/elsewhere_job.rb:2 (lambda)>")
+      allow(ActiveJob::Base).to receive(:descendants).and_return([ reflected ])
 
       expect(booted_queue("ElsewhereJob")).to eq(proc_label)
     end
 
-    # The source names a constant, which says nothing of what it holds;
-    # reflection says it holds a Proc.
     it "reads a Proc held in a constant as the Proc it is" do
       with_job_file("ConstantJob", <<~RUBY) do |file|
         class ConstantJob < ActiveJob::Base
@@ -1559,9 +1572,65 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
           queue_as QUEUE
         end
       RUBY
-        reflected_job("ConstantJob", file) { queue_as -> { :high } }
+        reflected_job("ConstantJob", file)
 
-        expect(booted_queue("ConstantJob")).to eq("#{proc_label}: `QUEUE`")
+        expect(booted_queue("ConstantJob")).to eq("#{proc_label}: `-> { :high }`")
+      end
+    end
+
+    # The parent's queue_as is the nearest one up the class chain, but the
+    # concern's runs later and is the one Rails keeps.
+    it "reads the Proc a concern's queue_as set, not the parent's literal" do
+      with_job_file("RoutedJob", <<~RUBY) do |file|
+        class ParentJob < ActiveJob::Base
+          queue_as :x
+        end
+
+        module Routing
+          extend ActiveSupport::Concern
+          included do
+            queue_as -> { :urgent }
+          end
+        end
+
+        class RoutedJob < ParentJob
+          include Routing
+        end
+      RUBY
+        reflected_job("RoutedJob", file, from: 8, to: 8)
+
+        expect(booted_queue("RoutedJob")).to eq("#{proc_label}: `-> { :urgent }`")
+      end
+    end
+
+    it "reads the block a concern's queue_as set, not the parent's literal" do
+      with_job_file("RoutedJob", <<~RUBY) do |file|
+        class ParentJob < ActiveJob::Base
+          queue_as :x
+        end
+
+        module Routing
+          extend ActiveSupport::Concern
+          included do
+            queue_as { :urgent }
+          end
+        end
+      RUBY
+        reflected_job("RoutedJob", file, from: 8, to: 8)
+
+        expect(booted_queue("RoutedJob")).to eq("computed by a block: `{ :urgent }`")
+      end
+    end
+
+    it "leaves the source out when two Procs share the line that set the queue" do
+      with_job_file("TwinJob", <<~RUBY) do |file|
+        class TwinJob < ActiveJob::Base
+          OTHER = -> { :low }; queue_as -> { :high }
+        end
+      RUBY
+        reflected_job("TwinJob", file)
+
+        expect(booted_queue("TwinJob")).to eq(proc_label)
       end
     end
 

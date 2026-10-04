@@ -15,6 +15,16 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::GenericMacroListener do
     expect(results.map { |r| r[:macro] }).to contain_exactly(:before_action, :after_action)
   end
 
+  # A nested describe would otherwise copy most of a spec file per level.
+  it "records a block's source only for the macros asked to" do
+    source = "describe 'x' do\n  # note\n  it 'y' do\n    run\n  end\nend\n"
+    plain = parse_and_dispatch(source, :describe, :it)
+    sourced = parse_and_dispatch(source, :describe, :it, block_source: [ :it ])
+
+    expect(plain.map { |r| r[:block] }).to eq([ nil, nil ])
+    expect(sourced.map { |r| r[:block] }).to eq([ nil, "do run; end" ])
+  end
+
   it "extracts symbol args" do
     results = parse_and_dispatch("before_action :auth, :set_locale", :before_action)
     expect(results.first[:args]).to eq([ :auth, :set_locale ])

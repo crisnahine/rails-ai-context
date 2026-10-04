@@ -24,6 +24,7 @@ RSpec.describe "Listener registration properties" do
       module Probe
         class Thing < Base
           SETTING = 1
+          RULE = -> { :rule }
 
           class << self
             def built

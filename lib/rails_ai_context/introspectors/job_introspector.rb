@@ -79,14 +79,14 @@ module RailsAiContext
           queue = job.queue_name
           # ActiveJob defaults queue_name to a lambda; any other Proc is a
           # queue_as block, and a Proc argument is stored as its inspect
-          # string. Only the source says what either one reads.
+          # string. Either one names the line that set it, which may be a
+          # concern's and not the nearest class's.
           if queue.equal?(ActiveJob::Base.queue_name)
             queue = job.queue_name_from_part(nil)
           elsif queue.is_a?(Proc)
-            queue = inherited(job.name) { |macros| queue_as(macros) } || COMPUTED_QUEUE
-          elsif queue.to_s.include?("#<Proc:")
-            source = inherited(job.name) { |macros| queue_source(macros) }
-            queue = source ? "#{PROC_QUEUE}: `#{source}`" : PROC_QUEUE
+            queue = labelled(COMPUTED_QUEUE, block_at(*queue.source_location))
+          elsif (location = queue.to_s.match(/#<Proc:0x\h+ (.+):(\d+)(?: \(lambda\))?>/))
+            queue = labelled(PROC_QUEUE, proc_at(location[1], location[2].to_i))
           end
 
           {
@@ -143,12 +143,30 @@ module RailsAiContext
       end
 
       def inherited_queue(name)
-        inherited(name) { |macros| queue_as(macros) }
+        chain_of(name).lazy.filter_map { |link| queue_as(job_candidates[link].ast) }.first
       end
 
-      # The first answer the block gives walking up the chain from this class.
-      def inherited(name)
-        chain_of(name).lazy.filter_map { |link| yield job_candidates[link].ast[:macros] }.first
+      def labelled(label, source)
+        source ? "#{label}: `#{source}`" : label
+      end
+
+      def block_at(file, line)
+        queue_as_walk(file)&.dig(:macros)&.find { |m| m[:location] == line && m[:block] }&.dig(:block)
+      end
+
+      # Only one Proc literal on the line says which one it was.
+      def proc_at(file, line)
+        found = queue_as_walk(file)&.dig(:procs)&.select { |literal| literal[:line] == line } || []
+        found.first[:source] if found.one?
+      end
+
+      def queue_as_walk(file)
+        @queue_as_walks ||= {}
+        return @queue_as_walks[file] if @queue_as_walks.key?(file)
+
+        @queue_as_walks[file] = File.file?(file) ? SourceIntrospector.walk_source(File.read(file), QUEUE_AS_LISTENERS) : nil
+      rescue SystemCallError
+        @queue_as_walks[file] = nil
       end
 
       # This class and its ancestors among the candidates, nearest first.
@@ -165,23 +183,25 @@ module RailsAiContext
       PROC_QUEUE = "queue_as given a Proc: ActiveJob does not call it, so the queue is named after the Proc's text"
       PROC_LITERAL = /\A(?:->|(?:lambda|proc|Proc\.new)(?![\w.]))/
 
+      QUEUE_AS_LISTENERS = {
+        macros: -> { Listeners::GenericMacroListener.new(:queue_as, block_source: [ :queue_as ]) },
+        procs:  Listeners::ProcLiteralListener
+      }.freeze
+
       # A literal queue by name; one picked at enqueue time by the source that
       # picks it, the way other computed values read.
-      def queue_as(macros)
-        hit = macros.find { |m| m[:macro] == :queue_as } or return nil
+      def queue_as(ast)
+        hit = ast[:macros].find { |m| m[:macro] == :queue_as } or return nil
         return hit[:args].first.to_s if hit[:args].any?
+        return labelled(COMPUTED_QUEUE, hit[:block]) if hit[:block]
 
-        source = queue_source(macros)
-        return source ? "#{COMPUTED_QUEUE}: `#{source}`" : COMPUTED_QUEUE if hit[:block]
-        return COMPUTED_QUEUE unless source
+        source = hit[:values].first.to_s.gsub(/\s+/, " ").strip
+        return COMPUTED_QUEUE if source.empty?
 
-        source.match?(PROC_LITERAL) ? "#{PROC_QUEUE}: `#{source}`" : "`#{source}` (computed)"
-      end
+        assigned = Array(ast[:procs]).find { |literal| literal[:constant] == source }
+        return labelled(PROC_QUEUE, assigned[:source]) if assigned
 
-      # What queue_as was given, as one line: its block when it has one.
-      def queue_source(macros)
-        hit = macros.find { |m| m[:macro] == :queue_as } or return nil
-        (hit[:block] || hit[:args].first || hit[:values].first).to_s.gsub(/\s+/, " ").strip.presence
+        source.match?(PROC_LITERAL) ? labelled(PROC_QUEUE, source) : "`#{source}` (computed)"
       end
 
       def sidekiq_options(macros)
@@ -340,7 +360,8 @@ module RailsAiContext
               declares: declarations.map(&:name),
               superclass: declaration.superclass,
               ast: SourceIntrospector.walk_source(record.source, {
-                macros:  -> { Listeners::GenericMacroListener.new(*JOB_MACROS) },
+                macros:  -> { Listeners::GenericMacroListener.new(*JOB_MACROS, block_source: [ :queue_as ]) },
+                procs:   Listeners::ProcLiteralListener,
                 methods: Listeners::MethodsListener,
                 calls:   SourceCalls.listener
               })
