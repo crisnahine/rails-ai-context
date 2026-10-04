@@ -253,4 +253,36 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
       expect(data[:foreign].first.slice(:declaration, :condition)).to eq({ declaration: "validates :title, presence: true" })
     end
   end
+
+  # Canvas's validates_locale, written before keyword arguments; `extract_options!` is the Rails spelling.
+  describe "an options hash taken off the end of a *args parameter" do
+    [ "args.last.is_a?(Hash) ? args.pop : {}", "args.extract_options!" ].each do |taken|
+      method_source = <<~RUBY
+        def validates_loc(*args)
+          options = #{taken}
+          before_validation :blank_to_nil if options[:allow_nil] && !options[:allow_empty]
+        end
+      RUBY
+
+      it "reads the call's trailing hash, or none, through `#{taken}`" do
+        callbacks = ->(call) { Array(expand(method_source, call)[:callbacks]).map { |cb| cb[:method].to_s } }
+
+        expect(callbacks.call("validates_loc :locale, allow_nil: true")).to eq(%w[blank_to_nil])
+        expect(callbacks.call("validates_loc allow_nil: true, allow_empty: true")).to eq([])
+        expect(callbacks.call("validates_loc :locale")).to eq([])
+      end
+    end
+
+    it "stays unbound when the method writes the local again" do
+      data = expand(<<~RUBY, "validates_loc allow_nil: true")
+        def validates_loc(*args)
+          options = args.extract_options!
+          options = {} if options.empty?
+          before_validation :blank_to_nil if options[:allow_nil]
+        end
+      RUBY
+
+      expect(data[:conditional].map { |c| c[:condition] }).to eq([ "options[:allow_nil]" ])
+    end
+  end
 end

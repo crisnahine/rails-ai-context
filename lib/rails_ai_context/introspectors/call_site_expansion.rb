@@ -62,7 +62,7 @@ module RailsAiContext
       def entries(definition, call, listeners)
         return {} unless definition.body
 
-        bindings = unwritten(bind(definition.parameters, call), definition.body)
+        bindings = trailing_options(unwritten(bind(definition.parameters, call), definition.body), definition, call)
         out = Output.new
         undecided = []
         emit(definition.body, bindings, out, undecided, 0, [])
@@ -206,6 +206,27 @@ module RailsAiContext
           bindings[node.name] = unknown if WRITES.include?(node.class) && node.depth == blocks && bindings.key?(node.name)
           blocks += 1 if node.is_a?(Prism::BlockNode) || node.is_a?(Prism::LambdaNode)
           stack.concat(node.compact_child_nodes.map { |child| [ child, blocks ] })
+        end
+        bindings
+      end
+
+      # `options = args.extract_options!`, or `args.last.is_a?(Hash) ? args.pop : {}`, on a `*args`
+      # parameter and written nowhere else, holds the hash the call ends with, or an empty one.
+      def trailing_options(bindings, definition, call)
+        rest = definition.parameters&.rest
+        return bindings unless call && rest.respond_to?(:name) && rest.name && definition.body.is_a?(Prism::StatementsNode)
+
+        taken = [ "#{rest.name}.extract_options!", "#{rest.name}.last.is_a?(Hash)?#{rest.name}.pop:{}" ]
+        writes = AstWalk.each(definition.body).select { |node| WRITES.include?(node.class) }.map(&:name).tally
+        last = Array(call.arguments&.arguments).last
+        definition.body.body.each do |node|
+          next unless node.is_a?(Prism::LocalVariableWriteNode) && writes[node.name] == 1 && taken.include?(node.value.slice.delete(" "))
+
+          bindings[node.name] =
+            if symbol_keyed?(last) then literal(last)
+            elsif last.nil? || literal_source?(last) then hash_binding({}, {})
+            else unknown
+            end
         end
         bindings
       end
