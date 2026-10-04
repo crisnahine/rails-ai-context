@@ -787,6 +787,44 @@ it "still explains a database that does not exist" do
       expect(File.exist?(marker)).to be false
     end
 
+    context "when another process inherits the query's pipe" do
+      let(:sleepers) { [] }
+
+      before do
+        allow(IO).to receive(:pipe).and_wrap_original do |m|
+          pipe = m.call
+          sleepers << Process.fork do
+            sleep 4
+            exit!(0)
+          end
+          pipe
+        end
+      end
+
+      after do
+        sleepers.each do |pid|
+          Process.kill(:KILL, pid)
+          Process.wait(pid)
+        end
+      end
+
+      it "returns a fast result without waiting for that process" do
+        result = nil
+        took = elapsed { result = described_class.send(:execute_sqlite, conn, "SELECT n FROM nums ORDER BY n", 5) }
+
+        expect(result.rows).to eq([ [ 1 ], [ 2 ], [ 3 ] ])
+        expect(took).to be < 2
+      end
+
+      it "still stops a slow query at the deadline" do
+        took = elapsed do
+          expect { described_class.send(:execute_sqlite, conn, slow_sql, 1) }
+            .to raise_error(ActiveRecord::StatementInvalid, /timeout/)
+        end
+        expect(took).to be < 2
+      end
+    end
+
     it "does not hand one query's pipe to another query's child" do
       RailsAiContext.configuration.query_timeout = 2
       first = true

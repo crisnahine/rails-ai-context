@@ -410,8 +410,19 @@ module RailsAiContext
       # virtual table modules, collations, an encryption key.
       SQLITE_APP_CONNECTION_ONLY = /no such (?:function|module|collation)|file is not a database/i
 
-      # Held from pipe to the parent closing its writer, so no other query's child inherits that writer.
-      SQLITE_FORK_LOCK = Mutex.new
+      private_class_method def self.read_before(reader, size, deadline)
+        data = "".b
+        while data.bytesize < size
+          left = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          raise ActiveRecord::StatementInvalid, "SQLite query exceeded the statement timeout" unless left.positive? && IO.select([ reader ], nil, nil, left)
+
+          chunk = reader.read_nonblock(size - data.bytesize, exception: false)
+          raise ActiveRecord::StatementInvalid, "the SQLite query process exited without a result" if chunk.nil?
+
+          data << chunk unless chunk == :wait_readable
+        end
+        data
+      end
 
       # nil for an in-memory or temporary database, or where there is no fork.
       private_class_method def self.sqlite_fork_path(conn)
@@ -427,31 +438,29 @@ module RailsAiContext
         # sqlite3 2.x warns in every child that inherits a writable handle; Rails 8 silences it the same way.
         SQLite3::ForkSafety.suppress_warnings! if defined?(SQLite3::ForkSafety)
 
-        reader = writer = pid = nil
-        SQLITE_FORK_LOCK.synchronize do
-          reader, writer = IO.pipe.each(&:binmode)
-          pid = fork do
-            reader.close
-            payload = begin
-              db = SQLite3::Database.new(path, readonly: true, extensions: extensions)
-              db.busy_timeout = (timeout * 1000).to_i
-              stmt = db.prepare(sql)
-              [ :ok, stmt.columns, stmt.to_a ]
-            rescue => e
-              [ :error, "#{e.class}: #{e.message}" ]
-            end
-            writer.write(Marshal.dump(payload))
-          ensure
-            exit!(0)
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+        reader, writer = IO.pipe.each(&:binmode)
+        pid = fork do
+          reader.close
+          payload = begin
+            db = SQLite3::Database.new(path, readonly: true, extensions: extensions)
+            db.busy_timeout = (timeout * 1000).to_i
+            stmt = db.prepare(sql)
+            [ :ok, stmt.columns, stmt.to_a ]
+          rescue => e
+            [ :error, "#{e.class}: #{e.message}" ]
           end
-          writer.close
+          bytes = Marshal.dump(payload)
+          writer.write([ bytes.bytesize ].pack("Q>"), bytes)
+        ensure
+          exit!(0)
         end
+        writer.close
 
-        raise ActiveRecord::StatementInvalid, "SQLite query exceeded the statement timeout" unless IO.select([ reader ], nil, nil, timeout)
-
-        data = reader.read
+        # Read by length, not to EOF: any other process forked meanwhile holds a copy of the writer.
+        size = read_before(reader, 8, deadline).unpack1("Q>")
         status, *rest = begin
-          Marshal.load(data)
+          Marshal.load(read_before(reader, size, deadline))
         rescue ArgumentError, TypeError
           raise ActiveRecord::StatementInvalid, "the SQLite query process exited without a result"
         end
