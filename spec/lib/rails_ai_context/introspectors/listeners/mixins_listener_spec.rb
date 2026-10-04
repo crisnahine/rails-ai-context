@@ -66,9 +66,16 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MixinsListener do
   end
 
   it "ignores an include called on a receiver" do
-    results = parse_and_dispatch("class Post\n  singleton_class.include Publishable\nend\n")
+    results = parse_and_dispatch("class Post\n  builder.include Publishable\n  base.singleton_class.include Auditable\nend\n")
 
     expect(results).to be_empty
+  end
+
+  it "reads an include or prepend on the class's own singleton class as giving class methods, not an ancestor" do
+    results = parse_and_dispatch("class Post\n  singleton_class.include Publishable\n  self.singleton_class.prepend Auditable\n  singleton_class.extend Other\nend\n")
+
+    expect(results.map { |r| [ r[:macro], r[:name], r[:ancestor] ] })
+      .to eq([ [ :singleton_include, "Publishable", false ], [ :singleton_prepend, "Auditable", false ] ])
   end
 
   it "reads `send :include, X` as the include it is" do

@@ -93,8 +93,8 @@ module RailsAiContext
         given = { prepended: [], mixed: [], block: [], hook: [] }
         return given unless own&.body
 
-        if macro == :extend
-          given[:mixed] = body_defs(own.body)
+        if ConcernMembership::SINGLETON_MACROS.include?(macro)
+          given[macro == :singleton_prepend ? :prepended : :mixed] = body_defs(own.body)
         else
           statements = own.body.compact_child_nodes
           hooks = statements.select { |node| node.is_a?(Prism::DefNode) && hook?(node, macro) && node.body }
@@ -198,10 +198,10 @@ module RailsAiContext
         end
       end
 
-      # Whether a mixin record adds to the class: an include or prepend, or an `extend` run with the
-      # class as self (`class_self`); in a module's own body `extend` extends the module.
+      # Whether a mixin record adds to the class: an include or prepend, or an `extend` or `singleton_class`
+      # include or prepend run with the class as self; in a module's own body `extend` extends the module.
       def self.joins?(mixin, class_self)
-        mixin[:ancestor] || (mixin[:macro] == :extend && !mixin[:receiver] && class_self)
+        mixin[:ancestor] || (ConcernMembership::SINGLETON_MACROS.include?(mixin[:macro]) && !mixin[:receiver] && class_self)
       end
 
       def initialize(reader)
@@ -512,18 +512,19 @@ module RailsAiContext
             else ConcernPaths.find_file(@root, name, within: within, dirs: @dirs) || beside(file, name, within)
             end
           macro = @macros[name] || :include
+          singleton = ConcernMembership::SINGLETON_MACROS.include?(macro)
           if ConcernMembership.excluded?(name)
             # Hiding a concern hides what it declared. Only one whose file is
             # here would have been read, so only that one is worth counting.
             # A module mixed in from outside the class's file is not its concern to hide.
-            @hidden << name if path && !@paths.key?(name) && macro != :extend
+            @hidden << name if path && !@paths.key?(name) && !singleton
             next
           end
 
           data = nested ? introspect_nested(source, nested) : path && introspect(path)
           if data.nil?
             # A module a class extends itself with from a gem is no concern of the app's.
-            @unresolved << name unless macro == :extend && path.nil?
+            @unresolved << name unless singleton && path.nil?
             next
           end
 
@@ -538,7 +539,7 @@ module RailsAiContext
           @mixins << [ label, macro, memo([ :module_defs, source_key, label, macro ]) { module_defs(tree, label, macro) }, @inside ]
           bodies, hooks = method_bodies(data, macro)
           own_lines, inner = memo([ :ranges, source_key, label ]) { own_and_nested_ranges(tree, label) }
-          scope = [ macro == :extend, inner, own_lines, hooks ]
+          scope = [ singleton, inner, own_lines, hooks ]
           # The class's own file was read with the class; only its callbacks go by owner.
           keys = nested && source == @own_file ? @keys & [ :callbacks ] : @keys
           keys.each do |key|

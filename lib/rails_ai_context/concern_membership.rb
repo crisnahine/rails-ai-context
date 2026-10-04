@@ -14,6 +14,8 @@ module RailsAiContext
       include: %w[included append_features], prepend: %w[prepended prepend_features], extend: %w[extended]
     }.freeze
     MIXIN_HOOKS = HOOKS_BY_MACRO.values.flatten.freeze
+    # The macros that give the class a module's methods as class methods.
+    SINGLETON_MACROS = %i[extend singleton_include singleton_prepend].freeze
     # The block ActiveSupport::Concern runs for each.
     CONCERN_BLOCKS = { include: :included, prepend: :prepended }.freeze
     FRAMEWORK_PREFIXES = %w[

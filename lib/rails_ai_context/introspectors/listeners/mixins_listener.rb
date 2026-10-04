@@ -33,12 +33,17 @@ module RailsAiContext
 
         # `Type.include(StatusPatch)` mixes into Type, not the class the line sits in, so the
         # record names Type as `receiver` and it is never an ancestor of the enclosing class.
+        # `singleton_class.include M` gives the class M's methods, as `extend` does, without its hook.
         def on_call_node_enter(node)
           receiver = node.receiver && constant_name(node.receiver)
-          return unless node.receiver.nil? || receiver
+          singleton = own_singleton?(node.receiver)
+          return unless node.receiver.nil? || receiver || singleton
 
           macro, arguments = mixin_call(node)
           return unless macro
+          return if singleton && macro == :extend
+
+          macro = :"singleton_#{macro}" if singleton
 
           arguments.each do |arg|
             name = constant_name(arg)
@@ -58,6 +63,12 @@ module RailsAiContext
         end
 
         private
+
+        # `singleton_class` or `self.singleton_class`.
+        def own_singleton?(node)
+          node.is_a?(Prism::CallNode) && node.name == :singleton_class && node.arguments.nil? &&
+            (node.receiver.nil? || node.receiver.is_a?(Prism::SelfNode))
+        end
 
         # `include X`, and `send :include, X`, the same include written to reach a private method.
         def mixin_call(node)

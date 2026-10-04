@@ -3413,6 +3413,27 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         end
       end
 
+      # Runtime: ScBody, SelfSc, SendSc and BlkScM :sc; ScPre :first, :scp.
+      it "reads singleton_class include and prepend in the class body and in an included block, from their line" do
+        Dir.mktmpdir do |dir|
+          stampy(dir)
+          write_model(dir, "Concerns::ScMod", "module ScMod\n  def stamp\n    before_save :sc\n  end\nend\n")
+          write_model(dir, "Concerns::ScPreMod", "module ScPreMod\n  def stamp\n    before_save :scp\n  end\nend\n")
+          write_model(dir, "Concerns::BlkSc", "module BlkSc\n  extend ActiveSupport::Concern\n  included do\n    singleton_class.include ScMod\n    stamp\n  end\nend\n")
+          write_model(dir, "ScBody", "class ScBody < ApplicationRecord\n  include Stampy\n  singleton_class.include ScMod\n  stamp\nend\n")
+          write_model(dir, "SelfSc", "class SelfSc < ApplicationRecord\n  include Stampy\n  self.singleton_class.include ScMod\n  stamp\nend\n")
+          write_model(dir, "SendSc", "class SendSc < ApplicationRecord\n  include Stampy\n  singleton_class.send(:include, ScMod)\n  stamp\nend\n")
+          write_model(dir, "BlkScM", "class BlkScM < ApplicationRecord\n  include Stampy\n  include BlkSc\nend\n")
+          write_model(dir, "ScPre", "class ScPre < ApplicationRecord\n  def self.stamp\n    before_save :own\n  end\n  singleton_class.prepend ScPreMod\n  before_save :first\n  stamp\nend\n")
+
+          static = static_save(dir)
+          expect(static.slice("ScBody", "SelfSc", "SendSc", "BlkScM", "ScPre")).to eq(
+            "ScBody" => %w[sc], "SelfSc" => %w[sc], "SendSc" => %w[sc], "BlkScM" => %w[sc], "ScPre" => %w[first scp]
+          )
+          %w[ScBody BlkScM ScPre].each { |name| expect(booted_callbacks(dir, name)).to eq("before_save" => static[name]) }
+        end
+      end
+
       # Runtime: LocM :first, :loc, :sb, :ro.
       it "reads the class methods an initializer defines on ActiveRecord::Base as the outermost definitions" do
         Dir.mktmpdir do |dir|
