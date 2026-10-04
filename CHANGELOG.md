@@ -53,18 +53,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   singleton class, the class's own class methods, then the modules it extends
   and its concerns' class methods, the last added first, then the same for
   each base, then what every model has: class methods an initializer writes
-  in `ActiveRecord::Base.class_eval` or a reopened base (Canvas's
-  `validates_locale` adds its `before_validation` to Account, User and
-  Course), then the modules mixed into the base. A class's own class methods
+  in `ActiveRecord::Base.class_eval` or a reopened base, the file Rails loads
+  later winning (Canvas's `validates_locale` adds its `before_validation` to
+  Account, User and Course), then the modules mixed into the base. One an
+  initializer writes on `ApplicationRecord` replaces ApplicationRecord's own.
+  A class's own class methods
   are its `def self.`, an `alias_method` in `class << self` (it runs what its
   original name ran at the alias), and those a Concern's `included` block or a
   hook writes on the class (`def self.x` or `class << self`, in the block, in
   `base.class_eval` or in `class << base`), each from its line where that code
   runs. A module counts from the line adding it, where that line runs: an
-  `extend` or `singleton_class.include` in the class, in a hook or in a
-  Concern's `included` block, an `extend` in a class method a call reaches
-  (an `acts_as_x` that extends its methods, whose `self.extended` hook then
-  runs), and `singleton_class.prepend` in a hook, which counts as prepended;
+  `extend`, `singleton_class.include` or `singleton_class.prepend` (which
+  counts as prepended) in the class, in a hook or in a Concern's `included`
+  block, and an `extend` in a class method a call reaches (an `acts_as_x`
+  that extends its methods, whose `self.extended` hook then runs);
   a plain module's nested `ClassMethods` counts only when something extends
   it. A `super` runs the next definition, at the `super`. An instance method
   or a nested class's method of the same name never runs. A module a class
@@ -98,6 +100,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A model macro written over `*args` reads each call's own arguments.**
+  The list binds to the call's positionals past the method's other
+  parameters, less the options hash the body takes off the end
+  (`args.extract_options!`), plus literals its leading statements push. A
+  block over the list is read once per item, so Canvas's
+  `validates_locale :locale, :browser_locale, allow_nil: true` lists an
+  inclusion validation on each field with `if: :locale_changed?`, in place of
+  the macro's own row and one on a computed `field`. An options hash, list
+  or parameter the method changes in place (`options[:x] = 1`,
+  `reverse_merge!`, `delete`) is not read as the call's value, so what it
+  decides stays a conditional declaration.
 - **A `load_defaults` written after `belongs_to_required_by_default = false`
   turns the default back on** in the static tier, as Rails does, so the
   implicit presence of a required `belongs_to` is listed. A literal assignment

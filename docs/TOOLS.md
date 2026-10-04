@@ -189,7 +189,7 @@ conditions, as Rails keeps it. The order is read from source in both tiers,
 and dynamic dispatch is not evaluated: a callback registered through
 `send(:before_save, ...)`, through a method called with `send` or defined with
 `define_singleton_method`, or through a module included in `class << self` is
-not evaluated, so the list can miss it or show the definition it replaces.
+not read, so the list can miss it or show the definition it replaces.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
