@@ -282,9 +282,8 @@ module RailsAiContext
         node.is_a?(Prism::ModuleNode) || node.is_a?(Prism::ClassNode)
       end
 
-      # Receiverless calls in `included do` outside any method run in the includer's
-      # class, so the includer calls them. The ids of the calls a plain mixin hook
-      # makes come back apart: that hook runs again on every include.
+      # Receiverless calls in `included do` outside any method are the includer's;
+      # the ids of a plain mixin hook's calls come back apart, as it reruns per include.
       def included_block_calls(tree, name, macro = :include)
         short = name.to_s.split("::").last.to_s
         block = ConcernMembership::CONCERN_BLOCKS[macro]

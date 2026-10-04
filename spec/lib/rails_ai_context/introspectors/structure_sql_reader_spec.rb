@@ -379,7 +379,7 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
       described_class.parse(sql)[:tables][table][:columns].map { |c| c.values_at(:name, :type, :null) }
     end
 
-    it "puts the parent's columns first in the issue's one-line form" do
+    it "puts the parent's columns first when CREATE TABLE and INHERITS share one line" do
       sql = <<~SQL
         CREATE TABLE public.base_logs (
             id bigint NOT NULL,
