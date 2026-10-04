@@ -23,11 +23,14 @@ module RailsAiContext
       MATCH_FIELD_SEPARATOR = "\x1f"
       # A line that names a method without calling it, by the file's own
       # syntax. `#{` opens a heredoc interpolation and ` * ` a Ruby splat, both
-      # code; ERB carries inline script; a stylesheet's `#id` is a selector.
+      # code; ERB carries inline script; `#id` is a stylesheet selector, and a
+      # haml or slim element, never a comment there.
       HASH_COMMENT = /\A\s*(?:#(?!\{)|<%#)/
       JS_COMMENT = %r{\A\s*(?://|/\*|\*\s)}
       NOT_A_CALL_LINE = {
         ".erb" => %r{\A\s*(?:#(?!\{)|<%#|//|/\*)},
+        ".haml" => %r{\A\s*(?:-#|/)},
+        ".slim" => %r{\A\s*/},
         ".css" => %r{\A\s*(?:/\*|\*\s|#)},
         ".scss" => %r{\A\s*(?://|/\*|\*\s|#)},
         ".sass" => %r{\A\s*(?://|/\*|\*\s|#)},
@@ -502,7 +505,13 @@ module RailsAiContext
       # A definition or a comment line names a method without calling it.
       private_class_method def self.not_a_call_site?(row)
         content = row[:content].to_s
-        content.match?(/\A\s*def\s/) || content.match?(NOT_A_CALL_LINE.fetch(File.extname(row[:file].to_s), HASH_COMMENT))
+        return true if content.match?(/\A\s*def\s/)
+
+        ext = File.extname(row[:file].to_s)
+        # A live ERB tag runs whatever comment surrounds it.
+        return false if ext == ".erb" && content.match?(/<%(?!#)/)
+
+        content.match?(NOT_A_CALL_LINE.fetch(ext, HASH_COMMENT))
       end
 
       private_class_method def self.match_count(rows)

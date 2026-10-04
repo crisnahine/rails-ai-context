@@ -818,6 +818,23 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
           end
         end
 
+        # A live ERB tag runs on the server whatever comment surrounds it, and
+        # `#id` opens an element in haml and slim.
+        it "keeps a line holding a live ERB tag, and a haml or slim id element" do
+          templates = {
+            "app/views/pings/show.js.erb" => "// <%= qa_ping %>\n/* <%= qa_ping %> */\n// qa_ping in a js.erb comment\n",
+            "app/views/pings/show.text.erb" => "# <%= qa_ping %>\n# qa_ping in a text.erb comment\n",
+            "app/views/pings/show.html.haml" => "-# qa_ping silent\n/ qa_ping html comment\n#qa_ping= qa_ping\n",
+            "app/views/pings/show.html.slim" => "/ qa_ping comment\n/! qa_ping html comment\n#qa_ping = qa_ping\n"
+          }
+          with_search_app(templates) do
+            text = described_class.call(pattern: "qa_ping", match_type: "call", context_lines: 0).content.first[:text]
+
+            expect(text).to include("show.js.erb:1:", "show.js.erb:2:", "show.text.erb:1:", "show.html.haml:3:", "show.html.slim:3:")
+            expect(text).to include("**5 matches**")
+          end
+        end
+
         it "does not count a call of the predicate or the setter as a call of the plain name" do
           with_search_app(files) do
             text = described_class.call(pattern: "qa_ping", match_type: "call", exact_match: true,
