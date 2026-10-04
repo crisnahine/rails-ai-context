@@ -197,7 +197,7 @@ module RailsAiContext
       end
 
       def scanned_body(lines, method_name)
-        name_end = Tools::BaseTool.method_name_end(method_name)
+        name_end = RailsAiContext::MethodName.definition_end(method_name)
         start_idx = lines.index { |l| l.match?(/^\s*def\s+#{Regexp.escape(method_name.to_s)}#{name_end}/i) }
         return nil unless start_idx
 

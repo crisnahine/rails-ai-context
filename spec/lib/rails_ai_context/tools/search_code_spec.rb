@@ -733,7 +733,17 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       <<~ERB
         <%# qa_ping mentioned in a comment %>
         <%= qa_ping %>
+        <script>
+          // qa_ping in inline script
+          /* qa_ping in an inline block comment */
+        </script>
       ERB
+    end
+
+    let(:style_files) do
+      { "app/assets/stylesheets/ping.css" => "#qa_ping { color: red; }\n/* qa_ping in a stylesheet */\n",
+        "app/assets/stylesheets/ping.scss" => "// qa_ping in scss\n#qa_ping { color: blue; }\n",
+        "app/javascript/ping.coffee" => "# qa_ping in coffee\n" }
     end
 
     # A splat written with a space reads like a JS doc-comment line, and a
@@ -745,6 +755,7 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
             [1,
              * qa_ping(3)]
             QaPinger.new.qa_ping?
+            QaPinger.new.qa_ping = 2
           end
         end
       RB
@@ -753,7 +764,7 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
     let(:files) do
       { "app/services/qa_pinger.rb" => pinger_source, "app/controllers/qa_pings_controller.rb" => controller_source,
         "app/javascript/ping.js" => script_source, "app/views/pings/show.html.erb" => view_source,
-        "app/models/user_of_ping.rb" => user_source }
+        "app/models/user_of_ping.rb" => user_source }.merge(style_files)
     end
 
     [ true, false ].each do |with_ripgrep|
@@ -802,17 +813,26 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
 
             expect(text).to include("qa_pings_controller.rb:3:", "ping.js:4:", "show.html.erb:2:", "user_of_ping.rb:4:")
             expect(text).not_to include("mentioned in a comment", "block comment", "doc comment")
-            expect(text).to include("**5 matches**")
+            expect(text).not_to include("inline script", "ping.css", "ping.scss", "ping.coffee")
+            expect(text).to include("**6 matches**")
           end
         end
 
-        it "does not count a call of the predicate as a call of the plain name" do
+        it "does not count a call of the predicate or the setter as a call of the plain name" do
           with_search_app(files) do
             text = described_class.call(pattern: "qa_ping", match_type: "call", exact_match: true,
                                         context_lines: 0).content.first[:text]
 
             expect(text).to include("user_of_ping.rb:4:")
-            expect(text).not_to include("user_of_ping.rb:5:")
+            expect(text).not_to include("user_of_ping.rb:5:", "user_of_ping.rb:6:")
+          end
+        end
+
+        it "leaves a spaced setter call out of the trace callers" do
+          with_search_app(files) do
+            text = described_class.call(pattern: "qa_ping", match_type: "trace").content.first[:text]
+
+            expect(text[/## Called from.*/m]).not_to include("qa_ping = 2")
           end
         end
 

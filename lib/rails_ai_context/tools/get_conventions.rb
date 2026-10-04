@@ -233,8 +233,8 @@ module RailsAiContext
           end
 
           # Create action flow detection
-          if content.match?(/def\s+create#{method_name_end("create")}/)
-            create_block = content[/def\s+create#{method_name_end("create")}.*?(?=\n\s{2}def\s|\n\s{2}private|\z)/m]
+          if content.match?(/def\s+create#{RailsAiContext::MethodName.definition_end("create")}/)
+            create_block = content[/def\s+create#{RailsAiContext::MethodName.definition_end("create")}.*?(?=\n\s{2}def\s|\n\s{2}private|\z)/m]
             if create_block
               flow_parts = []
               flow_parts << "permission check" if create_block.match?(/can_\w+\??|authorize|authorize!/)

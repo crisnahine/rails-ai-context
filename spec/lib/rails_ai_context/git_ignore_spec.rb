@@ -147,6 +147,18 @@ RSpec.describe RailsAiContext::GitIgnore do
       expect(ignored?("app/a.xdg.rb")).to be true
     end
 
+    # ripgrep opens a relative value from its own working directory, and the
+    # search runs it from this process's, whatever root it searches.
+    it "reads a relative core.excludesFile from the working directory" do
+      cwd = File.join(@home, "cwd")
+      FileUtils.mkdir_p(cwd)
+      File.write(File.join(cwd, "rel-ignore"), "rel_only.rb\n")
+      File.write(File.join(@root, "rel-ignore"), "")
+      File.write(@global, "[core]\n\texcludesFile = rel-ignore\n")
+
+      expect(Dir.chdir(cwd) { ignored?("rel_only.rb") }).to be true
+    end
+
     it "does not read core.excludesFile from GIT_CONFIG_GLOBAL" do
       excludes = File.join(@root, "env-ignore")
       File.write(excludes, "env_only.rb\n")

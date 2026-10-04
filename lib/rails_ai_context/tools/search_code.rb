@@ -21,12 +21,18 @@ module RailsAiContext
 
       TEST_DIRS = %w[test/ spec/ features/].freeze
       MATCH_FIELD_SEPARATOR = "\x1f"
-      # A line that opens with a comment, by the file's own comment syntax. `#{`
-      # opens an interpolation inside a heredoc, which is code, and a Ruby
-      # line may open with a splat.
-      C_STYLE_COMMENT = %r{\A\s*(?://|/\*|\*\s)}
+      # A line that names a method without calling it, by the file's own
+      # syntax. `#{` opens a heredoc interpolation and ` * ` a Ruby splat, both
+      # code; ERB carries inline script; a stylesheet's `#id` is a selector.
       HASH_COMMENT = /\A\s*(?:#(?!\{)|<%#)/
-      C_STYLE_EXTENSIONS = %w[.js .jsx .mjs .cjs .ts .tsx .mts .cts .css .scss .sass .less .vue .svelte].freeze
+      JS_COMMENT = %r{\A\s*(?://|/\*|\*\s)}
+      NOT_A_CALL_LINE = {
+        ".erb" => %r{\A\s*(?:#(?!\{)|<%#|//|/\*)},
+        ".css" => %r{\A\s*(?:/\*|\*\s|#)},
+        ".scss" => %r{\A\s*(?://|/\*|\*\s|#)},
+        ".sass" => %r{\A\s*(?://|/\*|\*\s|#)},
+        ".less" => %r{\A\s*(?://|/\*|\*\s|#)}
+      }.merge(%w[.js .jsx .mjs .cjs .ts .tsx .mts .cts .vue .svelte].to_h { |ext| [ ext, JS_COMMENT ] }).freeze
 
       tool_name "rails_search_code"
       description "Search the Rails codebase with smart modes. " \
@@ -120,7 +126,7 @@ module RailsAiContext
           cleaned = pattern.sub(/\A\s*def\s+/, "")
           escaped = literal(cleaned)
           # `def\s+` already anchors the left edge, so only a trailing boundary.
-          exact_match ? "^\\s*def\\s+(self\\.)?#{escaped}#{method_name_end(cleaned)}" : "^\\s*def\\s+(self\\.)?#{escaped}"
+          exact_match ? "^\\s*def\\s+(self\\.)?#{escaped}#{RailsAiContext::MethodName.definition_end(cleaned)}" : "^\\s*def\\s+(self\\.)?#{escaped}"
         when "class"
           cleaned = pattern.sub(/\A\s*(class|module)\s+/, "")
           escaped = literal(cleaned)
@@ -258,7 +264,7 @@ module RailsAiContext
       end
 
       private_class_method def self.method_call_pattern(name)
-        "#{leading_boundary(name)}#{literal(name)}#{method_name_end(name)}"
+        "#{leading_boundary(name)}#{literal(name)}#{RailsAiContext::MethodName.call_end(name)}"
       end
 
       # Regexp.escape writes a space as `\ `, which ripgrep 13 rejects as an
@@ -496,8 +502,7 @@ module RailsAiContext
       # A definition or a comment line names a method without calling it.
       private_class_method def self.not_a_call_site?(row)
         content = row[:content].to_s
-        comment = C_STYLE_EXTENSIONS.include?(File.extname(row[:file].to_s)) ? C_STYLE_COMMENT : HASH_COMMENT
-        content.match?(/\A\s*def\s/) || content.match?(comment)
+        content.match?(/\A\s*def\s/) || content.match?(NOT_A_CALL_LINE.fetch(File.extname(row[:file].to_s), HASH_COMMENT))
       end
 
       private_class_method def self.match_count(rows)
@@ -553,7 +558,7 @@ module RailsAiContext
         lines = [ "# Trace: `#{cleaned}`", "" ]
 
         # 1. Find the definition
-        def_pattern = "^\\s*def\\s+(self\\.)?#{literal(cleaned)}#{method_name_end(cleaned)}"
+        def_pattern = "^\\s*def\\s+(self\\.)?#{literal(cleaned)}#{RailsAiContext::MethodName.definition_end(cleaned)}"
         def_results, = quick_search(def_pattern, search_path, root, 10, exclude_tests)
 
         if def_results.any?
