@@ -2988,6 +2988,21 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         end
       end
 
+      it "marks only a chain that holds two transaction callbacks" do
+        {
+          "after_commit :a\n  after_rollback :b" => false,
+          "after_create_commit :a\n  after_update_commit :b" => true
+        }.each do |body, marked|
+          Dir.mktmpdir do |dir|
+            write_model(dir, "Order", "class Order < ApplicationRecord\n  #{body}\nend\n")
+
+            details = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Order"]
+
+            expect(details.key?(:commit_order_unread)).to be(marked), body
+          end
+        end
+      end
+
       it "puts a prepend: true callback first in its chain, ahead of the base's" do
         Dir.mktmpdir do |dir|
           write_config(dir, "config.load_defaults 7.0")
