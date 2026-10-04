@@ -179,25 +179,25 @@ RSpec.describe RailsAiContext::Tools::SearchDocs do
     end
 
     context "with fetch: true" do
-      let(:mock_response) do
-        response = instance_double(Net::HTTPSuccess, body: "# Active Record Basics\n\nFull guide content here...", code: "200")
-        allow(response).to receive(:is_a?).with(Net::HTTPSuccess).and_return(true)
-        response
-      end
+      let(:root) { Pathname.new(Dir.mktmpdir) }
+      let(:cache_file) { root.join("tmp", "rails-ai-context", "docs", "active_record_basics_8-0-stable.md") }
+      let(:body) { (+"# Active Record Basics\n\nFull guide content here \u2014 caf\u00e9...").force_encoding(Encoding::BINARY) }
+      let(:http) { instance_double(Net::HTTP) }
 
       before do
-        cache_dir = Rails.root.join("tmp", "rails-ai-context", "docs")
-        allow(FileUtils).to receive(:mkdir_p).with(cache_dir)
-        allow(File).to receive(:exist?).with(cache_dir.join("active_record_basics_8-0-stable.md")).and_return(false)
-        allow(File).to receive(:write)
+        allow(described_class).to receive(:rails_app).and_return(double(root: root))
+        allow(described_class).to receive(:detect_rails_branch).and_return("8-0-stable")
 
-        http = instance_double(Net::HTTP)
+        response = instance_double(Net::HTTPSuccess, body: body, code: "200")
+        allow(response).to receive(:is_a?).with(Net::HTTPSuccess).and_return(true)
         allow(Net::HTTP).to receive(:new).and_return(http)
         allow(http).to receive(:use_ssl=)
         allow(http).to receive(:open_timeout=)
         allow(http).to receive(:read_timeout=)
-        allow(http).to receive(:request).and_return(mock_response)
+        allow(http).to receive(:request).and_return(response)
       end
+
+      after { FileUtils.rm_rf(root) }
 
       it "fetches and returns full content" do
         result = described_class.call(query: "active record basics", fetch: true)
@@ -206,6 +206,30 @@ RSpec.describe RailsAiContext::Tools::SearchDocs do
         expect(text).to include("(fetched)")
         expect(text).to include("Active Record Basics")
         expect(text).to include("Full guide content here")
+      end
+
+      # Rails sets default_internal to UTF-8, which makes a text-mode write
+      # transcode the binary body.
+      it "caches a non-ASCII body whole when the default internal encoding is UTF-8" do
+        previous = Encoding.default_internal
+        silence_warnings { Encoding.default_internal = Encoding::UTF_8 }
+        text = described_class.call(query: "active record basics", fetch: true).content.first[:text]
+
+        expect(text).not_to include("fetch failed")
+        expect(text).to include("caf\u00e9")
+        expect(File.binread(cache_file)).to eq(body)
+      ensure
+        silence_warnings { Encoding.default_internal = previous }
+      end
+
+      it "fetches again over an empty cache file" do
+        FileUtils.mkdir_p(cache_file.dirname)
+        File.write(cache_file, "")
+
+        text = described_class.call(query: "active record basics", fetch: true).content.first[:text]
+
+        expect(text).to include("Full guide content here")
+        expect(File.size(cache_file)).to eq(body.bytesize)
       end
     end
 

@@ -197,8 +197,8 @@ module RailsAiContext
           cache_key = "#{topic['id']}_#{branch}.md"
           cache_file = cache_dir.join(cache_key)
 
-          # Use cached file if < 24 hours old
-          if File.exist?(cache_file) && (Time.now - File.mtime(cache_file)) < 86_400
+          # Use cached file if < 24 hours old; an empty one is a failed write, not a doc.
+          if File.size?(cache_file) && (Time.now - File.mtime(cache_file)) < 86_400
             return RailsAiContext::SafeFile.read(cache_file)
           end
 
@@ -214,9 +214,8 @@ module RailsAiContext
 
           max_fetch_bytes = 2_000_000 # 2MB safety cap
           if response.is_a?(Net::HTTPSuccess)
-            body = response.body
-            body = body.byteslice(0, max_fetch_bytes) if body.bytesize > max_fetch_bytes
-            File.write(cache_file, body)
+            body = response.body.byteslice(0, max_fetch_bytes).force_encoding(Encoding::UTF_8).scrub("?")
+            RailsAiContext::SafeFile.atomic_write(cache_file, body)
             body
           else
             "#{topic['summary']}\n→ #{url}\n_(fetch failed: HTTP #{response.code})_"

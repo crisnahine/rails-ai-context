@@ -66,4 +66,19 @@ RSpec.describe RailsAiContext::SafeFile do
       expect(described_class.read("/some/protected/file")).to be_nil
     end
   end
+
+  describe ".atomic_write" do
+    it "writes binary content byte for byte and leaves no temp file when the rename fails" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "doc.md")
+        bytes = (+"caf\u00e9").force_encoding(Encoding::BINARY)
+        described_class.atomic_write(path, bytes)
+        expect(File.binread(path)).to eq(bytes)
+
+        allow(File).to receive(:rename).and_raise(Errno::EACCES)
+        expect { described_class.atomic_write(path, "new") }.to raise_error(Errno::EACCES)
+        expect(Dir.children(dir)).to eq([ "doc.md" ])
+      end
+    end
+  end
 end

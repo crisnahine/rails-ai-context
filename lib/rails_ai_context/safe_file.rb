@@ -16,8 +16,11 @@ module RailsAiContext
       dir = File.dirname(path)
       FileUtils.mkdir_p(dir)
       tmp = File.join(dir, ".#{File.basename(path)}.#{SecureRandom.hex(4)}.tmp")
-      File.write(tmp, content)
+      File.binwrite(tmp, content)
       File.rename(tmp, path)
+    rescue StandardError
+      FileUtils.rm_f(tmp) if tmp
+      raise
     end
 
     def self.read(path, max_size: nil)
