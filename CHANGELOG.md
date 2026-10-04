@@ -106,11 +106,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`args.extract_options!`), plus literals its leading statements push. A
   block over the list is read once per item, so Canvas's
   `validates_locale :locale, :browser_locale, allow_nil: true` lists an
-  inclusion validation on each field with `if: :locale_changed?`, in place of
-  the macro's own row and one on a computed `field`. An options hash, list
-  or parameter the method changes in place (`options[:x] = 1`,
-  `reverse_merge!`, `delete`) is not read as the call's value, so what it
-  decides stays a conditional declaration.
+  inclusion validation on each field with its own `if: :<field>_changed?`, in
+  place of the macro's own row and one on a computed `field`. An options
+  hash, list or parameter the method changes in place (`options[:x] = 1`,
+  `options[:x] ||= 1`, `reverse_merge!`, `delete`) is not read as the call's
+  value, so what it decides stays a conditional declaration.
 - **A `load_defaults` written after `belongs_to_required_by_default = false`
   turns the default back on** in the static tier, as Rails does, so the
   implicit presence of a required `belongs_to` is listed. A literal assignment
