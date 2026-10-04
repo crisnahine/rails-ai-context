@@ -585,6 +585,49 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
       end
     end
 
+    {
+      "an in-repo plugin" => "plugins/chat/app/javascript/controllers",
+      "an engine" => "engines/admin/app/javascript/controllers"
+    }.each do |label, other_dir|
+      it "keeps the written name on the app's own app/frontend file over #{label}'s app/javascript file" do
+        Dir.mktmpdir do |root|
+          [ "app/frontend/controllers", other_dir ].each do |dir|
+            FileUtils.mkdir_p(File.join(root, dir))
+            File.write(File.join(root, dir, "foo_controller.js"),
+                       %(import { Controller } from "@hotwired/stimulus"\nexport default class extends Controller {}\n))
+          end
+          FileUtils.mkdir_p(File.join(root, "plugins/chat/app/models"))
+          File.write(File.join(root, "plugins/chat/plugin.rb"), "# plugin\n")
+          FileUtils.mkdir_p(File.join(root, "app/views/pages"))
+          File.write(File.join(root, "app/views/pages/home.html.erb"), %(<div data-controller="foo"></div>\n))
+          RailsAiContext::PathResolver.clear_code_roots
+
+          names = described_class.new(RailsAiContext::StaticApp.new(root)).call[:controllers].to_h { |c| [ c[:file], c[:name] ] }
+
+          expect(names["app/frontend/controllers/foo_controller.js"]).to eq("foo")
+          expect(names["#{other_dir}/foo_controller.js"]).not_to eq("foo")
+        end
+      end
+    end
+
+    it "names a nested controllers directory inside the home by its whole path under the home" do
+      Dir.mktmpdir do |root|
+        home = File.join(root, "app/javascript/controllers")
+        FileUtils.mkdir_p(File.join(home, "admin/controllers"))
+        [ "x_controller.js", "admin/controllers/x_controller.js" ].each do |file|
+          File.write(File.join(home, file), %(import { Controller } from "@hotwired/stimulus"\nexport default class extends Controller {}\n))
+        end
+
+        controllers = described_class.new(RailsAiContext::StaticApp.new(root)).call[:controllers]
+        by_file = controllers.to_h { |c| [ c[:file], [ c[:name], c[:identifier_inferred] ] ] }
+
+        expect(by_file).to eq(
+          "app/javascript/controllers/x_controller.js" => [ "x", nil ],
+          "app/javascript/controllers/admin/controllers/x_controller.js" => [ "admin--controllers--x", nil ]
+        )
+      end
+    end
+
     it "keeps two unconfirmed guesses apart too" do
       Dir.mktmpdir do |root|
         [ "frontend/controllers", "plugins/chat/frontend/controllers" ].each do |dir|

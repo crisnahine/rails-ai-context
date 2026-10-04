@@ -144,7 +144,7 @@ module RailsAiContext
         # the rails-new home an app's own loader can strip a segment the path keeps.
         def identifier_for(path, js_root)
           parts = path.sub("#{js_root}/", "").split("/")
-          index = parts.rindex("controllers")
+          index = parts.index("controllers")
           stem = (index ? parts[(index + 1)..] : parts).join("/")
                    .sub(/(?:_controller|\.controller)\.\w+\z/, "")
           [ stem.gsub("/", "--").tr("_", "-"), !default_home?(path, js_root) ]
@@ -159,7 +159,7 @@ module RailsAiContext
         # controller left without a free name is qualified by its code root and marked a guess.
         def resolve_names(paths, referenced, registered = {}, root: nil, loader_dirs: [])
           derived = paths.map { |path, js_root| [ path, js_root, identifier_for(path, js_root) ] }
-                         .sort_by { |path, js_root, (_name, guess)| [ guess ? 1 : 0, js_root.count("/"), path ] }
+                         .sort_by { |path, js_root, (_name, guess)| [ js_root.count("/"), guess ? 1 : 0, path ] }
           claimed = derived.map { |_path, _js_root, (name, _guess)| name }.to_set
           taken = Set.new
           resolved = {}
@@ -238,7 +238,7 @@ module RailsAiContext
 
         def controllers_home(path, js_root)
           parts = path.delete_prefix("#{js_root}/").split("/")
-          index = parts.rindex("controllers") or return nil
+          index = parts.index("controllers") or return nil
           File.join(js_root, *parts.first(index + 1))
         end
 

@@ -237,6 +237,29 @@ RSpec.describe RailsAiContext::Tools::GetStimulus do
       end
     end
 
+    context "when app/frontend holds the same controller path as the home" do
+      it "renders the home file under its bare name with its targets" do
+        Dir.mktmpdir do |root|
+          home = File.join(root, "app/javascript/controllers/users/tools")
+          other = File.join(root, "app/frontend/controllers/users/tools")
+          [ home, other ].each { |dir| FileUtils.mkdir_p(dir) }
+          File.write(File.join(home, "ajax_controller.js"),
+                     %(import { Controller } from "@hotwired/stimulus"\nexport default class extends Controller {\n  static targets = ["output"]\n}\n))
+          File.write(File.join(other, "ajax_controller.js"),
+                     %(import { Controller } from "@hotwired/stimulus"\nexport default class extends Controller {\n  connect() {}\n}\n))
+          FileUtils.mkdir_p(File.join(root, "app/views/pages"))
+          File.write(File.join(root, "app/views/pages/faq.html.erb"), %(<div data-controller="users--tools--ajax"></div>\n))
+          data = RailsAiContext::Introspectors::StimulusIntrospector.new(RailsAiContext::StaticApp.new(root)).call
+          allow(described_class).to receive(:cached_context).and_return(stimulus: data)
+
+          text = described_class.call.content.first[:text]
+
+          expect(text).to match(/^## users--tools--ajax\n- Targets: output$/)
+          expect(text).not_to include("app-javascript--")
+        end
+      end
+    end
+
     context "when the caller asks by the file-path spelling" do
       before do
         allow(described_class).to receive(:cached_context).and_return(
