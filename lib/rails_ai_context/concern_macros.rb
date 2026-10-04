@@ -241,7 +241,7 @@ module RailsAiContext
           path =
             if nested then source
             elsif @paths.key?(name) then @paths[name]
-            else ConcernPaths.find_file(@root, name, within: within, dirs: @dirs)
+            else ConcernPaths.find_file(@root, name, within: within, dirs: @dirs) || beside(file, name, within)
             end
           macro = @macros[name] || :include
           if ConcernMembership.excluded?(name)
@@ -328,6 +328,17 @@ module RailsAiContext
         nil
       rescue StandardError => e
         RailsAiContext.debug_fail(e, nil, label: "nested module #{name} in #{file}")
+      end
+
+      # A plugin's lib is on the load path, so a module it names can sit under the
+      # namer's own directory by its constant path, required by a glob.
+      def beside(file, name, within)
+        return nil unless file
+
+        memo([ :beside, file, name, within ]) do
+          dir = File.dirname(file)
+          ConcernPaths.candidate_names(name, within).map { |candidate| File.join(dir, "#{candidate.underscore}.rb") }.find { |path| File.file?(path) }
+        end
       end
 
       def introspect_nested(file, (qualified, node))
