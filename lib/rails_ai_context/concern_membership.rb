@@ -60,12 +60,12 @@ module RailsAiContext
 
     # Matched on the last segment: `module Edition; module Featurable` and
     # `module Edition::Featurable` both write one constant.
-    def own_mixins(mixins, name)
-      return Array(mixins) if Array(mixins).none? { |mixin| mixin.key?(:owner) }
+    def owned_by(records, name)
+      return Array(records) if Array(records).none? { |record| record.key?(:owner) }
 
-      own = own_owner(mixins, name)
+      own = own_owner(records, name)
       # `Other.include X` written in the body mixes into Other.
-      Array(mixins).select { |mixin| own && !mixin[:receiver] && Array(mixin[:owner]).join("::") == own }
+      Array(records).select { |record| own && !record[:receiver] && Array(record[:owner]).join("::") == own }
     end
 
     def own_owner(records, name)

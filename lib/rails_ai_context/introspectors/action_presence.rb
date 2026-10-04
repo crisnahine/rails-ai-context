@@ -83,7 +83,7 @@ module RailsAiContext
       # the actions its class macros build with define_method, and an unread
       # one only hides class methods.
       def read_modules(source, owner, root, names, unread, depth)
-        mixins = ConcernMembership.own_mixins(
+        mixins = ConcernMembership.owned_by(
           SourceIntrospector.walk_source(source, { mixins: Listeners::MixinsListener })[:mixins], owner
         )
         mixins.select { |m| m[:ancestor] || (m[:macro] == :extend && !m[:receiver]) }.uniq { |m| m[:name] }.each do |mixin|

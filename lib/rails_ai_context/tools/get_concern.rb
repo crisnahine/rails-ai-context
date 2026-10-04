@@ -171,7 +171,7 @@ module RailsAiContext
         end
 
         # Only the module's own mixins: a class nested in the file includes for itself.
-        mixins = ConcernMembership.own_mixins(
+        mixins = ConcernMembership.owned_by(
           Introspectors::SourceIntrospector.walk_source(source, { mixins: Introspectors::Listeners::MixinsListener })[:mixins], name
         )
         included_modules = mixins.select { |m| m[:macro] == :include }.map { |m| m[:name] }.uniq
