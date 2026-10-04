@@ -76,9 +76,12 @@ needs a function, virtual-table module, collation or encryption key only the
 app's own connection has. The table and EXPLAIN answers then say so; CSV output
 stays plain data.
 
-On sqlite3 1.x the child waits out its timeout behind a write lock held by
-another connection in the same process, since the lock record it inherits never
-clears; a lock held by another process is waited on as usual.
+On sqlite3 1.x a query fails at its timeout, with the statement-timeout error,
+when another connection in the same process held an exclusive lock on a
+rollback-journal database as it started (`BEGIN EXCLUSIVE`, or a commit being
+written): the child inherits that lock record and it never clears. A lock held
+by another process is waited on as usual, and an open write transaction or any
+lock in WAL mode does not block it.
 
 ### Layer 3 - Row limit
 
