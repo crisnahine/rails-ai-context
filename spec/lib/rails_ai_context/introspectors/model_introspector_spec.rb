@@ -3247,18 +3247,33 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         end
       end
 
-      it "reads the running setting when booted, and reverses on a Rails without it" do
+      def skip_without_setting
+        return if ActiveRecord.respond_to?(:run_after_transaction_callbacks_in_order_defined)
+
+        skip "ActiveRecord #{ActiveRecord::VERSION::STRING} has no run_after_transaction_callbacks_in_order_defined"
+      end
+
+      it "reverses when booted on a Rails without the setting" do
+        Dir.mktmpdir do |dir|
+          write_order(dir)
+
+          expect(booted_with_flag(dir, nil)).to eq(reversed)
+        end
+      end
+
+      it "reads the running setting when booted" do
+        skip_without_setting
         Dir.mktmpdir do |dir|
           write_order(dir)
 
           expect(booted_with_flag(dir, false)).to eq(reversed)
           expect(booted_with_flag(dir, true)).to eq(in_order)
-          expect(booted_with_flag(dir, nil)).to eq(reversed)
         end
       end
 
       # Rails tests the setting for truth, so nil runs them last declared first.
       it "reverses when booted with the setting nil" do
+        skip_without_setting
         Dir.mktmpdir do |dir|
           write_order(dir)
           allow(ActiveRecord).to receive(:run_after_transaction_callbacks_in_order_defined).and_return(nil)
