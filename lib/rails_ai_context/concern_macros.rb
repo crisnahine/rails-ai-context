@@ -10,25 +10,95 @@ module RailsAiContext
   module ConcernMacros
     MAX_DEPTH = 3
 
+    # A call made inside one of the class's own class methods, standing where
+    # the class calls that method.
+    Relayed = Struct.new(:node, :via) do
+      def arguments = node.arguments
+      def location = node.location
+    end
+
     # The class methods a class calls, by name to call sites: what `reader`
     # finds in the class files, read once, and what `included` blocks add.
-    ClassCalls = Struct.new(:reader, :included) do
-      # Calls already known, from no class file.
-      def self.of(found) = new(-> { [ found, {} ] }, {})
+    # `reader` returns the calls, each class-file call site's rank (0 is the
+    # class, then its bases nearest first) and the calls each of the class's
+    # own class methods makes, by method name; `blocks` names the concern
+    # whose `included` block or hook made a call.
+    class ClassCalls
+      attr_reader :included, :blocks
 
-      def call = Run.merge_calls(Run.merge_calls({}, read.first), included)
+      def initialize(reader, included = {}, blocks = {})
+        @reader = reader
+        @included = included
+        @blocks = blocks
+      end
 
-      # Which class file a call site sits in: 0 is the class, then its bases nearest first.
-      def rank_of(site) = read.last[site.__id__]
+      # A class method the class calls makes the calls in its body too.
+      def call
+        found = Run.merge_calls(Run.merge_calls({}, read[0]), included)
+        queue = found.flat_map { |name, sites| sites.map { |site| [ name, site ] } }
+        expanded = Set.new
+        until queue.empty?
+          name, site = queue.shift
+          Array(read[2]&.dig(name)).each do |inner|
+            next unless expanded.add?([ inner.__id__, origin(site).__id__ ])
 
-      def read = (@read ||= reader.call)
+            inner.each do |inner_name, nodes|
+              nodes.each do |node|
+                relayed = Relayed.new(node, site)
+                (found[inner_name] ||= []) << relayed
+                queue << [ inner_name, relayed ]
+              end
+            end
+          end
+        end
+        found
+      end
+
+      # A declaration made through `site` joins the chain at the class-file
+      # call it was reached from, or where the concern whose block made it
+      # is included.
+      def place(entry, site)
+        origin = origin(site)
+        rank = origin && read[1][origin.__id__]
+        return entry.merge(call_rank: rank, call_line: origin.location.start_line, rerun: true) if rank
+
+        from = origin && blocks[origin.__id__]
+        from ? entry.merge(called_from: from) : entry
+      end
+
+      # Each entry inside one of `methods` counts once per call of that
+      # method, and nowhere when nothing calls it.
+      def per_call(entries, methods)
+        bodies = Array(methods).filter_map do |method|
+          [ method[:location]..method[:end_location], method[:name].to_s ] if method[:location] && method[:end_location]
+        end
+        sites = call
+        Array(entries).flat_map do |entry|
+          _, name = ClassCalls.enclosing(bodies, entry[:location])
+          name ? Array(sites[name]).map { |site| place(entry, site) } : [ entry ]
+        end
+      end
+
+      # The innermost of `bodies`, [range, name] pairs, around `line`.
+      def self.enclosing(bodies, line)
+        line && bodies.select { |range, _| range.cover?(line) }.min_by { |range, _| range.size }
+      end
+
+      private
+
+      def origin(site)
+        site = site.via while site.is_a?(Relayed)
+        site
+      end
+
+      def read = (@read ||= @reader.call)
     end
 
     # One walk's state. The root, the directories, the keys and the cache are
     # fixed for the run and `seen`, `collected` and `unresolved` accumulate
     # across it, so they belong to the run rather than to every call.
     class Run
-      attr_reader :unresolved, :hidden, :included_calls, :skipped_methods, :placement, :hook_sites
+      attr_reader :unresolved, :hidden, :included_calls, :skipped_methods, :placement, :hook_sites, :block_sites
 
       # The default block belongs to the walk. Once the entries leave it, a
       # caller reading a key the walk never produced would grow one.
@@ -65,6 +135,7 @@ module RailsAiContext
         @unresolved = []
         @hidden = []
         @included_calls = {}
+        @block_sites = {}
         @skipped_methods = Set.new
         @consulted = Set.new
         @placement = {}
@@ -117,6 +188,7 @@ module RailsAiContext
           source_key = nested ? "#{file}##{nested.first}" : path
           block_calls, hooked = memo([ :included_calls, source_key, label, macro ]) { included_block_calls(tree, label, macro) }
           Run.merge_calls(@included_calls, block_calls)
+          block_calls.each_value { |sites| sites.each { |site| @block_sites[site.__id__] ||= label if site } }
           @hook_sites.merge(hooked)
           bodies, hooks = method_bodies(data, macro)
           own_lines, inner = memo([ :ranges, source_key, label ]) { own_and_nested_ranges(tree, label) }
@@ -218,7 +290,7 @@ module RailsAiContext
           line = entry.is_a?(Hash) && entry[:location]
           next false if line && own_lines && !own_lines.cover?(line)
 
-          enclosing = line && bodies.select { |range, _| range.cover?(line) }.min_by { |range, _| range.size }
+          enclosing = ClassCalls.enclosing(bodies, line)
           next true if enclosing.nil? && hooks.any? { |range| range.cover?(line) }
           next !extended && inner.none? { |range| range.cover?(line) } if enclosing.nil?
           next keep_called if calls?(enclosing.last)
@@ -368,11 +440,10 @@ module RailsAiContext
         rerun ? entry.merge(from_concern: concern_name, rerun: true) : entry.merge(from_concern: concern_name)
       end
 
-      # Where the call that declared it stands, so the chain places it there.
+      # The call travels with the entry; the class places it once every
+      # concern's blocks are known.
       def at_call(entry, call)
-        rank = call && @calls&.rank_of(call)
-        return entry.merge(call_rank: rank, call_line: call.location.start_line, rerun: true) if rank
-
+        entry = entry.merge(site: call) if call
         call && @hook_sites.include?(call.__id__) ? entry.merge(rerun: true) : entry
       end
 
@@ -402,17 +473,18 @@ module RailsAiContext
     #   the kind from outside its file, read from the file they name
     # @param listeners [Hash] the listener map each concern file is walked
     #   with; it must carry `mixins` for the walk to follow nested concerns
-    # @return [Array(Hash, Array<String>, Array<String>, Hash, Hash, Set)] the
-    #   collected entries per key, the names whose file could not be read, the
-    #   names `excluded_concerns` hid that the walk would otherwise have read,
-    #   the methods `included` blocks call with their call sites, and for each
-    #   concern read the top-level mixin that reached it and its place in the
-    #   order Ruby adds them, and the methods whose declarations the walk held
-    #   back because nothing it knew of calls them
+    # @return [Array(Hash, Array<String>, Array<String>, Hash, Hash, Set, Hash)]
+    #   the collected entries per key, the names whose file could not be read,
+    #   the names `excluded_concerns` hid that the walk would otherwise have
+    #   read, the methods `included` blocks call with their call sites, and for
+    #   each concern read the top-level mixin that reached it and its place in
+    #   the order Ruby adds them, the methods whose declarations the walk held
+    #   back because nothing it knew of calls them, and the concern each
+    #   `included` block call site belongs to, by the site's object id
     def collect(root, mixins, keys:, prefer: nil, within: nil, cache: nil, calls: nil,
                 listeners: Introspectors::SourceIntrospector::LISTENER_MAP, extra: [], file: nil)
       names = ConcernMembership.mixin_names(mixins) | extra.map(&:name)
-      return [ {}, [], [], {}, {}, Set.new ] if names.empty?
+      return [ {}, [], [], {}, {}, Set.new, {} ] if names.empty?
 
       # Most walks never look at the class's calls, so a base's walk is the
       # same for every subclass: kept in the caller's per-run cache.
@@ -441,16 +513,16 @@ module RailsAiContext
         run.walk(walked, within, MAX_DEPTH)
       end
 
-      result = [ run.collected, run.unresolved, run.hidden, run.included_calls, run.placement, run.skipped_methods ]
+      result = [ run.collected, run.unresolved, run.hidden, run.included_calls, run.placement, run.skipped_methods, run.block_sites ]
       cache[memo_key] = [ run.consulted, fresh(result) ] if memo_key && !depends_on_calls
       result
     end
 
     # A copy a caller may change without changing the cached walk.
     def fresh(result)
-      collected, unresolved, hidden, included, placement, skipped = result
+      collected, unresolved, hidden, included, placement, skipped, blocks = result
       [ collected.transform_values { |entries| entries.map { |entry| entry.is_a?(Hash) ? entry.dup : entry } },
-        unresolved.dup, hidden.dup, included.transform_values(&:dup), placement.dup, skipped.dup ]
+        unresolved.dup, hidden.dup, included.transform_values(&:dup), placement.dup, skipped.dup, blocks.dup ]
     end
     private_class_method :fresh
   end

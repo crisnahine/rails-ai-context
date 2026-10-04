@@ -2797,6 +2797,114 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # Runtime: each of these runs before_save :first, :track, :last; Cycle runs :first, :x.
+    it "follows a call with self as receiver and a call made from another of the class's methods" do
+      Dir.mktmpdir do |dir|
+        write_model(dir, "Selfcall", <<~RUBY)
+          class Selfcall < ApplicationRecord
+            def self.loud!
+              before_save :track
+            end
+            before_save :first
+            self.loud!
+            before_save :last
+          end
+        RUBY
+        write_model(dir, "Indirect", <<~RUBY)
+          class Indirect < ApplicationRecord
+            def self.setup
+              loud!
+            end
+            def self.loud!
+              before_save :track
+            end
+            before_save :first
+            setup
+            before_save :last
+          end
+        RUBY
+        write_model(dir, "Viaself", <<~RUBY)
+          class Viaself < ApplicationRecord
+            class << self
+              def setup
+                self.loud!
+              end
+              def loud!
+                before_save :track
+              end
+            end
+            before_save :first
+            setup
+            before_save :last
+          end
+        RUBY
+        write_model(dir, "Cycle", <<~RUBY)
+          class Cycle < ApplicationRecord
+            def self.a(go = true)
+              b if go
+            end
+            def self.b
+              a(false)
+              before_save :x
+            end
+            before_save :first
+            a
+          end
+        RUBY
+
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        %w[Selfcall Indirect Viaself].each do |name|
+          expect(static[name][:callbacks]).to eq("before_save" => %w[first track last])
+          expect(booted_callbacks(dir, name)).to eq(static[name][:callbacks])
+        end
+        expect(static["Cycle"][:callbacks]).to eq("before_save" => %w[first x])
+      end
+    end
+
+    # Runtime: Fromblock runs :first, :track, :last and Crossblock :mid, :s, :last.
+    it "places a declaration a concern's included block makes through a call where that concern is included" do
+      Dir.mktmpdir do |dir|
+        write_model(dir, "Concerns::Hooky", "module Hooky\n  extend ActiveSupport::Concern\n  included do\n    loud!\n  end\nend\n")
+        write_model(dir, "Concerns::Stampy", <<~RUBY)
+          module Stampy
+            extend ActiveSupport::Concern
+            class_methods do
+              def stamp
+                before_save :s
+              end
+            end
+          end
+        RUBY
+        write_model(dir, "Concerns::Caller", "module Caller\n  extend ActiveSupport::Concern\n  included do\n    stamp\n  end\nend\n")
+        write_model(dir, "Fromblock", <<~RUBY)
+          class Fromblock < ApplicationRecord
+            def self.loud!
+              before_save :track
+            end
+            before_save :first
+            include Hooky
+            before_save :last
+          end
+        RUBY
+        write_model(dir, "Crossblock", <<~RUBY)
+          class Crossblock < ApplicationRecord
+            include Stampy
+            before_save :mid
+            include Caller
+            before_save :last
+          end
+        RUBY
+
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(static["Fromblock"][:callbacks]).to eq("before_save" => %w[first track last])
+        expect(static["Crossblock"][:callbacks]).to eq("before_save" => %w[mid s last])
+        expect(booted_callbacks(dir, "Fromblock")).to eq(static["Fromblock"][:callbacks])
+        expect(booted_callbacks(dir, "Crossblock")).to eq(static["Crossblock"][:callbacks])
+      end
+    end
+
     # Rails builds the chain base first, a concern where its include runs,
     # then the class body; a later declaration replaces an earlier one.
     it "lists callbacks across a base, a concern and the class in chain order" do
