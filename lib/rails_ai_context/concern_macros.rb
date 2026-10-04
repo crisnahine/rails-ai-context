@@ -10,6 +10,20 @@ module RailsAiContext
   module ConcernMacros
     MAX_DEPTH = 3
 
+    # The class methods a class calls, by name to call sites: what `reader`
+    # finds in the class files, read once, and what `included` blocks add.
+    ClassCalls = Struct.new(:reader, :included) do
+      # Calls already known, from no class file.
+      def self.of(found) = new(-> { [ found, {} ] }, {})
+
+      def call = Run.merge_calls(Run.merge_calls({}, read.first), included)
+
+      # Which class file a call site sits in: 0 is the class, then its bases nearest first.
+      def rank_of(site) = read.last[site.__id__]
+
+      def read = (@read ||= reader.call)
+    end
+
     # One walk's state. The root, the directories, the keys and the cache are
     # fixed for the run and `seen`, `collected` and `unresolved` accumulate
     # across it, so they belong to the run rather than to every call.
@@ -357,7 +371,7 @@ module RailsAiContext
 
       # Where the call that declared it stands, so the chain places it there.
       def at_call(entry, call)
-        rank = call && @calls.respond_to?(:rank_of) && @calls.rank_of(call)
+        rank = call && @calls&.rank_of(call)
         return entry.merge(call_rank: rank, call_line: call.location.start_line, rerun: true) if rank
 
         call && @hook_sites.include?(call.__id__) ? entry.merge(rerun: true) : entry
@@ -378,7 +392,7 @@ module RailsAiContext
     #   resolves to this one's concerns directory
     # @param within [String, nil] the enclosing constant of the class, for a
     #   namespace-relative `include`
-    # @param calls [#call, nil] answers the class methods the including class
+    # @param calls [ClassCalls, nil] the class methods the including class
     #   calls in its body; nil counts none
     # @param cache [Hash, nil] a caller-owned store keyed by concern file, so
     #   one run walks a file once however many classes include it. The caller

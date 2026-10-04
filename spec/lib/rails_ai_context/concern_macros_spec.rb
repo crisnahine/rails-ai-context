@@ -177,7 +177,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     RUBY
 
     collected, = described_class.collect(tmpdir, mixin("RateLimitable"), keys: %i[associations callbacks],
-                                         calls: -> { %w[rate_limit] })
+                                         calls: described_class::ClassCalls.of(%w[rate_limit]))
 
     expect(collected[:callbacks].map { |c| c[:type] }).to eq([ "after_create" ])
     expect(collected.keys).to eq([ :callbacks ])
@@ -298,7 +298,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     expect(uncalled).to eq({})
 
     called, = described_class.collect(tmpdir, mixin("Attachable"), keys: %i[associations callbacks],
-                                      calls: -> { %w[acts_as_attachable] })
+                                      calls: described_class::ClassCalls.of(%w[acts_as_attachable]))
     expect(called[:associations].map { |a| a[:name] }).to eq([ :attachments ])
     expect(called[:callbacks].map { |c| [ c[:method], c[:from_concern] ] })
       .to eq([ [ "persist_attachments_claimed", "Attachable::InstanceMethods" ] ])
@@ -367,7 +367,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
       .with(having_attributes(name: :plugin_settings), anything, anything).and_raise(NoMethodError, "each_char for nil")
 
     collected, unresolved = described_class.collect(tmpdir, mixin("Settings"), keys: %i[associations],
-                                                    calls: -> { %w[plugin_settings owned] })
+                                                    calls: described_class::ClassCalls.of(%w[plugin_settings owned]))
 
     expect(collected[:associations].map { |a| a[:name] }).to eq([ :owners ])
     expect(unresolved).to eq([ "Settings::ClassMethods#plugin_settings" ])
@@ -592,7 +592,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
 
     def collect_for(calls, cache)
       described_class.collect(tmpdir, mixin("Trackable"), keys: %i[associations], within: "Base",
-                              cache: cache, calls: -> { calls })
+                              cache: cache, calls: described_class::ClassCalls.of(calls))
     end
 
     it "is walked once for classes that call none of the methods it asked about, and again for one that does" do
@@ -608,7 +608,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
       calling, = collect_for({ "tracks" => [ nil ] }, cache)
       expect(runs).to eq(2)
       expect(calling).to eq(described_class.collect(tmpdir, mixin("Trackable"), keys: %i[associations], within: "Base",
-                                                    calls: -> { { "tracks" => [ nil ] } }).first)
+                                                    calls: described_class::ClassCalls.of({ "tracks" => [ nil ] })).first)
     end
   end
 

@@ -1441,13 +1441,13 @@ module RailsAiContext
         BaseMixins.models(app.root.to_s) + extended
       end
 
-      def merge_concern_macros(own, class_name, calls = nil, extra: [], file: nil)
+      def merge_concern_macros(own, class_name, calls, extra: [], file: nil)
         collected, unread, hidden, included, placement, skipped = ConcernMacros.collect(
           app.root.to_s, own[:mixins] || [],
           keys: [ *WALKED_KEYS, :expanded ], prefer: "model", within: class_name,
           cache: @source_cache, calls: calls, extra: extra, file: file
         )
-        ConcernMacros::Run.merge_calls(calls.included, included) if calls.respond_to?(:included)
+        ConcernMacros::Run.merge_calls(calls.included, included)
         own = own.merge(callbacks: called_callbacks(own, calls))
         own = without_expanded_calls(own, collected.delete(:expanded))
         own = own.merge(callbacks: placed_callbacks(own, collected.delete(:callbacks), placement)) if collected.key?(:callbacks)
@@ -1465,7 +1465,7 @@ module RailsAiContext
                        .min_by { |method| method[:end_location] - method[:location] }
           next [ cb ] unless body
 
-          Array(calls&.call&.dig(body[:name].to_s)).map do |site|
+          Array(calls.call[body[:name].to_s]).map do |site|
             rank = site && calls.rank_of(site)
             line = site&.location&.start_line
             rank ? cb.merge(call_rank: rank, call_line: line, chain_at: [ line, 0 ]) : cb
@@ -1847,36 +1847,22 @@ module RailsAiContext
       #
       # A concern's `included do` calls join the set too, so a base walked later sees them.
       def class_calls(paths)
-        ranks = {}
         reader = lambda do
-          paths.each_with_index.select { |path, _| path && readable_source?(path) }.each_with_object({}) do |(path, rank), found|
+          ranks = {}
+          readable = paths.each_with_index.select { |path, _| path && readable_source?(path) }
+          found = readable.each_with_object({}) do |(path, rank), into|
             source = model_source(path)
             tree = (source ? AstCache.parse_string(source) : AstCache.parse(path)).value
             own = SourceIntrospector.calls_outside_methods(tree)
             own.each_value { |sites| Array(sites).each { |site| ranks[site.__id__] = rank if site } }
-            ConcernMacros::Run.merge_calls(found, own)
+            ConcernMacros::Run.merge_calls(into, own)
           rescue StandardError, ScriptError => e
             # A file the walk cannot read calls nothing it can see.
             RailsAiContext.debug_fail(e, nil, label: "class calls of #{path}")
           end
+          [ found, ranks ]
         end
-        ClassCalls.new(reader, {}, ranks)
-      end
-
-      # The class files' own calls are read once; the included-block calls
-      # grow as the walks read concerns.
-      ClassCalls = Struct.new(:reader, :included, :ranks) do
-        def call = ConcernMacros::Run.merge_calls(ConcernMacros::Run.merge_calls({}, own), included)
-
-        # Which class file a call site sits in: 0 is the class, then its bases nearest first.
-        def rank_of(site)
-          own
-          ranks[site.__id__]
-        end
-
-        def own
-          @own ||= reader.call
-        end
+        ConcernMacros::ClassCalls.new(reader, {})
       end
 
 
