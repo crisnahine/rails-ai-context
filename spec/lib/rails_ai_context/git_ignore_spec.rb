@@ -147,6 +147,25 @@ RSpec.describe RailsAiContext::GitIgnore do
       expect(ignored?("app/a.xdg.rb")).to be true
     end
 
+    # ripgrep 15.1.0 matches `"?\s*(\S+?)\s*"?`: quotes go, and a value with a
+    # space matches nothing, so the next config decides.
+    it "drops quotes around the value and skips a value with a space, as ripgrep does" do
+      quoted = File.join(@root, "quoted-ignore")
+      File.write(quoted, "*.quoted.rb\n")
+      File.write(@global, "[core]\n\texcludesFile = \"#{quoted}\"\n")
+
+      expect(ignored?("app/a.quoted.rb")).to be true
+
+      FileUtils.mkdir_p(File.join(@root, "sp ace"))
+      File.write(File.join(@root, "sp ace", "ignore"), "*.spaced.rb\n")
+      FileUtils.mkdir_p(File.join(@root, "no-xdg", "git"))
+      File.write(File.join(@root, "no-xdg", "git", "ignore"), "*.xdg.rb\n")
+      File.write(@global, "[core]\n\texcludesFile = #{File.join(@root, "sp ace", "ignore")}\n")
+
+      expect(ignored?("app/a.spaced.rb")).to be false
+      expect(ignored?("app/a.xdg.rb")).to be true
+    end
+
     # ripgrep opens a relative value from its own working directory, and the
     # search runs it from this process's, whatever root it searches.
     it "reads a relative core.excludesFile from the working directory" do
