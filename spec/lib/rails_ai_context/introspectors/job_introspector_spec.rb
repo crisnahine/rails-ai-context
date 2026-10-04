@@ -1558,9 +1558,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
     end
 
     it "never prints the Proc when the lambda's source is not found" do
-      reflected = job("ElsewhereJob", defined_in: app_job_file)
-      allow(reflected).to receive(:queue_name).and_return("#<Proc:0x0000000100000000 /nowhere/elsewhere_job.rb:2 (lambda)>")
-      allow(ActiveJob::Base).to receive(:descendants).and_return([ reflected ])
+      queue_stored_as("ElsewhereJob", "#<Proc:0x0000000100000000 /nowhere/elsewhere_job.rb:2 (lambda)>")
 
       expect(booted_queue("ElsewhereJob")).to eq(proc_label)
     end
@@ -1631,6 +1629,61 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
         reflected_job("TwinJob", file)
 
         expect(booted_queue("TwinJob")).to eq(proc_label)
+      end
+    end
+
+    def queue_stored_as(name, queue, file: app_job_file)
+      reflected = job(name, defined_in: file)
+      allow(reflected).to receive(:queue_name).and_return(queue)
+      allow(ActiveJob::Base).to receive(:descendants).and_return([ reflected ])
+    end
+
+    it "reads no file outside the app a Proc's text names" do
+      Dir.mktmpdir do |outside|
+        file = File.join(outside, "secret.rb")
+        File.write(file, "SECRET = -> { :secret }\n")
+        with_job_file("PlainJob", "class PlainJob < ActiveJob::Base\nend\n") do |job_file|
+          queue_stored_as("PlainJob", "#<Proc:0x0000000100000000 #{file}:1 (lambda)>", file: job_file)
+
+          expect(booted_queue("PlainJob")).to eq(proc_label)
+        end
+      end
+    end
+
+    it "reads no file over the size cap a Proc's text names" do
+      with_job_file("PlainJob", "class PlainJob < ActiveJob::Base\nend\n") do |job_file|
+        concern = File.join(File.dirname(job_file, 3), "app", "models", "concerns", "routing.rb")
+        FileUtils.mkdir_p(File.dirname(concern))
+        File.write(concern, "module Routing\n  ROUTE = -> { :urgent }\nend\n# #{'x' * 300}\n")
+        allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(200)
+        queue_stored_as("PlainJob", "#<Proc:0x0000000100000000 #{concern}:2 (lambda)>", file: job_file)
+
+        expect(booted_queue("PlainJob")).to eq(proc_label)
+      end
+    end
+
+    it "never prints a Proc whose text names no file" do
+      [ method(:puts).to_proc, lambda(&:to_s) ].each do |stored|
+        queue_stored_as("NowhereJob", Class.new(ActiveJob::Base) { queue_as stored }.queue_name)
+
+        expect(booted_queue("NowhereJob")).to eq(proc_label)
+      end
+    end
+
+    it "reads a block with no source location as computed" do
+      queue_stored_as("SymbolJob", Class.new(ActiveJob::Base) { queue_as(&:to_s) }.queue_name)
+
+      expect(booted_queue("SymbolJob")).to eq("computed by a block")
+    end
+
+    it "reads a job file's queue from the walk that found the job" do
+      with_job_file("UrgentJob", "class UrgentJob < ActiveJob::Base\n  queue_as -> { :high }\nend\n") do |file|
+        reflected_job("UrgentJob", file)
+        allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source).and_call_original
+
+        expect(booted_queue("UrgentJob")).to eq("#{proc_label}: `-> { :high }`")
+        expect(RailsAiContext::Introspectors::SourceIntrospector)
+          .not_to have_received(:walk_source).with(anything, described_class::QUEUE_AS_LISTENERS)
       end
     end
 

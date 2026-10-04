@@ -84,9 +84,10 @@ module RailsAiContext
           if queue.equal?(ActiveJob::Base.queue_name)
             queue = job.queue_name_from_part(nil)
           elsif queue.is_a?(Proc)
-            queue = labelled(COMPUTED_QUEUE, block_at(*queue.source_location))
-          elsif (location = queue.to_s.match(/#<Proc:0x\h+ (.+):(\d+)(?: \(lambda\))?>/))
-            queue = labelled(PROC_QUEUE, proc_at(location[1], location[2].to_i))
+            queue = labelled(COMPUTED_QUEUE, queue.source_location && block_at(*queue.source_location))
+          elsif queue.to_s.include?("#<Proc:")
+            location = queue.match(/#<Proc:0x\h+ (.+):(\d+)(?: \(lambda\))?>/)
+            queue = labelled(PROC_QUEUE, location && proc_at(location[1], location[2].to_i))
           end
 
           {
@@ -151,7 +152,7 @@ module RailsAiContext
       end
 
       def block_at(file, line)
-        queue_as_walk(file)&.dig(:macros)&.find { |m| m[:location] == line && m[:block] }&.dig(:block)
+        queue_as_walk(file)&.dig(:macros)&.find { |m| m[:macro] == :queue_as && m[:location] == line && m[:block] }&.dig(:block)
       end
 
       # Only one Proc literal on the line says which one it was.
@@ -160,13 +161,22 @@ module RailsAiContext
         found.first[:source] if found.one?
       end
 
+      # Only the app's own files are read; a job file reuses the walk that found it.
       def queue_as_walk(file)
         @queue_as_walks ||= {}
-        return @queue_as_walks[file] if @queue_as_walks.key?(file)
-
-        @queue_as_walks[file] = File.file?(file) ? SourceIntrospector.walk_source(File.read(file), QUEUE_AS_LISTENERS) : nil
-      rescue SystemCallError
-        @queue_as_walks[file] = nil
+        @queue_as_walks.fetch(file) do
+          @queue_as_walks[file] = begin
+            real = File.realpath(file)
+            root = app.root.to_s
+            if SourceScan.under_root?(file, real, root, app_root_real)
+              relative = SourceScan.relative_file(file, real, root, app_root_real)
+              job_candidates.values.find { |candidate| candidate.file == relative }&.ast ||
+                (source = SafeFile.read(file)) && SourceIntrospector.walk_source(source, QUEUE_AS_LISTENERS)
+            end
+          rescue SystemCallError
+            nil
+          end
+        end
       end
 
       # This class and its ancestors among the candidates, nearest first.
