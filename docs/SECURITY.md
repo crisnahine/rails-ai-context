@@ -66,9 +66,15 @@ After validation, the query runs inside a transaction:
 |:---------|:----------|
 | PostgreSQL | `SET TRANSACTION READ ONLY` + `SET LOCAL statement_timeout` |
 | MySQL | `SET TRANSACTION READ ONLY` + `MAX_EXECUTION_TIME` hint |
-| SQLite | A child process opens its own read-only connection to the database file and is killed at the timeout. An in-memory database, a platform without `fork`, or a query using a function only the app's own connection has runs in-process under `PRAGMA query_only = ON` with no time limit, and the table and EXPLAIN answers say so; CSV output stays plain data. |
+| SQLite | A read-only connection in a child process, killed at timeout |
 
 All queries execute inside a transaction, then rollback (even if they could write, they can't).
+
+A SQLite query runs in-process under `PRAGMA query_only = ON`, with no time
+limit, for an in-memory database, on a platform without `fork`, or when it
+needs a function, virtual-table module, collation or encryption key only the
+app's own connection has. The table and EXPLAIN answers then say so; CSV output
+stays plain data.
 
 ### Layer 3 - Row limit
 
@@ -90,7 +96,8 @@ If one of your own columns merely looks sensitive (an `oauth_applications.secret
 config.query_allowed_columns = %w[secret]
 ```
 
-The exemption covers the results too: an allowed name comes back unredacted. A column declared with `encrypts` stays `[FILTERED]` either way.
+The exemption covers the results too: an allowed name comes back unredacted. A
+column declared with `encrypts` stays `[FILTERED]` either way.
 
 ### Environment guard
 

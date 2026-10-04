@@ -277,17 +277,16 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   stay marked `[UNAVAILABLE]`. A concern whose file cannot be found, a gem's
   module for example, is named under `Concerns` as not read.
 - **Callbacks are what the file declares.** In both tiers the callback list is
-  what the model file, the app concerns it includes and the classes it
-  inherits from declare. A callback a
-  gem registers on include without an `include` line in the model file (Devise,
-  counter caches, attachment purges) is not listed. Within one type the order
-  is the order Rails runs them: base classes first, a concern's callbacks where
-  its `include` line stands, then the model's own, and a `before_` or
-  `around_` callback with `prepend: true` first. `after_commit` and
-  `after_rollback` run last declared first unless
-  `run_after_transaction_callbacks_in_order_defined` is on
-  (`load_defaults 7.1` or later; Rails 7.0 has no such setting). The booted tier reads the
-  setting; the static tier reads `load_defaults` and any assignment in
+  what the model file, the app concerns it includes and the classes it inherits
+  from declare. A callback a gem registers on include without an `include` line
+  in the model file (Devise, counter caches, attachment purges) is not listed.
+  Within one type the order is the order Rails runs them: base classes first, a
+  concern's callbacks where its `include` line stands, then the model's own,
+  and a `before_` or `around_` callback with `prepend: true` first.
+  `after_commit` and `after_rollback` run last declared first unless
+  `run_after_transaction_callbacks_in_order_defined` is on (`load_defaults 7.1`
+  or later; Rails 7.0 has no such setting). The booted tier reads the setting;
+  the static tier reads `load_defaults` and any assignment in
   `config/application.rb` or an initializer, the last line that sets it
   winning, and when those do not say, keeps declaration order and the answer
   says so. The static tier does not read `config/environments/*.rb` for this

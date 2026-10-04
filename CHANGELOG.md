@@ -21,32 +21,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so a sensitive file ripgrep cannot open is not reported as an error and does
   not send a no-match search through the Ruby fallback. (#267)
 - **`rails_query` on a SQLite file stops at `query_timeout`.** The query runs
-  in a child process with its own read-only connection, which is stopped at
-  the deadline. sqlite3 2.x's `statement_timeout=` interrupts any statement of
-  more than a few thousand steps whatever the value, and the extension holds
-  the GVL while a statement runs, so no in-process limit exists. The child
-  takes the app's `extensions:` and waits on a locked database as the app
-  would. An in-memory database, a platform without `fork`, or a function only
-  the app's own connection has runs in-process; the table and EXPLAIN answers
-  then say it ran without a time limit, and CSV output stays plain data. (#256)
-- **`rails_get_callbacks` lists callbacks in the order Rails runs them**:
-  base classes first, a concern's callbacks where its `include` line stands,
-  then the model's own, and a `before_` or `around_` callback with
-  `prepend: true` first. `after_commit` and `after_rollback` list last
-  declared first, as Rails runs them, unless
-  `run_after_transaction_callbacks_in_order_defined` is on
-  (`load_defaults 7.1` or later). The static tier reads that from `config/application.rb` and
-  the initializers, the last line that sets it winning, and when the config
-  does not tell, `rails_get_callbacks` and `rails_get_model_details` say so.
-  A method declared twice under one callback type shows the declaration Rails
-  keeps, the later one, which corrects the 5.30.0 entry that said each
-  declaration is shown. A nested class's callbacks are its own, not the outer
-  model's. (#253)
+  in a child process with its own read-only connection, which is stopped at the
+  deadline. sqlite3 2.x's `statement_timeout=` interrupts any statement of more
+  than a few thousand steps whatever the value, and the extension holds the GVL
+  while a statement runs, so no in-process limit exists. The child takes the
+  app's `extensions:` and waits on a locked database as the app would. An
+  in-memory database, a platform without `fork`, or a query that needs a
+  function, virtual-table module, collation or encryption key only the app's
+  own connection has runs in-process; the table and EXPLAIN answers then say it
+  ran without a time limit, and CSV output stays plain data. (#256)
+- **`rails_get_callbacks` lists callbacks in the order Rails runs them**: base
+  classes first, a concern's callbacks where its `include` line stands, then
+  the model's own, and a `before_` or `around_` callback with `prepend: true`
+  first. `after_commit` and `after_rollback` list last declared first, as Rails
+  runs them, unless `run_after_transaction_callbacks_in_order_defined` is on
+  (`load_defaults 7.1` or later). The static tier reads that from
+  `config/application.rb` and the initializers, the last line that sets it
+  winning, and when the config does not tell, `rails_get_callbacks` and
+  `rails_get_model_details` say so. A method declared twice under one callback
+  type shows the declaration Rails keeps, the later one, which corrects the
+  5.30.0 entry that said each declaration is shown. A declaration inside a
+  method body counts where the class calls the method, and not at all when
+  nothing does, so an uncalled method that redeclares a callback no longer
+  hides it. A nested class's callbacks are its own, not the outer model's.
+  (#253)
 - **A lambda or Proc given to `queue_as` reads as what ActiveJob does with
-  it.** ActiveJob never calls it; it names the queue after the Proc's text. Both
-  tiers now say so, with the source, where the booted tier printed the Proc's
-  address and the static tier called it computed. A `queue_as` block is the
-  computed case and now shows its source too. The 5.30.0 entry used
+  it.** ActiveJob never calls it; it names the queue after the Proc's text.
+  Both tiers now say so, with the source, where the booted tier printed the
+  Proc's address and the static tier called it computed. A `queue_as` block is
+  the computed case and now shows its source too; a block argument
+  (`queue_as(&pick)`) reads as computed in both tiers. The 5.30.0 entry used
   `queue_as -> { ... }` as its example of a computed queue; that was wrong.
   (#271)
 - **An MCP stdio session carries nothing but JSON-RPC on stdout for its whole
@@ -62,7 +66,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A `load_defaults` written after `belongs_to_required_by_default = false`
   turns the default back on** in the static tier, as Rails does, so the
   implicit presence of a required `belongs_to` is listed. A literal assignment
-  used to win wherever it stood.
+  used to win wherever it stood. A value the source cannot evaluate
+  (`ENV.fetch(...) == "true"`), app-wide or in the class, makes the presence
+  conditional on it, named in the answer.
 - **`rails_get_callbacks` prints `on:`** for validation callbacks and any
   callback whose type does not already name the event, before `if:` and
   `unless:`. (#252)
@@ -72,11 +78,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   text failed to write in the booted tier and left an empty file that read as a
   cached guide for 24 hours; the write is now binary and atomic, and an empty
   cache file is a miss. (#266)
-- **`rails_search_code` trace finds one definition and no sibling of
-  itself**: `qa_ping` no longer matches `def qa_ping?`, `qa_ping!` or
-  `qa_ping=`, and `def self.qa_ping` is left out of its own sibling list, where
-  a setter now appears. Every method-body lookup (concerns, callbacks, actions,
-  conventions) ends a name the same way. (#258)
+- **`rails_search_code` trace finds one definition and no sibling of itself**:
+  `qa_ping` no longer matches `def qa_ping?`, `qa_ping!` or `qa_ping=`, and
+  `def self.qa_ping` is left out of its own sibling list, where a setter now
+  appears. Every method-body lookup (concerns, callbacks, actions, conventions)
+  ends a name the same way, and ripgrep and the Ruby fallback agree on
+  non-ASCII text, where any character outside ASCII is part of the name, as
+  Ruby reads it. (#258)
 - **`rails_search_code` call sites skip comment lines** with the rule trace
   uses, by file type: `#` in Ruby, `//` and `/*` in JS and TS, `/*` in CSS and
   `//` too in SCSS, Sass and Less, `-#` in Haml, `/` in Slim. A stylesheet
