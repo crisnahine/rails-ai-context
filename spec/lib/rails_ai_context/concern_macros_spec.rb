@@ -12,7 +12,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
   after { FileUtils.remove_entry(tmpdir) }
 
   def class_calls(found)
-    described_class::ClassCalls.new(-> { described_class::ClassCalls::Read.new(found, {}, {}) })
+    described_class::ClassCalls.new(-> { described_class::ClassCalls::Read.new(found, {}, []) })
   end
 
   def mixin(name)
@@ -693,7 +693,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     expect(errors.string).to include(path)
   end
 
-  # The lookup alone: providers built from parsed defs, sites from parsed calls.
+  # The lookup alone: class methods from parsed defs, sites from parsed calls.
   describe "ClassCalls, the class-method lookup" do
     let(:klass) { RailsAiContext::ConcernMacros::ClassCalls }
 
@@ -701,9 +701,10 @@ RSpec.describe RailsAiContext::ConcernMacros do
 
     def definition(owner, source) = klass.definition(owner, node(source))
 
-    def provider(rank, group, at, owner, source)
-      found = definition(owner, source)
-      klass::Provider.new(rank, group, at, { found.name => found })
+    # A module reached at `at` (or inside the body `inside` names) giving the class methods `source` defines.
+    def mixin(label, at, source = nil, inside: nil, hook_defs: nil)
+      defs = source ? [ definition(label, source) ] : []
+      klass::Mixin.new(label, :include, defs, hook_defs ? [ definition(label, hook_defs) ] : [], at, inside, false)
     end
 
     def lookup(sites, own, outer: 1)
@@ -716,10 +717,14 @@ RSpec.describe RailsAiContext::ConcernMacros do
       calls.placed({}, definer, [ line ], site).map { |entry| [ entry[:rank], entry[:chain_at] ] }
     end
 
+    def mixed_in(calls, label, rank, line, hook: false)
+      calls.mixed_in({ from_concern: label, location: line, hook: hook }, rank).map { |entry| [ entry[:rank], entry[:chain_at] ] }
+    end
+
     it "runs the class's own def, then what its super reaches, at the super" do
       call = node("\n\n\n\n\n\n\nstamp")
-      calls = lookup([ [ 0, call ] ], [ provider(0, 1, [ 3, 0 ], 0, "\n\ndef self.stamp\n  super\n  own\nend") ])
-      calls.add(0, {}, {}, [ provider(0, 2, [ 2, 0 ], "Stampy", "def stamp\n  s\nend") ])
+      calls = lookup([ [ 0, call ] ], [ definition(0, "\n\ndef self.stamp\n  super\n  own\nend") ])
+      calls.add(0, {}, {}, [ mixin("Stampy", [ 2, 0 ], "def stamp\n  s\nend") ])
 
       expect(placed(calls, [ 0, 3 ], 5)).to eq([ [ 0, [ 8, -1, 5 ] ] ])
       expect(placed(calls, [ "Stampy", 1 ], 2)).to eq([ [ 0, [ 8, -1, 4, 2 ] ] ])
@@ -727,19 +732,18 @@ RSpec.describe RailsAiContext::ConcernMacros do
 
     it "reaches the concern included last, and no definition that exists only after the call" do
       call = node("\n\n\n\nstamp")
-      own = [ provider(0, 1, [ 9, 0 ], 0, "def self.stamp\nend") ]
-      calls = lookup([ [ 0, call ] ], own)
-      calls.add(0, {}, {}, [ provider(0, 2, [ 2, 0 ], "Stampy", "def stamp\nend"), provider(0, 2, [ 3, 0 ], "Stampy2", "def stamp\nend") ])
+      calls = lookup([ [ 0, call ] ], [ definition(0, "\n" * 8 + "def self.stamp\nend") ])
+      calls.add(0, {}, {}, [ mixin("Stampy", [ 2, 0 ], "def stamp\nend"), mixin("Stampy2", [ 3, 0 ], "def stamp\nend") ])
 
       expect(placed(calls, [ "Stampy2", 1 ], 1)).to eq([ [ 0, [ 5, -1, 1 ] ] ])
       expect(placed(calls, [ "Stampy", 1 ], 1)).to eq([])
-      expect(placed(calls, [ 0, 1 ], 1)).to eq([])
+      expect(placed(calls, [ 0, 9 ], 1)).to eq([])
     end
 
     it "resolves a base's call from the base outward, never into the child" do
       base_call = node("\n\nstamp")
-      calls = lookup([ [ 1, base_call ] ], [ provider(1, 1, [ 1, 0 ], 1, "def self.stamp\nend") ], outer: 2)
-      calls.add(0, {}, {}, [ provider(0, 2, [ 2, 0 ], "Stampy", "def stamp\nend") ])
+      calls = lookup([ [ 1, base_call ] ], [ definition(1, "def self.stamp\nend") ], outer: 2)
+      calls.add(0, {}, {}, [ mixin("Stampy", [ 2, 0 ], "def stamp\nend") ])
       calls.add(1, {}, {}, [])
 
       expect(placed(calls, [ 1, 1 ], 1)).to eq([ [ 1, [ 3, -1, 1 ] ] ])
@@ -749,19 +753,67 @@ RSpec.describe RailsAiContext::ConcernMacros do
     it "runs a Concern's block once in the outermost class including it, and a plain hook in each" do
       block_call = node("loud!")
       hook_call = node("base.loud!")
-      calls = lookup([], [ provider(0, 1, [ 1, 0 ], 0, "def self.loud!\nend"), provider(1, 1, [ 1, 0 ], 1, "def self.loud!\nend") ], outer: 2)
-      calls.add(0, { "loud!" => [ block_call, hook_call ] }, { block_call.__id__ => [ [ 4, 0 ], false ], hook_call.__id__ => [ [ 6, 1 ], true ] }, [])
-      calls.add(1, { "loud!" => [ block_call, hook_call ] }, { block_call.__id__ => [ [ 2, 0 ], false ], hook_call.__id__ => [ [ 3, 1 ], true ] }, [])
+      calls = lookup([], [ definition(0, "def self.loud!\nend"), definition(1, "def self.loud!\nend") ], outer: 2)
+      blocks = { block_call.__id__ => [ "Hooky", false ], hook_call.__id__ => [ "Hk", true ] }
+      calls.add(0, { "loud!" => [ block_call, hook_call ] }, blocks, [ mixin("Hooky", [ 4, 0 ]), mixin("Hk", [ 6, 1 ]) ])
+      calls.add(1, { "loud!" => [ block_call, hook_call ] }, blocks, [ mixin("Hooky", [ 2, 0 ]), mixin("Hk", [ 3, 1 ]) ])
 
       expect(placed(calls, [ 1, 1 ], 1, block_call)).to eq([ [ 1, [ 2, 0, 1, 1 ] ] ])
       expect(placed(calls, [ 0, 1 ], 1, block_call)).to eq([])
       expect(placed(calls, [ 0, 1 ], 1, hook_call)).to eq([ [ 0, [ 6, 1, 1, 1 ] ] ])
       expect(placed(calls, [ 1, 1 ], 1, hook_call)).to eq([ [ 1, [ 3, 1, 1, 1 ] ] ])
+      expect(mixed_in(calls, "Hooky", 0, 9)).to eq([])
+      expect(mixed_in(calls, "Hooky", 1, 9)).to eq([ [ 1, [ 2, 0, 9 ] ] ])
+      expect(mixed_in(calls, "Hk", 0, 9, hook: true)).to eq([ [ 0, [ 6, 1, 9 ] ] ])
+    end
+
+    it "adds a module a method includes at the first call reaching that method, and gives its methods to calls after" do
+      setup = node("\n\n\n\nsetup")
+      stamp_before = node("\n\n\nstamp")
+      stamp_after = node("\n\n\n\n\nstamp")
+      second = node("\n\n\n\n\n\nsetup")
+      calls = lookup([ [ 0, setup ], [ 0, stamp_before ], [ 0, stamp_after ], [ 0, second ] ], [ definition(0, "def self.setup\n  include Tb\nend") ])
+      calls.add(0, {}, {}, [ mixin("Tb", [ 2, 0 ], "def stamp\nend", inside: [ 0, 1 ]), mixin("Stampy", [ 1, 0 ], "def stamp\nend") ])
+
+      expect(mixed_in(calls, "Tb", 0, 9)).to eq([ [ 0, [ 5, -1, 2, 0, 9 ] ] ])
+      expect(placed(calls, [ "Tb", 1 ], 1, stamp_before)).to eq([])
+      expect(placed(calls, [ "Tb", 1 ], 1, stamp_after)).to eq([ [ 0, [ 6, -1, 1 ] ] ])
+    end
+
+    it "resolves a plain hook's call again at each include, as of that include" do
+      hook_call = node("base.loud!")
+      first_setup = node("\n\n\n\nsetup")
+      second_setup = node("\n\n\n\n\n\nsetup")
+      calls = lookup([ [ 0, first_setup ], [ 0, second_setup ] ], [ definition(0, "def self.setup\n  include Hk\nend") ])
+      calls.add(0, { "loud!" => [ hook_call ] }, { hook_call.__id__ => [ "Hk", true ] },
+                [ mixin("Hk", [ 2, 0 ], inside: [ 0, 1 ]), mixin("Louder", [ 6, 0 ], "def loud!\nend") ])
+
+      expect(placed(calls, [ "Louder", 1 ], 1, hook_call)).to eq([ [ 0, [ 7, -1, 2, 0, 1, 1 ] ] ])
+    end
+
+    it "adds no module a method includes when every call runs another definition" do
+      setup = node("\n\n\n\nsetup")
+      calls = lookup([ [ 0, setup ] ], [ definition(0, "\n\ndef self.setup\nend") ])
+      calls.add(0, {}, {}, [ mixin("SetupC", [ 1, 0 ], "def setup\n  include HelperC\nend"), mixin("HelperC", [ 2, 0 ], inside: [ "SetupC", 1 ]) ])
+
+      expect(mixed_in(calls, "HelperC", 0, 9)).to eq([])
+    end
+
+    it "reads a hook's def on the class as the class's own from that include, and an alias as what its name ran there" do
+      call = node("\n\n\n\n\nstamp")
+      own = [ definition(0, "def self.stamp\nend"), klass::Def.new(0, "stamp_without", 3, nil, {}, "stamp") ]
+      aliased = node("\n\n\n\n\n\nstamp_without")
+      calls = lookup([ [ 0, call ], [ 0, aliased ] ], own)
+      calls.add(0, {}, {}, [ mixin("Icm", [ 2, 0 ], hook_defs: "\ndef stamp\nend") ])
+
+      expect(placed(calls, [ "Icm", 2 ], 1, call)).to eq([ [ 0, [ 6, -1, 1 ] ] ])
+      expect(placed(calls, [ "Icm", 2 ], 1, aliased)).to eq([ [ 0, [ 7, -1, 1 ] ] ])
+      expect(placed(calls, [ 0, 1 ], 1, call)).to eq([])
     end
 
     it "makes a reached body's calls from where its own call stands" do
       call = node("\n\n\n\n\nsetup")
-      own = [ provider(0, 1, [ 1, 0 ], 0, "def self.setup\n  loud!\nend"), provider(0, 1, [ 4, 0 ], 0, "\n\n\ndef self.loud!\nend") ]
+      own = [ definition(0, "def self.setup\n  loud!\nend"), definition(0, "\n\n\ndef self.loud!\nend") ]
       calls = lookup([ [ 0, call ] ], own)
 
       expect(calls.call.keys).to contain_exactly("setup", "loud!")
@@ -770,12 +822,12 @@ RSpec.describe RailsAiContext::ConcernMacros do
 
     it "places a call made in a body a super reached after what ran before that super" do
       call = node("\n\n\n\n\n\n\nstamp")
-      own = [ provider(0, 1, [ 3, 0 ], 0, "\n\ndef self.stamp\n  own\n  super\nend"), provider(0, 1, [ 2, 0 ], 0, "\n" * 19 + "def self.loud!\nend") ]
+      own = [ definition(0, "\n\ndef self.stamp\n  own\n  super\nend"), definition(0, "def self.loud!\nend") ]
       calls = lookup([ [ 0, call ] ], own)
-      calls.add(0, {}, {}, [ provider(0, 2, [ 2, 0 ], "Stampy", "def stamp\n  loud!\nend") ])
+      calls.add(0, {}, {}, [ mixin("Stampy", [ 2, 0 ], "def stamp\n  loud!\nend") ])
 
       expect(placed(calls, [ 0, 3 ], 4)).to eq([ [ 0, [ 8, -1, 4 ] ] ])
-      expect(placed(calls, [ 0, 20 ], 21)).to eq([ [ 0, [ 8, -1, 5, 2, 21 ] ] ])
+      expect(placed(calls, [ 0, 1 ], 21)).to eq([ [ 0, [ 8, -1, 5, 2, 21 ] ] ])
     end
   end
 

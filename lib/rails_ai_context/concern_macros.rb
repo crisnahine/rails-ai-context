@@ -21,15 +21,23 @@ module RailsAiContext
     # Ruby's class-method lookup over a class (rank 0), its bases nearest first and the modules
     # every model has: which definitions a call runs, and so where what they declare lands.
     class ClassCalls
-      # A class method one provider defines; `owner` is a class file's rank or a module's label.
-      Def = Struct.new(:owner, :name, :line, :super_line, :calls) do
+      # The lookup order inside one rank.
+      PREPENDED = 0
+      OWN = 1
+      MIXED = 2
+
+      # A class method; `owner` is a class file's rank or a module's label, `alias_of` the name an alias copies.
+      Def = Struct.new(:owner, :name, :line, :super_line, :calls, :alias_of) do
         def key = [ owner, line ]
       end
-      # One step of a singleton ancestry, existing from `at` ([line, order]): `group` 0 prepended,
-      # 1 the class's own def, 2 mixed in. A module a called method includes ranks by that `site`.
-      Provider = Struct.new(:rank, :group, :at, :defs, :site)
-      # The class files' body calls by name, each one's rank, their own defs, and the outermost rank.
-      Read = Struct.new(:found, :ranks, :providers, :outer)
+      # One step of a singleton ancestry, existing from `at` ([line, order, ...]).
+      Provider = Struct.new(:rank, :group, :at, :defs)
+      # The class files' body calls by name, each one's rank, their own class methods, and the outermost rank.
+      Read = Struct.new(:found, :ranks, :defs, :outer)
+      # A module a walk reached, with the class methods it gives and those its hooks define on the class itself.
+      # Added at `at`, or, when `inside` names a body ([owner, line]), at `at` within each run of that body.
+      Mixin = Struct.new(:label, :macro, :defs, :hook_defs, :at, :inside, :every)
+      Walk = Struct.new(:included, :blocks, :mixins)
 
       def self.definition(owner, node)
         super_node = node.body && Introspectors::AstWalk.each(node.body).find do |inner|
@@ -39,16 +47,125 @@ module RailsAiContext
         Def.new(owner, node.name.to_s, node.location.start_line, super_node&.location&.start_line, calls)
       end
 
+      # A class file's own class methods: `def self.x`, and `def x` and aliases inside `class << self`.
+      def self.own_defs(scope, rank)
+        scope.flat_map do |node|
+          case node
+          when Prism::DefNode then node.receiver.is_a?(Prism::SelfNode) ? [ definition(rank, node) ] : []
+          when Prism::SingletonClassNode
+            next [] unless node.expression.is_a?(Prism::SelfNode)
+
+            Array(node.body&.body).filter_map do |member|
+              if member.is_a?(Prism::DefNode) && member.receiver.nil? then definition(rank, member)
+              elsif (names = alias_names(member)) then Def.new(rank, names.first, member.location.start_line, nil, {}, names.last)
+              end
+            end
+          else []
+          end
+        end
+      end
+
+      def self.alias_names(node)
+        pair =
+          case node
+          when Prism::AliasMethodNode then [ node.new_name, node.old_name ]
+          when Prism::CallNode then node.name == :alias_method && node.receiver.nil? ? Array(node.arguments&.arguments) : []
+          else []
+          end
+        names = pair.map { |arg| arg.unescaped if arg.respond_to?(:unescaped) }
+        names if names.size == 2 && names.all?
+      end
+
+      # The class methods the module `own` gives a class it is mixed into, and those its hooks define on that
+      # class itself: on extend its methods; otherwise `class_methods` and what its hooks and block extend.
+      def self.module_defs(own, label, macro)
+        return [ [], [] ] unless own&.body
+
+        hooks = own.body.compact_child_nodes.select { |node| node.is_a?(Prism::DefNode) && hook?(node, macro) && node.body }
+        nodes =
+          if macro == :extend then body_defs(own.body)
+          else
+            short = label.to_s.split("::").last
+            extended = hooks.flat_map { |hook| extended_names(hook.body, short) } + block_extends(own, macro, short)
+            extended << "ClassMethods" if concern?(own)
+            blocks = own.body.compact_child_nodes.select { |node| node.is_a?(Prism::CallNode) && node.name == :class_methods && node.block }
+            nested = own.body.compact_child_nodes.select { |node| node.is_a?(Prism::ModuleNode) && extended.include?(node.constant_path.slice.split("::").last) }
+            blocks.flat_map { |block| body_defs(block.block.body) } + nested.flat_map { |node| body_defs(node.body) } +
+              (extended.include?(short) ? body_defs(own.body) : [])
+          end
+        [ nodes, hooks.flat_map { |hook| singleton_defs(hook) } ].map { |found| found.map { |node| definition(label, node) } }
+      end
+
+      # A `def self.included` (or the hook `macro` runs) on the module itself.
+      def self.hook?(node, macro)
+        node.receiver.is_a?(Prism::SelfNode) && ConcernMembership::HOOKS_BY_MACRO.fetch(macro, []).include?(node.name.to_s)
+      end
+
+      def self.concern?(own)
+        own.body.compact_child_nodes.any? do |node|
+          node.is_a?(Prism::CallNode) && node.name == :extend && node.receiver.nil? &&
+            Array(node.arguments&.arguments).any? { |arg| arg.slice.delete_prefix("::") == "ActiveSupport::Concern" }
+        end
+      end
+
+      # The constants an `extend` under `body` names, `self` standing for the module (`short`).
+      def self.extended_names(body, short)
+        Introspectors::AstWalk.each(body).flat_map do |call|
+          next [] unless call.is_a?(Prism::CallNode)
+
+          arguments = Array(call.arguments&.arguments)
+          if %i[send public_send].include?(call.name) && arguments.first&.slice == ":extend" then arguments = arguments.drop(1)
+          elsif call.name != :extend then next []
+          end
+
+          arguments.filter_map do |arg|
+            if arg.is_a?(Prism::SelfNode) then short
+            elsif arg.is_a?(Prism::ConstantReadNode) || arg.is_a?(Prism::ConstantPathNode) then arg.slice.split("::").last
+            end
+          end
+        end
+      end
+
+      def self.block_extends(own, macro, short)
+        block = ConcernMembership::CONCERN_BLOCKS[macro]
+        own.body.compact_child_nodes.select { |node| node.is_a?(Prism::CallNode) && node.name == block && node.block&.body }
+           .flat_map { |node| extended_names(node.block.body, short) }
+      end
+
+      # `def x` inside `class << base` in a hook, `base` being the class mixing the module in.
+      def self.singleton_defs(hook)
+        param = hook.parameters&.requireds&.first
+        return [] unless param.respond_to?(:name)
+
+        Introspectors::AstWalk.each(hook.body).select do |node|
+          node.is_a?(Prism::SingletonClassNode) && node.expression.is_a?(Prism::LocalVariableReadNode) && node.expression.name == param.name
+        end.flat_map { |node| body_defs(node.body) }
+      end
+
+      # The `def x` a module body runs with the module as self, `private def x` included.
+      def self.body_defs(node, found = [])
+        case node
+        when nil then found
+        when Prism::DefNode then node.receiver.nil? ? found << node : found
+        when Prism::ClassNode, Prism::ModuleNode, Prism::SingletonClassNode then found
+        when Prism::CallNode
+          return found if %i[class_methods included prepended].include?(node.name) && node.block
+
+          node.compact_child_nodes.each_with_object(found) { |child, into| body_defs(child, into) }
+        else node.compact_child_nodes.each_with_object(found) { |child, into| body_defs(child, into) }
+        end
+      end
+
       def initialize(reader)
         @reader = reader
         @walks = {}
         forget
       end
 
-      # What the walk of the class at `rank` found: the calls its concerns' blocks make, each
-      # block site's [at, hook?], and the providers it mixes in. A later walk of a rank replaces it.
-      def add(rank, included, blocks, providers)
-        @walks[rank] = [ included, blocks, providers ]
+      # What the walk of the class at `rank` found: the calls its concerns' blocks and hooks make, each
+      # one's [label, hook?] by object id, and the modules it reached. A later walk of a rank replaces it.
+      def add(rank, included, blocks, mixins)
+        @walks[rank] = Walk.new(included, blocks, mixins.to_h { |mixin| [ mixin.label, mixin ] })
         forget
       end
 
@@ -57,15 +174,19 @@ module RailsAiContext
       def call
         @call ||= begin
           found = Run.merge_calls({}, read.found)
-          @walks.each_value { |included, *| Run.merge_calls(found, included) }
+          @walks.each_value { |walk| Run.merge_calls(found, walk.included) }
           queue = found.flat_map { |name, sites| sites.compact.map { |site| [ name, site ] } }
           read_bodies = Set.new
           until queue.empty?
             name, site = queue.shift
-            providers.each do |_, provider|
-              definition = provider.defs[name]
-              next unless definition && read_bodies.add?([ definition.key, root(site).__id__ ])
+            defs_named(name).each do |definition|
+              next unless read_bodies.add?([ definition.key, root(site).__id__ ])
 
+              # A call of an alias runs the original's body.
+              if definition.alias_of
+                (found[definition.alias_of] ||= []) << site
+                queue << [ definition.alias_of, site ]
+              end
               definition.calls.each do |inner, nodes|
                 nodes.each do |node|
                   relayed = Relayed.new(node, site, definition)
@@ -82,13 +203,54 @@ module RailsAiContext
       # A copy of `entry` for each run of a call that reaches `definer`'s body
       # ([owner, line]), placed at that call with `tail` after it; none when no call does.
       def placed(entry, definer, tail, site = nil)
-        sites = site ? [ site ] : running(definer)
+        resolve
+        sites = site ? [ site ] : @running.fetch(definer, [])
         sites.flat_map { |each| placements(each, definer, tail) }.uniq.map do |rank, at|
-          entry.merge(rank: rank, chain_at: at.map(&:to_i), rerun: true)
+          entry.merge(rank: rank, chain_at: at.map(&:to_i))
         end
       end
 
+      # A copy of `entry`, which a module the walk at `rank` reached declares, at each run of that code.
+      # One in a method stands at each call reaching it, read from one walk: the method's key is the module's.
+      def mixed_in(entry, rank)
+        resolve
+        mixin = @walks[rank]&.mixins&.[](entry[:from_concern])
+        return [ entry.merge(rank: rank) ] unless mixin
+        return placed(entry.except(:site, :definer), entry[:definer], [ entry[:location] ], entry[:site]) if entry[:site] && first(mixin.label)&.first == rank
+        return [] if entry[:site]
+
+        ran(rank, mixin, entry[:hook]).map { |_, run, at| entry.merge(rank: run, chain_at: [ *at, entry[:location].to_i ]) }
+      end
+
       private
+
+      # Where code of `mixin`, reached by the walk at `rank`, runs: a hook's each time the walk's class
+      # adds the module, the rest once, where the chain first adds it (Ruby adds a module once).
+      def ran(rank, mixin, hook)
+        hook ? events(rank, mixin) : [ first(mixin.label) ].select { |walk, *| walk == rank }
+      end
+
+      # [walk rank, rank, at] for each time the code adding `mixin` runs.
+      def events(rank, mixin)
+        key = [ rank, mixin.label ]
+        return @events[key] if @events.key?(key)
+
+        @events[key] = []
+        @events[key] =
+          if mixin.inside
+            @running.fetch(mixin.inside, []).flat_map { |site| placements(site, mixin.inside, mixin.at) }.uniq.map { |run, at| [ rank, run, at ] }
+          else
+            [ [ rank, mixin.every ? read.outer : rank, mixin.at ] ]
+          end
+      end
+
+      def first(label)
+        return @first[label] if @first.key?(label)
+
+        @first[label] = nil
+        @first[label] = @walks.flat_map { |rank, walk| walk.mixins.key?(label) ? events(rank, walk.mixins[label]) : [] }
+                              .min_by { |_, run, at| [ -run, at ] }
+      end
 
       def placements(site, definer, tail)
         runs(root(site)).filter_map do |rank, at|
@@ -111,51 +273,92 @@ module RailsAiContext
 
       # The definitions a call runs: the first the lookup finds, then each one a `super` reaches.
       def chain(site, rank, at)
-        @chains[[ site.__id__, rank ]] ||= begin
+        @chains[[ site.__id__, rank, at ]] ||= begin
           found = lookup(site.name.to_s, rank, at)
           found.take_while.with_index { |_, index| index.zero? || found[index - 1].super_line }
         end
       end
 
       def lookup(name, rank, at)
-        providers.select { |from, provider| provider.defs.key?(name) && from >= rank && (from > rank || (provider.at <=> at) <= 0) }
-                 .sort { |(a_rank, a), (b_rank, b)| ([ a_rank, a.group ] <=> [ b_rank, b.group ]).nonzero? || (b.at <=> a.at) }
-                 .map { |_, provider| provider.defs[name] }
+        @providers.select { |provider| provider.defs.key?(name) && provider.rank >= rank && (provider.rank > rank || (provider.at <=> at) <= 0) }
+                  .sort { |a, b| ([ a.rank, a.group ] <=> [ b.rank, b.group ]).nonzero? || (b.at <=> a.at) }
+                  .flat_map { |provider| resolved(provider.defs[name]) }
       end
 
-      # Each [rank, at] a call outside any method runs in: a class-body call once; a
-      # Concern's block once, in the outermost class including it; a plain hook on each include.
+      # An alias runs what its original name ran where the alias stands.
+      def resolved(definition)
+        definition.alias_of ? lookup(definition.alias_of, definition.owner, [ definition.line, 0 ]).first(1) : [ definition ]
+      end
+
+      # Each [rank, at] a call outside any method runs in: a class-body call once, at its line;
+      # a call a concern's block or hook makes where `ran` puts that concern's code.
       def runs(site)
         rank = read.ranks[site.__id__]
         return [ [ rank, [ site.location.start_line, -1 ] ] ] if rank
 
-        found = @walks.filter_map { |walk_rank, (_, blocks)| [ walk_rank, *blocks[site.__id__] ] if blocks.key?(site.__id__) }
-        found = found.max_by(1, &:first) unless found.any? { |*, hook| hook }
-        found.map { |walk_rank, at, _| [ walk_rank, [ *at, site.location.start_line ] ] }
+        @walks.flat_map do |walk_rank, walk|
+          label, hook = walk.blocks[site.__id__]
+          mixin = label && walk.mixins[label]
+          mixin ? ran(walk_rank, mixin, hook) : []
+        end.uniq.map { |_, run, at| [ run, [ *at, site.location.start_line ] ] }
       end
 
-      # [rank, provider] pairs. Ruby adds a module to an ancestry once, at the
-      # outermost class mixing it in.
-      def providers
-        @providers ||= begin
-          mixed = @walks.each_value.flat_map { |*, list| list }.flat_map do |provider|
-            next [ [ provider.rank || read.outer, provider ] ] unless provider.site
+      # Modules join where code adding them runs, and which code a call runs depends on the
+      # modules joined before it, so both are read again until neither changes.
+      def resolve
+        return if @running
 
-            runs(root(provider.site)).map { |rank, _| [ rank, provider ] }
-          end
-          read.providers.map { |provider| [ provider.rank, provider ] } +
-            mixed.group_by { |_, provider| provider.defs.each_value.first.owner }.map { |_, pairs| pairs.max_by(&:first) }
+        @running = {}
+        @providers = []
+        inside = @walks.each_value.any? { |walk| walk.mixins.each_value.any?(&:inside) }
+        (MAX_DEPTH + 2).times do
+          @chains = {}
+          @events = {}
+          @first = {}
+          @providers = providers
+          @chains = {}
+          running = running_sites
+          signature = [ @providers.map { |provider| [ provider.rank, provider.group, provider.at, provider.defs.values.map(&:key) ] },
+                        running.transform_values { |sites| sites.map(&:__id__) } ]
+          settled = signature == @signature
+          @signature = signature
+          @running = running
+          break if settled || !inside
         end
       end
 
-      # The sites whose call runs the body `key` names.
-      def running(key)
-        @running ||= call.each_value.with_object(Hash.new { |hash, k| hash[k] = [] }) do |sites, index|
+      # The class files' own methods, each module where the chain first adds it, and what a hook
+      # defines on the class itself each time it runs.
+      def providers
+        own = read.defs.map { |definition| Provider.new(definition.owner, OWN, [ definition.line, 0 ], by_name([ definition ])) }
+        mixed = @walks.each_value.flat_map { |walk| walk.mixins.keys }.uniq.filter_map do |label|
+          walk, rank, at = first(label)
+          mixin = walk && @walks[walk].mixins[label]
+          Provider.new(rank, mixin.macro == :prepend ? PREPENDED : MIXED, at, by_name(mixin.defs)) if mixin&.defs&.any?
+        end
+        hooked = @walks.flat_map do |rank, walk|
+          walk.mixins.each_value.select { |mixin| mixin.hook_defs.any? }.flat_map do |mixin|
+            events(rank, mixin).map { |_, run, at| Provider.new(run, OWN, at, by_name(mixin.hook_defs)) }
+          end
+        end
+        own + mixed + hooked
+      end
+
+      def by_name(defs) = defs.to_h { |definition| [ definition.name, definition ] }
+
+      # The sites whose call may run each body, by the body's key.
+      def running_sites
+        call.each_value.with_object(Hash.new { |hash, key| hash[key] = [] }) do |sites, index|
           sites.compact.each do |site|
             runs(root(site)).each { |rank, at| chain(site, rank, at).each { |definition| index[definition.key] |= [ site ] } }
           end
         end
-        @running.fetch(key, [])
+      end
+
+      def defs_named(name)
+        @defs_named ||= (read.defs + @walks.each_value.flat_map { |walk| walk.mixins.each_value.flat_map { |mixin| mixin.defs + mixin.hook_defs } })
+                        .group_by(&:name)
+        @defs_named.fetch(name, [])
       end
 
       def root(site)
@@ -164,7 +367,7 @@ module RailsAiContext
       end
 
       def forget
-        @call = @providers = @running = nil
+        @call = @running = @defs_named = @signature = nil
         @chains = {}
       end
 
@@ -175,7 +378,7 @@ module RailsAiContext
     # fixed for the run and `seen`, `collected` and `unresolved` accumulate
     # across it, so they belong to the run rather than to every call.
     class Run
-      attr_reader :unresolved, :hidden, :included_calls, :skipped_methods, :placement, :block_sites, :providers
+      attr_reader :unresolved, :hidden, :included_calls, :skipped_methods, :placement, :block_sites, :mixins
 
       # The default block belongs to the walk. Once the entries leave it, a
       # caller reading a key the walk never produced would grow one.
@@ -213,7 +416,7 @@ module RailsAiContext
         @skipped_methods = Set.new
         @consulted = Set.new
         @placement = {}
-        @providers = []
+        @mixins = []
         @via = nil
       end
 
@@ -263,34 +466,29 @@ module RailsAiContext
           # A nested module's lines count from its own slice, so the ranges parse that.
           tree = nested ? AstCache.parse_string(nested.last.slice).value : AstCache.parse(path).value
           source_key = nested ? "#{source}##{nested.first}" : path
-          block_calls, hooked = memo([ :included_calls, source_key, label, macro ]) { included_block_calls(tree, label, macro) }
+          block_calls, hooked, block_ranges = memo([ :included_calls, source_key, label, macro ]) { included_block_calls(tree, label, macro) }
           Run.merge_calls(@included_calls, block_calls)
           hooked = hooked.to_set
           block_calls.each_value { |sites| sites.each { |site| @block_sites[site.__id__] ||= [ label, hooked.include?(site.__id__) ] if site } }
-          defs = memo([ :provided, source_key, label, macro ]) { provided(tree, label, macro) }
-          @providers << [ label, macro, defs, @via ] if defs.any?
+          @mixins << [ label, macro, *memo([ :module_defs, source_key, label, macro ]) { module_defs(tree, label, macro) }, @via ]
           bodies, hooks = method_bodies(data, macro)
           own_lines, inner = memo([ :ranges, source_key, label ]) { own_and_nested_ranges(tree, label) }
           scope = [ macro == :extend, inner, own_lines, hooks ]
           # The class's own file was read with the class; only its callbacks go by owner.
           keys = nested && source == @own_file ? @keys & [ :callbacks ] : @keys
           keys.each do |key|
-            applied(data[key], bodies, *scope).each do |entry|
-              rerun = key == :callbacks && in_hook?(entry, hooks)
-              via(tagged(entry, label, rerun: rerun), rerun).each { |copy| @collected[key] << copy }
-            end
+            applied(data[key], bodies, *scope).each { |entry| @collected[key] << tagged(entry, label, hook: in_hook?(entry, hooks)) }
           end
           expand_called(tree, data, own_lines, label, keys).each do |key, entries|
-            entries.each { |entry| via(tagged(entry, label), false).each { |copy| @collected[key] << copy } }
+            entries.each { |entry| @collected[key] << tagged(entry, label) }
           end
 
           applied(data[:mixins], bodies, *scope, keep_called: true).each do |mixin|
-            next unless mixin[:ancestor]
+            next unless mixin[:ancestor] || extends_includer?(mixin, block_ranges, path, label)
 
             enclosing = ConcernMacros.enclosing(bodies, mixin[:location])
-            sites = enclosing ? call_sites.fetch(enclosing.last, []).compact : []
             outer = @via
-            @via = [ [ label, enclosing.first.begin ], mixin[:location], sites ] if sites.any?
+            @via = [ [ label, enclosing.first.begin ], mixin[:location] ] if enclosing
             walk([ mixin ], label, depth - 1, path)
             @via = outer
           end
@@ -465,9 +663,9 @@ module RailsAiContext
       def included_block_calls(tree, name, macro = :include)
         short = name.to_s.split("::").last.to_s
         block = ConcernMembership::CONCERN_BLOCKS[macro]
-        runs = ConcernMembership::HOOKS_BY_MACRO.fetch(macro, [])
         found = {}
         hooked = {}
+        ranges = []
         visit = lambda do |node, owner|
           case node
           when Prism::ClassNode, Prism::ModuleNode
@@ -475,22 +673,24 @@ module RailsAiContext
           when Prism::CallNode
             if node.name == block && node.receiver.nil? && node.block && owner.to_s.casecmp?(short)
               Introspectors::SourceIntrospector.calls_outside_methods(node.block, found)
+              ranges << (node.location.start_line..node.location.end_line)
               return
             end
           when Prism::DefNode
-            return hook_calls(node, hooked) if mixin_hook?(node, runs) && owner.to_s.casecmp?(short)
+            return hook_calls(node, hooked) if ClassCalls.hook?(node, macro) && owner.to_s.casecmp?(short)
           end
           node.child_nodes.compact.each { |child| visit.call(child, owner) }
         end
         visit.call(tree, nil)
-        [ Run.merge_calls(found, hooked), hooked.values.flatten.map(&:__id__) ]
+        [ Run.merge_calls(found, hooked), hooked.values.flatten.map(&:__id__), ranges ]
       rescue StandardError => e
-        RailsAiContext.debug_fail(e, [ {}, [] ], label: "included block calls of #{name}")
+        RailsAiContext.debug_fail(e, [ {}, [], [] ], label: "included block calls of #{name}")
       end
 
-
-      def mixin_hook?(node, runs)
-        node.receiver.is_a?(Prism::SelfNode) && runs.include?(node.name.to_s)
+      # `extend X` in a Concern's block extends the includer; a module nested here is read with the concern.
+      def extends_includer?(mixin, block_ranges, file, within)
+        mixin[:macro] == :extend && !mixin[:receiver] && block_ranges.any? { |range| range.cover?(mixin[:location]) } &&
+          !nested_module(file, mixin[:name], within)
       end
 
       # A hook runs in the includer: its receiverless calls (inside
@@ -538,12 +738,11 @@ module RailsAiContext
         into
       end
 
-      # A mixin hook or a called class method runs again for a subclass that
-      # includes or calls it again; a Concern's `included` block does not.
-      def tagged(entry, concern_name, rerun: false)
+      # A mixin hook runs again for a subclass that includes the module again; a Concern's block does not.
+      def tagged(entry, concern_name, hook: false)
         return entry unless entry.is_a?(Hash)
 
-        rerun ? entry.merge(from_concern: concern_name, rerun: true) : entry.merge(from_concern: concern_name)
+        hook ? entry.merge(from_concern: concern_name, hook: true) : entry.merge(from_concern: concern_name)
       end
 
       # The call and the body it runs travel with the entry; the class places
@@ -552,65 +751,10 @@ module RailsAiContext
         call && entry.is_a?(Hash) ? entry.merge(site: call, definer: definer) : entry
       end
 
-      # An entry of a module a called method includes stands at each call of that method;
-      # a Concern's block in it runs at the first.
-      def via(entry, rerun)
-        return [ entry ] unless @via && entry.is_a?(Hash) && !entry.key?(:site)
-
-        definer, line, sites = @via
-        sites.map { |site| entry.merge(site: site, definer: definer, via_line: line, **(rerun ? {} : { once: true })) }
-      end
-
-      # The class methods the module gives a class it is mixed into: on extend its own
-      # methods; otherwise its `class_methods`, its ClassMethods and what its hooks extend.
-      def provided(tree, label, macro)
-        own = own_node(tree, label)
-        return [] unless own&.body
-
-        nodes =
-          if macro == :extend then body_defs(own.body)
-          else
-            extended = hook_extends(own, macro) | [ "ClassMethods" ]
-            blocks = own.body.compact_child_nodes.select { |node| node.is_a?(Prism::CallNode) && node.name == :class_methods && node.block }
-            nested = own.body.compact_child_nodes.select { |node| node.is_a?(Prism::ModuleNode) && extended.include?(node.constant_path.slice.split("::").last) }
-            short = label.to_s.split("::").last
-            blocks.flat_map { |block| body_defs(block.block.body) } + nested.flat_map { |node| body_defs(node.body) } +
-              (extended.include?(short) ? body_defs(own.body) : [])
-          end
-        nodes.map { |node| ClassCalls.definition(label, node) }
+      def module_defs(tree, label, macro)
+        ClassCalls.module_defs(own_node(tree, label), label, macro)
       rescue StandardError => e
-        RailsAiContext.debug_fail(e, [], label: "class methods of #{label}")
-      end
-
-      # The constants a mixin hook extends its includer with.
-      def hook_extends(own, macro)
-        runs = ConcernMembership::HOOKS_BY_MACRO.fetch(macro, [])
-        own.body.compact_child_nodes.select { |node| node.is_a?(Prism::DefNode) && mixin_hook?(node, runs) && node.body }.flat_map do |hook|
-          Introspectors::AstWalk.each(hook.body).flat_map do |call|
-            next [] unless call.is_a?(Prism::CallNode)
-
-            arguments = Array(call.arguments&.arguments)
-            if %i[send public_send].include?(call.name) && arguments.first&.slice == ":extend" then arguments = arguments.drop(1)
-            elsif call.name != :extend then next []
-            end
-
-            arguments.filter_map { |arg| arg.slice.split("::").last if arg.is_a?(Prism::ConstantReadNode) || arg.is_a?(Prism::ConstantPathNode) }
-          end
-        end
-      end
-
-      # The `def x` a module body runs with the module as self, `private def x` included.
-      def body_defs(node, found = [])
-        case node
-        when nil then found
-        when Prism::DefNode then node.receiver.nil? ? found << node : found
-        when Prism::ClassNode, Prism::ModuleNode, Prism::SingletonClassNode then found
-        when Prism::CallNode
-          return found if %i[class_methods included prepended].include?(node.name) && node.block
-
-          node.compact_child_nodes.each_with_object(found) { |child, into| body_defs(child, into) }
-        else node.compact_child_nodes.each_with_object(found) { |child, into| body_defs(child, into) }
-        end
+        RailsAiContext.debug_fail(e, [ [], [] ], label: "class methods of #{label}")
       end
 
       def in_hook?(entry, hooks)
@@ -652,7 +796,8 @@ module RailsAiContext
     #   the order Ruby adds them, the methods whose declarations the walk held
     #   back because nothing it knew of calls them, the concern each `included`
     #   block call site belongs to and whether it is a plain hook, by the site's
-    #   object id, and [label, macro, class methods, via] for each module giving the class some
+    #   object id, and for each module read [label, macro, the class methods it gives, those its
+    #   hooks define on the class, and [method, line] when a method of a module includes it]
     def collect(root, mixins, keys:, prefer: nil, within: nil, cache: nil, calls: nil,
                 listeners: Introspectors::SourceIntrospector::LISTENER_MAP, extra: [], file: nil)
       # A module the class extends itself with gives it class methods, though no ancestor.
@@ -688,16 +833,16 @@ module RailsAiContext
       end
 
       result = [ run.collected, run.unresolved, run.hidden, run.included_calls, run.placement, run.skipped_methods,
-                 run.block_sites, run.providers ]
+                 run.block_sites, run.mixins ]
       cache[memo_key] = [ run.consulted, fresh(result) ] if memo_key && !depends_on_calls
       result
     end
 
     # A copy a caller may change without changing the cached walk.
     def fresh(result)
-      collected, unresolved, hidden, included, placement, skipped, blocks, providers = result
+      collected, unresolved, hidden, included, placement, skipped, blocks, mixins = result
       [ collected.transform_values { |entries| entries.map { |entry| entry.is_a?(Hash) ? entry.dup : entry } },
-        unresolved.dup, hidden.dup, included.transform_values(&:dup), placement.dup, skipped.dup, blocks.dup, providers.dup ]
+        unresolved.dup, hidden.dup, included.transform_values(&:dup), placement.dup, skipped.dup, blocks.dup, mixins.dup ]
     end
     private_class_method :fresh
   end

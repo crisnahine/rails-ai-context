@@ -3206,8 +3206,8 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         end
       end
 
-      # Runtime: TwoConc :first, :s2; Xchild :first, :s; Zchild :first, :sc; Kchild :b, :c;
-      # ReincChild :pre, :s, :s2; LateDef :first, :s, :own; PreOver :first, :p.
+      # Runtime: TwoConc :first, :s2; Xchild :first, :s; Zchild :first, :sc; Kchild :b, :c; ReincChild :pre, :s, :s2;
+      # LateDef :first, :s, :own; PreOver :first, :p; ViaUnreached :first, :own_setup, :s; ViaTime and PlainCmM :first, :s.
       it "runs the nearest definition: own, then concerns latest first, then a base's, as of the call" do
         Dir.mktmpdir do |dir|
           stampy(dir)
@@ -3227,18 +3227,25 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
           write_model(dir, "ReincChild", "class ReincChild < ReincBase\n  include StampSup\n  include Stampy\n  stamp\nend\n")
           write_model(dir, "LateDef", "class LateDef < ApplicationRecord\n  include Stampy\n  before_save :first\n  stamp\n  def self.stamp\n    before_save :own\n  end\n  stamp\nend\n")
           write_model(dir, "PreOver", "class PreOver < ApplicationRecord\n  def self.stamp\n    before_save :own\n  end\n  prepend PreStamp\n  before_save :first\n  stamp\nend\n")
+          write_model(dir, "Concerns::HelperC", "module HelperC\n  extend ActiveSupport::Concern\n  class_methods do\n    def stamp\n      before_save :hs\n    end\n  end\nend\n")
+          write_model(dir, "Concerns::SetupC", "module SetupC\n  extend ActiveSupport::Concern\n  class_methods do\n    def setup\n      include HelperC\n    end\n  end\nend\n")
+          write_model(dir, "Concerns::PlainCm", "module PlainCm\n  module ClassMethods\n    def stamp\n      before_save :pc\n    end\n  end\nend\n")
+          write_model(dir, "ViaUnreached", "class ViaUnreached < ApplicationRecord\n  include Stampy\n  include SetupC\n  def self.setup\n    before_save :own_setup\n  end\n  before_save :first\n  setup\n  stamp\nend\n")
+          write_model(dir, "ViaTime", "class ViaTime < ApplicationRecord\n  include Stampy\n  include SetupC\n  before_save :first\n  stamp\n  setup\nend\n")
+          write_model(dir, "PlainCmM", "class PlainCmM < ApplicationRecord\n  include Stampy\n  include PlainCm\n  before_save :first\n  stamp\nend\n")
 
           static = static_save(dir)
 
-          expect(static.slice("TwoConc", "Xchild", "Zchild", "Kchild", "ReincChild", "LateDef", "PreOver")).to eq(
+          expect(static.slice("TwoConc", "Xchild", "Zchild", "Kchild", "ReincChild", "LateDef", "PreOver", "ViaUnreached", "ViaTime", "PlainCmM")).to eq(
             "TwoConc" => %w[first s2], "Xchild" => %w[first s], "Zchild" => %w[first sc], "Kchild" => %w[b c],
-            "ReincChild" => %w[pre s s2], "LateDef" => %w[first s own], "PreOver" => %w[first p]
+            "ReincChild" => %w[pre s s2], "LateDef" => %w[first s own], "PreOver" => %w[first p],
+            "ViaUnreached" => %w[first own_setup s], "ViaTime" => %w[first s], "PlainCmM" => %w[first s]
           )
           %w[TwoConc LateDef PreOver].each { |name| expect(booted_callbacks(dir, name)).to eq("before_save" => static[name]) }
         end
       end
 
-      # Runtime: AliasSing :first, :x; ExtNested :first, :t; ExtNested2 :first, :e; ExtChild :c, :t.
+      # Runtime: AliasSing :first, :x; ExtNested :first, :t; ExtNested2 :first, :e; ExtChild :c, :t; AliasChain :first, :s, :w.
       it "reads an alias in class << self and a module the class extends, nested in its file or not" do
         Dir.mktmpdir do |dir|
           write_model(dir, "Concerns::TrExt", "module TrExt\n  def track_it\n    before_save :t\n  end\nend\n")
@@ -3247,18 +3254,22 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
           write_model(dir, "ExtNested2", "class ExtNested2 < ApplicationRecord\n  module Tr\n    def self.extended(base)\n      base.before_save :e\n    end\n  end\n  before_save :first\n  extend Tr\nend\n")
           write_model(dir, "ExtBase", "class ExtBase < ApplicationRecord\n  extend TrExt\n  track_it\nend\n")
           write_model(dir, "ExtChild", "class ExtChild < ExtBase\n  before_save :c\n  track_it\nend\n")
+          stampy(dir)
+          write_model(dir, "AliasChain", "class AliasChain < ApplicationRecord\n  include Stampy\n  class << self\n    alias_method :stamp_without, :stamp\n    def stamp\n      stamp_without\n      before_save :w\n    end\n  end\n  before_save :first\n  stamp\nend\n")
 
           static = static_save(dir)
 
-          expect(static.slice("AliasSing", "ExtNested", "ExtNested2", "ExtChild")).to eq(
-            "AliasSing" => %w[first x], "ExtNested" => %w[first t], "ExtNested2" => %w[first e], "ExtChild" => %w[c t]
+          expect(static.slice("AliasSing", "ExtNested", "ExtNested2", "ExtChild", "AliasChain")).to eq(
+            "AliasSing" => %w[first x], "ExtNested" => %w[first t], "ExtNested2" => %w[first e], "ExtChild" => %w[c t],
+            "AliasChain" => %w[first s w]
           )
           %w[AliasSing ExtNested ExtNested2].each { |name| expect(booted_callbacks(dir, name)).to eq("before_save" => static[name]) }
         end
       end
 
       # Runtime: T3child and T4child :bl, :tb, :c (Hooky's block ran once, in T3base);
-      # HkC :hb, :hc (a plain hook runs again, resolved for the child); TwinBlock destroys block, block, :mid, block.
+      # HkC :hb, :hc (a plain hook runs again, resolved for the child); TwinBlock destroys block, block, :mid, block;
+      # TwSetup, VtChild and VlChild :tb, :first; TwBlk and VbChild block, :first (the first include runs the block).
       it "runs a Concern's block once in the first class including it, and a plain hook on every include" do
         Dir.mktmpdir do |dir|
           write_model(dir, "Concerns::Hooky", "module Hooky\n  extend ActiveSupport::Concern\n  included do\n    loud!\n  end\nend\n")
@@ -3275,9 +3286,49 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
           static = static_save(dir)
 
+          write_model(dir, "Concerns::Tb", "module Tb\n  extend ActiveSupport::Concern\n  included do\n    before_save :tb\n  end\nend\n")
+          write_model(dir, "Concerns::Tblk", "module Tblk\n  extend ActiveSupport::Concern\n  included do\n    before_save { }\n  end\nend\n")
+          write_model(dir, "TwSetup", "class TwSetup < ApplicationRecord\n  def self.setup\n    include Tb\n  end\n  setup\n  before_save :first\n  setup\nend\n")
+          write_model(dir, "TwBlk", "class TwBlk < ApplicationRecord\n  def self.setup\n    include Tblk\n  end\n  setup\n  before_save :first\n  setup\nend\n")
+          write_model(dir, "VtBase", "class VtBase < ApplicationRecord\n  def self.setup\n    include Tb\n  end\nend\n")
+          write_model(dir, "VtChild", "class VtChild < VtBase\n  include Tb\n  before_save :first\n  setup\nend\n")
+          write_model(dir, "VlChild", "class VlChild < VtBase\n  setup\n  before_save :first\n  include Tb\nend\n")
+          write_model(dir, "VbBase", "class VbBase < ApplicationRecord\n  def self.setup\n    include Tblk\n  end\nend\n")
+          write_model(dir, "VbChild", "class VbChild < VbBase\n  include Tblk\n  before_save :first\n  setup\nend\n")
+          static = static_save(dir)
+
           expect(static.slice("T3child", "T4child", "HkC")).to eq("T3child" => %w[bl tb c], "T4child" => %w[bl tb c], "HkC" => %w[hb hc])
+          expect(static.slice("TwSetup", "VtChild", "VlChild", "TwBlk", "VbChild")).to eq(
+            "TwSetup" => %w[tb first], "VtChild" => %w[tb first], "VlChild" => %w[tb first],
+            "TwBlk" => %w[[inline_block] first], "VbChild" => %w[[inline_block] first]
+          )
           expect(static_save(dir, "before_destroy")["TwinBlock"]).to eq(%w[[inline_block] [inline_block] mid [inline_block]])
           expect(booted_callbacks(dir, "TwinBlock")).to eq("before_destroy" => %w[[inline_block] [inline_block] mid [inline_block]])
+        end
+      end
+
+      # Runtime: PrepCm :first, :p; IncCm :first, :i; ExtBlk :first, :e4; ExtBlk2 :first, :own; SelfExtM :first, :se;
+      # PlainHook :first, :ph.
+      it "reads the class methods a hook or an included block adds, from where it runs" do
+        Dir.mktmpdir do |dir|
+          stampy(dir)
+          write_model(dir, "Concerns::Pcm", "module Pcm\n  def self.prepended(base)\n    class << base\n      def stamp\n        before_save :p\n      end\n    end\n  end\nend\n")
+          write_model(dir, "Concerns::Icm", "module Icm\n  def self.included(base)\n    class << base\n      def stamp\n        before_save :i\n      end\n    end\n  end\nend\n")
+          write_model(dir, "Concerns::Ext4", "module Ext4\n  def stamp\n    before_save :e4\n  end\nend\n")
+          write_model(dir, "Concerns::Inc4", "module Inc4\n  extend ActiveSupport::Concern\n  included do\n    extend Ext4\n    stamp\n  end\nend\n")
+          write_model(dir, "Concerns::SelfExt", "module SelfExt\n  def self.included(base)\n    base.extend(self)\n  end\n\n  def stamp\n    before_save :se\n  end\nend\n")
+          write_model(dir, "Concerns::PlainHk", "module PlainHk\n  def self.included(base)\n    base.extend ClassMethods\n  end\n\n  module ClassMethods\n    def stamp\n      before_save :ph\n    end\n  end\nend\n")
+          write_model(dir, "PrepCm", "class PrepCm < ApplicationRecord\n  def self.stamp\n    before_save :own\n  end\n  prepend Pcm\n  before_save :first\n  stamp\nend\n")
+          write_model(dir, "IncCm", "class IncCm < ApplicationRecord\n  def self.stamp\n    before_save :own\n  end\n  include Icm\n  before_save :first\n  stamp\nend\n")
+          write_model(dir, "ExtBlk", "class ExtBlk < ApplicationRecord\n  before_save :first\n  include Inc4\nend\n")
+          write_model(dir, "ExtBlk2", "class ExtBlk2 < ApplicationRecord\n  def self.stamp\n    before_save :own\n  end\n  before_save :first\n  include Inc4\nend\n")
+          write_model(dir, "SelfExtM", "class SelfExtM < ApplicationRecord\n  include Stampy\n  include SelfExt\n  before_save :first\n  stamp\nend\n")
+          write_model(dir, "PlainHook", "class PlainHook < ApplicationRecord\n  include Stampy\n  include PlainHk\n  before_save :first\n  stamp\nend\n")
+
+          expect(static_save(dir).slice("PrepCm", "IncCm", "ExtBlk", "ExtBlk2", "SelfExtM", "PlainHook")).to eq(
+            "PrepCm" => %w[first p], "IncCm" => %w[first i], "ExtBlk" => %w[first e4], "ExtBlk2" => %w[first own],
+            "SelfExtM" => %w[first se], "PlainHook" => %w[first ph]
+          )
         end
       end
 
