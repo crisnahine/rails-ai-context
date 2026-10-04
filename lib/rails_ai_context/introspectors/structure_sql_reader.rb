@@ -27,7 +27,7 @@ module RailsAiContext
         all = {}
         add = proc do |qualified, body, inherits, single_line|
           name = qualified_name(qualified)
-          shown = name.delete_prefix("public.")
+          shown = shown_name(name)
           next if shown.start_with?("ar_internal_metadata", "schema_migrations") || (single_line && all.key?(name))
 
           raw_types = {}
@@ -62,7 +62,7 @@ module RailsAiContext
         # statement and attribute the FK to the wrong table.
         content.scan(/ALTER TABLE\s+(?:ONLY\s+)?#{QUALIFIED_NAME}\s+ADD CONSTRAINT[^;]*?FOREIGN KEY\s*\(([^)]*)\)\s*REFERENCES\s+#{QUALIFIED_NAME}\s*\(([^)]*)\)/m) do |from, cols, to, pks|
           from = qualified_name(from)
-          all.dig(from, :table, :foreign_keys)&.push(SchemaConventions.foreign_key_entry(from.delete_prefix("public."), qualified_name(to).delete_prefix("public."), cols.scan(/\w+/), pks.scan(/\w+/)))
+          all.dig(from, :table, :foreign_keys)&.push(SchemaConventions.foreign_key_entry(shown_name(from), shown_name(qualified_name(to)), cols.scan(/\w+/), pks.scan(/\w+/)))
         end
 
         alters = Hash.new { |h, k| h[k] = [] }
@@ -75,7 +75,7 @@ module RailsAiContext
         # pg_dump writes each partition as a table, then attaches it in exactly this form.
         content.scan(/^ALTER TABLE ONLY .+? ATTACH PARTITION #{QUALIFIED_NAME} /) do |(partition)|
           name = qualified_name(partition)
-          tables.delete(name.delete_prefix("public.")) if name.start_with?("public.")
+          tables.delete(shown_name(name)) if name.start_with?("public.")
         end
 
         { dialect: detect_sql_dialect(content), tables: tables }
@@ -94,6 +94,11 @@ module RailsAiContext
         parts.join(".")
       end
 
+      # A public table is shown by its bare name.
+      def shown_name(name)
+        name.delete_prefix("public.")
+      end
+
       # Each parent's columns, then the child's own. pg_dump writes only local
       # columns and sets an inherited one's NOT NULL and default by ALTER.
       def resolve_columns(name, all, alters, resolved)
@@ -106,7 +111,7 @@ module RailsAiContext
         unresolved = []
         entry[:parents]&.each do |parent|
           unless all[parent]
-            unresolved << parent.delete_prefix("public.")
+            unresolved << shown_name(parent)
             next
           end
 
