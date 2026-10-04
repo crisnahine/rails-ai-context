@@ -43,8 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   5.30.0 entry that said each declaration is shown. A declaration inside a
   method body counts where the class calls the method, and not at all when
   nothing does, so an uncalled method that redeclares a callback no longer
-  hides it. A nested class's callbacks are its own, not the outer model's.
-  (#253)
+  hides it. A call counts written bare or as `self.name`, made from another of
+  the class's own class methods, or made from a concern's `included` block,
+  where it counts at that concern's `include` line. A nested class's callbacks
+  are its own, not the outer model's, and a module nested in the model's file
+  that the model includes keeps its callbacks. A Mongoid document's callbacks
+  list in the same run order. (#253)
 - **A lambda or Proc given to `queue_as` reads as what ActiveJob does with
   it.** ActiveJob never calls it; it names the queue after the Proc's text.
   Both tiers now say so, with the source, where the booted tier printed the
@@ -68,7 +72,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implicit presence of a required `belongs_to` is listed. A literal assignment
   used to win wherever it stood. A value the source cannot evaluate
   (`ENV.fetch(...) == "true"`), app-wide or in the class, makes the presence
-  conditional on it, named in the answer.
+  conditional on it, named in the answer. A literal `nil` reads as off, as
+  Rails reads it, here and for the commit-order setting.
 - **`rails_get_callbacks` prints `on:`** for validation callbacks and any
   callback whose type does not already name the event, before `if:` and
   `unless:`. (#252)
