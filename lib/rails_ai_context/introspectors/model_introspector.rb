@@ -1575,7 +1575,7 @@ module RailsAiContext
       # Rails 7.0 has no setting and always runs them last declared first.
       def booted_commits_in_order
         ActiveRecord.respond_to?(:run_after_transaction_callbacks_in_order_defined) &&
-          ActiveRecord.run_after_transaction_callbacks_in_order_defined
+          ActiveRecord.run_after_transaction_callbacks_in_order_defined == true
       end
 
       # nil when the config cannot say: no config/application.rb, a version or

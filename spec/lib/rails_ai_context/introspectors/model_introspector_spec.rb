@@ -3075,6 +3075,16 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         end
       end
 
+      # Rails tests the setting for truth, so nil runs them last declared first.
+      it "reverses when booted with the setting nil" do
+        Dir.mktmpdir do |dir|
+          write_order(dir)
+          allow(ActiveRecord).to receive(:run_after_transaction_callbacks_in_order_defined).and_return(nil)
+
+          expect(booted_callbacks(dir, "Order")).to eq(reversed)
+        end
+      end
+
       it "keeps declaration order statically when the config cannot say, and marks it" do
         [ nil, "config.load_defaults Rails::VERSION::STRING.to_f",
           "config.load_defaults 7.0\n    config.active_record.run_after_transaction_callbacks_in_order_defined = ENV.key?(\"X\")" ].each do |application|
