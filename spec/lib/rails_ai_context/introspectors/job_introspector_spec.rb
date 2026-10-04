@@ -1650,6 +1650,18 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       end
     end
 
+    it "reads no file outside the app a Proc's text reaches through .." do
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "secret.rb"), "SECRET = -> { :secret }\n")
+        with_job_file("PlainJob", "class PlainJob < ActiveJob::Base\nend\n") do |job_file|
+          climbing = File.join(File.dirname(job_file, 3), "..", File.basename(outside), "secret.rb")
+          queue_stored_as("PlainJob", "#<Proc:0x0000000100000000 #{climbing}:1 (lambda)>", file: job_file)
+
+          expect(booted_queue("PlainJob")).to eq(proc_label)
+        end
+      end
+    end
+
     it "reads no file over the size cap a Proc's text names" do
       with_job_file("PlainJob", "class PlainJob < ActiveJob::Base\nend\n") do |job_file|
         concern = File.join(File.dirname(job_file, 3), "app", "models", "concerns", "routing.rb")

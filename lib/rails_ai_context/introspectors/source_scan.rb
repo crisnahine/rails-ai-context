@@ -81,9 +81,10 @@ module RailsAiContext
       end
 
       # Whether either spelling of a path lands inside either spelling of the
-      # root. Only one of the two holds for a symlinked pack.
+      # root. Only one of the two holds for a symlinked pack. expand_path
+      # collapses ".." without resolving symlinks.
       def under_root?(path, real, root, real_root)
-        path.start_with?(root + File::SEPARATOR) || real.start_with?(real_root + File::SEPARATOR)
+        File.expand_path(path).start_with?(root + File::SEPARATOR) || real.start_with?(real_root + File::SEPARATOR)
       end
     end
   end
