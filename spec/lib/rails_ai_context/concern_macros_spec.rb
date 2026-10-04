@@ -753,10 +753,10 @@ RSpec.describe RailsAiContext::ConcernMacros do
       calls.add(0, { "loud!" => [ block_call, hook_call ] }, { block_call.__id__ => [ [ 4, 0 ], false ], hook_call.__id__ => [ [ 6, 1 ], true ] }, [])
       calls.add(1, { "loud!" => [ block_call, hook_call ] }, { block_call.__id__ => [ [ 2, 0 ], false ], hook_call.__id__ => [ [ 3, 1 ], true ] }, [])
 
-      expect(placed(calls, [ 1, 1 ], 1, block_call)).to eq([ [ 1, [ 2, 0, 1 ] ] ])
+      expect(placed(calls, [ 1, 1 ], 1, block_call)).to eq([ [ 1, [ 2, 0, 1, 1 ] ] ])
       expect(placed(calls, [ 0, 1 ], 1, block_call)).to eq([])
-      expect(placed(calls, [ 0, 1 ], 1, hook_call)).to eq([ [ 0, [ 6, 1, 1 ] ] ])
-      expect(placed(calls, [ 1, 1 ], 1, hook_call)).to eq([ [ 1, [ 3, 1, 1 ] ] ])
+      expect(placed(calls, [ 0, 1 ], 1, hook_call)).to eq([ [ 0, [ 6, 1, 1, 1 ] ] ])
+      expect(placed(calls, [ 1, 1 ], 1, hook_call)).to eq([ [ 1, [ 3, 1, 1, 1 ] ] ])
     end
 
     it "makes a reached body's calls from where its own call stands" do

@@ -131,7 +131,7 @@ module RailsAiContext
 
         found = @walks.filter_map { |walk_rank, (_, blocks)| [ walk_rank, *blocks[site.__id__] ] if blocks.key?(site.__id__) }
         found = found.max_by(1, &:first) unless found.any? { |*, hook| hook }
-        found.map { |walk_rank, at, _| [ walk_rank, at ] }
+        found.map { |walk_rank, at, _| [ walk_rank, [ *at, site.location.start_line ] ] }
       end
 
       # [rank, provider] pairs. Ruby adds a module to an ancestry once, at the
@@ -674,14 +674,16 @@ module RailsAiContext
       run = Run.new(root.to_s, dirs, keys, cache, listeners, calls, extra, file)
       run.walk(walked, within, MAX_DEPTH)
       depends_on_calls = run.calls_any_consulted?
-      # An `included do` can call a method whose macros an earlier concern held back,
-      # so walk again with the known calls until nothing held back is called.
+      # An `included do` can call a method a concern read before the block did, so walk
+      # again with the known calls until no method the walk asked about has a new call.
+      known = {}
       MAX_DEPTH.times do
-        break unless run.skipped_methods.intersect?(run.included_calls.keys.to_set)
+        asked = run.skipped_methods | run.consulted
+        break if run.included_calls.none? { |name, sites| asked.include?(name) && (sites.map(&:__id__) - Array(known[name]).map(&:__id__)).any? }
 
         depends_on_calls = true
-
-        run = Run.new(root.to_s, dirs, keys, cache, listeners, calls, extra, file, known: run.included_calls)
+        known = run.included_calls
+        run = Run.new(root.to_s, dirs, keys, cache, listeners, calls, extra, file, known: known)
         run.walk(walked, within, MAX_DEPTH)
       end
 

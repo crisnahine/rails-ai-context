@@ -3258,7 +3258,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
 
       # Runtime: T3child and T4child :bl, :tb, :c (Hooky's block ran once, in T3base);
-      # HkC :hb, :hc (a plain hook runs again, resolved for the child).
+      # HkC :hb, :hc (a plain hook runs again, resolved for the child); TwinBlock destroys block, block, :mid, block.
       it "runs a Concern's block once in the first class including it, and a plain hook on every include" do
         Dir.mktmpdir do |dir|
           write_model(dir, "Concerns::Hooky", "module Hooky\n  extend ActiveSupport::Concern\n  included do\n    loud!\n  end\nend\n")
@@ -3269,9 +3269,15 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
           write_model(dir, "HkB", "class HkB < ApplicationRecord\n  def self.loud!\n    before_save :hb\n  end\n  include Hk\nend\n")
           write_model(dir, "HkC", "class HkC < HkB\n  def self.loud!\n    before_save :hc\n  end\n  include Hk\nend\n")
 
+          write_model(dir, "Concerns::Virt", "module Virt\n  extend ActiveSupport::Concern\n  class_methods do\n    def virt(name)\n      before_destroy { name }\n    end\n  end\nend\n")
+          write_model(dir, "Concerns::Twin", "module Twin\n  extend ActiveSupport::Concern\n  included do\n    include Virt\n    virt :a\n    virt :b\n  end\nend\n")
+          write_model(dir, "TwinBlock", "class TwinBlock < ApplicationRecord\n  include Twin\n  before_destroy :mid\n  virt :c\nend\n")
+
           static = static_save(dir)
 
           expect(static.slice("T3child", "T4child", "HkC")).to eq("T3child" => %w[bl tb c], "T4child" => %w[bl tb c], "HkC" => %w[hb hc])
+          expect(static_save(dir, "before_destroy")["TwinBlock"]).to eq(%w[[inline_block] [inline_block] mid [inline_block]])
+          expect(booted_callbacks(dir, "TwinBlock")).to eq("before_destroy" => %w[[inline_block] [inline_block] mid [inline_block]])
         end
       end
 
