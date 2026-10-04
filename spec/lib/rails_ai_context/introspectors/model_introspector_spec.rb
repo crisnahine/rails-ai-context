@@ -2374,6 +2374,24 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # Rails tests the setting for truth, so a literal nil turns it off.
+    it "is off for a literal nil, app-wide or in the class" do
+      {
+        "config.load_defaults 7.1\n    config.active_record.belongs_to_required_by_default = nil" => "",
+        "config.load_defaults 7.1" => "self.belongs_to_required_by_default = nil"
+      }.each do |application, class_line|
+        Dir.mktmpdir do |dir|
+          write_app(dir, application: application)
+          File.write(File.join(dir, "app", "models", "comment.rb"),
+                     "class Comment < ApplicationRecord\n  #{class_line}\n  belongs_to :post\nend\n")
+
+          static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Comment"][:validations]
+
+          expect(static).to eq([]), application
+        end
+      end
+    end
+
     it "is on for load_defaults written as the running version" do
       Dir.mktmpdir do |dir|
         write_app(dir, application: "config.load_defaults Rails::VERSION::STRING.to_f")
@@ -3189,7 +3207,8 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
           [ "config.load_defaults 7.1",
             "Rails.application.config.active_record.run_after_transaction_callbacks_in_order_defined = false" ] => reversed,
           [ "config.active_record.run_after_transaction_callbacks_in_order_defined = false\n    config.load_defaults 7.0",
-            "Rails.application.config.active_record.run_after_transaction_callbacks_in_order_defined = true" ] => in_order
+            "Rails.application.config.active_record.run_after_transaction_callbacks_in_order_defined = true" ] => in_order,
+          [ "config.load_defaults 7.1\n    config.active_record.run_after_transaction_callbacks_in_order_defined = nil", nil ] => reversed
         }.each do |(application, initializer), expected|
           Dir.mktmpdir do |dir|
             write_config(dir, application, initializer)

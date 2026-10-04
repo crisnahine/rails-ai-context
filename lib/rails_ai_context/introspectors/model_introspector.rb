@@ -769,11 +769,12 @@ module RailsAiContext
         end
       end
 
-      # A literal true or false as itself; any other value is decided at boot,
-      # so it reads as the condition "<setting> = <expression> is true".
+      # A literal true or false as itself, and nil as false, since Rails tests
+      # the setting for truth; any other value is decided at boot, so it reads
+      # as the condition "<setting> = <expression> is true".
       def setting_value(node)
         value = node.arguments&.arguments&.first
-        literal = { Prism::TrueNode => true, Prism::FalseNode => false }[value.class]
+        literal = { Prism::TrueNode => true, Prism::FalseNode => false, Prism::NilNode => false }[value.class]
         return literal unless literal.nil? && value
 
         "#{node.name.to_s.delete_suffix('=')} = #{value.slice} is true"
