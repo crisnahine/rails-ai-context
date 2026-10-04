@@ -186,10 +186,11 @@ It runs a single-pass Dispatcher that walks the AST once and feeds events to all
 | CallbacksListener | All AR callback types including `around_*`, `after_touch`, `after_initialize` and `after_find`; `after_commit` with `on:` resolution; a callback object by its constant, a block as `[inline_block]`; `if:`/`unless:` kept as the source wrote them, and the options of an enclosing `with_options` block |
 | MacrosListener | `encrypts`, `normalizes`, `delegate`, `has_secure_password`, `serialize`, `store`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `generates_token_for`, `attribute` |
 | MethodsListener | `def`/`def self.`, visibility tracking, parameter extraction, `class << self`; `include_initialize: true` adds the constructor a caller reports on its own |
-| MixinsListener | `include`, `prepend`, `extend` (and on `singleton_class`) |
+| MixinsListener | `include`, `prepend`, `extend`, and more below |
 
-MixinsListener flags the mixins that reach the ancestor chain, as reflection
-reports them.
+MixinsListener also reads `singleton_class.include` and
+`singleton_class.prepend` (`singleton_class.extend` is not read), and flags
+the mixins that reach the ancestor chain, as reflection reports them.
 
 ### The targeted-walk listeners
 
