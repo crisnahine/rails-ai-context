@@ -25,15 +25,14 @@ module RailsAiContext
       # `#id` is a selector in a stylesheet and an element in Haml or Slim.
       HASH_COMMENT = /\A\s*(?:#(?!\{)|<%#)/
       JS_COMMENT = %r{\A\s*(?://|/\*|\*\s)}
+      STYLESHEET_LINE = %r{\A\s*(?://|/\*|\*\s|#)}
       NOT_A_CALL_LINE = {
         ".erb" => %r{\A\s*(?:#(?!\{)|<%#|//|/\*)},
         ".haml" => %r{\A\s*(?:-#|/)},
         ".slim" => %r{\A\s*/},
-        ".css" => %r{\A\s*(?:/\*|\*\s|#)},
-        ".scss" => %r{\A\s*(?://|/\*|\*\s|#)},
-        ".sass" => %r{\A\s*(?://|/\*|\*\s|#)},
-        ".less" => %r{\A\s*(?://|/\*|\*\s|#)}
-      }.merge(%w[.js .jsx .mjs .cjs .ts .tsx .mts .cts .vue .svelte].to_h { |ext| [ ext, JS_COMMENT ] }).freeze
+        ".css" => %r{\A\s*(?:/\*|\*\s|#)}
+      }.merge(%w[.scss .sass .less].to_h { |ext| [ ext, STYLESHEET_LINE ] })
+       .merge(%w[.js .jsx .mjs .cjs .ts .tsx .mts .cts .vue .svelte].to_h { |ext| [ ext, JS_COMMENT ] }).freeze
 
       tool_name "rails_search_code"
       description "Search the Rails codebase with smart modes. " \
