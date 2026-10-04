@@ -455,5 +455,83 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
       expect(cols["child_logs"]["msg"][:default]).to eq("child")
       expect(cols["grand"]["msg"][:default]).to eq("child")
     end
+
+    it "reads a parent in another schema or under a quoted name, and lists only the tables it listed before" do
+      sql = <<~SQL
+        CREATE TABLE audit.base (
+            id bigint NOT NULL,
+            note text
+        );
+        CREATE TABLE public."my base" (
+            tag text
+        );
+        CREATE TABLE public.child (
+            extra integer
+        )
+        INHERITS (audit.base, public."my base");
+      SQL
+      tables = described_class.parse(sql)[:tables]
+
+      expect(tables.keys).to eq(%w[child])
+      expect(tables["child"][:columns].map { |c| c[:name] }).to eq(%w[id note tag extra])
+      expect(tables["child"]).not_to have_key(:inherits_unresolved)
+    end
+
+    it "names a parent the file does not hold" do
+      sql = <<~SQL
+        CREATE TABLE public.orphan (
+            x integer
+        )
+        INHERITS (elsewhere.gone);
+      SQL
+      table = described_class.parse(sql)[:tables]["orphan"]
+
+      expect(table[:columns].map { |c| c[:name] }).to eq(%w[x])
+      expect(table[:inherits_unresolved]).to eq(%w[elsewhere.gone])
+    end
+
+    it "reads INHERITS in any case" do
+      sql = <<~SQL
+        CREATE TABLE public.base_logs (
+            id bigint NOT NULL
+        );
+        CREATE TABLE public.child_logs (extra integer) inherits (public.base_logs);
+      SQL
+
+      expect(columns(sql, "child_logs")).to eq([ [ "id", "bigint", false ], [ "extra", "integer", true ] ])
+    end
+
+    it "reads an array default set by ALTER the way it reads one in the body" do
+      sql = <<~SQL
+        CREATE TABLE public.base (
+            vals double precision[]
+        );
+        CREATE TABLE public.inline (
+            vals double precision[] DEFAULT '{1.5,2}'::double precision[]
+        );
+        CREATE TABLE public.child (
+        )
+        INHERITS (public.base);
+        ALTER TABLE ONLY public.child ALTER COLUMN vals SET DEFAULT '{1.5,2}'::double precision[];
+      SQL
+      tables = described_class.parse(sql)[:tables]
+
+      expect(tables["child"][:columns]).to eq(tables["inline"][:columns])
+    end
+  end
+
+  it "keeps a serial key without a default when pg_dump sets its nextval by ALTER" do
+    sql = <<~SQL
+      CREATE TABLE public.users (
+          id bigint NOT NULL,
+          name character varying
+      );
+      ALTER TABLE ONLY public.users ALTER COLUMN id SET DEFAULT nextval('public.users_id_seq'::regclass);
+    SQL
+
+    expect(described_class.parse(sql)[:tables]["users"][:columns]).to eq([
+      { name: "id", type: "bigint", null: false },
+      { name: "name", type: "string", null: true }
+    ])
   end
 end

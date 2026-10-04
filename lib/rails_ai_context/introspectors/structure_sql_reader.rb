@@ -22,23 +22,25 @@ module RailsAiContext
         # follows it: without it, the lazy scan has no "\n)" to stop at inside
         # that one-line statement, so it keeps consuming lines - including the
         # next CREATE TABLE - until it finds one.
-        parents = {}
-        content.scan(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(?:public\.)?[`"]?(\w+)[`"]?\s*\(((?:(?!CREATE TABLE).)*?)^\)#{INHERITS}/m) do |table_name, body, inherits|
-          next if table_name.start_with?("ar_internal_metadata", "schema_migrations")
+        # Every table the file creates, by schema-qualified name, so a parent
+        # outside the listed tables still resolves.
+        all = {}
+        add = proc do |qualified, body, inherits, single_line|
+          name = qualified_name(qualified)
+          shown = name.delete_prefix("public.")
+          next if shown.start_with?("ar_internal_metadata", "schema_migrations") || (single_line && all.key?(name))
 
-          tables[table_name] = parse_sql_table_body(body, table_name)
-          parents[table_name] = inherits if inherits
+          raw_types = {}
+          table = parse_sql_table_body(body, shown, raw_types)
+          all[name] = { table: table, raw_types: raw_types, parents: inherits && split_top_level(inherits).map { |parent| qualified_name(parent) } }
+          tables[shown] = table if shown.match?(/\A\w+\z/)
         end
+        content.scan(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?#{QUALIFIED_NAME}\s*\(((?:(?!CREATE TABLE).)*?)^\)#{INHERITS}/m, &add)
 
         # Single-line CREATE TABLE statements (sqlite emits these for tiny
         # tables) close with ");" on the same line and miss the multi-line
         # scan above.
-        content.scan(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(?:public\.)?[`"]?(\w+)[`"]?\s*\(((?:(?!\)\s*INHERITS\b)[^\n])*)\)#{INHERITS};/) do |table_name, body, inherits|
-          next if table_name.start_with?("ar_internal_metadata", "schema_migrations") || tables.key?(table_name)
-
-          tables[table_name] = parse_sql_table_body(body, table_name)
-          parents[table_name] = inherits if inherits
-        end
+        content.scan(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?#{QUALIFIED_NAME}\s*\(((?:(?!\)#{INHERITS_KEYWORD})[^\n])*)\)#{INHERITS};/) { |groups| add.call(*groups, true) }
 
         content.scan(/CREATE (UNIQUE )?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF NOT EXISTS\s+)?[`"]?(\w+)[`"]?\s+ON\s+(?:ONLY\s+)?(?:public\.)?[`"]?(\w+)[`"]?([^;]*)/m) do |unique, idx_name, table, rest|
           group = first_paren_group(rest)
@@ -62,11 +64,11 @@ module RailsAiContext
         end
 
         alters = Hash.new { |h, k| h[k] = [] }
-        content.scan(/^ALTER TABLE (?:ONLY )?(?:public\.)?"?(\w+)"? ALTER COLUMN "?(\w+)"? SET (NOT NULL|DEFAULT .+);$/) do |table, column, change|
-          alters[table] << [ column, change ]
+        content.scan(/^ALTER TABLE (?:ONLY )?#{QUALIFIED_NAME} ALTER COLUMN "?(\w+)"? SET (NOT NULL|DEFAULT .+);$/) do |table, column, change|
+          alters[qualified_name(table)] << [ column, change ]
         end
         resolved = {}
-        tables.each_key { |name| resolve_columns(name, tables, parents, alters, resolved) }
+        all.each_key { |name| resolve_columns(name, all, alters, resolved) }
 
         # pg_dump writes each partition as a table, then attaches it in exactly this form.
         content.scan(/^ALTER TABLE ONLY .+? ATTACH PARTITION (?:public\.)?(?:"([^"]+)"|(\w+)) /) { |quoted, bare| tables.delete(quoted || bare) }
@@ -74,36 +76,56 @@ module RailsAiContext
         { dialect: detect_sql_dialect(content), tables: tables }
       end
 
+      # A table name, optionally schema-qualified, each part bare or quoted.
+      QUALIFIED_NAME = /((?:(?:"[^"]+"|`[^`]+`|\w+)\.)?(?:"[^"]+"|`[^`]+`|\w+))/
+      INHERITS_KEYWORD = /\s*INHERITS\b/i
       # The optional INHERITS list after a CREATE TABLE body.
-      INHERITS = /(?:\s*INHERITS\s*\(([^)]*)\))?/
+      INHERITS = /(?:#{INHERITS_KEYWORD}\s*\(([^)]*)\))?/
+
+      # "schema.name" with quotes removed; an unqualified name is in public.
+      def qualified_name(text)
+        parts = text.strip.scan(/"([^"]+)"|`([^`]+)`|(\w+)/).map { |groups| groups.compact.first }
+        parts.unshift("public") if parts.size == 1
+        parts.join(".")
+      end
 
       # A child table's columns: each parent's in order, then its own, a
       # redeclared column merged into the inherited slot. pg_dump writes only
       # the local columns and sets inherited ones' NOT NULL and defaults by ALTER.
-      def resolve_columns(name, tables, parents, alters, resolved)
-        return tables[name][:columns] if resolved[name]
+      def resolve_columns(name, all, alters, resolved)
+        entry = all[name]
+        return entry if resolved[name]
 
         resolved[name] = true
         columns = []
-        parents[name]&.split(",")&.each do |parent|
-          parent = parent.strip.delete_prefix("public.").delete('"')
-          next unless tables[parent]
+        raw_types = {}
+        unresolved = []
+        entry[:parents]&.each do |parent|
+          unless all[parent]
+            unresolved << parent.delete_prefix("public.")
+            next
+          end
 
-          resolve_columns(parent, tables, parents, alters, resolved).each { |column| merge_column(columns, column.dup) }
+          resolved_parent = resolve_columns(parent, all, alters, resolved)
+          resolved_parent[:table][:columns].each { |column| merge_column(columns, column.dup) }
+          raw_types = resolved_parent[:raw_types].merge(raw_types)
+          unresolved.concat(Array(resolved_parent[:table][:inherits_unresolved]))
         end
-        tables[name][:columns].each { |column| merge_column(columns, column) }
+        entry[:table][:columns].each { |column| merge_column(columns, column) }
+        entry[:raw_types] = raw_types.merge(entry[:raw_types])
 
         alters[name].each do |column_name, change|
           column = columns.find { |c| c[:name] == column_name } or next
           if change == "NOT NULL"
             column[:null] = false
           else
-            raw_type = column[:array] ? "#{column[:type]}[]" : column[:type]
-            default = sql_default(change, column[:type], raw_type)
+            default = sql_default(change, column[:type], entry[:raw_types].fetch(column_name))
             default.nil? ? column.delete(:default) : column[:default] = default
           end
         end
-        tables[name][:columns] = columns
+        entry[:table][:columns] = columns
+        entry[:table][:inherits_unresolved] = unresolved.uniq if unresolved.any?
+        entry
       end
 
       def merge_column(columns, column)
@@ -131,13 +153,13 @@ module RailsAiContext
       # MySQL keeps indexes and foreign keys inside the CREATE TABLE body as
       # KEY / UNIQUE KEY / CONSTRAINT lines; the other dialects emit separate
       # statements, so those lines simply never match here.
-      def parse_sql_table_body(body, table_name)
+      def parse_sql_table_body(body, table_name, raw_types = {})
         # sqlite's .schema emits whole CREATE TABLE statements on one line;
         # the per-line parsers below would then see a single "line" and keep
         # only its first column. Split such bodies on top-level commas first.
         body = split_single_line_sql_body(body) unless body.include?("\n")
 
-        table = { columns: parse_sql_columns(body), indexes: [], foreign_keys: [] }
+        table = { columns: parse_sql_columns(body, raw_types), indexes: [], foreign_keys: [] }
         if (key = body[/^\s*PRIMARY KEY\s*\(([^)]*)\)/i, 1])
           table[:primary_key] = SchemaConventions.primary_key_value(key.scan(/\w+/))
         end
@@ -225,7 +247,7 @@ module RailsAiContext
       end
 
       # Parse column definitions from a CREATE TABLE body
-      def parse_sql_columns(body)
+      def parse_sql_columns(body, raw_types = {})
         columns = []
         body.each_line do |line|
           line = line.strip.chomp(",").strip
@@ -252,6 +274,7 @@ module RailsAiContext
             nullable = !rest.match?(/\bNOT\s+NULL\b|\bPRIMARY\s+KEY\b/i)
             # An array is its element type with the flag, as schema.rb dumps it.
             type = normalize_sql_type(col_type.delete_suffix("[]"))
+            raw_types[col_name] = col_type
             column = { name: col_name, type: type, null: nullable }
             default = sql_default(rest, type, col_type)
             column[:default] = default unless default.nil?

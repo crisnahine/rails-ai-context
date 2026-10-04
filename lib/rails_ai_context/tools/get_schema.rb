@@ -475,6 +475,10 @@ module RailsAiContext
           lines << "#{line} |"
           lines << "  _#{col[:comment]}_" if has_comments && col[:comment] && !col[:comment].to_s.empty?
         end
+        if data[:inherits_unresolved]&.any?
+          parents = data[:inherits_unresolved].map { |parent| "`#{parent}`" }.join(", ")
+          lines << "" << "Inherits from #{parents}, which the structure.sql dump does not define: its columns are not shown."
+        end
 
         if data[:indexes]&.any?
           lines << "" << "### Indexes"

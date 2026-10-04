@@ -920,4 +920,18 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(reads_for(40)).to eq(reads_for(3))
     end
   end
+
+  it "says when a table's inherited columns come from a parent the dump does not hold" do
+    allow(described_class).to receive(:cached_context).and_return({
+      schema: { adapter: "static_parse", total_tables: 1, tables: {
+        "orphan" => { columns: [ { name: "x", type: "integer", null: true } ], indexes: [], foreign_keys: [],
+                      inherits_unresolved: %w[elsewhere.gone] }
+      } },
+      models: {}
+    })
+
+    text = described_class.call(table: "orphan").content.first[:text]
+
+    expect(text).to include("Inherits from `elsewhere.gone`, which the structure.sql dump does not define: its columns are not shown.")
+  end
 end
