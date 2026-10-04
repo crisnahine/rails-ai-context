@@ -192,9 +192,13 @@ module RailsAiContext
     # along with fd 1 and STDOUT, so a tool or a logger built during a call
     # cannot reach the JSON-RPC stream.
     class StdioChannelTransport < MCP::Server::Transports::StdioTransport
+      # The SDK sets UTF-8 on $stdout, which is $stderr here; it goes on the channel instead.
       def initialize(server, channel)
+        stderr_encoding = [ $stdout.external_encoding, $stdout.internal_encoding ]
         super(server)
+        $stdout.set_encoding(*stderr_encoding)
         @channel = channel
+        @channel.set_encoding("UTF-8")
       end
 
       def send_response(message)

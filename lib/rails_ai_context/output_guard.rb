@@ -52,7 +52,7 @@ module RailsAiContext
         # cleared hands a copy of the MCP channel to every subprocess the app
         # spawns afterwards.
         saved_stdout.close unless saved_stdout.closed?
-        ENV.delete(STDOUT_FD_ENV) if across_exec
+        ENV.delete(STDOUT_FD_ENV)
       end
       $stdout = original
     end

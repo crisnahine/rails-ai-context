@@ -53,6 +53,26 @@ RSpec.describe RailsAiContext::OutputGuard do
     expect(err).to eq("noise\n")
   end
 
+  # The guard closes an adopted descriptor on the way out, so a pointer left
+  # behind would name a closed fd.
+  it "drops an inherited pointer it adopted when across_exec is off" do
+    require "open3"
+
+    script = <<~RUBY
+      require #{File.expand_path("lib/rails_ai_context/output_guard.rb").inspect}
+      inherited = STDOUT.dup
+      ENV["RAILS_AI_CONTEXT_STDOUT_FD"] = inherited.fileno.to_s
+      RailsAiContext::OutputGuard.quarantine_stdout(across_exec: false) do |channel|
+        channel.puts "adopted=\#{channel.fileno == inherited.fileno}"
+      end
+      puts "pointer=\#{ENV['RAILS_AI_CONTEXT_STDOUT_FD'].inspect}"
+    RUBY
+    out, _err, status = Open3.capture3(RbConfig.ruby, "-e", script)
+
+    expect(status).to be_success
+    expect(out).to eq("adopted=true\npointer=nil\n")
+  end
+
   # Bundler re-execs the process from inside this block when the lockfile
   # names a different Bundler than the one running. `exec` keeps file
   # descriptors, so the new image started with fd 1 already pointing at

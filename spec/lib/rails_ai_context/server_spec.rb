@@ -448,7 +448,7 @@ RSpec.describe RailsAiContext::Server do
   # Sidekiq builds Logger.new($stdout) on first use, which is during a tool
   # call, long after the boot quarantine has ended.
   describe "a real stdio session" do
-    it "carries nothing but JSON-RPC on stdout while a tool writes to stdout" do
+    it "carries nothing but JSON-RPC on stdout while a tool writes to stdout or the server notifies" do
       require "open3"
 
       Dir.mktmpdir do |dir|
@@ -470,12 +470,17 @@ RSpec.describe RailsAiContext::Server do
               $stdout.puts "global noise"
               Logger.new($stdout).info("logger noise")
               system("echo child noise")
+              $mcp.notify_resources_list_changed
+              $stderr.puts "channel=\#{$mcp.transport.instance_variable_get(:@channel).external_encoding}"
               MCP::Tool::Response.new([ { type: "text", text: "done" } ])
             end
           end
 
+          RailsAiContext::Server.prepend(Module.new { def build = ($mcp = super) })
           RailsAiContext.configuration.custom_tools = [ NoisyTool ]
+          stderr_encoding = $stderr.external_encoding.inspect
           RailsAiContext::Server.new(RailsAiContext::StaticApp.new(#{dir.inspect}), transport: :stdio).start
+          $stderr.puts "stderr before=\#{stderr_encoding} after=\#{$stderr.external_encoding.inspect}"
         RUBY
 
         requests = [
@@ -489,9 +494,12 @@ RSpec.describe RailsAiContext::Server do
 
         expect(status).to be_success, err
         lines = out.lines
-        expect(lines.map { |l| JSON.parse(l)["id"] }).to eq([ 1, 2 ]), out
+        messages = lines.map { |l| JSON.parse(l) }
+        expect(messages.map { |m| m["id"] || m["method"] }).to eq([ 1, "notifications/resources/list_changed", 2 ]), out
         expect(lines.last).to include("done")
-        expect(err).to include("constant noise", "global noise", "logger noise", "child noise")
+        expect(err).to include("constant noise", "global noise", "logger noise", "child noise", "channel=UTF-8")
+        before, after = err.match(/stderr before=(\S+) after=(\S+)/).captures
+        expect(after).to eq(before)
       end
     end
   end

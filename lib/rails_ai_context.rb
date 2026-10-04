@@ -44,7 +44,7 @@ module RailsAiContext
     # Global configuration
     attr_writer :configuration
 
-    # True while the stdio transport owns $stdout for JSON-RPC.
+    # True while a stdio session is serving JSON-RPC.
     attr_accessor :stdio_open
 
     def configuration
