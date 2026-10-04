@@ -21,10 +21,8 @@ module RailsAiContext
 
       TEST_DIRS = %w[test/ spec/ features/].freeze
       MATCH_FIELD_SEPARATOR = "\x1f"
-      # A line that names a method without calling it, by the file's own
-      # syntax. `#{` opens a heredoc interpolation and ` * ` a Ruby splat, both
-      # code; ERB carries inline script; `#id` is a stylesheet selector, and a
-      # haml or slim element, never a comment there.
+      # A comment line by the file's own syntax. `#{` and ` * ` are Ruby code;
+      # `#id` is a selector in a stylesheet and an element in Haml or Slim.
       HASH_COMMENT = /\A\s*(?:#(?!\{)|<%#)/
       JS_COMMENT = %r{\A\s*(?://|/\*|\*\s)}
       NOT_A_CALL_LINE = {

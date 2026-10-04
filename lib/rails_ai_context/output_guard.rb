@@ -25,9 +25,8 @@ module RailsAiContext
     # re-execs itself while the quarantine is up.
     STDOUT_FD_ENV = "RAILS_AI_CONTEXT_STDOUT_FD"
 
-    # Yields the IO the real stdout now lives on. A long-lived caller that
-    # spawns subprocesses passes across_exec: false, so its children inherit
-    # neither the descriptor nor the pointer to it.
+    # Yields the real stdout. across_exec: false keeps it from the children of
+    # a long-lived caller.
     def self.quarantine_stdout(across_exec: true)
       original = $stdout
       saved_stdout = reopenable_target? ? saved_stdout_io : nil

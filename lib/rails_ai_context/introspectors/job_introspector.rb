@@ -77,10 +77,8 @@ module RailsAiContext
           end
 
           queue = job.queue_name
-          # ActiveJob defaults queue_name to a lambda; any other Proc is a
-          # queue_as block, and a Proc argument is stored as its inspect
-          # string. Either one names the line that set it, which may be a
-          # concern's and not the nearest class's.
+          # The default is a lambda; another Proc is a queue_as block, and a
+          # Proc argument is stored as its inspect string, with the line that set it.
           if queue.equal?(ActiveJob::Base.queue_name)
             queue = job.queue_name_from_part(nil)
           elsif queue.is_a?(Proc)

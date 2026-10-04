@@ -94,9 +94,8 @@ module RailsAiContext
         parts.join(".")
       end
 
-      # A child table's columns: each parent's in order, then its own, a
-      # redeclared column merged into the inherited slot. pg_dump writes only
-      # the local columns and sets inherited ones' NOT NULL and defaults by ALTER.
+      # Each parent's columns, then the child's own. pg_dump writes only local
+      # columns and sets an inherited one's NOT NULL and default by ALTER.
       def resolve_columns(name, all, alters, resolved)
         entry = all[name]
         return entry if resolved[name]

@@ -1,9 +1,8 @@
 # frozen_string_literal: true
 
 module RailsAiContext
-  # Where a Ruby method name ends in source read as text: `ping` is not
-  # `ping?`, `ping!` or `ping=`. No lookahead, so each fragment works as a
-  # ripgrep pattern too.
+  # Where a method name ends in source text, `ping` not `ping?`; no lookahead,
+  # so each fragment is a ripgrep pattern too.
   module MethodName
     module_function
 

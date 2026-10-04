@@ -739,10 +739,8 @@ module RailsAiContext
         setting.nil? ? version.to_f >= 5.0 : setting
       end
 
-      # Each `setter` call Rails would run, from config/application.rb then
-      # each initializer in load order, on any receiver (`config.active_record`,
-      # `ActiveRecord::Base`), as true, false or nil for a non-literal; the
-      # `config.load_defaults` version; and whether application.rb was read.
+      # Each `setter` value in application.rb then the initializers, nil where not
+      # a literal; the `load_defaults` version; whether application.rb was read.
       def framework_setting(setter)
         @framework_settings ||= {}
         @framework_settings[setter] ||= begin
@@ -1455,9 +1453,8 @@ module RailsAiContext
         [ merge_inherited(own, collected), unread, hidden, skipped ]
       end
 
-      # A concern's callbacks join the chain where its include line runs, as
-      # ControllerFilters places a concern's filters, and a called class
-      # method's where the call is.
+      # A concern's callbacks join the chain where its include line runs, and a
+      # called class method's where the call is.
       def placed_callbacks(own, collected, placement)
         line_of = Array(own[:mixins]).reverse.to_h { |mixin| [ mixin[:name], mixin[:location].to_i ] }
         Array(own[:callbacks]) + Array(collected).map do |cb|
@@ -1523,9 +1520,8 @@ module RailsAiContext
 
       TRANSACTION_TYPE = /\Aafter_(\w+_)?(commit|rollback)/
 
-      # ActiveSupport puts a prepended callback at the front of its chain and
-      # runs after callbacks from the back. ActiveModel prepends every after_*,
-      # and Active Record prepends after_commit only when the app asks for it.
+      # A prepended callback goes to the front and after callbacks run from the
+      # back; ActiveModel prepends every after_*, after_commit only on request.
       def run_order(callbacks, commits_in_order)
         ordered = callbacks.dup
         callbacks.each_index.group_by { |i| Listeners::CallbacksListener.chain_key(callbacks[i][:type]) }.each_value do |slots|
@@ -1675,11 +1671,8 @@ module RailsAiContext
 
       SYMBOL_TARGET = /\A[a-z_]\w*[?!]?\z/
 
-      # The base's chain comes first. Rails keeps one entry for a symbol
-      # declared again, the later one at its own place, and two validators for
-      # a validation declared twice, so the two are not deduped alike. Two
-      # blocks or objects are two callbacks unless they are one concern line
-      # reached twice for one include or one call.
+      # Rails keeps the later of a symbol declared twice; two blocks stay two
+      # unless they are one concern line reached twice for one include or call.
       def callback_chain(callbacks)
         keys = callbacks.each_with_index.map do |c, i|
           if c[:method].to_s.match?(SYMBOL_TARGET)

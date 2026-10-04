@@ -188,9 +188,8 @@ module RailsAiContext
       "[rails-ai-context] Tools (#{names.size}): #{names.join(', ')}"
     end
 
-    # The SDK transport writes to $stdout, which the session points at stderr
-    # along with fd 1 and STDOUT, so a tool or a logger built during a call
-    # cannot reach the JSON-RPC stream.
+    # Writes to the saved channel, since the session points $stdout and fd 1
+    # at stderr so nothing a tool prints reaches the JSON-RPC stream.
     class StdioChannelTransport < MCP::Server::Transports::StdioTransport
       # The SDK sets UTF-8 on $stdout, which is $stderr here; it goes on the channel instead.
       def initialize(server, channel)

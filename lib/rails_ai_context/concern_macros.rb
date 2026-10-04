@@ -347,10 +347,8 @@ module RailsAiContext
         into
       end
 
-      # A callback from a mixin hook, or from a class method the class file or a
-      # mixin hook calls, runs again for a subclass that includes or calls it
-      # again; ActiveSupport::Concern's `included` block does not, so a method
-      # it calls does not either.
+      # A mixin hook or a called class method runs again for a subclass that
+      # includes or calls it again; a Concern's `included` block does not.
       def tagged(entry, concern_name, rerun: false)
         return entry unless entry.is_a?(Hash)
 
