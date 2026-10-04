@@ -826,7 +826,7 @@ rails_get_callbacks(model: "Order", detail: "full")
   → Order's callbacks with the actual method source code for each callback
 ```
 
-**Returns:** Callbacks grouped by type, in Rails event order. Includes concern-provided callbacks, with their bodies read from the concern file. Within one type the order is declaration order, not the order Rails registered them in.
+**Returns:** Callbacks grouped by type, in Rails event order. Includes concern-provided callbacks, with their bodies read from the concern file. Within one type the order is the order Rails runs them, base classes first, and a method declared again shows once with the later declaration's conditions.
 
 ### rails_get_helper_methods
 

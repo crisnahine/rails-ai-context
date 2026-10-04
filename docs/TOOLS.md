@@ -179,8 +179,10 @@ Concerns as `[UNAVAILABLE]` rather than dropped.
 Callbacks grouped by type, in Rails event order, with source code. The list
 covers concern-declared callbacks too, with the body read from the concern
 file, and the "From Concerns" section says which concern declared each one.
-Within one type the order is declaration order (the model file first, then
-its concerns), not the order Rails registered them in.
+Within one type the order is the order Rails runs them: base classes first, a
+concern's callbacks where its `include` line stands, then the model's own. A
+method declared again for one type shows once, with the later declaration's
+conditions, as Rails keeps it.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|

@@ -23,6 +23,29 @@ module RailsAiContext
         INLINE_BLOCK = "[inline_block]"
         NAME_SHAPED = /\A[A-Za-z_]\w*(::[A-Za-z_]\w*)*[?!]?\z/
 
+        def initialize
+          super
+          @owner_stack = []
+        end
+
+        # The class or module the callback is written in, the way
+        # MixinsListener records an include: a nested class's is its own.
+        def on_class_node_enter(node)
+          @owner_stack.push(constant_path_string(node.constant_path))
+        end
+
+        def on_class_node_leave(_node)
+          @owner_stack.pop
+        end
+
+        def on_module_node_enter(node)
+          @owner_stack.push(constant_path_string(node.constant_path))
+        end
+
+        def on_module_node_leave(_node)
+          @owner_stack.pop
+        end
+
         def on_call_node_enter(node)
           return unless CALLBACK_METHODS.include?(node.name) && in_scope?(node)
 
@@ -51,7 +74,9 @@ module RailsAiContext
         # removes the earlier one and takes its own place in the chain.
         def drop_redeclared(callback_types, methods)
           keys = callback_types.map { |type| self.class.chain_key(type) }
-          @results.reject! { |r| methods.include?(r[:method]) && keys.include?(self.class.chain_key(r[:type])) }
+          @results.reject! do |r|
+            r[:owner] == @owner_stack && methods.include?(r[:method]) && keys.include?(self.class.chain_key(r[:type]))
+          end
         end
 
         # `around_create Snowflake::Callbacks` names a real target;
@@ -79,6 +104,7 @@ module RailsAiContext
                 type:       callback_type,
                 method:     method_name,
                 options:    options,
+                owner:      @owner_stack.dup,
                 location:   node.location.start_line,
                 confidence: confidence
               }

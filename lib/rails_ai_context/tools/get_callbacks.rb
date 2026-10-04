@@ -7,7 +7,7 @@ module RailsAiContext
       description "Get ActiveRecord model callbacks grouped by type, in Rails event order: before/after/around for validation, save, create, update, destroy. " \
         "Use when: understanding side effects, debugging callback chains, or checking what happens on save/create/destroy. " \
         "Specify model:\"User\" for one model's callbacks. detail:\"full\" includes callback method source code. " \
-        "The list is what the model file and its concerns declare, and within one type the order is declaration order."
+        "The list is what the model, its base classes and its concerns declare, and within one type the order is the order Rails runs them."
 
       # `after_create_commit :x` and `after_commit :y, on: :create` run at the
       # same point and keep their own declared spellings, so the two sit
@@ -256,8 +256,7 @@ module RailsAiContext
         "#{prefix}lines #{source[:start_line]}-#{source[:end_line]}"
       end
 
-      # The conditions arrive in step with the names, one entry per
-      # occurrence, so the same method declared twice keeps its own condition.
+      # The conditions arrive in step with the names, one entry per callback.
       private_class_method def self.format_targets(methods, data = nil, type = nil)
         per_type = Array(((data && data[:callback_conditions]) || {})[type.to_s])
         methods.each_with_index.map do |m, i|

@@ -2673,6 +2673,73 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # Rails builds the chain base first, a concern where its include runs,
+    # then the class body; a later declaration replaces an earlier one.
+    it "lists callbacks across a base, a concern and the class in chain order" do
+      Dir.mktmpdir do |dir|
+        write_model(dir, "BaseThing", <<~RUBY)
+          class BaseThing < ApplicationRecord
+            before_save :b_only
+            before_save :basex, if: :from_base?
+          end
+        RUBY
+        write_model(dir, "Thing", <<~RUBY)
+          class Thing < BaseThing
+            include Stampable
+            before_save :m_only
+            before_save :basex, if: :from_model?
+          end
+        RUBY
+        write_model(dir, "Early", <<~RUBY)
+          class Early < ApplicationRecord
+            before_save :shared, if: :from_model?
+            include Stampable
+          end
+        RUBY
+        write_model(dir, "Concerns::Stampable", <<~RUBY)
+          module Stampable
+            extend ActiveSupport::Concern
+            included do
+              before_save :c_only
+              before_save :shared, if: :from_concern?
+            end
+          end
+        RUBY
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["Thing"][:callbacks]["before_save"]).to eq(%w[b_only c_only shared m_only basex])
+        expect(models["Thing"][:callback_conditions]["before_save"]).to eq(
+          [ nil, nil, { if: :from_concern? }, nil, { if: :from_model? } ]
+        )
+        expect(models["Early"][:callbacks]["before_save"]).to eq(%w[c_only shared])
+        expect(models["Early"][:callback_conditions]["before_save"]).to eq([ nil, { if: :from_concern? } ])
+        expect(booted_callbacks(dir, "Early")).to eq(models["Early"][:callbacks])
+      end
+    end
+
+    it "reads no callback a class nested in the model's body declares" do
+      Dir.mktmpdir do |dir|
+        write_model(dir, "Outer", <<~RUBY)
+          class Outer < ApplicationRecord
+            before_save :x, if: :outer?
+            class Inner < ApplicationRecord
+              before_save :x, if: :inner?
+              before_save :only_inner
+            end
+            before_save :y
+            before_save :y, if: :later?
+          end
+        RUBY
+
+        outer = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Outer"]
+
+        expect(outer[:callbacks]).to eq("before_save" => %w[x y])
+        expect(outer[:callback_conditions]).to eq("before_save" => [ { if: :outer? }, { if: :later? } ])
+        expect(booted_callbacks(dir, "Outer")).to eq(outer[:callbacks])
+      end
+    end
+
     it "keeps on: as a condition wherever the type does not already say it" do
       Dir.mktmpdir do |dir|
         write_model(dir, "Order", <<~RUBY)

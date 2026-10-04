@@ -979,8 +979,8 @@ module RailsAiContext
 
       CONDITION_KEYS = %i[if unless].freeze
 
-      # One conditions entry per callback occurrence, in step with the name list: a model can
-      # declare one method twice under different conditions.
+      # One conditions entry per callback, in step with the name list: one method can sit under
+      # two types with different conditions.
       def callback_conditions(callbacks)
         Array(callbacks).each_with_object({}) do |cb, hash|
           next unless cb.is_a?(Hash) && cb[:type]
@@ -1429,16 +1429,29 @@ module RailsAiContext
       end
 
       def merge_concern_macros(own, class_name, calls = nil, extra: [], file: nil)
-        collected, unread, hidden, included, _placement, skipped = ConcernMacros.collect(
+        collected, unread, hidden, included, placement, skipped = ConcernMacros.collect(
           app.root.to_s, own[:mixins] || [],
           keys: [ *WALKED_KEYS, :expanded ], prefer: "model", within: class_name,
           cache: @source_cache, calls: calls, extra: extra, file: file
         )
         ConcernMacros::Run.merge_calls(calls.included, included) if calls.respond_to?(:included)
         own = without_expanded_calls(own, collected.delete(:expanded))
+        own = own.merge(callbacks: placed_callbacks(own, collected.delete(:callbacks), placement)) if collected.key?(:callbacks)
         return [ own, unread, hidden, skipped ] if collected.empty?
 
         [ merge_inherited(own, collected), unread, hidden, skipped ]
+      end
+
+      # A concern's callbacks join the chain where its include line runs, as
+      # ControllerFilters places a concern's filters.
+      def placed_callbacks(own, collected, placement)
+        line_of = Array(own[:mixins]).reverse.to_h { |mixin| [ mixin[:name], mixin[:location].to_i ] }
+        placed = Array(own[:callbacks]).map { |cb| [ cb[:location].to_i, -1, cb ] } +
+                 Array(collected).map do |cb|
+                   top, order = placement[cb[:from_concern]]
+                   [ line_of[top].to_i, order.to_i, cb ]
+                 end
+        callback_chain(placed.each_with_index.sort_by { |(line, order, _), index| [ line, order, index ] }.map { |(_, _, cb), _| cb })
       end
 
       # A `validates_translation :title` call the listener read as a validation
@@ -1561,20 +1574,33 @@ module RailsAiContext
         # declaration: the line it was read at differs between two files, and
         # the concern tag differs between two ways of reaching one file.
         merged[:macros] = dedup(merged[:macros]) { |m| m.except(:from_concern, :location) }
-        # Rails keeps one entry for a symbol callback declared on a base and
-        # again on the child, and two validators for a validation declared
-        # twice, so these two are not deduped alike. Two blocks are two
-        # callbacks unless they are one line of one file read twice.
-        merged[:callbacks] = dedup(merged[:callbacks]) do |c|
-          block = c[:method].to_s == Listeners::CallbacksListener::INLINE_BLOCK
-          [ Listeners::CallbacksListener.chain_key(c[:type]), c[:method].to_s, (block ? [ c[:from_concern], c[:location] ] : nil) ]
-        end
+        merged[:callbacks] = callback_chain(Array(inherited[:callbacks]) + Array(mine[:callbacks]))
         # One source line read twice is still one declaration: a concern the
         # model and one of its bases both include is walked once per class, and
         # `included do` runs once. Two validations really written twice differ
         # by the line they are on and both stay.
         merged[:validations] = dedup(merged[:validations]) { |v| v }
         merged
+      end
+
+      SYMBOL_TARGET = /\A[a-z_]\w*[?!]?\z/
+
+      # The base's chain comes first. Rails keeps one entry for a symbol
+      # declared again, the later one at its own place, and two validators for
+      # a validation declared twice, so the two are not deduped alike. Two
+      # blocks or objects are two callbacks unless they are one concern line
+      # reached twice.
+      def callback_chain(callbacks)
+        keys = callbacks.each_with_index.map do |c, i|
+          if c[:method].to_s.match?(SYMBOL_TARGET)
+            [ Listeners::CallbacksListener.chain_key(c[:type]), c[:method].to_s ]
+          elsif c[:from_concern]
+            [ c[:from_concern], c[:location] ]
+          else
+            i
+          end
+        end
+        keys.zip(callbacks).reverse.uniq(&:first).reverse.map(&:last)
       end
 
       # The model's own declaration wins: it is the one whose options the
@@ -1705,7 +1731,8 @@ module RailsAiContext
       # A path the read could not answer falls through to the path walk, which raises. A class
       # nested in the model's file includes for itself, not for the model.
       def own_body(data, class_name)
-        data.merge(mixins: ConcernMembership.own_mixins(data[:mixins], class_name))
+        data.merge(mixins: ConcernMembership.own_mixins(data[:mixins], class_name),
+                   callbacks: ConcernMembership.own_mixins(data[:callbacks], class_name))
       end
 
       def source_walk(path)
