@@ -1590,6 +1590,36 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # ActiveModel runs before_save :first, :track, :last: a callback in a class method counts
+    # where the method is called, one in an instance method or a nested class nowhere.
+    it "places a document's callback in a class method at its call" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "customer.rb"), <<~RUBY)
+          class Customer
+            include Mongoid::Document
+            class Inner
+              before_save :inner
+            end
+            def self.loud!
+              before_save :track
+            end
+            def setup
+              before_save :inst
+            end
+            before_save :first
+            loud!
+            before_save :last
+          end
+        RUBY
+
+        customer = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Customer"]
+        expect(customer[:callbacks]).to eq("before_save" => %w[first track last])
+      end
+    end
+
     it "reads every embed kind and the store_in collection" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))

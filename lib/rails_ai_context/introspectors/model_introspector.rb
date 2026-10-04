@@ -1777,7 +1777,7 @@ module RailsAiContext
           next unless models.include?(class_name)
 
           result[class_name] = if entry[:source].include?("Mongoid::Document")
-            mongoid_model_details(entry[:source]).merge(file: relative_to_root(entry[:path]))
+            mongoid_model_details(entry[:source], class_name, entry[:path]).merge(file: relative_to_root(entry[:path]))
           else
             # This walk keeps no candidate hash, so an AR model in a
             # hybrid app gets the table it assigns itself and the derived
@@ -1930,7 +1930,7 @@ module RailsAiContext
         end
       end
 
-      def mongoid_model_details(source)
+      def mongoid_model_details(source, class_name, path)
         data = SourceIntrospector.walk_source(source, {
           mongoid: -> { Listeners::GenericMacroListener.new(%i[field embeds_many embeds_one embedded_in store_in]) },
           associations: Listeners::AssociationsListener,
@@ -1940,8 +1940,11 @@ module RailsAiContext
           methods: Listeners::MethodsListener
         })
         macros = data[:mongoid] || []
+        calls = class_calls([ [ class_name, path ] ])
+        calls.add(0, {}, {}, [])
+        own = own_body(data.merge(mixins: []), class_name)
         # Mongoid sets after_commit without prepend, as Rails 7.0 does, so it runs last declared first.
-        callbacks = run_order(callback_chain(Array(data[:callbacks])), false)
+        callbacks = chain_order(settle(Walk.new(own, {}, [], [], Set.new, ->(_) { [ 0, 0 ] }, {}, 0), calls).first[:callbacks], false)
         details = {
           confidence: Confidence::STATIC,
           mongoid: true,
