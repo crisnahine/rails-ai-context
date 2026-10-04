@@ -32,6 +32,27 @@ RSpec.describe RailsAiContext::OutputGuard do
     expect(described_class.quarantine_stdout { :value }).to eq(:value)
   end
 
+  # A stdio session spawns subprocesses for its whole life; none of them may
+  # inherit the JSON-RPC channel.
+  it "yields the real stdout without exporting it when across_exec is off" do
+    require "open3"
+
+    script = <<~RUBY
+      require #{File.expand_path("lib/rails_ai_context/output_guard.rb").inspect}
+      RailsAiContext::OutputGuard.quarantine_stdout(across_exec: false) do |channel|
+        STDOUT.puts "noise"
+        STDOUT.flush
+        channel.puts "pointer=\#{ENV['RAILS_AI_CONTEXT_STDOUT_FD'].inspect} cloexec=\#{channel.close_on_exec?}"
+      end
+      puts "after"
+    RUBY
+    out, err, status = Open3.capture3(RbConfig.ruby, "-e", script)
+
+    expect(status).to be_success
+    expect(out).to eq("pointer=nil cloexec=true\nafter\n")
+    expect(err).to eq("noise\n")
+  end
+
   # Bundler re-execs the process from inside this block when the lockfile
   # names a different Bundler than the one running. `exec` keeps file
   # descriptors, so the new image started with fd 1 already pointing at

@@ -188,14 +188,30 @@ module RailsAiContext
       "[rails-ai-context] Tools (#{names.size}): #{names.join(', ')}"
     end
 
+    # The SDK transport writes to $stdout, which the session points at stderr
+    # along with fd 1 and STDOUT, so a tool or a logger built during a call
+    # cannot reach the JSON-RPC stream.
+    class StdioChannelTransport < MCP::Server::Transports::StdioTransport
+      def initialize(server, channel)
+        super(server)
+        @channel = channel
+      end
+
+      def send_response(message)
+        @channel.puts(message.is_a?(String) ? message : JSON.generate(message))
+        @channel.flush
+      end
+    end
+
     def start_stdio(server)
-      transport = MCP::Server::Transports::StdioTransport.new(server)
-      # Log to stderr so we don't pollute the JSON-RPC channel on stdout
-      $stderr.puts "[rails-ai-context] MCP server started (stdio transport)"
-      $stderr.puts tool_banner(server)
-      RailsAiContext.stdio_open = true
-      maybe_start_live_reload(server)
-      transport.open
+      OutputGuard.quarantine_stdout(across_exec: false) do |channel|
+        transport = StdioChannelTransport.new(server, channel)
+        $stderr.puts "[rails-ai-context] MCP server started (stdio transport)"
+        $stderr.puts tool_banner(server)
+        RailsAiContext.stdio_open = true
+        maybe_start_live_reload(server)
+        transport.open
+      end
     ensure
       RailsAiContext.stdio_open = false
     end

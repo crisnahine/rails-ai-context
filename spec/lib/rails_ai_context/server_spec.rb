@@ -394,13 +394,13 @@ RSpec.describe RailsAiContext::Server do
     end
   end
 
-  # The stdio transport writes JSON-RPC to $stdout, and an app logger pointed
+  # The stdio transport writes JSON-RPC to the real stdout, and an app logger pointed
   # at STDOUT would put the gem's own warnings in that stream.
   describe "warnings while the stdio transport is open" do
     it "go to stderr, not the app logger" do
       logger = instance_double(Logger, warn: nil)
       allow(Rails).to receive(:logger).and_return(logger)
-      allow(MCP::Server::Transports::StdioTransport).to receive(:new).and_wrap_original do |original, *args|
+      allow(described_class::StdioChannelTransport).to receive(:new).and_wrap_original do |original, *args|
         original.call(*args).tap do |transport|
           allow(transport).to receive(:open) { RailsAiContext.log_warn("[rails-ai-context] section failed") }
         end
@@ -417,7 +417,7 @@ RSpec.describe RailsAiContext::Server do
     it "go to stderr from the live-reload start too" do
       logger = instance_double(Logger, warn: nil)
       allow(Rails).to receive(:logger).and_return(logger)
-      allow(MCP::Server::Transports::StdioTransport).to receive(:new).and_wrap_original do |original, *args|
+      allow(described_class::StdioChannelTransport).to receive(:new).and_wrap_original do |original, *args|
         original.call(*args).tap { |transport| allow(transport).to receive(:open) }
       end
       allow(server).to receive(:maybe_start_live_reload) do
@@ -432,7 +432,7 @@ RSpec.describe RailsAiContext::Server do
     it "go back to the app logger once the transport has closed" do
       logger = instance_double(Logger, warn: nil)
       allow(Rails).to receive(:logger).and_return(logger)
-      allow(MCP::Server::Transports::StdioTransport).to receive(:new).and_wrap_original do |original, *args|
+      allow(described_class::StdioChannelTransport).to receive(:new).and_wrap_original do |original, *args|
         original.call(*args).tap { |transport| allow(transport).to receive(:open) }
       end
       allow(server).to receive(:maybe_start_live_reload)
@@ -442,6 +442,57 @@ RSpec.describe RailsAiContext::Server do
       RailsAiContext.log_warn("after")
 
       expect(logger).to have_received(:warn).with("after")
+    end
+  end
+
+  # Sidekiq builds Logger.new($stdout) on first use, which is during a tool
+  # call, long after the boot quarantine has ended.
+  describe "a real stdio session" do
+    it "carries nothing but JSON-RPC on stdout while a tool writes to stdout" do
+      require "open3"
+
+      Dir.mktmpdir do |dir|
+        script = File.join(dir, "serve.rb")
+        File.write(script, <<~RUBY)
+          $LOAD_PATH.unshift(#{File.expand_path("../../../lib", __dir__).inspect})
+          require "rails_ai_context"
+          require "logger"
+          require "mcp"
+
+          class NoisyTool < MCP::Tool
+            tool_name "noisy"
+            description "writes to stdout"
+            input_schema(properties: {})
+
+            def self.call(server_context: nil, **)
+              STDOUT.puts "constant noise"
+              STDOUT.flush
+              $stdout.puts "global noise"
+              Logger.new($stdout).info("logger noise")
+              system("echo child noise")
+              MCP::Tool::Response.new([ { type: "text", text: "done" } ])
+            end
+          end
+
+          RailsAiContext.configuration.custom_tools = [ NoisyTool ]
+          RailsAiContext::Server.new(RailsAiContext::StaticApp.new(#{dir.inspect}), transport: :stdio).start
+        RUBY
+
+        requests = [
+          { jsonrpc: "2.0", id: 1, method: "initialize",
+            params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "spec", version: "1" } } },
+          { jsonrpc: "2.0", method: "notifications/initialized" },
+          { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "noisy", arguments: {} } }
+        ].map { |r| "#{JSON.generate(r)}\n" }.join
+
+        out, err, status = Open3.capture3(RbConfig.ruby, script, stdin_data: requests, chdir: dir)
+
+        expect(status).to be_success, err
+        lines = out.lines
+        expect(lines.map { |l| JSON.parse(l)["id"] }).to eq([ 1, 2 ]), out
+        expect(lines.last).to include("done")
+        expect(err).to include("constant noise", "global noise", "logger noise", "child noise")
+      end
     end
   end
 end

@@ -25,10 +25,13 @@ module RailsAiContext
     # re-execs itself while the quarantine is up.
     STDOUT_FD_ENV = "RAILS_AI_CONTEXT_STDOUT_FD"
 
-    def self.quarantine_stdout
+    # Yields the IO the real stdout now lives on. A long-lived caller that
+    # spawns subprocesses passes across_exec: false, so its children inherit
+    # neither the descriptor nor the pointer to it.
+    def self.quarantine_stdout(across_exec: true)
       original = $stdout
       saved_stdout = reopenable_target? ? saved_stdout_io : nil
-      if saved_stdout
+      if saved_stdout && across_exec
         # `exec` closes a dup'd descriptor unless close-on-exec is cleared,
         # and the new image would then save fd 1 - by then pointing at
         # stderr - as its "stdout" and write every MCP response there.
@@ -37,10 +40,10 @@ module RailsAiContext
         # names a different Bundler than the one running.
         saved_stdout.close_on_exec = false
         ENV[STDOUT_FD_ENV] = saved_stdout.fileno.to_s
-        STDOUT.reopen($stderr)
       end
+      STDOUT.reopen($stderr) if saved_stdout
       $stdout = $stderr
-      yield
+      yield(saved_stdout || original)
     ensure
       if saved_stdout
         STDOUT.reopen(saved_stdout)
@@ -49,7 +52,7 @@ module RailsAiContext
         # cleared hands a copy of the MCP channel to every subprocess the app
         # spawns afterwards.
         saved_stdout.close unless saved_stdout.closed?
-        ENV.delete(STDOUT_FD_ENV)
+        ENV.delete(STDOUT_FD_ENV) if across_exec
       end
       $stdout = original
     end
