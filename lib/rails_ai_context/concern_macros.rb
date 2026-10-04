@@ -51,14 +51,20 @@ module RailsAiContext
         Def.new(owner, node.name.to_s, node.location.start_line, super_node&.location&.start_line, calls)
       end
 
+      # Where a base body's def sits in the lookup: after every class file's, then by load order and line.
+      AFTER_CLASS_FILES = Float::INFINITY
+
       # The class methods a body run with the class as self defines: `def self.x`, and `def x` and aliases
       # inside `class << self`. `owner` is a class file's rank or a module's label; `order` a base body's load order.
-      def self.own_defs(scope, owner, order = nil)
+      def self.own_defs(scope, owner, order = nil) = member_defs(scope, owner, order).map(&:last)
+
+      # [node, Def] for each of `own_defs`.
+      def self.member_defs(scope, owner, order = nil)
         singleton_members(scope).map do |node|
           names = alias_names(node)
           found = names ? Def.new(owner, names.first, node.location.start_line, nil, {}, names.last) : definition(owner, node)
-          found.at = [ Float::INFINITY, order, found.line ] if order
-          found
+          found.at = [ AFTER_CLASS_FILES, order, found.line ] if order
+          [ node, found ]
         end
       end
 

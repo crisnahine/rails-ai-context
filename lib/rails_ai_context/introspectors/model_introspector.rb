@@ -1873,8 +1873,7 @@ module RailsAiContext
           rank = body.target == "ApplicationRecord" ? application : classes.size
           next [] unless rank
 
-          ConcernMacros::SingletonLookup.singleton_members(body.statements)
-                                        .zip(ConcernMacros::SingletonLookup.own_defs(body.statements, rank, body.order))
+          ConcernMacros::SingletonLookup.member_defs(body.statements, rank, body.order)
         end
       end
 

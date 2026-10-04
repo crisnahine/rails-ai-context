@@ -230,9 +230,8 @@ module RailsAiContext
         found
       end
 
-      # `*args` holds the call's positionals past the other parameters. `options = args.extract_options!`,
-      # or `args.last.is_a?(Hash) ? args.pop : {}`, takes the hash they end with, or an empty one, and
-      # literals the leading statements push join the list; a local changed anywhere else is unknown.
+      # `*args` holds the call's positionals past the other parameters, less a trailing hash the body takes
+      # (`extract_options!`), plus literals the leading statements push; a local changed elsewhere is unknown.
       def rest_bindings(bindings, definition, call)
         rest = definition.parameters&.rest
         return bindings unless call && rest.respond_to?(:name) && rest.name && definition.body.is_a?(Prism::StatementsNode)
