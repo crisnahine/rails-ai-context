@@ -703,8 +703,8 @@ RSpec.describe RailsAiContext::ConcernMacros do
 
     # A module reached at `at` (or inside the body `inside` names) giving the class methods `source` defines.
     def mixin(label, at, source = nil, inside: nil, hook_defs: nil)
-      defs = source ? [ definition(label, source) ] : []
-      klass::Mixin.new(label, :include, defs, hook_defs ? [ definition(label, hook_defs) ] : [], at, inside, false)
+      defs = { prepended: [], mixed: source ? [ definition(label, source) ] : [], block: [], hook: hook_defs ? [ definition(label, hook_defs) ] : [] }
+      klass::Mixin.new(label, :include, defs, inside && [ :body, inside ], at, false)
     end
 
     def lookup(sites, own, outer: 1)

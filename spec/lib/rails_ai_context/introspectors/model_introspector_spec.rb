@@ -3332,6 +3332,87 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         end
       end
 
+      # Runtime: IsdM :first, :isd; IsdChild :first, :isd; IcsM :first, :ics; CevM :first, :ce; IsdLateM :s, :first, :il.
+      it "reads the class methods an included block or a hook's class_eval defines, from their line in that run" do
+        Dir.mktmpdir do |dir|
+          stampy(dir)
+          write_model(dir, "Concerns::Isd", "module Isd\n  extend ActiveSupport::Concern\n  included do\n    def self.stamp\n      before_save :isd\n    end\n  end\nend\n")
+          write_model(dir, "Concerns::Ics", "module Ics\n  extend ActiveSupport::Concern\n  included do\n    class << self\n      def stamp\n        before_save :ics\n      end\n    end\n  end\nend\n")
+          write_model(dir, "Concerns::Cev", "module Cev\n  def self.included(base)\n    base.class_eval do\n      def self.stamp\n        before_save :ce\n      end\n    end\n  end\nend\n")
+          write_model(dir, "Concerns::IsdLate", "module IsdLate\n  extend ActiveSupport::Concern\n  included do\n    stamp\n    def self.stamp\n      before_save :il\n    end\n    stamp\n  end\nend\n")
+          write_model(dir, "IsdM", "class IsdM < ApplicationRecord\n  include Isd\n  before_save :first\n  stamp\nend\n")
+          write_model(dir, "IsdBase", "class IsdBase < ApplicationRecord\n  include Isd\nend\n")
+          write_model(dir, "IsdChild", "class IsdChild < IsdBase\n  before_save :first\n  stamp\nend\n")
+          write_model(dir, "IcsM", "class IcsM < ApplicationRecord\n  include Ics\n  before_save :first\n  stamp\nend\n")
+          write_model(dir, "CevM", "class CevM < ApplicationRecord\n  include Cev\n  before_save :first\n  stamp\nend\n")
+          write_model(dir, "IsdLateM", "class IsdLateM < ApplicationRecord\n  include Stampy\n  include IsdLate\n  before_save :first\n  stamp\nend\n")
+
+          static = static_save(dir)
+          expect(static.slice("IsdM", "IsdChild", "IcsM", "CevM", "IsdLateM")).to eq(
+            "IsdM" => %w[first isd], "IsdChild" => %w[first isd], "IcsM" => %w[first ics], "CevM" => %w[first ce], "IsdLateM" => %w[s first il]
+          )
+          %w[IsdM CevM].each { |name| expect(booted_callbacks(dir, name)).to eq("before_save" => static[name]) }
+        end
+      end
+
+      # Runtime: ActsM :first, :aa, :sm; ActsYM :first, :yh; ActsZM :first, :s, :x.
+      it "follows an extend in a module's class method from its call, and runs the extended module's hook there" do
+        Dir.mktmpdir do |dir|
+          stampy(dir)
+          write_model(dir, "Concerns::ActsX", "module ActsX\n  def self.included(base)\n    base.extend ClassMethods\n  end\n\n  module ClassMethods\n    def acts_as_x\n      before_save :aa\n      extend SingletonMethods\n    end\n  end\n\n  module SingletonMethods\n    def stamp\n      before_save :sm\n    end\n  end\nend\n")
+          write_model(dir, "Concerns::Yh", "module Yh\n  def self.extended(base)\n    base.before_save :yh\n  end\nend\n")
+          write_model(dir, "Concerns::ActsY", "module ActsY\n  def self.included(base)\n    base.extend ClassMethods\n  end\n\n  module ClassMethods\n    def acts_as_y\n      extend Yh\n    end\n  end\nend\n")
+          write_model(dir, "Concerns::X4", "module X4\n  def stamp\n    before_save :x\n  end\nend\n")
+          write_model(dir, "Concerns::ActsZ", "module ActsZ\n  extend ActiveSupport::Concern\n  class_methods do\n    def acts_as_z\n      extend X4\n    end\n  end\nend\n")
+          write_model(dir, "ActsM", "class ActsM < ApplicationRecord\n  include ActsX\n  before_save :first\n  acts_as_x\n  stamp\nend\n")
+          write_model(dir, "ActsYM", "class ActsYM < ApplicationRecord\n  include ActsY\n  before_save :first\n  acts_as_y\nend\n")
+          write_model(dir, "ActsZM", "class ActsZM < ApplicationRecord\n  include Stampy\n  include ActsZ\n  before_save :first\n  stamp\n  acts_as_z\n  stamp\nend\n")
+
+          static = static_save(dir)
+          expect(static.slice("ActsM", "ActsYM", "ActsZM")).to eq("ActsM" => %w[first aa sm], "ActsYM" => %w[first yh], "ActsZM" => %w[first s x])
+          %w[ActsM ActsYM].each { |name| expect(booted_callbacks(dir, name)).to eq("before_save" => static[name]) }
+        end
+      end
+
+      # Runtime: OrderM :s; Order2M :x.
+      it "adds a module a Concern's block extends from its line in the block" do
+        Dir.mktmpdir do |dir|
+          stampy(dir)
+          write_model(dir, "Concerns::X4", "module X4\n  def stamp\n    before_save :x\n  end\nend\n")
+          write_model(dir, "Concerns::BlkExt", "module BlkExt\n  extend ActiveSupport::Concern\n  included do\n    stamp\n    extend X4\n  end\nend\n")
+          write_model(dir, "Concerns::BlkExt2", "module BlkExt2\n  extend ActiveSupport::Concern\n  included do\n    extend X4\n    stamp\n  end\nend\n")
+          write_model(dir, "OrderM", "class OrderM < ApplicationRecord\n  include Stampy\n  include BlkExt\nend\n")
+          write_model(dir, "Order2M", "class Order2M < ApplicationRecord\n  include Stampy\n  include BlkExt2\nend\n")
+
+          static = static_save(dir)
+          expect(static.slice("OrderM", "Order2M")).to eq("OrderM" => %w[s], "Order2M" => %w[x])
+          expect(booted_callbacks(dir, "OrderM")).to eq("before_save" => static["OrderM"])
+        end
+      end
+
+      # Runtime: SciM :first, :sci; SpcM :first, :spc; PeM :first, :own; SciSendM :first, :ss; PreExtM :first, :ph.
+      it "reads a hook's singleton_class include and prepend, and ranks what a prepend hook extends behind the class's own" do
+        Dir.mktmpdir do |dir|
+          stampy(dir)
+          write_model(dir, "Concerns::Sci", "module Sci\n  module ClassMethods\n    def stamp\n      before_save :sci\n    end\n  end\n\n  def self.included(klass)\n    klass.singleton_class.include(ClassMethods)\n  end\nend\n")
+          write_model(dir, "Concerns::SciSend", "module SciSend\n  def self.included(klass)\n    klass.singleton_class.send(:include, Cm)\n  end\n\n  module Cm\n    def stamp\n      before_save :ss\n    end\n  end\nend\n")
+          write_model(dir, "Concerns::Spc", "module Spc\n  def self.prepended(base)\n    base.singleton_class.prepend ClassMethods\n  end\n\n  module ClassMethods\n    def stamp\n      before_save :spc\n    end\n  end\nend\n")
+          write_model(dir, "Concerns::Pe", "module Pe\n  def self.prepended(base)\n    base.extend ClassMethods\n  end\n\n  module ClassMethods\n    def stamp\n      before_save :pe\n    end\n  end\nend\n")
+          write_model(dir, "Concerns::HookExt", "module HookExt\n  def self.included(base)\n    base.extend Cm\n  end\n\n  module Cm\n    def stamp\n      before_save :he\n    end\n  end\nend\n")
+          write_model(dir, "Concerns::PreHook", "module PreHook\n  def self.prepended(base)\n    base.extend Cm\n  end\n\n  module Cm\n    def stamp\n      before_save :ph\n    end\n  end\nend\n")
+          write_model(dir, "SciM", "class SciM < ApplicationRecord\n  include Stampy\n  include Sci\n  before_save :first\n  stamp\nend\n")
+          write_model(dir, "SciSendM", "class SciSendM < ApplicationRecord\n  include Stampy\n  include SciSend\n  before_save :first\n  stamp\nend\n")
+          own = "  def self.stamp\n    before_save :own\n  end\n"
+          write_model(dir, "SpcM", "class SpcM < ApplicationRecord\n#{own}  prepend Spc\n  before_save :first\n  stamp\nend\n")
+          write_model(dir, "PeM", "class PeM < ApplicationRecord\n#{own}  prepend Pe\n  before_save :first\n  stamp\nend\n")
+          write_model(dir, "PreExtM", "class PreExtM < ApplicationRecord\n  include HookExt\n  prepend PreHook\n  before_save :first\n  stamp\nend\n")
+
+          expect(static_save(dir).slice("SciM", "SciSendM", "SpcM", "PeM", "PreExtM")).to eq(
+            "SciM" => %w[first sci], "SciSendM" => %w[first ss], "SpcM" => %w[first spc], "PeM" => %w[first own], "PreExtM" => %w[first ph]
+          )
+        end
+      end
+
       # Runtime: EvChild :own_t (the base's own method over the every-model one);
       # Guest2 runs after_save :persist, :own (InstM joins where Acc2's Avi block calls acts_as_inst).
       it "reads a module every model has as the outermost definition, and a mixin a called method includes at the call" do

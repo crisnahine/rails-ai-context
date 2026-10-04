@@ -1435,12 +1435,11 @@ module RailsAiContext
         )
         included_at = included_at(own, placement)
         every = extra.map(&:name).to_set
-        mixins = mixed.map do |label, macro, defs, hook_defs, in_module|
+        bodies = method_bodies(own)
+        mixins = mixed.map do |label, macro, defs, in_module|
           line, order = included_at.call(label)
-          # A mixin a method includes joins at that include, in each run of the method.
-          method = !in_module && own_method(own, line)
-          inside, at = in_module ? [ in_module.first, [ in_module.last, order ] ] : [ method && [ rank, method[:location] ], [ line, order ] ]
-          ConcernMacros::SingletonLookup::Mixin.new(label, macro, defs, hook_defs, at, inside, every.include?(placement.dig(label, 0)))
+          added, line = in_module || [ ConcernMacros::SingletonLookup.added_in(rank, line, bodies), line ]
+          ConcernMacros::SingletonLookup::Mixin.new(label, macro, defs, added, [ line, order ], every.include?(placement.dig(label, 0)))
         end
         calls.add(rank, included, blocks, mixins)
         Walk.new(own, collected, unread, hidden, skipped, rank)
@@ -1480,8 +1479,11 @@ module RailsAiContext
       end
 
       def own_method(own, line)
-        bodies = Array(own[:methods]).filter_map { |m| [ m[:location]..m[:end_location], m ] if m[:location] && m[:end_location] }
-        ConcernMacros.enclosing(bodies, line)&.last
+        ConcernMacros.enclosing(method_bodies(own), line)&.last
+      end
+
+      def method_bodies(own)
+        Array(own[:methods]).filter_map { |m| [ m[:location]..m[:end_location], m ] if m[:location] && m[:end_location] }
       end
 
       # A `validates_translation :title` call the listener read as a validation
