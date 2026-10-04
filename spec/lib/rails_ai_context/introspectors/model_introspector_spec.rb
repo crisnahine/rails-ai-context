@@ -2718,6 +2718,50 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # ActiveSupport::Concern skips `included` for a class whose base already
+    # has the module, so its callbacks stay where the base put them.
+    it "keeps a concern the base already included at the base's place" do
+      Dir.mktmpdir do |dir|
+        write_model(dir, "Concerns::Mixy", <<~RUBY)
+          module Mixy
+            extend ActiveSupport::Concern
+            included do
+              before_save :c
+              before_save { 1 }
+            end
+          end
+        RUBY
+        write_model(dir, "Base2", <<~RUBY)
+          class Base2 < ApplicationRecord
+            include Mixy
+            before_save :b
+          end
+        RUBY
+        write_model(dir, "Child2", <<~RUBY)
+          class Child2 < Base2
+            include Mixy
+            before_save :d
+          end
+        RUBY
+
+        child = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Child2"]
+
+        expect(child[:callbacks]["before_save"]).to eq(%w[c [inline_block] b d])
+      end
+    end
+
+    it "reads the callbacks of a model written as Class.new" do
+      Dir.mktmpdir do |dir|
+        write_model(dir, "Anon", <<~RUBY)
+          Anon = Class.new(ApplicationRecord) do
+            before_save :x, if: :a?
+          end
+        RUBY
+
+        expect(booted_callbacks(dir, "Anon")).to eq("before_save" => %w[x])
+      end
+    end
+
     it "reads no callback a class nested in the model's body declares" do
       Dir.mktmpdir do |dir|
         write_model(dir, "Outer", <<~RUBY)

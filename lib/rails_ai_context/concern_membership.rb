@@ -63,9 +63,10 @@ module RailsAiContext
     def own_mixins(mixins, name)
       return Array(mixins) if Array(mixins).none? { |mixin| mixin.key?(:owner) }
 
-      own = own_owner(mixins, name)
+      # No named owner, as in `Foo = Class.new(Base) do`: the top-level records are the class's.
+      own = own_owner(mixins, name) || ""
       # `Other.include X` written in the body mixes into Other.
-      Array(mixins).select { |mixin| own && !mixin[:receiver] && Array(mixin[:owner]).join("::") == own }
+      Array(mixins).select { |mixin| !mixin[:receiver] && Array(mixin[:owner]).join("::") == own }
     end
 
     def own_owner(records, name)

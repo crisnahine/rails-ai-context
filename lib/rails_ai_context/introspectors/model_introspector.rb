@@ -1574,13 +1574,20 @@ module RailsAiContext
         # declaration: the line it was read at differs between two files, and
         # the concern tag differs between two ways of reaching one file.
         merged[:macros] = dedup(merged[:macros]) { |m| m.except(:from_concern, :location) }
-        merged[:callbacks] = callback_chain(Array(inherited[:callbacks]) + Array(mine[:callbacks]))
+        merged[:callbacks] = callback_chain(Array(inherited[:callbacks]) + not_rerun(mine[:callbacks], inherited[:callbacks]))
         # One source line read twice is still one declaration: a concern the
         # model and one of its bases both include is walked once per class, and
         # `included do` runs once. Two validations really written twice differ
         # by the line they are on and both stay.
         merged[:validations] = dedup(merged[:validations]) { |v| v }
         merged
+      end
+
+      # ActiveSupport::Concern skips `included` for a class whose base already
+      # has the module, so the child's copy of those lines never runs.
+      def not_rerun(mine, inherited)
+        ran = Array(inherited).filter_map { |c| [ c[:from_concern], c[:location] ] if c[:from_concern] }.to_set
+        Array(mine).reject { |c| c[:from_concern] && ran.include?([ c[:from_concern], c[:location] ]) }
       end
 
       SYMBOL_TARGET = /\A[a-z_]\w*[?!]?\z/
