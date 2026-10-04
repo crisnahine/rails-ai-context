@@ -22,7 +22,7 @@ module RailsAiContext
             options:       extract_keyword_options(node),
             option_values: extract_keyword_sources(node),
             option_nodes:  extract_keyword_nodes(node),
-            block:         (one_line_source(node.block) if node.block && @block_source.include?(node.name)),
+            block:         (one_line_source(node.block) if node.block.is_a?(Prism::BlockNode) && @block_source.include?(node.name)),
             # Offsets, not line numbers: a one-line block puts the parent and
             # its nested calls on one line, and a consumer pairing them by
             # line then attaches the second child to the first.

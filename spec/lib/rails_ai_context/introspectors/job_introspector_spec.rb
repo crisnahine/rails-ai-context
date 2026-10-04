@@ -1325,6 +1325,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
           File.write(File.join(dir, "app", "jobs", "brace_job.rb"), "class BraceJob < ActiveJob::Base\n  queue_as { :high }\nend\n")
           File.write(File.join(dir, "app", "jobs", "proc_job.rb"), "class ProcJob < ActiveJob::Base\n  queue_as proc { :x }\nend\n")
           File.write(File.join(dir, "app", "jobs", "proc_new_job.rb"), "class ProcNewJob < ActiveJob::Base\n  queue_as Proc.new { :x }\nend\n")
+          File.write(File.join(dir, "app", "jobs", "pick_job.rb"), "class PickJob < ActiveJob::Base\n  queue_as(&PICK)\nend\n")
         end
 
         expect(result[:jobs].to_h { |j| [ j[:name], j[:queue] ] }).to eq(
@@ -1333,6 +1334,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
           "ConstJob" => "#{proc_label}: `-> { :high }`",
           "EnvJob" => "`ENV.fetch(\"ENV_QUEUE\", \"default\")` (computed)",
           "OutsideConstJob" => "`Queues::HIGH` (computed)",
+          "PickJob" => "computed by a block",
           "ProcessingJob" => "`processing_queue` (computed)",
           "ProcJob" => "#{proc_label}: `proc { :x }`",
           "ProcNewJob" => "#{proc_label}: `Proc.new { :x }`",

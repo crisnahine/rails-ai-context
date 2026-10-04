@@ -25,6 +25,11 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::GenericMacroListener do
     expect(sourced.map { |r| r[:block] }).to eq([ nil, "do run; end" ])
   end
 
+  it "records no source for a block passed as an argument" do
+    results = parse_and_dispatch("queue_as(&PICK)", :queue_as, block_source: [ :queue_as ])
+    expect(results.first[:block]).to be_nil
+  end
+
   it "extracts symbol args" do
     results = parse_and_dispatch("before_action :auth, :set_locale", :before_action)
     expect(results.first[:args]).to eq([ :auth, :set_locale ])
