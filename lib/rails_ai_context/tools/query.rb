@@ -410,13 +410,16 @@ module RailsAiContext
       # virtual table modules, collations, an encryption key.
       SQLITE_APP_CONNECTION_ONLY = /no such (?:function|module|collation)|file is not a database/i
 
+      # A row-capped result is far below this; a larger prefix is a corrupt one.
+      SQLITE_MAX_RESULT_BYTES = 1 << 30
+
       private_class_method def self.read_before(reader, size, deadline)
         data = "".b
         while data.bytesize < size
           left = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
           raise ActiveRecord::StatementInvalid, "SQLite query exceeded the statement timeout" unless left.positive? && IO.select([ reader ], nil, nil, left)
 
-          chunk = reader.read_nonblock(size - data.bytesize, exception: false)
+          chunk = reader.read_nonblock([ size - data.bytesize, 1 << 16 ].min, exception: false)
           raise ActiveRecord::StatementInvalid, "the SQLite query process exited without a result" if chunk.nil?
 
           data << chunk unless chunk == :wait_readable
@@ -460,6 +463,8 @@ module RailsAiContext
         # Read by length, not to EOF: any other process forked meanwhile holds a copy of the writer.
         size = read_before(reader, 8, deadline).unpack1("Q>")
         status, *rest = begin
+          raise ArgumentError, "result length out of range" if size > SQLITE_MAX_RESULT_BYTES
+
           Marshal.load(read_before(reader, size, deadline))
         rescue ArgumentError, TypeError
           raise ActiveRecord::StatementInvalid, "the SQLite query process exited without a result"

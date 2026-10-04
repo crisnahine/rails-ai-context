@@ -726,6 +726,18 @@ it "still explains a database that does not exist" do
       expect { Process.kill(0, pids.first) }.to raise_error(Errno::ESRCH)
     end
 
+    it "reads an impossible length prefix as a missing result" do
+      calls = 0
+      allow(described_class).to receive(:read_before).and_wrap_original do |m, *args|
+        calls += 1
+        calls == 1 ? [ 1 << 62 ].pack("Q>") : m.call(*args)
+      end
+
+      expect {
+        described_class.send(:execute_sqlite, conn, "SELECT n FROM nums", 5)
+      }.to raise_error(ActiveRecord::StatementInvalid, /exited without a result/)
+    end
+
     it "reads a garbled result as a missing result" do
       allow(Marshal).to receive(:load).and_raise(ArgumentError, "marshal data too short")
       expect {
