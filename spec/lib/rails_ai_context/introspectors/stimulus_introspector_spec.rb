@@ -563,6 +563,28 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
       end
     end
 
+    it "keeps the bare name on the app/javascript file when a view writes it and app/frontend holds the same path" do
+      Dir.mktmpdir do |root|
+        home = File.join(root, "app/javascript/controllers/users/tools")
+        other = File.join(root, "app/frontend/controllers/users/tools")
+        [ home, other ].each { |dir| FileUtils.mkdir_p(dir) }
+        File.write(File.join(home, "ajax_controller.js"),
+                   %(import { Controller } from "@hotwired/stimulus"\nexport default class extends Controller {\n  static targets = ["output"]\n  static values = { url: String }\n}\n))
+        File.write(File.join(other, "ajax_controller.js"),
+                   %(import { Controller } from "@hotwired/stimulus"\nexport default class extends Controller {\n  connect() {}\n}\n))
+        FileUtils.mkdir_p(File.join(root, "app/views/pages"))
+        File.write(File.join(root, "app/views/pages/faq.html.erb"), %(<div data-controller="users--tools--ajax"></div>\n))
+
+        controllers = described_class.new(RailsAiContext::StaticApp.new(root)).call[:controllers]
+        by_file = controllers.to_h { |c| [ c[:file], [ c[:name], c[:identifier_inferred], c[:targets] ] ] }
+
+        expect(by_file).to eq(
+          "app/javascript/controllers/users/tools/ajax_controller.js" => [ "users--tools--ajax", nil, [ "output" ] ],
+          "app/frontend/controllers/users/tools/ajax_controller.js" => [ "app-frontend--users--tools--ajax", true, [] ]
+        )
+      end
+    end
+
     it "keeps two unconfirmed guesses apart too" do
       Dir.mktmpdir do |root|
         [ "frontend/controllers", "plugins/chat/frontend/controllers" ].each do |dir|

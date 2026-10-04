@@ -159,7 +159,7 @@ module RailsAiContext
         # controller left without a free name is qualified by its code root and marked a guess.
         def resolve_names(paths, referenced, registered = {}, root: nil, loader_dirs: [])
           derived = paths.map { |path, js_root| [ path, js_root, identifier_for(path, js_root) ] }
-                         .sort_by { |path, js_root, _| [ js_root.count("/"), path ] }
+                         .sort_by { |path, js_root, (_name, guess)| [ guess ? 1 : 0, js_root.count("/"), path ] }
           claimed = derived.map { |_path, _js_root, (name, _guess)| name }.to_set
           taken = Set.new
           resolved = {}
