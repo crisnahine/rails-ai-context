@@ -97,6 +97,11 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
       expect(described_class.under_root?("/app/../outside/secret.rb", "/outside/secret.rb", "/app", "/app")).to be(false)
     end
 
+    it "rejects a spelled .. that climbs out through a symlink" do
+      expect(described_class.under_root?("/app/link/../secret.rb", "/outside/secret.rb", "/app", "/app")).to be(false)
+      expect(described_class.under_root?("/app/x/../a.rb", "/app/a.rb", "/app", "/app")).to be(true)
+    end
+
     it "keeps a path under either spelling of the root" do
       expect(described_class.under_root?("/private/tmp/app/a.rb", "/private/tmp/app/a.rb", "/tmp/app", "/private/tmp/app")).to be(true)
       expect(described_class.under_root?("/app/packs/billing/a.rb", "/elsewhere/billing/a.rb", "/app", "/app")).to be(true)

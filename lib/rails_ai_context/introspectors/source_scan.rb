@@ -80,11 +80,12 @@ module RailsAiContext
         path.delete_prefix(root + File::SEPARATOR)
       end
 
-      # Whether either spelling of a path lands inside either spelling of the
-      # root. Only one of the two holds for a symlinked pack. expand_path
-      # collapses ".." without resolving symlinks.
+      # Either spelling may land inside the root (only one does for a symlinked
+      # pack), but a spelled ".." can climb out through a symlink, so it needs the real one.
       def under_root?(path, real, root, real_root)
-        File.expand_path(path).start_with?(root + File::SEPARATOR) || real.start_with?(real_root + File::SEPARATOR)
+        return true if real.start_with?(real_root + File::SEPARATOR)
+
+        !path.split(File::SEPARATOR).include?("..") && File.expand_path(path).start_with?(root + File::SEPARATOR)
       end
     end
   end
