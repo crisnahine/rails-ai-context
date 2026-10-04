@@ -43,16 +43,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   5.30.0 entry that said each declaration is shown. A declaration inside a
   method body counts where the class calls the method, and not at all when
   nothing does, so an uncalled method that redeclares a callback no longer
-  hides it. A call counts written bare or as `self.name`, made from another of
-  the class's own class methods, or made from a concern's `included` block,
-  where it counts at that concern's `include` line in the class that ran the
-  block. A call runs the class method Ruby resolves for it: the class's own,
-  then its concerns', then a base's, never an instance method or a nested
-  class's method of the same name. A nested class's callbacks are its own, not
-  the outer model's, and a module nested in the model's file reads like any
-  concern: its callbacks join where the model includes it, and none join
-  through `extend`. A Mongoid document's callbacks list in the same run order.
-  (#253)
+  hides it. A call counts written bare or as `self.name`, made inside a class
+  method it runs, or made from a concern's `included` block, which runs once,
+  in the first class of the chain to include the concern; a plain
+  `self.included` hook runs on every include. A call runs the definition
+  Ruby's lookup finds as of the call: a module the class prepends, the class's
+  own `def self.` (an `alias_method` in `class << self` too), then the modules
+  it extends and its concerns' class methods, the last included first, then
+  the same for each base, then the modules every model has. A `super` runs the
+  next definition, at the `super`. An instance method or a nested class's
+  method of the same name never runs. A mixin a called class method includes
+  joins where the method is called. A nested class's callbacks are its own,
+  and a module nested in the model's file reads like any concern: `include`
+  runs its `included` block, `extend` its methods and `self.extended` only. A
+  module a plugin's lib loads by a glob `require` is read from beside the file
+  naming it, so OpenProject's journalized models list `save_journals`. A
+  Mongoid document's own callbacks list in the same run order, one in a class
+  method where the document calls it. (#253)
 - **A lambda or Proc given to `queue_as` reads as what ActiveJob does with
   it.** ActiveJob never calls it; it names the queue after the Proc's text.
   Both tiers now say so, with the source, where the booted tier printed the

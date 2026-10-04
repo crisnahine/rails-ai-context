@@ -78,8 +78,8 @@ stays plain data.
 
 On sqlite3 1.x a query fails at its timeout, with the statement-timeout error,
 when another connection in the same process held an exclusive lock on a
-rollback-journal database as it started (`BEGIN EXCLUSIVE`, or a commit being
-written): the child inherits that lock record and it never clears. A lock held
+rollback-journal database as it started (`BEGIN EXCLUSIVE`): the child
+inherits that lock record and it never clears. A lock held
 by another process is waited on as usual, and an open write transaction or any
 lock in WAL mode does not block it.
 
