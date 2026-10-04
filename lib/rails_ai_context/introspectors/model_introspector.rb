@@ -780,8 +780,8 @@ module RailsAiContext
         "#{node.name.to_s.delete_suffix('=')} = #{value.slice} is true"
       end
 
-      # A literal version as written; anything else (`Rails::VERSION::STRING.to_f`)
-      # is the running Rails, Float::INFINITY, which each reader takes as it can.
+      # A literal version as written; anything else (`Rails::VERSION::STRING.to_f`) is the
+      # running Rails, Float::INFINITY: on for belongs_to, unknown for the commit order.
       def defaults_version(arg)
         case arg
         when Prism::FloatNode, Prism::IntegerNode then arg.value.to_f
