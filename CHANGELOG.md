@@ -68,9 +68,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   block, and an `extend` in a class method a call reaches (an `acts_as_x`
   that extends its methods, whose `self.extended` hook then runs);
   a plain module's nested `ClassMethods` counts only when something extends
-  it. Two concerns' modules of one name (each concern's `ClassMethods`) stay
-  two: each name is the constant it resolves to where it is written, and one
-  that resolves to nothing no longer hides the other. A `super` runs the next definition, at
+  it. A module a hook includes runs its own hooks. Two concerns' modules of
+  one name (each concern's `ClassMethods`) stay two: each name is the
+  constant it resolves to where it is written, and one that resolves to
+  nothing no longer hides the other. A `super` runs the next definition, at
   the `super`. An instance method or a nested class's method of the same
   name never runs. A module a class
   method includes joins only when a call reaches that method, and only calls

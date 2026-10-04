@@ -37,6 +37,12 @@ module RailsAiContext
           node.is_a?(Prism::CallNode) && node.name == :singleton_class && node.arguments.nil? && stands_for_class.call(node.receiver)
         end
 
+        # The record of `node` mixing in `name`.
+        def self.record(node, macro, name, ancestor:, owner: [])
+          { macro: macro, name: name, ancestor: ancestor, owner: owner, location: node.location.start_line,
+            confidence: RailsAiContext::Confidence.for_node(node) }
+        end
+
         # `Type.include(StatusPatch)` mixes into Type, not the class the line sits in, so the
         # record names Type as `receiver` and it is never an ancestor of the enclosing class.
         def on_call_node_enter(node)
@@ -54,14 +60,8 @@ module RailsAiContext
             name = constant_name(arg)
             next unless name
 
-            record = {
-              macro:      macro,
-              name:       name,
-              ancestor:   receiver.nil? && @singleton_depth.zero? && ANCESTOR_MACROS.include?(macro),
-              owner:      @owner_stack.dup,
-              location:   node.location.start_line,
-              confidence: confidence_for(node)
-            }
+            ancestor = receiver.nil? && @singleton_depth.zero? && ANCESTOR_MACROS.include?(macro)
+            record = self.class.record(node, macro, name, ancestor: ancestor, owner: @owner_stack.dup)
             record[:receiver] = receiver if receiver
             @results << record
           end

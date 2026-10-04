@@ -3480,6 +3480,41 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         end
       end
 
+      # Runtime: HTwoM :first, :n; HInstM :first, :n.
+      it "places the modules one hook extends with by line, in instance_eval too" do
+        Dir.mktmpdir do |dir|
+          stampy(dir)
+          write_model(dir, "Concerns::ZInc", "module ZInc\n  def stamp\n    before_save :i\n  end\nend\n")
+          nested = "\n  module ClassMethods\n    def stamp\n      before_save :n\n    end\n  end\nend\n"
+          write_model(dir, "Concerns::HTwo", "module HTwo\n  def self.included(base)\n    base.extend ZInc\n    base.extend ClassMethods\n  end\n#{nested}")
+          write_model(dir, "Concerns::HInst", "module HInst\n  def self.included(base)\n    base.instance_eval do\n      extend ClassMethods\n    end\n  end\n#{nested}")
+          write_model(dir, "HTwoM", "class HTwoM < ApplicationRecord\n  include HTwo\n  before_save :first\n  stamp\nend\n")
+          write_model(dir, "HInstM", "class HInstM < ApplicationRecord\n  include Stampy\n  include HInst\n  before_save :first\n  stamp\nend\n")
+
+          expect(static_save(dir).slice("HTwoM", "HInstM")).to eq("HTwoM" => %w[first n], "HInstM" => %w[first n])
+        end
+      end
+
+      # Runtime: QExtM, QActsM, QOuterM :first, :s; QExt2M :first, :t.
+      it "runs a module's extended hook, and the hooks of a module a hook includes" do
+        Dir.mktmpdir do |dir|
+          write_model(dir, "Concerns::QCm", "module QCm\n  def stamp\n    before_save :s\n  end\nend\n")
+          write_model(dir, "Concerns::QHook", "module QHook\n  def self.included(base)\n    base.extend QCm\n  end\nend\n")
+          write_model(dir, "Concerns::QHookExt", "module QHookExt\n  def self.extended(base)\n    base.extend QCm\n  end\nend\n")
+          write_model(dir, "Concerns::QHookExt2", "module QHookExt2\n  def self.extended(base)\n    base.extend QCm2\n  end\n" \
+                                                  "  module QCm2\n    def stamp\n      before_save :t\n    end\n  end\nend\n")
+          write_model(dir, "Concerns::QOuter", "module QOuter\n  def self.included(base)\n    base.include QHook\n  end\nend\n")
+          write_model(dir, "Concerns::QActs", "module QActs\n  def acts_as_q\n    extend QHookExt\n  end\nend\n")
+          { "QExtM" => "extend QHookExt", "QExt2M" => "extend QHookExt2", "QOuterM" => "include QOuter", "QActsM" => "extend QActs\n  acts_as_q" }.each do |name, line|
+            write_model(dir, name, "class #{name} < ApplicationRecord\n  #{line}\n  before_save :first\n  stamp\nend\n")
+          end
+
+          expect(static_save(dir).slice("QExtM", "QExt2M", "QOuterM", "QActsM")).to eq(
+            "QExtM" => %w[first s], "QExt2M" => %w[first t], "QOuterM" => %w[first s], "QActsM" => %w[first s]
+          )
+        end
+      end
+
       # Runtime: LocM :first, :loc, :sb, :ro.
       it "reads the class methods an initializer defines on ActiveRecord::Base as the outermost definitions" do
         Dir.mktmpdir do |dir|

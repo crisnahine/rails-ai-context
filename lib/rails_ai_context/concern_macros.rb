@@ -27,8 +27,9 @@ module RailsAiContext
       MIXED = 2
 
       # A class method; `owner` is a class file's rank or a module's label, `alias_of` the name an alias copies,
-      # `at` its place in the owner's lookup when not its line (a base body's, after the base's file).
-      Def = Struct.new(:owner, :name, :line, :super_line, :calls, :alias_of, :at) do
+      # `at` its place in the owner's lookup when not its line (a base body's, after the base's file),
+      # `joined` the line of the hook's call adding the nested module it is in.
+      Def = Struct.new(:owner, :name, :line, :super_line, :calls, :alias_of, :at, :joined) do
         def key = at ? [ owner, *at ] : [ owner, line ]
       end
       # One step of a singleton ancestry, existing from `at` ([line, order, ...]).
@@ -94,34 +95,44 @@ module RailsAiContext
       end
 
       # The class methods the module `own` gives a class, by how they join: `:mixed` and `:prepended` with the
-      # module, `:block` (an included block's) at its first add, `:hook` at each add, both from their line.
+      # module, `:block` (an included block's) at its first add, and at each add `:hook` from its line and
+      # `:hook_mixed`/`:hook_prepended` (a nested module's a hook adds) from the line adding it.
       def self.module_defs(own, label, macro)
-        given = { prepended: [], mixed: [], block: [], hook: [] }
+        given = { prepended: [], mixed: [], block: [], hook: [], hook_mixed: [], hook_prepended: [] }
         return given unless own&.body
 
+        hook_defs = hooks(own, macro)
         if ConcernMembership::SINGLETON_MACROS.include?(macro)
           given[group(macro)] = body_defs(own.body)
         else
-          statements = own.body.compact_child_nodes
-          hook_defs = hooks(own, macro)
-          short = label.to_s.split("::").last
           concern = macro == :prepend ? :prepended : :mixed
-          joined = hook_defs.flat_map { |hook| hook_joins(hook) }.map { |added, arg| [ group(added), short_name(arg, short) ] }
-          joined << [ concern, "ClassMethods" ] if concern?(own)
-          statements.each do |node|
+          class_methods = concern?(own)
+          own.body.compact_child_nodes.each do |node|
             if node.is_a?(Prism::CallNode) && node.name == :class_methods && node.block then given[concern].concat(body_defs(node.block.body))
             elsif node.is_a?(Prism::CallNode) && node.name == ConcernMembership::CONCERN_BLOCKS[macro] && node.block
               given[:block].concat(singleton_scope_defs(node.block.body, label))
-            elsif node.is_a?(Prism::ModuleNode)
-              name = node.constant_path.slice.split("::").last
-              joined.each { |group, joined_name| given[group].concat(body_defs(node.body)) if joined_name == name }
+            elsif node.is_a?(Prism::ModuleNode) && class_methods && module_name(node) == "ClassMethods"
+              given[concern].concat(body_defs(node.body))
             end
           end
-          joined.each { |group, name| given[group].concat(body_defs(own.body)) if name == short }
-          given[:hook] = hook_defs.flat_map { |hook| singleton_defs(hook, label) }
         end
+        short = label.to_s.split("::").last
+        hook_defs.flat_map { |hook| hook_joins(hook) }.each do |added, arg, call|
+          next unless ConcernMembership::SINGLETON_MACROS.include?(added)
+
+          name = short_name(arg, short)
+          given[group(added)].concat(body_defs(own.body)) if name == short
+          nested_modules(own).select { |node| module_name(node) == name }.each do |node|
+            given[:"hook_#{group(added)}"].concat(body_defs(node.body).map { |inner| definition(label, inner).tap { |found| found.joined = call.location.start_line } })
+          end
+        end
+        given[:hook] = hook_defs.flat_map { |hook| singleton_defs(hook, label) }
         given.to_h { |group, nodes| [ group, nodes.map { |node| node.is_a?(Def) ? node : definition(label, node) } ] }
       end
+
+      def self.nested_modules(own) = own.body.compact_child_nodes.grep(Prism::ModuleNode)
+
+      def self.module_name(node) = node.constant_path.slice.split("::").last
 
       # A `def self.included` (or the hook `macro` runs) on the module itself.
       def self.hook?(node, macro)
@@ -139,20 +150,25 @@ module RailsAiContext
 
       def self.short_name(arg, short) = arg.is_a?(Prism::SelfNode) ? short : arg.slice.split("::").last
 
-      # The hooks `macro` runs that the module `own` defines; a module given as class methods runs none here.
+      # The hooks `macro` runs that the module `own` defines: `extended` for an extend, none for a `singleton_class` mixin.
       def self.hooks(own, macro)
-        return [] if own&.body.nil? || ConcernMembership::SINGLETON_MACROS.include?(macro)
+        return [] if own&.body.nil?
 
         own.body.compact_child_nodes.select { |node| node.is_a?(Prism::DefNode) && hook?(node, macro) && node.body }
       end
 
-      # [macro, argument] for each module a hook gives the class as class methods: `base.extend`, and
-      # `base.singleton_class.include`/`prepend`, `base` being the hook's parameter.
-      def self.hook_joins(hook)
+      # A reader of the hook's parameter, the class mixing the module in; nil when the hook takes none.
+      def self.base_reader(hook)
         param = hook.parameters&.requireds&.first
-        return [] unless param.respond_to?(:name)
+        ->(node) { node.is_a?(Prism::LocalVariableReadNode) && node.name == param.name } if param.respond_to?(:name)
+      end
 
-        base = ->(node) { node.is_a?(Prism::LocalVariableReadNode) && node.name == param.name }
+      # [macro, argument, call] for each module a hook adds to the class: `base.include`, `prepend` and `extend`,
+      # and `base.singleton_class.include`/`prepend`, `base` being the hook's parameter.
+      def self.hook_joins(hook)
+        base = base_reader(hook)
+        return [] unless base
+
         Introspectors::AstWalk.each(hook.body).flat_map do |call|
           next [] unless call.is_a?(Prism::CallNode)
 
@@ -163,37 +179,38 @@ module RailsAiContext
             arguments = arguments.drop(1)
           end
           macro =
-            if base.call(call.receiver) then :extend if name == :extend
+            if base.call(call.receiver) then name if Introspectors::Listeners::MixinsListener::MIXIN_MACROS.include?(name)
             elsif Introspectors::Listeners::MixinsListener.singleton_class_of?(call.receiver, &base)
               { include: :singleton_include, prepend: :singleton_prepend }[name]
             end
           next [] unless macro
 
           arguments.filter_map do |arg|
-            [ macro, arg ] if arg.is_a?(Prism::SelfNode) || arg.is_a?(Prism::ConstantReadNode) || arg.is_a?(Prism::ConstantPathNode)
+            [ macro, arg, call ] if arg.is_a?(Prism::SelfNode) || arg.is_a?(Prism::ConstantReadNode) || arg.is_a?(Prism::ConstantPathNode)
           end
         end
       end
 
-      # A module from elsewhere that a hook gives the class, as a mixin record the walk follows;
+      # A mixin record the walk follows for each module from elsewhere a hook adds;
       # `module_defs` reads the module itself and one nested in it.
       def self.hook_mixins(own, label, macro)
         short = label.to_s.split("::").last
-        read = [ short, *own&.body&.compact_child_nodes.to_a.grep(Prism::ModuleNode).map { |node| node.constant_path.slice.split("::").last } ]
-        hooks(own, macro).flat_map { |hook| hook_joins(hook) }.filter_map do |added, arg|
+        read = [ short, *(own&.body ? nested_modules(own).map { |node| module_name(node) } : []) ]
+        hooks(own, macro).flat_map { |hook| hook_joins(hook) }.filter_map do |added, arg, call|
           next if read.include?(short_name(arg, short))
 
-          { macro: added, name: arg.slice.delete_prefix("::"), location: arg.location.start_line, ancestor: false }
+          Introspectors::Listeners::MixinsListener.record(
+            call, added, arg.slice.delete_prefix("::"), ancestor: Introspectors::Listeners::MixinsListener::ANCESTOR_MACROS.include?(added)
+          )
         end
       end
 
       # The class's own methods a hook defines: `def x` in `class << base`, and `def self.x` or
       # `class << self` in `base.class_eval`, `base` being the class mixing the module in.
       def self.singleton_defs(hook, label)
-        param = hook.parameters&.requireds&.first
-        return [] unless param.respond_to?(:name)
+        base = base_reader(hook)
+        return [] unless base
 
-        base = ->(node) { node.is_a?(Prism::LocalVariableReadNode) && node.name == param.name }
         Introspectors::AstWalk.each(hook.body).flat_map do |node|
           if node.is_a?(Prism::SingletonClassNode) && base.call(node.expression) then body_defs(node.body).map { |inner| definition(label, inner) }
           elsif node.is_a?(Prism::CallNode) && %i[class_eval class_exec].include?(node.name) && base.call(node.receiver) && node.block
@@ -228,9 +245,12 @@ module RailsAiContext
         body = ConcernMacros.enclosing(bodies, line)
         if body then [ :body, [ owner, body.first.begin ] ]
         elsif blocks.any? { |range| range.cover?(line) } then [ :block, owner, false ]
-        elsif evals.any? { |range| range.cover?(line) } then [ :block, owner, true ]
+        elsif evals.any? { |range| range.cover?(line) } then in_hook(owner)
         end
       end
+
+      # Where a hook of `owner` runs, each time `owner` is added.
+      def self.in_hook(owner) = [ :block, owner, true ]
 
       # Whether a mixin record adds to the class: an include or prepend, or an `extend` or `singleton_class`
       # include or prepend run with the class as self; in a module's own body `extend` extends the module.
@@ -417,7 +437,7 @@ module RailsAiContext
       end
 
       # The class files' own methods, each module's where the chain first adds it, and the class's own
-      # methods a block or hook defines, from their line in each run of that code.
+      # methods a block or hook defines and a nested module's a hook adds, from their line in each run of that code.
       def providers
         own = read.defs.map { |definition| Provider.new(definition.owner, OWN, definition.at || [ definition.line, 0 ], by_name([ definition ])) }
         joined = @walks.each_value.flat_map { |walk| walk.mixins.keys }.uniq.flat_map do |label|
@@ -431,11 +451,11 @@ module RailsAiContext
         end
         ran_defs = @walks.flat_map do |rank, walk|
           walk.mixins.each_value.flat_map do |mixin|
-            { block: false, hook: true }.flat_map do |kind, hook|
+            { block: [ false, OWN ], hook: [ true, OWN ], hook_mixed: [ true, MIXED ], hook_prepended: [ true, PREPENDED ] }.flat_map do |kind, (hook, group)|
               next [] if mixin.defs[kind].empty?
 
               ran(rank, mixin, hook).flat_map do |_, run, at|
-                mixin.defs[kind].map { |definition| Provider.new(run, OWN, [ *at, definition.line ], by_name([ definition ])) }
+                mixin.defs[kind].map { |definition| Provider.new(run, group, [ *at, definition.joined || definition.line ], by_name([ definition ])) }
               end
             end
           end
@@ -586,7 +606,7 @@ module RailsAiContext
             [ mixin, added ] if SingletonLookup.joins?(mixin, !added.nil?)
           end
           hooked_mixins = memo([ :hook_mixins, source_key, label, macro ]) { hook_mixins(tree, label, macro) }
-          joined.concat(hooked_mixins.map { |mixin| [ mixin, [ :block, label, true ] ] })
+          joined.concat(hooked_mixins.map { |mixin| [ mixin, SingletonLookup.in_hook(label) ] })
           joined.sort_by.with_index { |(mixin, _), index| [ mixin[:location].to_i, index ] }.each do |mixin, added|
             outer = @inside
             @inside = [ added, mixin[:location] ] if added
@@ -786,17 +806,19 @@ module RailsAiContext
         return unless node.body
 
         Introspectors::SourceIntrospector.calls_outside_methods(node.body, found)
-        param = node.parameters&.requireds&.first
-        return unless param.respond_to?(:name)
+        base = SingletonLookup.base_reader(node)
+        return unless base
 
         Introspectors::AstWalk.each(node.body).each do |call|
-          next unless call.is_a?(Prism::CallNode) && call.receiver.is_a?(Prism::LocalVariableReadNode)
-          next unless call.receiver.name == param.name
+          next unless call.is_a?(Prism::CallNode) && base.call(call.receiver)
 
           (found[call.name.to_s] ||= []) << call
-          evals << (call.location.start_line..call.location.end_line) if %i[class_eval class_exec].include?(call.name) && call.block
+          evals << (call.location.start_line..call.location.end_line) if EVALS.include?(call.name) && call.block
         end
       end
+
+      # Each runs its block with the class as self.
+      EVALS = %i[class_eval class_exec instance_eval instance_exec].freeze
 
       # Asked only once a mixin declares something inside a method, which
       # few do, so most classes never pay for the look.
