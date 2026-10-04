@@ -379,6 +379,34 @@ RSpec.describe RailsAiContext::ConcernMacros do
     expect(unresolved).to eq([ "Settings::ClassMethods#plugin_settings" ])
   end
 
+  # Canvas's CollectionRestrictor hook includes MasterCourses::Restrictor::CommonMethods, which
+  # restrictor.rb declares; Zeitwerk loads it with MasterCourses::Restrictor.
+  it "reads a module from its outer module's file, through a hook's include too" do
+    File.write(File.join(concern_dir, "restrictor.rb"), <<~RUBY)
+      module Restrictor
+        module CommonMethods
+          extend ActiveSupport::Concern
+
+          included do
+            validates :title, presence: true
+          end
+        end
+      end
+    RUBY
+    File.write(File.join(concern_dir, "collection_restrictor.rb"), <<~RUBY)
+      module CollectionRestrictor
+        def self.included(klass)
+          klass.include Restrictor::CommonMethods
+        end
+      end
+    RUBY
+
+    collected, unresolved = described_class.collect(tmpdir, mixin("CollectionRestrictor"), keys: %i[validations])
+
+    expect(unresolved).to eq([])
+    expect(collected[:validations].map { |v| [ v[:attributes], v[:from_concern] ] }).to eq([ [ [ "title" ], "Restrictor::CommonMethods" ] ])
+  end
+
   # A hook that calls a helper macro declares what the helper declares, on
   # every includer, with the hook's arguments.
   it "reads the helper macros a mixin hook calls" do

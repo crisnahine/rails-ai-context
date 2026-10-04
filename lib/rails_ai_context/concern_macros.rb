@@ -560,6 +560,10 @@ module RailsAiContext
             elsif @paths.key?(name) then [ name, @paths[name] ]
             else ConcernPaths.find_named(@root, name, within: within, dirs: @dirs) || beside(file, name, within)
             end
+          if path.nil? && (outer = in_outer_file(name, within))
+            source, nested = outer
+            label, path = nested.first, source
+          end
           # A module is walked once, as the constant the name resolves to where it is written;
           # a name resolving to none keeps no module's place.
           next unless @seen.add?(path ? label : [ :unresolved, name ])
@@ -658,6 +662,18 @@ module RailsAiContext
           dir = File.dirname(file)
           ConcernPaths.candidate_names(name, within).map { |candidate| [ candidate, File.join(dir, "#{candidate.underscore}.rb") ] }
                       .find { |_, path| File.file?(path) }
+        end
+      end
+
+      # `Outer::Inner` with no file of its own, from Outer's file, which Zeitwerk loads it with.
+      def in_outer_file(name, within)
+        memo([ :outer, name, within ]) do
+          ConcernPaths.candidate_names(name, within).lazy.filter_map do |candidate|
+            outer = candidate.rpartition("::").first
+            file = !outer.empty? && ConcernPaths.find_file(@root, outer, dirs: @dirs)
+            found = file && nested_module(file, candidate, nil)
+            [ file, found ] if found
+          end.first
         end
       end
 

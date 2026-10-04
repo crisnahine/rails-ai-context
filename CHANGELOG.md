@@ -108,6 +108,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `include Validations` in WorkPackage lists its validations from
   `WorkPackage::Validations`, the constant Ruby includes, where it said
   `Validations`.
+- **A module declared in its outer module's file is read from there.**
+  Canvas's `Role::AssociationHelper` lives in role.rb, and its `included`
+  hook adds `before_save :resolve_cross_account_role` to Enrollment and its
+  subclasses, AccountUser and RoleOverride; the static tier called the
+  module unread and missed the callback.
 - **A model macro written over `*args` reads each call's own arguments.**
   The list binds to the call's positionals past the method's other
   parameters, less the options hash the body takes off the end
