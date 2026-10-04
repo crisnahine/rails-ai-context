@@ -88,6 +88,30 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
     collected[:callbacks] || []
   end
 
+  describe "transaction callbacks whose order the config cannot say" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Order" => { callbacks: { "after_commit" => %w[a b] }, commit_order_unread: true },
+          "Item" => { callbacks: { "after_commit" => %w[c d] }, commit_order_unread: true },
+          "Post" => { callbacks: { "after_commit" => %w[e f] } }
+        }
+      )
+    end
+
+    it "says so once, for one model and for the listing" do
+      one = described_class.call(model: "Order").content.first[:text]
+      all = described_class.call(detail: "standard").content.first[:text]
+      clean = described_class.call(model: "Post").content.first[:text]
+
+      expect(one.scan("declaration order").size).to eq(1)
+      expect(all.scan("declaration order").size).to eq(1)
+      expect(all).to include("Item, Order")
+      expect(clean).not_to include("declaration order")
+    end
+  end
+
   describe "detail levels for all models" do
     it "returns model names with callback counts for detail:summary" do
       result = described_class.call(detail: "summary")

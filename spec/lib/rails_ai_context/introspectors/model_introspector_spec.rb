@@ -2875,6 +2875,120 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    describe "transaction callbacks and prepend: true" do
+      def write_config(dir, application, initializer = nil)
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "application.rb"),
+                   "module Demo\n  class Application < Rails::Application\n    #{application}\n  end\nend\n")
+        return unless initializer
+
+        File.write(File.join(dir, "config", "initializers", "new_framework_defaults.rb"), "#{initializer}\n")
+      end
+
+      def write_order(dir)
+        write_model(dir, "Order", <<~RUBY)
+          class Order < ApplicationRecord
+            after_commit :first
+            after_commit :second
+            after_rollback :r1
+            after_rollback :r2
+            after_save :s1
+            after_save :s2
+          end
+        RUBY
+      end
+
+      def booted_with_flag(dir, flag)
+        if flag.nil?
+          allow(ActiveRecord).to receive(:respond_to?).and_call_original
+          allow(ActiveRecord).to receive(:respond_to?).with(:run_after_transaction_callbacks_in_order_defined).and_return(false)
+        else
+          allow(ActiveRecord).to receive(:run_after_transaction_callbacks_in_order_defined).and_return(flag)
+        end
+        booted_callbacks(dir, "Order")
+      end
+
+      reversed = { "after_commit" => %w[second first], "after_rollback" => %w[r2 r1], "after_save" => %w[s1 s2] }
+      in_order = { "after_commit" => %w[first second], "after_rollback" => %w[r1 r2], "after_save" => %w[s1 s2] }
+
+      # Rails 7.0 always runs them from the last declared; 7.1 adds the setting
+      # and `load_defaults 7.1` turns it on.
+      it "lists after_commit and after_rollback last declared first unless the app runs them in order" do
+        {
+          [ "config.load_defaults 7.0", nil ] => reversed,
+          [ "config.load_defaults 6.1", nil ] => reversed,
+          [ "config.load_defaults 7.1", nil ] => in_order,
+          [ "config.load_defaults 8.1", nil ] => in_order,
+          [ "config.load_defaults 7.0",
+            "Rails.application.config.active_record.run_after_transaction_callbacks_in_order_defined = true" ] => in_order,
+          [ "config.load_defaults 7.1\n    config.active_record.run_after_transaction_callbacks_in_order_defined = false", nil ] => reversed
+        }.each do |(application, initializer), expected|
+          Dir.mktmpdir do |dir|
+            write_config(dir, application, initializer)
+            write_order(dir)
+
+            details = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Order"]
+
+            expect(details[:callbacks]).to eq(expected), application
+            expect(details).not_to have_key(:commit_order_unread)
+          end
+        end
+      end
+
+      it "reads the running setting when booted, and reverses on a Rails without it" do
+        Dir.mktmpdir do |dir|
+          write_order(dir)
+
+          expect(booted_with_flag(dir, false)).to eq(reversed)
+          expect(booted_with_flag(dir, true)).to eq(in_order)
+          expect(booted_with_flag(dir, nil)).to eq(reversed)
+        end
+      end
+
+      it "keeps declaration order statically when the config cannot say, and marks it" do
+        [ nil, "config.load_defaults Rails::VERSION::STRING.to_f" ].each do |application|
+          Dir.mktmpdir do |dir|
+            write_config(dir, application) if application
+            write_order(dir)
+
+            details = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Order"]
+
+            expect(details[:callbacks]).to eq(in_order), application.inspect
+            expect(details[:commit_order_unread]).to be(true)
+          end
+        end
+      end
+
+      it "puts a prepend: true callback first in its chain, ahead of the base's" do
+        Dir.mktmpdir do |dir|
+          write_config(dir, "config.load_defaults 7.0")
+          write_model(dir, "Account", "class Account < ApplicationRecord\n  before_destroy :base_guard\nend\n")
+          write_model(dir, "Order", <<~RUBY)
+            class Order < Account
+              before_destroy :a
+              before_destroy :check, prepend: true
+              before_destroy :late_check, prepend: true
+              around_save :wrap
+              around_save :outer, prepend: true
+              after_commit :x, prepend: true
+              after_commit :y
+              after_save :s1, prepend: true
+              after_save :s2
+            end
+          RUBY
+
+          details = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Order"]
+
+          expect(details[:callbacks]).to eq(
+            "before_destroy" => %w[late_check check base_guard a],
+            "around_save" => %w[outer wrap],
+            "after_commit" => %w[y x],
+            "after_save" => %w[s1 s2]
+          )
+        end
+      end
+    end
+
     it "keeps on: as a condition wherever the type does not already say it" do
       Dir.mktmpdir do |dir|
         write_model(dir, "Order", <<~RUBY)

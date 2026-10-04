@@ -27,7 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without a time limit. (#256)
 - **`rails_get_callbacks` lists callbacks in the order Rails runs them**:
   base classes first, a concern's callbacks where its `include` line stands,
-  then the model's own. A method declared twice under one callback type shows
+  then the model's own, with a `prepend: true` callback at the front.
+  `after_commit` and `after_rollback` list last declared first, as Rails runs
+  them, unless `run_after_transaction_callbacks_in_order_defined` is on
+  (`load_defaults 7.1` or later); the static tier reads that from the config,
+  and says so when the config does not tell. A method declared twice under one callback type shows
   the declaration Rails keeps, the later one, which corrects the 5.30.0 entry
   that said each declaration is shown. A nested class's callbacks are its own,
   not the outer model's. (#253)

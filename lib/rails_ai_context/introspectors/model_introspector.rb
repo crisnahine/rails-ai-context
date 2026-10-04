@@ -503,7 +503,8 @@ module RailsAiContext
         bases = booted_declaring_bases(model)
         calls = class_calls([ model_source_path(model), *bases.map(&:last) ])
         source_data, unread, bases_unread, hidden =
-          merge_class_and_bases(own_source, model.name, calls, bases, file: model_source_path(model))
+          merge_class_and_bases(own_source, model.name, calls, bases, file: model_source_path(model),
+                                commits_in_order: booted_commits_in_order)
 
         class_methods = extract_class_methods_from_ast(model, source_data)
         instance_methods = extract_instance_methods_from_ast(model, source_data)
@@ -730,41 +731,51 @@ module RailsAiContext
         { true => true, false => false, "true" => true, "false" => false }[value]
       end
 
-      # The last `belongs_to_required_by_default =` Rails would run, from
-      # config/application.rb then each initializer in load order, on any
-      # receiver (`config.active_record`, `ActiveRecord::Base`); without one,
-      # Rails turns it on from `load_defaults 5.0`.
+      # Without a `belongs_to_required_by_default =` of its own, Rails turns it
+      # on from `load_defaults 5.0`.
       def belongs_to_required_by_default?
-        return @belongs_to_required if defined?(@belongs_to_required)
+        values, version = framework_setting(:belongs_to_required_by_default=)
+        setting = values.compact.last
+        setting.nil? ? version.to_f >= 5.0 : setting
+      end
 
-        root = app.root.to_s
-        paths = [ File.join(root, "config", "application.rb"),
-                  *Dir.glob(File.join(root, "config", "initializers", "**", "*.rb")).sort ]
-        setting = nil
-        version = nil
-        paths.each do |path|
-          source = SafeFile.read(path) or next
-          AstWalk.each(AstCache.parse_string(source).value) do |node|
-            next unless node.is_a?(Prism::CallNode)
+      # Each `setter` call Rails would run, from config/application.rb then
+      # each initializer in load order, on any receiver (`config.active_record`,
+      # `ActiveRecord::Base`), as true, false or nil for a non-literal; the
+      # `config.load_defaults` version; and whether application.rb was read.
+      def framework_setting(setter)
+        @framework_settings ||= {}
+        @framework_settings[setter] ||= begin
+          root = app.root.to_s
+          application = File.join(root, "config", "application.rb")
+          values = []
+          version = nil
+          read = false
+          [ application, *Dir.glob(File.join(root, "config", "initializers", "**", "*.rb")).sort ].each do |path|
+            source = SafeFile.read(path) or next
+            read ||= path == application
+            AstWalk.each(AstCache.parse_string(source).value) do |node|
+              next unless node.is_a?(Prism::CallNode)
 
-            if node.name == :belongs_to_required_by_default= && node.receiver
-              literal = required_default_literal(node)
-              setting = literal unless literal.nil?
-            elsif node.name == :load_defaults && path.end_with?("application.rb") && node.receiver&.slice.to_s == "config"
-              version = defaults_version(node.arguments&.arguments&.first)
+              if node.name == setter && node.receiver
+                values << boolean_literal(node)
+              elsif node.name == :load_defaults && path == application && node.receiver&.slice.to_s == "config"
+                version = defaults_version(node.arguments&.arguments&.first)
+              end
             end
           end
+          [ values, version, read ]
         end
-        @belongs_to_required = setting.nil? ? version.to_f >= 5.0 : setting
+      end
+
+      def boolean_literal(node)
+        { Prism::TrueNode => true, Prism::FalseNode => false }[node.arguments&.arguments&.first.class]
       end
 
       # The true or false a `belongs_to_required_by_default =` call assigns;
       # nil for another call or a value the source cannot evaluate.
       def required_default_literal(node)
-        return nil unless node.name == :belongs_to_required_by_default=
-
-        value = node.arguments&.arguments&.first
-        { Prism::TrueNode => true, Prism::FalseNode => false }[value.class]
+        boolean_literal(node) if node.name == :belongs_to_required_by_default=
       end
 
       # A literal version as written; anything else (`Rails::VERSION::STRING.to_f`)
@@ -1342,7 +1353,8 @@ module RailsAiContext
                                sti: nil, parent_model: nil)
         own = own_body(source_walk(path), class_name)
         calls = class_calls([ path, *Array(inherited_from).map(&:last) ])
-        data, unread, bases_unread, hidden = merge_class_and_bases(own, class_name, calls, inherited_from, file: path)
+        data, unread, bases_unread, hidden = merge_class_and_bases(own, class_name, calls, inherited_from, file: path,
+                                                                   commits_in_order: static_commits_in_order)
         own_methods = ActionResolver.own_methods(own[:methods], class_name)
         scope_names = Array(data[:scopes]).filter_map { |scope| scope[:name]&.to_s }.to_set
         static_instance_methods = own_methods.select { |m| m[:scope] == :instance && m[:visibility] == :public }.map { |m| m[:name].to_s }
@@ -1373,6 +1385,7 @@ module RailsAiContext
           concern_callbacks: concern_callbacks(data[:callbacks]),
           concerns_unread: (unread if unread.any?),
           bases_unread: (bases_unread if bases_unread.any?),
+          commit_order_unread: commit_order_unread(data[:callbacks]),
           conditional_declarations: declarations(data[:conditional]),
           foreign_declarations: declarations(data[:foreign]),
           macros: data[:macros],
@@ -1472,7 +1485,7 @@ module RailsAiContext
       #
       # Each side is walked again only when the other has since learned a call
       # that releases something it held back.
-      def merge_class_and_bases(own, class_name, calls, bases, file:)
+      def merge_class_and_bases(own, class_name, calls, bases, file:, commits_in_order:)
         extra = class_extras(own, class_name)
         mine = merge_concern_macros(own, class_name, calls, extra: extra, file: file)
         walked = walk_bases(bases, calls)
@@ -1488,7 +1501,7 @@ module RailsAiContext
         data, unread, hidden = mine
         data = data.merge(callbacks: ranked(data[:callbacks], 0))
         data, *rest = merge_inherited_macros(data, unread, hidden, walked)
-        [ data.merge(callbacks: chain_order(data[:callbacks])), *rest ]
+        [ data.merge(callbacks: chain_order(data[:callbacks], commits_in_order)), *rest ]
       end
 
       # The class's own rank, unless the line that declared it was a call in
@@ -1501,11 +1514,60 @@ module RailsAiContext
 
       # Rails builds the chain from the outermost base in, each class in the
       # order its body runs.
-      def chain_order(callbacks)
+      def chain_order(callbacks, commits_in_order)
         sorted = Array(callbacks).each_with_index.sort_by do |cb, index|
           [ -cb[:rank].to_i, *(cb[:chain_at] || [ cb[:location].to_i, -1 ]), index ]
         end
-        callback_chain(sorted.map(&:first)).map { |cb| cb.except(*CHAIN_KEYS) }
+        run_order(callback_chain(sorted.map(&:first)), commits_in_order).map { |cb| cb.except(*CHAIN_KEYS) }
+      end
+
+      TRANSACTION_TYPE = /\Aafter_(\w+_)?(commit|rollback)/
+
+      # ActiveSupport puts a prepended callback at the front of its chain and
+      # runs after callbacks from the back. ActiveModel prepends every after_*,
+      # and Active Record prepends after_commit only when the app asks for it.
+      def run_order(callbacks, commits_in_order)
+        ordered = callbacks.dup
+        callbacks.each_index.group_by { |i| Listeners::CallbacksListener.chain_key(callbacks[i][:type]) }.each_value do |slots|
+          chain = slots.each_with_object([]) do |i, list|
+            prepended?(callbacks[i], commits_in_order) ? list.unshift(callbacks[i]) : list.push(callbacks[i])
+          end
+          chain.reverse! if callbacks[slots.first][:type].to_s.start_with?("after_")
+          slots.zip(chain) { |i, cb| ordered[i] = cb }
+        end
+        ordered
+      end
+
+      # An unknown setting keeps the transaction callbacks in declaration order.
+      def prepended?(callback, commits_in_order)
+        type = callback[:type].to_s
+        declared = callback.dig(:options, :prepend).to_s == "true"
+        return declared unless type.start_with?("after_")
+        return true unless type.match?(TRANSACTION_TYPE)
+
+        declared || commits_in_order != false
+      end
+
+      # Rails 7.0 has no setting and always runs them last declared first.
+      def booted_commits_in_order
+        ActiveRecord.respond_to?(:run_after_transaction_callbacks_in_order_defined) &&
+          ActiveRecord.run_after_transaction_callbacks_in_order_defined
+      end
+
+      # nil when the config cannot say: no config/application.rb, a version or
+      # a value that is not a literal.
+      def static_commits_in_order
+        values, version, read = framework_setting(:run_after_transaction_callbacks_in_order_defined=)
+        return values.last unless values.empty?
+        return nil if !read || version == Float::INFINITY
+
+        version.to_f >= 7.1
+      end
+
+      def commit_order_unread(callbacks)
+        return nil unless static_commits_in_order.nil?
+
+        true if Array(callbacks).count { |cb| cb[:type].to_s.match?(TRANSACTION_TYPE) } > 1
       end
 
       # Each base read with its concerns; a base's concern macro that sits in a

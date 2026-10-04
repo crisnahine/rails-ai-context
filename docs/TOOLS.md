@@ -180,7 +180,10 @@ Callbacks grouped by type, in Rails event order, with source code. The list
 covers concern-declared callbacks too, with the body read from the concern
 file, and the "From Concerns" section says which concern declared each one.
 Within one type the order is the order Rails runs them: base classes first, a
-concern's callbacks where its `include` line stands, then the model's own. A
+concern's callbacks where its `include` line stands, then the model's own, with
+a `prepend: true` callback at the front. `after_commit` and `after_rollback`
+are last declared first unless the app turns on
+`run_after_transaction_callbacks_in_order_defined` (`load_defaults 7.1`). A
 method declared again for one type shows once, with the later declaration's
 conditions, as Rails keeps it.
 

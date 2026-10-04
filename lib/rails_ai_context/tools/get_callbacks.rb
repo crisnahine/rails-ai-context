@@ -7,7 +7,8 @@ module RailsAiContext
       description "Get ActiveRecord model callbacks grouped by type, in Rails event order: before/after/around for validation, save, create, update, destroy. " \
         "Use when: understanding side effects, debugging callback chains, or checking what happens on save/create/destroy. " \
         "Specify model:\"User\" for one model's callbacks. detail:\"full\" includes callback method source code. " \
-        "The list is what the model, its base classes and its concerns declare, and within one type the order is the order Rails runs them."
+        "The list is what the model, its base classes and its concerns declare, and within one type the order is the order Rails runs them, " \
+        "prepend: true and the app's after_commit order setting included."
 
       # `after_create_commit :x` and `after_commit :y, on: :create` run at the
       # same point and keep their own declared spellings, so the two sit
@@ -126,6 +127,9 @@ module RailsAiContext
           end
         end
 
+        note = commit_order_note([ name ], { name => data })
+        lines << "" << note if note
+
         # Which concern declared what. The callbacks themselves are already in
         # the execution-order list above, with their bodies at detail:full, so
         # repeating either here prints the same declaration twice.
@@ -198,7 +202,19 @@ module RailsAiContext
           end
         end
 
+        note = commit_order_note(models_with_callbacks.keys, models_with_callbacks) unless detail == "summary"
+        lines << "" << note if note
         text_response(lines.join("\n"))
+      end
+
+      # Statically, a config that does not say how Rails orders after_commit
+      # and after_rollback leaves those lists in declaration order.
+      private_class_method def self.commit_order_note(names, models)
+        unread = names.select { |name| models[name][:commit_order_unread] }.sort
+        return nil if unread.empty?
+
+        "_after_commit and after_rollback for #{unread.join(', ')} are in declaration order: the config does not say " \
+          "whether `run_after_transaction_callbacks_in_order_defined` is on, and when it is off Rails runs them last declared first._"
       end
 
       private_class_method def self.order_callbacks(callbacks)
