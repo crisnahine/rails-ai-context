@@ -185,7 +185,11 @@ a `before_` or `around_` callback with `prepend: true` first. `after_commit`
 and `after_rollback` are last declared first unless the app turns on
 `run_after_transaction_callbacks_in_order_defined` (`load_defaults 7.1`). A
 method declared again for one type shows once, with the later declaration's
-conditions, as Rails keeps it.
+conditions, as Rails keeps it. The order is read from source in both tiers,
+and dynamic dispatch is not evaluated: a callback registered through
+`send(:before_save, ...)`, through a method called with `send` or defined with
+`define_singleton_method`, or through a module included in `class << self` is
+not listed.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
