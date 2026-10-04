@@ -25,6 +25,8 @@ RSpec.describe "Listener registration properties" do
         class Thing < Base
           SETTING = 1
           RULE = -> { :rule }
+          Probe::Nested = Class.new(Base) do
+          end
 
           class << self
             def built

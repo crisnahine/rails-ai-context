@@ -106,10 +106,12 @@ module RailsAiContext
           extended = @extended.include?(name)
           scope = [ extended, inner, own_lines, hooks ]
           @keys.each do |key|
-            applied(data[key], bodies, *scope).each { |entry| @collected[key] << tagged(entry, label) }
+            applied(data[key], bodies, *scope).each do |entry|
+              @collected[key] << tagged(entry, label, rerun: key == :callbacks && in_hook?(entry, hooks))
+            end
           end
           expand_called(tree, data, own_lines, label).each do |key, entries|
-            entries.each { |entry| @collected[key] << tagged(entry, label) }
+            entries.each { |entry| @collected[key] << tagged(entry, label, rerun: key == :callbacks) }
           end
 
           mixins = applied(data[:mixins], bodies, *scope, keep_called: true)
@@ -226,7 +228,11 @@ module RailsAiContext
           call_sites.fetch(name).each do |call|
             expansion = Introspectors::CallSiteExpansion.entries(definition, call, @listeners)
             # `:conditional` and `:foreign` come back as keys too, when asked for.
-            expansion.each { |key, entries| found[key].concat(Array(entries)) if @keys.include?(key) }
+            expansion.each do |key, entries|
+              next unless @keys.include?(key)
+
+              found[key].concat(key == :callbacks ? Array(entries).map { |entry| at_call(entry, call) } : Array(entries))
+            end
             # The call site now reads as what the method declares; a caller that
             # read the call itself as a declaration (`validates_translation` as a
             # validation) drops that reading by its line.
@@ -336,8 +342,24 @@ module RailsAiContext
         into
       end
 
-      def tagged(entry, concern_name)
-        entry.is_a?(Hash) ? entry.merge(from_concern: concern_name) : entry
+      # A callback from a mixin hook or a called class method runs again for a
+      # subclass that includes or calls it again; ActiveSupport::Concern's
+      # `included` block does not, so only the first carries `rerun`.
+      def tagged(entry, concern_name, rerun: false)
+        return entry unless entry.is_a?(Hash)
+
+        rerun ? entry.merge(from_concern: concern_name, rerun: true) : entry.merge(from_concern: concern_name)
+      end
+
+      # Where the call that declared it stands, so the chain places it there.
+      def at_call(entry, call)
+        rank = call && @calls.respond_to?(:rank_of) && @calls.rank_of(call)
+        rank ? entry.merge(call_rank: rank, call_line: call.location.start_line) : entry
+      end
+
+      def in_hook?(entry, hooks)
+        line = entry.is_a?(Hash) && entry[:location]
+        line && hooks.any? { |range| range.cover?(line) }
       end
     end
 

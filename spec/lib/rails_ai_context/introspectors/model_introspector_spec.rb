@@ -2750,6 +2750,64 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # A plain module's `self.included` and a class method the child calls
+    # again do run again, unlike an ActiveSupport::Concern's `included` block.
+    it "runs a plain included hook and a called class method again for the child" do
+      Dir.mktmpdir do |dir|
+        write_model(dir, "Concerns::Plain", <<~RUBY)
+          module Plain
+            def self.included(base)
+              base.before_save :p
+              base.before_save { 1 }
+            end
+          end
+        RUBY
+        write_model(dir, "Concerns::Cm", <<~RUBY)
+          module Cm
+            extend ActiveSupport::Concern
+            class_methods do
+              def stampable
+                before_save :cm_only
+                before_save { 2 }
+              end
+            end
+          end
+        RUBY
+        write_model(dir, "Pb", "class Pb < ApplicationRecord\n  include Plain\n  before_save :b\nend\n")
+        write_model(dir, "Pc", "class Pc < Pb\n  include Plain\n  before_save :d\nend\n")
+        write_model(dir, "Mb", "class Mb < ApplicationRecord\n  include Cm\n  stampable\n  before_save :b\nend\n")
+        write_model(dir, "Mc", "class Mc < Mb\n  include Cm\n  stampable\n  before_save :d\nend\n")
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["Pc"][:callbacks]["before_save"]).to eq(%w[[inline_block] b p [inline_block] d])
+        expect(models["Mc"][:callbacks]["before_save"]).to eq(%w[[inline_block] b cm_only [inline_block] d])
+      end
+    end
+
+    it "credits a Class.new body and a top-level line to no other class in the file" do
+      Dir.mktmpdir do |dir|
+        write_model(dir, "Concerns::Stampable", "module Stampable\n  extend ActiveSupport::Concern\nend\n")
+        write_model(dir, "Pair", <<~RUBY)
+          class Pair < ApplicationRecord
+            include Stampable
+          end
+          Sib = Class.new(ApplicationRecord) do
+            include Comparable
+            before_save :z
+          end
+        RUBY
+        write_model(dir, "Lone", "include Comparable\nclass Lone < ApplicationRecord\n  before_save :q\nend\n")
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["Pair"][:callbacks]).to eq({})
+        expect(booted_callbacks(dir, "Pair")).to eq({})
+        expect(models["Pair"][:concerns]).to eq([ "Stampable" ])
+        expect(models["Lone"][:concerns]).to eq([])
+      end
+    end
+
     it "reads the callbacks of a model written as Class.new" do
       Dir.mktmpdir do |dir|
         write_model(dir, "Anon", <<~RUBY)

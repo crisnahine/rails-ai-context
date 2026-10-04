@@ -7,6 +7,7 @@ module RailsAiContext
       # before_validation, after_save, after_commit, etc.
       class CallbacksListener < BaseListener
         include WithOptionsScope
+        include OwnerScope
 
         CALLBACK_METHODS = %i[
           before_validation after_validation
@@ -22,29 +23,6 @@ module RailsAiContext
 
         INLINE_BLOCK = "[inline_block]"
         NAME_SHAPED = /\A[A-Za-z_]\w*(::[A-Za-z_]\w*)*[?!]?\z/
-
-        def initialize
-          super
-          @owner_stack = []
-        end
-
-        # The class or module the callback is written in, the way
-        # MixinsListener records an include: a nested class's is its own.
-        def on_class_node_enter(node)
-          @owner_stack.push(constant_path_string(node.constant_path))
-        end
-
-        def on_class_node_leave(_node)
-          @owner_stack.pop
-        end
-
-        def on_module_node_enter(node)
-          @owner_stack.push(constant_path_string(node.constant_path))
-        end
-
-        def on_module_node_leave(_node)
-          @owner_stack.pop
-        end
 
         def on_call_node_enter(node)
           return unless CALLBACK_METHODS.include?(node.name) && in_scope?(node)

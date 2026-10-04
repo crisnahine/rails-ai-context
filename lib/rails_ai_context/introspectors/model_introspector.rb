@@ -1443,15 +1443,16 @@ module RailsAiContext
       end
 
       # A concern's callbacks join the chain where its include line runs, as
-      # ControllerFilters places a concern's filters.
+      # ControllerFilters places a concern's filters, and a called class
+      # method's where the call is.
       def placed_callbacks(own, collected, placement)
         line_of = Array(own[:mixins]).reverse.to_h { |mixin| [ mixin[:name], mixin[:location].to_i ] }
-        placed = Array(own[:callbacks]).map { |cb| [ cb[:location].to_i, -1, cb ] } +
-                 Array(collected).map do |cb|
-                   top, order = placement[cb[:from_concern]]
-                   [ line_of[top].to_i, order.to_i, cb ]
-                 end
-        callback_chain(placed.each_with_index.sort_by { |(line, order, _), index| [ line, order, index ] }.map { |(_, _, cb), _| cb })
+        Array(own[:callbacks]) + Array(collected).map do |cb|
+          next cb.merge(chain_at: [ cb[:call_line], 0 ]) if cb[:call_line]
+
+          top, order = placement[cb[:from_concern]]
+          cb.merge(chain_at: [ line_of[top].to_i, order.to_i ])
+        end
       end
 
       # A `validates_translation :title` call the listener read as a validation
@@ -1485,7 +1486,26 @@ module RailsAiContext
           walked = walk_bases(bases, calls) if held.intersect?(grown)
         end
         data, unread, hidden = mine
-        merge_inherited_macros(data, unread, hidden, walked)
+        data = data.merge(callbacks: ranked(data[:callbacks], 0))
+        data, *rest = merge_inherited_macros(data, unread, hidden, walked)
+        [ data.merge(callbacks: chain_order(data[:callbacks])), *rest ]
+      end
+
+      # The class's own rank, unless the line that declared it was a call in
+      # another class's file.
+      def ranked(callbacks, rank)
+        Array(callbacks).map { |cb| cb.merge(rank: cb[:call_rank] || rank) }
+      end
+
+      CHAIN_KEYS = %i[rank chain_at call_rank call_line rerun].freeze
+
+      # Rails builds the chain from the outermost base in, each class in the
+      # order its body runs.
+      def chain_order(callbacks)
+        sorted = Array(callbacks).each_with_index.sort_by do |cb, index|
+          [ -cb[:rank].to_i, *(cb[:chain_at] || [ cb[:location].to_i, -1 ]), index ]
+        end
+        callback_chain(sorted.map(&:first)).map { |cb| cb.except(*CHAIN_KEYS) }
       end
 
       # Each base read with its concerns; a base's concern macro that sits in a
@@ -1511,12 +1531,13 @@ module RailsAiContext
       # never reaches the line that names them.
       def merge_inherited_macros(data, unread, hidden, walked)
         bases_unread = []
-        walked.each do |name, own, base, base_unread, base_hidden|
+        walked.each_with_index do |(name, own, base, base_unread, base_hidden), index|
           if own.nil?
             bases_unread |= [ name ]
             next
           end
 
+          base = base.merge(callbacks: ranked(base[:callbacks], index + 1))
           data = merge_inherited(data, base.slice(*WALKED_KEYS))
           # A base's concerns are the child's too: the child's record already
           # carries what they declared, and its callbacks credit them by name.
@@ -1574,7 +1595,7 @@ module RailsAiContext
         # declaration: the line it was read at differs between two files, and
         # the concern tag differs between two ways of reaching one file.
         merged[:macros] = dedup(merged[:macros]) { |m| m.except(:from_concern, :location) }
-        merged[:callbacks] = callback_chain(Array(inherited[:callbacks]) + not_rerun(mine[:callbacks], inherited[:callbacks]))
+        merged[:callbacks] = Array(inherited[:callbacks]) + not_rerun(mine[:callbacks], inherited[:callbacks])
         # One source line read twice is still one declaration: a concern the
         # model and one of its bases both include is walked once per class, and
         # `included do` runs once. Two validations really written twice differ
@@ -1587,7 +1608,7 @@ module RailsAiContext
       # has the module, so the child's copy of those lines never runs.
       def not_rerun(mine, inherited)
         ran = Array(inherited).filter_map { |c| [ c[:from_concern], c[:location] ] if c[:from_concern] }.to_set
-        Array(mine).reject { |c| c[:from_concern] && ran.include?([ c[:from_concern], c[:location] ]) }
+        Array(mine).reject { |c| c[:from_concern] && !c[:rerun] && ran.include?([ c[:from_concern], c[:location] ]) }
       end
 
       SYMBOL_TARGET = /\A[a-z_]\w*[?!]?\z/
@@ -1596,13 +1617,13 @@ module RailsAiContext
       # declared again, the later one at its own place, and two validators for
       # a validation declared twice, so the two are not deduped alike. Two
       # blocks or objects are two callbacks unless they are one concern line
-      # reached twice.
+      # reached twice for one include or one call.
       def callback_chain(callbacks)
         keys = callbacks.each_with_index.map do |c, i|
           if c[:method].to_s.match?(SYMBOL_TARGET)
             [ Listeners::CallbacksListener.chain_key(c[:type]), c[:method].to_s ]
-          elsif c[:from_concern]
-            [ c[:from_concern], c[:location] ]
+          elsif c[:from_concern] && (!c[:rerun] || c[:call_line])
+            [ c[:from_concern], c[:location], c[:call_rank], c[:call_line] ]
           else
             i
           end
@@ -1752,23 +1773,32 @@ module RailsAiContext
       #
       # A concern's `included do` calls join the set too, so a base walked later sees them.
       def class_calls(paths)
+        ranks = {}
         reader = lambda do
-          paths.compact.select { |path| readable_source?(path) }.each_with_object({}) do |path, found|
+          paths.each_with_index.select { |path, _| path && readable_source?(path) }.each_with_object({}) do |(path, rank), found|
             source = model_source(path)
             tree = (source ? AstCache.parse_string(source) : AstCache.parse(path)).value
-            ConcernMacros::Run.merge_calls(found, SourceIntrospector.calls_outside_methods(tree))
+            own = SourceIntrospector.calls_outside_methods(tree)
+            own.each_value { |sites| Array(sites).each { |site| ranks[site.__id__] = rank if site } }
+            ConcernMacros::Run.merge_calls(found, own)
           rescue StandardError, ScriptError => e
             # A file the walk cannot read calls nothing it can see.
             RailsAiContext.debug_fail(e, nil, label: "class calls of #{path}")
           end
         end
-        ClassCalls.new(reader, {})
+        ClassCalls.new(reader, {}, ranks)
       end
 
       # The class files' own calls are read once; the included-block calls
       # grow as the walks read concerns.
-      ClassCalls = Struct.new(:reader, :included) do
+      ClassCalls = Struct.new(:reader, :included, :ranks) do
         def call = ConcernMacros::Run.merge_calls(ConcernMacros::Run.merge_calls({}, own), included)
+
+        # Which class file a call site sits in: 0 is the class, then its bases nearest first.
+        def rank_of(site)
+          own
+          ranks[site.__id__]
+        end
 
         def own
           @own ||= reader.call

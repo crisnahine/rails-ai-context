@@ -14,28 +14,11 @@ module RailsAiContext
         MIXIN_MACROS = %i[include prepend extend].to_set.freeze
         ANCESTOR_MACROS = %i[include prepend].to_set.freeze
 
+        include OwnerScope
+
         def initialize
           super
           @singleton_depth = 0
-          @owner_stack = []
-        end
-
-        # The class or module the mixin is written in, the way MethodsListener
-        # records a method's: a nested class's include is not its module's.
-        def on_class_node_enter(node)
-          @owner_stack.push(constant_path_string(node.constant_path))
-        end
-
-        def on_class_node_leave(_node)
-          @owner_stack.pop
-        end
-
-        def on_module_node_enter(node)
-          @owner_stack.push(constant_path_string(node.constant_path))
-        end
-
-        def on_module_node_leave(_node)
-          @owner_stack.pop
         end
 
         # `include` inside `class << self` lands on the singleton class, so it
