@@ -198,7 +198,7 @@ module RailsAiContext
         when "csv"
           format_csv(redacted)
         else
-          format_table(redacted)
+          format_table(redacted) + unbounded_sqlite_note
         end
 
         text_response(output)
@@ -312,14 +312,17 @@ module RailsAiContext
         # Build the combined list ONCE per call and dedupe.
         configured = Array(config.query_redacted_columns).map { |c| c.to_s.downcase }
         suffixed   = SENSITIVE_COLUMN_SUFFIXES.map(&:downcase)
-        # An app whose own column merely looks sensitive (oauth_applications.secret)
-        # exempts it here; the built-in list is frozen and cannot be subtracted from.
-        allowed    = Array(config.query_allowed_columns).map { |c| c.to_s.downcase }
-        ((configured + suffixed).uniq - allowed).each do |col|
+        ((configured + suffixed).uniq - allowed_columns.to_a).each do |col|
           next if col.empty?
           return col if down.match?(/\b#{Regexp.escape(col)}\b/)
         end
         nil
+      end
+
+      # An app whose own column merely looks sensitive (oauth_applications.secret)
+      # exempts it by name, from the pre-query check and from result redaction alike.
+      private_class_method def self.allowed_columns
+        Array(config.query_allowed_columns).to_set { |c| c.to_s.downcase }
       end
 
       # ── Database-level execution (Layer 2) ──────────────────────────
@@ -383,29 +386,81 @@ module RailsAiContext
         result
       end
 
+      # sqlite3-ruby cannot stop a running statement in-process: `statement_timeout=`
+      # interrupts almost every statement at once, and `interrupt` never runs while
+      # `step` holds the GVL. So a file-backed database is queried from a child process
+      # the parent can kill.
       private_class_method def self.execute_sqlite(conn, sql, timeout)
-        raw = conn.raw_connection
+        if (path = sqlite_fork_path(conn))
+          return execute_sqlite_in_child(path, sql, timeout)
+        end
+
         result = nil
         begin
           conn.execute("PRAGMA query_only = ON")
-          # SQLite has no native statement timeout. Use a progress handler
-          # to abort queries that run too long (checked every 1000 VM steps).
-          deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
-          if raw.respond_to?(:set_progress_handler)
-            raw.set_progress_handler(1000) do
-              if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
-                1 # non-zero = abort
-              else
-                0
-              end
-            end
-          end
           result = conn.select_all(sql)
         ensure
-          raw.set_progress_handler(0, nil) if raw.respond_to?(:set_progress_handler)
           conn.execute("PRAGMA query_only = OFF")
         end
         result
+      end
+
+      private_class_method def self.unbounded_sqlite_note
+        conn = ActiveRecord::Base.connection
+        return "" unless conn.adapter_name.match?(/sqlite/i) && sqlite_fork_path(conn).nil?
+
+        "\n\n_This SQLite query ran without a time limit: query_timeout needs a file-backed database on a platform with fork._"
+      end
+
+      # nil for an in-memory or temporary database, or where there is no fork.
+      private_class_method def self.sqlite_fork_path(conn)
+        return nil unless Process.respond_to?(:fork)
+
+        path = conn.raw_connection.filename("main").to_s
+        path unless path.empty?
+      end
+
+      private_class_method def self.execute_sqlite_in_child(path, sql, timeout)
+        reader, writer = IO.pipe.each(&:binmode)
+        # sqlite3 2.x closes the inherited writable handle in the child and warns on stderr.
+        quiet = File.open(File::NULL, "w")
+        stderr, $stderr = $stderr, quiet
+        begin
+          pid = fork do
+            reader.close
+            payload = begin
+              stmt = SQLite3::Database.new(path, readonly: true).prepare(sql)
+              [ :ok, stmt.columns, stmt.to_a ]
+            rescue => e
+              [ :error, "#{e.class}: #{e.message}" ]
+            end
+            writer.write(Marshal.dump(payload))
+          ensure
+            exit!(0)
+          end
+        ensure
+          $stderr = stderr
+          quiet.close
+        end
+        writer.close
+
+        unless IO.select([ reader ], nil, nil, timeout)
+          # KILL, not TERM: TERM cannot land while `step` holds the GVL, and would run inherited at_exit hooks.
+          Process.kill(:KILL, pid)
+          raise ActiveRecord::StatementInvalid, "SQLite query exceeded the statement timeout"
+        end
+
+        data = reader.read
+        raise ActiveRecord::StatementInvalid, "the SQLite query process exited without a result" if data.empty?
+
+        status, *rest = Marshal.load(data)
+        raise ActiveRecord::StatementInvalid, rest.first if status == :error
+
+        ActiveRecord::Result.new(*rest)
+      ensure
+        reader&.close
+        writer&.close
+        Process.wait(pid) if pid
       end
 
       # ── EXPLAIN execution ────────────────────────────────────────────
@@ -592,14 +647,15 @@ module RailsAiContext
 
       # ── Column redaction (Layer 4) ──────────────────────────────────
       private_class_method def self.redact_results(result)
-        redacted_cols = config.query_redacted_columns.map(&:downcase).to_set
+        allowed = allowed_columns
+        redacted_cols = config.query_redacted_columns.map(&:downcase).to_set - allowed
+        encrypted_cols = Set.new
 
-        # Auto-redact columns declared with `encrypts` in models
         models_data = cached_context&.dig(:models)
         if models_data.is_a?(Hash)
           models_data.each_value do |data|
             next unless data.is_a?(Hash)
-            (data[:encrypts] || []).each { |col| redacted_cols << col.to_s.downcase }
+            (data[:encrypts] || []).each { |col| encrypted_cols << col.to_s.downcase }
           end
         end
         columns = result.columns
@@ -609,8 +665,9 @@ module RailsAiContext
         sensitive_suffixes = %w[password secret token key digest hash].freeze
         redacted_indices = columns.each_with_index.filter_map { |col, i|
           col_down = col.downcase
-          i if redacted_cols.include?(col_down) ||
-               sensitive_suffixes.any? { |suffix| col_down.end_with?(suffix) || col_down.include?("password") || col_down.include?("secret") || col_down.include?("token") }
+          i if encrypted_cols.include?(col_down) || redacted_cols.include?(col_down) ||
+               (!allowed.include?(col_down) &&
+                sensitive_suffixes.any? { |suffix| col_down.end_with?(suffix) || col_down.include?("password") || col_down.include?("secret") || col_down.include?("token") })
         }
 
         return result if redacted_indices.empty?

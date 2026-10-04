@@ -614,15 +614,10 @@ it "still explains a database that does not exist" do
       end
     end
 
-    it "executes queries successfully without progress handler support" do
-      raw = ActiveRecord::Base.connection.raw_connection
-
-      # sqlite3 gem 2.x removed set_progress_handler; verify the timeout
-      # enforcement path degrades gracefully (query still runs, no error)
-      expect(raw.respond_to?(:set_progress_handler)).to be false
-      response = described_class.call(sql: "SELECT 1 AS test")
-      expect(response).to be_a(MCP::Tool::Response)
-      expect(response.content.first[:text]).to include("test")
+    it "says an in-memory database runs without a time limit" do
+      text = described_class.call(sql: "SELECT 1 AS test").content.first[:text]
+      expect(text).to include("| 1")
+      expect(text).to include("without a time limit")
     end
 
     it "resets PRAGMA query_only after query execution" do
@@ -642,6 +637,96 @@ it "still explains a database that does not exist" do
       ensure
         conn.execute("DROP TABLE IF EXISTS _query_tool_reset_test")
       end
+    end
+  end
+
+  describe "SQLite timeout on a file-backed database" do
+    let(:dir) { Dir.mktmpdir }
+    let(:conn) do
+      stub_const("QueryTimeoutSpecRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+      QueryTimeoutSpecRecord.establish_connection(adapter: "sqlite3", database: File.join(dir, "t.sqlite3"))
+      QueryTimeoutSpecRecord.connection.tap do |c|
+        c.execute("CREATE TABLE nums (n INTEGER)")
+        c.execute("INSERT INTO nums VALUES (1), (2), (3)")
+        c.execute("CREATE TABLE big (n INTEGER)")
+        c.execute("INSERT INTO big WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM r WHERE x < 2000) SELECT x FROM r")
+      end
+    end
+    let(:slow_sql) do
+      "SELECT count(*) AS n FROM big a, big b, (SELECT * FROM big LIMIT 100) c"
+    end
+
+    before { allow(ActiveRecord::Base).to receive(:connection).and_return(conn) }
+
+    after do
+      QueryTimeoutSpecRecord.remove_connection
+      FileUtils.rm_rf(dir)
+    end
+
+    it "stops a long query at query_timeout with the timeout message" do
+      RailsAiContext.configuration.query_timeout = 1
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      text = described_class.call(sql: slow_sql).content.first[:text]
+
+      expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 3
+      expect(text).to start_with("Query exceeded 1 second timeout")
+    end
+
+    it "returns the same rows as the in-process connection" do
+      sql = "SELECT n, n * 2 AS twice FROM nums ORDER BY n"
+      result = described_class.send(:execute_sqlite, conn, sql, 5)
+
+      expect(result.columns).to eq(conn.select_all(sql).columns)
+      expect(result.rows).to eq(conn.select_all(sql).rows)
+    end
+
+    it "returns rows under the UTF-8 default_internal a Rails app sets" do
+      internal = Encoding.default_internal
+      Encoding.default_internal = Encoding::UTF_8
+      result = described_class.send(:execute_sqlite, conn, "SELECT count(*) AS n FROM big", 5)
+      expect(result.rows).to eq([ [ 2000 ] ])
+    ensure
+      Encoding.default_internal = internal
+    end
+
+    it "refuses a write" do
+      expect {
+        described_class.send(:execute_sqlite, conn, "INSERT INTO nums VALUES (4)", 5)
+      }.to raise_error(ActiveRecord::StatementInvalid, /readonly/)
+      expect(conn.select_value("SELECT count(*) FROM nums")).to eq(3)
+    end
+
+    it "reports a SQL error the way the in-process path does" do
+      expect {
+        described_class.send(:execute_sqlite, conn, "SELECT nope FROM nums", 5)
+      }.to raise_error(ActiveRecord::StatementInvalid, /\ASQLite3::SQLException: no such column: nope/)
+    end
+
+    it "does not say the query is unbounded" do
+      text = described_class.call(sql: "SELECT n FROM nums").content.first[:text]
+      expect(text).not_to include("without a time limit")
+    end
+  end
+
+  describe "query_allowed_columns in result redaction" do
+    before { RailsAiContext.configuration.query_allowed_columns = %w[secret api_secret] }
+    after { RailsAiContext.configuration.query_allowed_columns = [] }
+
+    it "returns an allowed column that the name heuristic would redact" do
+      text = described_class.call(sql: "SELECT 7 AS secret").content.first[:text]
+      expect(text).to include("| 7")
+      expect(text).not_to include("[FILTERED]")
+    end
+
+    it "returns an allowed column that query_redacted_columns lists" do
+      text = described_class.call(sql: "SELECT 7 AS api_secret").content.first[:text]
+      expect(text).not_to include("[FILTERED]")
+    end
+
+    it "still redacts an allowed column declared with encrypts" do
+      allow(described_class).to receive(:cached_context).and_return(models: { "Thing" => { encrypts: %w[secret] } })
+      text = described_class.call(sql: "SELECT 7 AS secret").content.first[:text]
+      expect(text).to include("[FILTERED]")
     end
   end
 

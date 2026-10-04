@@ -66,7 +66,7 @@ After validation, the query runs inside a transaction:
 |:---------|:----------|
 | PostgreSQL | `SET TRANSACTION READ ONLY` + `SET LOCAL statement_timeout` |
 | MySQL | `SET TRANSACTION READ ONLY` + `MAX_EXECUTION_TIME` hint |
-| SQLite | `PRAGMA query_only = ON` + progress handler for timeout |
+| SQLite | A child process opens its own read-only connection to the database file and is killed at the timeout. An in-memory database, or a platform without `fork`, runs in-process under `PRAGMA query_only = ON` with no time limit, and the answer says so. |
 
 All queries execute inside a transaction, then rollback (even if they could write, they can't).
 
@@ -89,6 +89,8 @@ If one of your own columns merely looks sensitive (an `oauth_applications.secret
 ```ruby
 config.query_allowed_columns = %w[secret]
 ```
+
+The exemption covers the results too: an allowed name comes back unredacted. A column declared with `encrypts` stays `[FILTERED]` either way.
 
 ### Environment guard
 
