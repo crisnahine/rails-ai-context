@@ -198,7 +198,7 @@ module RailsAiContext
         when "csv"
           format_csv(redacted)
         else
-          format_table(redacted) + unbounded_sqlite_note
+          format_table(redacted) + (result.is_a?(UnboundedResult) ? UNBOUNDED_SQLITE_NOTE : "")
         end
 
         text_response(output)
@@ -386,13 +386,14 @@ module RailsAiContext
         result
       end
 
-      # sqlite3-ruby cannot stop a running statement in-process: `statement_timeout=`
-      # interrupts almost every statement at once, and `interrupt` never runs while
-      # `step` holds the GVL. So a file-backed database is queried from a child process
-      # the parent can kill.
+      # sqlite3-ruby cannot interrupt a running statement, so a killable child runs it instead.
       private_class_method def self.execute_sqlite(conn, sql, timeout)
         if (path = sqlite_fork_path(conn))
-          return execute_sqlite_in_child(path, sql, timeout)
+          begin
+            return execute_sqlite_in_child(conn, path, sql, timeout)
+          rescue ActiveRecord::StatementInvalid => e
+            raise unless e.message.match?(SQLITE_APP_CONNECTION_ONLY)
+          end
         end
 
         result = nil
@@ -402,15 +403,15 @@ module RailsAiContext
         ensure
           conn.execute("PRAGMA query_only = OFF")
         end
-        result
+        UnboundedResult.new(result.columns, result.rows)
       end
 
-      private_class_method def self.unbounded_sqlite_note
-        conn = ActiveRecord::Base.connection
-        return "" unless conn.adapter_name.match?(/sqlite/i) && sqlite_fork_path(conn).nil?
+      # Errors from state only the app's own connection has: registered functions,
+      # virtual table modules, collations, an encryption key.
+      SQLITE_APP_CONNECTION_ONLY = /no such (?:function|module|collation)|file is not a database/i
 
-        "\n\n_This SQLite query ran without a time limit: query_timeout needs a file-backed database on a platform with fork._"
-      end
+      # Held from pipe to the parent closing its writer, so no other query's child inherits that writer.
+      SQLITE_FORK_LOCK = Mutex.new
 
       # nil for an in-memory or temporary database, or where there is no fork.
       private_class_method def self.sqlite_fork_path(conn)
@@ -420,16 +421,21 @@ module RailsAiContext
         path unless path.empty?
       end
 
-      private_class_method def self.execute_sqlite_in_child(path, sql, timeout)
-        reader, writer = IO.pipe.each(&:binmode)
-        # sqlite3 2.x closes the inherited writable handle in the child and warns on stderr.
-        quiet = File.open(File::NULL, "w")
-        stderr, $stderr = $stderr, quiet
-        begin
+      private_class_method def self.execute_sqlite_in_child(conn, path, sql, timeout)
+        parent = Process.pid
+        extensions = Array(conn.pool.db_config.configuration_hash[:extensions]).map { |ext| (ext.is_a?(String) && ext.safe_constantize) || ext }
+        # sqlite3 2.x warns in every child that inherits a writable handle; Rails 8 silences it the same way.
+        SQLite3::ForkSafety.suppress_warnings! if defined?(SQLite3::ForkSafety)
+
+        reader = writer = pid = nil
+        SQLITE_FORK_LOCK.synchronize do
+          reader, writer = IO.pipe.each(&:binmode)
           pid = fork do
             reader.close
             payload = begin
-              stmt = SQLite3::Database.new(path, readonly: true).prepare(sql)
+              db = SQLite3::Database.new(path, readonly: true, extensions: extensions)
+              db.busy_timeout = (timeout * 1000).to_i
+              stmt = db.prepare(sql)
               [ :ok, stmt.columns, stmt.to_a ]
             rescue => e
               [ :error, "#{e.class}: #{e.message}" ]
@@ -438,29 +444,38 @@ module RailsAiContext
           ensure
             exit!(0)
           end
-        ensure
-          $stderr = stderr
-          quiet.close
+          writer.close
         end
-        writer.close
 
-        unless IO.select([ reader ], nil, nil, timeout)
-          # KILL, not TERM: TERM cannot land while `step` holds the GVL, and would run inherited at_exit hooks.
-          Process.kill(:KILL, pid)
-          raise ActiveRecord::StatementInvalid, "SQLite query exceeded the statement timeout"
-        end
+        raise ActiveRecord::StatementInvalid, "SQLite query exceeded the statement timeout" unless IO.select([ reader ], nil, nil, timeout)
 
         data = reader.read
-        raise ActiveRecord::StatementInvalid, "the SQLite query process exited without a result" if data.empty?
-
-        status, *rest = Marshal.load(data)
+        status, *rest = begin
+          Marshal.load(data)
+        rescue ArgumentError, TypeError
+          raise ActiveRecord::StatementInvalid, "the SQLite query process exited without a result"
+        end
         raise ActiveRecord::StatementInvalid, rest.first if status == :error
 
         ActiveRecord::Result.new(*rest)
       ensure
+        # Also reached in a child whose fork hooks raised: it must not carry on as a second server.
+        exit!(1) if parent && Process.pid != parent
         reader&.close
         writer&.close
-        Process.wait(pid) if pid
+        if pid
+          # KILL: TERM cannot land while `step` holds the GVL, and would run inherited at_exit hooks.
+          begin
+            Process.kill(:KILL, pid)
+          rescue Errno::ESRCH
+            nil
+          end
+          begin
+            Process.wait(pid)
+          rescue Errno::ECHILD
+            nil
+          end
+        end
       end
 
       # ── EXPLAIN execution ────────────────────────────────────────────
@@ -761,6 +776,9 @@ module RailsAiContext
 
       # Quacks like ActiveRecord::Result for redacted output.
       ResultProxy = Struct.new(:columns, :rows)
+      UnboundedResult = Struct.new(:columns, :rows)
+      UNBOUNDED_SQLITE_NOTE = "\n\n_This SQLite query ran without a time limit: query_timeout needs a file-backed database, " \
+        "a platform with fork, and nothing that only the app's own connection has._"
     end
   end
 end

@@ -706,6 +706,110 @@ it "still explains a database that does not exist" do
       text = described_class.call(sql: "SELECT n FROM nums").content.first[:text]
       expect(text).not_to include("without a time limit")
     end
+
+    def elapsed
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      yield
+      Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+    end
+
+    it "kills the child when the parent fails while waiting" do
+      pids = []
+      allow(Process).to receive(:wait).and_wrap_original { |m, pid| pids << pid; m.call(pid) }
+      allow(IO).to receive(:select).and_raise(IOError, "stream closed")
+
+      took = elapsed do
+        expect { described_class.send(:execute_sqlite, conn, slow_sql, 5) }.to raise_error(IOError)
+      end
+
+      expect(took).to be < 3
+      expect { Process.kill(0, pids.first) }.to raise_error(Errno::ESRCH)
+    end
+
+    it "reads a garbled result as a missing result" do
+      allow(Marshal).to receive(:load).and_raise(ArgumentError, "marshal data too short")
+      expect {
+        described_class.send(:execute_sqlite, conn, "SELECT n FROM nums", 5)
+      }.to raise_error(ActiveRecord::StatementInvalid, /exited without a result/)
+    end
+
+    it "waits on a writer's lock as the app connection would" do
+      conn.execute("PRAGMA journal_mode = DELETE")
+      locker = SQLite3::Database.new(File.join(dir, "t.sqlite3"))
+      locker.execute("BEGIN EXCLUSIVE")
+      locker.execute("INSERT INTO nums VALUES (9)")
+      releaser = Thread.new do
+        sleep 0.5
+        locker.execute("COMMIT")
+      end
+
+      result = described_class.send(:execute_sqlite, conn, "SELECT count(*) AS n FROM nums", 5)
+      expect(result.rows).to eq([ [ 4 ] ])
+    ensure
+      releaser&.join
+      locker&.close
+    end
+
+    it "reruns in-process, without a time limit, what only the app connection can answer" do
+      conn.raw_connection.create_function("rac_twice", 1) { |func, x| func.result = x * 2 }
+      text = described_class.call(sql: "SELECT rac_twice(n) AS t FROM nums ORDER BY n").content.first[:text]
+
+      expect(text).to include("| 6")
+      expect(text).to include("without a time limit")
+    end
+
+    it "loads the extensions database.yml names into the child" do
+      missing = File.join(dir, "rac_missing_ext")
+      allow(conn.pool.db_config).to receive(:configuration_hash)
+        .and_return(conn.pool.db_config.configuration_hash.merge(extensions: [ missing ]))
+
+      expect {
+        described_class.send(:execute_sqlite, conn, "SELECT n FROM nums", 5)
+      }.to raise_error(ActiveRecord::StatementInvalid, /rac_missing_ext/)
+    end
+
+    it "ends a child whose fork hooks raise instead of letting it run on" do
+      spec_pid = Process.pid
+      marker = File.join(dir, "child_ran_on")
+      allow(Process).to receive(:kill)
+      hook = ActiveSupport::ForkTracker.after_fork { raise "fork hook failed" }
+      begin
+        expect {
+          described_class.send(:execute_sqlite, conn, "SELECT n FROM nums", 5)
+        }.to raise_error(ActiveRecord::StatementInvalid, /exited without a result/)
+      ensure
+        if Process.pid != spec_pid
+          File.write(marker, "")
+          exit!(2)
+        end
+        ActiveSupport::ForkTracker.unregister(hook)
+      end
+      expect(File.exist?(marker)).to be false
+    end
+
+    it "does not hand one query's pipe to another query's child" do
+      RailsAiContext.configuration.query_timeout = 2
+      first = true
+      allow(IO).to receive(:pipe).and_wrap_original do |m|
+        pipe = m.call
+        if first
+          first = false
+          sleep 0.3
+        end
+        pipe
+      end
+
+      fast = Thread.new { elapsed { described_class.send(:execute_sqlite, conn, "SELECT n FROM nums", 2) } }
+      sleep 0.1
+      slow = Thread.new do
+        described_class.send(:execute_sqlite, conn, slow_sql, 2)
+      rescue ActiveRecord::StatementInvalid
+        nil
+      end
+
+      expect(fast.value).to be < 1.5
+      slow.join
+    end
   end
 
   describe "query_allowed_columns in result redaction" do
