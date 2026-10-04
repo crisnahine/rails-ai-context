@@ -8,7 +8,7 @@ module RailsAiContext
         "Use when: understanding side effects, debugging callback chains, or checking what happens on save/create/destroy. " \
         "Specify model:\"User\" for one model's callbacks. detail:\"full\" includes callback method source code. " \
         "The list is what the model, its base classes and its concerns declare, and within one type the order is the order Rails runs them, " \
-        "prepend: true and the app's after_commit order setting included."
+        "a before_ or around_ callback with prepend: true first, and after_commit in the order the app's setting gives."
 
       # `after_create_commit :x` and `after_commit :y, on: :create` run at the
       # same point and keep their own declared spellings, so the two sit

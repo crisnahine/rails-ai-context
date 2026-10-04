@@ -282,14 +282,17 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   gem registers on include without an `include` line in the model file (Devise,
   counter caches, attachment purges) is not listed. Within one type the order
   is the order Rails runs them: base classes first, a concern's callbacks where
-  its `include` line stands, then the model's own, with a `prepend: true`
-  callback at the front. `after_commit` and `after_rollback` run last declared
-  first unless `run_after_transaction_callbacks_in_order_defined` is on
-  (`load_defaults 7.1` or later; Rails 7.0 has no such setting). The booted
-  tier reads the setting; the static tier reads `load_defaults` and any
-  assignment in `config/application.rb` or an initializer, and when those do
-  not say, keeps declaration order and the answer says so. The order across
-  types is Rails' event order.
+  its `include` line stands, then the model's own, and a `before_` or
+  `around_` callback with `prepend: true` first. `after_commit` and
+  `after_rollback` run last declared first unless
+  `run_after_transaction_callbacks_in_order_defined` is on
+  (`load_defaults 7.1` or later; Rails 7.0 has no such setting). The booted tier reads the
+  setting; the static tier reads `load_defaults` and any assignment in
+  `config/application.rb` or an initializer, the last line that sets it
+  winning, and when those do not say, keeps declaration order and the answer
+  says so. The static tier does not read `config/environments/*.rb` for this
+  setting or for `belongs_to_required_by_default`, so a value set per
+  environment is missed. The order across types is Rails' event order.
 - **Concern-style Mongoid documents in runtime results.** Mongoid documents
   are invisible to ActiveRecord reflection, so `ModelIntrospector#call` falls
   back to the same source-parsing pass used in the static tier even when the
