@@ -252,7 +252,7 @@ module RailsAiContext
 
         # A worker or base declares its queue in `sidekiq_options`, which the introspector read.
         queue = extract_queue(source) || (record && (record[:queue] || (record[:options] || {})["queue"]))
-        lines << "**Queue:** `#{queue}`" if queue
+        lines << "**Queue:** #{queue_text(queue)}" if queue
         lines << "**Throttle:** #{worker[:throttle]}" if worker && worker[:throttle]
         if base && (declares = Array(base[:declares])).any?
           lines << "" << "## Declares (every job below inherits these)"
@@ -374,7 +374,7 @@ module RailsAiContext
           job_data.each do |j|
             lines << "## #{j[:class_name]}"
             lines << "- **File:** `#{j[:file]}` (#{count_phrase(j[:line_count], "line")})" if j[:line_count]
-            lines << "- **Queue:** `#{j[:queue]}`" if j[:queue]
+            lines << "- **Queue:** #{queue_text(j[:queue])}" if j[:queue]
             lines << "- **Perform:** `#{j[:perform_sig]}`" if j[:perform_sig]
             lines << "- **Retries:** #{j[:retry_config].join('; ')}" if j[:retry_config].any?
             lines << "- **Calls:** #{j[:dependencies].join(', ')}" if j[:dependencies].any?
@@ -397,6 +397,12 @@ module RailsAiContext
         end
 
         lines
+      end
+
+      # A queue name reads as code; a sentence about how the queue is picked
+      # carries its own backticks.
+      private_class_method def self.queue_text(queue)
+        queue.to_s.match?(/\s/) ? queue : "`#{queue}`"
       end
 
       private_class_method def self.queue_label(job)

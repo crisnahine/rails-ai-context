@@ -1299,11 +1299,21 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
               def perform; end
             end
           RUBY
+          File.write(File.join(dir, "app", "jobs", "processing_job.rb"), <<~RUBY)
+            class ProcessingJob < ActiveJob::Base
+              def self.processing_queue = :processing
+              queue_as processing_queue
+
+              def perform; end
+            end
+          RUBY
         end
 
         expect(result[:jobs].to_h { |j| [ j[:name], j[:queue] ] }).to eq(
           "EnvJob" => "`ENV.fetch(\"ENV_QUEUE\", \"default\")` (computed)",
-          "UrgentJob" => "computed by a block: `-> { arguments.first.urgent? ? :high : :low }`"
+          "ProcessingJob" => "`processing_queue` (computed)",
+          "UrgentJob" => "queue_as given a lambda: ActiveJob does not call it, so the queue is named after the Proc's text: " \
+                         "`-> { arguments.first.urgent? ? :high : :low }`"
         )
       end
 
@@ -1474,28 +1484,56 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       end
     end
 
-    # Reflection holds the Proc and nothing about it; the source says what it
-    # computes.
-    it "reads a Proc queue's source rather than calling it dynamic" do
-      Dir.mktmpdir do |dir|
-        FileUtils.mkdir_p(File.join(dir, "app", "jobs"))
-        file = File.join(dir, "app", "jobs", "urgent_job.rb")
-        File.write(file, <<~RUBY)
-          class UrgentJob < ActiveJob::Base
-            queue_as -> { :high }
+    # The queue_name each example reads is what this Rails version stores for
+    # the declaration, not a hand-made stand-in.
+    def reflected_job(name, file, &declaration)
+      reflected = job(name, defined_in: file)
+      allow(reflected).to receive(:queue_name).and_return(Class.new(ActiveJob::Base, &declaration).queue_name)
+      allow(ActiveJob::Base).to receive(:descendants).and_return([ reflected ])
+    end
 
-            def perform; end
+    def booted_queue(name)
+      described_class.new(Rails.application).call[:jobs].find { |j| j[:name] == name }[:queue]
+    end
+
+    it "reads a queue_as block as computed" do
+      with_job_file("UrgentJob", <<~RUBY) do |file|
+        class UrgentJob < ActiveJob::Base
+          queue_as do
+            :high
           end
-        RUBY
-        allow(Rails.application).to receive(:root).and_return(Pathname.new(dir))
-        proc_job = job("UrgentJob", defined_in: file)
-        allow(proc_job).to receive(:queue_name).and_return(-> { :high })
-        allow(ActiveJob::Base).to receive(:descendants).and_return([ proc_job ])
 
-        jobs = described_class.new(Rails.application).call[:jobs]
+          def perform; end
+        end
+      RUBY
+        reflected_job("UrgentJob", file) { queue_as { :high } }
 
-        expect(jobs.find { |j| j[:name] == "UrgentJob" }[:queue]).to eq("computed by a block: `-> { :high }`")
+        expect(booted_queue("UrgentJob")).to eq("computed by a block")
       end
+    end
+
+    # ActiveJob never calls a lambda given as the argument: it names the queue
+    # after the Proc's inspect string, a memory address and a path.
+    it "reads a lambda queue_as argument from its source, never as the Proc" do
+      with_job_file("UrgentJob", <<~RUBY) do |file|
+        class UrgentJob < ActiveJob::Base
+          queue_as -> { :high }
+
+          def perform; end
+        end
+      RUBY
+        reflected_job("UrgentJob", file) { queue_as -> { :high } }
+
+        expect(booted_queue("UrgentJob"))
+          .to eq("queue_as given a lambda: ActiveJob does not call it, so the queue is named after the Proc's text: `-> { :high }`")
+      end
+    end
+
+    it "never prints the Proc when the lambda's source is not found" do
+      reflected_job("ElsewhereJob", app_job_file) { queue_as -> { :high } }
+
+      expect(booted_queue("ElsewhereJob"))
+        .to eq("queue_as given a lambda: ActiveJob does not call it, so the queue is named after the Proc's text")
     end
 
     # ActiveJob 7.0+ defaults queue_name to a lambda, so every job without a

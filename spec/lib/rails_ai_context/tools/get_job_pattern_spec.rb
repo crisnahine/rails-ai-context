@@ -118,6 +118,16 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
         expect(text).to include("Job file too large to analyze.")
       end
 
+      it "writes a queue sentence as prose, keeping its own backticks whole" do
+        File.write(File.join(jobs_dir, "lambda_job.rb"), "class LambdaJob < ApplicationJob\n  queue_as -> { :x }\nend\n")
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
+        label = "#{RailsAiContext::Introspectors::JobIntrospector::PROC_QUEUE}: `-> { :x }`"
+
+        expect(described_class.call(job: "LambdaJob").content.first[:text]).to include("**Queue:** #{label}\n")
+        expect(described_class.call(detail: "full").content.first[:text]).to include("- **Queue:** #{label}\n")
+      end
+
       it "extracts queue name from job" do
         result = described_class.call(job: "NotifyJob")
         text = result.content.first[:text]

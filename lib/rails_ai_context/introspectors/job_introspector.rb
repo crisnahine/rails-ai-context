@@ -78,11 +78,14 @@ module RailsAiContext
 
           queue = job.queue_name
           # ActiveJob defaults queue_name to a lambda; any other Proc is a
-          # queue_as block, and only the source says what it computes.
+          # queue_as block, and a lambda argument is stored as its inspect
+          # string. Only the source says what either one reads.
           if queue.equal?(ActiveJob::Base.queue_name)
             queue = job.queue_name_from_part(nil)
           elsif queue.is_a?(Proc)
-            queue = (job_candidates.key?(job.name) && inherited_queue(job.name)) || COMPUTED_QUEUE
+            queue = sourced_queue(job.name) || COMPUTED_QUEUE
+          elsif queue.to_s.include?("#<Proc:")
+            queue = sourced_queue(job.name) || PROC_QUEUE
           end
 
           {
@@ -152,7 +155,13 @@ module RailsAiContext
         chain
       end
 
+      def sourced_queue(name)
+        job_candidates.key?(name) && inherited_queue(name)
+      end
+
       COMPUTED_QUEUE = "computed by a block"
+      PROC_QUEUE = "queue_as given a lambda: ActiveJob does not call it, so the queue is named after the Proc's text"
+      PROC_LITERAL = /\A(?:->|(?:lambda|proc|Proc\.new)(?![\w.]))/
 
       # A literal queue by name; one picked at enqueue time by the source that
       # picks it, the way other computed values read.
@@ -163,7 +172,7 @@ module RailsAiContext
         source = hit[:values].first.to_s.gsub(/\s+/, " ").strip
         return COMPUTED_QUEUE if source.empty?
 
-        source.start_with?("->", "lambda", "proc") ? "#{COMPUTED_QUEUE}: `#{source}`" : "`#{source}` (computed)"
+        source.match?(PROC_LITERAL) ? "#{PROC_QUEUE}: `#{source}`" : "`#{source}` (computed)"
       end
 
       def sidekiq_options(macros)
