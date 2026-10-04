@@ -165,9 +165,13 @@ module RailsAiContext
       #
       # @return [Hash{String => Prism::ModuleNode}]
       def module_nodes(root)
-        constants(root).each_with_object({}) do |(qualified, node), found|
-          found[qualified] = node if node.is_a?(Prism::ModuleNode) && (!found[qualified] || (stub?(found[qualified]) && !stub?(node)))
-        end
+        constants(root).select { |_, node| node.is_a?(Prism::ModuleNode) }
+                       .group_by(&:first).transform_values { |found| definition(found.map { |_, node| node }) }
+      end
+
+      # Of the nodes writing one constant, the one defining it: the first that is not a stub.
+      def definition(nodes)
+        nodes.find { |node| !stub?(node) } || nodes.first
       end
 
       # A class or module holding nothing but such stubs: `module Acts; module Journalized; end; end`.

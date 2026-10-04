@@ -108,7 +108,7 @@ module RailsAiContext
               given[:block].concat(singleton_scope_defs(node.block.body, label))
             elsif node.is_a?(Prism::ModuleNode)
               name = node.constant_path.slice.split("::").last
-              joined.each { |group, each| given[group].concat(body_defs(node.body)) if each == name }
+              joined.each { |group, joined_name| given[group].concat(body_defs(node.body)) if joined_name == name }
             end
           end
           joined.each { |group, name| given[group].concat(body_defs(own.body)) if name == short }
@@ -366,7 +366,7 @@ module RailsAiContext
         @providers = []
         inside = @walks.each_value.any? { |walk| walk.mixins.each_value.any? { |mixin| mixin.added&.first == :body } }
         PASSES.times do
-          # Chains read in a pass saw the previous pass's providers.
+          # Cleared so each pass rereads them against the new providers.
           @chains = {}
           @events = {}
           @first = {}
@@ -551,7 +551,7 @@ module RailsAiContext
 
           applied(data[:mixins], bodies, *scope, keep_called: true).each do |mixin|
             added = SingletonLookup.added_in(label, mixin[:location], bodies, blocks, evals)
-            next unless SingletonLookup.joins?(mixin, added)
+            next unless SingletonLookup.joins?(mixin, !added.nil?)
 
             outer = @inside
             @inside = [ added, mixin[:location] ] if added
@@ -692,10 +692,9 @@ module RailsAiContext
 
       def own_node(tree, name)
         short = name.to_s.split("::").last.to_s
-        found = Introspectors::AstWalk.each(tree).select do |node|
+        Introspectors::DeclaredConstant.definition(Introspectors::AstWalk.each(tree).select do |node|
           constant_node?(node) && node.constant_path.slice.split("::").last.casecmp?(short)
-        end
-        found.find { |node| !Introspectors::DeclaredConstant.stub?(node) } || found.first
+        end)
       end
 
       def own_and_nested_ranges(tree, name)
