@@ -3413,6 +3413,32 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         end
       end
 
+      # Runtime: LocM :first, :loc, :sb, :ro.
+      it "reads the class methods an initializer defines on ActiveRecord::Base as the outermost definitions" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+          File.write(File.join(dir, "config", "initializers", "base_ext.rb"), <<~RUBY)
+            ActiveRecord::Base.class_eval do
+              class << self
+                def validates_loc(options = {})
+                  before_save :loc if options[:allow_nil]
+                end
+              end
+
+              def self.stamp_base
+                before_save :sb
+              end
+            end
+          RUBY
+          File.write(File.join(dir, "config", "initializers", "base_reopen.rb"), "class ActiveRecord::Base\n  def self.reopened\n    before_save :ro\n  end\nend\n")
+          write_model(dir, "LocM", "class LocM < ApplicationRecord\n  before_save :first\n  validates_loc allow_nil: true\n  stamp_base\n  reopened\nend\n")
+          write_model(dir, "NoLoc", "class NoLoc < ApplicationRecord\n  validates_loc\nend\n")
+
+          static = static_save(dir)
+          expect(static.slice("LocM", "NoLoc")).to eq("LocM" => %w[first loc sb ro], "NoLoc" => nil)
+        end
+      end
+
       # Runtime: EvChild :own_t (the base's own method over the every-model one);
       # Guest2 runs after_save :persist, :own (InstM joins where Acc2's Avi block calls acts_as_inst).
       it "reads a module every model has as the outermost definition, and a mixin a called method includes at the call" do

@@ -21,18 +21,33 @@ module RailsAiContext
       RunCache.fetch([ :base_mixins, root ]) { discover(root) }
     end
 
-    def discover(root)
-      scanned_files(root).flat_map do |file|
-        source = SafeFile.read(file)
-        next [] unless source && MARKERS.any? { |marker| source.include?(marker) }
+    # The statements of each model base body the app writes outside app/models, where a
+    # `def self.x` or `class << self` defines a class method every model has.
+    # @return [Array<Array<Prism::Node>>]
+    def bodies(root)
+      root = File.expand_path(root.to_s)
+      RunCache.fetch([ :base_bodies, root ]) { marked(root).flat_map { |_, tree| base_bodies(tree) } }
+    rescue StandardError => e
+      RailsAiContext.debug_fail(e, [], label: "BaseMixins.bodies")
+    end
 
-        tree = AstCache.parse(file).value
+    def discover(root)
+      marked(root).flat_map do |file, tree|
         mixed_in(tree).map { |macro, name| Mixin.new(name, declaring_file(root, name, file), macro) }
       end.uniq(&:name)
     rescue StandardError => e
       RailsAiContext.debug_fail(e, [], label: "BaseMixins.discover")
     end
     private_class_method :discover
+
+    # [file, tree] for each scanned file that names a model base.
+    def marked(root)
+      scanned_files(root).filter_map do |file|
+        source = SafeFile.read(file)
+        [ file, AstCache.parse(file).value ] if source && MARKERS.any? { |marker| source.include?(marker) }
+      end
+    end
+    private_class_method :marked
 
     # Everywhere the app configures itself but app/models: a model file's includes are
     # its own, and the model walk reads that file already.
@@ -50,25 +65,31 @@ module RailsAiContext
     private_class_method :scanned_files
 
     # [macro, constant] for each module the tree mixes into a model base:
-    # sent to it, run in its `on_load` hook, or written in its reopened body.
+    # sent to it, run in its `on_load` hook, or written in its own body.
     def mixed_in(tree)
       Introspectors::AstWalk.each(tree).flat_map do |node|
         next [] unless node.is_a?(Prism::CallNode)
         next hook_mixins(node) if hook?(node)
 
         target?(node.receiver) ? mixin_calls(node) : []
-      end + reopened_mixins(tree)
+      end + base_bodies(tree).flatten.flat_map { |call| call.is_a?(Prism::CallNode) && call.receiver.nil? ? mixin_calls(call) : [] }
     end
 
-    # `class ActiveRecord::Base; include X; end`, however the namespace is written.
-    def reopened_mixins(tree)
-      Introspectors::DeclaredConstant.constants(tree).flat_map do |name, node|
-        next [] unless node.is_a?(Prism::ClassNode) && TARGETS.include?(name) && node.body
-
-        node.body.body.flat_map { |call| call.is_a?(Prism::CallNode) && call.receiver.nil? ? mixin_calls(call) : [] }
+    # The statements a base runs as self: `class ActiveRecord::Base` reopened however the
+    # namespace is written, `ActiveRecord::Base.class_eval do`, and an `on_load` block.
+    def base_bodies(tree)
+      reopened = Introspectors::DeclaredConstant.constants(tree).filter_map do |name, node|
+        node.body if node.is_a?(Prism::ClassNode) && TARGETS.include?(name)
       end
+      evaluated = Introspectors::AstWalk.each(tree).filter_map do |node|
+        next unless node.is_a?(Prism::CallNode) && node.block
+        next node.block.body if hook?(node)
+
+        node.block.body if %i[class_eval class_exec].include?(node.name) && target?(node.receiver)
+      end
+      (reopened + evaluated).filter_map { |body| body.body if body.is_a?(Prism::StatementsNode) }
     end
-    private_class_method :reopened_mixins
+    private_class_method :base_bodies
 
     # Inside `on_load(:active_record) { ... }` the block runs in the base.
     def hook_mixins(node)

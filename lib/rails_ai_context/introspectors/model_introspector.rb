@@ -1517,12 +1517,32 @@ module RailsAiContext
           walked = walk_bases(bases, calls) if held.intersect?(grown)
         end
         data, unread, hidden = settle(mine, calls)
+        data = merge_inherited(data, base_declarations(calls, bases.size + 1))
         settled = walked.map { |name, walk| walk ? [ name, walk.own, *settle(walk, calls) ] : [ name, nil ] }
         data, *rest = merge_inherited_macros(data, unread, hidden, settled)
         [ data.merge(callbacks: chain_order(data[:callbacks], commits_in_order)), *rest ]
       end
 
       CHAIN_KEYS = %i[rank chain_at hook owner].freeze
+
+      # What the class methods every model has from the app's own base bodies declare, at each call
+      # reaching them; they are the outermost rank's own (`singleton_lookup`).
+      def base_declarations(calls, outer)
+        found = Hash.new { |hash, key| hash[key] = [] }
+        BaseMixins.bodies(app.root.to_s).each do |scope|
+          ConcernMacros::SingletonLookup.singleton_members(scope).grep(Prism::DefNode).each do |node|
+            Array(calls.sites_by_name[node.name.to_s]).compact.each do |site|
+              CallSiteExpansion.entries(node, site, SourceIntrospector::LISTENER_MAP).each do |key, entries|
+                next unless WALKED_KEYS.include?(key)
+
+                placed = Array(entries).flat_map { |entry| calls.placed(entry, [ outer, node.location.start_line ], [ entry[:location] ], site) }
+                found[key].concat(key == :callbacks ? placed : placed.map { |entry| entry.except(*CHAIN_KEYS) }.uniq)
+              end
+            end
+          end
+        end
+        found.to_h
+      end
 
       # Rails builds the chain from the outermost base in, each class in the
       # order its body runs.
@@ -1838,6 +1858,7 @@ module RailsAiContext
             # A file the walk cannot read calls nothing it can see.
             RailsAiContext.debug_fail(e, nil, label: "class calls of #{path}")
           end
+          BaseMixins.bodies(app.root.to_s).each { |scope| defs.concat(ConcernMacros::SingletonLookup.own_defs(scope, classes.size)) }
           ConcernMacros::SingletonLookup::Read.new(found, ranks, defs, classes.size)
         end
         ConcernMacros::SingletonLookup.new(reader)

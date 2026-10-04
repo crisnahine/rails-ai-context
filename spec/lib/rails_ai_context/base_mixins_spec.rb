@@ -54,6 +54,14 @@ RSpec.describe RailsAiContext::BaseMixins do
     expect(mixins).to eq([ [ "Searchable", :extend, nil ] ])
   end
 
+  it "finds a module written into a class_eval block, and reads the class methods that block defines" do
+    write("config/initializers/i18n.rb", "ActiveRecord::Base.class_eval do\n  include Localized\n  class << self\n    def validates_locale; end\n  end\nend\n")
+
+    expect(mixins).to eq([ [ "Localized", :include, nil ] ])
+    defs = described_class.bodies(@root).flat_map { |scope| RailsAiContext::ConcernMacros::SingletonLookup.own_defs(scope, 1) }
+    expect(defs.map(&:name)).to eq(%w[validates_locale])
+  end
+
   it "does not read a model file's own includes" do
     write("app/models/user.rb", "class User < ApplicationRecord\n  include Auditable\nend\n")
 

@@ -53,17 +53,21 @@ module RailsAiContext
       # The class methods a body run with the class as self defines: `def self.x`, and `def x` and aliases
       # inside `class << self`. `owner` is a class file's rank or a module's label.
       def self.own_defs(scope, owner)
+        singleton_members(scope).map do |node|
+          names = alias_names(node)
+          names ? Def.new(owner, names.first, node.location.start_line, nil, {}, names.last) : definition(owner, node)
+        end
+      end
+
+      # The `def` and alias nodes behind `own_defs`.
+      def self.singleton_members(scope)
         scope.flat_map do |node|
           case node
-          when Prism::DefNode then node.receiver.is_a?(Prism::SelfNode) ? [ definition(owner, node) ] : []
+          when Prism::DefNode then node.receiver.is_a?(Prism::SelfNode) ? [ node ] : []
           when Prism::SingletonClassNode
             next [] unless node.expression.is_a?(Prism::SelfNode)
 
-            Array(node.body&.body).filter_map do |member|
-              if member.is_a?(Prism::DefNode) && member.receiver.nil? then definition(owner, member)
-              elsif (names = alias_names(member)) then Def.new(owner, names.first, member.location.start_line, nil, {}, names.last)
-              end
-            end
+            Array(node.body&.body).select { |member| (member.is_a?(Prism::DefNode) && member.receiver.nil?) || alias_names(member) }
           else []
           end
         end
