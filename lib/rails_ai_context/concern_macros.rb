@@ -94,13 +94,13 @@ module RailsAiContext
         return given unless own&.body
 
         if ConcernMembership::SINGLETON_MACROS.include?(macro)
-          given[macro == :singleton_prepend ? :prepended : :mixed] = body_defs(own.body)
+          given[group(macro)] = body_defs(own.body)
         else
           statements = own.body.compact_child_nodes
-          hooks = statements.select { |node| node.is_a?(Prism::DefNode) && hook?(node, macro) && node.body }
+          hook_defs = hooks(own, macro)
           short = label.to_s.split("::").last
           concern = macro == :prepend ? :prepended : :mixed
-          joined = hooks.flat_map { |hook| joined_names(hook.body, short) }
+          joined = hook_defs.flat_map { |hook| hook_joins(hook) }.map { |added, arg| [ group(added), short_name(arg, short) ] }
           joined << [ concern, "ClassMethods" ] if concern?(own)
           statements.each do |node|
             if node.is_a?(Prism::CallNode) && node.name == :class_methods && node.block then given[concern].concat(body_defs(node.block.body))
@@ -112,7 +112,7 @@ module RailsAiContext
             end
           end
           joined.each { |group, name| given[group].concat(body_defs(own.body)) if name == short }
-          given[:hook] = hooks.flat_map { |hook| singleton_defs(hook, label) }
+          given[:hook] = hook_defs.flat_map { |hook| singleton_defs(hook, label) }
         end
         given.to_h { |group, nodes| [ group, nodes.map { |node| node.is_a?(Def) ? node : definition(label, node) } ] }
       end
@@ -129,10 +129,25 @@ module RailsAiContext
         end
       end
 
-      # [group, constant] for each module a hook joins to the class's singleton: `extend`, and
-      # `singleton_class.include`/`prepend`, `self` standing for the module (`short`).
-      def self.joined_names(body, short)
-        Introspectors::AstWalk.each(body).flat_map do |call|
+      def self.group(macro) = macro == :singleton_prepend ? :prepended : :mixed
+
+      def self.short_name(arg, short) = arg.is_a?(Prism::SelfNode) ? short : arg.slice.split("::").last
+
+      # The hooks `macro` runs that the module `own` defines; a module given as class methods runs none here.
+      def self.hooks(own, macro)
+        return [] if own&.body.nil? || ConcernMembership::SINGLETON_MACROS.include?(macro)
+
+        own.body.compact_child_nodes.select { |node| node.is_a?(Prism::DefNode) && hook?(node, macro) && node.body }
+      end
+
+      # [macro, argument] for each module a hook gives the class as class methods: `base.extend`, and
+      # `base.singleton_class.include`/`prepend`, `base` being the hook's parameter.
+      def self.hook_joins(hook)
+        param = hook.parameters&.requireds&.first
+        return [] unless param.respond_to?(:name)
+
+        base = ->(node) { node.is_a?(Prism::LocalVariableReadNode) && node.name == param.name }
+        Introspectors::AstWalk.each(hook.body).flat_map do |call|
           next [] unless call.is_a?(Prism::CallNode)
 
           name = call.name
@@ -141,15 +156,28 @@ module RailsAiContext
             name = arguments.first.unescaped.to_sym
             arguments = arguments.drop(1)
           end
-          singleton = call.receiver.is_a?(Prism::CallNode) && call.receiver.name == :singleton_class
-          group = { extend: :mixed, include: (:mixed if singleton), prepend: (:prepended if singleton) }[name]
-          next [] unless group
+          macro =
+            if base.call(call.receiver) then :extend if name == :extend
+            elsif Introspectors::Listeners::MixinsListener.singleton_class_of?(call.receiver, &base)
+              { include: :singleton_include, prepend: :singleton_prepend }[name]
+            end
+          next [] unless macro
 
           arguments.filter_map do |arg|
-            if arg.is_a?(Prism::SelfNode) then [ group, short ]
-            elsif arg.is_a?(Prism::ConstantReadNode) || arg.is_a?(Prism::ConstantPathNode) then [ group, arg.slice.split("::").last ]
-            end
+            [ macro, arg ] if arg.is_a?(Prism::SelfNode) || arg.is_a?(Prism::ConstantReadNode) || arg.is_a?(Prism::ConstantPathNode)
           end
+        end
+      end
+
+      # A module from elsewhere that a hook gives the class, as a mixin record the walk follows;
+      # `module_defs` reads the module itself and one nested in it.
+      def self.hook_mixins(own, label, macro)
+        short = label.to_s.split("::").last
+        read = [ short, *own&.body&.compact_child_nodes.to_a.grep(Prism::ModuleNode).map { |node| node.constant_path.slice.split("::").last } ]
+        hooks(own, macro).flat_map { |hook| hook_joins(hook) }.filter_map do |added, arg|
+          next if read.include?(short_name(arg, short))
+
+          { macro: added, name: arg.slice.delete_prefix("::"), location: arg.location.start_line, ancestor: false }
         end
       end
 
@@ -549,10 +577,13 @@ module RailsAiContext
             entries.each { |entry| @collected[key] << tagged(entry, label) }
           end
 
-          applied(data[:mixins], bodies, *scope, keep_called: true).each do |mixin|
+          joined = applied(data[:mixins], bodies, *scope, keep_called: true).filter_map do |mixin|
             added = SingletonLookup.added_in(label, mixin[:location], bodies, blocks, evals)
-            next unless SingletonLookup.joins?(mixin, !added.nil?)
-
+            [ mixin, added ] if SingletonLookup.joins?(mixin, !added.nil?)
+          end
+          hooked_mixins = memo([ :hook_mixins, source_key, label, macro ]) { hook_mixins(tree, label, macro) }
+          joined.concat(hooked_mixins.map { |mixin| [ mixin, [ :block, label, true ] ] })
+          joined.sort_by.with_index { |(mixin, _), index| [ mixin[:location].to_i, index ] }.each do |mixin, added|
             outer = @inside
             @inside = [ added, mixin[:location] ] if added
             walk([ mixin ], label, depth - 1, path)
@@ -806,6 +837,12 @@ module RailsAiContext
         SingletonLookup.module_defs(own_node(tree, label), label, macro)
       rescue StandardError => e
         RailsAiContext.debug_fail(e, SingletonLookup.module_defs(nil, label, macro), label: "class methods of #{label}")
+      end
+
+      def hook_mixins(tree, label, macro)
+        SingletonLookup.hook_mixins(own_node(tree, label), label, macro)
+      rescue StandardError => e
+        RailsAiContext.debug_fail(e, [], label: "hook mixins of #{label}")
       end
 
       def in_hook?(entry, hooks)

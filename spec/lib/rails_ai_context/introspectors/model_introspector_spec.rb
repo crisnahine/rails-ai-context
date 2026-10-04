@@ -3434,6 +3434,31 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         end
       end
 
+      # Runtime: HkExtM, HkScM, HkSendM :first, :i; HkPreM :first, :p, :own; HkModScM :first, :s; HkLateM :first, :s, :i.
+      it "follows a module from its own file that a plain hook extends the class with, at each include" do
+        Dir.mktmpdir do |dir|
+          stampy(dir)
+          write_model(dir, "Concerns::HkInc", "module HkInc\n  def stamp\n    before_save :i\n  end\nend\n")
+          write_model(dir, "Concerns::HkPre", "module HkPre\n  def stamp\n    before_save :p\n    super\n  end\nend\n")
+          { "HkExt" => "base.extend HkInc", "HkSc" => "base.singleton_class.include HkInc", "HkSend" => "base.send(:extend, HkInc)",
+            "HkPreHook" => "base.singleton_class.prepend HkPre", "HkModSc" => "singleton_class.include HkInc" }.each do |name, line|
+            write_model(dir, "Concerns::#{name}", "module #{name}\n  def self.included(base)\n    #{line}\n  end\nend\n")
+          end
+          %w[HkExt HkSc HkSend HkModSc].each do |hook|
+            write_model(dir, "#{hook}M", "class #{hook}M < ApplicationRecord\n  include Stampy\n  include #{hook}\n  before_save :first\n  stamp\nend\n")
+          end
+          write_model(dir, "HkPreM", "class HkPreM < ApplicationRecord\n  def self.stamp\n    before_save :own\n  end\n  include HkPreHook\n  before_save :first\n  stamp\nend\n")
+          write_model(dir, "HkLateM", "class HkLateM < ApplicationRecord\n  include Stampy\n  before_save :first\n  stamp\n  include HkExt\n  stamp\nend\n")
+
+          static = static_save(dir)
+          expect(static.slice("HkExtM", "HkScM", "HkSendM", "HkPreM", "HkModScM", "HkLateM")).to eq(
+            "HkExtM" => %w[first i], "HkScM" => %w[first i], "HkSendM" => %w[first i], "HkPreM" => %w[first p own],
+            "HkModScM" => %w[first s], "HkLateM" => %w[first s i]
+          )
+          %w[HkExtM HkPreM HkLateM].each { |name| expect(booted_callbacks(dir, name)).to eq("before_save" => static[name]) }
+        end
+      end
+
       # Runtime: LocM :first, :loc, :sb, :ro.
       it "reads the class methods an initializer defines on ActiveRecord::Base as the outermost definitions" do
         Dir.mktmpdir do |dir|
