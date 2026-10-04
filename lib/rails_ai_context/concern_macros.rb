@@ -528,24 +528,23 @@ module RailsAiContext
 
         # `names` may be the mixin records themselves, which say how each
         # module is mixed in; that decides which of its hooks run.
-        if names.first.is_a?(Hash)
-          names.each { |mixin| @macros[mixin[:name]] ||= mixin[:macro] }
-          names = names.map { |mixin| mixin[:name] }.uniq
-        end
-
-        names.each do |name|
+        names.each do |mixin|
+          name, written = mixin.is_a?(Hash) ? mixin.values_at(:name, :macro) : mixin
           @top = name if file.nil?
-          next unless @seen.add?(name)
           next unless ConcernMembership.candidate?(name)
 
           source = file || @own_file
           nested = source && nested_module(source, name, within)
-          path =
-            if nested then source
-            elsif @paths.key?(name) then @paths[name]
-            else ConcernPaths.find_file(@root, name, within: within, dirs: @dirs) || beside(file, name, within)
+          label, path =
+            if nested then [ nested.first, source ]
+            elsif @paths.key?(name) then [ name, @paths[name] ]
+            else ConcernPaths.find_named(@root, name, within: within, dirs: @dirs) || beside(file, name, within)
             end
-          macro = @macros[name] || :include
+          # A module is walked once, as the constant the name resolves to where it is written;
+          # a name resolving to none keeps no module's place.
+          next unless @seen.add?(path ? label : [ :unresolved, name ])
+
+          macro = @macros[name] || written || :include
           singleton = ConcernMembership::SINGLETON_MACROS.include?(macro)
           if ConcernMembership.excluded?(name)
             # Hiding a concern hides what it declared. Only one whose file is
@@ -562,7 +561,6 @@ module RailsAiContext
             next
           end
 
-          label = nested ? nested.first : name
           # A nested module's lines count from its own slice, so the ranges parse that.
           tree = nested ? AstCache.parse_string(nested.last.slice).value : AstCache.parse(path).value
           source_key = nested ? "#{source}##{nested.first}" : path
@@ -638,7 +636,8 @@ module RailsAiContext
 
         memo([ :beside, file, name, within ]) do
           dir = File.dirname(file)
-          ConcernPaths.candidate_names(name, within).map { |candidate| File.join(dir, "#{candidate.underscore}.rb") }.find { |path| File.file?(path) }
+          ConcernPaths.candidate_names(name, within).map { |candidate| [ candidate, File.join(dir, "#{candidate.underscore}.rb") ] }
+                      .find { |_, path| File.file?(path) }
         end
       end
 

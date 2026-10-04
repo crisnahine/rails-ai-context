@@ -68,8 +68,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   block, and an `extend` in a class method a call reaches (an `acts_as_x`
   that extends its methods, whose `self.extended` hook then runs);
   a plain module's nested `ClassMethods` counts only when something extends
-  it. A `super` runs the next definition, at the `super`. An instance method
-  or a nested class's method of the same name never runs. A module a class
+  it. Two concerns' modules of one name (each concern's `ClassMethods`) stay
+  two: each name is the constant it resolves to where it is written, and one
+  that resolves to nothing no longer hides the other. A `super` runs the next definition, at
+  the `super`. An instance method or a nested class's method of the same
+  name never runs. A module a class
   method includes joins only when a call reaches that method, and only calls
   after it see its methods. A nested class's callbacks are its own, and a
   module nested in the model's file reads like any concern: `include` runs its
@@ -100,6 +103,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A concern's declarations name the module the include resolves to.**
+  `include Validations` in WorkPackage lists its validations from
+  `WorkPackage::Validations`, the constant Ruby includes, where it said
+  `Validations`.
 - **A model macro written over `*args` reads each call's own arguments.**
   The list binds to the call's positionals past the method's other
   parameters, less the options hash the body takes off the end

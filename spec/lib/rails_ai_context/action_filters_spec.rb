@@ -131,8 +131,8 @@ RSpec.describe RailsAiContext::ActionFilters do
 
         chain = described_class.for_controller(ctx, "Admin::FollowsController", root: dir)
         expect(chain[:own].map { |f| [ f[:name], f[:from_concern] ] })
-          .to eq([ [ "require_admin!", nil ], [ "set_account", "AccountLookup" ],
-                   [ "check_account_suspension", "AccountLookup" ] ])
+          .to eq([ [ "require_admin!", nil ], [ "set_account", "Admin::AccountLookup" ],
+                   [ "check_account_suspension", "Admin::AccountLookup" ] ])
         expect(chain[:inherited].map { |f| [ f[:name], f[:from], f[:from_concern] ] })
           .to eq([ [ "authenticate_user!", "ApplicationController", nil ],
                    [ "set_locale", "ApplicationController", "Localized" ] ])

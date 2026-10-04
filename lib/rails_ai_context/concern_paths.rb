@@ -134,6 +134,11 @@ module RailsAiContext
     #   to Fasp::Provider::DebugConcern, which the literal spelling misses.
     # @param dirs [Array<String>, nil] pre-resolved concern directories
     def find_file(root, concern_name, prefer: nil, within: nil, dirs: nil)
+      find_named(root, concern_name, prefer: prefer, within: within, dirs: dirs)&.last
+    end
+
+    # [the constant the reference resolves to, its file] for `find_file`'s file, or nil.
+    def find_named(root, concern_name, prefer: nil, within: nil, dirs: nil)
       # Wherever Zeitwerk would look, plus an in-repo path gem's lib. A lib the app does
       # not add to its autoload paths holds nothing it autoloads, so it is skipped.
       dirs = ordered_dirs(root, prefer, dirs) + PathResolver.app_roots(root) + PathResolver.declared_roots(root) +
@@ -144,8 +149,7 @@ module RailsAiContext
         next if underscore.empty? || underscore.include?("..")
 
         found = dirs.find { |dir| file_exist?(dir, "#{underscore}.rb") }
-        path = found && File.join(found, "#{underscore}.rb")
-        return path if path
+        return [ name, File.join(found, "#{underscore}.rb") ] if found
       end
 
       nil

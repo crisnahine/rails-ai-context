@@ -208,7 +208,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
                                                     within: "WorkPackage")
 
     expect(unresolved).to be_empty
-    expect(collected[:validations].first[:from_concern]).to eq("Validations")
+    expect(collected[:validations].first[:from_concern]).to eq("WorkPackage::Validations")
     expect(collected[:validations].first[:attributes]).to eq([ "subject" ])
   end
 

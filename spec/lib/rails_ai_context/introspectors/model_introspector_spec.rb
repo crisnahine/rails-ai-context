@@ -3459,6 +3459,27 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         end
       end
 
+      # Runtime: TwoFarM :first, :a, :b; TwoFarEvalM :first, :a, :c. CanvasLikeM raises (Subm::ClassMethods is
+      # undefined); without Subm it lists :first, :g, which an unresolved name must not take away.
+      it "keeps apart two concerns' modules of one name, each resolved in its own concern" do
+        Dir.mktmpdir do |dir|
+          %w[a b c].each do |key|
+            write_model(dir, "Concerns::H#{key}::ClassMethods", "module H#{key}\n  module ClassMethods\n    def stamp_#{key}\n      before_save :#{key}\n    end\n  end\nend\n")
+          end
+          %w[Ha Hb Subm].each { |name| write_model(dir, "Concerns::#{name}", "module #{name}\n  def self.included(base)\n    base.extend ClassMethods\n  end\nend\n") }
+          write_model(dir, "Concerns::Hc", "module Hc\n  def self.included(base)\n    base.class_eval do\n      extend ClassMethods\n    end\n  end\nend\n")
+          write_model(dir, "Concerns::Smart", "module Smart\n  def self.included(klass)\n    klass.class_eval do\n      extend ClassMethods\n    end\n  end\n\n" \
+                                              "  module ClassMethods\n    def use_ss\n      before_save :g\n    end\n  end\nend\n")
+          write_model(dir, "TwoFarM", "class TwoFarM < ApplicationRecord\n  include Ha\n  include Hb\n  before_save :first\n  stamp_a\n  stamp_b\nend\n")
+          write_model(dir, "TwoFarEvalM", "class TwoFarEvalM < ApplicationRecord\n  include Ha\n  include Hc\n  before_save :first\n  stamp_a\n  stamp_c\nend\n")
+          write_model(dir, "CanvasLikeM", "class CanvasLikeM < ApplicationRecord\n  include Subm\n  include Smart\n  before_save :first\n  use_ss\nend\n")
+
+          expect(static_save(dir).slice("TwoFarM", "TwoFarEvalM", "CanvasLikeM")).to eq(
+            "TwoFarM" => %w[first a b], "TwoFarEvalM" => %w[first a c], "CanvasLikeM" => %w[first g]
+          )
+        end
+      end
+
       # Runtime: LocM :first, :loc, :sb, :ro.
       it "reads the class methods an initializer defines on ActiveRecord::Base as the outermost definitions" do
         Dir.mktmpdir do |dir|
