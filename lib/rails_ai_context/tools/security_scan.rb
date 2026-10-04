@@ -117,7 +117,10 @@ module RailsAiContext
           quiet: true,
           report_progress: false,
           min_confidence: min_confidence,
-          print_report: false
+          print_report: false,
+          # Forked parse workers return through Marshal, and with web-console's
+          # bindex loaded a parse error carries a Binding Marshal cannot dump.
+          parallel_checks: false
         }
         options[:run_checks] = Set.new(resolved_checks) if resolved_checks
 

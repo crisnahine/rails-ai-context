@@ -466,6 +466,13 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         expect(Brakeman).to have_received(:run).with(hash_including(min_confidence: 0))
       end
 
+      # A forked parse worker hands its result back through Marshal, and with
+      # web-console's bindex loaded a parse error carries a Binding it cannot dump.
+      it "parses in this process rather than in forked workers" do
+        described_class.call
+        expect(Brakeman).to have_received(:run).with(hash_including(parallel_checks: false))
+      end
+
       it "passes specific checks to Brakeman with alias resolution" do
         described_class.call(checks: [ "sql", "CheckXSS" ])
         expect(Brakeman).to have_received(:run).with(
