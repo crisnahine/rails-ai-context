@@ -734,35 +734,38 @@ module RailsAiContext
       # Without a `belongs_to_required_by_default =` of its own, Rails turns it
       # on from `load_defaults 5.0`.
       def belongs_to_required_by_default?
-        values, version = framework_setting(:belongs_to_required_by_default=)
-        setting = values.compact.last
-        setting.nil? ? version.to_f >= 5.0 : setting
+        setting = framework_setting(:belongs_to_required_by_default=, since: 5.0)
+        setting.assigned ? setting.value : setting.version.to_f >= 5.0
       end
 
-      # Each `setter` value in application.rb then the initializers, nil where not
-      # a literal; the `load_defaults` version; whether application.rb was read.
-      def framework_setting(setter)
+      # `value` is the deciding assignment's literal (nil if not one) when
+      # `assigned`; else `load_defaults`' `version` decides.
+      FrameworkSetting = Struct.new(:assigned, :value, :version, :read, keyword_init: true)
+
+      # Application.rb then the initializers, as Rails runs them; a `load_defaults`
+      # of version `since` or later assigns the setting too, and the last line wins.
+      def framework_setting(setter, since:)
         @framework_settings ||= {}
         @framework_settings[setter] ||= begin
           root = app.root.to_s
           application = File.join(root, "config", "application.rb")
-          values = []
-          version = nil
-          read = false
+          setting = FrameworkSetting.new(assigned: false, read: false)
           [ application, *Dir.glob(File.join(root, "config", "initializers", "**", "*.rb")).sort ].each do |path|
             source = SafeFile.read(path) or next
-            read ||= path == application
+            setting.read ||= path == application
             AstWalk.each(AstCache.parse_string(source).value) do |node|
               next unless node.is_a?(Prism::CallNode)
 
               if node.name == setter && node.receiver
-                values << boolean_literal(node)
+                setting.assigned = true
+                setting.value = boolean_literal(node)
               elsif node.name == :load_defaults && path == application && node.receiver&.slice.to_s == "config"
-                version = defaults_version(node.arguments&.arguments&.first)
+                setting.version = defaults_version(node.arguments&.arguments&.first)
+                setting.assigned = false if setting.version.to_f >= since
               end
             end
           end
-          [ values, version, read ]
+          setting
         end
       end
 
@@ -1553,11 +1556,11 @@ module RailsAiContext
       # nil when the config cannot say: no config/application.rb, a version or
       # a value that is not a literal.
       def static_commits_in_order
-        values, version, read = framework_setting(:run_after_transaction_callbacks_in_order_defined=)
-        return values.last unless values.empty?
-        return nil if !read || version == Float::INFINITY
+        setting = framework_setting(:run_after_transaction_callbacks_in_order_defined=, since: 7.1)
+        return setting.value if setting.assigned
+        return nil if !setting.read || setting.version == Float::INFINITY
 
-        version.to_f >= 7.1
+        setting.version.to_f >= 7.1
       end
 
       def commit_order_unread(callbacks)

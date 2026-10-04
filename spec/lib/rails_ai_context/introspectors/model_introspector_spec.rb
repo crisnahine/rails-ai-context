@@ -2311,6 +2311,28 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # load_defaults assigns the setting where it runs; a later line wins either way.
+    it "takes the setting from the last line that sets it, initializers after application.rb" do
+      {
+        [ "config.active_record.belongs_to_required_by_default = false\n    config.load_defaults 7.1", nil ] => [ %w[post] ],
+        [ "config.active_record.belongs_to_required_by_default = false\n    config.load_defaults 4.2", nil ] => [],
+        [ "config.load_defaults 7.1",
+          "Rails.application.config.active_record.belongs_to_required_by_default = false" ] => []
+      }.each do |(application, initializer), expected|
+        Dir.mktmpdir do |dir|
+          write_app(dir, application: application)
+          if initializer
+            FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+            File.write(File.join(dir, "config", "initializers", "defaults.rb"), "#{initializer}\n")
+          end
+
+          static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Comment"][:validations]
+
+          expect(implicit(static)).to eq(expected), application
+        end
+      end
+    end
+
     it "is on for load_defaults written as the running version" do
       Dir.mktmpdir do |dir|
         write_app(dir, application: "config.load_defaults Rails::VERSION::STRING.to_f")
@@ -2922,7 +2944,13 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
           [ "config.load_defaults 8.1", nil ] => in_order,
           [ "config.load_defaults 7.0",
             "Rails.application.config.active_record.run_after_transaction_callbacks_in_order_defined = true" ] => in_order,
-          [ "config.load_defaults 7.1\n    config.active_record.run_after_transaction_callbacks_in_order_defined = false", nil ] => reversed
+          [ "config.load_defaults 7.1\n    config.active_record.run_after_transaction_callbacks_in_order_defined = false", nil ] => reversed,
+          [ "config.active_record.run_after_transaction_callbacks_in_order_defined = false\n    config.load_defaults 7.1", nil ] => in_order,
+          [ "config.active_record.run_after_transaction_callbacks_in_order_defined = false\n    config.load_defaults 7.0", nil ] => reversed,
+          [ "config.load_defaults 7.1",
+            "Rails.application.config.active_record.run_after_transaction_callbacks_in_order_defined = false" ] => reversed,
+          [ "config.active_record.run_after_transaction_callbacks_in_order_defined = false\n    config.load_defaults 7.0",
+            "Rails.application.config.active_record.run_after_transaction_callbacks_in_order_defined = true" ] => in_order
         }.each do |(application, initializer), expected|
           Dir.mktmpdir do |dir|
             write_config(dir, application, initializer)
