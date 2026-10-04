@@ -76,6 +76,10 @@ needs a function, virtual-table module, collation or encryption key only the
 app's own connection has. The table and EXPLAIN answers then say so; CSV output
 stays plain data.
 
+On sqlite3 1.x the child waits out its timeout behind a write lock held by
+another connection in the same process, since the lock record it inherits never
+clears; a lock held by another process is waited on as usual.
+
 ### Layer 3 - Row limit
 
 - Default: 100 rows

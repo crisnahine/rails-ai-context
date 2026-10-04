@@ -754,21 +754,23 @@ it "still explains a database that does not exist" do
       }.to raise_error(ActiveRecord::StatementInvalid, /exited without a result/)
     end
 
-    it "waits on a writer's lock as the app connection would" do
+    it "waits on another process's write lock as the app connection would" do
       conn.execute("PRAGMA journal_mode = DELETE")
-      locker = SQLite3::Database.new(File.join(dir, "t.sqlite3"))
-      locker.execute("BEGIN EXCLUSIVE")
-      locker.execute("INSERT INTO nums VALUES (9)")
-      releaser = Thread.new do
+      writer = IO.popen([ RbConfig.ruby, "-rsqlite3", "-e", <<~RUBY, File.join(dir, "t.sqlite3") ])
+        db = SQLite3::Database.new(ARGV[0])
+        db.execute("BEGIN EXCLUSIVE")
+        db.execute("INSERT INTO nums VALUES (9)")
+        $stdout.puts "locked"
+        $stdout.flush
         sleep 0.5
-        locker.execute("COMMIT")
-      end
+        db.execute("COMMIT")
+      RUBY
+      expect(writer.gets).to eq("locked\n")
 
       result = described_class.send(:execute_sqlite, conn, "SELECT count(*) AS n FROM nums", 5)
       expect(result.rows).to eq([ [ 4 ] ])
     ensure
-      releaser&.join
-      locker&.close
+      writer&.close
     end
 
     it "reruns in-process, without a time limit, what only the app connection can answer" do
@@ -780,6 +782,10 @@ it "still explains a database that does not exist" do
     end
 
     it "loads the extensions database.yml names into the child" do
+      if Gem::Version.new(SQLite3::VERSION) < Gem::Version.new("2.4")
+        skip "sqlite3 #{SQLite3::VERSION} ignores extensions:, in the child as in the app's own connection"
+      end
+
       missing = File.join(dir, "rac_missing_ext")
       allow(conn.pool.db_config).to receive(:configuration_hash)
         .and_return(conn.pool.db_config.configuration_hash.merge(extensions: [ missing ]))
