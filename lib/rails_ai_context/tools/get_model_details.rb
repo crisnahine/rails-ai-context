@@ -322,6 +322,7 @@ module RailsAiContext
             end
             lines << "- `#{callback_type_label(type)}`: #{targets.join(', ')}"
           end
+          lines << "" << GetCallbacks.commit_order_note([ name ]) if data[:commit_order_unread]
         end
 
         # Macros - surface hidden introspector data

@@ -503,6 +503,17 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).to include("- `after_save`: :sync (if: :a?), :sync (if: :b?)")
     end
 
+    it "says when the config leaves transaction callbacks in declaration order" do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Order" => { table_name: "orders", callbacks: { "after_commit" => %w[a b] }, commit_order_unread: true } }
+      )
+
+      text = described_class.call(model: "Order", detail: "standard").content.first[:text]
+
+      expect(text).to include("_after_commit and after_rollback for Order are in declaration order")
+    end
+
     # A list of targets is a list of names, so the block keyword read there
     # as a callback named `do`.
     it "names a block callback with the payload's marker" do

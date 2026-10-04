@@ -127,7 +127,7 @@ module RailsAiContext
           end
         end
 
-        note = commit_order_note([ name ], { name => data })
+        note = commit_order_note([ name ]) if data[:commit_order_unread]
         lines << "" << note if note
 
         # Which concern declared what. The callbacks themselves are already in
@@ -202,18 +202,18 @@ module RailsAiContext
           end
         end
 
-        note = commit_order_note(models_with_callbacks.keys, models_with_callbacks) unless detail == "summary"
+        unread = models_with_callbacks.select { |_, data| data[:commit_order_unread] }.keys
+        note = commit_order_note(unread) unless detail == "summary"
         lines << "" << note if note
         text_response(lines.join("\n"))
       end
 
       # Statically, a config that does not say how Rails orders after_commit
       # and after_rollback leaves those lists in declaration order.
-      private_class_method def self.commit_order_note(names, models)
-        unread = names.select { |name| models[name][:commit_order_unread] }.sort
+      def self.commit_order_note(unread)
         return nil if unread.empty?
 
-        "_after_commit and after_rollback for #{unread.join(', ')} are in declaration order: the config does not say " \
+        "_after_commit and after_rollback for #{unread.sort.join(', ')} are in declaration order: the config does not say " \
           "whether `run_after_transaction_callbacks_in_order_defined` is on, and when it is off Rails runs them last declared first._"
       end
 
