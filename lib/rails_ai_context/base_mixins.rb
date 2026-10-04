@@ -6,6 +6,8 @@ module RailsAiContext
   module BaseMixins
     # `path` is nil when the declaring file is not the app's (a gem's module).
     Mixin = Struct.new(:name, :path, :macro)
+    # A base body's statements, the base it runs in, and its file's place in load order (sorted, as Rails loads initializers).
+    Body = Struct.new(:statements, :target, :order)
 
     TARGETS = %w[ActiveRecord::Base ApplicationRecord].freeze
     HOOK = :active_record
@@ -21,12 +23,16 @@ module RailsAiContext
       RunCache.fetch([ :base_mixins, root ]) { discover(root) }
     end
 
-    # The statements of each model base body the app writes outside app/models, where a
-    # `def self.x` or `class << self` defines a class method every model has.
-    # @return [Array<Array<Prism::Node>>]
+    # Each model base body the app writes outside app/models, where a `def self.x` or
+    # `class << self` defines a class method every model under that base has.
+    # @return [Array<Body>]
     def bodies(root)
       root = File.expand_path(root.to_s)
-      RunCache.fetch([ :base_bodies, root ]) { marked(root).flat_map { |_, tree| base_bodies(tree) } }
+      RunCache.fetch([ :base_bodies, root ]) do
+        marked(root).each_with_index.flat_map do |(_, tree), order|
+          base_bodies(tree).map { |statements, target, _| Body.new(statements, target, order) }
+        end
+      end
     rescue StandardError => e
       RailsAiContext.debug_fail(e, [], label: "BaseMixins.bodies")
     end
@@ -72,22 +78,22 @@ module RailsAiContext
         next hook_mixins(node) if hook?(node)
 
         target?(node.receiver) ? mixin_calls(node) : []
-      end + base_bodies(tree).flatten.flat_map { |call| call.is_a?(Prism::CallNode) && call.receiver.nil? ? mixin_calls(call) : [] }
+      end + base_bodies(tree).reject(&:last).flat_map(&:first).flat_map { |call| call.is_a?(Prism::CallNode) && call.receiver.nil? ? mixin_calls(call) : [] }
     end
 
-    # The statements a base runs as self: `class ActiveRecord::Base` reopened however the
-    # namespace is written, `ActiveRecord::Base.class_eval do`, and an `on_load` block.
+    # [statements, base, hook?] for each body a base runs as self: `class ActiveRecord::Base` reopened
+    # however the namespace is written, `ActiveRecord::Base.class_eval do`, and an `on_load` block.
     def base_bodies(tree)
       reopened = Introspectors::DeclaredConstant.constants(tree).filter_map do |name, node|
-        node.body if node.is_a?(Prism::ClassNode) && TARGETS.include?(name)
+        [ node.body, name, false ] if node.is_a?(Prism::ClassNode) && TARGETS.include?(name)
       end
       evaluated = Introspectors::AstWalk.each(tree).filter_map do |node|
         next unless node.is_a?(Prism::CallNode) && node.block
-        next node.block.body if hook?(node)
+        next [ node.block.body, TARGETS.first, true ] if hook?(node)
 
-        node.block.body if %i[class_eval class_exec].include?(node.name) && target?(node.receiver)
+        [ node.block.body, node.receiver.slice.delete_prefix("::"), false ] if %i[class_eval class_exec].include?(node.name) && target?(node.receiver)
       end
-      (reopened + evaluated).filter_map { |body| body.body if body.is_a?(Prism::StatementsNode) }
+      (reopened + evaluated).filter_map { |body, *rest| [ body.body, *rest ] if body.is_a?(Prism::StatementsNode) }
     end
     private_class_method :base_bodies
 

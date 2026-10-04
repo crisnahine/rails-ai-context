@@ -1457,12 +1457,12 @@ module RailsAiContext
 
       # A walk's declarations where Ruby runs them: one in a method body, the class's own or a
       # module's, once per call running that body; a concern's where its code runs.
-      def settle(walk, calls)
+      def settle(walk, calls, expanded = nil)
         own, rank = walk.own, walk.rank
         collected = walk.collected.to_h do |key, entries|
           [ key, entries.flat_map { |entry| place(entry, rank, calls) }.then { |found| key == :callbacks ? found : found.map { |entry| entry.except(*CHAIN_KEYS) }.uniq } ]
         end
-        own = without_expanded_calls(own, collected.delete(:expanded))
+        own = without_expanded_calls(own, Array(collected.delete(:expanded)) + Array(expanded))
         callbacks = Array(own[:callbacks]).flat_map do |cb|
           method = own_method(own, cb[:location])
           next [ cb.merge(rank: rank) ] unless method
@@ -1516,29 +1516,30 @@ module RailsAiContext
           grown = Set.new(calls.sites_by_name.keys) - known
           walked = walk_bases(bases, calls) if held.intersect?(grown)
         end
-        data, unread, hidden = settle(mine, calls)
-        data = merge_inherited(data, base_declarations(calls, bases.size + 1))
-        settled = walked.map { |name, walk| walk ? [ name, walk.own, *settle(walk, calls) ] : [ name, nil ] }
+        declared = base_declarations(calls, [ [ class_name, file ], *bases ])
+        expanded = Array(declared.delete(:expanded)).group_by { |call| call[:rank] }
+        data, unread, hidden = settle(mine, calls, expanded[0])
+        data = merge_inherited(data, declared)
+        settled = walked.map { |name, walk| walk ? [ name, walk.own, *settle(walk, calls, expanded[walk.rank]) ] : [ name, nil ] }
         data, *rest = merge_inherited_macros(data, unread, hidden, settled)
         [ data.merge(callbacks: chain_order(data[:callbacks], commits_in_order)), *rest ]
       end
 
       CHAIN_KEYS = %i[rank chain_at hook owner].freeze
 
-      # What the class methods every model has from the app's own base bodies declare, at each call
-      # reaching them; they are the outermost rank's own (`singleton_lookup`).
-      def base_declarations(calls, outer)
+      # What the class methods the app's base bodies give the class declare, at each call reaching them,
+      # with the calls read that way (`:expanded`) by the rank they stand at.
+      def base_declarations(calls, classes)
         found = Hash.new { |hash, key| hash[key] = [] }
-        BaseMixins.bodies(app.root.to_s).each do |scope|
-          ConcernMacros::SingletonLookup.singleton_members(scope).grep(Prism::DefNode).each do |node|
-            Array(calls.sites_by_name[node.name.to_s]).compact.each do |site|
-              CallSiteExpansion.entries(node, site, SourceIntrospector::LISTENER_MAP).each do |key, entries|
-                next unless WALKED_KEYS.include?(key)
+        base_defs(classes).each do |node, definition|
+          next unless node.is_a?(Prism::DefNode)
 
-                placed = Array(entries).flat_map { |entry| calls.placed(entry, [ outer, node.location.start_line ], [ entry[:location] ], site) }
-                found[key].concat(key == :callbacks ? placed : placed.map { |entry| entry.except(*CHAIN_KEYS) }.uniq)
-              end
-            end
+          sites = Array(calls.sites_by_name[definition.name]).compact
+          expansion, = ConcernMacros.expand_calls(node, sites, [ *WALKED_KEYS, :expanded ], SourceIntrospector::LISTENER_MAP) do |entry, site|
+            calls.placed(entry, definition.key, [ entry[:location] ], site)
+          end
+          expansion.each do |key, entries|
+            found[key].concat(%i[callbacks expanded].include?(key) ? entries : entries.map { |entry| entry.except(*CHAIN_KEYS) }.uniq)
           end
         end
         found.to_h
@@ -1858,10 +1859,23 @@ module RailsAiContext
             # A file the walk cannot read calls nothing it can see.
             RailsAiContext.debug_fail(e, nil, label: "class calls of #{path}")
           end
-          BaseMixins.bodies(app.root.to_s).each { |scope| defs.concat(ConcernMacros::SingletonLookup.own_defs(scope, classes.size)) }
+          defs.concat(base_defs(classes).map(&:last))
           ConcernMacros::SingletonLookup::Read.new(found, ranks, defs, classes.size)
         end
         ConcernMacros::SingletonLookup.new(reader)
+      end
+
+      # [node, definition] for each class method a base body outside app/models gives the class: one
+      # reopening ApplicationRecord at that base's rank, the rest at the outermost; each after its base's file.
+      def base_defs(classes)
+        application = classes.index { |name, _| name == "ApplicationRecord" }
+        BaseMixins.bodies(app.root.to_s).flat_map do |body|
+          rank = body.target == "ApplicationRecord" ? application : classes.size
+          next [] unless rank
+
+          ConcernMacros::SingletonLookup.singleton_members(body.statements)
+                                        .zip(ConcernMacros::SingletonLookup.own_defs(body.statements, rank, body.order))
+        end
       end
 
       # The nodes the class body runs with the class as self: the node opening a

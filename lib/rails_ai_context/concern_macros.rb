@@ -26,9 +26,10 @@ module RailsAiContext
       OWN = 1
       MIXED = 2
 
-      # A class method; `owner` is a class file's rank or a module's label, `alias_of` the name an alias copies.
-      Def = Struct.new(:owner, :name, :line, :super_line, :calls, :alias_of) do
-        def key = [ owner, line ]
+      # A class method; `owner` is a class file's rank or a module's label, `alias_of` the name an alias copies,
+      # `at` its place in the owner's lookup when not its line (a base body's, after the base's file).
+      Def = Struct.new(:owner, :name, :line, :super_line, :calls, :alias_of, :at) do
+        def key = at ? [ owner, *at ] : [ owner, line ]
       end
       # One step of a singleton ancestry, existing from `at` ([line, order, ...]).
       Provider = Struct.new(:rank, :group, :at, :defs)
@@ -51,11 +52,13 @@ module RailsAiContext
       end
 
       # The class methods a body run with the class as self defines: `def self.x`, and `def x` and aliases
-      # inside `class << self`. `owner` is a class file's rank or a module's label.
-      def self.own_defs(scope, owner)
+      # inside `class << self`. `owner` is a class file's rank or a module's label; `order` a base body's load order.
+      def self.own_defs(scope, owner, order = nil)
         singleton_members(scope).map do |node|
           names = alias_names(node)
-          names ? Def.new(owner, names.first, node.location.start_line, nil, {}, names.last) : definition(owner, node)
+          found = names ? Def.new(owner, names.first, node.location.start_line, nil, {}, names.last) : definition(owner, node)
+          found.at = [ Float::INFINITY, order, found.line ] if order
+          found
         end
       end
 
@@ -382,7 +385,7 @@ module RailsAiContext
       # The class files' own methods, each module's where the chain first adds it, and the class's own
       # methods a block or hook defines, from their line in each run of that code.
       def providers
-        own = read.defs.map { |definition| Provider.new(definition.owner, OWN, [ definition.line, 0 ], by_name([ definition ])) }
+        own = read.defs.map { |definition| Provider.new(definition.owner, OWN, definition.at || [ definition.line, 0 ], by_name([ definition ])) }
         joined = @walks.each_value.flat_map { |walk| walk.mixins.keys }.uniq.flat_map do |label|
           walk, rank, at = first(label)
           mixin = walk && @walks[walk].mixins[label]
@@ -674,26 +677,14 @@ module RailsAiContext
           end
           next unless definition
 
-          call_sites.fetch(name).each do |call|
-            expansion = Introspectors::CallSiteExpansion.entries(definition, call, @listeners)
-            # `:conditional` and `:foreign` come back as keys too, when asked for.
-            expansion.each do |key, entries|
-              next unless keys.include?(key)
-
-              found[key].concat(Array(entries).map { |entry| at_call(entry, call, [ label, method[:location] ]) })
-            end
-            # The call site now reads as what the method declares; a caller that
-            # read the call itself as a declaration (`validates_translation` as a
-            # validation) drops that reading by its line.
-            if call && keys.include?(:expanded)
-              found[:expanded] << at_call({ method: name, line: call.location.start_line }, call, [ label, method[:location] ])
-            end
-          rescue StandardError => e
-            # One call the expansion cannot read costs that method, named as unread.
-            owner = Array(method[:owner]).join("::")
-            @unresolved |= [ "#{owner.empty? ? label : owner}##{name}" ]
-            RailsAiContext.debug_fail(e, nil, label: "called method expansion of #{name}")
+          expansion, read = ConcernMacros.expand_calls(definition, call_sites.fetch(name), keys, @listeners) do |entry, call|
+            [ at_call(entry, call, [ label, method[:location] ]) ]
           end
+          expansion.each { |key, entries| found[key].concat(entries) }
+          next if read
+
+          owner = Array(method[:owner]).join("::")
+          @unresolved |= [ "#{owner.empty? ? label : owner}##{name}" ]
         end
         found
       end
@@ -824,6 +815,27 @@ module RailsAiContext
     end
 
     module_function
+
+    # What the method `definition` declares at each call in `sites`, by key, each entry placed by the block
+    # ([entry, call] in, entries out), with the calls it read as `:expanded`; false second when a call was not.
+    def expand_calls(definition, sites, keys, listeners)
+      found = Hash.new { |hash, key| hash[key] = [] }
+      read = true
+      sites.each do |call|
+        # `:conditional` and `:foreign` come back as keys too, when asked for.
+        Introspectors::CallSiteExpansion.entries(definition, call, listeners).each do |key, entries|
+          found[key].concat(Array(entries).flat_map { |entry| yield entry, call }) if keys.include?(key)
+        end
+        # The call now reads as what the method declares; a caller that read the call itself as a
+        # declaration (`validates_translation` as a validation) drops that reading by its line.
+        found[:expanded].concat(yield({ method: definition.name.to_s, line: call.location.start_line }, call)) if call && keys.include?(:expanded)
+      rescue StandardError => e
+        # One call the expansion cannot read costs that call.
+        read = false
+        RailsAiContext.debug_fail(e, nil, label: "called method expansion of #{definition.name}")
+      end
+      [ found, read ]
+    end
 
     # The innermost of `bodies`, [range, name] pairs, around `line`.
     def enclosing(bodies, line)

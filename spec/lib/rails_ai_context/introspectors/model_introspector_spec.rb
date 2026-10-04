@@ -3439,6 +3439,33 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         end
       end
 
+      # Runtime (initializers load sorted): WSame :first, :b_same; WFar :first, :b_far; WThree :first, :leaf3;
+      # XP6 :first, :init_p6 (the initializer reopens ApplicationRecord after its file ran).
+      it "takes an initializer's class method from the file Rails loads last, and one on ApplicationRecord over its own" do
+        Dir.mktmpdir do |dir|
+          initializers = File.join(dir, "config", "initializers")
+          FileUtils.mkdir_p(initializers)
+          {
+            "a_ext.rb" => "ActiveRecord::Base.class_eval do\n  def self.dup_same\n    before_save :a_same\n  end\n  def self.p6\n    before_save :base_p6\n  end\n" \
+                          "  def self.outer3\n    mid3\n  end\n#{"\n" * 7}  def self.dup_far\n    before_save :a_far\n  end\nend\n",
+            "b_ext.rb" => "ActiveRecord::Base.class_eval do\n  def self.dup_same\n    before_save :b_same\n  end\n  def self.pb\n    before_save :pb\n  end\n" \
+                          "  def self.dup_far\n    before_save :b_far\n  end\nend\n",
+            "c_ext.rb" => "ActiveRecord::Base.class_eval do\n  def self.zz\n    before_save :zz\n  end\n  def self.leaf3\n    before_save :leaf3\n  end\nend\n",
+            "d_ext.rb" => "ActiveRecord::Base.class_eval do\n  def self.zz2\n    before_save :zz2\n  end\n  def self.zz3\n    before_save :zz3\n  end\n  def self.mid3\n    leaf3\n  end\nend\n",
+            "e_ar.rb" => "ApplicationRecord.class_eval do\n  def self.p6\n    before_save :init_p6\n  end\nend\n"
+          }.each { |name, source| File.write(File.join(initializers, name), source) }
+          write_model(dir, "ApplicationRecord", "class ApplicationRecord < ActiveRecord::Base\n  self.abstract_class = true\n  def self.p6\n    before_save :ar_own\n  end\nend\n")
+          write_model(dir, "WSame", "class WSame < ApplicationRecord\n  before_save :first\n  dup_same\nend\n")
+          write_model(dir, "WFar", "class WFar < ApplicationRecord\n  before_save :first\n  dup_far\nend\n")
+          write_model(dir, "WThree", "class WThree < ApplicationRecord\n  before_save :first\n  outer3\nend\n")
+          write_model(dir, "XP6", "class XP6 < ApplicationRecord\n  before_save :first\n  p6\nend\n")
+
+          expect(static_save(dir).slice("WSame", "WFar", "WThree", "XP6")).to eq(
+            "WSame" => %w[first b_same], "WFar" => %w[first b_far], "WThree" => %w[first leaf3], "XP6" => %w[first init_p6]
+          )
+        end
+      end
+
       # Runtime: EvChild :own_t (the base's own method over the every-model one);
       # Guest2 runs after_save :persist, :own (InstM joins where Acc2's Avi block calls acts_as_inst).
       it "reads a module every model has as the outermost definition, and a mixin a called method includes at the call" do
