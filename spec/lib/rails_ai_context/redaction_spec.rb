@@ -160,6 +160,7 @@ RSpec.describe RailsAiContext::Redaction do
         "SESSION_SECRET: secret"
       ].each { |line| expect(redact(line, path: "config/x.example.yml")).to eq(line) }
       expect(redact("API_KEY=your_api_key_here", path: ".env.example")).to eq("API_KEY=your_api_key_here")
+      expect(redact("API_KEY=your_api_key_here", path: ".env.dist")).to eq("API_KEY=your_api_key_here")
     end
 
     it "filters a cipher key, whose name has no secret word but whose value is key material" do
@@ -187,7 +188,7 @@ RSpec.describe RailsAiContext::Redaction do
 
     it "reads a .yml.example, .yml.sample or .yml.template file as YAML" do
       hex = "3b" * 20
-      %w[config/security.yml.example config/database.yml.sample config/x.yaml.template].each do |path|
+      %w[config/security.yml.example config/database.yml.sample config/x.yaml.template config/x.yml.dist].each do |path|
         expect(redact("  encryption_key: #{hex}", path: path)).to eq("  encryption_key: [FILTERED]")
       end
       expect(redact("  password: changeme", path: "config/database.yml.example")).to eq("  password: changeme")

@@ -310,9 +310,6 @@ module RailsAiContext
           cmd << "--glob=!#{p}"
         end
 
-        # Sensitive files are dropped from the rows by SafePath below: an rg
-        # glob cannot exempt a placeholder the pattern also matches.
-
         ai_context_paths.each do |p|
           cmd << "--glob=!#{p}"
         end
@@ -334,24 +331,37 @@ module RailsAiContext
         cmd << pattern
         cmd << search_path
 
-        output, status = Open3.capture2(*cmd, err: File::NULL)
+        output, err, status = Open3.capture3(*cmd)
 
         # rg exits 1 for "no matches" and 2 for any error, including one it
         # recovered from - an unreadable file in the tree - and it still
         # prints every match it found. An rg too old for a flag prints
         # nothing, so an empty result from a failed run is the one worth
         # rerunning; a full one is kept and the answer says an error was hit.
-        failed = !(status.success? || status.exitstatus == 1)
+        failed = !(status.success? || status.exitstatus == 1) && rg_error_outside_sensitive?(err, root)
         if failed && output.empty?
           return search_with_ruby(pattern, search_path, file_type, max_results, root, ctx_lines, exclude_tests: exclude_tests)
         end
 
+        # SafePath, not an rg glob, drops sensitive files: a glob cannot exempt a placeholder.
         rows = parse_rg_output(output, root)
           .reject { |r| sensitive_file?(r[:file]) }
           .first(max_results)
         [ rows, failed ]
       rescue => e
         [ [ { file: "error", line_number: 0, content: e.message } ], false ]
+      end
+
+      # rg opens sensitive files too, and one it cannot read is not an error
+      # the answer reports. A line that names no path counts as an error.
+      private_class_method def self.rg_error_outside_sensitive?(err, root)
+        lines = err.to_s.scrub.lines.map(&:chomp).reject(&:empty?)
+        return true if lines.empty?
+
+        lines.any? do |line|
+          path = line.delete_prefix("rg: ")[/\A(.+?): [^:]*\(os error \d+\)\z/, 1]
+          path.nil? || !sensitive_file?(path.delete_prefix("#{root}/"))
+        end
       end
 
       private_class_method def self.search_with_ruby(pattern, search_path, file_type, max_results, root, ctx_lines = 0, exclude_tests: false)

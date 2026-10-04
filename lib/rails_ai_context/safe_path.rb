@@ -69,7 +69,8 @@ module RailsAiContext
       return false if matching.empty?
       return true unless PLACEHOLDER_SUFFIXES.any? { |suffix| basename.downcase.end_with?(suffix) }
 
-      matching.any? { |pattern| !pattern.match?(/[*?\[{\\]/) && (pattern.casecmp?(path) || pattern.casecmp?(basename)) }
+      # Without FNM_EXTGLOB a brace is literal, so only these make a pattern a glob.
+      matching.any? { |pattern| !pattern.match?(/[*?\[\\]/) && (pattern.casecmp?(path) || pattern.casecmp?(basename)) }
     end
 
     def contained?(real, real_dir)

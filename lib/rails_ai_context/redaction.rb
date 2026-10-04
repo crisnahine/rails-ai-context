@@ -12,6 +12,10 @@ module RailsAiContext
     # apart from a secret, because it says what kind of data was there.
     EMAIL = "[EMAIL]"
 
+    PLACEHOLDER_NAMES = SafePath::PLACEHOLDER_SUFFIXES.map { |suffix| Regexp.escape(suffix.delete_prefix(".")) }.join("|")
+    EXAMPLE_FILE = /\.(?:#{PLACEHOLDER_NAMES})\b/
+    YAML_FILE = /\.ya?ml(?:\.(?:erb|#{PLACEHOLDER_NAMES}))*\z/
+
     # Regex by design: these scrub vocabulary out of values already read from
     # the AST or a log file rather than parsing structure. A credential can
     # sit in an interpolation, a heredoc or a bare string, and no node type
@@ -173,7 +177,7 @@ module RailsAiContext
         # Locale files hold translations: only credential formats are filtered.
         # Example files often hold real values, so only a plain placeholder is kept.
         locale = path.to_s.match?(%r{(?:\A|/)locales?/})
-        example = path.to_s.match?(/\.(?:example|sample|template)\b/)
+        example = path.to_s.match?(EXAMPLE_FILE)
         result = line.gsub(URI_USERINFO) { |m| placeholder?(m) ? m : "#{Regexp.last_match(1)}#{FILTERED}@" }
         unless locale
           result = result.gsub(KEYED_LITERAL) do |m|
@@ -193,7 +197,7 @@ module RailsAiContext
         end
         result = result.gsub(STRING_LITERAL) { |lit| credential?(lit[1..-2]) ? "#{lit[0]}#{FILTERED}#{lit[0]}" : lit }
         result = CREDENTIAL_TOKENS.reduce(result) { |text, pattern| text.gsub(pattern, FILTERED) }
-        path.to_s.match?(/\.ya?ml(?:\.(?:erb|example|sample|template))*\z/) && !locale ? yaml_scalar(result, example) : result
+        path.to_s.match?(YAML_FILE) && !locale ? yaml_scalar(result, example) : result
       end
 
       # Consecutive lines, so a PEM key across them is filtered whole; the line

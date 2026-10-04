@@ -221,6 +221,11 @@ RSpec.describe RailsAiContext::SafePath do
         expect(described_class.sensitive?("forbidden/keys.sample")).to be false
       end
 
+      it "reads a brace in a pattern as a literal character, as the match does" do
+        RailsAiContext.configuration.sensitive_patterns = %w[{app}.env.example]
+        expect(described_class.sensitive?("{app}.env.example")).to be true
+      end
+
       it "allows .env when only custom patterns are configured" do
         expect(described_class.sensitive?(".env")).to be false
       end

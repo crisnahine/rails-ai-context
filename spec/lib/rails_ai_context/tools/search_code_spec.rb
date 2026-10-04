@@ -799,9 +799,9 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
     before do
       allow(RailsAiContext).to receive(:tier).and_return(:static)
       allow(described_class).to receive(:ripgrep_available?).and_return(true)
-      allow(Open3).to receive(:capture2) do |*cmd, **|
+      allow(Open3).to receive(:capture3) do |*cmd, **|
         patterns << cmd.last(2).first
-        [ "", instance_double(Process::Status, success?: false, exitstatus: 1) ]
+        [ "", "", instance_double(Process::Status, success?: false, exitstatus: 1) ]
       end
     end
 
@@ -822,7 +822,8 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
     before do
       allow(RailsAiContext).to receive(:tier).and_return(:static)
       allow(described_class).to receive(:ripgrep_available?).and_return(true)
-      allow(Open3).to receive(:capture2).and_return([ "", instance_double(Process::Status, success?: false, exitstatus: 2) ])
+      allow(Open3).to receive(:capture3)
+        .and_return([ "", "rg: unrecognized flag --field-match-separator\n", instance_double(Process::Status, success?: false, exitstatus: 2) ])
     end
 
     it "answers from the Ruby backend rather than reporting no results" do
@@ -859,6 +860,24 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
         expect(text).to include("The search reported an error and may have skipped files")
       ensure
         File.chmod(0o644, File.join(dir, "app", "models", "locked.rb"))
+      end
+    end
+
+    # The tools never read a sensitive file, so rg failing to open one is not
+    # an error in the answer, and saying so would hint the file exists.
+    it "ignores an error on a sensitive file it could not open" do
+      with_search_app("app/models/status.rb" => "# devise\n", "config/master.key" => "devise\n") do |dir|
+        key = File.join(dir, "config", "master.key")
+        make_unreadable(key)
+        expect(described_class).not_to receive(:search_with_ruby)
+
+        text = described_class.call(pattern: "devise").content.first[:text]
+        expect(text).to include("app/models/status.rb:1")
+        expect(text).not_to include("reported an error")
+        expect(described_class.call(pattern: "nothing_matches_this").content.first[:text])
+          .not_to include("reported an error")
+      ensure
+        File.chmod(0o644, key)
       end
     end
   end
@@ -1081,9 +1100,9 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
     it "hands ripgrep the list the Ruby fallback filters on" do
       allow(described_class).to receive(:ripgrep_available?).and_return(true)
       captured = nil
-      allow(Open3).to receive(:capture2) do |*args, **_kwargs|
+      allow(Open3).to receive(:capture3) do |*args, **_kwargs|
         captured = args
-        [ "", instance_double(Process::Status, success?: true, exitstatus: 0) ]
+        [ "", "", instance_double(Process::Status, success?: true, exitstatus: 0) ]
       end
 
       with_search_app(fixture) { described_class.call(pattern: "NEEDLE_TOKEN") }
@@ -1097,9 +1116,9 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
     it "excludes the directories an AI tool owns outright" do
       allow(described_class).to receive(:ripgrep_available?).and_return(true)
       captured = nil
-      allow(Open3).to receive(:capture2) do |*args, **_kwargs|
+      allow(Open3).to receive(:capture3) do |*args, **_kwargs|
         captured = args
-        [ "", instance_double(Process::Status, success?: true, exitstatus: 0) ]
+        [ "", "", instance_double(Process::Status, success?: true, exitstatus: 0) ]
       end
 
       with_search_app(fixture) { described_class.call(pattern: "NEEDLE_TOKEN") }
