@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "open3"
 
 RSpec.describe RailsAiContext::Redaction do
   # The class body reads SafePath's placeholder list, so the file has to load on its own.
