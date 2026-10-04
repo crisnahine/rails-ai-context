@@ -25,12 +25,13 @@ module RailsAiContext
       # `#id` is a selector in a stylesheet and an element in Haml or Slim.
       HASH_COMMENT = /\A\s*(?:#(?!\{)|<%#)/
       JS_COMMENT = %r{\A\s*(?://|/\*|\*\s)}
-      STYLESHEET_LINE = %r{\A\s*(?://|/\*|\*\s|#)}
+      CSS_COMMENT = %r{\A\s*(?:/\*|\*\s|#)}
+      STYLESHEET_LINE = Regexp.union(CSS_COMMENT, %r{\A\s*//})
       NOT_A_CALL_LINE = {
         ".erb" => %r{\A\s*(?:#(?!\{)|<%#|//|/\*)},
         ".haml" => %r{\A\s*(?:-#|/)},
         ".slim" => %r{\A\s*/},
-        ".css" => %r{\A\s*(?:/\*|\*\s|#)}
+        ".css" => CSS_COMMENT
       }.merge(%w[.scss .sass .less].to_h { |ext| [ ext, STYLESHEET_LINE ] })
        .merge(%w[.js .jsx .mjs .cjs .ts .tsx .mts .cts .vue .svelte].to_h { |ext| [ ext, JS_COMMENT ] }).freeze
 
