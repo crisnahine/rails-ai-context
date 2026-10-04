@@ -2862,6 +2862,36 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # Runtime: Gb runs :g_only, :b and Gc :g_only, :b, :d.
+    it "keeps the callbacks of a module nested in the model's file that the model includes" do
+      Dir.mktmpdir do |dir|
+        write_model(dir, "Gb", <<~RUBY)
+          class Gb < ApplicationRecord
+            module Gst
+              extend ActiveSupport::Concern
+              class_methods do
+                def gstamp
+                  before_save :g_only
+                end
+              end
+              included do
+                gstamp
+              end
+            end
+            include Gst
+            before_save :b
+          end
+        RUBY
+        write_model(dir, "Gc", "class Gc < Gb\n  include Gb::Gst\n  before_save :d\nend\n")
+
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(static["Gb"][:callbacks]).to eq("before_save" => %w[g_only b])
+        expect(static["Gc"][:callbacks]).to eq("before_save" => %w[g_only b d])
+        expect(booted_callbacks(dir, "Gb")).to eq(static["Gb"][:callbacks])
+      end
+    end
+
     # Runtime: Fromblock runs :first, :track, :last and Crossblock :mid, :s, :last.
     it "places a declaration a concern's included block makes through a call where that concern is included" do
       Dir.mktmpdir do |dir|

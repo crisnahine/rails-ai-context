@@ -1819,10 +1819,14 @@ module RailsAiContext
       end
 
       # A path the read could not answer falls through to the path walk, which raises. A class
-      # nested in the model's file includes for itself, not for the model.
+      # nested in the model's file includes for itself, not for the model; a module nested
+      # there that the model includes is the model's own body, which the concern walk skips.
       def own_body(data, class_name)
-        data.merge(mixins: ConcernMembership.owned_by(data[:mixins], class_name),
-                   callbacks: ConcernMembership.owned_by(data[:callbacks], class_name))
+        mixins = ConcernMembership.owned_by(data[:mixins], class_name)
+        own = ConcernMembership.owned_by(data[:callbacks], class_name)
+        nested = mixins.to_set { |mixin| [ *Array(mixin[:owner]), mixin[:name].to_s.split("::").last ].join("::") }
+        data.merge(mixins: mixins,
+                   callbacks: Array(data[:callbacks]).select { |cb| own.include?(cb) || nested.include?(Array(cb[:owner]).join("::")) })
       end
 
       def source_walk(path)
