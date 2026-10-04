@@ -198,7 +198,7 @@ module RailsAiContext
         when "csv"
           format_csv(redacted)
         else
-          format_table(redacted) + (result.is_a?(UnboundedResult) ? UNBOUNDED_SQLITE_NOTE : "")
+          format_table(redacted) + unbounded_note(result)
         end
 
         text_response(output)
@@ -403,7 +403,7 @@ module RailsAiContext
         ensure
           conn.execute("PRAGMA query_only = OFF")
         end
-        UnboundedResult.new(result.columns, result.rows)
+        ResultProxy.new(result.columns, result.rows, true)
       end
 
       # Errors from state only the app's own connection has: registered functions,
@@ -487,10 +487,14 @@ module RailsAiContext
       end
 
       # KILL: TERM cannot land while `step` holds the GVL, and would run inherited at_exit hooks.
-      # Our own child: the only failures are ESRCH (already gone) and ECHILD (already reaped).
+      # Runs in an ensure, so it rescues everything: nothing here may replace the query's own error.
       private_class_method def self.reap_child(pid)
         Process.kill(:KILL, pid) rescue nil
         Process.wait(pid) rescue nil
+      end
+
+      private_class_method def self.unbounded_note(result)
+        result.is_a?(ResultProxy) && result.unbounded ? UNBOUNDED_SQLITE_NOTE : ""
       end
 
       # ── EXPLAIN execution ────────────────────────────────────────────
@@ -547,7 +551,7 @@ module RailsAiContext
         lines << parsed[:raw]
         lines << "```"
 
-        text_response(lines.join("\n") + (result.is_a?(UnboundedResult) ? UNBOUNDED_SQLITE_NOTE : ""))
+        text_response(lines.join("\n") + unbounded_note(result))
       rescue ActiveRecord::StatementInvalid => e
         text_response("EXPLAIN failed: #{clean_error_message(e.message)}")
       end
@@ -789,9 +793,9 @@ module RailsAiContext
         message.lines.first&.strip || message.strip
       end
 
-      # Quacks like ActiveRecord::Result for redacted output.
-      ResultProxy = Struct.new(:columns, :rows)
-      UnboundedResult = Struct.new(:columns, :rows)
+      # Quacks like ActiveRecord::Result for redacted output, or for a SQLite
+      # query that ran in-process with no time limit.
+      ResultProxy = Struct.new(:columns, :rows, :unbounded)
       UNBOUNDED_SQLITE_NOTE = "\n\n_This SQLite query ran without a time limit: query_timeout needs a file-backed database, " \
         "a platform with fork, and nothing that only the app's own connection has._"
     end
