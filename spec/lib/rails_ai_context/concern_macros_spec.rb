@@ -11,6 +11,10 @@ RSpec.describe RailsAiContext::ConcernMacros do
   before { FileUtils.mkdir_p(concern_dir) }
   after { FileUtils.remove_entry(tmpdir) }
 
+  def class_calls(found)
+    described_class::ClassCalls.new(-> { described_class::ClassCalls::Read.new(found, {}, {}) })
+  end
+
   def mixin(name)
     [ { name: name, kind: :include, ancestor: true } ]
   end
@@ -177,7 +181,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     RUBY
 
     collected, = described_class.collect(tmpdir, mixin("RateLimitable"), keys: %i[associations callbacks],
-                                         calls: described_class::ClassCalls.new(-> { [ %w[rate_limit], {} ] }))
+                                         calls: class_calls(%w[rate_limit]))
 
     expect(collected[:callbacks].map { |c| c[:type] }).to eq([ "after_create" ])
     expect(collected.keys).to eq([ :callbacks ])
@@ -298,7 +302,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     expect(uncalled).to eq({})
 
     called, = described_class.collect(tmpdir, mixin("Attachable"), keys: %i[associations callbacks],
-                                      calls: described_class::ClassCalls.new(-> { [ %w[acts_as_attachable], {} ] }))
+                                      calls: class_calls(%w[acts_as_attachable]))
     expect(called[:associations].map { |a| a[:name] }).to eq([ :attachments ])
     expect(called[:callbacks].map { |c| [ c[:method], c[:from_concern] ] })
       .to eq([ [ "persist_attachments_claimed", "Attachable::InstanceMethods" ] ])
@@ -367,7 +371,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
       .with(having_attributes(name: :plugin_settings), anything, anything).and_raise(NoMethodError, "each_char for nil")
 
     collected, unresolved = described_class.collect(tmpdir, mixin("Settings"), keys: %i[associations],
-                                                    calls: described_class::ClassCalls.new(-> { [ %w[plugin_settings owned], {} ] }))
+                                                    calls: class_calls(%w[plugin_settings owned]))
 
     expect(collected[:associations].map { |a| a[:name] }).to eq([ :owners ])
     expect(unresolved).to eq([ "Settings::ClassMethods#plugin_settings" ])
@@ -592,7 +596,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
 
     def collect_for(calls, cache)
       described_class.collect(tmpdir, mixin("Trackable"), keys: %i[associations], within: "Base",
-                              cache: cache, calls: described_class::ClassCalls.new(-> { [ calls, {} ] }))
+                              cache: cache, calls: class_calls(calls))
     end
 
     it "is walked once for classes that call none of the methods it asked about, and again for one that does" do
@@ -608,7 +612,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
       calling, = collect_for({ "tracks" => [ nil ] }, cache)
       expect(runs).to eq(2)
       expect(calling).to eq(described_class.collect(tmpdir, mixin("Trackable"), keys: %i[associations], within: "Base",
-                                                    calls: described_class::ClassCalls.new(-> { [ { "tracks" => [ nil ] }, {} ] })).first)
+                                                    calls: class_calls({ "tracks" => [ nil ] })).first)
     end
   end
 
@@ -689,8 +693,8 @@ RSpec.describe RailsAiContext::ConcernMacros do
     expect(errors.string).to include(path)
   end
 
-  it "exposes collect alone" do
-    expect(described_class.singleton_methods(false)).to eq([ :collect ])
+  it "exposes collect and the body lookup its classes share" do
+    expect(described_class.singleton_methods(false)).to contain_exactly(:collect, :enclosing)
   end
 
   it "does not reach outside the owner kind's concerns directory" do

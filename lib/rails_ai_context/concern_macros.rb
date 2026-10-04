@@ -19,11 +19,10 @@ module RailsAiContext
 
     # The class methods a class calls, by name to call sites: what `reader`
     # finds in the class files, read once, and what `included` blocks add.
-    # `reader` returns the calls, each class-file call site's rank (0 is the
-    # class, then its bases nearest first) and the calls each of the class's
-    # own class methods makes, by method name; `blocks` names the concern
-    # whose `included` block or hook made a call.
     class ClassCalls
+      # Each class-file site's rank is 0 for the class, then its bases nearest first.
+      Read = Struct.new(:found, :ranks, :methods)
+
       attr_reader :included, :blocks
 
       def initialize(reader, included = {}, blocks = {})
@@ -34,12 +33,12 @@ module RailsAiContext
 
       # A class method the class calls makes the calls in its body too.
       def call
-        found = Run.merge_calls(Run.merge_calls({}, read[0]), included)
+        found = Run.merge_calls(Run.merge_calls({}, read.found), included)
         queue = found.flat_map { |name, sites| sites.map { |site| [ name, site ] } }
         expanded = Set.new
         until queue.empty?
           name, site = queue.shift
-          Array(read[2]&.dig(name)).each do |inner|
+          Array(read.methods[name]).each do |inner|
             next unless expanded.add?([ inner.__id__, origin(site).__id__ ])
 
             inner.each do |inner_name, nodes|
@@ -59,7 +58,7 @@ module RailsAiContext
       # is included.
       def place(entry, site)
         origin = origin(site)
-        rank = origin && read[1][origin.__id__]
+        rank = origin && read.ranks[origin.__id__]
         return entry.merge(call_rank: rank, call_line: origin.location.start_line, rerun: true) if rank
 
         from = origin && blocks[origin.__id__]
@@ -74,14 +73,9 @@ module RailsAiContext
         end
         sites = call
         Array(entries).flat_map do |entry|
-          _, name = ClassCalls.enclosing(bodies, entry[:location])
+          _, name = ConcernMacros.enclosing(bodies, entry[:location])
           name ? Array(sites[name]).map { |site| place(entry, site) } : [ entry ]
         end
-      end
-
-      # The innermost of `bodies`, [range, name] pairs, around `line`.
-      def self.enclosing(bodies, line)
-        line && bodies.select { |range, _| range.cover?(line) }.min_by { |range, _| range.size }
       end
 
       private
@@ -290,7 +284,7 @@ module RailsAiContext
           line = entry.is_a?(Hash) && entry[:location]
           next false if line && own_lines && !own_lines.cover?(line)
 
-          enclosing = ClassCalls.enclosing(bodies, line)
+          enclosing = ConcernMacros.enclosing(bodies, line)
           next true if enclosing.nil? && hooks.any? { |range| range.cover?(line) }
           next !extended && inner.none? { |range| range.cover?(line) } if enclosing.nil?
           next keep_called if calls?(enclosing.last)
@@ -454,6 +448,11 @@ module RailsAiContext
     end
 
     module_function
+
+    # The innermost of `bodies`, [range, name] pairs, around `line`.
+    def enclosing(bodies, line)
+      line && bodies.select { |range, _| range.cover?(line) }.min_by { |range, _| range.size }
+    end
 
     # @param root [String] application root
     # @param mixins [Array<Hash>] MixinsListener records

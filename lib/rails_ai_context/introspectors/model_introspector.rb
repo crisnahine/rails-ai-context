@@ -1857,7 +1857,7 @@ module RailsAiContext
             # A file the walk cannot read calls nothing it can see.
             RailsAiContext.debug_fail(e, nil, label: "class calls of #{path}")
           end
-          [ found, ranks, methods ]
+          ConcernMacros::ClassCalls::Read.new(found, ranks, methods)
         end
         ConcernMacros::ClassCalls.new(reader)
       end
