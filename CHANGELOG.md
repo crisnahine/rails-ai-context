@@ -5,6 +5,88 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **A committed placeholder is not a secret.** A file whose name ends in
+  `.example`, `.sample`, `.template` or `.dist` (`.env.example`) is readable by
+  `rails_get_edit_context` and the other file tools, although the default
+  `.env.*` pattern matches it, and `doctor` no longer lists it as unread or
+  says to gitignore it. A `sensitive_patterns` entry that names the file
+  exactly, with no glob characters, still blocks it. Redaction treats the four
+  suffixes alike. (#267)
+- **`rails_query` on a SQLite file stops at `query_timeout`.** The query runs
+  in a child process with its own read-only connection, which is stopped at
+  the deadline. sqlite3 2.x's `statement_timeout=` interrupts any statement of
+  more than a few thousand steps whatever the value, and the extension holds
+  the GVL while a statement runs, so no in-process limit exists. The child
+  takes the app's `extensions:` and waits on a locked database as the app
+  would. An in-memory database, a platform without `fork`, or a function only
+  the app's own connection has runs in-process, and the answer says it ran
+  without a time limit. (#256)
+- **`rails_get_callbacks` lists callbacks in the order Rails runs them**:
+  base classes first, a concern's callbacks where its `include` line stands,
+  then the model's own. A method declared twice under one callback type shows
+  the declaration Rails keeps, the later one, which corrects the 5.30.0 entry
+  that said each declaration is shown. A nested class's callbacks are its own,
+  not the outer model's. (#253)
+- **A lambda or Proc given to `queue_as` reads as what ActiveJob does with
+  it.** ActiveJob never calls it; it names the queue after the Proc's text. Both
+  tiers now say so, with the source, where the booted tier printed the Proc's
+  address and the static tier called it computed. A `queue_as` block is the
+  computed case and now shows its source too. The 5.30.0 entry used
+  `queue_as -> { ... }` as its example of a computed queue; that was wrong.
+  (#271)
+- **An MCP stdio session carries nothing but JSON-RPC on stdout for its whole
+  life.** Output written during a tool call (a logger built on first use, as
+  Sidekiq's is, `puts`, a child process) goes to stderr; only boot was guarded
+  before. (#255)
+- **The booted `rails_security_scan` parses in its own process.** Brakeman's
+  forked parse workers could not return a parse error from an app that loads
+  web-console, and the scan failed where the static tier scanned. (#257)
+
+### Fixed
+
+- **`rails_get_callbacks` prints `on:`** for validation callbacks and any
+  callback whose type does not already name the event, before `if:` and
+  `unless:`. (#252)
+- **`rails_performance_check` with `model` and `category` counts only what it
+  lists.** (#265)
+- **`rails_search_docs` caches a fetched guide whole.** A guide with non-ASCII
+  text failed to write in the booted tier and left an empty file that read as a
+  cached guide for 24 hours; the write is now binary and atomic, and an empty
+  cache file is a miss. (#266)
+- **`rails_search_code` trace finds one definition and no sibling of
+  itself**: `qa_ping` no longer matches `def qa_ping?`, `qa_ping!` or
+  `qa_ping=`, and `def self.qa_ping` is left out of its own sibling list, where
+  a setter now appears. Every method-body lookup (concerns, callbacks, actions,
+  conventions) ends a name the same way. (#258)
+- **`rails_search_code` call sites skip comment lines** with the rule trace
+  uses, by file type: `#` in Ruby, `//` and `/*` in JS, TS and CSS, `-#` in
+  Haml, `/` in Slim. A line holding a live ERB tag is a call site, and a spaced
+  setter call (`obj.qa_ping = 1`) is not a call of `qa_ping`. (#269)
+- **Both search backends read the same excludes file.** The Ruby fallback read
+  `core.excludesFile` from the repository's own config, which ripgrep does not.
+  It now reads what ripgrep 15 reads: `~/.gitconfig`, then the XDG git config,
+  then the default ignore file. (#268)
+- **`rails_search_code` reports no error for a sensitive file ripgrep could not
+  open**, and a no-match search no longer reruns through the Ruby fallback
+  because of one.
+- **A `db/structure.sql` table that `INHERITS` reads its parent's columns
+  first, then its own**, with multiple parents, chains, a parent defined later
+  in the file, and `ALTER COLUMN ... SET NOT NULL`/`SET DEFAULT`. A parent in
+  another schema resolves; one the file does not define is named. An index, key
+  or foreign key lands on the table its statement names, schema included. The
+  one-line form read its column type as `integer) INHERITS (...`. (#259)
+- **A Stimulus controller under `app/javascript/controllers` keeps its
+  identifier** when another `controllers` directory holds the same path, and a
+  nested `controllers` directory stays in the name (`admin--controllers--x`).
+  (#264)
+- **`query_allowed_columns` exempts a column from result redaction too**, as
+  it does from the pre-query check. Columns declared with `encrypts` stay
+  redacted. (#270)
+
 ## [5.30.2] - 2026-10-01
 
 ### Changed
