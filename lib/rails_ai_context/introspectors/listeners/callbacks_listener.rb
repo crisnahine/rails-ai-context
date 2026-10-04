@@ -60,6 +60,11 @@ module RailsAiContext
           type.to_s.start_with?(ON_EVENT)
         end
 
+        # The event such a type names, `"create"`, or nil.
+        def self.event(type)
+          type.to_s.delete_prefix(ON_EVENT) if names_event?(type)
+        end
+
         private
 
         # `around_create Snowflake::Callbacks` names a real target;
