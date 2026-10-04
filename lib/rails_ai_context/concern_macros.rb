@@ -11,8 +11,8 @@ module RailsAiContext
     MAX_DEPTH = 3
 
     # A call made inside a class method's body, standing where the call that ran
-    # that body (`via`) was made; `definition` is the body it sits in.
-    Relayed = Struct.new(:node, :via, :definition) do
+    # that body (`outer`) was made; `definition` is the body it sits in.
+    Relayed = Struct.new(:node, :outer, :definition) do
       def arguments = node.arguments
       def location = node.location
       def name = node.name
@@ -20,7 +20,7 @@ module RailsAiContext
 
     # Ruby's class-method lookup over a class (rank 0), its bases nearest first and the modules
     # every model has: which definitions a call runs, and so where what they declare lands.
-    class ClassCalls
+    class SingletonLookup
       # The lookup order inside one rank.
       PREPENDED = 0
       OWN = 1
@@ -171,8 +171,8 @@ module RailsAiContext
 
       # Every call the classes may make, by name. Resolving one needs every walk,
       # so a body is read for any call of its name.
-      def call
-        @call ||= begin
+      def sites_by_name
+        @sites_by_name ||= begin
           found = Run.merge_calls({}, read.found)
           @walks.each_value { |walk| Run.merge_calls(found, walk.included) }
           queue = found.flat_map { |name, sites| sites.compact.map { |site| [ name, site ] } }
@@ -254,21 +254,21 @@ module RailsAiContext
 
       def placements(site, definer, tail)
         runs(root(site)).filter_map do |rank, at|
-          keys = keys_at(site, rank, at)
-          chain = keys && chain(site, rank, at)
+          path = run_path(site, rank, at)
+          chain = path && chain(site, rank, at)
           index = chain&.index { |definition| definition.key == definer }
-          [ rank, keys + chain.first(index).map(&:super_line) + tail ] if index
+          [ rank, path + chain.first(index).map(&:super_line) + tail ] if index
         end
       end
 
       # Where a call stands in the run of its root call: nil when the body making it never runs.
-      def keys_at(site, rank, at)
+      def run_path(site, rank, at)
         return at unless site.is_a?(Relayed)
 
-        keys = keys_at(site.via, rank, at)
-        chain = keys && chain(site.via, rank, at)
+        path = run_path(site.outer, rank, at)
+        chain = path && chain(site.outer, rank, at)
         index = chain&.index { |definition| definition.key == site.definition.key }
-        keys + chain.first(index).map(&:super_line) + [ site.location.start_line ] if index
+        path + chain.first(index).map(&:super_line) + [ site.location.start_line ] if index
       end
 
       # The definitions a call runs: the first the lookup finds, then each one a `super` reaches.
@@ -348,7 +348,7 @@ module RailsAiContext
 
       # The sites whose call may run each body, by the body's key.
       def running_sites
-        call.each_value.with_object(Hash.new { |hash, key| hash[key] = [] }) do |sites, index|
+        sites_by_name.each_value.with_object(Hash.new { |hash, key| hash[key] = [] }) do |sites, index|
           sites.compact.each do |site|
             runs(root(site)).each { |rank, at| chain(site, rank, at).each { |definition| index[definition.key] |= [ site ] } }
           end
@@ -362,12 +362,12 @@ module RailsAiContext
       end
 
       def root(site)
-        site = site.via while site.is_a?(Relayed)
+        site = site.outer while site.is_a?(Relayed)
         site
       end
 
       def forget
-        @call = @running = @defs_named = @signature = nil
+        @sites_by_name = @running = @defs_named = @signature = nil
         @chains = {}
       end
 
@@ -417,7 +417,7 @@ module RailsAiContext
         @consulted = Set.new
         @placement = {}
         @mixins = []
-        @via = nil
+        @inside = nil
       end
 
       # Raw mixin names in, so the exclusion happens here: this is the only
@@ -470,7 +470,7 @@ module RailsAiContext
           Run.merge_calls(@included_calls, block_calls)
           hooked = hooked.to_set
           block_calls.each_value { |sites| sites.each { |site| @block_sites[site.__id__] ||= [ label, hooked.include?(site.__id__) ] if site } }
-          @mixins << [ label, macro, *memo([ :module_defs, source_key, label, macro ]) { module_defs(tree, label, macro) }, @via ]
+          @mixins << [ label, macro, *memo([ :module_defs, source_key, label, macro ]) { module_defs(tree, label, macro) }, @inside ]
           bodies, hooks = method_bodies(data, macro)
           own_lines, inner = memo([ :ranges, source_key, label ]) { own_and_nested_ranges(tree, label) }
           scope = [ macro == :extend, inner, own_lines, hooks ]
@@ -487,10 +487,10 @@ module RailsAiContext
             next unless mixin[:ancestor] || extends_includer?(mixin, block_ranges, path, label)
 
             enclosing = ConcernMacros.enclosing(bodies, mixin[:location])
-            outer = @via
-            @via = [ [ label, enclosing.first.begin ], mixin[:location] ] if enclosing
+            outer = @inside
+            @inside = [ [ label, enclosing.first.begin ], mixin[:location] ] if enclosing
             walk([ mixin ], label, depth - 1, path)
-            @via = outer
+            @inside = outer
           end
           # ActiveSupport::Concern runs a concern's dependencies before it, so
           # the walk's post-order is the order the class receives them.
@@ -677,7 +677,7 @@ module RailsAiContext
               return
             end
           when Prism::DefNode
-            return hook_calls(node, hooked) if ClassCalls.hook?(node, macro) && owner.to_s.casecmp?(short)
+            return hook_calls(node, hooked) if SingletonLookup.hook?(node, macro) && owner.to_s.casecmp?(short)
           end
           node.child_nodes.compact.each { |child| visit.call(child, owner) }
         end
@@ -725,7 +725,7 @@ module RailsAiContext
       # Method name => its call sites; nil stands for a call whose arguments
       # are not known (a caller that names the methods only).
       def call_sites
-        @call_sites ||= Run.merge_calls(Run.merge_calls({}, @calls&.call), @known).transform_values { |sites| sites.uniq(&:__id__) }
+        @call_sites ||= Run.merge_calls(Run.merge_calls({}, @calls&.sites_by_name), @known).transform_values { |sites| sites.uniq(&:__id__) }
       end
 
       # Folds `more` - a Hash of call sites, or bare names - into `into`.
@@ -752,7 +752,7 @@ module RailsAiContext
       end
 
       def module_defs(tree, label, macro)
-        ClassCalls.module_defs(own_node(tree, label), label, macro)
+        SingletonLookup.module_defs(own_node(tree, label), label, macro)
       rescue StandardError => e
         RailsAiContext.debug_fail(e, [ [], [] ], label: "class methods of #{label}")
       end
@@ -777,7 +777,7 @@ module RailsAiContext
     #   resolves to this one's concerns directory
     # @param within [String, nil] the enclosing constant of the class, for a
     #   namespace-relative `include`
-    # @param calls [ClassCalls, nil] the class methods the including class
+    # @param calls [SingletonLookup, nil] the class methods the including class
     #   calls in its body; nil counts none
     # @param cache [Hash, nil] a caller-owned store keyed by concern file, so
     #   one run walks a file once however many classes include it. The caller
@@ -809,7 +809,7 @@ module RailsAiContext
       # same for every subclass: kept in the caller's per-run cache.
       memo_key = cache && [ :collect, root.to_s, mixins, keys, prefer, within, listeners, extra, file ]
       if memo_key && (consulted, result = cache[memo_key])
-        return fresh(result) if consulted.empty? || !consulted.intersect?(Run.merge_calls({}, calls&.call).keys.to_set)
+        return fresh(result) if consulted.empty? || !consulted.intersect?(Run.merge_calls({}, calls&.sites_by_name).keys.to_set)
       end
 
       # Resolved once per call and held by the run: the configured paths

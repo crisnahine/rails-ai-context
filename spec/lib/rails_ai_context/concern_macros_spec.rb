@@ -11,8 +11,8 @@ RSpec.describe RailsAiContext::ConcernMacros do
   before { FileUtils.mkdir_p(concern_dir) }
   after { FileUtils.remove_entry(tmpdir) }
 
-  def class_calls(found)
-    described_class::ClassCalls.new(-> { described_class::ClassCalls::Read.new(found, {}, []) })
+  def singleton_lookup(found)
+    described_class::SingletonLookup.new(-> { described_class::SingletonLookup::Read.new(found, {}, []) })
   end
 
   def mixin(name)
@@ -181,7 +181,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     RUBY
 
     collected, = described_class.collect(tmpdir, mixin("RateLimitable"), keys: %i[associations callbacks],
-                                         calls: class_calls(%w[rate_limit]))
+                                         calls: singleton_lookup(%w[rate_limit]))
 
     expect(collected[:callbacks].map { |c| c[:type] }).to eq([ "after_create" ])
     expect(collected.keys).to eq([ :callbacks ])
@@ -302,7 +302,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     expect(uncalled).to eq({})
 
     called, = described_class.collect(tmpdir, mixin("Attachable"), keys: %i[associations callbacks],
-                                      calls: class_calls(%w[acts_as_attachable]))
+                                      calls: singleton_lookup(%w[acts_as_attachable]))
     expect(called[:associations].map { |a| a[:name] }).to eq([ :attachments ])
     expect(called[:callbacks].map { |c| [ c[:method], c[:from_concern] ] })
       .to eq([ [ "persist_attachments_claimed", "Attachable::InstanceMethods" ] ])
@@ -371,7 +371,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
       .with(having_attributes(name: :plugin_settings), anything, anything).and_raise(NoMethodError, "each_char for nil")
 
     collected, unresolved = described_class.collect(tmpdir, mixin("Settings"), keys: %i[associations],
-                                                    calls: class_calls(%w[plugin_settings owned]))
+                                                    calls: singleton_lookup(%w[plugin_settings owned]))
 
     expect(collected[:associations].map { |a| a[:name] }).to eq([ :owners ])
     expect(unresolved).to eq([ "Settings::ClassMethods#plugin_settings" ])
@@ -596,7 +596,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
 
     def collect_for(calls, cache)
       described_class.collect(tmpdir, mixin("Trackable"), keys: %i[associations], within: "Base",
-                              cache: cache, calls: class_calls(calls))
+                              cache: cache, calls: singleton_lookup(calls))
     end
 
     it "is walked once for classes that call none of the methods it asked about, and again for one that does" do
@@ -612,7 +612,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
       calling, = collect_for({ "tracks" => [ nil ] }, cache)
       expect(runs).to eq(2)
       expect(calling).to eq(described_class.collect(tmpdir, mixin("Trackable"), keys: %i[associations], within: "Base",
-                                                    calls: class_calls({ "tracks" => [ nil ] })).first)
+                                                    calls: singleton_lookup({ "tracks" => [ nil ] })).first)
     end
   end
 
@@ -694,8 +694,8 @@ RSpec.describe RailsAiContext::ConcernMacros do
   end
 
   # The lookup alone: class methods from parsed defs, sites from parsed calls.
-  describe "ClassCalls, the class-method lookup" do
-    let(:klass) { RailsAiContext::ConcernMacros::ClassCalls }
+  describe "SingletonLookup, the class-method lookup" do
+    let(:klass) { RailsAiContext::ConcernMacros::SingletonLookup }
 
     def node(source) = Prism.parse(source).value.statements.body.first
 
@@ -816,7 +816,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
       own = [ definition(0, "def self.setup\n  loud!\nend"), definition(0, "\n\n\ndef self.loud!\nend") ]
       calls = lookup([ [ 0, call ] ], own)
 
-      expect(calls.call.keys).to contain_exactly("setup", "loud!")
+      expect(calls.sites_by_name.keys).to contain_exactly("setup", "loud!")
       expect(placed(calls, [ 0, 4 ], 4)).to eq([ [ 0, [ 6, -1, 2, 4 ] ] ])
     end
 

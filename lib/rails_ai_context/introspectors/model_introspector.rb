@@ -501,7 +501,7 @@ module RailsAiContext
         # and the superclasses are merged here too, or the static tier
         # out-answers this one.
         bases = booted_declaring_bases(model)
-        calls = class_calls([ [ model.name, model_source_path(model) ], *bases ])
+        calls = singleton_lookup([ [ model.name, model_source_path(model) ], *bases ])
         source_data, unread, bases_unread, hidden =
           merge_class_and_bases(own_source, model.name, calls, bases, file: model_source_path(model),
                                 commits_in_order: booted_commits_in_order)
@@ -1352,7 +1352,7 @@ module RailsAiContext
       def static_model_details(path, class_name, file: relative_to_root(path), table_name: nil, inherited_from: [],
                                sti: nil, parent_model: nil)
         own = own_body(source_walk(path), class_name)
-        calls = class_calls([ [ class_name, path ], *Array(inherited_from) ])
+        calls = singleton_lookup([ [ class_name, path ], *Array(inherited_from) ])
         data, unread, bases_unread, hidden = merge_class_and_bases(own, class_name, calls, inherited_from, file: path,
                                                                    commits_in_order: static_commits_in_order)
         own_methods = ActionResolver.own_methods(own[:methods], class_name)
@@ -1435,12 +1435,12 @@ module RailsAiContext
         )
         included_at = included_at(own, placement)
         every = extra.map(&:name).to_set
-        mixins = mixed.map do |label, macro, defs, hook_defs, via|
+        mixins = mixed.map do |label, macro, defs, hook_defs, in_module|
           line, order = included_at.call(label)
           # A mixin a method includes joins at that include, in each run of the method.
-          method = !via && own_method(own, line)
-          inside, at = via ? [ via.first, [ via.last, order ] ] : [ method && [ rank, method[:location] ], [ line, order ] ]
-          ConcernMacros::ClassCalls::Mixin.new(label, macro, defs, hook_defs, at, inside, every.include?(placement.dig(label, 0)))
+          method = !in_module && own_method(own, line)
+          inside, at = in_module ? [ in_module.first, [ in_module.last, order ] ] : [ method && [ rank, method[:location] ], [ line, order ] ]
+          ConcernMacros::SingletonLookup::Mixin.new(label, macro, defs, hook_defs, at, inside, every.include?(placement.dig(label, 0)))
         end
         calls.add(rank, included, blocks, mixins)
         Walk.new(own, collected, unread, hidden, skipped, rank)
@@ -1506,12 +1506,12 @@ module RailsAiContext
         mine = walk_class(own, class_name, calls, extra: extra, file: file)
         walked = walk_bases(bases, calls)
         ConcernMacros::MAX_DEPTH.times do
-          known = Set.new(calls.call.keys)
+          known = Set.new(calls.sites_by_name.keys)
           break unless mine.skipped.intersect?(known)
 
           mine = walk_class(own, class_name, calls, extra: extra, file: file)
           held = walked.flat_map { |_name, walk| walk ? walk.skipped.to_a : [] }.to_set
-          grown = Set.new(calls.call.keys) - known
+          grown = Set.new(calls.sites_by_name.keys) - known
           walked = walk_bases(bases, calls) if held.intersect?(grown)
         end
         data, unread, hidden = settle(mine, calls)
@@ -1819,7 +1819,7 @@ module RailsAiContext
 
       # The class files' side of the lookup, read only when a concern asks: their class-body
       # calls and their own class methods, `alias_method` in `class << self` included.
-      def class_calls(classes)
+      def singleton_lookup(classes)
         reader = lambda do
           ranks = {}
           defs = []
@@ -1830,15 +1830,15 @@ module RailsAiContext
             own = scope.select { |node| node.is_a?(Prism::CallNode) && (node.receiver.nil? || node.receiver.is_a?(Prism::SelfNode)) }
                        .group_by { |node| node.name.to_s }
             own.each_value { |sites| sites.each { |site| ranks[site.__id__] = rank } }
-            defs.concat(ConcernMacros::ClassCalls.own_defs(scope, rank))
+            defs.concat(ConcernMacros::SingletonLookup.own_defs(scope, rank))
             ConcernMacros::Run.merge_calls(into, own)
           rescue StandardError, ScriptError => e
             # A file the walk cannot read calls nothing it can see.
             RailsAiContext.debug_fail(e, nil, label: "class calls of #{path}")
           end
-          ConcernMacros::ClassCalls::Read.new(found, ranks, defs, classes.size)
+          ConcernMacros::SingletonLookup::Read.new(found, ranks, defs, classes.size)
         end
-        ConcernMacros::ClassCalls.new(reader)
+        ConcernMacros::SingletonLookup.new(reader)
       end
 
       # The nodes the class body runs with the class as self: the node opening a
@@ -1869,7 +1869,7 @@ module RailsAiContext
           methods: Listeners::MethodsListener
         })
         macros = data[:mongoid] || []
-        calls = class_calls([ [ class_name, path ] ])
+        calls = singleton_lookup([ [ class_name, path ] ])
         calls.add(0, {}, {}, [])
         own = own_body(data.merge(mixins: []), class_name)
         # Mongoid sets after_commit without prepend, as Rails 7.0 does, so it runs last declared first.
