@@ -45,17 +45,21 @@ RSpec.describe RailsAiContext::GitIgnore do
       Dir.mktmpdir do |dir|
         @root = dir
         FileUtils.mkdir_p(File.join(dir, ".git", "info"))
-        # A global config of our own, so the developer's real one never leaks in.
-        @global = File.join(dir, "..", "#{File.basename(dir)}-gitconfig")
+        # A home of our own, so the developer's real git config never leaks in.
+        @home = File.join(dir, "..", "#{File.basename(dir)}-home")
+        FileUtils.mkdir_p(@home)
+        @global = File.join(@home, ".gitconfig")
         File.write(@global, "")
-        previous = ENV.to_h.slice("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "XDG_CONFIG_HOME")
+        keys = %w[HOME GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM XDG_CONFIG_HOME]
+        previous = ENV.to_h.slice(*keys)
+        ENV["HOME"] = @home
         ENV["GIT_CONFIG_GLOBAL"] = @global
         ENV["GIT_CONFIG_NOSYSTEM"] = "1"
         ENV["XDG_CONFIG_HOME"] = File.join(dir, "no-xdg")
         example.run
       ensure
-        %w[GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM XDG_CONFIG_HOME].each { |k| ENV[k] = previous[k] }
-        FileUtils.rm_f(@global)
+        keys.each { |k| ENV[k] = previous[k] }
+        FileUtils.rm_rf(@home)
       end
     end
 
@@ -108,6 +112,38 @@ RSpec.describe RailsAiContext::GitIgnore do
       File.write(@global, "[core]\n\texcludesFile = #{excludes}\n")
 
       expect(ignored?("app/a.swp.rb")).to be true
+    end
+
+    it "reads core.excludesFile from the XDG git config" do
+      excludes = File.join(@root, "xdg-ignore")
+      File.write(excludes, "*.xdg.rb\n")
+      FileUtils.mkdir_p(File.join(@root, "no-xdg", "git"))
+      File.write(File.join(@root, "no-xdg", "git", "config"), "[core]\n\texcludesFile = #{excludes}\n")
+
+      expect(ignored?("app/a.xdg.rb")).to be true
+    end
+
+    # ripgrep 15 reads core.excludesFile from ~/.gitconfig and the XDG git
+    # config only, so the fallback must not see the repository's own setting.
+    it "does not read core.excludesFile from the repository's own config" do
+      excludes = File.join(@root, "repo-ignore")
+      File.write(excludes, "repo_only.rb\n")
+      FileUtils.mkdir_p(File.join(@root, ".git", "objects"))
+      FileUtils.mkdir_p(File.join(@root, ".git", "refs"))
+      File.write(File.join(@root, ".git", "HEAD"), "ref: refs/heads/main\n")
+      File.write(File.join(@root, ".git", "config"), "[core]\n\texcludesFile = #{excludes}\n")
+
+      expect(ignored?("repo_only.rb")).to be false
+    end
+
+    it "does not read core.excludesFile from GIT_CONFIG_GLOBAL" do
+      excludes = File.join(@root, "env-ignore")
+      File.write(excludes, "env_only.rb\n")
+      env_config = File.join(@root, "env-gitconfig")
+      File.write(env_config, "[core]\n\texcludesFile = #{excludes}\n")
+      ENV["GIT_CONFIG_GLOBAL"] = env_config
+
+      expect(ignored?("env_only.rb")).to be false
     end
 
     it "reads the default global excludes file when none is configured" do

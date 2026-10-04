@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require "open3"
-
 module RailsAiContext
   # git's ignore-file rules (globs, anchoring, last match wins, negation) for
   # the doctor, and ripgrep's walk over a tree for the search fallback.
@@ -147,7 +145,7 @@ module RailsAiContext
       def global
         return @global if defined?(@global)
 
-        @global = source(@root, GitIgnore.global_excludes_path(@root))
+        @global = source(@root, GitIgnore.global_excludes_path)
       end
     end
 
@@ -169,15 +167,17 @@ module RailsAiContext
       nil
     end
 
-    # `core.excludesFile` as git resolves it from the app's directory, or the
-    # default git uses when it is unset.
-    def global_excludes_path(root)
-      configured, status = Open3.capture2("git", "config", "--get", "core.excludesFile", chdir: root)
-      configured = configured.to_s.strip
-      return File.expand_path(configured) if status.success? && !configured.empty?
-
+    # `core.excludesFile` as ripgrep 15 finds it: ~/.gitconfig, then the XDG
+    # git config, then git's default (ignore crate `gitconfig_excludes_path`).
+    def global_excludes_path
       xdg = ENV["XDG_CONFIG_HOME"].to_s
-      File.join(xdg.empty? ? File.join(Dir.home, ".config") : xdg, "git", "ignore")
+      config_dir = xdg.empty? ? File.join(Dir.home, ".config") : xdg
+      configured = [ File.join(Dir.home, ".gitconfig"), File.join(config_dir, "git", "config") ].lazy.filter_map do |config|
+        File.file?(config) && File.binread(config)[/^\s*excludesfile\s*=\s*"?\s*(\S+?)\s*"?\s*$/i, 1]
+      end.first
+      return File.expand_path(configured.dup.force_encoding(Encoding::UTF_8).gsub("~", Dir.home)) if configured
+
+      File.join(config_dir, "git", "ignore")
     rescue StandardError
       nil
     end

@@ -684,6 +684,116 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
     end
   end
 
+  describe "a method name and its ?, ! and = neighbours" do
+    let(:pinger_source) do
+      <<~RB
+        class QaPinger
+          def self.qa_ping(x)
+            qa_helper(x)
+          end
+
+          def qa_ping?
+            true
+          end
+
+          def qa_ping!
+            nil
+          end
+
+          def qa_ping=(value)
+            @value = value
+          end
+
+          def self.qa_helper(x) = x
+        end
+      RB
+    end
+
+    let(:controller_source) do
+      <<~RB
+        class QaPingsController < ApplicationController
+          def show
+            QaPinger.qa_ping(1)
+            # qa_ping mentioned in a comment
+          end
+        end
+      RB
+    end
+
+    let(:script_source) do
+      <<~JS
+        // qa_ping mentioned in a comment
+        /* qa_ping in a block comment */
+         * qa_ping in a doc comment
+        qa_ping();
+      JS
+    end
+
+    let(:view_source) do
+      <<~ERB
+        <%# qa_ping mentioned in a comment %>
+        <%= qa_ping %>
+      ERB
+    end
+
+    let(:files) do
+      { "app/services/qa_pinger.rb" => pinger_source, "app/controllers/qa_pings_controller.rb" => controller_source,
+        "app/javascript/ping.js" => script_source, "app/views/pings/show.html.erb" => view_source }
+    end
+
+    [ true, false ].each do |with_ripgrep|
+      context(with_ripgrep ? "on the ripgrep backend" : "on the Ruby fallback backend") do
+        before do
+          allow(RailsAiContext).to receive(:tier).and_return(:static)
+          if with_ripgrep
+            skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
+          else
+            allow(described_class).to receive(:ripgrep_available?).and_return(false)
+          end
+        end
+
+        it "traces one definition and leaves the traced method out of its siblings" do
+          with_search_app(files) do
+            text = described_class.call(pattern: "qa_ping", match_type: "trace").content.first[:text]
+            definition = text[/## Definition.*?(?=## Called from)/m]
+
+            expect(definition.scan(/^\*\*app\/services\/qa_pinger\.rb:(\d+)\*\*/).flatten).to eq([ "2" ])
+            siblings = definition[/## Sibling methods \(same file\)\n(.*?)\n\n/m, 1].lines.map(&:strip)
+            expect(siblings).to eq([ "- `qa_ping?`", "- `qa_ping!`", "- `self.qa_helper`" ])
+          end
+        end
+
+        it "still traces a predicate by its own name" do
+          with_search_app(files) do
+            text = described_class.call(pattern: "qa_ping?", match_type: "trace").content.first[:text]
+
+            expect(text.scan(/^\*\*app\/services\/qa_pinger\.rb:(\d+)\*\*/).flatten).to eq([ "6" ])
+          end
+        end
+
+        it "finds only the exact method with match_type definition" do
+          with_search_app(files) do
+            text = described_class.call(pattern: "qa_ping", match_type: "definition", exact_match: true,
+                                        context_lines: 0).content.first[:text]
+
+            expect(text).to include("qa_pinger.rb:2:")
+            expect(text).not_to match(/qa_pinger\.rb:(6|10|14):/)
+          end
+        end
+
+        it "does not count a comment line as a call site" do
+          with_search_app(files) do
+            text = described_class.call(pattern: "qa_ping", match_type: "call", context_lines: 0).content.first[:text]
+
+            expect(text).to include("qa_pings_controller.rb:3:", "ping.js:4:", "show.html.erb:2:")
+            expect(text).not_to include("mentioned in a comment", "block comment", "doc comment")
+            expect(text).to include("**3 matches**")
+          end
+        end
+      end
+    end
+  end
+
   describe "trace mode call sites" do
     let(:saver_source) do
       <<~RB

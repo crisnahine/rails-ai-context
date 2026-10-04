@@ -21,6 +21,9 @@ module RailsAiContext
 
       TEST_DIRS = %w[test/ spec/ features/].freeze
       MATCH_FIELD_SEPARATOR = "\x1f"
+      # A definition, or a line that opens with a Ruby, JS or ERB comment. `#{`
+      # opens an interpolation inside a heredoc, which is code.
+      NOT_A_CALL_SITE = %r{\A\s*(?:def\s|#(?!\{)|//|/\*|\*\s|<%#)}
 
       tool_name "rails_search_code"
       description "Search the Rails codebase with smart modes. " \
@@ -114,7 +117,7 @@ module RailsAiContext
           cleaned = pattern.sub(/\A\s*def\s+/, "")
           escaped = literal(cleaned)
           # `def\s+` already anchors the left edge, so only a trailing boundary.
-          exact_match ? "^\\s*def\\s+(self\\.)?#{escaped}#{trailing_boundary(cleaned)}" : "^\\s*def\\s+(self\\.)?#{escaped}"
+          exact_match ? "^\\s*def\\s+(self\\.)?#{escaped}#{method_name_end(cleaned)}" : "^\\s*def\\s+(self\\.)?#{escaped}"
         when "class"
           cleaned = pattern.sub(/\A\s*(class|module)\s+/, "")
           escaped = literal(cleaned)
@@ -174,8 +177,10 @@ module RailsAiContext
         end
         all_results, truncated = cap_results(fetched)
 
-        # Filter out definitions for match_type:"call"
-        all_results.reject! { |r| r[:content].match?(/\A\s*def\s/) } if match_type == "call"
+        # A definition or comment line stays as context, never as a call site.
+        if match_type == "call"
+          all_results.map! { |r| match_row?(r) && r[:content].match?(NOT_A_CALL_SITE) ? r.merge(match: false) : r }
+        end
         all_results = confirmed_rows(all_results, root, build_regexp(search_pattern, timeout: 1), context_lines)
 
         if all_results.empty?
@@ -247,6 +252,12 @@ module RailsAiContext
       # otherwise, so `def reblog?` would match `def reblog` too.
       private_class_method def self.exact_pattern(pattern)
         "#{leading_boundary(pattern)}#{literal(pattern)}#{trailing_boundary(pattern)}"
+      end
+
+      # A def of `ping` must not match `ping?`, `ping!` or `ping=`, which are
+      # other methods. No lookahead: ripgrep's regex engine has none.
+      private_class_method def self.method_name_end(name)
+        name.match?(/\w\z/) ? "(?:[^\\w?!=]|$)" : ""
       end
 
       # Regexp.escape writes a space as `\ `, which ripgrep 13 rejects as an
@@ -531,7 +542,7 @@ module RailsAiContext
         lines = [ "# Trace: `#{cleaned}`", "" ]
 
         # 1. Find the definition
-        def_pattern = "^\\s*def\\s+(self\\.)?#{literal(cleaned)}#{trailing_boundary(cleaned)}"
+        def_pattern = "^\\s*def\\s+(self\\.)?#{literal(cleaned)}#{method_name_end(cleaned)}"
         def_results, = quick_search(def_pattern, search_path, root, 10, exclude_tests)
 
         if def_results.any?
@@ -580,8 +591,7 @@ module RailsAiContext
         call_pattern = exact_pattern(cleaned)
         call_rows, = quick_search(call_pattern, search_path, root, max_results_cap + 1, exclude_tests)
         call_results, call_truncated = cap_results(call_rows)
-        # A `#` line mentioning the method is prose about it, not a call site.
-        callers = call_results.reject { |r| r[:content].match?(/\A\s*(def\s|#)/) }
+        callers = call_results.reject { |r| r[:content].match?(NOT_A_CALL_SITE) }
 
         # Exclude the definition file+line to avoid self-reference
         def_locations = def_results.map { |r| "#{r[:file]}:#{r[:line_number]}" }.to_set
@@ -689,7 +699,7 @@ module RailsAiContext
           next if in_private
           if (m = line.match(/\A\s*def\s+((?:self\.)?\w+[?!]?)/))
             name = m[1]
-            methods << name unless name == exclude_method || name.start_with?("initialize")
+            methods << name unless name.delete_prefix("self.") == exclude_method || name.start_with?("initialize")
           end
         end
         methods
