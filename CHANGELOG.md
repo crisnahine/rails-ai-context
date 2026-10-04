@@ -15,7 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.env.*` pattern matches it, and `doctor` no longer lists it as unread or
   says to gitignore it. A `sensitive_patterns` entry that names the file
   exactly, with no glob characters, still blocks it. Redaction treats the four
-  suffixes alike. (#267)
+  suffixes alike. `rails_search_code` now drops sensitive files from ripgrep's
+  output where it used to exclude them by glob, so a sensitive file ripgrep
+  cannot open is not reported as an error and does not send a no-match search
+  through the Ruby fallback. (#267)
 - **`rails_query` on a SQLite file stops at `query_timeout`.** The query runs
   in a child process with its own read-only connection, which is stopped at
   the deadline. sqlite3 2.x's `statement_timeout=` interrupts any statement of
@@ -67,16 +70,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a setter now appears. Every method-body lookup (concerns, callbacks, actions,
   conventions) ends a name the same way. (#258)
 - **`rails_search_code` call sites skip comment lines** with the rule trace
-  uses, by file type: `#` in Ruby, `//` and `/*` in JS, TS and CSS, `-#` in
-  Haml, `/` in Slim. A line holding a live ERB tag is a call site, and a spaced
-  setter call (`obj.qa_ping = 1`) is not a call of `qa_ping`. (#269)
+  uses, by file type: `#` in Ruby, `//` and `/*` in JS and TS, `/*` in CSS and
+  `//` too in SCSS, Sass and Less, `-#` in Haml, `/` in Slim. A stylesheet
+  line that starts with a `#id` selector is not a call site either. A line
+  holding a live ERB tag is a call site, and a spaced setter call
+  (`obj.qa_ping = 1`) is not a call of `qa_ping`. (#269)
 - **Both search backends read the same excludes file.** The Ruby fallback read
   `core.excludesFile` from the repository's own config, which ripgrep does not.
   It now reads what ripgrep 15 reads: `~/.gitconfig`, then the XDG git config,
   then the default ignore file. (#268)
-- **`rails_search_code` reports no error for a sensitive file ripgrep could not
-  open**, and a no-match search no longer reruns through the Ruby fallback
-  because of one.
 - **A `db/structure.sql` table that `INHERITS` reads its parent's columns
   first, then its own**, with multiple parents, chains, a parent defined later
   in the file, and `ALTER COLUMN ... SET NOT NULL`/`SET DEFAULT`. A parent in
