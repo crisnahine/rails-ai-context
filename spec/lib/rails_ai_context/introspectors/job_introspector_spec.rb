@@ -1307,15 +1307,30 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
               def perform; end
             end
           RUBY
+          File.write(File.join(dir, "app", "jobs", "block_job.rb"), <<~RUBY)
+            class BlockJob < ActiveJob::Base
+              queue_as do
+                arguments.first.urgent? ? :high : :low
+              end
+            end
+          RUBY
+          File.write(File.join(dir, "app", "jobs", "brace_job.rb"), "class BraceJob < ActiveJob::Base\n  queue_as { :high }\nend\n")
+          File.write(File.join(dir, "app", "jobs", "proc_job.rb"), "class ProcJob < ActiveJob::Base\n  queue_as proc { :x }\nend\n")
+          File.write(File.join(dir, "app", "jobs", "proc_new_job.rb"), "class ProcNewJob < ActiveJob::Base\n  queue_as Proc.new { :x }\nend\n")
         end
 
         expect(result[:jobs].to_h { |j| [ j[:name], j[:queue] ] }).to eq(
+          "BlockJob" => "computed by a block: `do arguments.first.urgent? ? :high : :low end`",
+          "BraceJob" => "computed by a block: `{ :high }`",
           "EnvJob" => "`ENV.fetch(\"ENV_QUEUE\", \"default\")` (computed)",
           "ProcessingJob" => "`processing_queue` (computed)",
-          "UrgentJob" => "queue_as given a lambda: ActiveJob does not call it, so the queue is named after the Proc's text: " \
-                         "`-> { arguments.first.urgent? ? :high : :low }`"
+          "ProcJob" => "#{proc_label}: `proc { :x }`",
+          "ProcNewJob" => "#{proc_label}: `Proc.new { :x }`",
+          "UrgentJob" => "#{proc_label}: `-> { arguments.first.urgent? ? :high : :low }`"
         )
       end
+
+      def proc_label = "queue_as given a Proc: ActiveJob does not call it, so the queue is named after the Proc's text"
 
       # OpenProject keeps a PDF style class, Styles::Base, in app/workers, and
       # it has subclasses: a base by name, and no job at all. A job base is one
@@ -1508,7 +1523,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       RUBY
         reflected_job("UrgentJob", file) { queue_as { :high } }
 
-        expect(booted_queue("UrgentJob")).to eq("computed by a block")
+        expect(booted_queue("UrgentJob")).to eq("computed by a block: `do :high end`")
       end
     end
 
@@ -1525,16 +1540,32 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
         reflected_job("UrgentJob", file) { queue_as -> { :high } }
 
         expect(booted_queue("UrgentJob"))
-          .to eq("queue_as given a lambda: ActiveJob does not call it, so the queue is named after the Proc's text: `-> { :high }`")
+          .to eq("#{proc_label}: `-> { :high }`")
       end
     end
 
     it "never prints the Proc when the lambda's source is not found" do
       reflected_job("ElsewhereJob", app_job_file) { queue_as -> { :high } }
 
-      expect(booted_queue("ElsewhereJob"))
-        .to eq("queue_as given a lambda: ActiveJob does not call it, so the queue is named after the Proc's text")
+      expect(booted_queue("ElsewhereJob")).to eq(proc_label)
     end
+
+    # The source names a constant, which says nothing of what it holds;
+    # reflection says it holds a Proc.
+    it "reads a Proc held in a constant as the Proc it is" do
+      with_job_file("ConstantJob", <<~RUBY) do |file|
+        class ConstantJob < ActiveJob::Base
+          QUEUE = -> { :high }
+          queue_as QUEUE
+        end
+      RUBY
+        reflected_job("ConstantJob", file) { queue_as -> { :high } }
+
+        expect(booted_queue("ConstantJob")).to eq("#{proc_label}: `QUEUE`")
+      end
+    end
+
+    def proc_label = "queue_as given a Proc: ActiveJob does not call it, so the queue is named after the Proc's text"
 
     # ActiveJob 7.0+ defaults queue_name to a lambda, so every job without a
     # queue_as holds a Proc.
