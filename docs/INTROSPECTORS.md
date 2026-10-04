@@ -183,7 +183,7 @@ It runs a single-pass Dispatcher that walks the AST once and feeds events to all
 | ValidationsListener | `validates`, `validates_*_of`, custom `validate :method`, under the options of an enclosing `with_options` block |
 | ScopesListener | `scope :name, -> { ... }`, `lambda { ... }` and the block form |
 | EnumsListener | Rails 7+ and legacy enum syntax, prefix/suffix options |
-| CallbacksListener | All AR callback types including `around_*`, `after_touch`, `after_initialize` and `after_find`; `after_commit` with `on:` resolution; a callback object by its constant, a block as `[inline_block]`; `if:`/`unless:` kept as the source wrote them, and the options of an enclosing `with_options` block |
+| CallbacksListener | All AR callback types including `around_*`, `after_touch`, `after_initialize` and `after_find`; `after_commit` with `on:` resolution; a callback object by its constant, a block as `[inline_block]`; `if:`/`unless:` kept as the source wrote them, and the options of an enclosing `with_options` block. Each record carries `owner`, the class nesting it was declared in, and a symbol declared again for one kind in one class replaces the earlier record, as Rails keeps only the later one |
 | MacrosListener | `encrypts`, `normalizes`, `delegate`, `has_secure_password`, `serialize`, `store`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `generates_token_for`, `attribute` |
 | MethodsListener | `def`/`def self.`, visibility tracking, parameter extraction, `class << self`; `include_initialize: true` adds the constructor a caller reports on its own |
 | MixinsListener | `include`, `prepend`, `extend`, flagging the ones that reach the ancestor chain |
@@ -194,7 +194,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 
 | Listener | What it detects |
 |:---------|:---------------|
-| GenericMacroListener | Any receiver-less macro you name: `GenericMacroListener.new(:devise, :rate_limit)`. Returns args, values (with a source-slice fallback), options, option values and option nodes, plus the nesting: `parent_offset` is the offset of the target macro call whose block this one sits in, paired against each call's own `offset` rather than its line |
+| GenericMacroListener | Any receiver-less macro you name: `GenericMacroListener.new(:devise, :rate_limit)`. Returns args, values (with a source-slice fallback), options, option values and option nodes, plus the nesting: `parent_offset` is the offset of the target macro call whose block this one sits in, paired against each call's own `offset` rather than its line. `block_source: [:name]` adds `block`, the one-line source of the block those macros are given |
 | ChainedCallListener | Calls on a receiver: `ChainedCallListener.new(:includes)`, or `receiver: :inflect` to pin the receiver. Reports the receiver name |
 | ConfigAssignmentListener | `config.key = value` and `config.a.b = value` in initializers and `config/environments/*.rb`, plus bare `config.jwt do ... end` section references. Takes a root name (`:config` by default, e.g. `:DatabaseCleaner`) |
 | ClassDefinitionListener | Class definitions with their superclass, namespaces resolved |
@@ -214,6 +214,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 | MailboxRoutingListener | Action Mailbox `routing` and processing callbacks |
 | ModelReferenceListener | Model constants used in controllers: `Post.find`, `params.require(:post)`, ivar writes |
 | VariantCallListener | `variant` calls (ChainedCallListener with `:variant` preset) |
+| ProcLiteralListener | Every Proc literal (`-> {}`, `lambda {}`, `proc {}`, `Proc.new {}`) with its line, its one-line source and the constant it is assigned to, if any. Used by the job introspector to read a `queue_as` Proc |
 | MethodCallListener | Call sites by name or pattern anywhere in a file, inside a `def`, a lambda or a block included, with arguments, options, receiver and line. Used by the Turbo introspector for broadcast calls and by `ActionFilters` for the skip macros |
 
 ### Adding a listener
