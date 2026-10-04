@@ -3488,7 +3488,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
           Dir.mktmpdir do |dir|
             plugin = File.join(dir, "lib", "plugins", "aaj")
             FileUtils.mkdir_p(File.join(plugin, "lib", "acts", "journalized"))
-            File.write(File.join(plugin, "init.rb"), "require File.expand_path('lib/acts_as_journalized', __dir__)\nActiveRecord::Base.include(Acts::Journalized)\n")
+            File.write(File.join(plugin, "init.rb"), "#{stub}require File.expand_path('lib/acts_as_journalized', __dir__)\nActiveRecord::Base.include(Acts::Journalized)\n")
             File.write(File.join(plugin, "lib", "acts_as_journalized.rb"), <<~RUBY)
               Dir[File.expand_path("acts/journalized/*.rb", __dir__)].each { |f| require f }
               #{stub}module Acts

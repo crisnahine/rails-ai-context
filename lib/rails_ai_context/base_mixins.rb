@@ -130,11 +130,12 @@ module RailsAiContext
     private_class_method :constants
 
     # Past Zeitwerk's path, a plugin's module sits in a lib file its init.rb
-    # requires, under a name its path does not spell.
+    # requires, under a name its path does not spell; a namespace stub is not it.
     def declaring_file(root, name, file)
       ConcernPaths.find_file(root, name) ||
         ([ file ] + required_files(root, file, 2)).find do |candidate|
-          Introspectors::DeclaredConstant.module_node(AstCache.parse(candidate).value, name)
+          node = Introspectors::DeclaredConstant.module_node(AstCache.parse(candidate).value, name)
+          node && !Introspectors::DeclaredConstant.stub?(node)
         end
     rescue StandardError => e
       RailsAiContext.debug_fail(e, nil, label: "BaseMixins.declaring_file #{name}")
