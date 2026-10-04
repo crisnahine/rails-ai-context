@@ -234,11 +234,12 @@ RSpec.describe RailsAiContext::Tools::SearchDocs do
     end
 
     context "with fetch: true and network failure" do
-      before do
-        cache_dir = Rails.root.join("tmp", "rails-ai-context", "docs")
-        allow(FileUtils).to receive(:mkdir_p).with(cache_dir)
-        allow(File).to receive(:exist?).with(cache_dir.join("active_record_basics_8-0-stable.md")).and_return(false)
+      let(:root) { Pathname.new(Dir.mktmpdir) }
 
+      after { FileUtils.rm_rf(root) }
+
+      before do
+        allow(described_class).to receive(:rails_app).and_return(double(root: root))
         allow(Net::HTTP).to receive(:new).and_raise(SocketError.new("getaddrinfo: Name or service not known"))
       end
 
