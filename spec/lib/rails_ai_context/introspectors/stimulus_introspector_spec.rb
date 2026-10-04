@@ -563,49 +563,55 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
       end
     end
 
-    it "keeps the bare name on the app/javascript file when a view writes it and app/frontend holds the same path" do
-      Dir.mktmpdir do |root|
-        home = File.join(root, "app/javascript/controllers/users/tools")
-        other = File.join(root, "app/frontend/controllers/users/tools")
-        [ home, other ].each { |dir| FileUtils.mkdir_p(dir) }
-        File.write(File.join(home, "ajax_controller.js"),
-                   %(import { Controller } from "@hotwired/stimulus"\nexport default class extends Controller {\n  static targets = ["output"]\n  static values = { url: String }\n}\n))
-        File.write(File.join(other, "ajax_controller.js"),
-                   %(import { Controller } from "@hotwired/stimulus"\nexport default class extends Controller {\n  connect() {}\n}\n))
-        FileUtils.mkdir_p(File.join(root, "app/views/pages"))
-        File.write(File.join(root, "app/views/pages/faq.html.erb"), %(<div data-controller="users--tools--ajax"></div>\n))
+    { "app/frontend" => "app-frontend", "frontend" => "frontend", "client" => "client" }.each do |js_dir, prefix|
+      it "keeps the bare name on the app/javascript file when a view writes it and #{js_dir} holds the same path" do
+        Dir.mktmpdir do |root|
+          home = File.join(root, "app/javascript/controllers/users/tools")
+          other = File.join(root, js_dir, "controllers/users/tools")
+          [ home, other ].each { |dir| FileUtils.mkdir_p(dir) }
+          File.write(File.join(home, "ajax_controller.js"),
+                     %(import { Controller } from "@hotwired/stimulus"\nexport default class extends Controller {\n  static targets = ["output"]\n  static values = { url: String }\n}\n))
+          File.write(File.join(other, "ajax_controller.js"),
+                     %(import { Controller } from "@hotwired/stimulus"\nexport default class extends Controller {\n  connect() {}\n}\n))
+          FileUtils.mkdir_p(File.join(root, "app/views/pages"))
+          File.write(File.join(root, "app/views/pages/faq.html.erb"), %(<div data-controller="users--tools--ajax"></div>\n))
 
-        controllers = described_class.new(RailsAiContext::StaticApp.new(root)).call[:controllers]
-        by_file = controllers.to_h { |c| [ c[:file], [ c[:name], c[:identifier_inferred], c[:targets] ] ] }
+          controllers = described_class.new(RailsAiContext::StaticApp.new(root)).call[:controllers]
+          by_file = controllers.to_h { |c| [ c[:file], [ c[:name], c[:identifier_inferred], c[:targets] ] ] }
 
-        expect(by_file).to eq(
-          "app/javascript/controllers/users/tools/ajax_controller.js" => [ "users--tools--ajax", nil, [ "output" ] ],
-          "app/frontend/controllers/users/tools/ajax_controller.js" => [ "app-frontend--users--tools--ajax", true, [] ]
-        )
+          expect(by_file).to eq(
+            "app/javascript/controllers/users/tools/ajax_controller.js" => [ "users--tools--ajax", nil, [ "output" ] ],
+            "#{js_dir}/controllers/users/tools/ajax_controller.js" => [ "#{prefix}--users--tools--ajax", true, [] ]
+          )
+        end
       end
     end
 
     {
-      "an in-repo plugin" => "plugins/chat/app/javascript/controllers",
-      "an engine" => "engines/admin/app/javascript/controllers"
-    }.each do |label, other_dir|
+      "an in-repo plugin" => [ "plugins/chat", "chat--foo" ],
+      "an engine" => [ "engines/admin", "admin--foo" ]
+    }.each do |label, (code_root, expected)|
       it "keeps the written name on the app's own app/frontend file over #{label}'s app/javascript file" do
         Dir.mktmpdir do |root|
-          [ "app/frontend/controllers", other_dir ].each do |dir|
+          [ "app/frontend/controllers", "#{code_root}/app/javascript/controllers" ].each do |dir|
             FileUtils.mkdir_p(File.join(root, dir))
             File.write(File.join(root, dir, "foo_controller.js"),
                        %(import { Controller } from "@hotwired/stimulus"\nexport default class extends Controller {}\n))
           end
-          FileUtils.mkdir_p(File.join(root, "plugins/chat/app/models"))
-          File.write(File.join(root, "plugins/chat/plugin.rb"), "# plugin\n")
+          if code_root.start_with?("plugins/")
+            FileUtils.mkdir_p(File.join(root, code_root, "app/models"))
+            File.write(File.join(root, code_root, "plugin.rb"), "# plugin\n")
+          end
           FileUtils.mkdir_p(File.join(root, "app/views/pages"))
           File.write(File.join(root, "app/views/pages/home.html.erb"), %(<div data-controller="foo"></div>\n))
           RailsAiContext::PathResolver.clear_code_roots
 
           names = described_class.new(RailsAiContext::StaticApp.new(root)).call[:controllers].to_h { |c| [ c[:file], c[:name] ] }
 
-          expect(names["app/frontend/controllers/foo_controller.js"]).to eq("foo")
-          expect(names["#{other_dir}/foo_controller.js"]).not_to eq("foo")
+          expect(names).to eq(
+            "app/frontend/controllers/foo_controller.js" => "foo",
+            "#{code_root}/app/javascript/controllers/foo_controller.js" => expected
+          )
         end
       end
     end

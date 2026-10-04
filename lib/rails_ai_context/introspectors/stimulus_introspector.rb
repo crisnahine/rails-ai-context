@@ -159,7 +159,7 @@ module RailsAiContext
         # controller left without a free name is qualified by its code root and marked a guess.
         def resolve_names(paths, referenced, registered = {}, root: nil, loader_dirs: [])
           derived = paths.map { |path, js_root| [ path, js_root, identifier_for(path, js_root) ] }
-                         .sort_by { |path, js_root, (_name, guess)| [ js_root.count("/"), guess ? 1 : 0, path ] }
+                         .sort_by { |path, js_root, (_name, guess)| [ code_root_of(js_root).count("/"), guess ? 1 : 0, path ] }
           claimed = derived.map { |_path, _js_root, (name, _guess)| name }.to_set
           taken = Set.new
           resolved = {}
@@ -255,11 +255,20 @@ module RailsAiContext
           end
         end
 
+        def js_dir_of(js_root)
+          JS_ROOTS.find { |dir| js_root == dir || js_root.end_with?("/#{dir}") }
+        end
+
+        # The code root a JS root belongs to: `frontend` and `app/javascript` share one.
+        def code_root_of(js_root)
+          js_root.delete_suffix(js_dir_of(js_root).to_s).chomp("/")
+        end
+
         # Names for a controller whose derived one is taken: prefixed by more and more
         # of its code root (`chat--foo`, `plugins--chat--foo`), then the whole path.
         def qualified_names(name, js_root, root)
           relative = root ? js_root.delete_prefix("#{root}/") : js_root
-          js_dir = JS_ROOTS.find { |dir| relative == dir || relative.end_with?("/#{dir}") }
+          js_dir = js_dir_of(relative)
           segments = (js_dir ? relative.delete_suffix(js_dir).chomp("/") : relative).split("/").reject(&:empty?)
           segments = [ js_dir.tr("/", "-") ] if segments.empty? && js_dir
           (1..segments.size).map { |n| "#{segments.last(n).join('--')}--#{name}" } +
