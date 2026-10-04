@@ -487,17 +487,10 @@ module RailsAiContext
       end
 
       # KILL: TERM cannot land while `step` holds the GVL, and would run inherited at_exit hooks.
+      # Our own child: the only failures are ESRCH (already gone) and ECHILD (already reaped).
       private_class_method def self.reap_child(pid)
-        begin
-          Process.kill(:KILL, pid)
-        rescue Errno::ESRCH
-          nil
-        end
-        begin
-          Process.wait(pid)
-        rescue Errno::ECHILD
-          nil
-        end
+        Process.kill(:KILL, pid) rescue nil
+        Process.wait(pid) rescue nil
       end
 
       # ── EXPLAIN execution ────────────────────────────────────────────
