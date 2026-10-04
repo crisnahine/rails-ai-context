@@ -3,6 +3,17 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Redaction do
+  # The class body reads SafePath's placeholder list, so the file has to load on its own.
+  it "loads with a bare require, outside the gem's autoloader" do
+    lib = File.expand_path("../../../lib", __dir__)
+    script = 'require "rails_ai_context/redaction"; ' \
+             'print RailsAiContext::Redaction.redact_source_line("  encryption_key: #{"3b" * 20}", path: "x.yml.dist")'
+    out, err, status = Open3.capture3(RbConfig.ruby, "-I", lib, "-e", script)
+
+    expect([ status.success?, err ]).to eq([ true, "" ])
+    expect(out).to eq("  encryption_key: [FILTERED]")
+  end
+
   # What the read tools emit is source an agent will edit, so only a string
   # literal is ever a value here: one under a secret-named key, or one shaped
   # like a credential. Code is never rewritten. Every value below is fake.

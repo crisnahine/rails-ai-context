@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "safe_path"
+
 module RailsAiContext
   # Every value that leaves the app through this gem - config source slices,
   # log lines, query rows, environment values - passes through here first.

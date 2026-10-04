@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "polyfill/data"
+
 module RailsAiContext
   # One answer to "may this caller-supplied path be read, and which file is
   # it". The checks run in an order that matters: a sensitive name is refused
