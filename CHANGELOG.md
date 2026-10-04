@@ -49,25 +49,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that adds it, at its first include there, which can be a call to a class
   method that includes it. A Concern's `included` block runs there only; a
   plain `self.included` hook runs on every include. A call runs the definition
-  Ruby's lookup finds as of the call: a module the class prepends, the class's
-  own `def self.` (with an `alias_method` in `class << self`, which runs what
-  its original name ran at the alias, and a `def` a hook writes in
-  `class << base`), then the modules it extends and its concerns' class
-  methods, the last added first, then the same for each base, then the modules
-  every model has. A module counts as extended from where the `extend` runs: in
-  the class, in a hook (`base.extend(ClassMethods)`, `base.extend(self)`) or in
-  a Concern's `included` block; a plain module's nested `ClassMethods` counts
-  only when something extends it. A `super` runs the next definition, at the
-  `super`. An instance method or a nested class's method of the same name
-  never runs. A module a class method includes joins only when a call reaches
-  that method, and only calls after it see its methods. A nested class's
-  callbacks are its own, and a module nested in the model's file reads like
-  any concern: `include` runs its `included` block, `extend` its methods and
-  `self.extended` only. A module a plugin's lib loads by a glob `require` is
-  read from beside the file naming it, so OpenProject's journalized models
-  list `save_journals`. A Mongoid document's own callbacks list in the same
-  run order, one in a class method where the document calls it. Neither tier
-  evaluates `send` or `define_singleton_method` for this. (#253)
+  Ruby's lookup finds as of the call: a module the class prepends to its
+  singleton class, the class's own class methods, then the modules it extends
+  and its concerns' class methods, the last added first, then the same for
+  each base, then what every model has: class methods an initializer writes
+  in `ActiveRecord::Base.class_eval` or a reopened base (Canvas's
+  `validates_locale` adds its `before_validation` to Account, User and
+  Course), then the modules mixed into the base. A class's own class methods
+  are its `def self.`, an `alias_method` in `class << self` (it runs what its
+  original name ran at the alias), and those a Concern's `included` block or a
+  hook writes on the class (`def self.x` or `class << self`, in the block, in
+  `base.class_eval` or in `class << base`), each from its line where that code
+  runs. A module counts from the line adding it, where that line runs: an
+  `extend` or `singleton_class.include` in the class, in a hook or in a
+  Concern's `included` block, an `extend` in a class method a call reaches
+  (an `acts_as_x` that extends its methods, whose `self.extended` hook then
+  runs), and `singleton_class.prepend` in a hook, which counts as prepended;
+  a plain module's nested `ClassMethods` counts only when something extends
+  it. A `super` runs the next definition, at the `super`. An instance method
+  or a nested class's method of the same name never runs. A module a class
+  method includes joins only when a call reaches that method, and only calls
+  after it see its methods. A nested class's callbacks are its own, and a
+  module nested in the model's file reads like any concern: `include` runs its
+  `included` block, `extend` its methods and `self.extended` only. A module a
+  plugin's lib loads by a glob `require` is read from beside the file naming
+  it, and from its definition rather than an empty namespace stub above it,
+  so OpenProject's journalized models list `save_journals`. A Mongoid
+  document's own callbacks list in the same run order, one in a class method
+  where the document calls it. Neither tier evaluates `send`,
+  `define_singleton_method` or a module included in `class << self` for this,
+  so the list can miss what they register or show the definition they
+  replace. (#253)
 - **A lambda or Proc given to `queue_as` reads as what ActiveJob does with
   it.** ActiveJob never calls it; it names the queue after the Proc's text.
   Both tiers now say so, with the source, where the booted tier printed the
