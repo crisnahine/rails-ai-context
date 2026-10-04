@@ -184,6 +184,20 @@ RSpec.describe RailsAiContext::Tools::PerformanceCheck do
       expect(text).not_to include("Your app looks good!")
     end
 
+    it "counts only what both the model and the category filter keep" do
+      text = described_class.call(model: "Post", category: "indexes").content.first[:text]
+
+      expect(text).to include("**Total issues found:** 0")
+      expect(text).to include("No issues found for Post in category 'indexes'")
+    end
+
+    it "lists in summary only the categories the filter keeps" do
+      text = described_class.call(model: "Post", category: "model_all", detail: "summary").content.first[:text]
+
+      expect(text).to include("**Total issues found:** 1")
+      expect(text.scan(/^- .*/)).to eq([ "- Model.all in controllers: 1" ])
+    end
+
     it "shows the unqualified good-news message only with no filters and zero issues" do
       allow(described_class).to receive(:cached_context).and_return({
         performance: {

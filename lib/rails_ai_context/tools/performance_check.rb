@@ -66,24 +66,16 @@ module RailsAiContext
 
           lines = [ "# Performance Analysis", "" ]
 
-          # Collect all items then filter, so the count reflects actual displayed results
-          all_sections = CATEGORIES.transform_values { |(key, _, _)| data[key] || [] }
-
-          # Apply model filter to count
-          filtered_count = if model && !model.empty?
-            all_sections.values.sum { |items| filter_items(items, model).size }
-          elsif category != "all"
-            (all_sections[category] || []).size
-          else
-            all_sections.values.sum(&:size)
-          end
+          kept = CATEGORIES.select { |name, _| category == "all" || category == name }
+            .to_h { |name, (key, _, _)| [ name, filter_items(data[key], model) ] }
+          filtered_count = kept.values.sum(&:size)
 
           lines << "**Total issues found:** #{filtered_count}"
           lines << ""
 
           if RailsAiContext::DetailLevel.summary?(detail)
-            CATEGORIES.each do |name, (_, label, _)|
-              items = filter_items(all_sections[name], model)
+            kept.each do |name, items|
+              label = CATEGORIES[name][1]
               counts = name == "n_plus_one" ? risk_summary_counts(items) : ""
               lines << "- #{label}: #{items.size}#{counts}"
             end
