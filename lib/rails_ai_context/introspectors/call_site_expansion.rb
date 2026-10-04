@@ -205,6 +205,9 @@ module RailsAiContext
         bindings
       end
 
+      # `local[key] ||= v`, `&&=` and `+=` change the local in place too.
+      INDEX_WRITES = [ Prism::IndexOrWriteNode, Prism::IndexAndWriteNode, Prism::IndexOperatorWriteNode ].freeze
+
       # Methods that change their receiver in place.
       MUTATORS = %i[<< []= push append unshift prepend insert concat pop shift delete delete_at delete_if keep_if
                     clear replace store update fill].freeze
@@ -218,7 +221,8 @@ module RailsAiContext
           next if kept.any? { |statement| statement.equal?(node) }
 
           found << node.name if WRITES.include?(node.class) && node.depth == blocks
-          receiver = node.receiver if node.is_a?(Prism::CallNode) && (MUTATORS.include?(node.name) || node.name.match?(/\w!\z/))
+          receiver = node.receiver if INDEX_WRITES.include?(node.class) ||
+                                      (node.is_a?(Prism::CallNode) && (MUTATORS.include?(node.name) || node.name.match?(/\w!\z/)))
           found << receiver.name if receiver.is_a?(Prism::LocalVariableReadNode) && receiver.depth == blocks
           blocks += 1 if node.is_a?(Prism::BlockNode) || node.is_a?(Prism::LambdaNode)
           stack.concat(node.compact_child_nodes.map { |child| [ child, blocks ] })

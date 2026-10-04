@@ -285,9 +285,10 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
       expect(data[:conditional].map { |c| c[:condition] }).to eq([ "options[:allow_nil]" ])
     end
 
-    # Ruby registers :x for the first two (the body sets the key) and nothing for the third (it drops it).
+    # Ruby registers :x for every change here but `delete` and `&&= false`, which drop the key's truth.
     it "stays unbound when the method changes the hash in place" do
-      [ "options.reverse_merge!(allow_nil: true)", "options[:allow_nil] = true", "options.delete(:allow_nil)" ].each do |change|
+      [ "options.reverse_merge!(allow_nil: true)", "options[:allow_nil] = true", "options.delete(:allow_nil)",
+        "options[:allow_nil] ||= true", "options[:allow_nil] &&= false", "options[:allow_nil] |= false" ].each do |change|
         data = expand("def vl(*args)\n  options = args.extract_options!\n  #{change}\n  before_save :x if options[:allow_nil]\nend\n",
                       "vl :a, allow_nil: true")
 
