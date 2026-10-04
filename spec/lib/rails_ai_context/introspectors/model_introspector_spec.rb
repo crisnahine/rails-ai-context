@@ -2777,11 +2777,44 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         write_model(dir, "Pc", "class Pc < Pb\n  include Plain\n  before_save :d\nend\n")
         write_model(dir, "Mb", "class Mb < ApplicationRecord\n  include Cm\n  stampable\n  before_save :b\nend\n")
         write_model(dir, "Mc", "class Mc < Mb\n  include Cm\n  stampable\n  before_save :d\nend\n")
+        write_model(dir, "Concerns::Nst", <<~RUBY)
+          module Nst
+            extend ActiveSupport::Concern
+            class_methods do
+              def nstamp
+                before_save :n_only
+                before_save { 3 }
+              end
+            end
+            included do
+              nstamp
+            end
+          end
+        RUBY
+        write_model(dir, "Concerns::Ph", <<~RUBY)
+          module Ph
+            def self.included(base)
+              base.extend(ClassMethods)
+              base.hstamp
+            end
+            module ClassMethods
+              def hstamp
+                before_save :h_only
+              end
+            end
+          end
+        RUBY
+        write_model(dir, "Nb", "class Nb < ApplicationRecord\n  include Nst\n  before_save :b\nend\n")
+        write_model(dir, "Nc", "class Nc < Nb\n  include Nst\n  before_save :d\nend\n")
+        write_model(dir, "Hb", "class Hb < ApplicationRecord\n  include Ph\n  before_save :b\nend\n")
+        write_model(dir, "Hc", "class Hc < Hb\n  include Ph\n  before_save :d\nend\n")
 
         models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
         expect(models["Pc"][:callbacks]["before_save"]).to eq(%w[[inline_block] b p [inline_block] d])
         expect(models["Mc"][:callbacks]["before_save"]).to eq(%w[[inline_block] b cm_only [inline_block] d])
+        expect(models["Nc"][:callbacks]["before_save"]).to eq(%w[n_only [inline_block] b d])
+        expect(models["Hc"][:callbacks]["before_save"]).to eq(%w[b h_only d])
       end
     end
 

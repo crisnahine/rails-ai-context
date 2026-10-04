@@ -14,7 +14,7 @@ module RailsAiContext
     # fixed for the run and `seen`, `collected` and `unresolved` accumulate
     # across it, so they belong to the run rather than to every call.
     class Run
-      attr_reader :unresolved, :hidden, :included_calls, :skipped_methods, :placement
+      attr_reader :unresolved, :hidden, :included_calls, :skipped_methods, :placement, :hook_sites
 
       # The default block belongs to the walk. Once the entries leave it, a
       # caller reading a key the walk never produced would grow one.
@@ -31,7 +31,7 @@ module RailsAiContext
         @consulted.any? { |name| called.include?(name) }
       end
 
-      def initialize(root, dirs, keys, cache, listeners, calls = nil, extra = [], file = nil)
+      def initialize(root, dirs, keys, cache, listeners, calls = nil, extra = [], file = nil, known: nil, hook_sites: Set.new)
         # The class's own file: a module it declares there and includes is
         # its own body, already read with it.
         @own_file = file
@@ -44,6 +44,8 @@ module RailsAiContext
         @cache = cache
         @listeners = listeners
         @calls = calls
+        @known = known
+        @hook_sites = hook_sites.dup
         @seen = Set.new
         @collected = Hash.new { |hash, key| hash[key] = [] }
         @unresolved = []
@@ -99,8 +101,9 @@ module RailsAiContext
           tree = nested ? AstCache.parse_string(nested.last.slice).value : AstCache.parse(path).value
           macro = @macros[name] || :include
           source_key = nested ? "#{file}##{nested.first}" : path
-          Run.merge_calls(@included_calls,
-                          memo([ :included_calls, source_key, label, macro ]) { included_block_calls(tree, label, macro) })
+          block_calls, hooked = memo([ :included_calls, source_key, label, macro ]) { included_block_calls(tree, label, macro) }
+          Run.merge_calls(@included_calls, block_calls)
+          @hook_sites.merge(hooked)
           bodies, hooks = method_bodies(data, macro)
           own_lines, inner = memo([ :ranges, source_key, label ]) { own_and_nested_ranges(tree, label) }
           extended = @extended.include?(name)
@@ -111,7 +114,7 @@ module RailsAiContext
             end
           end
           expand_called(tree, data, own_lines, label).each do |key, entries|
-            entries.each { |entry| @collected[key] << tagged(entry, label, rerun: key == :callbacks) }
+            entries.each { |entry| @collected[key] << tagged(entry, label, rerun: key == :callbacks && entry[:rerun]) }
           end
 
           mixins = applied(data[:mixins], bodies, *scope, keep_called: true)
@@ -266,12 +269,14 @@ module RailsAiContext
       end
 
       # Receiverless calls in `included do` outside any method run in the includer's
-      # class, so the includer calls them.
+      # class, so the includer calls them. The ids of the calls a plain mixin hook
+      # makes come back apart: that hook runs again on every include.
       def included_block_calls(tree, name, macro = :include)
         short = name.to_s.split("::").last.to_s
         block = ConcernMembership::CONCERN_BLOCKS[macro]
         runs = ConcernMembership::HOOKS_BY_MACRO.fetch(macro, [])
         found = {}
+        hooked = {}
         visit = lambda do |node, owner|
           case node
           when Prism::ClassNode, Prism::ModuleNode
@@ -282,14 +287,14 @@ module RailsAiContext
               return
             end
           when Prism::DefNode
-            return hook_calls(node, found) if mixin_hook?(node, runs) && owner.to_s.casecmp?(short)
+            return hook_calls(node, hooked) if mixin_hook?(node, runs) && owner.to_s.casecmp?(short)
           end
           node.child_nodes.compact.each { |child| visit.call(child, owner) }
         end
         visit.call(tree, nil)
-        found
+        [ Run.merge_calls(found, hooked), hooked.values.flatten.map(&:__id__) ]
       rescue StandardError => e
-        RailsAiContext.debug_fail(e, {}, label: "included block calls of #{name}")
+        RailsAiContext.debug_fail(e, [ {}, [] ], label: "included block calls of #{name}")
       end
 
 
@@ -329,7 +334,7 @@ module RailsAiContext
       # Method name => its call sites; nil stands for a call whose arguments
       # are not known (a caller that names the methods only).
       def call_sites
-        @call_sites ||= Run.merge_calls({}, @calls&.call).transform_values { |sites| sites.uniq(&:__id__) }
+        @call_sites ||= Run.merge_calls(Run.merge_calls({}, @calls&.call), @known).transform_values { |sites| sites.uniq(&:__id__) }
       end
 
       # Folds `more` - a Hash of call sites, or bare names - into `into`.
@@ -342,9 +347,10 @@ module RailsAiContext
         into
       end
 
-      # A callback from a mixin hook or a called class method runs again for a
-      # subclass that includes or calls it again; ActiveSupport::Concern's
-      # `included` block does not, so only the first carries `rerun`.
+      # A callback from a mixin hook, or from a class method the class file or a
+      # mixin hook calls, runs again for a subclass that includes or calls it
+      # again; ActiveSupport::Concern's `included` block does not, so a method
+      # it calls does not either.
       def tagged(entry, concern_name, rerun: false)
         return entry unless entry.is_a?(Hash)
 
@@ -354,7 +360,9 @@ module RailsAiContext
       # Where the call that declared it stands, so the chain places it there.
       def at_call(entry, call)
         rank = call && @calls.respond_to?(:rank_of) && @calls.rank_of(call)
-        rank ? entry.merge(call_rank: rank, call_line: call.location.start_line) : entry
+        return entry.merge(call_rank: rank, call_line: call.location.start_line, rerun: true) if rank
+
+        call && @hook_sites.include?(call.__id__) ? entry.merge(rerun: true) : entry
       end
 
       def in_hook?(entry, hooks)
@@ -417,9 +425,8 @@ module RailsAiContext
 
         depends_on_calls = true
 
-        known = run.included_calls
-        run = Run.new(root.to_s, dirs, keys, cache, listeners, -> { Run.merge_calls(Run.merge_calls({}, calls&.call), known) },
-                      extra, file)
+        run = Run.new(root.to_s, dirs, keys, cache, listeners, calls, extra, file,
+                      known: run.included_calls, hook_sites: run.hook_sites)
         run.walk(walked, within, MAX_DEPTH)
       end
 
