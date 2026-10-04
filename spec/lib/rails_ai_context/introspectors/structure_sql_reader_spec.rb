@@ -534,4 +534,50 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
       { name: "name", type: "string", null: true }
     ])
   end
+
+  describe "schema-qualified names in later statements" do
+    it "gives a quoted public table its index, key and foreign key, and drops it as a partition" do
+      sql = <<~SQL
+        CREATE TABLE "public"."pq" (
+            id bigint NOT NULL
+        );
+        CREATE TABLE "public"."p1" (
+            id bigint NOT NULL
+        );
+        CREATE TABLE public.other (
+            id bigint NOT NULL
+        );
+        ALTER TABLE ONLY "public"."pq" ADD CONSTRAINT pq_pkey PRIMARY KEY (id);
+        ALTER TABLE ONLY "public"."pq" ADD CONSTRAINT fk_other FOREIGN KEY (id) REFERENCES "public"."other"(id);
+        CREATE INDEX index_pq_on_id ON "public"."pq" USING btree (id);
+        ALTER TABLE ONLY public.events ATTACH PARTITION "public"."p1" FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
+      SQL
+      tables = described_class.parse(sql)[:tables]
+
+      expect(tables.keys).to eq(%w[pq other])
+      expect(tables["pq"][:primary_key]).to eq("id")
+      expect(tables["pq"][:indexes].map { |i| i[:name] }).to eq(%w[index_pq_on_id])
+      expect(tables["pq"][:foreign_keys].map { |fk| fk[:to_table] }).to eq(%w[other])
+    end
+
+    it "keeps another schema's index and key off a public table of the schema's name" do
+      sql = <<~SQL
+        CREATE TABLE public.audit (
+            id bigint NOT NULL,
+            user_id bigint
+        );
+        CREATE TABLE audit.users (
+            id bigint NOT NULL
+        );
+        CREATE INDEX index_audit_users_on_id ON audit.users USING btree (id);
+        ALTER TABLE ONLY audit.users ADD CONSTRAINT users_pkey PRIMARY KEY (id);
+        ALTER TABLE ONLY public.audit ADD CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES audit.users(id);
+      SQL
+      audit = described_class.parse(sql)[:tables]["audit"]
+
+      expect(audit[:indexes]).to eq([])
+      expect(audit).not_to have_key(:primary_key)
+      expect(audit[:foreign_keys].map { |fk| fk[:to_table] }).to eq(%w[audit.users])
+    end
+  end
 end

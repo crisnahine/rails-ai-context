@@ -42,25 +42,27 @@ module RailsAiContext
         # scan above.
         content.scan(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?#{QUALIFIED_NAME}\s*\(((?:(?!\)#{INHERITS_KEYWORD})[^\n])*)\)#{INHERITS};/) { |groups| add.call(*groups, true) }
 
-        content.scan(/CREATE (UNIQUE )?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF NOT EXISTS\s+)?[`"]?(\w+)[`"]?\s+ON\s+(?:ONLY\s+)?(?:public\.)?[`"]?(\w+)[`"]?([^;]*)/m) do |unique, idx_name, table, rest|
+        content.scan(/CREATE (UNIQUE )?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF NOT EXISTS\s+)?[`"]?(\w+)[`"]?\s+ON\s+(?:ONLY\s+)?#{QUALIFIED_NAME}([^;]*)/m) do |unique, idx_name, table, rest|
           group = first_paren_group(rest)
           keys = index_keys(group)
           next if keys.empty?
 
           # The condition follows the key list, never inside it.
           where = rest[(rest.index("(") + group.length + 2)..][/\bWHERE\s+(.+)\z/mi, 1]&.strip
-          tables[table]&.dig(:indexes)&.push({ name: idx_name, columns: keys, unique: !!unique, where: where }.compact)
+          all.dig(qualified_name(table), :table, :indexes)&.push({ name: idx_name, columns: keys, unique: !!unique, where: where }.compact)
         end
 
-        content.scan(/ALTER TABLE\s+(?:ONLY\s+)?(?:public\.)?[`"]?(\w+)[`"]?\s+ADD CONSTRAINT[^;]*?PRIMARY KEY\s*\(([^)]*)\)/m) do |table, cols|
-          tables[table][:primary_key] = SchemaConventions.primary_key_value(cols.scan(/\w+/)) if tables[table]
+        content.scan(/ALTER TABLE\s+(?:ONLY\s+)?#{QUALIFIED_NAME}\s+ADD CONSTRAINT[^;]*?PRIMARY KEY\s*\(([^)]*)\)/m) do |table, cols|
+          table = all.dig(qualified_name(table), :table)
+          table[:primary_key] = SchemaConventions.primary_key_value(cols.scan(/\w+/)) if table
         end
 
         # [^;]*? keeps the match inside one statement: with .*? a pkey-only
         # ADD CONSTRAINT would swallow up to the FOREIGN KEY of a LATER
         # statement and attribute the FK to the wrong table.
-        content.scan(/ALTER TABLE\s+(?:ONLY\s+)?(?:public\.)?[`"]?(\w+)[`"]?\s+ADD CONSTRAINT[^;]*?FOREIGN KEY\s*\(([^)]*)\)\s*REFERENCES\s+(?:public\.)?[`"]?(\w+)[`"]?\s*\(([^)]*)\)/m) do |from, cols, to, pks|
-          tables[from]&.dig(:foreign_keys)&.push(SchemaConventions.foreign_key_entry(from, to, cols.scan(/\w+/), pks.scan(/\w+/)))
+        content.scan(/ALTER TABLE\s+(?:ONLY\s+)?#{QUALIFIED_NAME}\s+ADD CONSTRAINT[^;]*?FOREIGN KEY\s*\(([^)]*)\)\s*REFERENCES\s+#{QUALIFIED_NAME}\s*\(([^)]*)\)/m) do |from, cols, to, pks|
+          from = qualified_name(from)
+          all.dig(from, :table, :foreign_keys)&.push(SchemaConventions.foreign_key_entry(from.delete_prefix("public."), qualified_name(to).delete_prefix("public."), cols.scan(/\w+/), pks.scan(/\w+/)))
         end
 
         alters = Hash.new { |h, k| h[k] = [] }
@@ -71,7 +73,10 @@ module RailsAiContext
         all.each_key { |name| resolve_columns(name, all, alters, resolved) }
 
         # pg_dump writes each partition as a table, then attaches it in exactly this form.
-        content.scan(/^ALTER TABLE ONLY .+? ATTACH PARTITION (?:public\.)?(?:"([^"]+)"|(\w+)) /) { |quoted, bare| tables.delete(quoted || bare) }
+        content.scan(/^ALTER TABLE ONLY .+? ATTACH PARTITION #{QUALIFIED_NAME} /) do |(partition)|
+          name = qualified_name(partition)
+          tables.delete(name.delete_prefix("public.")) if name.start_with?("public.")
+        end
 
         { dialect: detect_sql_dialect(content), tables: tables }
       end
