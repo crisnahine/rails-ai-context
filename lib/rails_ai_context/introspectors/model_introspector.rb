@@ -708,19 +708,19 @@ module RailsAiContext
         validator.kind == :presence && validator.options[:message] == :required
       end
 
-      # Rails' rule: an explicit optional: wins, then required:, then the app's
-      # default. An option the source cannot evaluate makes it conditional.
+      # Rails' rule: a required: key sets optional: to its negation, then a nil
+      # optional: means the app's default. An unevaluable option makes it conditional.
       def static_required_belongs_to(associations, default = belongs_to_required_by_default?)
         Array(associations).select { |a| a.is_a?(Hash) && a[:type].to_s == "belongs_to" }.filter_map do |a|
           name = a[:name].to_s
-          optional_value = a.key?(:optional) ? a[:optional] : a.dig(:options, :optional)
-          required_value = a.dig(:options, :required)
-          optional = literal_boolean(optional_value)
-          required = literal_boolean(required_value)
-          if !optional.nil? then (name unless optional)
-          elsif !optional_value.nil? then [ name, "optional: #{optional_value} is false" ]
-          elsif !required.nil? then (name if required)
-          elsif !required_value.nil? then [ name, "required: #{required_value} is true" ]
+          options = a[:options] || {}
+          optional_value = a.key?(:optional) ? a[:optional] : options[:optional]
+          if options.key?(:required)
+            required = literal_boolean(options[:required])
+            required.nil? ? [ name, "required: #{options[:required]} is true" ] : (name if required)
+          elsif !optional_value.nil?
+            optional = literal_boolean(optional_value)
+            optional.nil? ? [ name, "optional: #{optional_value} is false" ] : (name unless optional)
           elsif default.is_a?(String) then [ name, default ]
           elsif default then name
           end
@@ -728,7 +728,7 @@ module RailsAiContext
       end
 
       def literal_boolean(value)
-        { true => true, false => false, "true" => true, "false" => false }[value]
+        { true => true, false => false, nil => false, "true" => true, "false" => false }[value]
       end
 
       # Without a `belongs_to_required_by_default =` of its own, Rails turns it

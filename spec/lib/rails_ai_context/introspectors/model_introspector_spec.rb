@@ -2327,6 +2327,36 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # Rails turns `required:` into `optional: !required`, over any optional:,
+    # so `required: nil` is optional; `optional: nil` falls back to the default.
+    it "reads required: nil as optional and lets required: decide over optional:" do
+      Dir.mktmpdir do |dir|
+        write_app(dir)
+        File.write(File.join(dir, "app", "models", "comment.rb"), <<~RUBY)
+          class Comment < ApplicationRecord
+            belongs_to :post, required: nil
+            belongs_to :user, optional: nil
+            belongs_to :editor, optional: true, required: true
+          end
+        RUBY
+        model = Class.new(ApplicationRecord) do
+          self.table_name = "comments"
+          self.belongs_to_required_by_default = true
+          belongs_to :post, required: nil
+          belongs_to :user, optional: nil
+          belongs_to :editor, optional: true, required: true, class_name: "User"
+        end
+        model.define_singleton_method(:name) { "Comment" }
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+
+        static = introspector.static_call["Comment"][:validations]
+        booted = introspector.send(:extract_model_details, model)[:validations]
+
+        expect(implicit(static)).to eq([ %w[user], %w[editor] ])
+        expect(implicit(booted)).to eq(implicit(static))
+      end
+    end
+
     it "is conditional on an optional: the source cannot evaluate" do
       Dir.mktmpdir do |dir|
         write_app(dir)
