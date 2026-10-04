@@ -12,6 +12,19 @@ module RailsAiContext
       def parse(content)
         tables = {}
 
+        # Every table the file creates, by schema-qualified name, so a parent
+        # outside the listed tables still resolves.
+        all = {}
+        add = proc do |qualified, body, inherits, single_line|
+          name = qualified_name(qualified)
+          shown = shown_name(name)
+          next if shown.start_with?("ar_internal_metadata", "schema_migrations") || (single_line && all.key?(name))
+
+          table, raw_types = parse_sql_table_body(body, shown)
+          all[name] = { table: table, raw_types: raw_types, parents: inherits && split_top_level(inherits).map { |parent| qualified_name(parent) } }
+          tables[shown] = table if shown.match?(/\A\w+\z/)
+        end
+
         # Identifier quoting differs per dump tool: pg_dump uses bare or
         # "quoted" names with a public. prefix, mysqldump uses `backticks` and
         # terminates CREATE TABLE with ") ENGINE=...;", sqlite uses "quotes"
@@ -22,19 +35,6 @@ module RailsAiContext
         # follows it: without it, the lazy scan has no "\n)" to stop at inside
         # that one-line statement, so it keeps consuming lines - including the
         # next CREATE TABLE - until it finds one.
-        # Every table the file creates, by schema-qualified name, so a parent
-        # outside the listed tables still resolves.
-        all = {}
-        add = proc do |qualified, body, inherits, single_line|
-          name = qualified_name(qualified)
-          shown = shown_name(name)
-          next if shown.start_with?("ar_internal_metadata", "schema_migrations") || (single_line && all.key?(name))
-
-          raw_types = {}
-          table = parse_sql_table_body(body, shown, raw_types)
-          all[name] = { table: table, raw_types: raw_types, parents: inherits && split_top_level(inherits).map { |parent| qualified_name(parent) } }
-          tables[shown] = table if shown.match?(/\A\w+\z/)
-        end
         content.scan(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?#{QUALIFIED_NAME}\s*\(((?:(?!CREATE TABLE).)*?)^\)#{INHERITS}/m, &add)
 
         # Single-line CREATE TABLE statements (sqlite emits these for tiny
@@ -162,13 +162,14 @@ module RailsAiContext
       # MySQL keeps indexes and foreign keys inside the CREATE TABLE body as
       # KEY / UNIQUE KEY / CONSTRAINT lines; the other dialects emit separate
       # statements, so those lines simply never match here.
-      def parse_sql_table_body(body, table_name, raw_types = {})
+      def parse_sql_table_body(body, table_name)
         # sqlite's .schema emits whole CREATE TABLE statements on one line;
         # the per-line parsers below would then see a single "line" and keep
         # only its first column. Split such bodies on top-level commas first.
         body = split_single_line_sql_body(body) unless body.include?("\n")
 
-        table = { columns: parse_sql_columns(body, raw_types), indexes: [], foreign_keys: [] }
+        columns, raw_types = parse_sql_columns(body)
+        table = { columns: columns, indexes: [], foreign_keys: [] }
         if (key = body[/^\s*PRIMARY KEY\s*\(([^)]*)\)/i, 1])
           table[:primary_key] = SchemaConventions.primary_key_value(key.scan(/\w+/))
         end
@@ -189,7 +190,7 @@ module RailsAiContext
           end
         end
 
-        table
+        [ table, raw_types ]
       end
 
       # A key that is a column, with any prefix length, operator class, sort
@@ -255,9 +256,10 @@ module RailsAiContext
         parts.map(&:strip)
       end
 
-      # Parse column definitions from a CREATE TABLE body
-      def parse_sql_columns(body, raw_types = {})
+      # Column definitions from a CREATE TABLE body, and each column's type as the dump spells it.
+      def parse_sql_columns(body)
         columns = []
+        raw_types = {}
         body.each_line do |line|
           line = line.strip.chomp(",").strip
           next if line.empty?
@@ -291,7 +293,7 @@ module RailsAiContext
             columns << column
           end
         end
-        columns
+        [ columns, raw_types ]
       end
 
       # Where a DEFAULT clause ends: the next constraint keyword at the top level.
