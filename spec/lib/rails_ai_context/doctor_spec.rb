@@ -677,6 +677,15 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
 
+    it "leaves a committed placeholder such as .env.example out of the files the tools refuse" do
+      app_with(".env.example" => "A=\n", ".env" => "A=1\n", ".gitignore" => "/.env\n") do |dir|
+        check = gitignore_check_for(dir)
+
+        expect(check.status).to eq(:pass)
+        expect(check.message).to eq("Sensitive files gitignored: .env")
+      end
+    end
+
     it "lists the sensitive files it found when every one is ignored" do
       app_with("config/application.yml" => "k: v\n", "config/master.key" => "x\n",
                ".gitignore" => "/config/application.yml\n/config/master.key\n") do |dir|

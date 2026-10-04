@@ -211,7 +211,7 @@ fits neither that shape nor the conventional one.
 
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
-| `sensitive_patterns` | Array | 34 patterns | File patterns blocked from search/read (`.env*`, `*.env`, `.envrc`, `*.key`, `*.pem`, `config/credentials.yml.enc`, `config/application.yml`, `config/settings.local.yml`, `.ssh/*`, etc.) |
+| `sensitive_patterns` | Array | 34 patterns | File patterns blocked from search/read (`.env*`, `*.env`, `.envrc`, `*.key`, `*.pem`, `config/credentials.yml.enc`, `config/application.yml`, `config/settings.local.yml`, `.ssh/*`, etc.). A placeholder ending in `.example`, `.sample`, `.template` or `.dist` stays readable unless a pattern names it exactly |
 
 ### Extensibility
 

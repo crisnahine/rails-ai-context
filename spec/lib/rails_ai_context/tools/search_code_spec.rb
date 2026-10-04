@@ -1123,5 +1123,23 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       expect(with_ripgrep).not_to include("CLAUDE.md", ".claude/rules/models.md", ".mcp.json", ".codex/config.toml")
       expect(with_ripgrep).not_to include("app/services/AGENTS.md", "app/services/opencode.json")
     end
+
+    it "searches a placeholder a sensitive glob matches on both paths, and never the secret beside it" do
+      skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
+
+      original = RailsAiContext.configuration.sensitive_patterns
+      RailsAiContext.configuration.sensitive_patterns = %w[keys.*]
+      files = { "secrets/keys.yml" => "NEEDLE_TOKEN: real\n", "secrets/keys.yml.sample" => "NEEDLE_TOKEN: placeholder\n" }
+      with_ripgrep = with_search_app(files) { files_found }
+      without_ripgrep = with_search_app(files) do
+        allow(described_class).to receive(:ripgrep_available?).and_return(false)
+        files_found
+      end
+
+      expect(with_ripgrep).to eq([ "secrets/keys.yml.sample" ])
+      expect(without_ripgrep).to eq(with_ripgrep)
+    ensure
+      RailsAiContext.configuration.sensitive_patterns = original
+    end
   end
 end

@@ -153,6 +153,11 @@ RSpec.describe RailsAiContext::SafePath do
       include_examples "allows", "features/support/env.rb"
       # The placeholder beside a secrets file exists to be read.
       include_examples "allows", "config/application.example.yml"
+      include_examples "allows", ".env.example"
+      include_examples "allows", ".env.sample"
+      include_examples "allows", "docker/.env.template"
+      include_examples "allows", ".env.production.dist"
+      include_examples "blocks", ".env.example.local"
     end
 
     describe "connection and credential files" do
@@ -208,6 +213,12 @@ RSpec.describe RailsAiContext::SafePath do
 
       it "blocks files matching the custom pattern" do
         expect(described_class.sensitive?("forbidden/secret.txt")).to be true
+      end
+
+      it "blocks a placeholder that a pattern names exactly, and not one a glob only matches" do
+        RailsAiContext.configuration.sensitive_patterns = %w[.env.example forbidden/*]
+        expect(described_class.sensitive?(".env.example")).to be true
+        expect(described_class.sensitive?("forbidden/keys.sample")).to be false
       end
 
       it "allows .env when only custom patterns are configured" do

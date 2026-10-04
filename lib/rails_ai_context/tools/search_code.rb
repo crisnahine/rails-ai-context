@@ -310,10 +310,8 @@ module RailsAiContext
           cmd << "--glob=!#{p}"
         end
 
-        # Block sensitive files from search results
-        RailsAiContext.configuration.sensitive_patterns.each do |p|
-          cmd << "--glob=!#{p}"
-        end
+        # Sensitive files are dropped from the rows by SafePath below: an rg
+        # glob cannot exempt a placeholder the pattern also matches.
 
         ai_context_paths.each do |p|
           cmd << "--glob=!#{p}"

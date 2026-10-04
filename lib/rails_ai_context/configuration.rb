@@ -387,8 +387,8 @@ module RailsAiContext
       @server_name         = "rails-ai-context"
       @introspectors       = PRESETS[:full].dup
       @excluded_paths      = %w[node_modules tmp log vendor .git doc docs]
-      # Files each tool's own docs say to gitignore. The patterns leave the placeholder
-      # beside one (config/application.example.yml, .env.example) readable.
+      # Files each tool's own docs say to gitignore. A placeholder beside one
+      # (config/application.example.yml, .env.example) stays readable: see SafePath.sensitive?.
       @sensitive_patterns  = %w[
         .env .env.* *.env .envrc
         config/master.key

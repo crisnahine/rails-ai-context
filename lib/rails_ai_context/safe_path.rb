@@ -55,13 +55,21 @@ module RailsAiContext
       relative.include?("..") || relative.start_with?("/") || relative.include?("\0")
     end
 
+    PLACEHOLDER_SUFFIXES = %w[.example .sample .template .dist].freeze
+
+    # A placeholder (.env.example) is committed to be read, so a glob that
+    # happens to match it does not block it; a pattern naming it exactly does.
     def sensitive?(relative)
-      patterns = RailsAiContext.configuration.sensitive_patterns
-      basename = File.basename(relative.to_s)
+      path = relative.to_s
+      basename = File.basename(path)
       flags = File::FNM_DOTMATCH | File::FNM_CASEFOLD
-      patterns.any? do |pattern|
-        File.fnmatch(pattern, relative.to_s, flags) || File.fnmatch(pattern, basename, flags)
+      matching = RailsAiContext.configuration.sensitive_patterns.select do |pattern|
+        File.fnmatch(pattern, path, flags) || File.fnmatch(pattern, basename, flags)
       end
+      return false if matching.empty?
+      return true unless PLACEHOLDER_SUFFIXES.any? { |suffix| basename.downcase.end_with?(suffix) }
+
+      matching.any? { |pattern| !pattern.match?(/[*?\[{\\]/) && (pattern.casecmp?(path) || pattern.casecmp?(basename)) }
     end
 
     def contained?(real, real_dir)

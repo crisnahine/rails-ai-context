@@ -115,6 +115,8 @@ config/mongoid.yml config/redis.yml
 .ssh/* .aws/credentials .aws/config .netrc .pgpass .my.cnf
 ```
 
+A placeholder whose name ends in `.example`, `.sample`, `.template` or `.dist` (`.env.example`) is committed to be read, so a glob that matches it does not block it. A pattern that names it exactly, with no glob characters, still does.
+
 ### AI context file exclusions
 
 Search also excludes generated AI context files to prevent circular references:
