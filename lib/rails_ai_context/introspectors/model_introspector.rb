@@ -501,7 +501,7 @@ module RailsAiContext
         # and the superclasses are merged here too, or the static tier
         # out-answers this one.
         bases = booted_declaring_bases(model)
-        calls = class_calls([ model_source_path(model), *bases.map(&:last) ])
+        calls = class_calls([ [ model.name, model_source_path(model) ], *bases ])
         source_data, unread, bases_unread, hidden =
           merge_class_and_bases(own_source, model.name, calls, bases, file: model_source_path(model),
                                 commits_in_order: booted_commits_in_order)
@@ -769,9 +769,8 @@ module RailsAiContext
         end
       end
 
-      # A literal true or false as itself, and nil as false, since Rails tests
-      # the setting for truth; any other value is decided at boot, so it reads
-      # as the condition "<setting> = <expression> is true".
+      # A literal true, false or nil (false, as Rails tests for truth) as itself;
+      # any other value reads as the condition "<setting> = <expression> is true".
       def setting_value(node)
         value = node.arguments&.arguments&.first
         literal = { Prism::TrueNode => true, Prism::FalseNode => false, Prism::NilNode => false }[value.class]
@@ -1353,7 +1352,7 @@ module RailsAiContext
       def static_model_details(path, class_name, file: relative_to_root(path), table_name: nil, inherited_from: [],
                                sti: nil, parent_model: nil)
         own = own_body(source_walk(path), class_name)
-        calls = class_calls([ path, *Array(inherited_from).map(&:last) ])
+        calls = class_calls([ [ class_name, path ], *Array(inherited_from) ])
         data, unread, bases_unread, hidden = merge_class_and_bases(own, class_name, calls, inherited_from, file: path,
                                                                    commits_in_order: static_commits_in_order)
         own_methods = ActionResolver.own_methods(own[:methods], class_name)
@@ -1442,33 +1441,41 @@ module RailsAiContext
         BaseMixins.models(app.root.to_s) + extended
       end
 
-      def merge_concern_macros(own, class_name, calls, extra: [], file: nil)
+      def merge_concern_macros(own, class_name, calls, extra: [], file: nil, rank: 0)
         collected, unread, hidden, included, placement, skipped, blocks = ConcernMacros.collect(
           app.root.to_s, own[:mixins] || [],
           keys: [ *WALKED_KEYS, :expanded ], prefer: "model", within: class_name,
           cache: @source_cache, calls: calls, extra: extra, file: file
         )
-        ConcernMacros::Run.merge_calls(calls.included, included)
-        calls.blocks.merge!(blocks)
+        included_at = included_at(own, placement)
+        calls.add(included, blocks.transform_values { |label| included_at.call(label) || [ 0, 0 ] }, rank)
         own = without_expanded_calls(own, collected.delete(:expanded))
-        own = own.merge(callbacks: placed_callbacks(own, collected.delete(:callbacks), placement, calls))
+        own = own.merge(callbacks: placed_callbacks(own, collected.delete(:callbacks), included_at, calls, rank))
         return [ own, unread, hidden, skipped ] if collected.empty?
 
         [ merge_inherited(own, collected), unread, hidden, skipped ]
       end
 
-      # A concern's callbacks join the chain where its include line runs; one
-      # declared in a method body, the class's own or a concern's, joins it
-      # where that method is called.
-      def placed_callbacks(own, collected, placement, calls)
+      # Where a concern the walk read joins the class's chain: at the line
+      # including it, after the concerns that include brought in before it.
+      def included_at(own, placement)
         line_of = Array(own[:mixins]).reverse.to_h { |mixin| [ mixin[:name], mixin[:location].to_i ] }
-        included_at = lambda do |name|
+        lambda do |name|
           top, order = placement[name]
           [ line_of[top].to_i, order.to_i ] if top
         end
-        concerns = Array(collected).map { |cb| cb.key?(:site) ? calls.place(cb.except(:site), cb[:site]) : cb }
-        (calls.per_call(own[:callbacks], own[:methods]) + concerns).map do |cb|
-          at = cb[:call_line] ? [ cb[:call_line], 0 ] : cb[:called_from] && included_at.call(cb[:called_from])
+      end
+
+      # A concern's callbacks join the chain where its include line runs; one in
+      # a method body, the class's own or a concern's, where that method is called.
+      def placed_callbacks(own, collected, included_at, calls, rank)
+        concerns = Array(collected).filter_map do |cb|
+          next cb unless cb.key?(:site)
+
+          calls.place(cb.except(:site), cb[:site]) if calls.reaches?(cb[:site], rank)
+        end
+        (calls.per_call(own[:callbacks], own[:methods], rank) + concerns).map do |cb|
+          at = cb[:chain_at] || (cb[:call_line] && [ cb[:call_line], 0 ])
           at ||= included_at.call(cb[:from_concern]) || [ 0, 0 ] if cb[:from_concern]
           at ? cb.merge(chain_at: at) : cb
         end
@@ -1516,7 +1523,7 @@ module RailsAiContext
         Array(callbacks).map { |cb| cb.merge(rank: cb[:call_rank] || rank) }
       end
 
-      CHAIN_KEYS = %i[rank chain_at call_rank call_line called_from rerun owner].freeze
+      CHAIN_KEYS = %i[rank chain_at call_rank call_line rerun owner].freeze
 
       # Rails builds the chain from the outermost base in, each class in the
       # order its body runs.
@@ -1578,12 +1585,12 @@ module RailsAiContext
       # class method runs for the class that calls it, the child as often as
       # the base.
       def walk_bases(bases, calls)
-        Array(bases).map do |name, path|
+        Array(bases).each_with_index.map do |(name, path), index|
           own = sti_base_source(path)
           next [ name, nil ] if own.nil?
 
           own = own_body(own, name)
-          [ name, own, *merge_concern_macros(own, name, calls, file: path) ]
+          [ name, own, *merge_concern_macros(own, name, calls, file: path, rank: index + 1) ]
         end
       end
 
@@ -1820,14 +1827,10 @@ module RailsAiContext
       end
 
       # A path the read could not answer falls through to the path walk, which raises. A class
-      # nested in the model's file includes for itself, not for the model; a module nested
-      # there that the model includes is the model's own body, which the concern walk skips.
+      # nested in the model's file includes for itself, not for the model.
       def own_body(data, class_name)
-        mixins = ConcernMembership.owned_by(data[:mixins], class_name)
-        own = ConcernMembership.owned_by(data[:callbacks], class_name)
-        nested = mixins.to_set { |mixin| [ *Array(mixin[:owner]), mixin[:name].to_s.split("::").last ].join("::") }
-        data.merge(mixins: mixins,
-                   callbacks: Array(data[:callbacks]).select { |cb| own.include?(cb) || nested.include?(Array(cb[:owner]).join("::")) })
+        data.merge(mixins: ConcernMembership.owned_by(data[:mixins], class_name),
+                   callbacks: ConcernMembership.owned_by(data[:callbacks], class_name))
       end
 
       def source_walk(path)
@@ -1839,18 +1842,20 @@ module RailsAiContext
       # inside `def acts_as_watchable` belongs to the models that call it.
       #
       # A concern's `included do` calls join the set too, so a base walked later sees them.
-      def class_calls(paths)
+      def class_calls(classes)
         reader = lambda do
           ranks = {}
           methods = {}
-          readable = paths.each_with_index.select { |path, _| path && readable_source?(path) }
-          found = readable.each_with_object({}) do |(path, rank), into|
+          readable = classes.each_with_index.select { |(_, path), _| path && readable_source?(path) }
+          found = readable.each_with_object({}) do |((name, path), rank), into|
             source = model_source(path)
-            tree = (source ? AstCache.parse_string(source) : AstCache.parse(path)).value
-            own = SourceIntrospector.calls_outside_methods(tree, self_receiver: true)
-            own.each_value { |sites| Array(sites).each { |site| ranks[site.__id__] = rank if site } }
-            class_method_defs(tree).each do |definition|
-              (methods[definition.name.to_s] ||= []) << SourceIntrospector.calls_outside_methods(definition.body, self_receiver: true)
+            scope = class_scope((source ? AstCache.parse_string(source) : AstCache.parse(path)).value, name)
+            own = scope.select { |node| node.is_a?(Prism::CallNode) && (node.receiver.nil? || node.receiver.is_a?(Prism::SelfNode)) }
+                       .group_by { |node| node.name.to_s }
+            own.each_value { |sites| sites.each { |site| ranks[site.__id__] = rank } }
+            class_method_defs(scope).each do |definition|
+              body = definition.body ? SourceIntrospector.calls_outside_methods(definition.body, self_receiver: true) : {}
+              ((methods[definition.name.to_s] ||= {})[rank] ||= []) << body
             end
             ConcernMacros::Run.merge_calls(into, own)
           rescue StandardError, ScriptError => e
@@ -1862,12 +1867,30 @@ module RailsAiContext
         ConcernMacros::ClassCalls.new(reader)
       end
 
-      def class_method_defs(tree)
-        AstWalk.each(tree).flat_map do |node|
+      # The nodes the class body runs with the class as self: the node opening a
+      # method, nested class or `class << x` is there, its body is not.
+      def class_scope(tree, class_name)
+        short = class_name.to_s.split("::").last.to_s
+        roots = AstWalk.each(tree).select { |node| node.is_a?(Prism::ClassNode) && node.constant_path.slice.split("::").last.casecmp?(short) }
+        roots.empty? ? scope_nodes(tree) : roots.flat_map { |root| scope_nodes(root.body) }
+      end
+
+      def scope_nodes(node, found = [])
+        return found unless node
+
+        found << node
+        case node
+        when Prism::DefNode, Prism::ClassNode, Prism::ModuleNode, Prism::SingletonClassNode then found
+        else node.child_nodes.compact.each_with_object(found) { |child, into| scope_nodes(child, into) }
+        end
+      end
+
+      def class_method_defs(scope)
+        scope.flat_map do |node|
           case node
-          when Prism::DefNode then node.receiver.is_a?(Prism::SelfNode) && node.body ? [ node ] : []
+          when Prism::DefNode then node.receiver.is_a?(Prism::SelfNode) ? [ node ] : []
           when Prism::SingletonClassNode
-            Array(node.body&.body).select { |member| member.is_a?(Prism::DefNode) && member.receiver.nil? && member.body }
+            node.expression.is_a?(Prism::SelfNode) ? Array(node.body&.body).select { |member| member.is_a?(Prism::DefNode) && member.receiver.nil? } : []
           else []
           end
         end

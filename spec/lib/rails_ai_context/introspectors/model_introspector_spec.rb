@@ -2965,6 +2965,188 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # Runtime: Gd runs :a, :b, :g; Ge :a, :b, :g, :c; Gn :a, :u; Gx only :b.
+    it "places a nested module's callbacks where the model includes it, and none through extend" do
+      Dir.mktmpdir do |dir|
+        concern = ->(body) { "  module Gst\n    extend ActiveSupport::Concern\n#{body}  end\n" }
+        block = "    included do\n      before_save :g\n    end\n"
+        write_model(dir, "Gd", "class Gd < ApplicationRecord\n  before_save :a\n#{concern.call(block)}  before_save :b\n  include Gst\nend\n")
+        write_model(dir, "Ge", <<~RUBY)
+          class Ge < ApplicationRecord
+            before_save :a
+            module Gst
+              extend ActiveSupport::Concern
+              class_methods do
+                def gstamp
+                  before_save :g
+                end
+              end
+              included do
+                gstamp
+              end
+            end
+            before_save :b
+            include Gst
+            before_save :c
+          end
+        RUBY
+        write_model(dir, "Gn", <<~RUBY)
+          class Gn < ApplicationRecord
+            module Unused
+              extend ActiveSupport::Concern
+              included do
+                before_save :never
+              end
+            end
+            module Used
+              extend ActiveSupport::Concern
+              included do
+                before_save :u
+              end
+            end
+            before_save :a
+            include Used
+          end
+        RUBY
+        write_model(dir, "Gx", "class Gx < ApplicationRecord\n#{concern.call(block)}  extend Gst\n  before_save :b\nend\n")
+
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expected = { "Gd" => %w[a b g], "Ge" => %w[a b g c], "Gn" => %w[a u], "Gx" => %w[b] }
+        expect(expected.keys.to_h { |name| [ name, static[name][:callbacks]["before_save"] ] }).to eq(expected)
+        expected.each_key { |name| expect(booted_callbacks(dir, name)).to eq(static[name][:callbacks]) }
+      end
+    end
+
+    # Ruby runs the nearest class method for a call: the class's own, then its
+    # concerns', then a base's; never an instance method, a nested class's, or an
+    # override a base's own code cannot see. Runtime: Nest :first; Inst :first,
+    # :track, :last; Ochild :first, :child_v; Tchild2 :s, :tb, :c; Uchild :ub,
+    # :first, :track, :last; OwnWins :first, :own.
+    it "credits a call only to the class method Ruby runs for it" do
+      Dir.mktmpdir do |dir|
+        write_model(dir, "Concerns::Stampy", <<~RUBY)
+          module Stampy
+            extend ActiveSupport::Concern
+            class_methods do
+              def stamp
+                before_save :s
+              end
+            end
+          end
+        RUBY
+        write_model(dir, "Concerns::Hooky2", "module Hooky2\n  extend ActiveSupport::Concern\n  included do\n    loud!\n    stamp\n  end\nend\n")
+        write_model(dir, "Nest", <<~RUBY)
+          class Nest < ApplicationRecord
+            class Inner
+              def self.setup
+                stamp
+              end
+            end
+            include Stampy
+            def self.setup
+            end
+            before_save :first
+            setup
+          end
+        RUBY
+        write_model(dir, "Inst", <<~RUBY)
+          class Inst < ApplicationRecord
+            def loud!
+              before_save :inst
+            end
+            def self.loud!
+              before_save :track
+            end
+            before_save :first
+            loud!
+            before_save :last
+          end
+        RUBY
+        write_model(dir, "Obase", "class Obase < ApplicationRecord\n  def self.setup\n    before_save :base_v\n  end\nend\n")
+        write_model(dir, "Ochild", <<~RUBY)
+          class Ochild < Obase
+            def self.setup
+              before_save :child_v
+            end
+            before_save :first
+            setup
+          end
+        RUBY
+        write_model(dir, "Tbase2", <<~RUBY)
+          class Tbase2 < ApplicationRecord
+            include Stampy
+            def self.loud!
+            end
+            include Hooky2
+            before_save :tb
+          end
+        RUBY
+        write_model(dir, "Tchild2", <<~RUBY)
+          class Tchild2 < Tbase2
+            include Stampy
+            def self.loud!
+              before_save :track
+            end
+            before_save :c
+          end
+        RUBY
+
+        write_model(dir, "Concerns::Hooky", "module Hooky\n  extend ActiveSupport::Concern\n  included do\n    loud!\n  end\nend\n")
+        write_model(dir, "Ubase", "class Ubase < ApplicationRecord\n  def self.loud!\n    before_save :track\n  end\n  before_save :ub\nend\n")
+        write_model(dir, "Uchild", "class Uchild < Ubase\n  before_save :first\n  include Hooky\n  before_save :last\nend\n")
+        write_model(dir, "OwnWins", <<~RUBY)
+          class OwnWins < ApplicationRecord
+            include Stampy
+            def self.stamp
+              before_save :own
+            end
+            before_save :first
+            stamp
+          end
+        RUBY
+
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(static["Uchild"][:callbacks]).to eq("before_save" => %w[ub first track last])
+        expect(static["OwnWins"][:callbacks]).to eq("before_save" => %w[first own])
+        expect(static["Nest"][:callbacks]).to eq("before_save" => %w[first])
+        expect(static["Inst"][:callbacks]).to eq("before_save" => %w[first track last])
+        expect(static["Ochild"][:callbacks]).to eq("before_save" => %w[first child_v])
+        expect(static["Tchild2"][:callbacks]).to eq("before_save" => %w[s tb c])
+        %w[Nest Inst OwnWins].each { |name| expect(booted_callbacks(dir, name)).to eq(static[name][:callbacks]) }
+      end
+    end
+
+    # A module mixed into every model is reached from a base's call as from the
+    # class's own: OpenProject's User calls acts_as_customizable for its subclasses.
+    it "keeps what a base's call declares through a module every model has" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "initializers", "tracking.rb"), <<~RUBY)
+          module Tracking
+            def self.included(base)
+              base.extend ClassMethods
+            end
+
+            module ClassMethods
+              def acts_as_tracked
+                before_save :tracked
+              end
+            end
+          end
+          ActiveRecord::Base.include Tracking
+        RUBY
+        write_model(dir, "Account", "class Account < ApplicationRecord\n  before_save :first\n  acts_as_tracked\nend\n")
+        write_model(dir, "Guest", "class Guest < Account\n  before_save :last\nend\n")
+
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(static["Account"][:callbacks]).to eq("before_save" => %w[first tracked])
+        expect(static["Guest"][:callbacks]).to eq("before_save" => %w[first tracked last])
+      end
+    end
+
     # Runtime: Fromblock runs :first, :track, :last and Crossblock :mid, :s, :last.
     it "places a declaration a concern's included block makes through a call where that concern is included" do
       Dir.mktmpdir do |dir|

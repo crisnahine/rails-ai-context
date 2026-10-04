@@ -15,20 +15,29 @@ module RailsAiContext
     Relayed = Struct.new(:node, :via) do
       def arguments = node.arguments
       def location = node.location
+      def name = node.name
     end
 
     # The class methods a class calls, by name to call sites: what `reader`
     # finds in the class files, read once, and what `included` blocks add.
     class ClassCalls
-      # Each class-file site's rank is 0 for the class, then its bases nearest first.
+      # Ranks are 0 for the class, then its bases nearest first; `methods` maps
+      # a class method's name to its body's calls, by the rank defining it.
       Read = Struct.new(:found, :ranks, :methods)
 
-      attr_reader :included, :blocks
+      attr_reader :included
 
-      def initialize(reader, included = {}, blocks = {})
+      def initialize(reader)
         @reader = reader
-        @included = included
-        @blocks = blocks
+        @included = {}
+        @blocks = {}
+      end
+
+      # The calls the walk of the class at `rank` found its concerns' blocks making, and
+      # where each block joins that chain; a block runs in the furthest base including it.
+      def add(included, blocks, rank)
+        Run.merge_calls(@included, included)
+        blocks.each { |id, at| @blocks[id] = [ rank, at ] unless @blocks.dig(id, 0).to_i > rank }
       end
 
       # A class method the class calls makes the calls in its body too.
@@ -38,7 +47,8 @@ module RailsAiContext
         expanded = Set.new
         until queue.empty?
           name, site = queue.shift
-          Array(read.methods[name]).each do |inner|
+          at = runs_at(name, site)
+          Array(read.methods.dig(name, at)).each do |inner|
             next unless expanded.add?([ inner.__id__, origin(site).__id__ ])
 
             inner.each do |inner_name, nodes|
@@ -53,32 +63,55 @@ module RailsAiContext
         found
       end
 
-      # A declaration made through `site` joins the chain at the class-file
-      # call it was reached from, or where the concern whose block made it
-      # is included.
+      # A declaration made through `site` joins the chain of the class that
+      # made the call, at the call or where the concern whose block made it is included.
       def place(entry, site)
         origin = origin(site)
         rank = origin && read.ranks[origin.__id__]
         return entry.merge(call_rank: rank, call_line: origin.location.start_line, rerun: true) if rank
 
-        from = origin && blocks[origin.__id__]
-        from ? entry.merge(called_from: from) : entry
+        rank, at = origin && @blocks[origin.__id__]
+        at ? entry.merge(call_rank: rank, chain_at: at) : entry
       end
 
-      # Each entry inside one of `methods` counts once per call of that
-      # method, and nowhere when nothing calls it.
-      def per_call(entries, methods)
+      # Each entry inside one of `methods`, the class methods of the class at
+      # `rank`, counts once per call Ruby resolves to that method.
+      def per_call(entries, methods, rank = 0)
         bodies = Array(methods).filter_map do |method|
-          [ method[:location]..method[:end_location], method[:name].to_s ] if method[:location] && method[:end_location]
+          [ method[:location]..method[:end_location], method[:name].to_s, method[:scope] ] if method[:location] && method[:end_location]
         end
         sites = call
         Array(entries).flat_map do |entry|
-          _, name = ConcernMacros.enclosing(bodies, entry[:location])
-          name ? Array(sites[name]).map { |site| place(entry, site) } : [ entry ]
+          _, name, scope = ConcernMacros.enclosing(bodies, entry[:location])
+          next [ entry ] unless name
+
+          Array(sites[name]).select { |site| scope == :class && runs_at(name, site, rank) == rank }.map { |site| place(entry, site) }
         end
       end
 
+      # Whether a call from `site` reaches the class method a concern of the class
+      # at `rank` defines: no class from the caller's up to that one defines its own.
+      def reaches?(site, rank)
+        at = runs_at(site.name.to_s, site)
+        at.nil? || rank < at
+      end
+
       private
+
+      # The rank of the nearest class defining `name` that a call from `site`
+      # reaches; `unknown` when no class file defines it.
+      def runs_at(name, site, unknown = nil)
+        defined = read.methods[name]
+        return unknown unless defined
+
+        from = rank_of(site)
+        defined.keys.select { |rank| rank >= from }.min
+      end
+
+      def rank_of(site)
+        from = origin(site)
+        from ? read.ranks[from.__id__] || @blocks.dig(from.__id__, 0) || 0 : 0
+      end
 
       def origin(site)
         site = site.via while site.is_a?(Relayed)
@@ -110,8 +143,7 @@ module RailsAiContext
       end
 
       def initialize(root, dirs, keys, cache, listeners, calls = nil, extra = [], file = nil, known: nil, hook_sites: Set.new)
-        # The class's own file: a module it declares there and includes is
-        # its own body, already read with it.
+        # The class's own file, which can declare a module it includes.
         @own_file = file
         @paths = extra.to_h { |mixin| [ mixin.name, mixin.path ] }
         @macros = extra.to_h { |mixin| [ mixin.name, mixin.macro ] }
@@ -153,11 +185,11 @@ module RailsAiContext
           @top = name if file.nil?
           next unless @seen.add?(name)
           next unless ConcernMembership.candidate?(name)
-          next if file.nil? && @own_file && nested_module(@own_file, name, within)
 
-          nested = file && nested_module(file, name, within)
+          source = file || @own_file
+          nested = source && nested_module(source, name, within)
           path =
-            if nested then file
+            if nested then source
             elsif @paths.key?(name) then @paths[name]
             else ConcernPaths.find_file(@root, name, within: within, dirs: @dirs)
             end
@@ -169,7 +201,7 @@ module RailsAiContext
             next
           end
 
-          data = nested ? introspect_nested(file, nested) : path && introspect(path)
+          data = nested ? introspect_nested(source, nested) : path && introspect(path)
           if data.nil?
             @unresolved << name
             next
@@ -179,7 +211,7 @@ module RailsAiContext
           # A nested module's lines count from its own slice, so the ranges parse that.
           tree = nested ? AstCache.parse_string(nested.last.slice).value : AstCache.parse(path).value
           macro = @macros[name] || :include
-          source_key = nested ? "#{file}##{nested.first}" : path
+          source_key = nested ? "#{source}##{nested.first}" : path
           block_calls, hooked = memo([ :included_calls, source_key, label, macro ]) { included_block_calls(tree, label, macro) }
           Run.merge_calls(@included_calls, block_calls)
           block_calls.each_value { |sites| sites.each { |site| @block_sites[site.__id__] ||= label if site } }
@@ -188,12 +220,14 @@ module RailsAiContext
           own_lines, inner = memo([ :ranges, source_key, label ]) { own_and_nested_ranges(tree, label) }
           extended = @extended.include?(name)
           scope = [ extended, inner, own_lines, hooks ]
-          @keys.each do |key|
+          # The class's own file was read with the class; only its callbacks go by owner.
+          keys = file.nil? && nested ? @keys & [ :callbacks ] : @keys
+          keys.each do |key|
             applied(data[key], bodies, *scope).each do |entry|
               @collected[key] << tagged(entry, label, rerun: key == :callbacks && in_hook?(entry, hooks))
             end
           end
-          expand_called(tree, data, own_lines, label).each do |key, entries|
+          expand_called(tree, data, own_lines, label, keys).each do |key, entries|
             entries.each { |entry| @collected[key] << tagged(entry, label, rerun: key == :callbacks && entry[:rerun]) }
           end
 
@@ -295,7 +329,7 @@ module RailsAiContext
       end
 
       # Each called method is read again with that call's literal arguments.
-      def expand_called(tree, data, own_lines, label)
+      def expand_called(tree, data, own_lines, label, keys)
         found = Hash.new { |hash, key| hash[key] = [] }
         Array(data[:methods]).each do |method|
           name = method[:name].to_s
@@ -312,14 +346,14 @@ module RailsAiContext
             expansion = Introspectors::CallSiteExpansion.entries(definition, call, @listeners)
             # `:conditional` and `:foreign` come back as keys too, when asked for.
             expansion.each do |key, entries|
-              next unless @keys.include?(key)
+              next unless keys.include?(key)
 
               found[key].concat(key == :callbacks ? Array(entries).map { |entry| at_call(entry, call) } : Array(entries))
             end
             # The call site now reads as what the method declares; a caller that
             # read the call itself as a declaration (`validates_translation` as a
             # validation) drops that reading by its line.
-            found[:expanded] << { method: name, line: call.location.start_line } if call && @keys.include?(:expanded)
+            found[:expanded] << { method: name, line: call.location.start_line } if call && keys.include?(:expanded)
           rescue StandardError => e
             # One call the expansion cannot read costs that method, named as unread.
             owner = Array(method[:owner]).join("::")
