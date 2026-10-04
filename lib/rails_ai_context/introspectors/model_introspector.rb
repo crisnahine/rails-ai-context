@@ -999,8 +999,7 @@ module RailsAiContext
 
           options = cb[:options] || {}
           conditions = options.select { |key, _| CONDITION_KEYS.include?(key) }
-          # `after_commit_on_create` already names its event.
-          conditions = { on: options[:on] }.merge(conditions) if options.key?(:on) && !cb[:type].to_s.start_with?("after_commit_on_")
+          conditions = { on: options[:on] }.merge(conditions) if options.key?(:on) && !Listeners::CallbacksListener.names_event?(cb[:type])
           (hash[cb[:type].to_s] ||= []) << (conditions.empty? ? nil : conditions)
         end.reject { |_, list| list.none? }
       end
@@ -1539,16 +1538,6 @@ module RailsAiContext
         run_order(callback_chain(sorted.map(&:first)), commits_in_order).map { |cb| cb.except(*CHAIN_KEYS) }
       end
 
-      TRANSACTION_TYPE = /\Aafter_(\w+_)?(commit|rollback)/
-
-      def transaction_callback?(callback)
-        callback[:type].to_s.match?(TRANSACTION_TYPE)
-      end
-
-      def after_callback?(callback)
-        callback[:type].to_s.start_with?("after_")
-      end
-
       # A prepended callback goes to the front and after callbacks run from the
       # back; ActiveModel prepends every after_*, after_commit only on request.
       def run_order(callbacks, commits_in_order)
@@ -1557,7 +1546,7 @@ module RailsAiContext
           chain = slots.each_with_object([]) do |i, list|
             prepended?(callbacks[i], commits_in_order) ? list.unshift(callbacks[i]) : list.push(callbacks[i])
           end
-          chain.reverse! if after_callback?(callbacks[slots.first])
+          chain.reverse! if Listeners::CallbacksListener.after?(callbacks[slots.first][:type])
           slots.zip(chain) { |i, cb| ordered[i] = cb }
         end
         ordered
@@ -1566,8 +1555,8 @@ module RailsAiContext
       # An unknown setting keeps the transaction callbacks in declaration order.
       def prepended?(callback, commits_in_order)
         declared = callback.dig(:options, :prepend).to_s == "true"
-        return declared unless after_callback?(callback)
-        return true unless transaction_callback?(callback)
+        return declared unless Listeners::CallbacksListener.after?(callback[:type])
+        return true unless Listeners::CallbacksListener.transaction?(callback[:type])
 
         declared || commits_in_order != false
       end
@@ -1592,7 +1581,7 @@ module RailsAiContext
       def commit_order_unread(callbacks)
         return nil unless static_commits_in_order.nil?
 
-        chains = Array(callbacks).select { |cb| transaction_callback?(cb) }.map { |cb| Listeners::CallbacksListener.chain_key(cb[:type]) }
+        chains = Array(callbacks).select { |cb| Listeners::CallbacksListener.transaction?(cb[:type]) }.map { |cb| Listeners::CallbacksListener.chain_key(cb[:type]) }
         true if chains.tally.values.any? { |count| count > 1 }
       end
 

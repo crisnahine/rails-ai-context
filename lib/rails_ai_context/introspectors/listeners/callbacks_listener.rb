@@ -40,9 +40,24 @@ module RailsAiContext
           end
         end
 
+        ON_EVENT = "after_commit_on_"
+
         # Every commit spelling lands in the one after-commit kind of one chain.
         def self.chain_key(type)
           type.to_s.match?(/\Aafter_(\w+_)?commit/) ? "after_commit" : type.to_s
+        end
+
+        def self.transaction?(type)
+          type.to_s.match?(/\Aafter_(\w+_)?(commit|rollback)/)
+        end
+
+        def self.after?(type)
+          type.to_s.start_with?("after_")
+        end
+
+        # `after_commit on: :create` resolves to a type that names its event.
+        def self.names_event?(type)
+          type.to_s.start_with?(ON_EVENT)
         end
 
         private
@@ -84,7 +99,7 @@ module RailsAiContext
         # declaration for several events stays one callback, its on: kept.
         def resolve_callback_types(name, options)
           events = Array(options[:on])
-          name == :after_commit && events.one? ? [ "after_commit_on_#{events.first}" ] : [ name.to_s ]
+          name == :after_commit && events.one? ? [ "#{ON_EVENT}#{events.first}" ] : [ name.to_s ]
         end
       end
     end

@@ -713,8 +713,8 @@ module RailsAiContext
         # `after_commit on: [...]`; Rails has no macro by that name, so an
         # agent that copies it gets a NoMethodError.
         def callback_type_label(type)
-          event = type.to_s[/\Aafter_commit_on_(\w+)\z/, 1]
-          event ? "after_commit (on: :#{event})" : type.to_s
+          listener = RailsAiContext::Introspectors::Listeners::CallbacksListener
+          listener.names_event?(type) ? "after_commit (on: :#{type.to_s.delete_prefix(listener::ON_EVENT)})" : type.to_s
         end
 
         # Statically, a config that does not say how Rails orders after_commit
