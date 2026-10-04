@@ -717,6 +717,15 @@ module RailsAiContext
           event ? "after_commit (on: :#{event})" : type.to_s
         end
 
+        # Statically, a config that does not say how Rails orders after_commit
+        # and after_rollback leaves those lists in declaration order.
+        def commit_order_note(unread)
+          return nil if unread.empty?
+
+          "_after_commit and after_rollback for #{unread.sort.join(', ')} are in declaration order: the config does not say " \
+            "whether `run_after_transaction_callbacks_in_order_defined` is on, and when it is off Rails runs them last declared first._"
+        end
+
         # One callback record rendered as the line the file declares. The
         # declared macro, not the resolved type: `after_commit_on_create` is
         # a key this gem synthesizes, not something the source says.

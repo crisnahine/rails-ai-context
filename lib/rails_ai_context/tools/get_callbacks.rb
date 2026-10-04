@@ -208,15 +208,6 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
-      # Statically, a config that does not say how Rails orders after_commit
-      # and after_rollback leaves those lists in declaration order.
-      def self.commit_order_note(unread)
-        return nil if unread.empty?
-
-        "_after_commit and after_rollback for #{unread.sort.join(', ')} are in declaration order: the config does not say " \
-          "whether `run_after_transaction_callbacks_in_order_defined` is on, and when it is off Rails runs them last declared first._"
-      end
-
       private_class_method def self.order_callbacks(callbacks)
         ordered = []
 
