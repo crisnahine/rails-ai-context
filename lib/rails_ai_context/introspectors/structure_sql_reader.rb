@@ -22,19 +22,22 @@ module RailsAiContext
         # follows it: without it, the lazy scan has no "\n)" to stop at inside
         # that one-line statement, so it keeps consuming lines - including the
         # next CREATE TABLE - until it finds one.
-        content.scan(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(?:public\.)?[`"]?(\w+)[`"]?\s*\(((?:(?!CREATE TABLE).)*?)^\)/m) do |table_name, body|
+        parents = {}
+        content.scan(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(?:public\.)?[`"]?(\w+)[`"]?\s*\(((?:(?!CREATE TABLE).)*?)^\)#{INHERITS}/m) do |table_name, body, inherits|
           next if table_name.start_with?("ar_internal_metadata", "schema_migrations")
 
           tables[table_name] = parse_sql_table_body(body, table_name)
+          parents[table_name] = inherits if inherits
         end
 
         # Single-line CREATE TABLE statements (sqlite emits these for tiny
         # tables) close with ");" on the same line and miss the multi-line
         # scan above.
-        content.scan(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(?:public\.)?[`"]?(\w+)[`"]?\s*\(([^\n]*)\);/) do |table_name, body|
-          next if table_name.start_with?("ar_internal_metadata", "schema_migrations")
+        content.scan(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(?:public\.)?[`"]?(\w+)[`"]?\s*\(((?:(?!\)\s*INHERITS\b)[^\n])*)\)#{INHERITS};/) do |table_name, body, inherits|
+          next if table_name.start_with?("ar_internal_metadata", "schema_migrations") || tables.key?(table_name)
 
-          tables[table_name] ||= parse_sql_table_body(body, table_name)
+          tables[table_name] = parse_sql_table_body(body, table_name)
+          parents[table_name] = inherits if inherits
         end
 
         content.scan(/CREATE (UNIQUE )?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF NOT EXISTS\s+)?[`"]?(\w+)[`"]?\s+ON\s+(?:ONLY\s+)?(?:public\.)?[`"]?(\w+)[`"]?([^;]*)/m) do |unique, idx_name, table, rest|
@@ -58,10 +61,56 @@ module RailsAiContext
           tables[from]&.dig(:foreign_keys)&.push(SchemaConventions.foreign_key_entry(from, to, cols.scan(/\w+/), pks.scan(/\w+/)))
         end
 
+        alters = Hash.new { |h, k| h[k] = [] }
+        content.scan(/^ALTER TABLE (?:ONLY )?(?:public\.)?"?(\w+)"? ALTER COLUMN "?(\w+)"? SET (NOT NULL|DEFAULT .+);$/) do |table, column, change|
+          alters[table] << [ column, change ]
+        end
+        resolved = {}
+        tables.each_key { |name| resolve_columns(name, tables, parents, alters, resolved) }
+
         # pg_dump writes each partition as a table, then attaches it in exactly this form.
         content.scan(/^ALTER TABLE ONLY .+? ATTACH PARTITION (?:public\.)?(?:"([^"]+)"|(\w+)) /) { |quoted, bare| tables.delete(quoted || bare) }
 
         { dialect: detect_sql_dialect(content), tables: tables }
+      end
+
+      # The optional INHERITS list after a CREATE TABLE body.
+      INHERITS = /(?:\s*INHERITS\s*\(([^)]*)\))?/
+
+      # A child table's columns: each parent's in order, then its own, a
+      # redeclared column merged into the inherited slot. pg_dump writes only
+      # the local columns and sets inherited ones' NOT NULL and defaults by ALTER.
+      def resolve_columns(name, tables, parents, alters, resolved)
+        return tables[name][:columns] if resolved[name]
+
+        resolved[name] = true
+        columns = []
+        parents[name]&.split(",")&.each do |parent|
+          parent = parent.strip.delete_prefix("public.").delete('"')
+          next unless tables[parent]
+
+          resolve_columns(parent, tables, parents, alters, resolved).each { |column| merge_column(columns, column.dup) }
+        end
+        tables[name][:columns].each { |column| merge_column(columns, column) }
+
+        alters[name].each do |column_name, change|
+          column = columns.find { |c| c[:name] == column_name } or next
+          if change == "NOT NULL"
+            column[:null] = false
+          else
+            raw_type = column[:array] ? "#{column[:type]}[]" : column[:type]
+            default = sql_default(change, column[:type], raw_type)
+            default.nil? ? column.delete(:default) : column[:default] = default
+          end
+        end
+        tables[name][:columns] = columns
+      end
+
+      def merge_column(columns, column)
+        at = columns.index { |c| c[:name] == column[:name] }
+        return columns << column unless at
+
+        columns[at] = columns[at].merge(column, null: columns[at][:null] && column[:null])
       end
 
       # mysqldump always terminates CREATE TABLE with ") ENGINE=..." and

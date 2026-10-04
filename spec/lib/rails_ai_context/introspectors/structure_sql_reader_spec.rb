@@ -373,4 +373,87 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
 
     expect(described_class.parse(sql)[:tables].keys).to eq(%w[events_staging])
   end
+
+  describe "INHERITS" do
+    def columns(sql, table)
+      described_class.parse(sql)[:tables][table][:columns].map { |c| c.values_at(:name, :type, :null) }
+    end
+
+    it "puts the parent's columns first in the issue's one-line form" do
+      sql = <<~SQL
+        CREATE TABLE public.base_logs (
+            id bigint NOT NULL,
+            msg text
+        );
+        CREATE TABLE public.child_logs (extra integer) INHERITS (public.base_logs);
+      SQL
+
+      expect(columns(sql, "child_logs")).to eq([ [ "id", "bigint", false ], [ "msg", "text", true ], [ "extra", "integer", true ] ])
+    end
+
+    # pg_dump 17 output, with each table's columns as the catalog orders them.
+    let(:dump) do
+      <<~SQL
+        CREATE TABLE public.base_logs (
+            id bigint NOT NULL,
+            msg text
+        );
+        CREATE TABLE public.child_logs (
+            extra integer
+        )
+        INHERITS (public.base_logs);
+        CREATE TABLE public.grand (
+            g integer
+        )
+        INHERITS (public.child_logs);
+        CREATE TABLE public.multi (
+            own integer
+        )
+        INHERITS (public.base_logs, public.tags);
+        CREATE TABLE public.tags (
+            tag text DEFAULT 'x'::text NOT NULL,
+            msg text
+        );
+        CREATE TABLE public.redecl (
+            msg text NOT NULL,
+            extra2 integer
+        )
+        INHERITS (public.base_logs);
+        CREATE TABLE public.empty_child (
+        )
+        INHERITS (public.base_logs);
+        CREATE TABLE public.notnull_child (
+            z integer
+        )
+        INHERITS (public.base_logs);
+        ALTER TABLE ONLY public.notnull_child ALTER COLUMN msg SET NOT NULL;
+        ALTER TABLE ONLY public.child_logs ALTER COLUMN msg SET DEFAULT 'child'::text;
+        ALTER TABLE ONLY public.grand ALTER COLUMN msg SET DEFAULT 'child'::text;
+        ALTER TABLE ONLY public.multi ALTER COLUMN tag SET DEFAULT 'x'::text;
+      SQL
+    end
+
+    let(:tables) { described_class.parse(dump)[:tables] }
+
+    def names(table) = tables[table][:columns].map { |c| c[:name] }
+
+    it "resolves a chain, several parents left to right, and a parent written later" do
+      expect(names("grand")).to eq(%w[id msg extra g])
+      expect(names("multi")).to eq(%w[id msg tag own])
+      expect(names("empty_child")).to eq(%w[id msg])
+    end
+
+    it "merges a redeclared column into the inherited slot" do
+      expect(columns(dump, "redecl")).to eq([ [ "id", "bigint", false ], [ "msg", "text", false ], [ "extra2", "integer", true ] ])
+    end
+
+    it "carries NOT NULL and defaults over, and applies the child's own" do
+      cols = ->(table) { tables[table][:columns].to_h { |c| [ c[:name], c ] } }
+      expect(cols["multi"]["tag"]).to include(null: false, default: "x")
+      expect(cols["notnull_child"]["msg"][:null]).to be(false)
+      expect(cols["base_logs"]["msg"]).to eq(name: "msg", type: "text", null: true)
+      expect(cols["child_logs"]["msg"][:default]).to eq("child")
+      expect(cols["grand"]["msg"][:default]).to eq("child")
+    end
+  end
 end
