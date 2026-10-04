@@ -398,6 +398,32 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
     end
   end
 
+  describe "the not-found handling line" do
+    it "credits a rescue only to the set_ method whose body holds it" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        File.write(File.join(dir, "app", "controllers", "posts_controller.rb"), <<~RB)
+          class PostsController < ApplicationController
+            def set_post
+              @post = Post.find(params[:id])
+            end
+
+            def set_post_author
+              @author = Author.find(params[:author_id])
+            rescue ActiveRecord::RecordNotFound
+              redirect_to authors_path
+            end
+          end
+        RB
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("- Not found: set_post_author → rescue → redirect_to authors_path")
+        expect(text).not_to include("- Not found: set_post →")
+      end
+    end
+  end
+
   # `validates_timeliness.en.yml` translates en; the name before the locale is the gem's.
   describe "the locales line" do
     def conventions_text(i18n)

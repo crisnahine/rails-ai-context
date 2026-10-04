@@ -736,9 +736,24 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       ERB
     end
 
+    # A splat written with a space reads like a JS doc-comment line, and a
+    # call of the predicate is not a call of the plain name.
+    let(:user_source) do
+      <<~RB
+        class UserOfPing
+          def run
+            [1,
+             * qa_ping(3)]
+            QaPinger.new.qa_ping?
+          end
+        end
+      RB
+    end
+
     let(:files) do
       { "app/services/qa_pinger.rb" => pinger_source, "app/controllers/qa_pings_controller.rb" => controller_source,
-        "app/javascript/ping.js" => script_source, "app/views/pings/show.html.erb" => view_source }
+        "app/javascript/ping.js" => script_source, "app/views/pings/show.html.erb" => view_source,
+        "app/models/user_of_ping.rb" => user_source }
     end
 
     [ true, false ].each do |with_ripgrep|
@@ -759,7 +774,7 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
 
             expect(definition.scan(/^\*\*app\/services\/qa_pinger\.rb:(\d+)\*\*/).flatten).to eq([ "2" ])
             siblings = definition[/## Sibling methods \(same file\)\n(.*?)\n\n/m, 1].lines.map(&:strip)
-            expect(siblings).to eq([ "- `qa_ping?`", "- `qa_ping!`", "- `self.qa_helper`" ])
+            expect(siblings).to eq([ "- `qa_ping?`", "- `qa_ping!`", "- `qa_ping=`", "- `self.qa_helper`" ])
           end
         end
 
@@ -785,11 +800,48 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
           with_search_app(files) do
             text = described_class.call(pattern: "qa_ping", match_type: "call", context_lines: 0).content.first[:text]
 
-            expect(text).to include("qa_pings_controller.rb:3:", "ping.js:4:", "show.html.erb:2:")
+            expect(text).to include("qa_pings_controller.rb:3:", "ping.js:4:", "show.html.erb:2:", "user_of_ping.rb:4:")
             expect(text).not_to include("mentioned in a comment", "block comment", "doc comment")
-            expect(text).to include("**3 matches**")
+            expect(text).to include("**5 matches**")
           end
         end
+
+        it "does not count a call of the predicate as a call of the plain name" do
+          with_search_app(files) do
+            text = described_class.call(pattern: "qa_ping", match_type: "call", exact_match: true,
+                                        context_lines: 0).content.first[:text]
+
+            expect(text).to include("user_of_ping.rb:4:")
+            expect(text).not_to include("user_of_ping.rb:5:")
+          end
+        end
+
+        it "lists Ruby splat lines and leaves predicate calls out of the trace callers" do
+          with_search_app(files) do
+            text = described_class.call(pattern: "qa_ping", match_type: "trace").content.first[:text]
+            callers = text[/## Called from.*/m]
+
+            expect(callers).to include("4: * qa_ping(3)")
+            expect(callers).not_to include("qa_ping?")
+          end
+        end
+      end
+    end
+  end
+
+  describe "a regex that times out while rows are confirmed" do
+    it "still drops a context row with no match beside it" do
+      skip "needs Regexp::TimeoutError" unless defined?(Regexp::TimeoutError)
+
+      backtracking = "#{'a' * 40}!"
+      with_search_app("app/a.rb" => "#{backtracking}\ntwo\n# three\n") do |dir|
+        regex = Regexp.new("^(a+)+\\1$", timeout: 0.01)
+        rows = [ { file: "app/a.rb", line_number: 1, content: backtracking, match: true },
+                 { file: "app/a.rb", line_number: 3, content: "# three", match: false } ]
+
+        kept = described_class.send(:confirmed_rows, rows, dir, regex, 0)
+
+        expect(kept.map { |r| r[:line_number] }).to eq([ 1 ])
       end
     end
   end

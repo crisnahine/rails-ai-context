@@ -594,12 +594,19 @@ module RailsAiContext
           pattern.match?(/\w\z/) ? "\\b" : ""
         end
 
+        # Where a method name ends: `ping` is not `ping?`, `ping!` or `ping=`,
+        # though `ping == x` and `ping => x` still read `ping`. No lookahead,
+        # so the same text works as a ripgrep pattern.
+        def method_name_end(name)
+          name.to_s.match?(/\w\z/) ? "(?:[^\\w?!=]|[!=][=~]|=>|$)" : ""
+        end
+
         # Extract method source from a source string via indentation-based matching.
         # Returns { code:, start_line:, end_line: } or nil. Shared by get_callbacks, get_concern.
         def extract_method_source_from_string(source, method_name)
           source_lines = source.lines
           name = method_name.to_s
-          pattern = /\A\s*def\s+#{Regexp.escape(name)}#{trailing_boundary(name)}/
+          pattern = /\A\s*def\s+#{Regexp.escape(name)}#{method_name_end(name)}/
           start_idx = source_lines.index { |l| l.match?(pattern) }
           return nil unless start_idx
 

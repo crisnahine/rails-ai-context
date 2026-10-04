@@ -172,10 +172,12 @@ module RailsAiContext
     def global_excludes_path
       xdg = ENV["XDG_CONFIG_HOME"].to_s
       config_dir = xdg.empty? ? File.join(Dir.home, ".config") : xdg
+      # A setting that is not UTF-8 is skipped, as ripgrep skips it.
       configured = [ File.join(Dir.home, ".gitconfig"), File.join(config_dir, "git", "config") ].lazy.filter_map do |config|
-        File.file?(config) && File.binread(config)[/^\s*excludesfile\s*=\s*"?\s*(\S+?)\s*"?\s*$/i, 1]
+        path = File.file?(config) && File.binread(config)[/^\s*excludesfile\s*=\s*"?\s*(\S+?)\s*"?\s*$/i, 1]
+        path && path.force_encoding(Encoding::UTF_8).valid_encoding? ? path : nil
       end.first
-      return File.expand_path(configured.dup.force_encoding(Encoding::UTF_8).gsub("~", Dir.home)) if configured
+      return File.expand_path(configured.gsub("~", Dir.home)) if configured
 
       File.join(config_dir, "git", "ignore")
     rescue StandardError

@@ -286,6 +286,14 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
       expect(described_class.method_body(source, "nope")).to be_nil
     end
 
+    it "reads past a predicate of the same name when the walk cannot answer" do
+      source = "class C\n  def show?\n    true\n  end\n\n  def show\n    @a = 1\n  end\n"
+      allow(described_class).to receive(:methods_in).and_return([])
+
+      expect(described_class.method_body(source, "show"))
+        .to eq(code: "  def show\n    @a = 1\n  end", start_line: 6, end_line: 8)
+    end
+
     it "answers the same body for an action named in another case" do
       source = "class C\n  def show\n    @a = 1\n  end\n\n  def edit; end\nend\n"
 

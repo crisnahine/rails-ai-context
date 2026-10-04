@@ -224,19 +224,17 @@ module RailsAiContext
           flash_alerts.concat(content.scan(/alert:\s*"([^"]*)"/).flatten)
 
           # Not-found handling: set_* methods that rescue or redirect on missing records
-          content.scan(/def\s+(set_\w+).*?(?=\n\s*def\s|\n\s*end\s*\z)/m).each do |match_data|
-            method_name = match_data[0]
-            # Look for the block around this method for rescue/redirect
-            if content.match?(/def\s+#{Regexp.escape(method_name)}.*?(?:rescue\s+ActiveRecord::RecordNotFound|rescue\b)/m)
-              redirect_match = content.match(/def\s+#{Regexp.escape(method_name)}.*?redirect_to\s+(\S+)/m)
+          content.scan(/def\s+(set_\w+)(.*?)(?=\n\s*def\s|\n\s*end\s*\z)/m).each do |method_name, body|
+            if body.match?(/\brescue\b/)
+              redirect_match = body.match(/redirect_to\s+(\S+)/)
               target = redirect_match ? redirect_match[1].sub(/,.*/, "") : "..."
               not_found_patterns << "#{method_name} → rescue → redirect_to #{target}" unless not_found_patterns.include?("#{method_name} → rescue → redirect_to #{target}")
             end
           end
 
           # Create action flow detection
-          if content.match?(/def\s+create\b/)
-            create_block = content[/def\s+create\b.*?(?=\n\s{2}def\s|\n\s{2}private|\z)/m]
+          if content.match?(/def\s+create#{method_name_end("create")}/)
+            create_block = content[/def\s+create#{method_name_end("create")}.*?(?=\n\s{2}def\s|\n\s{2}private|\z)/m]
             if create_block
               flow_parts = []
               flow_parts << "permission check" if create_block.match?(/can_\w+\??|authorize|authorize!/)

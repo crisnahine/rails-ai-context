@@ -197,5 +197,29 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
       expect(described_class.extract_method_source_from_string(source, "name=")[:start_line]).to eq(6)
       expect(described_class.extract_method_source_from_string(source, "save!")[:start_line]).to eq(10)
     end
+
+    it "does not answer a ?, ! or = method for the plain name declared after it" do
+      source = <<~RB
+        class Post
+          def touch?
+            true
+          end
+
+          def touch!
+            nil
+          end
+
+          def touch=(value)
+            nil
+          end
+
+          def touch
+            update(at: 1)
+          end
+        end
+      RB
+
+      expect(described_class.extract_method_source_from_string(source, "touch")[:start_line]).to eq(14)
+    end
   end
 end

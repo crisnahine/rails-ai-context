@@ -197,7 +197,8 @@ module RailsAiContext
       end
 
       def scanned_body(lines, method_name)
-        start_idx = lines.index { |l| l.match?(/^\s*def\s+#{Regexp.escape(method_name.to_s)}\b/i) }
+        name_end = Tools::BaseTool.method_name_end(method_name)
+        start_idx = lines.index { |l| l.match?(/^\s*def\s+#{Regexp.escape(method_name.to_s)}#{name_end}/i) }
         return nil unless start_idx
 
         indent = lines[start_idx][/\A\s*/].length

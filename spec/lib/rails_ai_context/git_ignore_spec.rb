@@ -136,6 +136,17 @@ RSpec.describe RailsAiContext::GitIgnore do
       expect(ignored?("repo_only.rb")).to be false
     end
 
+    # ripgrep drops a setting that is not UTF-8 and reads the next config.
+    it "reads the XDG setting when ~/.gitconfig names a path that is not UTF-8" do
+      File.binwrite(@global, "[core]\n\texcludesFile = /tmp/\xFF-ignore\n".b)
+      excludes = File.join(@root, "xdg-ignore")
+      File.write(excludes, "*.xdg.rb\n")
+      FileUtils.mkdir_p(File.join(@root, "no-xdg", "git"))
+      File.write(File.join(@root, "no-xdg", "git", "config"), "[core]\n\texcludesFile = #{excludes}\n")
+
+      expect(ignored?("app/a.xdg.rb")).to be true
+    end
+
     it "does not read core.excludesFile from GIT_CONFIG_GLOBAL" do
       excludes = File.join(@root, "env-ignore")
       File.write(excludes, "env_only.rb\n")

@@ -21,9 +21,12 @@ module RailsAiContext
 
       TEST_DIRS = %w[test/ spec/ features/].freeze
       MATCH_FIELD_SEPARATOR = "\x1f"
-      # A definition, or a line that opens with a Ruby, JS or ERB comment. `#{`
-      # opens an interpolation inside a heredoc, which is code.
-      NOT_A_CALL_SITE = %r{\A\s*(?:def\s|#(?!\{)|//|/\*|\*\s|<%#)}
+      # A line that opens with a comment, by the file's own comment syntax. `#{`
+      # opens an interpolation inside a heredoc, which is code, and a Ruby
+      # line may open with a splat.
+      C_STYLE_COMMENT = %r{\A\s*(?://|/\*|\*\s)}
+      HASH_COMMENT = /\A\s*(?:#(?!\{)|<%#)/
+      C_STYLE_EXTENSIONS = %w[.js .jsx .mjs .cjs .ts .tsx .mts .cts .css .scss .sass .less .vue .svelte].freeze
 
       tool_name "rails_search_code"
       description "Search the Rails codebase with smart modes. " \
@@ -124,7 +127,7 @@ module RailsAiContext
           # `\w*` stays unbounded so a CamelCase prefix still resolves.
           exact_match ? "^\\s*(class|module)\\s+\\w*#{escaped}#{trailing_boundary(cleaned)}" : "^\\s*(class|module)\\s+\\w*#{escaped}"
         when "call"
-          exact_match ? exact_pattern(pattern) : pattern
+          exact_match ? method_call_pattern(pattern) : pattern
         else
           exact_match ? exact_pattern(pattern) : pattern
         end
@@ -179,7 +182,7 @@ module RailsAiContext
 
         # A definition or comment line stays as context, never as a call site.
         if match_type == "call"
-          all_results.map! { |r| match_row?(r) && r[:content].match?(NOT_A_CALL_SITE) ? r.merge(match: false) : r }
+          all_results.map! { |r| match_row?(r) && not_a_call_site?(r) ? r.merge(match: false) : r }
         end
         all_results = confirmed_rows(all_results, root, build_regexp(search_pattern, timeout: 1), context_lines)
 
@@ -254,10 +257,8 @@ module RailsAiContext
         "#{leading_boundary(pattern)}#{literal(pattern)}#{trailing_boundary(pattern)}"
       end
 
-      # A def of `ping` must not match `ping?`, `ping!` or `ping=`, which are
-      # other methods. No lookahead: ripgrep's regex engine has none.
-      private_class_method def self.method_name_end(name)
-        name.match?(/\w\z/) ? "(?:[^\\w?!=]|$)" : ""
+      private_class_method def self.method_call_pattern(name)
+        "#{leading_boundary(name)}#{literal(name)}#{method_name_end(name)}"
       end
 
       # Regexp.escape writes a space as `\ `, which ripgrep 13 rejects as an
@@ -471,14 +472,17 @@ module RailsAiContext
       # runs on the raw file, so a hit there would confirm what the secret starts with. Context rows
       # stay only beside a real hit, so a right guess shows what a wrong one does.
       private_class_method def self.confirmed_rows(rows, root, regex, ctx_lines)
-        kept = rows.zip(redact_rows(rows, root)).map do |raw, row|
-          hidden = match_row?(row) && raw[:content].to_s.chomp.match?(regex) && !row[:content].match?(regex)
-          hidden ? row.merge(match: false) : row
+        redacted_rows = redact_rows(rows, root)
+        kept = begin
+          rows.zip(redacted_rows).map do |raw, row|
+            hidden = match_row?(row) && raw[:content].to_s.chomp.match?(regex) && !row[:content].match?(regex)
+            hidden ? row.merge(match: false) : row
+          end
+        rescue Regexp::TimeoutError
+          redacted_rows
         end
         hits = kept.select { |r| match_row?(r) }.group_by { |r| r[:file] }
         kept.select { |r| match_row?(r) || hits.fetch(r[:file], []).any? { |h| (h[:line_number] - r[:line_number]).abs <= ctx_lines } }
-      rescue Regexp::TimeoutError
-        redact_rows(rows, root)
       end
 
       private_class_method def self.redacted(row)
@@ -487,6 +491,13 @@ module RailsAiContext
 
       private_class_method def self.match_row?(row)
         row[:match] != false
+      end
+
+      # A definition or a comment line names a method without calling it.
+      private_class_method def self.not_a_call_site?(row)
+        content = row[:content].to_s
+        comment = C_STYLE_EXTENSIONS.include?(File.extname(row[:file].to_s)) ? C_STYLE_COMMENT : HASH_COMMENT
+        content.match?(/\A\s*def\s/) || content.match?(comment)
       end
 
       private_class_method def self.match_count(rows)
@@ -588,10 +599,10 @@ module RailsAiContext
         end
 
         # 2. Find all callers (everywhere the method is referenced, excluding the def line)
-        call_pattern = exact_pattern(cleaned)
+        call_pattern = method_call_pattern(cleaned)
         call_rows, = quick_search(call_pattern, search_path, root, max_results_cap + 1, exclude_tests)
         call_results, call_truncated = cap_results(call_rows)
-        callers = call_results.reject { |r| r[:content].match?(NOT_A_CALL_SITE) }
+        callers = call_results.reject { |r| not_a_call_site?(r) }
 
         # Exclude the definition file+line to avoid self-reference
         def_locations = def_results.map { |r| "#{r[:file]}:#{r[:line_number]}" }.to_set
@@ -697,7 +708,7 @@ module RailsAiContext
         source.each_line do |line|
           in_private = true if line.match?(/\A\s*private\s*$/)
           next if in_private
-          if (m = line.match(/\A\s*def\s+((?:self\.)?\w+[?!]?)/))
+          if (m = line.match(/\A\s*def\s+((?:self\.)?\w+[?!=]?)/))
             name = m[1]
             methods << name unless name.delete_prefix("self.") == exclude_method || name.start_with?("initialize")
           end
