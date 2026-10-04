@@ -192,7 +192,7 @@ module RailsAiContext
       PROC_LITERAL = /\A(?:->|(?:lambda|proc|Proc\.new)(?![\w.]))/
 
       QUEUE_AS_LISTENERS = {
-        macros: -> { Listeners::GenericMacroListener.new(:queue_as, block_source: [ :queue_as ]) },
+        macros: -> { Listeners::GenericMacroListener.new(*JOB_MACROS, block_source: [ :queue_as ]) },
         procs:  Listeners::ProcLiteralListener
       }.freeze
 
@@ -367,12 +367,10 @@ module RailsAiContext
               declared: declaration.name,
               declares: declarations.map(&:name),
               superclass: declaration.superclass,
-              ast: SourceIntrospector.walk_source(record.source, {
-                macros:  -> { Listeners::GenericMacroListener.new(*JOB_MACROS, block_source: [ :queue_as ]) },
-                procs:   Listeners::ProcLiteralListener,
+              ast: SourceIntrospector.walk_source(record.source, QUEUE_AS_LISTENERS.merge(
                 methods: Listeners::MethodsListener,
                 calls:   SourceCalls.listener
-              })
+              ))
             )
           end
         end
