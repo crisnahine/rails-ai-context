@@ -3485,6 +3485,23 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         end
       end
 
+      it "loses only the initializer macro call it cannot expand, not the other calls" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+          File.write(File.join(dir, "config", "initializers", "base_ext.rb"),
+                     "class ActiveRecord::Base\n  def self.loc(options = {})\n    before_save :loc if options[:on]\n  end\n\n  def self.stamp_base\n    before_save :sb\n  end\nend\n")
+          write_model(dir, "BadLoc", "class BadLoc < ApplicationRecord\n  loc on: true, bad: true\n  stamp_base\nend\n")
+          write_model(dir, "GoodLoc", "class GoodLoc < ApplicationRecord\n  loc on: true\nend\n")
+          allow(RailsAiContext::Introspectors::CallSiteExpansion).to receive(:entries).and_wrap_original do |original, definition, call, listeners|
+            raise ArgumentError, "unreadable" if call&.slice&.include?("bad")
+
+            original.call(definition, call, listeners)
+          end
+
+          expect(static_save(dir).slice("BadLoc", "GoodLoc")).to eq("BadLoc" => %w[sb], "GoodLoc" => %w[loc])
+        end
+      end
+
       # Runtime: Account validates inclusion of default_locale, User of locale and browser_locale, Course of
       # locale (the method's default), each `if: :<field>_changed?`, and each runs one before_validation block.
       it "reads an initializer's macro at each call, its fields bound from the call, in place of the call's own row" do

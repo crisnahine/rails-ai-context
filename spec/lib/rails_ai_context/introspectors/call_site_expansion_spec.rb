@@ -303,6 +303,33 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
       expect(Array(expand(method_source, "vl allow_nil: true")[:callbacks])).to eq([])
     end
 
+    # Ruby fills requireds and posts first, then optionals, and `*args` takes what is left.
+    it "takes the rest after requireds, optionals and posts, less a hash the keywords take, unknown past a splat" do
+      each_field = "  args.each do |field|\n    validates_presence_of field\n  end\nend\n"
+      read = ->(head, call) { expand("#{head}\n  options = args.extract_options!\n#{each_field}", call)[:validations].map { |v| v[:attributes] } }
+      posts = "def vl(first, second = :s, *args, last)"
+
+      expect(read.call(posts, "vl :a, :b, :c, :d, :e")).to eq([ [ "c" ], [ "d" ] ])
+      expect(read.call(posts, "vl :a, :b, :c")).to eq([])
+      expect(read.call(posts, "vl :a, :b")).to eq([])
+      expect(read.call("def vl(*args, allow_nil: false)", "vl :a, allow_nil: true")).to eq([ [ "a" ] ])
+      expect(read.call("def vl(*args)", "vl :a, allow_nil: true")).to eq([ [ "a" ] ])
+      expect(read.call("def vl(*args)", "vl(*fields)")).to eq([ [] ])
+
+      keywords = "def vl(*args, allow_nil: false)\n  options = args.extract_options!\n  before_save :x if options[:allow_nil]\nend\n"
+      expect(Array(expand(keywords, "vl :a, allow_nil: true")[:callbacks])).to eq([])
+      named = "def vl(name, *args)\n  options = args.extract_options!\n  before_save :x if options[:allow_nil]\nend\n"
+      expect(expand(named, "vl(*fields, allow_nil: true)")[:conditional].map { |c| c[:condition] }).to eq([ "options[:allow_nil]" ])
+    end
+
+    it "pushes with `push` too, and only when the modifier's predicate holds" do
+      method_source = "def vl(*args)\n  args.push(:locale, :zone) if args.empty?\n  args.each do |field|\n    validates_presence_of field\n  end\nend\n"
+      read = ->(call) { expand(method_source, call)[:validations].map { |v| v[:attributes] } }
+
+      expect(read.call("vl")).to eq([ [ "locale" ], [ "zone" ] ])
+      expect(read.call("vl :a")).to eq([ [ "a" ] ])
+    end
+
     # Ruby: `vl :a, :b` validates a and b; `vl` validates locale, the default the body pushes.
     it "writes a block over the rest of the list once per item, with what the leading statements push" do
       method_source = <<~'RUBY'
