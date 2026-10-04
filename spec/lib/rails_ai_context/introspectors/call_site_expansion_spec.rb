@@ -284,5 +284,49 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
 
       expect(data[:conditional].map { |c| c[:condition] }).to eq([ "options[:allow_nil]" ])
     end
+
+    # Ruby registers :x for the first two (the body sets the key) and nothing for the third (it drops it).
+    it "stays unbound when the method changes the hash in place" do
+      [ "options.reverse_merge!(allow_nil: true)", "options[:allow_nil] = true", "options.delete(:allow_nil)" ].each do |change|
+        data = expand("def vl(*args)\n  options = args.extract_options!\n  #{change}\n  before_save :x if options[:allow_nil]\nend\n",
+                      "vl :a, allow_nil: true")
+
+        expect([ Array(data[:callbacks]), data[:conditional].map { |c| c[:condition] } ]).to eq([ [], [ "options[:allow_nil]" ] ])
+      end
+    end
+
+    it "takes only the arguments past the other parameters" do
+      method_source = "def vl(name, *args)\n  options = args.extract_options!\n  before_save :x if options[:allow_nil]\nend\n"
+
+      expect(Array(expand(method_source, "vl :a, allow_nil: true")[:callbacks]).map { |cb| cb[:method] }).to eq(%w[x])
+      expect(Array(expand(method_source, "vl allow_nil: true")[:callbacks])).to eq([])
+    end
+
+    # Ruby: `vl :a, :b` validates a and b; `vl` validates locale, the default the body pushes.
+    it "writes a block over the rest of the list once per item, with what the leading statements push" do
+      method_source = <<~'RUBY'
+        def vl(*args)
+          options = args.last.is_a?(Hash) ? args.pop : {}
+          args << :locale if args.empty?
+          args.each do |field|
+            validates_inclusion_of field, options.merge(if: :"#{field}_changed?")
+          end
+        end
+      RUBY
+      read = ->(call) { expand(method_source, call)[:validations].map { |v| [ v[:attributes], v[:options] ] } }
+
+      expect(read.call("vl :a, :b, allow_nil: true")).to eq(
+        [ [ [ "a" ], { allow_nil: true, if: :a_changed? } ], [ [ "b" ], { allow_nil: true, if: :b_changed? } ] ]
+      )
+      expect(read.call("vl")).to eq([ [ [ "locale" ], { if: :locale_changed? } ] ])
+    end
+  end
+
+  describe "a hash parameter the body changes in place" do
+    it "is bound to nothing" do
+      data = expand("def vl(name, options = {})\n  options[:allow_nil] = true\n  before_save :x if options[:allow_nil]\nend\n", "vl :a")
+
+      expect([ Array(data[:callbacks]), data[:conditional].map { |c| c[:condition] } ]).to eq([ [], [ "options[:allow_nil]" ] ])
+    end
   end
 end

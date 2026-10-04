@@ -3439,6 +3439,50 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         end
       end
 
+      # Runtime: Account validates inclusion of default_locale, User of locale and browser_locale, Course of
+      # locale (the method's default), each `if: :<field>_changed?`, and each runs one before_validation block.
+      it "reads an initializer's macro at each call, its fields bound from the call, in place of the call's own row" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+          File.write(File.join(dir, "config", "initializers", "i18n.rb"), <<~'RUBY')
+            ActiveRecord::Base.class_eval do
+              class << self
+                LOCALE_LIST = %w[en fr].freeze
+
+                def validates_locale(*args)
+                  options = args.last.is_a?(Hash) ? args.pop : {}
+                  args << :locale if args.empty?
+                  if options[:allow_nil] && !options[:allow_empty]
+                    before_validation do |record|
+                      args.each do |field|
+                        record[field] = nil if record[field] == ""
+                      end
+                    end
+                  end
+                  args.each do |field|
+                    validates_inclusion_of field, options.merge(in: LOCALE_LIST, if: :"#{field}_changed?")
+                  end
+                end
+              end
+            end
+          RUBY
+          write_model(dir, "Account", "class Account < ApplicationRecord\n  validates_locale :default_locale, allow_nil: true\nend\n")
+          write_model(dir, "User", "class User < ApplicationRecord\n  validates_locale :locale, :browser_locale, allow_nil: true\nend\n")
+          write_model(dir, "Course", "class Course < ApplicationRecord\n  validates_locale allow_nil: true\nend\n")
+
+          models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+          read = %w[Account User Course].to_h do |name|
+            [ name, models[name][:validations].map { |v| [ v[:kind], v[:attributes], v[:options][:if] ] } ]
+          end
+          expect(read).to eq(
+            "Account" => [ [ "inclusion", [ "default_locale" ], :default_locale_changed? ] ],
+            "User" => [ [ "inclusion", [ "locale" ], :locale_changed? ], [ "inclusion", [ "browser_locale" ], :browser_locale_changed? ] ],
+            "Course" => [ [ "inclusion", [ "locale" ], :locale_changed? ] ]
+          )
+          %w[Account User Course].each { |name| expect(models[name][:callbacks]).to eq("before_validation" => %w[[inline_block]]) }
+        end
+      end
+
       # Runtime (initializers load sorted): WSame :first, :b_same; WFar :first, :b_far; WThree :first, :leaf3;
       # XP6 :first, :init_p6 (the initializer reopens ApplicationRecord after its file ran).
       it "takes an initializer's class method from the file Rails loads last, and one on ApplicationRecord over its own" do

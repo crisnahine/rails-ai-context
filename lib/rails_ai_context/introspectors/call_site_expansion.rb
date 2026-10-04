@@ -12,7 +12,8 @@ module RailsAiContext
       UNKNOWN = Object.new.freeze
       # `pairs` is set for a literal hash: its `key: value` text, which reads
       # as keyword arguments where the parameter is passed as the last one.
-      Binding = Struct.new(:value, :source, :pairs, :value_sources)
+      # `items` is set for a list of literals: each one's source.
+      Binding = Struct.new(:value, :source, :pairs, :value_sources, :items)
 
       # The rewritten body, and for each of its lines the line of the mixin's
       # file it came from, so what the body declares keeps its real location.
@@ -62,7 +63,7 @@ module RailsAiContext
       def entries(definition, call, listeners)
         return {} unless definition.body
 
-        bindings = trailing_options(unwritten(bind(definition.parameters, call), definition.body), definition, call)
+        bindings = rest_bindings(unwritten(bind(definition.parameters, call), definition.body), definition, call)
         out = Output.new
         undecided = []
         emit(definition.body, bindings, out, undecided, 0, [])
@@ -197,38 +198,108 @@ module RailsAiContext
         Prism::LocalVariableOrWriteNode, Prism::LocalVariableAndWriteNode
       ].freeze
 
-      # A parameter the body assigns, in a block too, no longer holds the
-      # call's argument wherever it is read, so it is bound to nothing.
+      # A parameter the body assigns or changes in place, in a block too, no
+      # longer holds the call's argument wherever it is read, so it is bound to nothing.
       def unwritten(bindings, body)
-        stack = [ [ body, 0 ] ]
-        until stack.empty?
-          node, blocks = stack.pop
-          bindings[node.name] = unknown if WRITES.include?(node.class) && node.depth == blocks && bindings.key?(node.name)
-          blocks += 1 if node.is_a?(Prism::BlockNode) || node.is_a?(Prism::LambdaNode)
-          stack.concat(node.compact_child_nodes.map { |child| [ child, blocks ] })
-        end
+        changed(body).each { |name| bindings[name] = unknown if bindings.key?(name) }
         bindings
       end
 
-      # `options = args.extract_options!`, or `args.last.is_a?(Hash) ? args.pop : {}`, on a `*args`
-      # parameter and written nowhere else, holds the hash the call ends with, or an empty one.
-      def trailing_options(bindings, definition, call)
+      # Methods that change their receiver in place.
+      MUTATORS = %i[<< []= push append unshift prepend insert concat pop shift delete delete_at delete_if keep_if
+                    clear replace store update fill].freeze
+
+      # The method's own locals the body writes or changes in place, outside the `kept` statements.
+      def changed(body, kept = [])
+        found = Set.new
+        stack = [ [ body, 0 ] ]
+        until stack.empty?
+          node, blocks = stack.pop
+          next if kept.any? { |statement| statement.equal?(node) }
+
+          found << node.name if WRITES.include?(node.class) && node.depth == blocks
+          receiver = node.receiver if node.is_a?(Prism::CallNode) && (MUTATORS.include?(node.name) || node.name.match?(/\w!\z/))
+          found << receiver.name if receiver.is_a?(Prism::LocalVariableReadNode) && receiver.depth == blocks
+          blocks += 1 if node.is_a?(Prism::BlockNode) || node.is_a?(Prism::LambdaNode)
+          stack.concat(node.compact_child_nodes.map { |child| [ child, blocks ] })
+        end
+        found
+      end
+
+      # `*args` holds the call's positionals past the other parameters. `options = args.extract_options!`,
+      # or `args.last.is_a?(Hash) ? args.pop : {}`, takes the hash they end with, or an empty one, and
+      # literals the leading statements push join the list; a local changed anywhere else is unknown.
+      def rest_bindings(bindings, definition, call)
         rest = definition.parameters&.rest
         return bindings unless call && rest.respond_to?(:name) && rest.name && definition.body.is_a?(Prism::StatementsNode)
 
+        given = rest_arguments(definition.parameters, call)
         taken = [ "#{rest.name}.extract_options!", "#{rest.name}.last.is_a?(Hash)?#{rest.name}.pop:{}" ]
-        writes = AstWalk.each(definition.body).select { |node| WRITES.include?(node.class) }.map(&:name).tally
-        last = Array(call.arguments&.arguments).last
+        kept = []
+        list = given
+        leading = true
         definition.body.body.each do |node|
-          next unless node.is_a?(Prism::LocalVariableWriteNode) && writes[node.name] == 1 && taken.include?(node.value.slice.delete(" "))
-
-          bindings[node.name] =
-            if symbol_keyed?(last) then literal(last)
-            elsif last.nil? || literal_source?(last) then hash_binding({}, {})
-            else unknown
-            end
+          if node.is_a?(Prism::LocalVariableWriteNode) && taken.include?(node.value.slice.delete(" "))
+            last = given&.last
+            bindings[node.name] =
+              if given.nil? then unknown
+              elsif symbol_keyed?(last) then literal(last)
+              elsif last.nil? || literal_source?(last) then hash_binding({}, {})
+              else unknown
+              end
+            list = leading && list && (symbol_keyed?(list.last) ? list[0...-1] : list)
+            kept << node
+          elsif leading && (grown = pushed(node, rest.name, list, bindings))
+            list = grown
+            kept << node
+          else
+            leading = false
+          end
         end
+        changed_names = changed(definition.body, kept)
+        kept.each { |node| bindings[node.name] = unknown if node.is_a?(Prism::LocalVariableWriteNode) && changed_names.include?(node.name) }
+        list = nil if !list || changed_names.include?(rest.name) || list.any? { |item| !literal_source?(item) }
+        bindings[rest.name] = list ? list_binding(list) : unknown
         bindings
+      end
+
+      # The call's arguments `*rest` takes, nil when they cannot be told (a splat, too few).
+      def rest_arguments(parameters, call)
+        arguments = Array(call.arguments&.arguments)
+        return nil if arguments.any? { |argument| argument.is_a?(Prism::SplatNode) }
+
+        takes_keywords = parameters.keywords.any? || parameters.keyword_rest
+        arguments = arguments[0...-1] if takes_keywords && arguments.last.is_a?(Prism::KeywordHashNode)
+        before = parameters.requireds.size
+        after = parameters.posts.size
+        return nil if arguments.size < before + after
+
+        before += [ parameters.optionals.size, arguments.size - before - after ].min
+        arguments[before...(arguments.size - after)]
+      end
+
+      # The list `args << :x` or `args.push(:x)` leaves, under a modifier `if` the bindings decide; nil for any other statement.
+      def pushed(node, name, list, bindings)
+        return nil unless list
+
+        if node.is_a?(Prism::IfNode) || node.is_a?(Prism::UnlessNode)
+          return nil if node.is_a?(Prism::IfNode) ? node.subsequent : node.else_clause
+          return nil unless node.statements&.body&.one? && (grown = pushed(node.statements.body.first, name, list, bindings))
+
+          truth = truth_of(evaluate(node.predicate, bindings.merge(name => list_binding(list)), 0))
+          return nil if truth == UNKNOWN
+
+          return (node.is_a?(Prism::UnlessNode) ? !truth : truth) ? grown : list
+        end
+        return nil unless node.is_a?(Prism::CallNode) && %i[<< push].include?(node.name) && node.block.nil?
+        return nil unless node.receiver.is_a?(Prism::LocalVariableReadNode) && node.receiver.name == name
+
+        items = Array(node.arguments&.arguments)
+        list + items if items.all? { |item| literal_source?(item) }
+      end
+
+      def list_binding(items)
+        Binding.new(items.map { |item| value_of(item) }, "[#{items.map(&:slice).join(", ")}]", nil, nil, items.map(&:slice))
       end
 
       # A hash with symbol keys binds by its pairs' own source, whatever
@@ -291,9 +362,14 @@ module RailsAiContext
       def emit(node, bindings, out, undecided, depth, conditions)
         case node
         when Prism::LocalVariableReadNode
-          source = node.depth == depth && bindings[node.name]&.source
+          source = bound(bindings, node, depth)&.source
           return out.append(source, node.location.start_line) if source
+        when Prism::InterpolatedSymbolNode, Prism::InterpolatedStringNode
+          folded = !heredoc?(node) && interpolated(node, bindings, depth)
+          return out.append(folded.inspect, node.location.start_line) if folded
         when Prism::CallNode
+          return emit_each(node, bindings, out, undecided, depth, conditions) if unrolled?(node, bindings, depth)
+
           looked_up = hash_lookup(node, bindings, depth)
           return out.append(looked_up, node.location.start_line) if looked_up
         when Prism::IfNode, Prism::UnlessNode
@@ -331,6 +407,50 @@ module RailsAiContext
         out.append(text.byteslice(position, text.bytesize - position), line_at.call(position))
       end
 
+      # The binding a read reaches: the method's parameter, or the parameter of a block written once per item.
+      def bound(bindings, node, depth)
+        level = depth - node.depth
+        level.zero? ? bindings[node.name] : bindings[[ node.name, level ]]
+      end
+
+      # `"#{field}_changed?"` with every part a literal or a bound literal, as the value it makes.
+      def interpolated(node, bindings, depth)
+        text = node.parts.map do |part|
+          next part.unescaped if part.is_a?(Prism::StringNode)
+
+          statements = part.is_a?(Prism::EmbeddedStatementsNode) && part.statements&.body
+          return nil unless statements&.one?
+
+          inner = statements.first
+          value = inner.is_a?(Prism::LocalVariableReadNode) ? bound(bindings, inner, depth)&.value : value_of(inner)
+          return nil if value.nil? || value == UNKNOWN || value.is_a?(Hash) || value.is_a?(Array)
+
+          value.to_s
+        end.join
+        node.is_a?(Prism::InterpolatedSymbolNode) ? text.to_sym : text
+      end
+
+      # `args.each do |field| ... end` over a bound list of literals.
+      def unrolled?(node, bindings, depth)
+        receiver = node.receiver
+        return false unless node.name == :each && node.arguments.nil? && node.block.is_a?(Prism::BlockNode) && node.block.body
+        return false unless receiver.is_a?(Prism::LocalVariableReadNode) && bound(bindings, receiver, depth)&.items
+
+        params = node.block.parameters&.parameters
+        params && params.requireds.one? && params.requireds.first.respond_to?(:name) && params.optionals.empty? && params.rest.nil? && params.posts.empty?
+      end
+
+      # The block's body written once per item, its parameter bound to that item.
+      def emit_each(node, bindings, out, undecided, depth, conditions)
+        name = node.block.parameters.parameters.requireds.first.name
+        binding = bound(bindings, node.receiver, depth)
+        binding.items.zip(binding.value).each do |source, value|
+          emit(node.block.body, bindings.merge([ name, depth + 1 ] => Binding.new(value, source)), out, undecided, depth + 1, conditions)
+          out.append("\n", node.location.end_line)
+        end
+        out
+      end
+
       # A call's arguments, each written from its own node and joined with a
       # comma: an argument that stands for no keywords at all (an options hash
       # left at `{}`) is left out whole, with no separator to dangle.
@@ -350,9 +470,9 @@ module RailsAiContext
       # `options[:length]` on a hash parameter the call passed as a literal:
       # the value's own source, or `nil` for a key the call left out.
       def hash_lookup(node, bindings, depth)
-        return unless node.name == :[] && node.receiver.is_a?(Prism::LocalVariableReadNode) && node.receiver.depth == depth
+        return unless node.name == :[] && node.receiver.is_a?(Prism::LocalVariableReadNode)
 
-        sources = bindings[node.receiver.name]&.value_sources
+        sources = bound(bindings, node.receiver, depth)&.value_sources
         key = Array(node.arguments&.arguments)
         return unless sources && key.one? && key.first.is_a?(Prism::SymbolNode)
 
@@ -371,9 +491,7 @@ module RailsAiContext
       # `slice`, `except` or a `reject { |key| key == :x }` on it. Anything else
       # on it is not read, and the expression stays as written.
       def hash_expression(node, bindings, depth)
-        if node.is_a?(Prism::LocalVariableReadNode)
-          return node.depth == depth ? bindings[node.name]&.then { |b| b if b.value_sources } : nil
-        end
+        return bound(bindings, node, depth)&.then { |b| b if b.value_sources } if node.is_a?(Prism::LocalVariableReadNode)
         return unless node.is_a?(Prism::CallNode) && node.receiver
 
         base = hash_expression(node.receiver, bindings, depth) or return
@@ -384,7 +502,7 @@ module RailsAiContext
         when :merge
           return unless arguments.one? && symbol_keyed?(arguments.first) && node.block.nil?
 
-          added = arguments.first.elements.to_h { |pair| [ key_of(pair), pair.value.slice ] }
+          added = arguments.first.elements.to_h { |pair| [ key_of(pair), emit(pair.value, bindings, Output.new, [], depth, []).text ] }
           hash_binding(UNKNOWN, sources.merge(added))
         when :slice then keys && hash_binding(UNKNOWN, sources.slice(*keys))
         when :except then keys && hash_binding(UNKNOWN, sources.except(*keys))
@@ -486,7 +604,7 @@ module RailsAiContext
       def evaluate(node, bindings, depth)
         case node
         when Prism::LocalVariableReadNode
-          node.depth == depth ? bindings.fetch(node.name, unknown).value : UNKNOWN
+          (bound(bindings, node, depth) || unknown).value
         when Prism::ParenthesesNode
           body = node.body&.body
           body&.one? ? evaluate(body.first, bindings, depth) : UNKNOWN
@@ -523,7 +641,7 @@ module RailsAiContext
         when :[] then receiver.is_a?(Hash) ? receiver[arguments.first] : UNKNOWN
         when :key?, :has_key?, :include? then receiver.is_a?(Hash) ? receiver.key?(arguments.first) : UNKNOWN
         when :many?, :any?, :empty?, :size, :length
-          return UNKNOWN unless receiver.is_a?(Hash) && arguments.empty? && !node.block
+          return UNKNOWN unless (receiver.is_a?(Hash) || receiver.is_a?(Array)) && arguments.empty? && !node.block
 
           node.name == :many? ? receiver.size > 1 : receiver.public_send(node.name)
         when :fetch
