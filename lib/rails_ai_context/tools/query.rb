@@ -443,24 +443,36 @@ module RailsAiContext
 
         deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
         reader, writer = IO.pipe.each(&:binmode)
-        pid = fork do
-          reader.close
-          payload = begin
-            db = SQLite3::Database.new(path, readonly: true, extensions: extensions)
-            db.busy_timeout = (timeout * 1000).to_i
-            stmt = db.prepare(sql)
-            [ :ok, stmt.columns, stmt.to_a ]
-          rescue => e
-            [ :error, "#{e.class}: #{e.message}" ]
-          end
-          bytes = Marshal.dump(payload)
-          writer.write([ bytes.bytesize ].pack("Q>"), bytes)
-        ensure
-          exit!(0)
-        end
+        pid = fork { answer_in_child(reader, writer, path, sql, timeout, extensions) }
         writer.close
+        read_child_result(reader, deadline)
+      ensure
+        # Also reached in a child whose fork hooks raised: it must not carry on as a second server.
+        exit!(1) if parent && Process.pid != parent
+        reader&.close
+        writer&.close
+        reap_child(pid) if pid
+      end
 
-        # Read by length, not to EOF: any other process forked meanwhile holds a copy of the writer.
+      # Writes the length-prefixed result and exits without the parent's at_exit hooks.
+      private_class_method def self.answer_in_child(reader, writer, path, sql, timeout, extensions)
+        reader.close
+        payload = begin
+          db = SQLite3::Database.new(path, readonly: true, extensions: extensions)
+          db.busy_timeout = (timeout * 1000).to_i
+          stmt = db.prepare(sql)
+          [ :ok, stmt.columns, stmt.to_a ]
+        rescue => e
+          [ :error, "#{e.class}: #{e.message}" ]
+        end
+        bytes = Marshal.dump(payload)
+        writer.write([ bytes.bytesize ].pack("Q>"), bytes)
+      ensure
+        exit!(0)
+      end
+
+      # Read by length, not to EOF: any other process forked meanwhile holds a copy of the writer.
+      private_class_method def self.read_child_result(reader, deadline)
         size = read_before(reader, 8, deadline).unpack1("Q>")
         status, *rest = begin
           raise ArgumentError, "result length out of range" if size > SQLITE_MAX_RESULT_BYTES
@@ -472,23 +484,19 @@ module RailsAiContext
         raise ActiveRecord::StatementInvalid, rest.first if status == :error
 
         ActiveRecord::Result.new(*rest)
-      ensure
-        # Also reached in a child whose fork hooks raised: it must not carry on as a second server.
-        exit!(1) if parent && Process.pid != parent
-        reader&.close
-        writer&.close
-        if pid
-          # KILL: TERM cannot land while `step` holds the GVL, and would run inherited at_exit hooks.
-          begin
-            Process.kill(:KILL, pid)
-          rescue Errno::ESRCH
-            nil
-          end
-          begin
-            Process.wait(pid)
-          rescue Errno::ECHILD
-            nil
-          end
+      end
+
+      # KILL: TERM cannot land while `step` holds the GVL, and would run inherited at_exit hooks.
+      private_class_method def self.reap_child(pid)
+        begin
+          Process.kill(:KILL, pid)
+        rescue Errno::ESRCH
+          nil
+        end
+        begin
+          Process.wait(pid)
+        rescue Errno::ECHILD
+          nil
         end
       end
 
