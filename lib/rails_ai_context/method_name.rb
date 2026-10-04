@@ -6,7 +6,8 @@ module RailsAiContext
   module MethodName
     # Ruby's `\w` and `\s` are ASCII and ripgrep's Unicode, so every class stays
     # in ASCII; Ruby reads any other character as part of a name.
-    SPACE = "[\\t\\n\\v\\f\\r ]"
+    SPACE_CHARS = "\\t\\n\\v\\f\\r "
+    SPACE = "[#{SPACE_CHARS}]"
 
     module_function
 
@@ -20,7 +21,7 @@ module RailsAiContext
     def call_end(name)
       return "" unless name_end?(name)
 
-      "(?:[\\x00-\\x7F&&[^\\w?!=\\s]]|[!=][=~]|=>|$|#{SPACE}+(?:[^=\\t\\n\\v\\f\\r ]|=[=~>]|$))"
+      "(?:[\\x00-\\x7F&&[^\\w?!=\\s]]|[!=][=~]|=>|$|#{SPACE}+(?:[^=#{SPACE_CHARS}]|=[=~>]|$))"
     end
 
     def name_end?(name)

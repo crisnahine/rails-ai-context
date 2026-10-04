@@ -36,17 +36,17 @@ RSpec.describe RailsAiContext::MethodName do
   describe "non-ASCII text" do
     lines = [ "pingé", "obj.pingé(1)", "ping\u00A0= 1", "ping \u00A0x", "ping\u2003", "def pingé", "def ping\u00A0",
               "ping(1)", "def ping", "obj.ping = 1" ]
-    patterns = { "call" => "\\bping%s", "def" => "^def\\s+ping%s" }
+    let(:patterns) do
+      { "call" => "\\bping#{described_class.call_end('ping')}", "def" => "^def\\s+ping#{described_class.definition_end('ping')}" }
+    end
 
     def matching(lines, pattern)
       lines.each_index.select { |i| lines[i].match?(Regexp.new(pattern)) }
     end
 
     it "counts a non-ASCII character as part of the name" do
-      call = format("\\bping%s", described_class.call_end("ping"))
-      definition = format("^def\\s+ping%s", described_class.definition_end("ping"))
-      expect(matching(lines, call)).to eq([ 3, 7, 8 ])
-      expect(matching(lines, definition)).to eq([ 8 ])
+      expect(matching(lines, patterns["call"])).to eq([ 3, 7, 8 ])
+      expect(matching(lines, patterns["def"])).to eq([ 8 ])
       expect(described_class.definition_end("pingé")).not_to eq("")
     end
 
@@ -56,8 +56,7 @@ RSpec.describe RailsAiContext::MethodName do
       Dir.mktmpdir do |dir|
         file = File.join(dir, "lines.txt")
         File.write(file, "#{lines.join("\n")}\n")
-        patterns.each do |kind, shape|
-          pattern = format(shape, kind == "call" ? described_class.call_end("ping") : described_class.definition_end("ping"))
+        patterns.each do |kind, pattern|
           out, = Open3.capture2("rg", "--no-filename", "-n", "-e", pattern, file)
           expect(out.lines.map { |l| l.to_i - 1 }).to eq(matching(lines, pattern)), kind
         end
