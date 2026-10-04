@@ -693,6 +693,92 @@ RSpec.describe RailsAiContext::ConcernMacros do
     expect(errors.string).to include(path)
   end
 
+  # The lookup alone: providers built from parsed defs, sites from parsed calls.
+  describe "ClassCalls, the class-method lookup" do
+    let(:klass) { RailsAiContext::ConcernMacros::ClassCalls }
+
+    def node(source) = Prism.parse(source).value.statements.body.first
+
+    def definition(owner, source) = klass.definition(owner, node(source))
+
+    def provider(rank, group, at, owner, source)
+      found = definition(owner, source)
+      klass::Provider.new(rank, group, at, { found.name => found })
+    end
+
+    def lookup(sites, own, outer: 1)
+      found = sites.group_by { |_, site| site.name.to_s }.transform_values { |pairs| pairs.map(&:last) }
+      ranks = sites.to_h { |rank, site| [ site.__id__, rank ] }
+      klass.new(-> { klass::Read.new(found, ranks, own, outer) })
+    end
+
+    def placed(calls, definer, line, site = nil)
+      calls.placed({}, definer, [ line ], site).map { |entry| [ entry[:rank], entry[:chain_at] ] }
+    end
+
+    it "runs the class's own def, then what its super reaches, at the super" do
+      call = node("\n\n\n\n\n\n\nstamp")
+      calls = lookup([ [ 0, call ] ], [ provider(0, 1, [ 3, 0 ], 0, "\n\ndef self.stamp\n  super\n  own\nend") ])
+      calls.add(0, {}, {}, [ provider(0, 2, [ 2, 0 ], "Stampy", "def stamp\n  s\nend") ])
+
+      expect(placed(calls, [ 0, 3 ], 5)).to eq([ [ 0, [ 8, -1, 5 ] ] ])
+      expect(placed(calls, [ "Stampy", 1 ], 2)).to eq([ [ 0, [ 8, -1, 4, 2 ] ] ])
+    end
+
+    it "reaches the concern included last, and no definition that exists only after the call" do
+      call = node("\n\n\n\nstamp")
+      own = [ provider(0, 1, [ 9, 0 ], 0, "def self.stamp\nend") ]
+      calls = lookup([ [ 0, call ] ], own)
+      calls.add(0, {}, {}, [ provider(0, 2, [ 2, 0 ], "Stampy", "def stamp\nend"), provider(0, 2, [ 3, 0 ], "Stampy2", "def stamp\nend") ])
+
+      expect(placed(calls, [ "Stampy2", 1 ], 1)).to eq([ [ 0, [ 5, -1, 1 ] ] ])
+      expect(placed(calls, [ "Stampy", 1 ], 1)).to eq([])
+      expect(placed(calls, [ 0, 1 ], 1)).to eq([])
+    end
+
+    it "resolves a base's call from the base outward, never into the child" do
+      base_call = node("\n\nstamp")
+      calls = lookup([ [ 1, base_call ] ], [ provider(1, 1, [ 1, 0 ], 1, "def self.stamp\nend") ], outer: 2)
+      calls.add(0, {}, {}, [ provider(0, 2, [ 2, 0 ], "Stampy", "def stamp\nend") ])
+      calls.add(1, {}, {}, [])
+
+      expect(placed(calls, [ 1, 1 ], 1)).to eq([ [ 1, [ 3, -1, 1 ] ] ])
+      expect(placed(calls, [ "Stampy", 1 ], 1)).to eq([])
+    end
+
+    it "runs a Concern's block once in the outermost class including it, and a plain hook in each" do
+      block_call = node("loud!")
+      hook_call = node("base.loud!")
+      calls = lookup([], [ provider(0, 1, [ 1, 0 ], 0, "def self.loud!\nend"), provider(1, 1, [ 1, 0 ], 1, "def self.loud!\nend") ], outer: 2)
+      calls.add(0, { "loud!" => [ block_call, hook_call ] }, { block_call.__id__ => [ [ 4, 0 ], false ], hook_call.__id__ => [ [ 6, 1 ], true ] }, [])
+      calls.add(1, { "loud!" => [ block_call, hook_call ] }, { block_call.__id__ => [ [ 2, 0 ], false ], hook_call.__id__ => [ [ 3, 1 ], true ] }, [])
+
+      expect(placed(calls, [ 1, 1 ], 1, block_call)).to eq([ [ 1, [ 2, 0, 1 ] ] ])
+      expect(placed(calls, [ 0, 1 ], 1, block_call)).to eq([])
+      expect(placed(calls, [ 0, 1 ], 1, hook_call)).to eq([ [ 0, [ 6, 1, 1 ] ] ])
+      expect(placed(calls, [ 1, 1 ], 1, hook_call)).to eq([ [ 1, [ 3, 1, 1 ] ] ])
+    end
+
+    it "makes a reached body's calls from where its own call stands" do
+      call = node("\n\n\n\n\nsetup")
+      own = [ provider(0, 1, [ 1, 0 ], 0, "def self.setup\n  loud!\nend"), provider(0, 1, [ 4, 0 ], 0, "\n\n\ndef self.loud!\nend") ]
+      calls = lookup([ [ 0, call ] ], own)
+
+      expect(calls.call.keys).to contain_exactly("setup", "loud!")
+      expect(placed(calls, [ 0, 4 ], 4)).to eq([ [ 0, [ 6, -1, 2, 4 ] ] ])
+    end
+
+    it "places a call made in a body a super reached after what ran before that super" do
+      call = node("\n\n\n\n\n\n\nstamp")
+      own = [ provider(0, 1, [ 3, 0 ], 0, "\n\ndef self.stamp\n  own\n  super\nend"), provider(0, 1, [ 2, 0 ], 0, "\n" * 19 + "def self.loud!\nend") ]
+      calls = lookup([ [ 0, call ] ], own)
+      calls.add(0, {}, {}, [ provider(0, 2, [ 2, 0 ], "Stampy", "def stamp\n  loud!\nend") ])
+
+      expect(placed(calls, [ 0, 3 ], 4)).to eq([ [ 0, [ 8, -1, 4 ] ] ])
+      expect(placed(calls, [ 0, 20 ], 21)).to eq([ [ 0, [ 8, -1, 5, 2, 21 ] ] ])
+    end
+  end
+
   it "exposes collect and the body lookup its classes share" do
     expect(described_class.singleton_methods(false)).to contain_exactly(:collect, :enclosing)
   end

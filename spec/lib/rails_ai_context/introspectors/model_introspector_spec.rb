@@ -3118,6 +3118,223 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    describe "a class-body call resolved the way Ruby resolves it" do
+      def stampy(dir)
+        write_model(dir, "Concerns::Stampy", <<~RUBY)
+          module Stampy
+            extend ActiveSupport::Concern
+            class_methods do
+              def stamp
+                before_save :s
+              end
+            end
+          end
+        RUBY
+      end
+
+      def static_save(dir, kind = "before_save")
+        described_class.new(RailsAiContext::StaticApp.new(dir)).static_call.transform_values { |m| m.dig(:callbacks, kind) }
+      end
+
+      # Runtime: SuperOver :first, :s, :own; Qchild :b1, :c1; Rchild :s, :c; SupChild :gb, :sc;
+      # TwoSuper :first, :pre, :s, :s2; RelaySuper :a, :s, :own, :b.
+      it "runs what a super in the reached method reaches, at the super" do
+        Dir.mktmpdir do |dir|
+          stampy(dir)
+          write_model(dir, "Concerns::StampSup", "module StampSup\n  extend ActiveSupport::Concern\n  class_methods do\n    def stamp\n      before_save :pre\n      super\n      before_save :s2\n    end\n  end\nend\n")
+          write_model(dir, "SuperOver", "class SuperOver < ApplicationRecord\n  include Stampy\n  def self.stamp\n    super\n    before_save :own\n  end\n  before_save :first\n  stamp\nend\n")
+          write_model(dir, "Qbase", "class Qbase < ApplicationRecord\n  def self.stamp\n    before_save :b1\n  end\nend\n")
+          write_model(dir, "Qchild", "class Qchild < Qbase\n  def self.stamp\n    super\n    before_save :c1\n  end\n  stamp\nend\n")
+          write_model(dir, "Rbase", "class Rbase < ApplicationRecord\n  include Stampy\nend\n")
+          write_model(dir, "Rchild", "class Rchild < Rbase\n  def self.stamp\n    super\n    before_save :c\n  end\n  stamp\nend\n")
+          write_model(dir, "Gbase", "class Gbase < ApplicationRecord\n  def self.setup\n    before_save :gb\n  end\nend\n")
+          write_model(dir, "SupChild", "class SupChild < Gbase\n  def self.setup\n    super\n    before_save :sc\n  end\n  setup\nend\n")
+          write_model(dir, "TwoSuper", "class TwoSuper < ApplicationRecord\n  include Stampy\n  include StampSup\n  before_save :first\n  stamp\nend\n")
+          write_model(dir, "RelaySuper", <<~RUBY)
+            class RelaySuper < ApplicationRecord
+              include Stampy
+              def self.setup
+                before_save :a
+                stamp
+                before_save :b
+              end
+              def self.stamp
+                super
+                before_save :own
+              end
+              setup
+            end
+          RUBY
+
+          static = static_save(dir)
+
+          expect(static.slice("SuperOver", "Qchild", "Rchild", "SupChild", "TwoSuper", "RelaySuper")).to eq(
+            "SuperOver" => %w[first s own], "Qchild" => %w[b1 c1], "Rchild" => %w[s c], "SupChild" => %w[gb sc],
+            "TwoSuper" => %w[first pre s s2], "RelaySuper" => %w[a s own b]
+          )
+          %w[SuperOver TwoSuper RelaySuper].each { |name| expect(booted_callbacks(dir, name)).to eq("before_save" => static[name]) }
+        end
+      end
+
+      # Runtime: TwoConc :first, :s2; Xchild :first, :s; Zchild :first, :sc; Kchild :b, :c;
+      # ReincChild :pre, :s, :s2; LateDef :first, :s, :own; PreOver :first, :p.
+      it "runs the nearest definition: own, then concerns latest first, then a base's, as of the call" do
+        Dir.mktmpdir do |dir|
+          stampy(dir)
+          write_model(dir, "Concerns::Stampy2", "module Stampy2\n  extend ActiveSupport::Concern\n  class_methods do\n    def stamp\n      before_save :s2\n    end\n  end\nend\n")
+          write_model(dir, "Concerns::StampSup", "module StampSup\n  extend ActiveSupport::Concern\n  class_methods do\n    def stamp\n      before_save :pre\n      super\n      before_save :s2\n    end\n  end\nend\n")
+          write_model(dir, "Concerns::PreStamp", "module PreStamp\n  extend ActiveSupport::Concern\n  class_methods do\n    def stamp\n      before_save :p\n    end\n  end\nend\n")
+          write_model(dir, "Concerns::Setty", "module Setty\n  extend ActiveSupport::Concern\n  class_methods do\n    def setup\n      before_save :sb\n    end\n  end\nend\n")
+          write_model(dir, "Concerns::Setty2", "module Setty2\n  extend ActiveSupport::Concern\n  class_methods do\n    def setup\n      before_save :sc\n    end\n  end\nend\n")
+          write_model(dir, "TwoConc", "class TwoConc < ApplicationRecord\n  include Stampy\n  include Stampy2\n  before_save :first\n  stamp\nend\n")
+          write_model(dir, "Xbase", "class Xbase < ApplicationRecord\n  def self.stamp\n    before_save :xb\n  end\nend\n")
+          write_model(dir, "Xchild", "class Xchild < Xbase\n  include Stampy\n  before_save :first\n  stamp\nend\n")
+          write_model(dir, "Zbase", "class Zbase < ApplicationRecord\n  include Setty\nend\n")
+          write_model(dir, "Zchild", "class Zchild < Zbase\n  include Setty2\n  before_save :first\n  setup\nend\n")
+          write_model(dir, "Kbase", "class Kbase < ApplicationRecord\n  def self.stamp\n    before_save :b\n  end\n  stamp\nend\n")
+          write_model(dir, "Kchild", "class Kchild < Kbase\n  include Stampy\n  before_save :c\nend\n")
+          write_model(dir, "ReincBase", "class ReincBase < ApplicationRecord\n  include Stampy\nend\n")
+          write_model(dir, "ReincChild", "class ReincChild < ReincBase\n  include StampSup\n  include Stampy\n  stamp\nend\n")
+          write_model(dir, "LateDef", "class LateDef < ApplicationRecord\n  include Stampy\n  before_save :first\n  stamp\n  def self.stamp\n    before_save :own\n  end\n  stamp\nend\n")
+          write_model(dir, "PreOver", "class PreOver < ApplicationRecord\n  def self.stamp\n    before_save :own\n  end\n  prepend PreStamp\n  before_save :first\n  stamp\nend\n")
+
+          static = static_save(dir)
+
+          expect(static.slice("TwoConc", "Xchild", "Zchild", "Kchild", "ReincChild", "LateDef", "PreOver")).to eq(
+            "TwoConc" => %w[first s2], "Xchild" => %w[first s], "Zchild" => %w[first sc], "Kchild" => %w[b c],
+            "ReincChild" => %w[pre s s2], "LateDef" => %w[first s own], "PreOver" => %w[first p]
+          )
+          %w[TwoConc LateDef PreOver].each { |name| expect(booted_callbacks(dir, name)).to eq("before_save" => static[name]) }
+        end
+      end
+
+      # Runtime: AliasSing :first, :x; ExtNested :first, :t; ExtNested2 :first, :e; ExtChild :c, :t.
+      it "reads an alias in class << self and a module the class extends, nested in its file or not" do
+        Dir.mktmpdir do |dir|
+          write_model(dir, "Concerns::TrExt", "module TrExt\n  def track_it\n    before_save :t\n  end\nend\n")
+          write_model(dir, "AliasSing", "class AliasSing < ApplicationRecord\n  class << self\n    def loud!\n      before_save :x\n    end\n    alias_method :loud2, :loud!\n  end\n  before_save :first\n  loud2\nend\n")
+          write_model(dir, "ExtNested", "class ExtNested < ApplicationRecord\n  module Tr\n    def track_it\n      before_save :t\n    end\n  end\n  extend Tr\n  before_save :first\n  track_it\nend\n")
+          write_model(dir, "ExtNested2", "class ExtNested2 < ApplicationRecord\n  module Tr\n    def self.extended(base)\n      base.before_save :e\n    end\n  end\n  before_save :first\n  extend Tr\nend\n")
+          write_model(dir, "ExtBase", "class ExtBase < ApplicationRecord\n  extend TrExt\n  track_it\nend\n")
+          write_model(dir, "ExtChild", "class ExtChild < ExtBase\n  before_save :c\n  track_it\nend\n")
+
+          static = static_save(dir)
+
+          expect(static.slice("AliasSing", "ExtNested", "ExtNested2", "ExtChild")).to eq(
+            "AliasSing" => %w[first x], "ExtNested" => %w[first t], "ExtNested2" => %w[first e], "ExtChild" => %w[c t]
+          )
+          %w[AliasSing ExtNested ExtNested2].each { |name| expect(booted_callbacks(dir, name)).to eq("before_save" => static[name]) }
+        end
+      end
+
+      # Runtime: T3child and T4child :bl, :tb, :c (Hooky's block ran once, in T3base);
+      # HkC :hb, :hc (a plain hook runs again, resolved for the child).
+      it "runs a Concern's block once in the first class including it, and a plain hook on every include" do
+        Dir.mktmpdir do |dir|
+          write_model(dir, "Concerns::Hooky", "module Hooky\n  extend ActiveSupport::Concern\n  included do\n    loud!\n  end\nend\n")
+          write_model(dir, "Concerns::Hk", "module Hk\n  def self.included(base)\n    base.loud!\n  end\nend\n")
+          write_model(dir, "T3base", "class T3base < ApplicationRecord\n  def self.loud!\n    before_save :bl\n  end\n  include Hooky\n  before_save :tb\nend\n")
+          write_model(dir, "T3child", "class T3child < T3base\n  def self.loud!\n    before_save :track\n  end\n  include Hooky\n  before_save :c\nend\n")
+          write_model(dir, "T4child", "class T4child < T3base\n  include Hooky\n  def self.loud!\n    before_save :track\n  end\n  before_save :c\nend\n")
+          write_model(dir, "HkB", "class HkB < ApplicationRecord\n  def self.loud!\n    before_save :hb\n  end\n  include Hk\nend\n")
+          write_model(dir, "HkC", "class HkC < HkB\n  def self.loud!\n    before_save :hc\n  end\n  include Hk\nend\n")
+
+          static = static_save(dir)
+
+          expect(static.slice("T3child", "T4child", "HkC")).to eq("T3child" => %w[bl tb c], "T4child" => %w[bl tb c], "HkC" => %w[hb hc])
+        end
+      end
+
+      # Runtime: EvChild :own_t (the base's own method over the every-model one);
+      # Guest2 runs after_save :persist, :own (InstM joins where Acc2's Avi block calls acts_as_inst).
+      it "reads a module every model has as the outermost definition, and a mixin a called method includes at the call" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+          File.write(File.join(dir, "config", "initializers", "tracking.rb"), <<~RUBY)
+            module Tracking
+              def self.included(base)
+                base.extend ClassMethods
+              end
+
+              module ClassMethods
+                def acts_as_tracked
+                  before_save :tracked
+                end
+
+                def acts_as_inst
+                  send :include, InstM
+                end
+              end
+
+              module InstM
+                extend ActiveSupport::Concern
+                included do
+                  after_save :persist
+                end
+              end
+            end
+            ActiveRecord::Base.include Tracking
+          RUBY
+          write_model(dir, "Concerns::Avi", "module Avi\n  extend ActiveSupport::Concern\n  included do\n    acts_as_inst\n  end\nend\n")
+          write_model(dir, "EvBase", "class EvBase < ApplicationRecord\n  def self.acts_as_tracked\n    before_save :own_t\n  end\n  acts_as_tracked\nend\n")
+          write_model(dir, "EvChild", "class EvChild < EvBase\n  acts_as_tracked\nend\n")
+          write_model(dir, "Acc2", "class Acc2 < ApplicationRecord\n  include Avi\n  after_save :own\nend\n")
+          write_model(dir, "Guest2", "class Guest2 < Acc2\nend\n")
+
+          expect(static_save(dir).slice("EvBase", "EvChild")).to eq("EvBase" => %w[own_t], "EvChild" => %w[own_t])
+          expect(static_save(dir, "after_save").slice("Acc2", "Guest2")).to eq("Acc2" => %w[persist own], "Guest2" => %w[persist own])
+        end
+      end
+
+      # Runtime: OChild :persist, :own, :c; TwiceInc :a, :persist, :b; LateInc :own, :persist.
+      it "runs a Concern a called method includes at the first call only, and a class method's include where it is called" do
+        Dir.mktmpdir do |dir|
+          write_model(dir, "Concerns::InstM", "module InstM\n  extend ActiveSupport::Concern\n  included do\n    before_save :persist\n  end\nend\n")
+          write_model(dir, "Concerns::Incl", "module Incl\n  extend ActiveSupport::Concern\n  class_methods do\n    def acts_as_inst\n      include InstM\n    end\n  end\nend\n")
+          write_model(dir, "OBase", "class OBase < ApplicationRecord\n  include Incl\n  acts_as_inst\n  before_save :own\nend\n")
+          write_model(dir, "OChild", "class OChild < OBase\n  acts_as_inst\n  before_save :c\nend\n")
+          write_model(dir, "TwiceInc", "class TwiceInc < ApplicationRecord\n  include Incl\n  before_save :a\n  acts_as_inst\n  before_save :b\n  acts_as_inst\nend\n")
+          write_model(dir, "LateInc", "class LateInc < ApplicationRecord\n  def self.setup\n    include InstM\n  end\n  before_save :own\n  setup\nend\n")
+
+          expect(static_save(dir).slice("OChild", "TwiceInc", "LateInc")).to eq(
+            "OChild" => %w[persist own c], "TwiceInc" => %w[a persist b], "LateInc" => %w[own persist]
+          )
+          %w[TwiceInc LateInc].each { |name| expect(booted_callbacks(dir, name)).to eq("before_save" => static_save(dir)[name]) }
+        end
+      end
+
+      # Runtime: one presence validator on title, and callbacks :first, :inner, :outer.
+      it "reads a module nested in the model's file once when another nested module includes it" do
+        Dir.mktmpdir do |dir|
+          write_model(dir, "NestDeep", <<~RUBY)
+            class NestDeep < ApplicationRecord
+              module Inner
+                extend ActiveSupport::Concern
+                included do
+                  validates :title, presence: true
+                  before_save :inner
+                end
+              end
+              module Outer
+                extend ActiveSupport::Concern
+                include Inner
+                included do
+                  before_save :outer
+                end
+              end
+              before_save :first
+              include Outer
+            end
+          RUBY
+
+          model = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["NestDeep"]
+
+          expect(model[:callbacks]).to eq("before_save" => %w[first inner outer])
+          expect(model[:validations].map { |v| v[:kind] }).to eq(%w[presence])
+        end
+      end
+    end
+
     # A module mixed into every model is reached from a base's call as from the
     # class's own: OpenProject's User calls acts_as_customizable for its subclasses.
     it "keeps what a base's call declares through a module every model has" do
