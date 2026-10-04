@@ -985,9 +985,10 @@ module RailsAiContext
         Array(callbacks).each_with_object({}) do |cb, hash|
           next unless cb.is_a?(Hash) && cb[:type]
 
-          # A plain after_commit carries the events its one declaration names.
-          keys = cb[:type].to_s == "after_commit" ? CONDITION_KEYS + [ :on ] : CONDITION_KEYS
-          conditions = (cb[:options] || {}).slice(*keys)
+          options = cb[:options] || {}
+          conditions = options.select { |key, _| CONDITION_KEYS.include?(key) }
+          # `after_commit_on_create` already names its event.
+          conditions = { on: options[:on] }.merge(conditions) if options.key?(:on) && !cb[:type].to_s.start_with?("after_commit_on_")
           (hash[cb[:type].to_s] ||= []) << (conditions.empty? ? nil : conditions)
         end.reject { |_, list| list.none? }
       end
@@ -1566,7 +1567,7 @@ module RailsAiContext
         # callbacks unless they are one line of one file read twice.
         merged[:callbacks] = dedup(merged[:callbacks]) do |c|
           block = c[:method].to_s == Listeners::CallbacksListener::INLINE_BLOCK
-          [ c[:type], c[:method].to_s, (block ? [ c[:from_concern], c[:location] ] : nil) ]
+          [ Listeners::CallbacksListener.chain_key(c[:type]), c[:method].to_s, (block ? [ c[:from_concern], c[:location] ] : nil) ]
         end
         # One source line read twice is still one declaration: a concern the
         # model and one of its bases both include is walked once per class, and

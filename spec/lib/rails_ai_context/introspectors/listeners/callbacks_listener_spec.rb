@@ -26,6 +26,24 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::CallbacksListener do
     expect(methods).to contain_exactly("normalize_email", "set_defaults")
   end
 
+  # Rails drops a duplicate only for a symbol filter; an object or block is
+  # appended again.
+  it "replaces a redeclared symbol but keeps a repeated callback object or block" do
+    results = parse_and_dispatch(<<~RUBY)
+      around_create Snowflake
+      around_create Snowflake
+      before_save { a }
+      before_save { a }
+      before_save :x, if: :a?
+      before_save :x, unless: :b?
+    RUBY
+    expect(results.map { |r| [ r[:type], r[:method], r[:options] ] }).to eq([
+      [ "around_create", "Snowflake", {} ], [ "around_create", "Snowflake", {} ],
+      [ "before_save", "[inline_block]", {} ], [ "before_save", "[inline_block]", {} ],
+      [ "before_save", "x", { unless: :b? } ]
+    ])
+  end
+
   it "includes confidence tag" do
     results = parse_and_dispatch("before_save :normalize_email")
     expect(results.first[:confidence]).to eq("[VERIFIED]")

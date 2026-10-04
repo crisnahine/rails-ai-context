@@ -2648,22 +2648,46 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[class_name][:callbacks]
     end
 
-    # A lookup keyed by name alone gave both declarations the condition of
-    # whichever was read last, so the first one read as running under the
-    # second's condition.
-    it "records one condition per declaration when a method is declared twice" do
+    # Rails keeps one entry per kind and method: the later declaration removes
+    # the earlier one and runs at its own position, under its own condition.
+    it "keeps only the later declaration of a method declared twice for one kind" do
       Dir.mktmpdir do |dir|
         write_model(dir, "Order", <<~RUBY)
           class Order < ApplicationRecord
-            after_save :sync, if: :a?
-            after_save :sync, if: :b?
+            before_save :sync, if: :a?
+            before_save :stamp
+            before_save :sync, unless: -> { b? }
+            after_save :sync
+            after_create_commit :notify
+            after_update_commit :notify
           end
         RUBY
 
         details = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Order"]
 
-        expect(details[:callbacks]["after_save"]).to eq(%w[sync sync])
-        expect(details[:callback_conditions]["after_save"]).to eq([ { if: :a? }, { if: :b? } ])
+        expect(details[:callbacks]).to eq(
+          "before_save" => %w[stamp sync], "after_save" => %w[sync], "after_update_commit" => %w[notify]
+        )
+        expect(details[:callback_conditions]).to eq("before_save" => [ nil, { unless: "-> { b? }" } ])
+        expect(booted_callbacks(dir, "Order")).to eq(details[:callbacks])
+      end
+    end
+
+    it "keeps on: as a condition wherever the type does not already say it" do
+      Dir.mktmpdir do |dir|
+        write_model(dir, "Order", <<~RUBY)
+          class Order < ApplicationRecord
+            before_validation :prep, on: :create
+            after_validation :prep, unless: :draft?, on: [:create, :update], if: :a?
+            after_commit :sync, on: :create
+          end
+        RUBY
+
+        conditions = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Order"][:callback_conditions]
+
+        expect(conditions["before_validation"]).to eq([ { on: :create } ])
+        expect(conditions["after_validation"].first.to_a).to eq([ [ :on, %i[create update] ], [ :unless, :draft? ], [ :if, :a? ] ])
+        expect(conditions).not_to have_key("after_commit_on_create")
       end
     end
 
