@@ -23,8 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the GVL while a statement runs, so no in-process limit exists. The child
   takes the app's `extensions:` and waits on a locked database as the app
   would. An in-memory database, a platform without `fork`, or a function only
-  the app's own connection has runs in-process, and the answer says it ran
-  without a time limit. (#256)
+  the app's own connection has runs in-process; the table and EXPLAIN answers
+  then say it ran without a time limit, and CSV output stays plain data. (#256)
 - **`rails_get_callbacks` lists callbacks in the order Rails runs them**:
   base classes first, a concern's callbacks where its `include` line stands,
   then the model's own, with a `prepend: true` callback at the front.

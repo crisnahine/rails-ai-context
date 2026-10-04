@@ -546,7 +546,7 @@ module RailsAiContext
         lines << parsed[:raw]
         lines << "```"
 
-        text_response(lines.join("\n"))
+        text_response(lines.join("\n") + (result.is_a?(UnboundedResult) ? UNBOUNDED_SQLITE_NOTE : ""))
       rescue ActiveRecord::StatementInvalid => e
         text_response("EXPLAIN failed: #{clean_error_message(e.message)}")
       end

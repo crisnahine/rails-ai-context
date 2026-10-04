@@ -66,7 +66,7 @@ After validation, the query runs inside a transaction:
 |:---------|:----------|
 | PostgreSQL | `SET TRANSACTION READ ONLY` + `SET LOCAL statement_timeout` |
 | MySQL | `SET TRANSACTION READ ONLY` + `MAX_EXECUTION_TIME` hint |
-| SQLite | A child process opens its own read-only connection to the database file and is killed at the timeout. An in-memory database, or a platform without `fork`, runs in-process under `PRAGMA query_only = ON` with no time limit, and the answer says so. |
+| SQLite | A child process opens its own read-only connection to the database file and is killed at the timeout. An in-memory database, a platform without `fork`, or a query using a function only the app's own connection has runs in-process under `PRAGMA query_only = ON` with no time limit, and the table and EXPLAIN answers say so; CSV output stays plain data. |
 
 All queries execute inside a transaction, then rollback (even if they could write, they can't).
 

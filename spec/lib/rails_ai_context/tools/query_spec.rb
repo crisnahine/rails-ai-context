@@ -620,6 +620,15 @@ it "still explains a database that does not exist" do
       expect(text).to include("without a time limit")
     end
 
+    it "says so for EXPLAIN too, and keeps CSV free of it" do
+      explain = described_class.call(sql: "SELECT 1 AS test", explain: true).content.first[:text]
+      csv = described_class.call(sql: "SELECT 1 AS test", format: "csv").content.first[:text]
+
+      expect(explain).to include("EXPLAIN Analysis")
+      expect(explain).to include("without a time limit")
+      expect(csv).not_to include("without a time limit")
+    end
+
     it "resets PRAGMA query_only after query execution" do
       conn = ActiveRecord::Base.connection
 
