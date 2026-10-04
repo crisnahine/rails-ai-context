@@ -158,6 +158,9 @@ RSpec.describe RailsAiContext::SafePath do
       include_examples "allows", "docker/.env.template"
       include_examples "allows", ".env.production.dist"
       include_examples "blocks", ".env.example.local"
+      # A path pattern means the whole directory, placeholders included.
+      include_examples "blocks", ".ssh/id_rsa.template"
+      include_examples "blocks", ".ssh/config.dist"
     end
 
     describe "connection and credential files" do
@@ -215,10 +218,11 @@ RSpec.describe RailsAiContext::SafePath do
         expect(described_class.sensitive?("forbidden/secret.txt")).to be true
       end
 
-      it "blocks a placeholder that a pattern names exactly, and not one a glob only matches" do
-        RailsAiContext.configuration.sensitive_patterns = %w[.env.example forbidden/*]
+      it "blocks a placeholder a pattern names exactly or a path pattern covers, not one a basename glob matches" do
+        RailsAiContext.configuration.sensitive_patterns = %w[.env.example .env.* forbidden/*]
         expect(described_class.sensitive?(".env.example")).to be true
-        expect(described_class.sensitive?("forbidden/keys.sample")).to be false
+        expect(described_class.sensitive?("forbidden/keys.sample")).to be true
+        expect(described_class.sensitive?(".env.sample")).to be false
       end
 
       it "reads a brace in a pattern as a literal character, as the match does" do

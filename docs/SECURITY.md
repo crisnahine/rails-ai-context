@@ -117,7 +117,11 @@ config/mongoid.yml config/redis.yml
 .ssh/* .aws/credentials .aws/config .netrc .pgpass .my.cnf
 ```
 
-A placeholder whose name ends in `.example`, `.sample`, `.template` or `.dist` (`.env.example`) is committed to be read, so a glob that matches it does not block it. A pattern that names it exactly, with no glob characters, still does.
+A placeholder whose name ends in `.example`, `.sample`, `.template` or
+`.dist` (`.env.example`) is committed to be read, so a basename glob such as
+`.env.*` does not block it. A pattern that names it exactly, with no glob
+characters, still does, and so does a path pattern (one with a `/`, such as
+`.ssh/*`), which covers everything under it.
 
 ### AI context file exclusions
 

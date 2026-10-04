@@ -59,8 +59,8 @@ module RailsAiContext
 
     PLACEHOLDER_SUFFIXES = %w[.example .sample .template .dist].freeze
 
-    # A placeholder (.env.example) is committed to be read, so a glob that
-    # happens to match it does not block it; a pattern naming it exactly does.
+    # A placeholder (.env.example) is committed to be read, so a basename glob
+    # does not block it; a path pattern (`.ssh/*`) or its exact name does.
     def sensitive?(relative)
       path = relative.to_s
       basename = File.basename(path)
@@ -72,7 +72,9 @@ module RailsAiContext
       return true unless PLACEHOLDER_SUFFIXES.any? { |suffix| basename.downcase.end_with?(suffix) }
 
       # Without FNM_EXTGLOB a brace is literal, so only these make a pattern a glob.
-      matching.any? { |pattern| !pattern.match?(/[*?\[\\]/) && (pattern.casecmp?(path) || pattern.casecmp?(basename)) }
+      matching.any? do |pattern|
+        pattern.include?("/") || (!pattern.match?(/[*?\[\\]/) && (pattern.casecmp?(path) || pattern.casecmp?(basename)))
+      end
     end
 
     def contained?(real, real_dir)

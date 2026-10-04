@@ -14,11 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rails_get_edit_context` and the other file tools, although the default
   `.env.*` pattern matches it, and `doctor` no longer lists it as unread or
   says to gitignore it. A `sensitive_patterns` entry that names the file
-  exactly, with no glob characters, still blocks it. Redaction treats the four
-  suffixes alike. `rails_search_code` now drops sensitive files from ripgrep's
-  output where it used to exclude them by glob, so a sensitive file ripgrep
-  cannot open is not reported as an error and does not send a no-match search
-  through the Ruby fallback. (#267)
+  exactly, with no glob characters, still blocks it, and so does a path
+  pattern with a `/` (`.ssh/*` keeps `.ssh/id_rsa.template` blocked).
+  Redaction treats the four suffixes alike. `rails_search_code` now drops
+  sensitive files from ripgrep's output where it used to exclude them by glob,
+  so a sensitive file ripgrep cannot open is not reported as an error and does
+  not send a no-match search through the Ruby fallback. (#267)
 - **`rails_query` on a SQLite file stops at `query_timeout`.** The query runs
   in a child process with its own read-only connection, which is stopped at
   the deadline. sqlite3 2.x's `statement_timeout=` interrupts any statement of
