@@ -1565,6 +1565,31 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # ActiveModel runs before_save :z, :x, :y here and after_save :a, :b;
+    # Mongoid's after_commit, set without prepend, runs :c2, :c1.
+    it "lists a document's callbacks in run order, prepend: true first" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "customer.rb"), <<~RUBY)
+          class Customer
+            include Mongoid::Document
+            before_save :x, prepend: true
+            before_save :y
+            before_save :z, prepend: true
+            after_save :a
+            after_save :b
+            after_commit :c1
+            after_commit :c2
+          end
+        RUBY
+
+        customer = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Customer"]
+        expect(customer[:callbacks]).to eq("before_save" => %w[z x y], "after_save" => %w[a b], "after_commit" => %w[c2 c1])
+      end
+    end
+
     it "reads every embed kind and the store_in collection" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))

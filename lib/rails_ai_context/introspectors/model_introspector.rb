@@ -1883,7 +1883,8 @@ module RailsAiContext
           methods: Listeners::MethodsListener
         })
         macros = data[:mongoid] || []
-        callbacks = callback_chain(Array(data[:callbacks]))
+        # Mongoid sets after_commit without prepend, as Rails 7.0 does, so it runs last declared first.
+        callbacks = run_order(callback_chain(Array(data[:callbacks])), false)
         details = {
           confidence: Confidence::STATIC,
           mongoid: true,
