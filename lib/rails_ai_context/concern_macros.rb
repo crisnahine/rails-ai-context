@@ -696,9 +696,10 @@ module RailsAiContext
 
       def own_node(tree, name)
         short = name.to_s.split("::").last.to_s
-        Introspectors::AstWalk.each(tree).find do |node|
+        found = Introspectors::AstWalk.each(tree).select do |node|
           constant_node?(node) && node.constant_path.slice.split("::").last.casecmp?(short)
         end
+        found.find { |node| !Introspectors::DeclaredConstant.stub?(node) } || found.first
       end
 
       def own_and_nested_ranges(tree, name)

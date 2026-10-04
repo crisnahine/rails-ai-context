@@ -64,8 +64,10 @@ RSpec.describe RailsAiContext::ConcernMacros do
   # Ruby resolves `prepend Wrapper` inside DryRunnable from the enclosing
   # namespace outward, so it names DryRunnable::Wrapper, which lives in the
   # concern's own file. Looking for a file of its own called it unread.
+  # An empty stub of the nested module above its definition is not that definition.
   it "reads a module the concern declares inside itself and mixes in" do
     File.write(File.join(concern_dir, "dry_runnable.rb"), <<~RUBY)
+      module DryRunnable; module Wrapper; end; end
       module DryRunnable
         extend ActiveSupport::Concern
 

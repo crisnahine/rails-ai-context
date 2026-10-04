@@ -3456,48 +3456,51 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
       # Runtime: Attachment runs after_save :first, :save_journals, :last. The macro's private helper
       # includes SaveHooks, which a glob require loads from beside the plugin's own file.
+      # An empty namespace stub before the module, on one line or several, is not its definition.
       it "follows a called method's call to a private helper, and the mixin that helper includes" do
-        Dir.mktmpdir do |dir|
-          plugin = File.join(dir, "lib", "plugins", "aaj")
-          FileUtils.mkdir_p(File.join(plugin, "lib", "acts", "journalized"))
-          File.write(File.join(plugin, "init.rb"), "require File.expand_path('lib/acts_as_journalized', __dir__)\nActiveRecord::Base.include(Acts::Journalized)\n")
-          File.write(File.join(plugin, "lib", "acts_as_journalized.rb"), <<~RUBY)
-            Dir[File.expand_path("acts/journalized/*.rb", __dir__)].each { |f| require f }
-            module Acts
-              module Journalized
-                def self.included(base)
-                  base.extend ClassMethods
-                end
-
-                module ClassMethods
-                  def acts_as_journalized
-                    include_aaj_modules
+        [ "", "module Acts; module Journalized; end; end\n", "module Acts\n  module Journalized\n  end\nend\n" ].each do |stub|
+          Dir.mktmpdir do |dir|
+            plugin = File.join(dir, "lib", "plugins", "aaj")
+            FileUtils.mkdir_p(File.join(plugin, "lib", "acts", "journalized"))
+            File.write(File.join(plugin, "init.rb"), "require File.expand_path('lib/acts_as_journalized', __dir__)\nActiveRecord::Base.include(Acts::Journalized)\n")
+            File.write(File.join(plugin, "lib", "acts_as_journalized.rb"), <<~RUBY)
+              Dir[File.expand_path("acts/journalized/*.rb", __dir__)].each { |f| require f }
+              #{stub}module Acts
+                module Journalized
+                  def self.included(base)
+                    base.extend ClassMethods
                   end
 
-                  private
+                  module ClassMethods
+                    def acts_as_journalized
+                      include_aaj_modules
+                    end
 
-                  def include_aaj_modules
-                    include SaveHooks
-                  end
-                end
-              end
-            end
-          RUBY
-          File.write(File.join(plugin, "lib", "acts", "journalized", "save_hooks.rb"), <<~RUBY)
-            module Acts::Journalized
-              module SaveHooks
-                def self.included(base)
-                  base.class_eval do
-                    after_save :save_journals
+                    private
+
+                    def include_aaj_modules
+                      include SaveHooks
+                    end
                   end
                 end
               end
-            end
-          RUBY
-          write_model(dir, "Attachment", "class Attachment < ApplicationRecord\n  after_save :first\n  acts_as_journalized\n  after_save :last\nend\n")
+            RUBY
+            File.write(File.join(plugin, "lib", "acts", "journalized", "save_hooks.rb"), <<~RUBY)
+              module Acts::Journalized
+                module SaveHooks
+                  def self.included(base)
+                    base.class_eval do
+                      after_save :save_journals
+                    end
+                  end
+                end
+              end
+            RUBY
+            write_model(dir, "Attachment", "class Attachment < ApplicationRecord\n  after_save :first\n  acts_as_journalized\n  after_save :last\nend\n")
 
-          expect(static_save(dir, "after_save")["Attachment"]).to eq(%w[first save_journals last])
-          expect(booted_callbacks(dir, "Attachment")).to eq("after_save" => %w[first save_journals last])
+            expect(static_save(dir, "after_save")["Attachment"]).to eq(%w[first save_journals last])
+            expect(booted_callbacks(dir, "Attachment")).to eq("after_save" => %w[first save_journals last])
+          end
         end
       end
 

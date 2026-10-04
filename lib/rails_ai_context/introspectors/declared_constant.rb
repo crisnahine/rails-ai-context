@@ -157,17 +157,22 @@ module RailsAiContext
       # @param root [Prism::Node] the file's parse tree
       # @return [Prism::ModuleNode, nil]
       def module_node(root, name)
-        constants(root).find { |qualified, node| node.is_a?(Prism::ModuleNode) && qualified == name }&.[](1)
+        module_nodes(root)[name]
       end
 
-      # Every module the tree declares, by qualified name, the first one
-      # `module_node` would find for each: one walk for many lookups.
+      # Every module the tree declares, by qualified name: the first that is
+      # not a stub, as a namespace stub above the definition is not it.
       #
       # @return [Hash{String => Prism::ModuleNode}]
       def module_nodes(root)
         constants(root).each_with_object({}) do |(qualified, node), found|
-          found[qualified] ||= node if node.is_a?(Prism::ModuleNode)
+          found[qualified] = node if node.is_a?(Prism::ModuleNode) && (!found[qualified] || (stub?(found[qualified]) && !stub?(node)))
         end
+      end
+
+      # A class or module holding nothing but such stubs: `module Acts; module Journalized; end; end`.
+      def stub?(node)
+        Array(node.body&.compact_child_nodes).all? { |child| (child.is_a?(Prism::ModuleNode) || child.is_a?(Prism::ClassNode)) && stub?(child) }
       end
 
       # Each class and module the tree declares, in source order: its
