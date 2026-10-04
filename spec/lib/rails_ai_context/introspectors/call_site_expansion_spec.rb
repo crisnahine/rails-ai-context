@@ -296,6 +296,15 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
       end
     end
 
+    it "stays unbound when the method changes a hash inside it" do
+      [ "options[:a][:b] &&= false", "options[:a][:b] = false", "options.fetch(:a)[:b] = false" ].each do |change|
+        data = expand("def vl(*args)\n  options = args.extract_options!\n  #{change}\n  before_save :x if options[:a][:b]\nend\n",
+                      "vl :a, a: { b: true }")
+
+        expect([ Array(data[:callbacks]), data[:conditional].map { |c| c[:condition] } ]).to eq([ [], [ "options[:a][:b]" ] ])
+      end
+    end
+
     it "takes only the arguments past the other parameters" do
       method_source = "def vl(name, *args)\n  options = args.extract_options!\n  before_save :x if options[:allow_nil]\nend\n"
 
