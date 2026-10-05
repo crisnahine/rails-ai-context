@@ -295,6 +295,35 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
     end
   end
 
+  describe "fabricators and a Cucumber tree" do
+    before do
+      test_data[:fabricators] = { location: "spec/fabricators", count: 1 }
+      test_data[:fabricator_names] = { "spec/fabricators/product_fabricator.rb" => %w[product] }
+      test_data[:cucumber] = { location: "features", count: 3, step_definitions: 1 }
+    end
+
+    it "counts them in the summary" do
+      text = described_class.call(detail: "summary").content.first[:text]
+
+      expect(text).to include("- **Fabricators:** 1 file")
+      expect(text).to include("- **Cucumber:** 3 feature files")
+    end
+
+    it "names where they live at standard detail" do
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("- **Fabricators:** spec/fabricators (1 file)")
+      expect(text).to include("- **Cucumber:** features (3 feature files, 1 step definition file)")
+    end
+
+    it "lists the fabricators by name at full detail" do
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("## Fabricators\n- **spec/fabricators/product_fabricator.rb:** product")
+      expect(text).to include("- **Cucumber:** features (3 feature files, 1 step definition file)")
+    end
+  end
+
   describe ".call with unknown detail level" do
     it "reads an invalid detail level as the default, and says so" do
       text = described_class.call(detail: "invalid").content.first[:text]

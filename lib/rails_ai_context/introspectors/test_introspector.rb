@@ -19,6 +19,9 @@ module RailsAiContext
           factories: detect_factories,
           factory_names: detect_factory_names,
           computed_factories: factory_definitions[:computed].nonzero?,
+          fabricators: detect_fabricators,
+          fabricator_names: fabricator_definitions.presence,
+          cucumber: detect_cucumber,
           fixtures: detect_fixtures,
           fixture_names: detect_fixture_names,
           system_tests: detect_system_tests,
@@ -59,7 +62,78 @@ module RailsAiContext
       end
 
       def detect_factories
-        first_dir_with("*.rb", "spec/factories", "test/factories")
+        locations_with_count(factory_sources)
+      end
+
+      # factory_bot's definition_file_paths: each is loaded as `path.rb` and
+      # as a directory.
+      FACTORY_PATHS = %w[factories test/factories spec/factories].freeze
+      FABRICATOR_PATHS = %w[test/fabricators spec/fabricators].freeze
+
+      # [location, files] for every place factory_bot loads definitions
+      # from, each pack's spec/factories and test/factories included as
+      # packs-rails adds them.
+      def factory_sources
+        @factory_sources ||= (FACTORY_PATHS + pack_factory_paths).flat_map do |rel|
+          single = app_files("#{rel}.rb")
+          files = app_files(File.join(rel, "**", "*.rb"))
+          [ ([ "#{rel}.rb", single ] if single.any?), ([ rel, files ] if files.any?) ].compact
+        end
+      end
+
+      # ponytail: packs-specification's default pack_paths; a packs.yml that
+      # sets its own pack_paths is not read.
+      def pack_factory_paths
+        Dir.glob(File.join(root, "packs", "{*,*/*}", "package.yml")).sort.flat_map do |manifest|
+          pack = File.dirname(manifest)
+          next [] if Dir.glob(File.join(pack, "*.gemspec")).any?
+
+          rel = pack.delete_prefix("#{root}/")
+          [ File.join(rel, "spec/factories"), File.join(rel, "test/factories") ]
+        end
+      end
+
+      def fabricator_sources
+        @fabricator_sources ||= FABRICATOR_PATHS.filter_map do |rel|
+          files = app_files(File.join(rel, "**", "*.rb"))
+          [ rel, files ] if files.any?
+        end
+      end
+
+      def detect_fabricators
+        locations_with_count(fabricator_sources)
+      end
+
+      def fabricator_definitions
+        fabricator_sources.flat_map(&:last).each_with_object({}) do |path, names|
+          found = SourceIntrospector.walk(path, { fabricators: -> { Listeners::GenericMacroListener.new(:Fabricator) } })[:fabricators]
+          named = found.map { |hit| hit[:args].first.to_s }.reject(&:empty?)
+          names[path.delete_prefix("#{root}/")] = named if named.any?
+        end
+      end
+
+      def detect_cucumber
+        features = app_files("features/**/*.feature")
+        return nil if features.empty?
+
+        { location: "features", count: features.size, step_definitions: app_files("features/step_definitions/**/*.rb").size }
+      end
+
+      def locations_with_count(sources)
+        return nil if sources.empty?
+
+        { location: sources.map(&:first).join(", "), count: sources.sum { |_, files| files.size } }
+      end
+
+      # The files a glob under the root matches, sorted, leaving out any whose
+      # real path leaves the app.
+      def app_files(pattern)
+        real_root = (@real_root ||= File.realpath(root))
+        Dir.glob(File.join(root, pattern)).sort.select do |path|
+          File.file?(path) && RailsAiContext::SafePath.contained?(File.realpath(path), real_root)
+        rescue SystemCallError
+          false
+        end
       end
 
       # The YAML fixture sets Rails loads, and apart from them the other files
@@ -130,35 +204,24 @@ module RailsAiContext
       # One walk per factory file for both the factories and their traits.
       # A factory whose name is computed (`factory :"#{model}_comment"` in a
       # loop, as Consul writes) has no name to list, so it is counted apart.
-      # The first factory directory that has any factory wins.
       def factory_definitions
         @factory_definitions ||= begin
-          found = { names: nil, traits: nil, computed: 0 }
-          %w[spec/factories test/factories].each do |dir_rel|
-            dir = File.join(root, dir_rel)
-            next unless Dir.exist?(dir)
-
-            names = {}
-            traits = {}
-            computed = 0
-            Dir.glob(File.join(dir, "**/*.rb")).each do |path|
-              ast_data = SourceIntrospector.walk(path, {
-                factories: -> { Listeners::GenericMacroListener.new(:factory) },
-                traits: -> { Listeners::GenericMacroListener.new(:trait) }
-              })
-              named = ast_data[:factories].map { |hit| hit[:args].first.to_s }
-              computed += named.count(&:empty?)
-              named = named.reject(&:empty?)
-              trait_names = ast_data[:traits].map { |hit| hit[:args].first.to_s }.reject(&:empty?)
-              names[path.sub("#{root}/", "")] = named if named.any?
-              traits[File.basename(path)] = trait_names if trait_names.any?
-            end
-            next if names.empty? && traits.empty? && computed.zero?
-
-            found = { names: names.presence, traits: traits.presence, computed: computed }
-            break
+          names = {}
+          traits = {}
+          computed = 0
+          factory_sources.flat_map(&:last).each do |path|
+            ast_data = SourceIntrospector.walk(path, {
+              factories: -> { Listeners::GenericMacroListener.new(:factory) },
+              traits: -> { Listeners::GenericMacroListener.new(:trait) }
+            })
+            named = ast_data[:factories].map { |hit| hit[:args].first.to_s }
+            computed += named.count(&:empty?)
+            named = named.reject(&:empty?)
+            trait_names = ast_data[:traits].map { |hit| hit[:args].first.to_s }.reject(&:empty?)
+            names[path.sub("#{root}/", "")] = named if named.any?
+            traits[File.basename(path)] = trait_names if trait_names.any?
           end
-          found
+          { names: names.presence, traits: traits.presence, computed: computed }
         end
       end
 

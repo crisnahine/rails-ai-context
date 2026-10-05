@@ -158,11 +158,12 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
         FileUtils.rm_rf(File.join(Rails.root, "spec/vcr_cassettes"))
       end
 
-      it "reports the spec/ factories and not the test/ ones" do
+      # factory_bot loads every one of its definition paths, in this order.
+      it "reports the test/ and spec/ factories, as factory_bot loads both" do
         FileUtils.mkdir_p(File.join(Rails.root, "test/factories"))
         File.write(File.join(Rails.root, "test/factories/orders.rb"), "factory :order\n")
 
-        expect(result[:factories][:location]).to eq("spec/factories")
+        expect(result[:factories][:location]).to eq("test/factories, spec/factories")
       end
 
       it "reports the spec/ fixtures and not the test/ ones" do
@@ -592,6 +593,72 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
         write("test/fixtures/users.yml", "bob:\n  name: B\n")
 
         expect(payload[:fixture_names]).to eq("users" => %w[bob])
+      end
+    end
+  end
+
+  # factory_bot loads factories.rb, test/factories.rb and spec/factories.rb and
+  # the directories of those names; packs-rails adds each pack's own.
+  describe "factories, fabricators and a Cucumber tree" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def write(rel, body = "")
+      path = File.join(@root, rel)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, body)
+    end
+
+    def payload
+      described_class.new(double("app", root: @root)).call
+    end
+
+    before do
+      write("spec/factories.rb", "FactoryBot.define do\n  factory :account do\n    name { \"x\" }\n  end\nend\n")
+      write("packs/billing/package.yml", "enforce_dependencies: true\n")
+      write("packs/billing/spec/factories/invoices.rb", "FactoryBot.define do\n  factory :invoice do\n    number { \"1\" }\n  end\nend\n")
+      write("spec/fabricators/product_fabricator.rb", "Fabricator(:product) do\n  title \"W\"\nend\n")
+      write("features/x.feature", "Feature: X\n")
+      write("features/step_definitions/s.rb", "Given(/^x$/) { }\n")
+    end
+
+    it "reads every place factory_bot loads definitions from, packs included" do
+      result = payload
+
+      expect(result[:factories]).to eq(location: "spec/factories.rb, packs/billing/spec/factories", count: 2)
+      expect(result[:factory_names]).to eq("spec/factories.rb" => %w[account], "packs/billing/spec/factories/invoices.rb" => %w[invoice])
+    end
+
+    it "reads the root factories directory and test/factories.rb" do
+      write("factories/users.rb", "FactoryBot.define do\n  factory :user\nend\n")
+      write("test/factories.rb", "FactoryBot.define do\n  factory :order\nend\n")
+
+      expect(payload[:factory_names].values.flatten).to contain_exactly("account", "invoice", "user", "order")
+    end
+
+    it "reads no pack factories from a pack that is a gem" do
+      write("packs/billing/billing.gemspec", "")
+
+      expect(payload[:factory_names].keys).to eq(%w[spec/factories.rb])
+    end
+
+    it "reads Fabrication's fabricators" do
+      result = payload
+
+      expect(result[:fabricators]).to eq(location: "spec/fabricators", count: 1)
+      expect(result[:fabricator_names]).to eq("spec/fabricators/product_fabricator.rb" => %w[product])
+    end
+
+    it "counts the Cucumber features and step definitions" do
+      expect(payload[:cucumber]).to eq(location: "features", count: 1, step_definitions: 1)
+    end
+
+    it "does not read a factory file linked from outside the app" do
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "leak.rb"), "FactoryBot.define do\n  factory :leak\nend\n")
+        FileUtils.mkdir_p(File.join(@root, "spec/factories"))
+        File.symlink(File.join(outside, "leak.rb"), File.join(@root, "spec/factories/leak.rb"))
+
+        expect(payload[:factory_names].values.flatten).not_to include("leak")
       end
     end
   end

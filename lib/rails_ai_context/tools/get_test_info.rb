@@ -52,6 +52,8 @@ module RailsAiContext
             lines = [ "# Test Infrastructure", "" ]
             lines << "- **Framework:** #{data[:framework]}"
             lines << "- **Factories:** #{count_phrase(data[:factories][:count], "file")}" if data[:factories]
+            lines << "- **Fabricators:** #{count_phrase(data[:fabricators][:count], "file")}" if data[:fabricators]
+            lines << "- **Cucumber:** #{count_phrase(data[:cucumber][:count], "feature file")}" if data[:cucumber]
             lines << "- **Fixtures:** #{RailsAiContext::TestFramework.fixture_phrase(data[:fixtures])}" if data[:fixtures]
             if data[:test_files]&.any?
               total = data[:test_files].values.sum { |v| v[:count] }
@@ -64,6 +66,8 @@ module RailsAiContext
             lines = [ "# Test Infrastructure", "" ]
             lines << "- **Framework:** #{data[:framework]}"
             lines << "- **Factories:** #{data[:factories][:location]} (#{count_phrase(data[:factories][:count], "file")})" if data[:factories]
+            lines << "- **Fabricators:** #{data[:fabricators][:location]} (#{count_phrase(data[:fabricators][:count], "file")})" if data[:fabricators]
+            lines << cucumber_line(data[:cucumber]) if data[:cucumber]
             lines << "- **Fixtures:** #{data[:fixtures][:location]} (#{RailsAiContext::TestFramework.fixture_phrase(data[:fixtures])})" if data[:fixtures]
             lines << "- **System tests:** #{data[:system_tests][:location]}" if data[:system_tests]
             lines << "- **CI:** #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
@@ -95,6 +99,7 @@ module RailsAiContext
             lines << "- **Framework:** #{data[:framework]}"
             lines << "- **CI:** #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
             lines << "- **Coverage:** #{data[:coverage]}" if data[:coverage]
+            lines << cucumber_line(data[:cucumber]) if data[:cucumber]
             lines.concat(ci_step_lines(data[:ci_steps]))
 
             lines.concat(trait_lines(data[:factory_traits], 20))
@@ -135,6 +140,11 @@ module RailsAiContext
                   lines << "- **#{file}:** #{names.join(', ')}"
                 end
               end
+            end
+
+            if data[:fabricator_names]&.any?
+              lines << "" << "## Fabricators"
+              data[:fabricator_names].each { |file, names| lines << "- **#{file}:** #{names.join(', ')}" }
             end
 
             if data[:test_helper_setup]&.any?
@@ -321,6 +331,11 @@ module RailsAiContext
         nearby.any? ? "\n\nFiles in test directory: #{nearby.join(', ')}" : ""
       rescue SystemCallError
         ""
+      end
+
+      private_class_method def self.cucumber_line(cucumber)
+        "- **Cucumber:** #{cucumber[:location]} (#{count_phrase(cucumber[:count], "feature file")}, " \
+          "#{count_phrase(cucumber[:step_definitions].to_i, "step definition file")})"
       end
 
       private_class_method def self.ci_step_lines(steps)
