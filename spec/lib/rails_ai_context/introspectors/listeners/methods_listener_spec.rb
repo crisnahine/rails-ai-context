@@ -587,6 +587,26 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener, "metho
     )
   end
 
+  it "applies an inline private or protected to the names attr_*, define_method and alias_method define" do
+    source = <<~RUBY
+      class Gadget
+        private attr_reader :a
+        protected attr_writer :b
+        private attr_accessor :c
+        private define_method(:d) { 1 }
+        def e; end
+        private alias_method :f, :e
+        attr_reader :g
+      end
+    RUBY
+    expect(rows(source)).to contain_exactly(
+      [ "a", :instance, :private ], [ "b=(value)", :instance, :protected ],
+      [ "c", :instance, :private ], [ "c=(value)", :instance, :private ],
+      [ "d", :instance, :private ], [ "e", :instance, :public ], [ "f", :instance, :private ],
+      [ "g", :instance, :public ]
+    )
+  end
+
   it "skips a computed name and a definer run inside a method" do
     source = <<~RUBY
       class Gadget

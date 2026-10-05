@@ -199,7 +199,23 @@ module RailsAiContext
               marks[[ scope, name ]] = visibility
               existing = @results.reverse_each.find { |r| r[:name] == name && r[:scope] == scope && r[:owner] == @owner_stack }
               apply_visibility(existing, visibility) if existing
+            when Prism::CallNode
+              # Since Ruby 3.0 these return the names they define, so `private attr_reader :x` works.
+              defined_names(arg).each { |name| marks[[ scope, name ]] = visibility } unless visibility == :module_function
             end
+          end
+        end
+
+        def defined_names(call)
+          return [] unless call.receiver.nil?
+
+          names = Array(call.arguments&.arguments).filter_map { |a| literal_string(a) }
+          case call.name
+          when :define_method, :alias_method then names.first(1)
+          when *ATTR_DEFINERS.keys
+            kinds = ATTR_DEFINERS[call.name]
+            names.flat_map { |name| [ (name if kinds.include?(:reader)), ("#{name}=" if kinds.include?(:writer)) ].compact }
+          else []
           end
         end
 
