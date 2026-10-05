@@ -127,10 +127,17 @@ module RailsAiContext
 
       # The files a glob under the root matches, sorted, leaving out any whose
       # real path leaves the app or names a sensitive file.
+      # A directory is resolved once for all its files; only a linked file needs its own realpath.
       def app_files(pattern)
         real_root = (@real_root ||= File.realpath(root))
+        real_dirs = {}
         Dir.glob(File.join(root, pattern)).sort.select do |path|
-          real = File.realpath(path)
+          real = if File.lstat(path).symlink?
+            File.realpath(path)
+          else
+            dir = File.dirname(path)
+            File.join(real_dirs[dir] ||= File.realpath(dir), File.basename(path))
+          end
           File.file?(real) && RailsAiContext::SafePath.contained?(real, real_root) &&
             !RailsAiContext::SafePath.sensitive?(real.delete_prefix("#{real_root}/"))
         rescue SystemCallError
