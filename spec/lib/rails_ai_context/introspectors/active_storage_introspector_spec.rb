@@ -138,6 +138,20 @@ RSpec.describe RailsAiContext::Introspectors::ActiveStorageIntrospector do
       end
     end
 
+    it "finds, booted, the attachment of a model outside app/models whose base a gem or initializer defines" do
+      domain = Rails.root.join("app", "zz_vendor_domain")
+      FileUtils.mkdir_p(domain)
+      File.write(domain.join("zz_scan.rb"), "class ZzScan < ZzVendorBase::Record\n  has_one_attached :page\nend\n")
+      allow(RailsAiContext::PathResolver).to receive(:extra_model_roots).and_return([ domain.to_s ])
+      stub_const("ZzVendorBase::Record", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+
+      attachments = described_class.new(Rails.application).call[:attachments]
+
+      expect(attachments).to include({ model: "ZzScan", name: "page", type: "has_one_attached" })
+    ensure
+      FileUtils.rm_rf(domain)
+    end
+
     it "finds the attachment of a model outside app/models that model_details lists" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "domain"))

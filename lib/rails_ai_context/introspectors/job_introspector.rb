@@ -316,7 +316,7 @@ module RailsAiContext
       # delayed_job's handle_asynchronously wraps a model method so every call is
       # queued; the app has no job class for it at all.
       def async_methods
-        SourceScan.each(app.root, kind: :models).flat_map do |record|
+        model_sources.flat_map do |record|
           next [] unless record.source.include?("handle_asynchronously")
 
           owner = DeclaredConstant.resolve(record.source, record.path_name)

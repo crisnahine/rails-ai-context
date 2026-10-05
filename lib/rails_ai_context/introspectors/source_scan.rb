@@ -171,8 +171,8 @@ module RailsAiContext
       private_class_method :scan, :scan_dir, :ruby_files, :walk_dir, :within?, :extra_model_candidates, :extra_model_declarations, :class_declarations
 
       # `kind: :models` reads model_paths: what model_details lists, not only app/models.
-      def each(root, kind:, skip_concerns: true, &block)
-        return enum_for(:each, root, kind: kind, skip_concerns: skip_concerns) unless block
+      def each(root, kind:, skip_concerns: true, base_model: nil, &block)
+        return enum_for(:each, root, kind: kind, skip_concerns: skip_concerns, base_model: base_model) unless block
 
         read = lambda do |record|
           source = SafeFile.read(record.path) or next
@@ -180,13 +180,13 @@ module RailsAiContext
         end
         return paths(root, kind: kind, skip_concerns: skip_concerns, &read) unless kind == :models
 
-        model_paths(root) { |record| read.call(record) unless skip_concerns && record.path_name.start_with?("Concerns::") }
+        model_paths(root, base_model: base_model) { |record| read.call(record) unless skip_concerns && record.path_name.start_with?("Concerns::") }
       end
 
       # The eager form: reads and parses every file for its declared name.
       # A caller that names only some files resolves DeclaredConstant itself.
-      def classes(root, kind:)
-        each(root, kind: kind).filter_map do |record|
+      def classes(root, kind:, base_model: nil)
+        each(root, kind: kind, base_model: base_model).filter_map do |record|
           next unless DeclaredConstant.declares_class?(record.source)
 
           [ DeclaredConstant.resolve(record.source, record.path_name), record ]

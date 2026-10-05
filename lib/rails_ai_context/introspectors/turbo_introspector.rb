@@ -190,7 +190,8 @@ module RailsAiContext
         seen = Set.new
         # A model outside app/models also sits under another kind's directory.
         [ :models, *BROADCAST_KINDS ].each do |kind|
-          SourceScan.each(root, kind: kind, skip_concerns: false) do |record|
+          records = kind == :models ? model_sources(skip_concerns: false) : SourceScan.each(root, kind: kind, skip_concerns: false)
+          records.each do |record|
             next unless seen.add?(record.path)
 
             walked = walk_broadcasts(record.source)

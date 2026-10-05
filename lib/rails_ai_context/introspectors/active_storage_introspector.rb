@@ -28,7 +28,7 @@ module RailsAiContext
           validations = []
           variants = []
 
-          SourceScan.classes(root, kind: :models).each do |model_name, record|
+          model_classes.each do |model_name, record|
             ast = SourceIntrospector.walk_source(record.source, {
               macros: Listeners::MacrosListener,
               validations: Listeners::ValidationsListener,

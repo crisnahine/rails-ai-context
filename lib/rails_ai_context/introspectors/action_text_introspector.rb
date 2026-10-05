@@ -36,7 +36,7 @@ module RailsAiContext
 
       def extract_rich_text_fields
         fields = []
-        SourceScan.classes(root, kind: :models).each do |model_name, record|
+        model_classes.each do |model_name, record|
           ast_data = SourceIntrospector.walk_source(record.source, { macros: Listeners::MacrosListener })
           ConcernMembership.owned_by(ast_data[:macros], model_name).each do |m|
             next unless m[:macro] == :has_rich_text

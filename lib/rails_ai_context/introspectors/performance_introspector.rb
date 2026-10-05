@@ -75,7 +75,7 @@ module RailsAiContext
       end
 
       def load_model_data
-        SourceScan.each(root, kind: :models).filter_map do |record|
+        model_sources.filter_map do |record|
           ast = SourceIntrospector.walk_source(record.source, {
             classes: Listeners::ClassDefinitionListener,
             associations: Listeners::AssociationsListener,
