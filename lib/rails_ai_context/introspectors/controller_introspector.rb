@@ -690,24 +690,26 @@ module RailsAiContext
         return [] if source.nil?
 
         parse_result = AstCache.parse_string(source)
-        # Only extract format calls inside respond_to blocks
         respond_to_blocks = []
-        find_respond_to_blocks(parse_result.value, respond_to_blocks)
-        return [] if respond_to_blocks.empty?
-
         formats = []
+        find_respond_to_blocks(parse_result.value, respond_to_blocks, formats)
         respond_to_blocks.each { |block| find_format_calls(block, formats) }
         formats.uniq.sort
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "extract_respond_to AST")
       end
 
-      def find_respond_to_blocks(node, blocks)
+      def find_respond_to_blocks(node, blocks, declared)
         return unless node.respond_to?(:child_nodes)
-        if node.is_a?(Prism::CallNode) && node.name == :respond_to && node.block
-          blocks << node.block
+        if node.is_a?(Prism::CallNode) && node.name == :respond_to
+          if node.block
+            blocks << node.block
+          elsif node.receiver.nil?
+            # The responders gem's class-level `respond_to :json`.
+            node.arguments&.arguments&.each { |arg| declared << arg.unescaped if arg.is_a?(Prism::SymbolNode) }
+          end
         end
-        node.child_nodes.compact.each { |child| find_respond_to_blocks(child, blocks) }
+        node.child_nodes.compact.each { |child| find_respond_to_blocks(child, blocks, declared) }
       end
 
       def find_format_calls(node, formats)
