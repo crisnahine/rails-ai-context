@@ -268,6 +268,11 @@ module RailsAiContext
         { kind: "virtual_table", module: mod, columns: columns.map { |name| { name: name } }, indexes: [], foreign_keys: [] }.compact
       end
 
+      # MySQL's dumper writes a tiny, medium or long text or blob type as size:.
+      def mysql_text_size(sql_type)
+        sql_type.to_s[/\A(tiny|medium|long)(?:text|blob)/i, 1]&.downcase
+      end
+
       # How a primary key reads to a person: `id`, or `tag_id, account_id`.
       def primary_key_label(key)
         Array(key || "id").join(", ")

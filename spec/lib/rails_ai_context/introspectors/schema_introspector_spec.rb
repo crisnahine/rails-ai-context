@@ -278,6 +278,14 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
           .to eq([ { name: "tags", type: "string", null: true, default: '["a", "b c"]', array: true } ])
       end
 
+      it "reads a MySQL text column's size as schema.rb writes it" do
+        column = double(name: "body", type: :text, null: true, default: nil, limit: 16_777_215, precision: nil,
+                        scale: nil, comment: nil, collation: nil, sql_type: "mediumtext", array?: false)
+        allow(introspector).to receive(:connection).and_return(double("mysql2", columns: [ column ], native_database_types: {}, mariadb?: false))
+
+        expect(introspector.send(:extract_columns, "pa_v_posts")).to eq([ { name: "body", type: "text", null: true, size: "medium" } ])
+      end
+
       # ActiveRecord gives an expression index's columns as one String; the
       # static readers split it into keys, and every consumer maps the list.
       it "reads an expression index's columns as the static readers do" do
@@ -1213,6 +1221,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
             t.string "name", limit: 120, null: false, collation: "C"
             t.integer "seats", unsigned: true
             t.decimal "total", precision: 10, scale: 2
+            t.text "bio", size: :long
             t.unique_constraint ["name"], deferrable: :immediate, name: "uniq_name"
           end
           create_table "users", force: :cascade do |t|
@@ -1232,6 +1241,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       expect(columns["name"]).to include(limit: 120, collation: "C")
       expect(columns["seats"]).to include(unsigned: true)
       expect(columns["total"]).to include(precision: 10, scale: 2)
+      expect(columns["bio"]).to include(size: "long")
     end
 
     it "keeps the table comment and its unique constraints" do

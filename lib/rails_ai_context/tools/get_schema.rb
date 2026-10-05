@@ -461,6 +461,7 @@ module RailsAiContext
         label += "(#{sizes.join(',')})" if col[:precision]
         label += "[]" if col[:array]
         label += ", limit: #{col[:limit]}" if col[:limit]
+        label += ", size: #{col[:size]}" if col[:size]
         label += ", unsigned" if col[:unsigned]
         label += ", collation: #{col[:collation]}" if col[:collation]
         label += ", enum_type: #{col[:enum_type]}" if col[:enum_type]

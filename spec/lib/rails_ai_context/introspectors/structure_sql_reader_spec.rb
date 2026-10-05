@@ -803,7 +803,9 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
           `at` timestamp NULL DEFAULT NULL,
           `made` datetime(6) NOT NULL,
           `note` varchar(255) DEFAULT NULL COMMENT 'Shown, it''s fine',
-          `raw` varbinary(16) DEFAULT NULL
+          `raw` varbinary(16) DEFAULT NULL,
+          `body` mediumtext,
+          `blob` longblob
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Mixed bag';
       SQL
       things = described_class.parse(sql)[:tables]["things"]
@@ -813,7 +815,8 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
         "u" => { type: "integer", unsigned: true }, "big" => { type: "bigint", unsigned: true },
         "tiny" => { type: "integer", limit: 1 }, "flag" => { type: "boolean" }, "medium" => { type: "integer", limit: 3 },
         "at" => { type: "timestamp" }, "made" => { type: "datetime" },
-        "note" => { type: "string", comment: "Shown, it's fine" }, "raw" => { type: "binary", limit: 16 }
+        "note" => { type: "string", comment: "Shown, it's fine" }, "raw" => { type: "binary", limit: 16 },
+        "body" => { type: "text", size: "medium" }, "blob" => { type: "binary", size: "long" }
       )
       expect(things[:comment]).to eq("Mixed bag")
     end

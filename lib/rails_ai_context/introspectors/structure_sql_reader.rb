@@ -454,6 +454,8 @@ module RailsAiContext
       def type_detail(raw_type, type, dialect)
         detail = {}
         detail[:unsigned] = true if raw_type.match?(/\bunsigned\b/i)
+        size = SchemaConventions.mysql_text_size(raw_type) if dialect == :mysql
+        detail[:size] = size if size
         limit = INTEGER_LIMITS[raw_type[/\A\w+/]]
         detail[:limit] = limit if type == "integer" && limit
         sizes = raw_type[/\((\d+(?:\s*,\s*\d+)?)\)/, 1]&.split(",")&.map(&:to_i)

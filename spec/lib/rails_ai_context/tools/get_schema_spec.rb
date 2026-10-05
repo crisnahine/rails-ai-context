@@ -85,7 +85,8 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
               { name: "name", type: "string", null: false, limit: 120, collation: "C" },
               { name: "seats", type: "integer", unsigned: true },
               { name: "total", type: "decimal", precision: 10, scale: 2 },
-              { name: "seen_at", type: "datetime", precision: 3 }
+              { name: "seen_at", type: "datetime", precision: 3 },
+              { name: "bio", type: "text", size: "medium" }
             ],
             indexes: [], foreign_keys: [],
             unique_constraints: [ { name: "uniq_name", columns: [ "name" ], deferrable: "immediate" } ]
@@ -110,6 +111,7 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(text).to include("| seats | integer, unsigned | yes |")
       expect(text).to include("| total | decimal(10,2) | yes |")
       expect(text).to include("| seen_at | datetime(3) | yes |")
+      expect(text).to include("| bio | text, size: medium | yes |")
     end
 
     it "shows the table comment and its unique constraints" do

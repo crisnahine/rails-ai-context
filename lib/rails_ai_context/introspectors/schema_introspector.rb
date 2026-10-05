@@ -188,6 +188,7 @@ module RailsAiContext
           precision: precision,
           scale: col.scale,
           unsigned: (true if col.respond_to?(:unsigned?) && col.unsigned?),
+          size: (SchemaConventions.mysql_text_size(col.sql_type) if connection.respond_to?(:mariadb?)),
           collation: (col.collation unless col.collation.nil? || col.collation == table_collation(table))
         }
       end
@@ -462,6 +463,7 @@ module RailsAiContext
         entry[:array] = true if options[:array] == true
         %i[limit precision scale].each { |key| entry[key] = options[key] if options[key].is_a?(Integer) }
         entry[:unsigned] = true if options[:unsigned] == true
+        entry[:size] = options[:size].to_s if options[:size].is_a?(Symbol)
         entry[:collation] = options[:collation] if options[:collation].is_a?(String)
         entry[:comment] = options[:comment] if options[:comment].is_a?(String)
         entry[:primary_key] = true if column[:primary_key]
