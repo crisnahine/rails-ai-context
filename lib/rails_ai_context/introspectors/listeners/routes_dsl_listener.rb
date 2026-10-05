@@ -21,9 +21,10 @@ module RailsAiContext
         DYNAMIC_MACROS = %i[devise_for draw].freeze
         # `direct` and `resolve` define URL helpers and draw no route.
         URL_HELPER_MACROS = %i[direct resolve].freeze
-        # Statement-level calls that draw nothing into the table.
+        # Calls that draw routes; an unknown block that makes none of them configures a gem macro.
         ROUTE_METHODS = (VERB_METHODS + %i[match namespace scope resources resource member collection new shallow
                                            concern concerns with_options controller mount root draw devise_for]).freeze
+        # Statement-level calls that draw nothing into the table.
         NON_ROUTING = %i[require require_relative puts p pp print warn raise default_url_options extend include].freeze
 
         # `scope` is the frames a `draw` of this file sits in, as its record carries them.
