@@ -84,8 +84,8 @@ module RailsAiContext
 
       # Named by the class each file declares: camelizing the path asks the global
       # inflector, which the static tier never loaded the app's acronyms into. A file
-      # that declares no class (a mixin, or one that did not parse) is still a
-      # serializer file in app/serializers, so it keeps the name its path spells.
+      # that declares only a module is a mixin, not a serializer; one that declares
+      # nothing (or did not parse) keeps the name its path spells.
       def serializer_class_names
         classes = SERIALIZER_KINDS.flat_map do |kind|
           SourceScan.each(root, kind: kind).map { |record| serializer_candidate(kind, record) }
@@ -96,7 +96,7 @@ module RailsAiContext
         job_arguments = descendants_of(classes) { |c| c[:superclass].to_s.start_with?(JOB_ARGUMENT_SERIALIZER) }
 
         classes.filter_map { |c|
-          next if job_arguments.include?(c[:name])
+          next if c[:mixin] || job_arguments.include?(c[:name])
 
           c[:name] if c[:kind] == "app/serializers" || framework.include?(c[:name])
         }.uniq.sort
@@ -104,11 +104,13 @@ module RailsAiContext
 
       def serializer_candidate(kind, record)
         name = DeclaredConstant.resolve(record.source, record.path_name)
-        own = DeclaredConstant.declarations(record.source).find { |d| d.name == name }
+        declared = DeclaredConstant.declarations(record.source)
+        own = declared.find { |d| d.name == name }
+        mixin = declared.empty? && DeclaredConstant.declared_module_names(record.source).any?
         includes = SourceIntrospector.walk_source(record.source, {
           includes: -> { Listeners::GenericMacroListener.new(:include) }
         })[:includes].flat_map { |hit| hit[:values].map { |v| v.to_s.delete_prefix("::") } }
-        { kind: kind, name: name, superclass: own&.superclass&.delete_prefix("::"), includes: includes }
+        { kind: kind, name: name, superclass: own&.superclass&.delete_prefix("::"), includes: includes, mixin: mixin }
       end
 
       # The names the block picks, and every class that inherits one of them.
