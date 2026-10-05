@@ -449,7 +449,7 @@ module RailsAiContext
 
       TEST_SIGNALS = {
         devise: /Devise::Test::IntegrationHelpers/,
-        sign_in: /sign_in/,
+        sign_in: /\bsign_in(?:_as)?\b/,
         assert_select: /assert_select/,
         assert_response: /assert_response/,
         auth_test: /requires?\s+authentication/i
@@ -467,6 +467,7 @@ module RailsAiContext
 
         found = {}
         detected_in = []
+        sign_in = nil
 
         test_files.first(5).each do |path|
           content = RailsAiContext::SafeFile.read(path) or next
@@ -474,6 +475,7 @@ module RailsAiContext
           next if hits.empty?
 
           found.update(hits)
+          sign_in ||= sign_in_call(content) if hits[:sign_in]
           # Only credit files that actually contributed a signal - an empty
           # scaffold test says nothing about the app's test pattern.
           detected_in << File.basename(path, ".rb").camelize.sub(/Test$/, "")
@@ -496,7 +498,7 @@ module RailsAiContext
           sections << ""
         end
         sections << "  test \"[action] renders page\" do"
-        sections << "    sign_in users(:one)" if found[:sign_in]
+        sections << "    #{sign_in}" if sign_in
         sections << "    get [path]"
         sections << "    assert_response :success"
         sections << "    assert_select \"h1\", \"[Expected Title]\"" if found[:assert_select]
@@ -509,6 +511,30 @@ module RailsAiContext
         sections
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "detect_test_pattern")
+      end
+
+      # A variable or a bare helper name: set outside the call, so a copy of
+      # the call alone signs in nil.
+      SIGN_IN_BOUND_OUTSIDE = /\A(?:@@?|\$)?[a-z_]\w*\z/
+      private_constant :SIGN_IN_BOUND_OUTSIDE
+
+      # The first sign-in call as the test writes it: Devise's `sign_in` and
+      # the `sign_in_as` Rails 8.1's authentication generator defines take
+      # different arguments. An argument the skeleton never sets is swapped
+      # for the app's own users fixture.
+      private_class_method def self.sign_in_call(content)
+        hit = RailsAiContext::Introspectors::SourceIntrospector.walk_source(content, {
+          sign_in: -> { RailsAiContext::Introspectors::Listeners::GenericMacroListener.new(:sign_in, :sign_in_as) }
+        })[:sign_in].first or return nil
+
+        call = content.byteslice(hit[:offset], hit[:end_offset] - hit[:offset]).squish
+        arg = hit[:values].first
+        return call unless arg.is_a?(String) && arg.match?(SIGN_IN_BOUND_OUTSIDE)
+
+        key = fixture_key_for("users", RailsAiContext::Payload.section(cached_context, :tests) || {})
+        return "# TODO: #{hit[:macro]} a user built from this app's own test data" unless key
+
+        call.sub(/(?<![\w@$])#{Regexp.escape(arg)}(?![\w?!])/, "users(:#{key})")
       end
     end
   end

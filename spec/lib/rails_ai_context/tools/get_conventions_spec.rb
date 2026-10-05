@@ -205,6 +205,117 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
       expect(text).to include("Detected from: PostsController")
     end
 
+    it "signs in with the helper the tests call, not Devise's sign_in" do
+      File.write(File.join(tests_dir, "sessions_controller_test.rb"), <<~RUBY)
+        require "test_helper"
+
+        class SessionsControllerTest < ActionDispatch::IntegrationTest
+          setup { @user = User.take }
+
+          test "destroy" do
+            sign_in_as(User.take)
+
+            delete session_path
+
+            assert_redirected_to new_session_path
+          end
+
+          test "new" do
+            get new_session_path
+            assert_response :success
+          end
+        end
+      RUBY
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("  test \"[action] renders page\" do\n    sign_in_as(User.take)\n    get [path]")
+      expect(text).not_to include("sign_in users(:one)")
+    end
+
+    it "signs in a users fixture where the tests sign in a variable the skeleton never sets" do
+      FileUtils.mkdir_p(File.join(tmpdir, "test", "fixtures"))
+      File.write(File.join(tmpdir, "test", "fixtures", "users.yml"), "admin:\n  email: a@example.com\n")
+      File.write(File.join(tests_dir, "posts_controller_test.rb"), <<~RUBY)
+        class PostsControllerTest < ActionDispatch::IntegrationTest
+          setup do
+            @user = users(:admin)
+            sign_in @user
+          end
+
+          test "index" do
+            get posts_path
+            assert_response :success
+          end
+        end
+      RUBY
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("  test \"[action] renders page\" do\n    sign_in users(:admin)\n    get [path]")
+      expect(text).not_to include("sign_in @user")
+    end
+
+    it "reads no users fixture through a fixture file symlinked out of the app" do
+      outside = Dir.mktmpdir
+      File.write(File.join(outside, "users.yml"), "secret_label:\n  email: a@example.com\n")
+      FileUtils.mkdir_p(File.join(tmpdir, "test", "fixtures"))
+      File.symlink(File.join(outside, "users.yml"), File.join(tmpdir, "test", "fixtures", "users.yml"))
+      File.write(File.join(tests_dir, "posts_controller_test.rb"), <<~RUBY)
+        class PostsControllerTest < ActionDispatch::IntegrationTest
+          setup do
+            @user = users(:admin)
+            sign_in @user
+          end
+
+          test "index" do
+            get posts_path
+            assert_response :success
+          end
+        end
+      RUBY
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).not_to include("secret_label")
+    ensure
+      FileUtils.rm_rf(outside) if outside
+    end
+
+    it "keeps the helper the tests call when it signs in a variable" do
+      File.write(File.join(tests_dir, "posts_controller_test.rb"), <<~RUBY)
+        class PostsControllerTest < ActionDispatch::IntegrationTest
+          test "index" do
+            user = User.take
+            sign_in_as(user)
+            get posts_path
+            assert_response :success
+          end
+        end
+      RUBY
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("    # TODO: sign_in_as a user built from this app's own test data\n    get [path]")
+      expect(text).not_to include("sign_in_as(user)")
+    end
+
+    it "reads no sign-in from a test name that mentions one" do
+      File.write(File.join(tests_dir, "pages_controller_test.rb"), <<~RUBY)
+        class PagesControllerTest < ActionDispatch::IntegrationTest
+          test "shows sign_in link" do
+            get root_path
+            assert_response :success
+          end
+        end
+      RUBY
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("### Controller Test Pattern")
+      expect(text).not_to include("    sign_in")
+    end
+
     it "renders no skeleton when no test asserts a response" do
       File.write(File.join(tests_dir, "quiet_controller_test.rb"), <<~RUBY)
         require "test_helper"

@@ -361,9 +361,7 @@ module RailsAiContext
           framework = tests[:framework] || "unknown"
           lines << "Framework: #{framework}."
 
-          factories = tests[:factories]
-          fixtures = tests[:fixtures]
-          lines << "Data setup: #{factories ? "FactoryBot (#{factory_phrase(tests)})" : fixtures ? "fixtures (#{RailsAiContext::TestFramework.fixture_phrase(fixtures)})" : "inline"}."
+          lines << "Data setup: #{data_setup_phrase(tests)}."
 
           ci = tests[:ci_config]
           lines << "CI: #{ci.join(', ')}." if ci&.any?
@@ -375,6 +373,26 @@ module RailsAiContext
           lines << "" << "Run tests: `#{test_cmd}`"
           lines << ""
           lines
+        end
+
+        def data_setup_phrase(tests)
+          if tests[:factories]
+            "FactoryBot (#{factory_phrase(tests)})"
+          elsif tests[:fabricators]
+            "Fabrication (#{fabricator_phrase(tests)})"
+          elsif tests[:fixtures]
+            "fixtures (#{RailsAiContext::TestFramework.fixture_phrase(tests[:fixtures])})"
+          else
+            "inline"
+          end
+        end
+
+        def fabricator_phrase(tests)
+          files = count_phrase(tests[:fabricators][:count].to_i, "file")
+          names = tests[:fabricator_names]
+          return files unless names.is_a?(Hash) && names.any?
+
+          "#{count_phrase(names.values.sum { |list| Array(list).size }, "fabricator")} in #{files}"
         end
 
         # The factories a suite defines, and the files they sit in: one file

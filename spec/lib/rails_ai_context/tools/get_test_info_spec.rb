@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "timeout"
 
 RSpec.describe RailsAiContext::Tools::GetTestInfo do
   before { described_class.reset_cache! }
@@ -150,6 +151,15 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       expect(text).to include("# TODO: sign in a user built from this app's own test data")
     end
 
+    it "does not read the app's own sign_in_as as Devise's sign_in" do
+      File.write(File.join(@root, "test", "controllers", "posts_controller_test.rb"),
+                 "class PostsControllerTest < ActionDispatch::IntegrationTest\n" \
+                 "  include Devise::Test::IntegrationHelpers\n" \
+                 "  test \"x\" do\n    sign_in_as users(:admin)\n  end\nend\n")
+
+      expect(call_with(minitest_data)).not_to include("sign_in users(")
+    end
+
     it "does not hand fixture syntax to an app with no fixtures" do
       text = call_with(minitest_data.merge(fixtures: nil, fixture_names: nil))
 
@@ -199,6 +209,154 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       result = described_class.call(detail: "full")
       text = result.content.first[:text]
       expect(text).to include("spec/support/auth_helpers.rb")
+    end
+  end
+
+  describe "the steps bin/ci runs" do
+    before do
+      test_data[:ci_config] = %w[rails_ci]
+      test_data[:ci_steps] = [ { name: "Setup", command: "bin/setup --skip-server" }, { name: "Tests: Rails", command: "bin/rails test" } ]
+    end
+
+    it "lists them under config/ci.rb at standard and full detail" do
+      %w[standard full].each do |detail|
+        text = described_class.call(detail: detail).content.first[:text]
+
+        expect(text).to include("- **CI:** rails_ci")
+        expect(text).to include("## CI Steps (`config/ci.rb`, run by `bin/ci`)\n- Setup: `bin/setup --skip-server`\n- Tests: Rails: `bin/rails test`")
+      end
+    end
+
+    it "keeps them out of the summary" do
+      expect(described_class.call(detail: "summary").content.first[:text]).not_to include("CI Steps")
+    end
+  end
+
+  describe "fixtures at full detail" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def write(rel, body)
+      path = File.join(@root, rel)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, body)
+    end
+
+    def full_text
+      tests = RailsAiContext::Introspectors::TestIntrospector.new(double("app", root: @root)).call
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(@root)))
+      allow(described_class).to receive(:cached_context).and_return({ tests: tests })
+      described_class.call(detail: "full").content.first[:text]
+    end
+
+    it "reads a set whose first line is an ERB tag beside one that is plain YAML" do
+      write("test/fixtures/users.yml", <<~YAML)
+        <% password_digest = BCrypt::Password.create("password") %>
+
+        one:
+          email_address: one@example.com
+          password_digest: <%= password_digest %>
+      YAML
+      write("test/fixtures/posts.yml", "one: { title: A, user: one }\n")
+
+      text = full_text
+
+      expect(text).to include("- **users:**\n  - `one`: email_address: one@example.com, password_digest: erb_value")
+      expect(text).to include("- **posts:**\n  - `one`: title: A, user: one")
+    end
+
+    it "follows DEFAULTS, keeps subfolder sets apart and leaves out _fixture and ignored labels" do
+      write("test/fixtures/users.yml", "DEFAULTS: &DEFAULTS\n  name: Default\nalice:\n  <<: *DEFAULTS\n  email: alice@example.com\n")
+      write("test/fixtures/admin/posts.yml", "pinned:\n  title: Admin pinned\n")
+      write("test/fixtures/posts.yml", "_fixture:\n  model_class: Post\n  ignore: base\nbase:\n  title: Base\nfirst:\n  title: Hello\n")
+
+      text = full_text
+
+      expect(text).to include("- **admin/posts:**\n  - `pinned`: title: Admin pinned")
+      expect(text).to include("- **posts:**\n  - `first`: title: Hello")
+      expect(text).to include("- **users:**\n  - `alice`: name: Default, email: alice@example.com")
+      expect(text).not_to include("_fixture")
+      expect(text).not_to include("`base`")
+    end
+
+    it "picks no label _fixture ignores when it reads the file itself" do
+      write("test/fixtures/posts.yml", "_fixture:\n  ignore: base\nbase:\n  title: Base\nfirst:\n  title: Hello\n")
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(@root)))
+
+      expect(described_class.send(:fixture_key_for, "posts", {})).to eq("first")
+    end
+
+    it "lists the labels of a set it cannot parse and says so" do
+      write("test/fixtures/users.yml", "bob:\n  name: B\n")
+      write("test/fixtures/broken.yml", "one:\n  title: [unclosed\n")
+
+      text = full_text
+
+      expect(text).to include("- **users:**\n  - `bob`: name: B")
+      expect(text).to include("- **broken:** one _(not parsed as YAML; labels only)_")
+    end
+
+    it "says a set past the read limit was too large, not that it does not parse" do
+      write("test/fixtures/users.yml", "bob:\n  name: #{"B" * 50}\n")
+      allow(RailsAiContext.configuration).to receive(:max_test_file_size).and_return(20)
+
+      expect(full_text).to include("- **users:** bob _(over the 20 byte read limit; labels only)_")
+    end
+
+    it "prints no label from a fixture file that links out of the app" do
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "leak.yml"), "secret_label:\n  key: x\n")
+        write("test/fixtures/users.yml", "bob:\n  name: B\n")
+        File.symlink(File.join(outside, "leak.yml"), File.join(@root, "test", "fixtures", "leak.yml"))
+
+        text = full_text
+
+        expect(text).to include("- **users:**\n  - `bob`: name: B")
+        expect(text).not_to include("secret_label")
+        expect(text).not_to include("not parsed as YAML")
+      end
+    end
+
+    it "shows an attribute an alias nests deeply without expanding it" do
+      laughs = +"a: &a [x, x, x, x, x, x, x, x, x]\n"
+      levels = ("a".."j").to_a
+      levels.each_cons(2) { |prev, cur| laughs << "#{cur}: &#{cur} [*#{prev}, *#{prev}, *#{prev}, *#{prev}, *#{prev}, *#{prev}, *#{prev}, *#{prev}, *#{prev}]\n" }
+      body = "bomb:\n  title: Short\n" + laughs.lines.map { |line| "  #{line}" }.join + "  tags: [one, two]\n"
+      write("test/fixtures/posts.yml", body)
+
+      text = nil
+      expect { Timeout.timeout(5) { text = full_text } }.not_to raise_error
+      expect(text).to include("- **posts:**\n  - `bomb`: title: Short")
+      expect(text).to include("tags: [\"one\", \"two\"]")
+      expect(text).not_to include("j: ")
+    end
+  end
+
+  describe "fabricators and a Cucumber tree" do
+    before do
+      test_data[:fabricators] = { location: "spec/fabricators", count: 1 }
+      test_data[:fabricator_names] = { "spec/fabricators/product_fabricator.rb" => %w[product] }
+      test_data[:cucumber] = { location: "features", count: 3, step_definitions: 1 }
+    end
+
+    it "counts them in the summary" do
+      text = described_class.call(detail: "summary").content.first[:text]
+
+      expect(text).to include("- **Fabricators:** 1 file")
+      expect(text).to include("- **Cucumber:** 3 feature files")
+    end
+
+    it "names where they live at standard detail" do
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("- **Fabricators:** spec/fabricators (1 file)")
+      expect(text).to include("- **Cucumber:** features (3 feature files, 1 step definition file)")
+    end
+
+    it "lists the fabricators by name at full detail" do
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("## Fabricators\n- **spec/fabricators/product_fabricator.rb:** product")
+      expect(text).to include("- **Cucumber:** features (3 feature files, 1 step definition file)")
     end
   end
 

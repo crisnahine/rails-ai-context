@@ -361,6 +361,20 @@ RSpec.describe RailsAiContext::Tools::Onboard do
         expect(text).to include("Data setup: FactoryBot (2+ factories in 1 file).")
       end
 
+      it "names Fabrication when the suite builds its data with fabricators" do
+        allow(described_class).to receive(:cached_context).and_return({
+          app_name: "Api", rails_version: "8.0", ruby_version: "3.4",
+          schema: { adapter: "PostgreSQL", total_tables: 2 }, models: {}, jobs: { jobs: [] },
+          conventions: { architecture: [] }, gems: { notable_gems: [] },
+          tests: { framework: "rspec", fabricators: { location: "spec/fabricators", count: 2 },
+                   fabricator_names: { "spec/fabricators/user_fabricator.rb" => %w[user admin], "spec/fabricators/post_fabricator.rb" => %w[post] } }
+        })
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("Data setup: Fabrication (3 fabricators in 2 files).")
+      end
+
       it "names no guessed domain, only the app" do
         allow(described_class).to receive(:cached_context).and_return({
           app_name: "Acme",

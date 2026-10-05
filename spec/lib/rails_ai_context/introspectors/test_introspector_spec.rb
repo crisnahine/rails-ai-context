@@ -158,11 +158,12 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
         FileUtils.rm_rf(File.join(Rails.root, "spec/vcr_cassettes"))
       end
 
-      it "reports the spec/ factories and not the test/ ones" do
+      # factory_bot loads every one of its definition paths, in this order.
+      it "reports the test/ and spec/ factories, as factory_bot loads both" do
         FileUtils.mkdir_p(File.join(Rails.root, "test/factories"))
         File.write(File.join(Rails.root, "test/factories/orders.rb"), "factory :order\n")
 
-        expect(result[:factories][:location]).to eq("spec/factories")
+        expect(result[:factories][:location]).to eq("test/factories, spec/factories")
       end
 
       it "reports the spec/ fixtures and not the test/ ones" do
@@ -171,7 +172,7 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
         File.write(File.join(Rails.root, "spec/fixtures/users.yml"), "one:\n  name: Alice\n")
         File.write(File.join(Rails.root, "test/fixtures/orders.yml"), "one:\n  ref: A\n")
 
-        expect(result[:fixtures]).to eq(location: "spec/fixtures", count: 1)
+        expect(result[:fixtures]).to eq(location: "spec/fixtures", locations: %w[spec/fixtures], count: 1)
       end
 
       it "walks past a cassette directory that exists but holds nothing" do
@@ -426,7 +427,7 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
 
       fixtures = described_class.new(double("app", root: @root)).call[:fixtures]
 
-      expect(fixtures).to eq(location: "spec/fixtures", count: 1, other_files: 3)
+      expect(fixtures).to eq(location: "spec/fixtures", locations: %w[spec/fixtures], count: 1, other_files: 3)
     end
   end
 
@@ -456,6 +457,223 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
       expect(result[:factory_names]).to eq("spec/factories/comments.rb" => %w[comment])
       expect(result[:computed_factories]).to eq(1)
       expect(result[:factory_traits]).to eq("comments.rb" => %w[hidden])
+    end
+  end
+
+  describe "CI configuration" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def write(rel, body = "")
+      path = File.join(@root, rel)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, body)
+    end
+
+    def payload
+      described_class.new(double("app", root: @root)).call
+    end
+
+    it "names Rails 8.1's config/ci.rb and lists the steps bin/ci runs" do
+      write("config/ci.rb", <<~RUBY)
+        CI.run do
+          step "Setup", "bin/setup --skip-server"
+          step "Tests: Rails", "bin/rails test"
+          # step "Tests: System", "bin/rails test:system"
+        end
+      RUBY
+
+      expect(payload[:ci_config]).to eq(%w[rails_ci])
+      expect(payload[:ci_steps]).to eq([
+        { name: "Setup", command: "bin/setup --skip-server" },
+        { name: "Tests: Rails", command: "bin/rails test" }
+      ])
+    end
+
+    it "names Buildkite and Jenkins beside the others" do
+      write(".gitlab-ci.yml")
+      write(".circleci/config.yml")
+      write(".buildkite/pipeline.yml")
+      write("Jenkinsfile")
+
+      expect(payload[:ci_config]).to eq(%w[circleci gitlab_ci buildkite jenkins])
+      expect(payload[:ci_steps]).to be_nil
+    end
+
+    it "keeps a config/ci.rb that does not parse to its name" do
+      write("config/ci.rb", "CI.run do\n  step \"Setup\", \n")
+
+      expect(payload[:ci_config]).to eq(%w[rails_ci])
+    end
+  end
+
+  # The layout `rails new` and `bin/rails g authentication` write in 8.1.
+  describe "test helpers and the setup the helper files run" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def write(rel, body = "")
+      path = File.join(@root, rel)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, body)
+    end
+
+    before do
+      write("test/helpers/users_helper_test.rb", "class UsersHelperTest < ActionView::TestCase\nend\n")
+      write("test/test_helpers/session_test_helper.rb", "module SessionTestHelper\n  def sign_in_as(user)\n  end\nend\n")
+      write("test/test_helper.rb", <<~RUBY)
+        require "rails/test_help"
+        require_relative "test_helpers/session_test_helper"
+
+        module ActiveSupport
+          class TestCase
+            parallelize(workers: :number_of_processors)
+            fixtures :all
+          end
+        end
+      RUBY
+      write("test/application_system_test_case.rb", <<~RUBY)
+        class ApplicationSystemTestCase < ActionDispatch::SystemTestCase
+          driven_by :selenium, using: :headless_chrome, screen_size: [ 1400, 1400 ]
+        end
+      RUBY
+    end
+
+    let(:result) { described_class.new(double("app", root: @root)).call }
+
+    it "names test/test_helpers and leaves helper tests to the test files" do
+      expect(result[:test_helpers]).to eq(%w[test/test_helpers/session_test_helper.rb])
+      expect(result[:test_files]["helpers"]).to eq(location: "test/helpers", count: 1)
+    end
+
+    it "shows the parallelize, fixtures and driven_by calls" do
+      expect(result[:test_helper_setup]).to eq([
+        "parallelize(workers: :number_of_processors)",
+        "fixtures :all",
+        "driven_by :selenium, using: :headless_chrome, screen_size: [ 1400, 1400 ]"
+      ])
+    end
+  end
+
+  describe "fixture sets read the way ActiveRecord reads them" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def write(rel, body = "")
+      path = File.join(@root, rel)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, body)
+    end
+
+    def payload
+      described_class.new(double("app", root: @root)).call
+    end
+
+    it "keeps subfolder sets apart and drops the labels _fixture ignores" do
+      write("test/fixtures/users.yml", "DEFAULTS: &DEFAULTS\n  name: Default\nalice:\n  <<: *DEFAULTS\n  email: alice@example.com\n")
+      write("test/fixtures/admin/posts.yml", "pinned:\n  title: Admin pinned\n")
+      write("test/fixtures/posts.yml", "_fixture:\n  model_class: Post\n  ignore: base\nbase:\n  title: Base\nfirst:\n  title: Hello\n")
+
+      expect(payload[:fixture_names]).to eq("admin/posts" => %w[pinned], "posts" => %w[first], "users" => %w[alice])
+    end
+
+    it "reads the sets under a directory the test helper adds to fixture_paths" do
+      write("test/test_helper.rb", "class ActiveSupport::TestCase\n  self.fixture_paths << Rails.root.join(\"test/shared_fixtures\")\nend\n")
+      write("test/fixtures/users.yml", "bob:\n  name: B\n")
+      write("test/shared_fixtures/plans.yml", "free:\n  price: 0\n")
+
+      result = payload
+      expect(result[:fixture_names]).to eq("users" => %w[bob], "plans" => %w[free])
+      expect(result[:fixtures]).to eq(location: "test/fixtures, test/shared_fixtures", locations: %w[test/fixtures test/shared_fixtures], count: 2)
+    end
+
+    it "does not follow a fixture path out of the app or into a missing directory" do
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "secrets.yml"), "leak:\n  key: x\n")
+        FileUtils.mkdir_p(File.join(@root, "test"))
+        File.symlink(outside, File.join(@root, "test", "linked"))
+        write("test/test_helper.rb", "self.fixture_paths += [\"test/linked\", \"test/nowhere\", \"../up\"]\n")
+        write("test/fixtures/users.yml", "bob:\n  name: B\n")
+
+        expect(payload[:fixture_names]).to eq("users" => %w[bob])
+      end
+    end
+
+    it "reads no fixture file that links out of the app or to a sensitive file" do
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "leak.yml"), "secret_label:\n  key: x\n")
+        write("config/database.yml", "production:\n  password: x\n")
+        write("test/fixtures/users.yml", "bob:\n  name: B\n")
+        File.symlink(File.join(outside, "leak.yml"), File.join(@root, "test", "fixtures", "leak.yml"))
+        File.symlink(File.join(@root, "config", "database.yml"), File.join(@root, "test", "fixtures", "db.yml"))
+
+        result = payload
+        expect(result[:fixture_names]).to eq("users" => %w[bob])
+        expect(result[:fixtures]).to eq(location: "test/fixtures", locations: %w[test/fixtures], count: 1)
+      end
+    end
+  end
+
+  # factory_bot loads factories.rb, test/factories.rb and spec/factories.rb and
+  # the directories of those names; packs-rails adds each pack's own.
+  describe "factories, fabricators and a Cucumber tree" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def write(rel, body = "")
+      path = File.join(@root, rel)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, body)
+    end
+
+    def payload
+      described_class.new(double("app", root: @root)).call
+    end
+
+    before do
+      write("spec/factories.rb", "FactoryBot.define do\n  factory :account do\n    name { \"x\" }\n  end\nend\n")
+      write("packs/billing/package.yml", "enforce_dependencies: true\n")
+      write("packs/billing/spec/factories/invoices.rb", "FactoryBot.define do\n  factory :invoice do\n    number { \"1\" }\n  end\nend\n")
+      write("spec/fabricators/product_fabricator.rb", "Fabricator(:product) do\n  title \"W\"\nend\n")
+      write("features/x.feature", "Feature: X\n")
+      write("features/step_definitions/s.rb", "Given(/^x$/) { }\n")
+    end
+
+    it "reads every place factory_bot loads definitions from, packs included" do
+      result = payload
+
+      expect(result[:factories]).to eq(location: "spec/factories.rb, packs/billing/spec/factories", count: 2)
+      expect(result[:factory_names]).to eq("spec/factories.rb" => %w[account], "packs/billing/spec/factories/invoices.rb" => %w[invoice])
+    end
+
+    it "reads the root factories directory and test/factories.rb" do
+      write("factories/users.rb", "FactoryBot.define do\n  factory :user\nend\n")
+      write("test/factories.rb", "FactoryBot.define do\n  factory :order\nend\n")
+
+      expect(payload[:factory_names].values.flatten).to contain_exactly("account", "invoice", "user", "order")
+    end
+
+    it "reads no pack factories from a pack that is a gem" do
+      write("packs/billing/billing.gemspec", "")
+
+      expect(payload[:factory_names].keys).to eq(%w[spec/factories.rb])
+    end
+
+    it "reads Fabrication's fabricators" do
+      result = payload
+
+      expect(result[:fabricators]).to eq(location: "spec/fabricators", count: 1)
+      expect(result[:fabricator_names]).to eq("spec/fabricators/product_fabricator.rb" => %w[product])
+    end
+
+    it "counts the Cucumber features and step definitions" do
+      expect(payload[:cucumber]).to eq(location: "features", count: 1, step_definitions: 1)
+    end
+
+    it "does not read a factory file linked from outside the app" do
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "leak.rb"), "FactoryBot.define do\n  factory :leak\nend\n")
+        FileUtils.mkdir_p(File.join(@root, "spec/factories"))
+        File.symlink(File.join(outside, "leak.rb"), File.join(@root, "spec/factories/leak.rb"))
+
+        expect(payload[:factory_names].values.flatten).not_to include("leak")
+      end
     end
   end
 

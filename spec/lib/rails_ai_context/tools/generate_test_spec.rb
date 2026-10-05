@@ -337,6 +337,24 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
           expect(text).to include("@user = drupal_users(:bob)")
         end
       end
+
+      it "reads no fixture label through a fixture file symlinked out of the app" do
+        Dir.mktmpdir do |outside|
+          Dir.mktmpdir do |root|
+            plots2_shaped(root)
+            File.write(File.join(outside, "nodes.yml"), "secret_label:\n  title: A\n")
+            File.symlink(File.join(outside, "nodes.yml"), File.join(root, "test", "fixtures", "nodes.yml"))
+            allow(described_class).to receive(:cached_context).and_return({
+              tests: { framework: "minitest", fixture_names: {}, factory_names: {} },
+              models: { "Node" => { table_name: "node", associations: [], validations: [], scopes: [], enums: {}, callbacks: {} } }
+            })
+
+            text = described_class.call(model: "Node").content.first[:text]
+
+            expect(text).not_to include("secret_label")
+          end
+        end
+      end
     end
 
     # A TestCase request names the action, so every dynamic path segment is
