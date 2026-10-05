@@ -324,3 +324,62 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener do
     ])
   end
 end
+
+RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener, "visibility scopes" do
+  def rows(source)
+    parse_and_dispatch(source).map { |m| [ m[:name], m[:scope], m[:visibility] ] }
+  end
+
+  it "keeps a private inside class << self to the singleton body" do
+    source = <<~RUBY
+      class OrdersController
+        class << self
+          private
+          def internal_helper; end
+        end
+        def index; end
+      end
+    RUBY
+    expect(rows(source)).to eq([ [ "internal_helper", :class, :private ], [ "index", :instance, :public ] ])
+  end
+
+  it "starts a class << self body public after a private section" do
+    source = <<~RUBY
+      class Widget
+        def theta_instance; end
+        private
+        class << self
+          def iota_class_after_private_section; end
+        end
+        def still_private; end
+      end
+    RUBY
+    expect(rows(source)).to eq([
+      [ "theta_instance", :instance, :public ],
+      [ "iota_class_after_private_section", :class, :public ],
+      [ "still_private", :instance, :private ]
+    ])
+  end
+
+  it "keeps a private inside a concerning block to that block" do
+    source = <<~RUBY
+      class WidgetLog
+        concerning :Exporting do
+          def export; end
+          private
+          def export_rows; end
+        end
+        def summary_after_concerning; end
+      end
+    RUBY
+    expect(rows(source)).to eq([
+      [ "export", :instance, :public ], [ "export_rows", :instance, :private ],
+      [ "summary_after_concerning", :instance, :public ]
+    ])
+  end
+
+  it "flips only the singleton method on private :x inside class << self" do
+    source = "class Widget\n  def x; end\n  class << self\n    def x; end\n    private :x\n  end\nend\n"
+    expect(rows(source)).to eq([ [ "x", :instance, :public ], [ "x", :class, :private ] ])
+  end
+end

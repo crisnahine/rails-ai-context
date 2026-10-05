@@ -13,138 +13,141 @@ module RailsAiContext
         def initialize(include_initialize: false)
           super()
           @include_initialize = include_initialize
-          @visibility_stack = [ :public ]
-          @in_singleton_class = false
-          @singleton_depth = 0
-          @inline_visibility_stack = [ {} ] # stack of { method_name => visibility }
+          @frames = [ Frame.new(:body, :public, {}) ]
           @owner_stack = []
-          # `class_methods do` and `included do` bodies, keyed by their block
-          # node so the block's own enter/leave can open and close a scope.
-          @concern_blocks = {}.compare_by_identity
+          # Blocks that open a body of their own, keyed by their block node so
+          # the block's own enter/leave can open and close the frame.
+          @scoped_blocks = {}.compare_by_identity
           @open_blocks = []
-          @scope_stack = []
         end
 
-        # Reset visibility when entering a new class/module scope
+        # One visibility scope: a class or module body, a `class << self`
+        # body, or a block Rails evaluates as a module body. `marks` holds the
+        # inline `private :x` forms, keyed by [scope, name].
+        Frame = Struct.new(:kind, :visibility, :marks)
+
+        CLASS_SCOPE_FRAMES = %i[singleton class_methods].freeze
+        BLOCK_FRAMES = { class_methods: :class_methods, included: :body, concerning: :body }.freeze
+
         def on_class_node_enter(node)
-          @visibility_stack.push(:public)
-          @inline_visibility_stack.push({})
+          open_frame(:body)
           @owner_stack.push(constant_path_string(node.constant_path))
         end
 
         def on_class_node_leave(node)
-          @visibility_stack.pop
-          @inline_visibility_stack.pop
+          @frames.pop
           @owner_stack.pop
         end
 
         def on_module_node_enter(node)
-          @visibility_stack.push(:public)
-          @inline_visibility_stack.push({})
+          open_frame(:body)
           @owner_stack.push(constant_path_string(node.constant_path))
         end
 
         def on_module_node_leave(node)
-          @visibility_stack.pop
-          @inline_visibility_stack.pop
+          @frames.pop
           @owner_stack.pop
         end
 
-        # Track `class << self` blocks
+        # A singleton class body starts public, and a `private` in it stays in it.
         def on_singleton_class_node_enter(node)
-          @in_singleton_class = true
-          @singleton_depth += 1
+          open_frame(:singleton)
         end
 
         def on_singleton_class_node_leave(node)
-          @singleton_depth -= 1
-          @in_singleton_class = false if @singleton_depth == 0
+          @frames.pop
         end
 
-        # Track visibility modifiers: private, protected, public
-        # Handles both bare form (`private`) and inline form (`private :method_name`)
+        # Bare `private` affects every later def in this frame; `private :x`
+        # and `private def x` mark the one name, retroactively for :x.
         def on_call_node_enter(node)
           return unless node.receiver.nil?
 
           case node.name
           when :private, :protected, :public
             if node.arguments.nil?
-              # Bare modifier: affects all subsequent defs in this scope
-              @visibility_stack[-1] = node.name
+              @frames.last.visibility = node.name
             else
-              # Inline form: `private :method_name` - retroactively update
-              # already-recorded methods and mark for future defs. The def in
-              # `private def x` is visited after this call, so marking its
-              # name here is enough.
-              args = node.arguments.arguments
-              args.each do |arg|
-                case arg
-                when Prism::DefNode
-                  @inline_visibility_stack.last[arg.name.to_s] = node.name
-                when Prism::SymbolNode
-                  method_name = arg.unescaped
-                  @inline_visibility_stack.last[method_name] = node.name
-                  existing = @results.find { |r| r[:name] == method_name && r[:owner] == @owner_stack }
-                  existing[:visibility] = node.name if existing
-                end
-              end
+              mark(node.arguments.arguments, node.name, frame_scope)
             end
-          when :class_methods, :included
-            @concern_blocks[node.block] = node.name if node.block.is_a?(Prism::BlockNode)
+          when *BLOCK_FRAMES.keys
+            @scoped_blocks[node.block] = BLOCK_FRAMES[node.name] if node.block.is_a?(Prism::BlockNode)
           end
         end
 
-        # A concern block is a visibility scope of its own: a `private` inside
-        # `class_methods do` does not reach the module's instance methods.
         def on_block_node_enter(node)
-          kind = @concern_blocks.delete(node)
+          kind = @scoped_blocks.delete(node)
           return unless kind
 
           @open_blocks.push(node)
-          @scope_stack.push(kind)
-          @visibility_stack.push(:public)
-          @inline_visibility_stack.push({})
+          open_frame(kind)
         end
 
         def on_block_node_leave(node)
           return unless @open_blocks.last.equal?(node)
 
           @open_blocks.pop
-          @scope_stack.pop
-          @visibility_stack.pop
-          @inline_visibility_stack.pop
+          @frames.pop
         end
 
         def on_def_node_enter(node)
-          is_class_method = @in_singleton_class || node.receiver&.is_a?(Prism::SelfNode) || @scope_stack.last == :class_methods
+          scope = def_scope(node)
           method_name = node.name.to_s
 
-          return if method_name == "initialize" && !is_class_method && !@include_initialize
+          return if method_name == "initialize" && scope == :instance && !@include_initialize
 
-          # Inline visibility (`private :foo`) takes precedence over positional
-          visibility = @inline_visibility_stack.last[method_name] || @visibility_stack.last
+          frame = @frames.last
+          visibility = frame.marks[[ scope, method_name ]] || frame.visibility
+          record(node, method_name, scope, visibility)
+        end
 
-          params = extract_params(node)
+        private
 
+        def open_frame(kind)
+          @frames.push(Frame.new(kind, :public, {}))
+        end
+
+        def frame_scope
+          CLASS_SCOPE_FRAMES.include?(@frames.last.kind) ? :class : :instance
+        end
+
+        def def_scope(node)
+          node.receiver.is_a?(Prism::SelfNode) ? :class : frame_scope
+        end
+
+        def mark(args, visibility, scope)
+          marks = @frames.last.marks
+          args.each do |arg|
+            case arg
+            when Prism::DefNode
+              marks[[ def_scope(arg), arg.name.to_s ]] = visibility
+            when Prism::SymbolNode
+              name = arg.unescaped
+              marks[[ scope, name ]] = visibility
+              existing = @results.reverse_each.find { |r| r[:name] == name && r[:scope] == scope && r[:owner] == @owner_stack }
+              existing[:visibility] = visibility if existing
+            end
+          end
+        end
+
+        def record(node, method_name, scope, visibility)
           @results << {
             name:         method_name,
-            scope:        is_class_method ? :class : :instance,
+            scope:        scope,
             visibility:   visibility,
-            params:       params,
+            params:       extract_params(node),
             # Enclosing class/module names, outermost first. A caller that
             # wants one class's own methods needs this: a helper class nested
             # inside a service is a separate owner, not part of its interface.
             owner:        @owner_stack.dup,
             # Sliced off the node so defaults read as written (`options = {}`);
             # `params` records names only.
-            signature:    signature_source(node, is_class_method),
+            signature:    signature_source(node, scope == :class),
             location:     node.location.start_line,
             end_location: node.location.end_line,
             confidence:   RailsAiContext::Confidence::VERIFIED
           }
         end
-
-        private
 
         # `class << self` members carry no receiver of their own, so they read
         # as the bare name, which is how they are written.
