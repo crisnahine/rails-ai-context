@@ -41,6 +41,14 @@ module RailsAiContext
         # only Rails' `private: true` makes one private.
         DELEGATORS = %i[delegate def_delegators def_instance_delegators def_delegator def_instance_delegator instance_delegate].freeze
 
+        # Ruby's own definers: these honor the section's visibility, as `def` does.
+        ATTR_DEFINERS = { attr_reader: [ :reader ], attr_writer: [ :writer ], attr_accessor: %i[reader writer], attr: [ :reader ] }.freeze
+        # Active Support's: each defines public class and instance accessors from a string `class_eval`.
+        CLASS_ACCESSORS = {
+          class_attribute: %i[reader writer], mattr_reader: [ :reader ], cattr_reader: [ :reader ],
+          mattr_writer: [ :writer ], cattr_writer: [ :writer ], mattr_accessor: %i[reader writer], cattr_accessor: %i[reader writer]
+        }.freeze
+
         def on_class_node_enter(node)
           open_frame(:body)
           @owner_stack.push(constant_path_string(node.constant_path))
@@ -95,7 +103,17 @@ module RailsAiContext
             @scoped_blocks[node.block] = BLOCK_FRAMES[node.name] if node.block.is_a?(Prism::BlockNode)
           when *DELEGATORS
             record_delegated(node) if @def_depth.zero?
+          when *ATTR_DEFINERS.keys, :define_method, :alias_method, *CLASS_ACCESSORS.keys
+            record_defined(node) if @def_depth.zero? && @frames.last.kind != :extension
           end
+        end
+
+        def on_alias_method_node_enter(node)
+          return unless @def_depth.zero? && @frames.last.kind != :extension
+
+          new_name = literal_string(node.new_name)
+          old_name = literal_string(node.old_name)
+          record_alias(node, new_name, old_name) if new_name && old_name
         end
 
         def on_block_node_enter(node)
@@ -217,6 +235,64 @@ module RailsAiContext
           @results << entry
         end
 
+        def record_defined(node)
+          names = Array(node.arguments&.arguments).filter_map { |a| literal_string(a) }
+          case node.name
+          when :define_method
+            record_name(node, names.first, frame_scope, @frames.last.visibility) if names.first
+          when :alias_method
+            record_alias(node, *names.first(2)) if names.size >= 2
+          when *ATTR_DEFINERS.keys
+            names.each { |name| record_accessors(node, name, ATTR_DEFINERS[node.name], frame_scope, @frames.last.visibility) }
+          else
+            record_class_accessors(node, names)
+          end
+        end
+
+        def record_class_accessors(node, names)
+          kinds = CLASS_ACCESSORS[node.name]
+          options = extract_keyword_options(node)
+          off = ->(key) { options[key] == false || options[:instance_accessor] == false }
+          instance = kinds.reject { |kind| off.call(kind == :reader ? :instance_reader : :instance_writer) }
+          predicate = node.name == :class_attribute && options[:instance_predicate] != false
+          names.each do |name|
+            record_accessors(node, name, kinds, :class, :public)
+            record_name(node, "#{name}?", :class, :public) if predicate
+            record_accessors(node, name, instance, :instance, :public)
+            record_name(node, "#{name}?", :instance, :public) if predicate && instance.include?(:reader)
+          end
+        end
+
+        def record_accessors(node, name, kinds, scope, visibility)
+          record_name(node, name, scope, visibility) if kinds.include?(:reader)
+          record_name(node, "#{name}=", scope, visibility, signature: "#{name}=(value)") if kinds.include?(:writer)
+        end
+
+        # An alias carries its original's visibility and parameters, whatever section it sits in.
+        def record_alias(node, new_name, old_name)
+          scope = frame_scope
+          original = @results.reverse_each.find { |r| r[:name] == old_name && r[:scope] == scope && r[:owner] == @owner_stack }
+          params = original ? original[:signature].to_s[/\(.*\)\z/m] : nil
+          record_name(node, new_name, scope, original ? original[:visibility] : :public, signature: "#{new_name}#{params}")
+        end
+
+        def record_name(node, name, scope, visibility, signature: name)
+          visibility = :public if visibility == :module_function
+          entry = {
+            name:         name,
+            scope:        scope,
+            visibility:   @frames.last.marks[[ scope, name ]] || visibility,
+            params:       [],
+            owner:        @owner_stack.dup,
+            signature:    signature,
+            # No end: these have no body for a call to sit inside.
+            location:     node.location.start_line,
+            confidence:   node.is_a?(Prism::CallNode) ? confidence_for(node) : RailsAiContext::Confidence::VERIFIED
+          }
+          entry[:class_methods_block] = true if @frames.last.kind == :class_methods
+          @results << entry
+        end
+
         def record_delegated(node)
           return if @frames.last.kind == :extension
 
@@ -241,7 +317,7 @@ module RailsAiContext
               args.grep(Prism::KeywordHashNode).flat_map(&:elements).grep(Prism::AssocNode).flat_map { |assoc| literal_strings(assoc.key) }
             end
           end
-          names.each { |name| record_delegated_name(node, name, visibility) }
+          names.each { |name| record_name(node, name, frame_scope, visibility) }
         end
 
         def delegation_prefix(options)
@@ -251,23 +327,6 @@ module RailsAiContext
           when Symbol, String then "#{options[:prefix]}_"
           else ""
           end
-        end
-
-        def record_delegated_name(node, name, visibility)
-          scope = frame_scope
-          entry = {
-            name:         name,
-            scope:        scope,
-            visibility:   @frames.last.marks[[ scope, name ]] || visibility,
-            params:       [],
-            owner:        @owner_stack.dup,
-            signature:    name,
-            # No end: a delegation has no body for a call to sit inside.
-            location:     node.location.start_line,
-            confidence:   confidence_for(node)
-          }
-          entry[:class_methods_block] = true if @frames.last.kind == :class_methods
-          @results << entry
         end
 
         # `class << self` members carry no receiver of their own, so they read

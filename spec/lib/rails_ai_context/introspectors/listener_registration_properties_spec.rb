@@ -34,6 +34,7 @@ RSpec.describe "Listener registration properties" do
           end
 
           macro :name, option: true
+          alias run_again run
 
           class_methods do
             def built_in_block

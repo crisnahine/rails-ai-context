@@ -500,6 +500,51 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  describe "methods a model defines without def" do
+    around do |example|
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "app", "models", "gadget.rb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, <<~RUBY)
+          class Gadget < ApplicationRecord
+            attr_accessor :draft_note
+            attr_reader :cached_total
+            class_attribute :default_color
+            cattr_accessor :registry
+            define_method(:dyn_inst) { 1 }
+
+            def summary
+              name.to_s
+            end
+            alias full_title summary
+            alias_method :headline, :summary
+          end
+        RUBY
+        @root = dir
+        example.run
+      end
+    end
+
+    it "lists aliases, accessors and define_method names with the def ones" do
+      described_class.reset_cache!
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Gadget" => { table_name: "gadgets", file: "app/models/gadget.rb" } }
+      )
+
+      text = described_class.call(model: "Gadget").content.first[:text]
+      instance = text[/## Key instance methods\n(.*?)\n\n/m, 1]
+      klass = text[/## Class methods\n(.*?)\n\n/m, 1]
+
+      %w[summary full_title headline draft_note draft_note=(value) cached_total dyn_inst].each do |m|
+        expect(instance).to include("- `#{m}`")
+      end
+      %w[default_color default_color=(value) registry registry=(value)].each do |m|
+        expect(klass).to include("- `#{m}`")
+      end
+    end
+  end
+
   describe "callbacks" do
     before do
       described_class.reset_cache!

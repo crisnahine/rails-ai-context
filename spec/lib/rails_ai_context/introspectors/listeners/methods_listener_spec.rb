@@ -515,3 +515,89 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener, "visib
     expect(rows(source)).to eq([ [ "built", :instance, :public ], [ "real_m", :instance, :public ] ])
   end
 end
+
+RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener, "methods defined without def" do
+  def rows(source)
+    parse_and_dispatch(source).map { |m| [ m[:signature], m[:scope], m[:visibility] ] }
+  end
+
+  it "records alias, alias_method, attr_*, define_method, class_attribute and cattr_accessor" do
+    source = <<~RUBY
+      class Gadget < ApplicationRecord
+        attr_accessor :draft_note
+        attr_reader :cached_total
+        class_attribute :default_color
+        cattr_accessor :registry
+        define_method(:dyn_inst) { 1 }
+
+        def summary(style = :short)
+          name.to_s
+        end
+        alias full_title summary
+        alias_method :headline, :summary
+      end
+    RUBY
+    expect(rows(source)).to contain_exactly(
+      [ "draft_note", :instance, :public ], [ "draft_note=(value)", :instance, :public ],
+      [ "cached_total", :instance, :public ],
+      [ "default_color", :class, :public ], [ "default_color=(value)", :class, :public ], [ "default_color?", :class, :public ],
+      [ "default_color", :instance, :public ], [ "default_color=(value)", :instance, :public ], [ "default_color?", :instance, :public ],
+      [ "registry", :class, :public ], [ "registry=(value)", :class, :public ],
+      [ "registry", :instance, :public ], [ "registry=(value)", :instance, :public ],
+      [ "dyn_inst", :instance, :public ],
+      [ "summary(style = :short)", :instance, :public ],
+      [ "full_title(style = :short)", :instance, :public ],
+      [ "headline(style = :short)", :instance, :public ]
+    )
+  end
+
+  it "honors the options that leave instance methods out" do
+    source = <<~RUBY
+      class Gadget
+        class_attribute :a, instance_writer: false, instance_predicate: false
+        class_attribute :b, instance_accessor: false
+        mattr_reader :c, instance_reader: false
+      end
+    RUBY
+    expect(rows(source)).to contain_exactly(
+      [ "a", :class, :public ], [ "a=(value)", :class, :public ], [ "a", :instance, :public ],
+      [ "b", :class, :public ], [ "b=(value)", :class, :public ], [ "b?", :class, :public ],
+      [ "c", :class, :public ]
+    )
+  end
+
+  it "keeps attr_* and define_method in the visibility section and an alias at its original's" do
+    source = <<~RUBY
+      class Gadget
+        private
+        attr_reader :secret
+        define_method(:hidden) { 1 }
+        def inner; end
+        alias outer inner
+        alias_method :saved, :save
+        class << self
+          attr_accessor :setting
+        end
+      end
+    RUBY
+    expect(rows(source)).to contain_exactly(
+      [ "secret", :instance, :private ], [ "hidden", :instance, :private ], [ "inner", :instance, :private ],
+      [ "outer", :instance, :private ], [ "saved", :instance, :public ],
+      [ "setting", :class, :public ], [ "setting=(value)", :class, :public ]
+    )
+  end
+
+  it "skips a computed name and a definer run inside a method" do
+    source = <<~RUBY
+      class Gadget
+        %w[a b].each { |n| define_method("\#{n}_x") { n } }
+        attr_reader(*COLUMNS)
+        def self.build
+          define_method(:later) { 1 }
+          attr_accessor :later_too
+        end
+      end
+    RUBY
+    expect(rows(source)).to eq([ [ "self.build", :class, :public ] ])
+  end
+end
