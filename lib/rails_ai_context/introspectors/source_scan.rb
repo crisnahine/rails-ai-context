@@ -40,12 +40,12 @@ module RailsAiContext
 
       def scan_dir(dir, root, real_root, skip_concerns)
         real_dir = File.realpath(dir)
-        Dir.glob(File.join(dir, "**", "*.rb")).sort.each do |path|
+        ruby_files(dir, [ real_dir, real_root ], Set.new).sort.each do |path|
           relative_to_dir = path.delete_prefix(dir + File::SEPARATOR)
           next if skip_concerns && relative_to_dir.start_with?("concerns/")
 
           real = File.realpath(path)
-          next unless SafePath.contained?(real, real_dir)
+          next unless within?(real, real_dir, real_root)
 
           path_name = relative_to_dir.sub(/\.rb\z/, "").split("/").map(&:camelize).join("::")
           yield Record.new(path: real, file: relative_file(path, real, root, real_root), path_name: path_name, source: nil)
@@ -54,6 +54,29 @@ module RailsAiContext
         end
       rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
         nil
+      end
+
+      # Zeitwerk follows symlinks, so the walk does too, as far as the app's
+      # own tree; a directory reached twice (a link back up) is walked once.
+      def ruby_files(dir, bounds, visited)
+        return [] unless visited.add?(File.realpath(dir))
+
+        Dir.children(dir).flat_map do |name|
+          next [] if name.start_with?(".")
+
+          path = File.join(dir, name)
+          if File.directory?(path)
+            within?(File.realpath(path), *bounds) ? ruby_files(path, bounds, visited) : []
+          else
+            name.end_with?(".rb") ? [ path ] : []
+          end
+        rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
+          []
+        end
+      end
+
+      def within?(real, real_dir, real_root)
+        SafePath.contained?(real, real_dir) || SafePath.contained?(real, real_root)
       end
 
       SUPERCLASS_DECLARATION = /^[^\S\n]*class[^\S\n]+[\w:]+[^\S\n]*</
@@ -74,7 +97,7 @@ module RailsAiContext
         end
       end
 
-      private_class_method :scan, :scan_dir, :scan_extra_model_roots
+      private_class_method :scan, :scan_dir, :ruby_files, :within?, :scan_extra_model_roots
 
       def each(root, kind:, skip_concerns: true)
         return enum_for(:each, root, kind: kind, skip_concerns: skip_concerns) unless block_given?

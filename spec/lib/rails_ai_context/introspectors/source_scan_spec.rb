@@ -87,6 +87,29 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
     end
   end
 
+  it "follows a symlinked directory or file in app/models to a target inside the app, as Zeitwerk does" do
+    Dir.mktmpdir do |dir|
+      Dir.mktmpdir do |elsewhere|
+        FileUtils.mkdir_p(File.join(dir, "app/models"))
+        FileUtils.mkdir_p(File.join(dir, "shared/billing"))
+        FileUtils.mkdir_p(File.join(dir, "shared2"))
+        File.write(File.join(dir, "shared/billing/invoice.rb"), "module Billing\n  class Invoice < ApplicationRecord\n  end\nend\n")
+        File.write(File.join(dir, "shared2/coupon.rb"), "class Coupon < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app/models/user.rb"), "class User < ApplicationRecord\nend\n")
+        File.write(File.join(elsewhere, "secret.rb"), "class Secret < ApplicationRecord\nend\n")
+        File.symlink("../../shared/billing", File.join(dir, "app/models/billing"))
+        File.symlink("../../shared2/coupon.rb", File.join(dir, "app/models/coupon.rb"))
+        File.symlink(File.join(elsewhere, "secret.rb"), File.join(dir, "app/models/secret.rb"))
+        File.symlink(elsewhere, File.join(dir, "app/models/outside"))
+        File.symlink("..", File.join(dir, "app/models/billing_loop"))
+
+        records = described_class.paths(dir, kind: "app/models").to_a
+        expect(records.map(&:path_name)).to contain_exactly("Billing::Invoice", "Coupon", "User")
+        expect(records.map(&:file)).to contain_exactly("shared/billing/invoice.rb", "shared2/coupon.rb", "app/models/user.rb")
+      end
+    end
+  end
+
   it "answers nothing for a root that does not exist" do
     expect(described_class.each("/nonexistent/rails-ai-context-root", kind: "app/models").to_a).to eq([])
   end
@@ -94,14 +117,15 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
   # OpenProject's run asked for app/models five times and app/controllers
   # four; the glob and a realpath per file were a fifth of its CPU.
   describe "within one introspection run" do
-    it "globs a kind once, and again in the next run" do
+    it "walks a kind once, and again in the next run" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models"))
         File.write(File.join(dir, "app", "models", "post.rb"), "class Post; end\n")
         globs = 0
-        allow(Dir).to receive(:glob).and_wrap_original do |original, *args, **kwargs, &block|
-          globs += 1 if args.first.to_s.end_with?("**/*.rb")
-          original.call(*args, **kwargs, &block)
+        models = File.join(dir, "app", "models")
+        allow(Dir).to receive(:children).and_wrap_original do |original, *args, **kwargs|
+          globs += 1 if args.first.to_s == models
+          original.call(*args, **kwargs)
         end
 
         RailsAiContext::RunCache.around do
