@@ -696,7 +696,40 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
     end
   end
 
+  describe "booted parent nesting" do
+    it "marks a namespaced controller's top-level parent so its namesake in the namespace is not read" do
+      stub_const("NestBase", Class.new)
+      stub_const("NestApi", Module.new)
+      stub_const("NestApi::NestBase", Class.new)
+      compact = stub_const("NestApi::CompactController", Class.new(NestBase))
+      nested = stub_const("NestApi::NestedController", Class.new(NestApi::NestBase))
+
+      expect(introspector.send(:booted_parent_nesting, compact)).to eq([])
+      expect(introspector.send(:booted_parent_nesting, nested)).to be_nil
+    end
+  end
+
   describe "#static_call" do
+    it "reads a compact controller's bare superclass from the top level" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "api"))
+        File.write(File.join(dir, "app", "controllers", "base_controller.rb"),
+                   "class BaseController < ApplicationController\n  before_action :authenticate_web\nend\n")
+        File.write(File.join(dir, "app", "controllers", "api", "base_controller.rb"),
+                   "module Api\n  class BaseController < ApplicationController\n    before_action :authenticate_token\n  end\nend\n")
+        File.write(File.join(dir, "app", "controllers", "api", "users_controller.rb"),
+                   "class Api::UsersController < BaseController\n  def index; end\nend\n")
+        File.write(File.join(dir, "app", "controllers", "api", "orders_controller.rb"),
+                   "module Api\n  class OrdersController < BaseController\n  end\nend\n")
+
+        controllers = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:controllers]
+        resolve = ->(name) { RailsAiContext::Introspectors::ActionResolver.resolve_entry_name(controllers, controllers[name][:parent_class], name) }
+
+        expect(resolve.call("Api::UsersController")).to eq("BaseController")
+        expect(resolve.call("Api::OrdersController")).to eq("Api::BaseController")
+      end
+    end
+
     it "names a controller that failed to load by its app-relative path" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers"))

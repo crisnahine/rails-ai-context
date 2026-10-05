@@ -103,6 +103,21 @@ RSpec.describe RailsAiContext::Introspectors::SuperclassChain do
   describe ".resolve_in_scope" do
     let(:known) { %w[Fasp::BaseWorker BaseWorker Trackers::Base] }
 
+    it "reads a compact class's superclass from the nesting it is written in" do
+      resolved = described_class.resolve_in_scope("Fasp::BackfillWorker", "BaseWorker", nesting: []) do |name|
+        name if known.include?(name)
+      end
+
+      expect(resolved).to eq("BaseWorker")
+    end
+
+    it "walks Module.nesting rather than every prefix of the declared name" do
+      tried = []
+      described_class.resolve_in_scope("A::B::D::C", "X", nesting: %w[A::B::D A]) { |name| tried << name && nil }
+
+      expect(tried).to eq(%w[A::B::D::X A::X X])
+    end
+
     it "prefers the nearest enclosing namespace over the bare name" do
       resolved = described_class.resolve_in_scope("Fasp::BackfillWorker", "BaseWorker") do |name|
         name if known.include?(name)

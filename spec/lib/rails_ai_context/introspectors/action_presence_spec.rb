@@ -31,6 +31,24 @@ RSpec.describe RailsAiContext::Introspectors::ActionPresence do
     end
   end
 
+  it "follows a compact controller's bare superclass to the top-level class" do
+    Dir.mktmpdir do |root|
+      {
+        "app/controllers/base_controller.rb" => "class BaseController < ActionController::Base\n  def web_only; end\nend\n",
+        "app/controllers/api/base_controller.rb" => "module Api\n  class BaseController < ActionController::Base\n    def token_only; end\n  end\nend\n",
+        "app/controllers/api/users_controller.rb" => "class Api::UsersController < BaseController\nend\n"
+      }.each do |relative, body|
+        FileUtils.mkdir_p(File.dirname(File.join(root, relative)))
+        File.write(File.join(root, relative), body)
+      end
+      source = File.read(File.join(root, "app/controllers/api/users_controller.rb"))
+      chain = described_class.read(root, "Api::UsersController", source, prefix: "api/users")
+
+      expect(chain.defines?("web_only")).to be true
+      expect(chain.defines?("token_only")).to be false
+    end
+  end
+
   it "counts what an extended module's class macro builds with define_method" do
     files = app_base.merge(
       "app/controllers/orders_controller.rb" => "class OrdersController < ApplicationController\n  extend Listing\n  listing_for :orders\nend\n",

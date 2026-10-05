@@ -348,7 +348,7 @@ module RailsAiContext
 
       # One class file. `declares` carries every constant in it, so a subclass
       # elsewhere can find its base here.
-      Candidate = Data.define(:file, :source, :declared, :declares, :superclass, :ast)
+      Candidate = Data.define(:file, :source, :declared, :declares, :superclass, :nesting, :ast)
 
       # Every class in every job directory, one walk each. The kind of job waits for the
       # whole map: the mixin or ActiveJob ancestry is often on a base in another file.
@@ -367,6 +367,7 @@ module RailsAiContext
               declared: declaration.name,
               declares: declarations.map(&:name),
               superclass: declaration.superclass,
+              nesting: declaration.nesting,
               ast: SourceIntrospector.walk_source(record.source, QUEUE_AS_LISTENERS.merge(
                 methods: Listeners::MethodsListener,
                 calls:   SourceCalls.listener
@@ -397,7 +398,7 @@ module RailsAiContext
       def superclass_of(name)
         candidate = job_candidates[name] or return nil
 
-        SuperclassChain.resolve_in_scope(candidate.declared, candidate.superclass) do |qualified|
+        SuperclassChain.resolve_in_scope(candidate.declared, candidate.superclass, nesting: candidate.nesting) do |qualified|
           candidate_names[qualified]
         end
       end

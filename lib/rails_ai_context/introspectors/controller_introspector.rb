@@ -199,7 +199,8 @@ module RailsAiContext
         # Carry the file that was read: the declared name does not round-trip
         # back to a path. See CONTEXT.md, "Declared constant".
         relative_file = record.file
-        parent = parent_class_of(source, class_name)
+        declaration = parent_declaration(source, class_name)
+        parent = declaration&.superclass || "Unknown"
         rate_limit = rate_limit_entry(source)
         filters, unread = ControllerFilters.with_concerns(source, root: app.root.to_s, within: class_name,
                                                                   cache: (@concern_cache ||= {}))
@@ -208,6 +209,7 @@ module RailsAiContext
         mixed_in = concern_actions(concerns, class_name, filters) - own
         details = {
           parent_class: parent,
+          parent_nesting: odd_nesting(class_name, declaration&.nesting),
           api_controller: parent.include?("API"),
           actions: (own + mixed_in).sort,
           inherited_actions: mixed_in.presence,
@@ -244,6 +246,7 @@ module RailsAiContext
 
         {
           parent_class: ctrl.superclass.name,
+          parent_nesting: booted_parent_nesting(ctrl),
           api_controller: api_controller?(ctrl),
           actions: actions.sort,
           inherited_actions: (actions - own).presence,
@@ -789,13 +792,26 @@ module RailsAiContext
 
       # --- AST helpers ---
 
-      # The superclass this file's own class names. A file may declare more
+      # The declaration naming this file's superclass. A file may declare more
       # than one class, so the one matching the resolved constant answers
       # first; anything else in the file only answers when it does not.
-      def parent_class_of(source, class_name)
+      def parent_declaration(source, class_name)
         declarations = DeclaredConstant.declarations(source)
         named = declarations.find { |d| d.name == class_name }
-        named&.superclass || declarations.find(&:superclass)&.superclass || "Unknown"
+        named&.superclass ? named : declarations.find(&:superclass)
+      end
+
+      # Only a nesting the class name does not already imply is carried: the
+      # compact form, or a root-anchored superclass.
+      def odd_nesting(class_name, nesting)
+        nesting unless nesting.nil? || nesting == SuperclassChain.nesting_of(class_name)
+      end
+
+      # Reflection names the superclass absolutely; reading it back by the
+      # class's own namespace would land on a namesake there.
+      def booted_parent_nesting(ctrl)
+        nearest = SuperclassChain.resolve_in_scope(ctrl.name, ctrl.superclass.name) { |c| c.safe_constantize.presence }
+        [] unless nearest.nil? || nearest.equal?(ctrl.superclass)
       end
 
       def read_source(ctrl)

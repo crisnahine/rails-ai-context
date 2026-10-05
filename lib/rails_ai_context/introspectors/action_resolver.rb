@@ -324,24 +324,22 @@ module RailsAiContext
         found.uniq.sort
       end
 
-      # Ruby resolves a bare superclass from the enclosing namespace outward,
-      # so `module Settings; class ProfileController < BaseController` keys the
-      # listing under Settings::BaseController even when a top-level
-      # BaseController exists too. A qualified name the listing holds is taken as written, one
-      # it lacks resolves outward too, and a rooted or unresolved name comes back as written.
+      # Ruby resolves a bare superclass through the nesting the class is
+      # written in, so `module Settings; class ProfileController < BaseController`
+      # keys the listing under Settings::BaseController even when a top-level
+      # BaseController exists too, and `class Settings::ProfileController <
+      # BaseController` keys it under BaseController. The entry's
+      # `parent_nesting` carries a nesting its name does not imply. A
+      # qualified name the listing holds is taken as written, one it lacks
+      # resolves outward too, and a rooted or unresolved name comes back as written.
       def resolve_entry_name(entries, name, within)
         rooted = name.to_s.start_with?("::")
         name = name&.to_s&.delete_prefix("::")
         return name if name.nil? || within.nil? || rooted || (name.include?("::") && entries.key?(name))
 
-        scope = within.to_s.split("::")[0..-2]
-        while scope.any?
-          qualified = (scope + [ name ]).join("::")
-          return qualified if entries.key?(qualified)
-
-          scope.pop
-        end
-        name
+        info = entries[within]
+        nesting = info[:parent_nesting] if info.is_a?(Hash)
+        SuperclassChain.resolve_in_scope(within, name, nesting: nesting) { |qualified| qualified if entries.key?(qualified) } || name
       end
 
       # `action_methods` subtracts inherited methods only as far as the

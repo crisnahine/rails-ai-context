@@ -1409,6 +1409,18 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
         ])
       end
 
+      it "reads a compact job's bare superclass from the top level" do
+        result = static_result do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "jobs", "admin"))
+          File.write(File.join(dir, "app", "jobs", "base_job.rb"), "class BaseJob < ActiveJob::Base\n  queue_as :web\nend\n")
+          File.write(File.join(dir, "app", "jobs", "admin", "base_job.rb"),
+                     "module Admin\n  class BaseJob < ActiveJob::Base\n    queue_as :admin\n  end\nend\n")
+          File.write(File.join(dir, "app", "jobs", "admin", "sync_job.rb"), "class Admin::SyncJob < BaseJob\n  def perform; end\nend\n")
+        end
+
+        expect(result[:jobs].find { |j| j[:name] == "Admin::SyncJob" }[:queue]).to eq("web")
+      end
+
       # Both halves of the base rule matter: a base nobody inherits from is
       # somebody's only job.
       it "keeps a job named like a base that nothing inherits from" do

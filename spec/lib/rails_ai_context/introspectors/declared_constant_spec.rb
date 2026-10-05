@@ -254,4 +254,19 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
       expect(described_class.declarations(source).map(&:name)).to eq([ "Billing::Invoice" ])
     end
   end
+  describe ".declarations nesting" do
+    def nesting_of(source, name)
+      described_class.declarations(source).find { |d| d.name == name }.nesting
+    end
+
+    it "is the Module.nesting the superclass is read in, innermost first" do
+      expect(nesting_of("module Api\n  class UsersController < BaseController\n  end\nend\n", "Api::UsersController")).to eq(%w[Api])
+      expect(nesting_of("class Api::UsersController < BaseController\nend\n", "Api::UsersController")).to eq([])
+      expect(nesting_of("module A\n  class B::C < X\n  end\nend\n", "A::B::C")).to eq(%w[A])
+    end
+
+    it "is empty for a superclass written from the root" do
+      expect(nesting_of("module Api\n  class UsersController < ::BaseController\n  end\nend\n", "Api::UsersController")).to eq([])
+    end
+  end
 end

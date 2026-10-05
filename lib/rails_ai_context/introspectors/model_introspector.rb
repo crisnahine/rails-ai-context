@@ -197,6 +197,7 @@ module RailsAiContext
               path: record.path,
               file: record.file,
               superclass: declaration&.superclass,
+              superclass_nesting: declaration&.nesting,
               abstract: abstract_class?(source)
             }.merge(TableName.declarations(source, class_name, app.root))
           rescue => e
@@ -271,7 +272,8 @@ module RailsAiContext
       # so `Admin::Report < Post` means the top-level Post unless Admin
       # declares one.
       def resolve_superclass(name, from, candidates)
-        SuperclassChain.resolve_in_scope(from, name) { |qualified| qualified if candidates.key?(qualified) }
+        nesting = candidates.dig(from, :superclass_nesting)
+        SuperclassChain.resolve_in_scope(from, name, nesting: nesting) { |qualified| qualified if candidates.key?(qualified) }
       end
 
       # Rails' own order: what the class assigns itself wins, an STI child
@@ -1793,7 +1795,7 @@ module RailsAiContext
               next if found.key?(class_name) || config.excluded_models.include?(class_name)
 
               declaration = DeclaredConstant.declaration_for(DeclaredConstant.declarations(source), class_name)
-              found[class_name] = { path: path, source: source, superclass: declaration&.superclass }
+              found[class_name] = { path: path, source: source, superclass: declaration&.superclass, nesting: declaration&.nesting }
             rescue => e
               found[relative.camelize] ||= { error: e.message }
             end
@@ -1811,7 +1813,7 @@ module RailsAiContext
           added = entries.select do |name, entry|
             parent = entry[:superclass]
             !names.include?(name) && parent &&
-              SuperclassChain.resolve_in_scope(name, parent) { |q| q if names.include?(q) }
+              SuperclassChain.resolve_in_scope(name, parent, nesting: entry[:nesting]) { |q| q if names.include?(q) }
           end.keys
           break if added.empty?
 
