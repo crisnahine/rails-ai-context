@@ -5,6 +5,59 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Tools::GetPartialInterface do
   before { described_class.reset_cache! }
 
+  describe "an implicit render of a collection or record" do
+    around do |example|
+      Dir.mktmpdir("implicit-render") do |dir|
+        @root = dir
+        views = File.join(dir, "app/views")
+        %w[admin/posts posts sessions shared].each { |d| FileUtils.mkdir_p(File.join(views, d)) }
+        FileUtils.mkdir_p(File.join(dir, "app/models"))
+        File.write(File.join(views, "admin/posts/index.html.erb"), "<%= render @posts %>\n")
+        File.write(File.join(views, "admin/posts/_post.html.erb"), "<%= post.title %>\n")
+        File.write(File.join(views, "posts/show.html.erb"), "<h1>Post</h1>\n\n<%= render @post %>\n")
+        File.write(File.join(views, "posts/_post.html.erb"), "<%= post.title %>\n")
+        File.write(File.join(views, "sessions/index.html.erb"), "<%= render @sessions %>\n")
+        File.write(File.join(views, "shared/_session_row.html.erb"), "<%= session_row.id %>\n")
+        File.write(File.join(dir, "app/models/session.rb"),
+                   "class Session < ApplicationRecord\n  def to_partial_path\n    \"shared/session_row\"\n  end\nend\n")
+        example.run
+      end
+    end
+
+    before do
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    def rendered_from(name)
+      described_class.call(partial: name).content.first[:text][/## Rendered From.*?(?=\n\n|\z)/m]
+    end
+
+    it "credits a namespaced view to the partial under its namespace" do
+      expect(rendered_from("admin/posts/post")).to eq("## Rendered From (1)\n- `app/views/admin/posts/index.html.erb:1`")
+      expect(rendered_from("posts/post")).to eq("## Rendered From (1)\n- `app/views/posts/show.html.erb:3`")
+    end
+
+    it "follows a to_partial_path the model defines" do
+      expect(rendered_from("shared/session_row")).to eq("## Rendered From (1)\n- `app/views/sessions/index.html.erb:1`")
+      expect(rendered_from("session_row")).to eq("## Rendered From (1)\n- `app/views/sessions/index.html.erb:1`")
+    end
+
+    it "drops the namespace when the app turns the prefix off" do
+      FileUtils.mkdir_p(File.join(@root, "config"))
+      File.write(File.join(@root, "config/application.rb"), <<~RUBY)
+        module Demo
+          class Application < Rails::Application
+            config.action_view.prefix_partial_path_with_controller_namespace = false
+          end
+        end
+      RUBY
+
+      expect(rendered_from("admin/posts/post")).to be_nil
+      expect(rendered_from("posts/post")).to include("app/views/admin/posts/index.html.erb:1", "app/views/posts/show.html.erb:3")
+    end
+  end
+
   describe "a strict locals comment in each form Rails accepts" do
     around do |example|
       Dir.mktmpdir("strict-locals") do |dir|
