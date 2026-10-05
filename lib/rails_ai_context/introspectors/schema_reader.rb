@@ -29,7 +29,7 @@ module RailsAiContext
           next unless File.exist?(path)
 
           if format == :ruby
-            reader = new(path, pk_type: SchemaConventions.implicit_pk_type(root, path))
+            reader = new(path, pk_type: SchemaConventions.implicit_pk_type(root))
             return reader.with_source(:schema_rb) if reader.tables.any?
           else
             content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
@@ -40,7 +40,7 @@ module RailsAiContext
 
         migrate_dirs = MigrationReplay.migration_dirs(root)
         if MigrationReplay.migration_files(migrate_dirs).any?
-          pk_type = SchemaConventions.implicit_pk_type(root, candidates.first.last)
+          pk_type = SchemaConventions.implicit_pk_type(root)
           return from_tables(MigrationReplay.tables(migrate_dirs, pk_type: pk_type, root: root),
                              source: :migrations, path: migrate_dirs.first)
         end

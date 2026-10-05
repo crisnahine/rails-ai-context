@@ -1635,6 +1635,21 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
+    it "compares a configured dump against db/migrate, the primary database's migrations" do
+      files = { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  schema_dump: schema_sqlite.rb\n",
+                "db/schema_sqlite.rb" => one_table_rb.call("widgets").sub("2026_01_01_000001", "2025_01_01_000000") }.merge(migration)
+      static_with(files) do |result, _|
+        expect(result[:pending_migrations]).to eq([ { version: "20260101000000", name: "CreateNotes" } ])
+      end
+    end
+
+    it "types a configured primary dump's implicit key by the primary database's adapter" do
+      yml = "#{RailsAiContext.environment_name}:\n  queue:\n    adapter: sqlite3\n  primary:\n    adapter: postgresql\n    schema_dump: main.rb\n"
+      static_with({ "config/database.yml" => yml, "db/main.rb" => one_table_rb.call("widgets") }) do |result, _|
+        expect(result[:tables]["widgets"][:columns].first).to include(name: "id", type: "bigint")
+      end
+    end
+
     it "reads structure.sql first when the app sets schema_format = :sql" do
       files = { "config/application.rb" => "module App\n  class Application < Rails::Application\n    # config.active_record.schema_format = :ruby\n    config.active_record.schema_format = :sql\n  end\nend\n",
                 "db/schema.rb" => one_table_rb.call("stale_things"),

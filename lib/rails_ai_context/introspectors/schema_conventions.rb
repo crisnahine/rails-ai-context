@@ -169,8 +169,9 @@ module RailsAiContext
       # since Rails 5.1, except SQLite where it stays integer. The dump does
       # not record it, but config/database.yml names the adapter - looked up
       # per database, because a multi-db app can mix adapters (postgres
-      # primary, sqlite queue) and each dump must be typed by its own.
-      def implicit_pk_type(root, dump_path)
+      # primary, sqlite queue) and each dump must be typed by its own. dump_path
+      # names a secondary database's dump; nil is the primary's.
+      def implicit_pk_type(root, dump_path = nil)
         db_name = File.basename(dump_path.to_s).sub(/\.(rb|sql)\z/, "").sub(/_?(schema|structure)\z/, "")
         db_name = "primary" if db_name.empty?
 

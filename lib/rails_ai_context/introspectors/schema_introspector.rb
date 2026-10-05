@@ -335,6 +335,15 @@ module RailsAiContext
         path if format == :ruby
       end
 
+      # A secondary dump's name says its database; the primary's, whatever schema_dump calls it, does not.
+      def secondary_dump(path)
+        path unless dump_candidates.any? { |_, candidate| candidate == path }
+      end
+
+      def migrate_dir_for_dump(path)
+        RailsAiContext::PendingMigrations.migrate_dir_for(app.root, secondary_dump(path))
+      end
+
       def relative_dump_path(path)
         path.delete_prefix("#{app.root.to_s.chomp('/')}/")
       end
@@ -480,7 +489,7 @@ module RailsAiContext
         content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
         return { error: "schema.rb too large (#{File.size(path)} bytes)" } unless content
 
-        schema = SchemaReader.new(path, pk_type: SchemaConventions.implicit_pk_type(app.root.to_s, path))
+        schema = SchemaReader.new(path, pk_type: SchemaConventions.implicit_pk_type(app.root.to_s, secondary_dump(path)))
 
         tables = {}
         schema.tables.each do |table_name, declared|
@@ -533,7 +542,7 @@ module RailsAiContext
         # linear histories, best-effort for out-of-order merges. With no
         # version recorded there is no answer, so the key stays absent.
         if version
-          migrate_dir = RailsAiContext::PendingMigrations.migrate_dir_for(app.root, path)
+          migrate_dir = migrate_dir_for_dump(path)
           result[:pending_migrations] = RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: version)
         end
         result
@@ -563,7 +572,7 @@ module RailsAiContext
         }
         if applied.any?
           result[:schema_version] = applied.map(&:to_i).max.to_s
-          migrate_dir = RailsAiContext::PendingMigrations.migrate_dir_for(app.root, path)
+          migrate_dir = migrate_dir_for_dump(path)
           result[:pending_migrations] = RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: applied)
         end
         result
@@ -592,7 +601,7 @@ module RailsAiContext
       # rename_table, drop_table, change_column, add_index, add_reference,
       # add_foreign_key, add_timestamps.
       def parse_migrations
-        pk_type = SchemaConventions.implicit_pk_type(app.root.to_s, dump_candidates.first.last)
+        pk_type = SchemaConventions.implicit_pk_type(app.root.to_s)
         replayed = MigrationReplay.replayed(migrations_dirs, pk_type: pk_type, root: app.root.to_s)
         tables = replayed.tables
         tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
