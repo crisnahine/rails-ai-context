@@ -311,16 +311,20 @@ module RailsAiContext
       # source parsing from inheritance chain for only/except constraints.
       def extract_filters(ctrl, source = nil)
         if ctrl.respond_to?(:_process_action_callbacks)
+          own_file = relative_source_path(ctrl)
           reflection_filters = ctrl._process_action_callbacks.filter_map do |cb|
-            name = callback_name(cb.filter)
+            name = callback_name(cb.filter, own_file)
             next if name.nil? || excluded_filters.include?(name)
             { name: name, kind: cb.kind.to_s }
           end
 
           # Collect only/except constraints from source files in the inheritance chain
-          source_constraints = reflection_filters.any? ? collect_source_constraints(ctrl, source) : {}
+          source_constraints, blocks = reflection_filters.any? ? collect_source_constraints(ctrl, source) : [ {}, {} ]
           reflection_filters.each do |f|
-            if (sc = source_constraints[[ f[:kind], f[:name] ]])
+            key = [ f[:kind], f[:name] ]
+            # Each block is a callback of its own, so blocks with one name pair up in chain order.
+            sc = ControllerFilters.block?(f[:name]) && blocks[key]&.any? ? blocks[key].shift : source_constraints[key]
+            if sc
               f[:only] = sc[:only] if sc[:only]&.any?
               f[:except] = sc[:except] if sc[:except]&.any?
               f[:unless] = sc[:unless] if sc[:unless]
@@ -356,7 +360,7 @@ module RailsAiContext
       # A block the app wrote is named by its line, as the static tier names it, and the one
       # http_basic_authenticate_with adds by that macro; any other framework's or gem's
       # block (`allow_browser`, `rate_limit`) is not a filter the app wrote.
-      def callback_name(filter)
+      def callback_name(filter, own_file = nil)
         case filter
         when Symbol, String then return filter.to_s.start_with?("_") ? nil : filter.to_s
         when Module then return filter.name
@@ -373,7 +377,10 @@ module RailsAiContext
         root = "#{app.root.to_s.chomp("/")}/"
         return unless path&.start_with?(root) && !path.delete_prefix(root).start_with?("vendor/")
 
-        "block (line #{line})" unless PortablePath.gem_file?(path, root)
+        return if PortablePath.gem_file?(path, root)
+
+        file = path.delete_prefix(root)
+        ControllerFilters.block_name(line, (file unless own_file.nil? || file == own_file))
       end
 
       # A compiled callback keeps only:/except: in private ivars, so the
@@ -382,18 +389,23 @@ module RailsAiContext
       # of what the filter is being asked for, so it never supplies one.
       def collect_source_constraints(ctrl, current_source = nil)
         constraints = {}
+        bodies = []
         klass = ctrl
         while klass&.name && !ActionResolver.framework?(klass, kind: :controller)
           src = (klass == ctrl) ? (current_source || read_source(klass)) : read_source(klass)
           if src
+            own = own_filters(src, klass.name)
+            own = ControllerFilters.in_file(own, relative_source_path(klass)) unless klass == ctrl
             # Within one body the last declaration wins; across the chain the most specific class does.
-            effective_declarations(own_filters(src, klass.name)).each { |key, sf| constraints[key] ||= sf }
+            effective_declarations(own).each { |key, sf| constraints[key] ||= sf }
+            bodies.unshift(own)
           end
           klass = klass.superclass
         end
-        constraints
+        blocks = bodies.flatten.select { |f| !f[:skipped] && ControllerFilters.block?(f[:name]) }.group_by { |f| [ f[:kind], f[:name] ] }
+        [ constraints, blocks ]
       rescue => e
-        RailsAiContext.debug_fail(e, {}, label: "collect_source_constraints")
+        RailsAiContext.debug_fail(e, [ {}, {} ], label: "collect_source_constraints")
       end
 
       # Reflection hands every class the whole chain and no skips at all, so
@@ -414,9 +426,17 @@ module RailsAiContext
         # `before_action :audit` is still the ancestor's.
         by_key = filters.group_by { |f| [ f[:kind], f[:name] ] }
         effective_declarations(own).each do |key, declared|
-          Array(by_key[key]).each do |f|
+          rows = Array(by_key[key])
+          # Each block is a callback of its own: the body's are the last ones of that name, in its order.
+          pairs = if ControllerFilters.block?(key.last)
+            mine = own.select { |f| !f[:skipped] && [ f[:kind], f[:name] ] == key }
+            rows.last(mine.size).zip(mine)
+          else
+            rows.map { |f| [ f, declared ] }
+          end
+          pairs.each do |f, source_record|
             f[:declared] = true
-            declared[:from_concern] ? f[:from_concern] = declared[:from_concern] : f.delete(:from_concern)
+            source_record[:from_concern] ? f[:from_concern] = source_record[:from_concern] : f.delete(:from_concern)
           end
         end
         skips = own.select { |f| f[:skipped] }

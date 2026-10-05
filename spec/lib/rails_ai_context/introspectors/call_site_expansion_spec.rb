@@ -447,6 +447,55 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
     end
   end
 
+  describe "a controller filter a class method declares" do
+    def filters(method_source, call_source)
+      definition = Prism.parse(method_source).value.statements.body.first
+      call = Prism.parse(call_source).value.statements.body.first
+      described_class.entries(definition, call, RailsAiContext::Introspectors::ControllerFilters::LISTENERS)[:filters]
+                     .map { |f| [ f[:macro], f[:options] ] }
+    end
+
+    # Consul's has_orders: `def has_orders(valid_orders, *)` passes its rest on as `before_action(*)`.
+    it "passes an anonymous rest on, keywords included" do
+      method_source = "def has_orders(valid_orders, *)\n  before_action(*) do |c|\n    c.head(:ok)\n  end\nend\n"
+
+      expect(filters(method_source, "has_orders %w[new old], only: :show")).to eq([ [ :before_action, { only: :show } ] ])
+      expect(filters(method_source, "has_orders %w[new old]")).to eq([ [ :before_action, {} ] ])
+    end
+
+    it "passes a named rest on with the trailing options the call gave it" do
+      method_source = "def guard_all(*names)\n  before_action(*names) { head :forbidden }\nend\n"
+
+      expect(filters(method_source, "guard_all only: :index")).to eq([ [ :before_action, { only: :index } ] ])
+      expect(filters(method_source, "guard_all :a, except: :show")).to eq([ [ :before_action, { except: :show } ] ])
+    end
+
+    # OpenProject's authorize_with_permission, called with an `only:` list over three lines.
+    it "keeps the block on the method's line when the call's arguments span several" do
+      definition = Prism.parse("def guard(**args)\n  before_action(**args) do\n    head :ok\n  end\nend\n").value.statements.body.first
+      call = Prism.parse("guard only: %i[a\n            b\n            c]\n").value.statements.body.first
+
+      found = described_class.entries(definition, call, RailsAiContext::Introspectors::ControllerFilters::LISTENERS)[:filters]
+
+      expect(found.map { |f| [ f[:location], f[:proc_lines], f[:options] ] }).to eq([ [ 2, [ 2 ], { only: %i[a b c] } ] ])
+    end
+
+    # Canvas's batch_jobs_in_actions takes its own key off the options before passing the rest on.
+    it "reads a hash parameter after the leading statements delete a key from it" do
+      method_source = <<~RUBY
+        def batch_jobs_in_actions(opts = {})
+          batch_opts = opts.delete(:batch)
+          around_action(opts) do |_controller, action|
+            action.call
+          end
+        end
+      RUBY
+
+      expect(filters(method_source, "batch_jobs_in_actions only: :create, batch: { priority: 1 }"))
+        .to eq([ [ :around_action, { only: :create } ] ])
+    end
+  end
+
   describe "a hash parameter the body changes in place" do
     it "is bound to nothing" do
       data = expand("def vl(name, options = {})\n  options[:allow_nil] = true\n  before_save :x if options[:allow_nil]\nend\n", "vl :a")

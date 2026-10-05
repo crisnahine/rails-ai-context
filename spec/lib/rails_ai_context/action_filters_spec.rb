@@ -101,6 +101,61 @@ RSpec.describe RailsAiContext::ActionFilters do
       end
     end
 
+    # The booted chain names an ancestor's block by its file, and a child's block on the same line is another one.
+    it "names an ancestor's block by the ancestor's file, apart from the child's own block on that line" do
+      Dir.mktmpdir do |dir|
+        app_with_base(dir)
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"), <<~RUBY)
+          class ApplicationController < ActionController::Base
+            before_action { head :forbidden }
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "pages_controller.rb"), <<~RUBY)
+          class PagesController < ApplicationController
+            before_action(only: :show) { head :ok }
+            def index; end
+            def show; end
+          end
+        RUBY
+
+        chain = described_class.for_controller(static_context(dir), "PagesController", root: dir)
+
+        expect(chain[:inherited].map { |f| [ f[:name], f[:from] ] })
+          .to eq([ [ "block (line 2 of app/controllers/application_controller.rb)", "ApplicationController" ] ])
+        expect(chain[:own].map { |f| [ f[:name], f[:only] ] }).to eq([ [ "block (line 2)", [ "show" ] ] ])
+      end
+    end
+
+    # Mastodon's Instances::DomainBlocksController: Api::BaseController, Instances::BaseController and the class each call vary_by.
+    it "keeps one block per class that declares it when the classes share the block's name" do
+      Dir.mktmpdir do |dir|
+        app_with_base(dir)
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        File.write(File.join(dir, "app", "controllers", "concerns", "cache_concern.rb"), <<~RUBY)
+          module CacheConcern
+            extend ActiveSupport::Concern
+            class_methods do
+              def vary_by(value, **kwargs)
+                before_action(**kwargs) { response.headers["Vary"] = value }
+              end
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"),
+                   "class ApplicationController < ActionController::Base\n  include CacheConcern\n  vary_by \"Authorization\"\nend\n")
+        File.write(File.join(dir, "app", "controllers", "base_controller.rb"),
+                   "class BaseController < ApplicationController\n  vary_by \"\"\nend\n")
+        File.write(File.join(dir, "app", "controllers", "pages_controller.rb"),
+                   "class PagesController < BaseController\n  vary_by \"\", if: :public?\n  def index; end\nend\n")
+
+        chain = described_class.for_controller(static_context(dir), "PagesController", root: dir)
+
+        block = "block (line 5 of app/controllers/concerns/cache_concern.rb)"
+        expect(chain[:inherited].map { |f| [ f[:name], f[:from] ] }).to eq([ [ block, "ApplicationController" ], [ block, "BaseController" ] ])
+        expect(chain[:own].map { |f| [ f[:name], f[:if] ] }).to eq([ [ block, :public? ] ])
+      end
+    end
+
     # Mastodon's AboutController runs four filters from WebAppControllerConcern
     # and set_locale from the Localized its parent includes; the static walk
     # read only the two class bodies and listed none of them.

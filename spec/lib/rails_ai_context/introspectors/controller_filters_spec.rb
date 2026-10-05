@@ -38,6 +38,182 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
       end
     end
 
+    # The block opens in the method's file; the expansion re-reads the method's body on its own.
+    it "names a block a class method declares by its line in the file that defines the method, and that file when it is not the class's" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        concern(dir, "CacheConcern", <<~BODY.strip)
+          class_methods do
+              def vary_by(value, **kwargs)
+                before_action(**kwargs) do
+                  response.headers["Vary"] = value
+                end
+              end
+            end
+        BODY
+        source = <<~RUBY
+          class PostsController < ApplicationController
+            include CacheConcern
+            def self.timed(**options)
+              around_action(**options) do |_controller, action|
+                action.call
+              end
+            end
+            vary_by "Accept"
+            timed only: :index
+          end
+        RUBY
+
+        filters, = described_class.with_concerns(source, root: dir, within: "PostsController")
+
+        expect(filters.map { |f| [ f[:kind], f[:name], f[:only] ] })
+          .to eq([ [ "before", "block (line 5 of app/controllers/concerns/cache_concern.rb)", nil ], [ "around", "block (line 4)", [ "index" ] ] ])
+      end
+    end
+
+    it "names a block a module nested in the controller's file declares by its line in that file, once" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        source = <<~RUBY
+          class WidgetsController < ApplicationController
+            module Gate
+              extend ActiveSupport::Concern
+
+              included do
+                x = 1
+                y = 2
+                before_action { head :forbidden }
+              end
+
+              class_methods do
+                def gate(**opts)
+                  before_action(**opts) { head :forbidden }
+                end
+              end
+            end
+
+            include Gate
+            gate only: :show
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "widgets_controller.rb"), source)
+
+        filters, = described_class.with_concerns(source, root: dir, within: "WidgetsController")
+
+        expect(filters.map { |f| [ f[:name], f[:only], f[:from_concern] ] })
+          .to eq([ [ "block (line 8)", nil, "WidgetsController::Gate" ], [ "block (line 13)", [ "show" ], nil ] ])
+      end
+    end
+
+    # Mastodon registers the acronym ActivityPub, so its base sits in activitypub/, not activity_pub/.
+    it "follows a base whose directory an app acronym spells" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "activitypub"))
+        concern(dir, "CacheConcern", <<~BODY.strip)
+          class_methods do
+              def vary_by(value, **kwargs)
+                before_action(**kwargs) { response.headers["Vary"] = value }
+              end
+            end
+        BODY
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"),
+                   "class ApplicationController < ActionController::Base\n  include CacheConcern\nend\n")
+        File.write(File.join(dir, "app", "controllers", "activitypub", "base_controller.rb"),
+                   "class ActivityPub::BaseController < ApplicationController\nend\n")
+        source = "class ActivityPub::OutboxesController < ActivityPub::BaseController\n  vary_by \"Signature\"\nend\n"
+
+        filters, = described_class.with_concerns(source, root: dir, within: "ActivityPub::OutboxesController")
+
+        expect(filters.map { |f| f[:name] }).to eq([ "block (line 5 of app/controllers/concerns/cache_concern.rb)" ])
+      end
+    end
+
+    it "expands a class method of a module nested in a concern once, at its line in the concern's file" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        concern(dir, "SubGate", <<~BODY.strip)
+          module Inner
+              extend ActiveSupport::Concern
+
+              class_methods do
+                def inner_gate(**opts)
+                  before_action(**opts) { head :forbidden }
+                end
+              end
+            end
+
+            include Inner
+        BODY
+        source = <<~RUBY
+          class GadgetsController < ApplicationController
+            include SubGate
+            inner_gate only: :index
+          end
+        RUBY
+
+        filters, = described_class.with_concerns(source, root: dir, within: "GadgetsController")
+
+        expect(filters.map { |f| [ f[:name], f[:only] ] })
+          .to eq([ [ "block (line 8 of app/controllers/concerns/sub_gate.rb)", [ "index" ] ] ])
+      end
+    end
+
+    # Mastodon: WebAppControllerConcern's included block calls vary_by, which CacheConcern gives ApplicationController.
+    it "reads a base's class method an included concern's block calls, where that concern is included" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        concern(dir, "CacheConcern", <<~BODY.strip)
+          class_methods do
+              def vary_by(value, **kwargs)
+                before_action(**kwargs) { response.headers["Vary"] = value }
+              end
+            end
+        BODY
+        concern(dir, "WebApp", "included do\n    vary_by \"Accept\"\n    before_action :set_referer\n  end")
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"),
+                   "class ApplicationController < ActionController::Base\n  include CacheConcern\nend\n")
+        source = <<~RUBY
+          class PostsController < ApplicationController
+            before_action :authenticate!
+            include WebApp
+            vary_by "Cookie", only: :show
+          end
+        RUBY
+
+        filters, = described_class.with_concerns(source, root: dir, within: "PostsController")
+
+        block = "block (line 5 of app/controllers/concerns/cache_concern.rb)"
+        expect(filters.map { |f| [ f[:name], f[:from_concern], f[:only] ] })
+          .to eq([ [ "authenticate!", nil, nil ], [ block, "WebApp", nil ], [ "set_referer", "WebApp", nil ], [ block, nil, [ "show" ] ] ])
+      end
+    end
+
+    # Decidim's NeedsOrganization: the hook hands its base to a method that class_evals the filter onto it.
+    it "reads a filter a mixin hook adds through a method it hands the including class to" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        File.write(File.join(dir, "app", "controllers", "concerns", "needs_organization.rb"), <<~RUBY)
+          module NeedsOrganization
+            def self.enhance_controller(instance_or_module)
+              instance_or_module.class_eval do
+                before_action :verify_organization
+              end
+            end
+
+            def self.included(base)
+              enhance_controller(base)
+            end
+          end
+        RUBY
+        source = "class PagesController < ApplicationController\n  include NeedsOrganization\nend\n"
+
+        filters, = described_class.with_concerns(source, root: dir, within: "PagesController")
+
+        expect(filters.map { |f| [ f[:name], f[:from_concern] ] }).to eq([ [ "verify_organization", "NeedsOrganization" ] ])
+      end
+    end
+
     # A macro inside a `def` runs when the method runs: never for a method nobody
     # calls, and with the call's options where the body calls it.
     it "reads a filter inside a method only where the class calls the method" do

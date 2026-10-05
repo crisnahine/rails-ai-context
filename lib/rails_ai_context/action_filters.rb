@@ -41,9 +41,11 @@ module RailsAiContext
       skips = own_skips(ctx, controller_name, info, action, root: root, source: source)
       skipped = absolute_names(skips, action)
       # A skip record states what does not run, so it is never a filter.
-      declared = Array(info[:filters]).grep(Hash).reject { |f| f[:skipped] }
+      offsets = Hash.new(0)
+      declared = number_blocks(Array(info[:filters]).grep(Hash).reject { |f| f[:skipped] }, offsets)
       parent, dropped, inherited_conditions, declares, whole_chain = parent_filters(ctx, info[:parent_class], action, skipped,
-                                                                       root: root, within: controller_name.to_s)
+                                                                       root: root, within: controller_name.to_s,
+                                                                       offsets: offsets)
       conditions = merge_conditions(inherited_conditions, conditions_by_name(skips, action))
       # The runtime tier's list is the whole chain, so an ancestor's skip
       # applies here too - except to what this body declares again, which
@@ -84,6 +86,8 @@ module RailsAiContext
           applicable.select(&inherited_here)
             .map { |f| f.except(:from, :from_concern, :provenance).merge(attribution_of[entry_key(f)]) }, conditions, action
       ) + outside
+      own = unnumbered(own)
+      inherited = unnumbered(inherited)
       inherited += unplaced_conditional_skips(own + inherited, conditions, action,
                                               declares | declared.map { |f| f[:name].to_s }.to_set)
       chain = run_sequence(inherited + own, info)
@@ -106,6 +110,27 @@ module RailsAiContext
       slots = filters.each_index.select { |i| rank.key?(entry_key(filters[i])) }
       ranked = slots.map { |i| filters[i] }.each_with_index.sort_by { |f, i| [ rank[entry_key(f)], i ] }.map(&:first)
       filters.dup.tap { |out| slots.zip(ranked) { |i, f| out[i] = f } }
+    end
+
+    BLOCK_NUMBER = /#\d+\z/
+
+    # Numbered from the chain's end so one block reads the same in a class's list and every descendant's.
+    def number_blocks(filters, offsets)
+      seen = Hash.new(0)
+      numbered = filters.reverse.map do |filter|
+        next filter unless Introspectors::ControllerFilters.block?(filter[:name])
+
+        key = entry_key(filter)
+        number = offsets[key] + seen[key]
+        seen[key] += 1
+        filter.merge(name: "#{filter[:name]}##{number}")
+      end.reverse
+      filters.each { |filter| offsets[entry_key(filter)] += 1 if filter[:declared] && Introspectors::ControllerFilters.block?(filter[:name]) }
+      numbered
+    end
+
+    def unnumbered(filters)
+      filters.map { |filter| filter[:name].to_s.match?(BLOCK_NUMBER) ? filter.merge(name: filter[:name].to_s.sub(BLOCK_NUMBER, "")) : filter }
     end
 
     # A skip of a name no ancestor in the payload declares is the only
@@ -205,7 +230,7 @@ module RailsAiContext
     # ends it: reconstructing a path from a class name breaks on every app
     # inflection. A bare superclass is resolved against the enclosing namespace
     # first, the way Ruby does.
-    def parent_filters(ctx, parent_class, action, skipped, root:, within: nil)
+    def parent_filters(ctx, parent_class, action, skipped, root:, within: nil, offsets: Hash.new(0))
       controllers = Payload.controllers(ctx)
       seen = Set.new
       found = {}
@@ -228,9 +253,10 @@ module RailsAiContext
         seen << name
         depth += 1
         info = controllers[name]
-        source = info.is_a?(Hash) ? nil : base_controller_source(name, root)
+        path = info.is_a?(Hash) ? nil : base_controller_path(name, root)
+        source = path && SafeFile.read(path)
         if source
-          info ||= { filters: base_filters(source, name, root),
+          info ||= { filters: base_filters(source, name, root), file: PortablePath.relativize(path, (root || default_root).to_s),
                      parent_class: Introspectors::DeclaredConstant.parent_declaration(source, name.to_s)&.superclass }
         end
         unless info.is_a?(Hash)
@@ -250,7 +276,9 @@ module RailsAiContext
         # The walk runs closest ancestor first, so a nearer class's condition
         # is the one the child inherits.
         conditions = merge_conditions(conditions_by_name(skips, action), conditions)
-        carried = Array(info[:filters]).grep(Hash).reject { |f| f[:skipped] }
+        # The child's chain names this class's own blocks by the file they are in.
+        carried = number_blocks(Introspectors::ControllerFilters.in_file(Array(info[:filters]).grep(Hash).reject { |f| f[:skipped] }, info[:file]),
+                                offsets)
         # Counted before the rejects below, so a conditional skip of a name
         # the walk did see is never mistaken for a skip of a declaration it
         # could not. A skip record is not a sighting, hence the reject above.
@@ -393,13 +421,16 @@ module RailsAiContext
     # printed it. Only a name the app has a file for is read,
     # so a gem-owned parent, or one an inflection renames, still ends the walk.
     def base_controller_source(name, root)
+      path = base_controller_path(name, root)
+      path && SafeFile.read(path)
+    end
+
+    def base_controller_path(name, root)
       root ||= default_root
       return nil unless root
 
       relative = "#{name.to_s.underscore}.rb"
-      path = PathResolver.controller_dirs(root.to_s).map { |dir| File.join(dir, relative) }
-                         .find { |candidate| File.exist?(candidate) }
-      path && SafeFile.read(path)
+      PathResolver.controller_dirs(root.to_s).map { |dir| File.join(dir, relative) }.find { |candidate| File.exist?(candidate) }
     end
 
     # Gem controllers whose base class is set in the app's initializers:
@@ -484,6 +515,7 @@ module RailsAiContext
                          :skip_records, :base_filters, :skip_flag_records, :redeclared_names, :last_records, :own_skips,
                          :record_attribution, :conditional?, :partial?, :absolute_names, :conditions_by_name,
                          :merge_conditions, :mark_conditional_skips, :skip_tail, :action_names, :condition_text,
-                         :unplaced_conditional_skips, :evidence_skips, :configured_base, :runs_once?, :run_sequence
+                         :unplaced_conditional_skips, :evidence_skips, :configured_base, :runs_once?, :run_sequence,
+                         :base_controller_path, :number_blocks, :unnumbered
   end
 end

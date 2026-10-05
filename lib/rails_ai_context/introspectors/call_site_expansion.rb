@@ -29,13 +29,12 @@ module RailsAiContext
           @foreign = []
         end
 
-        # A line takes the source line of the first code written on it; the
-        # indentation before a pruned branch's body is not code.
-        def append(chunk, source_line)
+        # A line takes the source line of its first code; text the call supplies keeps its parameter's line.
+        def append(chunk, source_line, from_call: false)
           chunk.each_char do |char|
             @text << char
             if char == "\n"
-              source_line += 1
+              source_line += 1 unless from_call
               @code = false
             elsif !@code && !char.match?(/\s/)
               @lines[line] = source_line
@@ -59,11 +58,13 @@ module RailsAiContext
       # @param definition [Prism::DefNode] the method called
       # @param call [Prism::CallNode, nil] the call site, nil when unknown
       # @param listeners [Hash] the listener map to read the body with
+      # @param includer [Set, nil] ids of the call's argument nodes that are the including class
       # @return [Hash{Symbol => Array<Hash>}]
-      def entries(definition, call, listeners)
+      def entries(definition, call, listeners, includer: nil)
         return {} unless definition.body
 
-        bindings = derived_bindings(rest_bindings(unwritten(bind(definition.parameters, call), definition.body), definition, call), definition.body)
+        bound = includer_bound(bind(definition.parameters, call), definition.parameters, call, includer)
+        bindings = derived_bindings(rest_bindings(unwritten(bound, definition.body), definition, call), definition.body)
         out = Output.new
         undecided = []
         emit(definition.body, bindings, out, undecided, 0, [])
@@ -94,11 +95,25 @@ module RailsAiContext
 
       EVALS = %i[instance_eval class_eval class_exec instance_exec module_eval module_exec].freeze
 
+      # The including class a mixin hook hands on (`enhance_controller(base)`), which a block evaluated on runs as the class.
+      INCLUDER = Object.new.freeze
+
       # `other.instance_eval { validates ... }` runs its block with `other` as
       # self, so what it declares is `other`'s, not the calling class's.
-      def foreign_eval?(node)
+      def foreign_eval?(node, bindings = {}, depth = 0)
         node.is_a?(Prism::CallNode) && EVALS.include?(node.name) && node.block.is_a?(Prism::BlockNode) &&
-          node.receiver && !node.receiver.is_a?(Prism::SelfNode)
+          node.receiver && !node.receiver.is_a?(Prism::SelfNode) &&
+          !(node.receiver.is_a?(Prism::LocalVariableReadNode) && bound(bindings, node.receiver, depth)&.value.equal?(INCLUDER))
+      end
+
+      # A required parameter the call passes the including class to stands for that class.
+      def includer_bound(bindings, parameters, call, includer)
+        return bindings unless parameters && call && includer&.any?
+
+        Array(call.arguments&.arguments).zip(parameters.requireds).each do |argument, param|
+          bindings[param.name] = Binding.new(INCLUDER, "self") if param.respond_to?(:name) && includer.include?(argument.__id__)
+        end
+        bindings
       end
 
       # What each block evaluated on another receiver declares, named with the
@@ -173,7 +188,9 @@ module RailsAiContext
       def relocated(entry, out)
         return entry unless entry.is_a?(Hash) && entry[:location]
 
-        entry.merge(location: out.source_line(entry[:location]) || entry[:location])
+        moved = entry.merge(location: out.source_line(entry[:location]) || entry[:location])
+        moved[:proc_lines] = entry[:proc_lines].map { |line| out.source_line(line) || line } if entry[:proc_lines].is_a?(Array)
+        moved
       end
 
       def identity(key, entry)
@@ -241,8 +258,28 @@ module RailsAiContext
       # A parameter the body assigns or changes in place, in a block too, no
       # longer holds the call's argument wherever it is read, so it is bound to nothing.
       def unwritten(bindings, body)
-        changed(body).each { |name| bindings[name] = unknown if bindings.key?(name) }
+        changed(body, deleted_keys(bindings, body)).each { |name| bindings[name] = unknown if bindings.key?(name) }
         bindings
+      end
+
+      # Leading `options.delete(:key)` on a literal hash parameter leave it bound to the other keys.
+      def deleted_keys(bindings, body)
+        return [] unless body.is_a?(Prism::StatementsNode)
+
+        body.body.take_while do |node|
+          call = node.is_a?(Prism::LocalVariableWriteNode) ? node.value : node
+          next false unless call.is_a?(Prism::CallNode) && call.name == :delete && call.block.nil?
+
+          receiver = call.receiver
+          key = Array(call.arguments&.arguments)
+          binding = receiver.is_a?(Prism::LocalVariableReadNode) && receiver.depth.zero? && bindings[receiver.name]
+          next false unless binding&.value_sources && key.one? && key.first.is_a?(Prism::SymbolNode)
+          next false if node.is_a?(Prism::LocalVariableWriteNode) && node.name == receiver.name
+
+          key = key.first.unescaped.to_sym
+          value = binding.value.is_a?(Hash) ? binding.value.except(key) : binding.value
+          bindings[receiver.name] = hash_binding(value, binding.value_sources.except(key))
+        end
       end
 
       # `local[key] ||= v`, `&&=` and `+=` change the local in place too.
@@ -279,7 +316,8 @@ module RailsAiContext
       # (`extract_options!`), plus literals the leading statements push; a local changed elsewhere is unknown.
       def rest_bindings(bindings, definition, call)
         rest = definition.parameters&.rest
-        return bindings unless call && rest.respond_to?(:name) && rest.name && definition.body.is_a?(Prism::StatementsNode)
+        return bindings unless call && rest.is_a?(Prism::RestParameterNode) && definition.body.is_a?(Prism::StatementsNode)
+        return anonymous_rest(bindings, definition, call) unless rest.name
 
         given = rest_arguments(definition.parameters, call)
         taken = [ "#{rest.name}.extract_options!", "#{rest.name}.last.is_a?(Hash)?#{rest.name}.pop:{}" ]
@@ -306,7 +344,9 @@ module RailsAiContext
         end
         changed_names = changed(definition.body, kept)
         kept.each { |node| bindings[node.name] = unknown if node.is_a?(Prism::LocalVariableWriteNode) && changed_names.include?(node.name) }
-        list = nil if !list || changed_names.include?(rest.name) || list.any? { |item| !literal_source?(item) }
+        # A trailing keyword hash no statement took stays in the rest, as Ruby leaves it.
+        items = list && (symbol_keyed?(list.last) ? list[0...-1] : list)
+        list = nil if !list || changed_names.include?(rest.name) || items.any? { |item| !literal_source?(item) }
         bindings[rest.name] = list ? list_binding(list) : unknown
         bindings
       end
@@ -325,6 +365,18 @@ module RailsAiContext
         end
         bindings
       end
+
+      # A bare `*` holds what the call passes there, which the body can only pass on whole.
+      def anonymous_rest(bindings, definition, call)
+        given = rest_arguments(definition.parameters, call)
+        last = given&.last
+        options = symbol_keyed?(last) ? [ last ] : []
+        items = given && (given - options)
+        bindings[ANONYMOUS_REST] = items&.all? { |item| literal_source?(item) } ? list_binding(items + options) : unknown
+        bindings
+      end
+
+      ANONYMOUS_REST = :*
 
       # The call's arguments `*rest` takes, nil when they cannot be told (a splat, too few).
       def rest_arguments(parameters, call)
@@ -362,7 +414,12 @@ module RailsAiContext
       end
 
       def list_binding(items)
-        Binding.new(items.map { |item| value_of(item) }, "[#{items.map(&:slice).join(", ")}]", nil, nil, items.map(&:slice))
+        Binding.new(items.map { |item| value_of(item) }, "[#{items.map(&:slice).join(", ")}]", nil, nil, items.map { |item| item_source(item) })
+      end
+
+      # A trailing `key: value` hash passes on as the keywords it spells.
+      def item_source(item)
+        item.is_a?(Prism::HashNode) && symbol_keyed?(item) ? item.elements.map(&:slice).join(", ") : item.slice
       end
 
       # A hash with symbol keys binds by its pairs' own source, whatever
@@ -426,7 +483,7 @@ module RailsAiContext
         case node
         when Prism::LocalVariableReadNode
           source = bound(bindings, node, depth)&.source
-          return out.append(source, node.location.start_line) if source
+          return out.append(source, node.location.start_line, from_call: true) if source
         when Prism::InterpolatedSymbolNode, Prism::InterpolatedStringNode
           folded = !heredoc?(node) && interpolated(node, bindings, depth)
           return out.append(folded.inspect, node.location.start_line) if folded
@@ -434,7 +491,7 @@ module RailsAiContext
           return emit_each(node, bindings, out, undecided, depth, conditions) if unrolled?(node, bindings, depth)
 
           looked_up = hash_lookup(node, bindings, depth)
-          return out.append(looked_up, node.location.start_line) if looked_up
+          return out.append(looked_up, node.location.start_line, from_call: true) if looked_up
         when Prism::IfNode, Prism::UnlessNode
           return emit_branch(node, bindings, out, undecided, depth, conditions)
         when Prism::CaseNode
@@ -444,7 +501,7 @@ module RailsAiContext
         when Prism::BlockNode, Prism::LambdaNode
           depth += 1
         end
-        if foreign_eval?(node)
+        if foreign_eval?(node, bindings, depth)
           block_out = Output.new
           emit(node.block.body, bindings, block_out, [], depth + 1, conditions) if node.block.body
           out.foreign << [ node.receiver.slice, block_out, conditions ]
@@ -524,7 +581,7 @@ module RailsAiContext
           next if pairs&.empty?
 
           out.append(", ", argument.location.start_line) if written
-          pairs ? out.append(pairs, argument.location.start_line) : emit(argument, bindings, out, undecided, depth, conditions)
+          pairs ? out.append(pairs, argument.location.start_line, from_call: true) : emit(argument, bindings, out, undecided, depth, conditions)
           written = true
         end
         out
@@ -532,7 +589,9 @@ module RailsAiContext
 
       # `*names` over a bound list of literals is its items.
       def splatted_items(argument, bindings, depth)
-        return unless argument.is_a?(Prism::SplatNode) && argument.expression.is_a?(Prism::LocalVariableReadNode)
+        return unless argument.is_a?(Prism::SplatNode)
+        return bindings[ANONYMOUS_REST]&.items&.join(", ") if argument.expression.nil?
+        return unless argument.expression.is_a?(Prism::LocalVariableReadNode)
 
         bound(bindings, argument.expression, depth)&.items&.join(", ")
       end
