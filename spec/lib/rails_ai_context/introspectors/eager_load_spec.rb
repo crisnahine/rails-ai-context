@@ -19,6 +19,26 @@ RSpec.describe RailsAiContext::Introspectors::EagerLoad do
     end
   end
 
+  # An engine's test/dummy boots the engine; its classes are the project's.
+  it "loads the kind in an engine the app sits inside, and in no other engine" do
+    Dir.mktmpdir do |dir|
+      dummy = File.join(dir, "test", "dummy")
+      FileUtils.mkdir_p(File.join(dummy, "app", "models"))
+      FileUtils.mkdir_p(File.join(dir, "app", "models", "shop"))
+      FileUtils.mkdir_p(File.join(dir, "other", "app", "models"))
+      enclosing = double("engine", root: Pathname.new(dir))
+      unrelated = double("engine", root: Pathname.new(File.join(dir, "other")))
+      rootless = double("engine", root: nil)
+      allow(Rails::Engine).to receive(:subclasses).and_return([ rootless, enclosing, unrelated ])
+      loaded = []
+      allow(described_class).to receive(:load_dir) { |path| loaded << path }
+
+      described_class.dir(dummy, kind: "app/models")
+
+      expect(loaded).to eq([ File.join(dummy, "app", "models"), File.join(dir, "app", "models") ])
+    end
+  end
+
   it "does nothing when the app already eager loaded" do
     allow(Rails.application.config).to receive(:eager_load).and_return(true)
     expect(RailsAiContext::PathResolver).not_to receive(:dirs_for)
