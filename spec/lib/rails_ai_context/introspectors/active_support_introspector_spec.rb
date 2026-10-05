@@ -178,4 +178,80 @@ RSpec.describe RailsAiContext::Introspectors::ActiveSupportIntrospector do
       end
     end
   end
+
+  describe "notification subscriptions" do
+    def subscriptions(files)
+      Dir.mktmpdir do |dir|
+        files.each do |path, body|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+          File.write(File.join(dir, path), body)
+        end
+        app = RailsAiContext::StaticApp.new(dir)
+        booted = described_class.new(app).send(:scan_sources)[:notification_subscriptions]
+        static = described_class.new(app).static_call[:notification_subscriptions]
+        expect(static).to eq(booted)
+        static
+      end
+    end
+
+    it "lists each event the app subscribes to, with the file and line" do
+      result = subscriptions(
+        "config/initializers/notifications.rb" => <<~RUBY,
+          ActiveSupport::Notifications.subscribe("process_action.action_controller") { |event| }
+          ActiveSupport::Notifications.monotonic_subscribe(/cache_.*/) { |event| }
+        RUBY
+        "app/subscribers/request_subscriber.rb" => <<~RUBY
+          class RequestSubscriber < ActiveSupport::Subscriber
+            attach_to :action_controller
+            def process_action(event); end
+            private
+            def helper; end
+          end
+        RUBY
+      )
+
+      expect(result).to eq([
+        { event: "process_action.action_controller", via: "RequestSubscriber.attach_to", file: "app/subscribers/request_subscriber.rb", line: 2 },
+        { event: "process_action.action_controller", via: "subscribe", file: "config/initializers/notifications.rb", line: 1 },
+        { event: "/cache_.*/", via: "monotonic_subscribe", file: "config/initializers/notifications.rb", line: 2 }
+      ])
+    end
+
+    it "reads attach_to called on the class after it, one event per public method the file defines" do
+      result = subscriptions(
+        "app/subscribers/ar_subscriber.rb" => <<~RUBY,
+          class ArSubscriber < ActiveSupport::LogSubscriber
+            def sql(event); end
+            def instantiation(event); end
+          end
+          ArSubscriber.attach_to :active_record
+        RUBY
+        "config/initializers/remote.rb" => "Audit::RemoteSubscriber.attach_to :action_mailer\n",
+        "app/subscribers/self_subscriber.rb" => <<~RUBY
+          class SelfSubscriber < ActiveSupport::Subscriber
+            self.attach_to :x
+            def a(event); end
+          end
+        RUBY
+      )
+
+      expect(result).to eq([
+        { event: "instantiation.active_record", via: "ArSubscriber.attach_to", file: "app/subscribers/ar_subscriber.rb", line: 5 },
+        { event: "sql.active_record", via: "ArSubscriber.attach_to", file: "app/subscribers/ar_subscriber.rb", line: 5 },
+        { event: "a.x", via: "SelfSubscriber.attach_to", file: "app/subscribers/self_subscriber.rb", line: 2 },
+        { event: "every public method of Audit::RemoteSubscriber, as <method>.action_mailer", via: "Audit::RemoteSubscriber.attach_to", file: "config/initializers/remote.rb", line: 1 }
+      ])
+    end
+
+    it "ignores a subscribe call on anything but Notifications, and survives a file it cannot parse" do
+      result = subscriptions(
+        "app/models/newsletter.rb" => "class Newsletter\n  def go = Mailchimp.subscribe(\"x\")\nend\n",
+        "lib/broken.rb" => "ActiveSupport::Notifications.subscribe(\"a.b\") {\n",
+        "lib/all.rb" => "ActiveSupport::Notifications.subscribe { |e| }\n"
+      )
+
+      expect(result.map { |r| r[:event] }).not_to include("x")
+      expect(result).to include({ event: "every event", via: "subscribe", file: "lib/all.rb", line: 1 })
+    end
+  end
 end

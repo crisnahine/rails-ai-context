@@ -372,4 +372,61 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
       expect(introspector.call[:count]).to eq(2)
     end
   end
+
+  describe "config/application.rb" do
+    def application(files)
+      Dir.mktmpdir do |dir|
+        files.each do |path, body|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+          File.write(File.join(dir, path), body)
+        end
+        described_class.new(RailsAiContext::StaticApp.new(dir)).call[:application]
+      end
+    end
+
+    let(:application_rb) do
+      <<~RUBY
+        module App
+          class Application < Rails::Application
+            config.load_defaults 7.1
+            config.active_record.pluralize_table_names = false
+            config.active_job.queue_name_prefix = "myapp"
+            config.x.payments.provider = "stripe"
+            config.payment = config_for(:payment)
+            config.mail = Rails.application.config_for("mail")
+          end
+        end
+      RUBY
+    end
+
+    it "lists the keys it sets for every environment, config.x included" do
+      result = application("config/application.rb" => application_rb)
+
+      expect(result[:file]).to eq("config/application.rb")
+      expect(result[:config_keys]).to include("active_record.pluralize_table_names", "active_job.queue_name_prefix",
+                                              "x.payments.provider", "payment", "load_defaults")
+    end
+
+    it "names the keys each config_for file gives the running environment, shared merged in, never the values" do
+      result = application(
+        "config/application.rb" => application_rb,
+        "config/payment.yml" => "shared:\n  currency: usd\ntest:\n  key: dev\nproduction:\n  key: <%= ENV[\"PAYMENT_KEY\"] %>\n  secret: x\n"
+      )
+
+      expect(result[:config_for]).to eq([
+        { key: "payment", file: "config/payment.yml", keys: %w[currency key] },
+        { key: "mail", file: "config/mail.yml", missing: true }
+      ])
+    end
+
+    it "is nil for an app without config/application.rb" do
+      expect(application({})).to be_nil
+    end
+
+    it "reads a config_for file that is not YAML as unreadable rather than failing" do
+      result = application("config/application.rb" => application_rb, "config/payment.yml" => "shared: [unclosed\n")
+
+      expect(result[:config_for].first).to eq({ key: "payment", file: "config/payment.yml", unreadable: true })
+    end
+  end
 end

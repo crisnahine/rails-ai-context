@@ -4,7 +4,9 @@ module RailsAiContext
   module Tools
     class GetMailers < BaseTool
       tool_name "rails_get_mailers"
-      description "Get ActionMailer mailers: every mailer class with its delivery actions and delivery method. " \
+      description "Get ActionMailer mailers: every mailer class with its delivery actions, delivery method, own defaults, layout and callbacks, " \
+        "template formats per action and preview class, the queue deliver_later uses, interceptors and observers, " \
+        "and the Action Mailbox mailboxes with the routing that sends inbound mail to each. " \
         "Use when: adding an email, checking which mailer sends what, or finding the action to preview/test. " \
         "Filter with mailer:\"UserMailer\". Omit for all mailers."
 
@@ -29,7 +31,7 @@ module RailsAiContext
         order: 41,
         mcp: "rails_get_mailers(mailer:\"UserMailer\")",
         cli_args: "mailer=UserMailer",
-        summary: "Mailer classes with delivery actions and delivery method"
+        summary: "Mailer classes with delivery actions and delivery method, mailboxes and their routing"
       )
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
@@ -62,12 +64,14 @@ module RailsAiContext
           # Past the end of the list, the hint below says where the end is.
           past_end = page[:items].empty? && !page[:total].zero?
           lines << "" << bases_note("mailers", base_names) if bases.any? && mailer.nil? && !past_end
+          lines.concat(settings_lines(jobs[:mailer_settings])) if mailer.nil? && page[:offset].zero?
           if page[:items].any?
             page[:items].each do |m|
               lines << "" << "## #{m[:name]}"
               # Configured at boot, so the static tier has no value to give.
               lines << "- **Delivery method:** #{m[:delivery_method]}" if m[:delivery_method].present?
               lines.concat(action_lines(m))
+              lines.concat(detail_lines(m))
             end
           elsif page[:total].zero?
             # An empty page past the end is not an app without mailers, and the
@@ -75,12 +79,65 @@ module RailsAiContext
             lines << "_No mailers found#{" matching '#{mailer}'" if mailer}._"
           end
 
+          lines.concat(mailbox_lines(Payload.section(cached_context, :action_mailbox))) if mailer.nil? && page[:offset].zero?
           lines << "" << page[:hint] unless page[:hint].empty?
           text_response(lines.join("\n"))
         end
       end
 
       HEIRS_SHOWN = 12
+
+      private_class_method def self.settings_lines(settings)
+        return [] unless settings.is_a?(Hash) && settings.any?
+
+        lines = [ "" ]
+        lines << "**deliver_later queue:** `#{settings[:deliver_later_queue]}`" if settings[:deliver_later_queue]
+        { "Interceptors" => settings[:interceptors], "Observers" => settings[:observers] }.each do |label, list|
+          list = Array(list)
+          lines << "**#{label}:** #{list.map { |e| "#{e[:name]} (`#{e[:file]}`)" }.join(', ')}" if list.any?
+        end
+        paths = Array(settings[:preview_paths])
+        lines << "**Preview paths:** #{paths.map { |p| "`#{p}`" }.join(', ')}" if paths.any?
+        lines.size > 1 ? lines : []
+      end
+
+      private_class_method def self.detail_lines(mailer)
+        lines = []
+        declares = Array(mailer[:declares])
+        lines << "- **Declares:** #{declares.map { |d| "`#{d}`" }.join(', ')}" if declares.any?
+        templates = mailer[:templates] || {}
+        lines << "- **Templates:** #{templates.map { |action, formats| "#{action} (#{formats.join(', ')})" }.join(', ')}" if templates.any?
+        if (preview = mailer[:preview])
+          lines << "- **Preview:** #{preview[:name]} (`#{preview[:file]}`)#{": #{preview[:methods].join(', ')}" if Array(preview[:methods]).any?}"
+        end
+        lines
+      end
+
+      private_class_method def self.mailbox_lines(data)
+        routes = Array(data&.dig(:routes))
+        mailboxes = Array(data&.dig(:mailboxes))
+        return [] if routes.empty? && mailboxes.empty?
+
+        lines = [ "", "## Mailboxes (Action Mailbox)" ]
+        if routes.any?
+          defined = mailboxes.map { |m| m[:name] }
+          files = routes.map { |r| r[:file] }.uniq.map { |f| "`#{f}`" }.join(", ")
+          lines << "" << "Routing, first match wins (#{files}):"
+          routes.each_with_index do |r, i|
+            missing = " (not defined in app/mailboxes)" unless defined.include?(r[:mailbox])
+            lines << "#{i + 1}. `#{r[:pattern]}` -> #{r[:mailbox]}#{missing}"
+          end
+        end
+        lines << "" if mailboxes.any?
+        mailboxes.each do |m|
+          callbacks = Array(m[:callbacks]).map { |c| "#{c[:type]} :#{c[:method]}" }
+          line = "- **#{m[:name]}** (`#{m[:file]}`)"
+          line += ": #{callbacks.join(', ')}" if callbacks.any?
+          line += " - no route sends mail here" if routes.any? && Array(m[:routed_from]).empty?
+          lines << line
+        end
+        lines
+      end
 
       private_class_method def self.base_page(base)
         lines = [ "# #{base[:name]}", "",

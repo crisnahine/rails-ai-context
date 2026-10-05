@@ -67,6 +67,218 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text).to include("ExampleJob")
     end
 
+    context "with Solid Queue workers declared in config/queue.yml" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      def answer(queue_yml, gemfile: "gem \"solid_queue\"\n", production: nil, **args)
+        FileUtils.mkdir_p(File.join(tmpdir, "app/jobs"))
+        FileUtils.mkdir_p(File.join(tmpdir, "config/environments"))
+        File.write(File.join(tmpdir, "Gemfile"), gemfile)
+        File.write(File.join(tmpdir, "config/environments/production.rb"), production) if production
+        File.write(File.join(tmpdir, "app/jobs/cleanup_job.rb"), "class CleanupJob < ApplicationJob\n  queue_as :maintenance\nend\n")
+        File.write(File.join(tmpdir, "app/jobs/mail_job.rb"), "class MailJob < ApplicationJob\n  queue_as :mailers\nend\n")
+        File.write(File.join(tmpdir, "config/queue.yml"), queue_yml)
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
+        described_class.call(**args).content.first[:text]
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      let(:queue_yml) do
+        "default: &default\n  workers:\n    - queues: [ default, mailers ]\n      threads: 3\ntest:\n  <<: *default\ndevelopment:\n  <<: *default\n"
+      end
+
+      it "names the queues the workers poll and the job queues none of them polls" do
+        text = answer(queue_yml)
+
+        expect(text).to include("config/queue.yml workers poll 2 queues: default, mailers. No worker polls maintenance (CleanupJob).")
+      end
+
+      it "says so on the page of a job whose queue no worker polls" do
+        expect(answer(queue_yml, job: "CleanupJob")).to include("**Queue:** `maintenance` (no worker in config/queue.yml polls it)")
+        expect(answer(queue_yml, job: "MailJob")).to include("**Queue:** `mailers`\n")
+      end
+
+      it "leaves the line out when the app runs another queue adapter" do
+        sidekiq = "Rails.application.configure do\n  config.active_job.queue_adapter = :sidekiq\nend\n"
+
+        expect(answer(queue_yml, gemfile: "gem \"sidekiq\"\n")).not_to include("config/queue.yml")
+        expect(answer(queue_yml, production: sidekiq)).not_to include("config/queue.yml")
+        expect(answer(queue_yml, gemfile: "gem \"sidekiq\"\n", production: sidekiq.sub("sidekiq", "solid_queue")))
+          .to include("No worker polls maintenance (CleanupJob).")
+      end
+
+      it "leaves the line out when config/queue.yml is not YAML" do
+        text = answer("test:\n  workers: [unclosed\n")
+
+        expect(text).to include("**Queues:**")
+        expect(text).not_to include("config/queue.yml")
+      end
+
+      it "treats a wildcard and a worker without queues as polling everything" do
+        text = answer("test:\n  workers:\n    - threads: 1\n    - queues: \"main*\"\n")
+
+        expect(text).to include("config/queue.yml workers poll 2 queues: *, main*.")
+        expect(text).not_to include("No worker polls")
+      end
+    end
+
+    context "with a delayed_job app whose models use handle_asynchronously" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app/models"))
+        File.write(File.join(tmpdir, "app/models/note.rb"), <<~RUBY)
+          class Note < ApplicationRecord
+            def send_welcome; end
+            handle_asynchronously :send_welcome, priority: 20
+
+            def archive; end
+            handle_asynchronously :archive
+          end
+        RUBY
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "names each method delayed_job queues, with its options, instead of saying no jobs" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).not_to include("No jobs found")
+        expect(text).to include("## Background methods (delayed_job `handle_asynchronously`, 2)")
+        expect(text).to include("- `Note#send_welcome` [priority: 20] (`app/models/note.rb:3`)")
+        expect(text).to include("- `Note#archive` (`app/models/note.rb:6`)")
+      end
+    end
+
+    context "with a job that includes ActiveJob::Continuable" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app/jobs"))
+        File.write(File.join(tmpdir, "app/jobs/import_job.rb"), <<~RUBY)
+          class ImportJob < ApplicationJob
+            include ActiveJob::Continuable
+            queue_as :default
+
+            def perform(import_id)
+              step :fetch do |step|
+                step.advance!
+              end
+              step :process, isolated: true
+              step :finish
+            end
+
+            private
+
+            def finish; end
+          end
+        RUBY
+        File.write(File.join(tmpdir, "app/jobs/base_continuable_job.rb"), "class BaseContinuableJob < ApplicationJob\n  include ActiveJob::Continuable\nend\n")
+        File.write(File.join(tmpdir, "app/jobs/sync_job.rb"), "class SyncJob < BaseContinuableJob\n  def perform\n    step :pull\n  end\nend\n")
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "marks it continuable and lists its steps in order" do
+        text = described_class.call(job: "ImportJob").content.first[:text]
+
+        expect(text).to include("**Continuable:** yes (ActiveJob::Continuable): a retry resumes at the first unfinished step")
+        expect(text).to include("## Steps\n1. `fetch` (block)\n2. `process` (method, isolated: true)\n3. `finish` (method)\n\n")
+      end
+
+      it "marks a job continuable through its base" do
+        text = described_class.call(job: "SyncJob").content.first[:text]
+
+        expect(text).to include("**Continuable:** yes")
+        expect(text).to include("1. `pull` (method)")
+      end
+    end
+
+    context "with what decides when a job runs and what happens after its last retry" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app/jobs"))
+        FileUtils.mkdir_p(File.join(tmpdir, "app/sidekiq"))
+        File.write(File.join(tmpdir, "app/jobs/report_job.rb"), <<~RUBY)
+          class ReportJob < ApplicationJob
+            queue_as :reports
+            queue_with_priority 10
+            self.enqueue_after_transaction_commit = true
+            retry_on ActiveRecord::Deadlocked, wait: 5.seconds, attempts: 3, queue: :low, priority: 1, jitter: 0.1
+            after_discard { |job, error| Rails.logger.error(error) }
+            before_enqueue :b_enq
+            around_perform :timed
+            after_perform :done
+            def perform(user_id); end
+          end
+        RUBY
+        File.write(File.join(tmpdir, "app/jobs/lambda_job.rb"), "class LambdaJob < ApplicationJob\n  queue_with_priority -> { 1 }\n  def perform; end\nend\n")
+        File.write(File.join(tmpdir, "app/jobs/nightly_job.rb"), <<~RUBY)
+          class NightlyJob < ApplicationJob
+            limits_concurrency to: 1, key: ->(id) { id }, duration: 5.minutes
+            def perform(id); end
+          end
+        RUBY
+        File.write(File.join(tmpdir, "app/sidekiq/hard_worker.rb"), <<~RUBY)
+          class HardWorker
+            include Sidekiq::Job
+            sidekiq_options retry: 5
+            sidekiq_retry_in { |count| 10 * count }
+            sidekiq_retries_exhausted { |msg, ex| Rails.logger.warn(msg) }
+            def perform; end
+          end
+        RUBY
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "shows the priority, the transaction setting, every retry option and the callbacks" do
+        text = described_class.call(job: "ReportJob").content.first[:text]
+
+        expect(text).to include("**Priority:** 10")
+        expect(text).to include("**Enqueue after transaction commit:** true")
+        expect(text).to include("- retry_on ActiveRecord::Deadlocked, attempts: 3, wait: 5.seconds, queue: :low, priority: 1, jitter: 0.1")
+        expect(text).to include("## Callbacks\n- `after_discard { |job, error| Rails.logger.error(error) }`\n" \
+                                "- `before_enqueue :b_enq`\n- `around_perform :timed`\n- `after_perform :done`\n\n**Perform:** `perform(user_id)`")
+      end
+
+      it "labels a priority given as a lambda as computed, the way a block's is" do
+        expect(described_class.call(job: "LambdaJob").content.first[:text]).to include("**Priority:** computed by a block: `-> { 1 }`")
+      end
+
+      it "shows a Solid Queue concurrency limit" do
+        expect(described_class.call(job: "NightlyJob").content.first[:text])
+          .to include("**Concurrency:** `limits_concurrency to: 1, key: ->(id) { id }, duration: 5.minutes`")
+      end
+
+      it "shows a Sidekiq worker's backoff block and exhausted handler under its retries" do
+        text = described_class.call(job: "HardWorker").content.first[:text]
+
+        expect(text).to include("- sidekiq_retry_in { |count| 10 * count }")
+        expect(text).to include("- sidekiq_retries_exhausted { |msg, ex| Rails.logger.warn(msg) }")
+      end
+
+      it "names a worker's retry block by its macro in the listing, keeping the line short" do
+        line = described_class.call(detail: "standard").content.first[:text].lines.find { |l| l.include?("**HardWorker**") }
+
+        expect(line).to include(" - sidekiq_retry_in (block)")
+        expect(line).not_to include("10 * count")
+      end
+    end
+
     context "with a rich job fixture" do
       let(:tmpdir) { Dir.mktmpdir }
       let(:jobs_dir) { File.join(tmpdir, "app", "jobs") }

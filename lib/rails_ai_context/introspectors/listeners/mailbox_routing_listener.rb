@@ -27,7 +27,8 @@ module RailsAiContext
             when Prism::KeywordHashNode, Prism::HashNode
               arg.elements.each do |assoc|
                 next unless assoc.is_a?(Prism::AssocNode)
-                pattern = node_source(assoc.key)
+                # `all: :catchall` is the :all address, written as a label.
+                pattern = assoc.key.is_a?(Prism::SymbolNode) ? ":#{assoc.key.unescaped}" : node_source(assoc.key)
                 action = extract_value(assoc.value)
                 @results << {
                   type:     :routing,

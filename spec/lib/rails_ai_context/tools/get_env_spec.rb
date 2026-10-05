@@ -911,6 +911,121 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     end
   end
 
+  describe "Kamal's config/deploy.yml env" do
+    around do |example|
+      Dir.mktmpdir do |dir|
+        @root = dir
+        example.run
+      end
+    end
+
+    before do
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(@root)))
+      FileUtils.mkdir_p(File.join(@root, "config"))
+    end
+
+    def write_deploy(yaml)
+      File.write(File.join(@root, "config", "deploy.yml"), yaml)
+    end
+
+    it "lists the secret names and the clear values it sets, at every detail level" do
+      write_deploy(<<~YAML)
+        service: app
+        env:
+          secret:
+            - RAILS_MASTER_KEY
+            - DB_PASSWORD:MAIN_DB_PASSWORD
+          clear:
+            SOLID_QUEUE_IN_PUMA: true
+            <% if true %>
+            JOB_CONCURRENCY: 3
+            <% end %>
+      YAML
+
+      text = described_class.call.content.first[:text]
+      expect(text).to include("## Set by Kamal (`config/deploy.yml`)")
+      expect(text).to include("- `RAILS_MASTER_KEY` - secret, from `.kamal/secrets`")
+      expect(text).to include("- `DB_PASSWORD` - secret, from `.kamal/secrets` (`MAIN_DB_PASSWORD`)")
+      expect(text).to include("- `SOLID_QUEUE_IN_PUMA` = `true`")
+      expect(text).to include("- `JOB_CONCURRENCY` = `3`")
+      expect(described_class.call(detail: "full").content.first[:text]).to include("- `RAILS_MASTER_KEY` - secret, from `.kamal/secrets`")
+      expect(described_class.call(detail: "summary").content.first[:text]).to include("- `RAILS_MASTER_KEY`")
+    end
+
+    it "reads an env hash with no clear or secret key as clear values, and redacts a secret-looking one" do
+      write_deploy("env:\n  DATABASE_HOST: db1\n  API_TOKEN: Zx9kQ2mW7pL4vB8nR3tY6uH1\n")
+
+      text = described_class.call.content.first[:text]
+      expect(text).to include("- `DATABASE_HOST` = `db1`")
+      expect(text).not_to include("Zx9kQ2mW7pL4vB8nR3tY6uH1")
+    end
+
+    it "adds nothing for a deploy file that is not valid YAML or has no env" do
+      write_deploy("env: [unclosed\n")
+      expect(described_class.call.content.first[:text]).not_to include("Set by Kamal")
+
+      write_deploy("service: app\n")
+      expect(described_class.call.content.first[:text]).not_to include("Set by Kamal")
+    end
+  end
+
+  describe "config gem settings and Anyway::Config classes" do
+    around do |example|
+      Dir.mktmpdir do |dir|
+        @root = dir
+        example.run
+      end
+    end
+
+    before do
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(@root)))
+    end
+
+    def write(rel, body)
+      path = File.join(@root, rel)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, body)
+    end
+
+    it "lists the setting keys each file gives and each config class's attributes with their env names, never a value" do
+      write("config/settings.yml", "payments:\n  provider: stripe\n  timeout: 30\n")
+      write("config/settings/production.yml", "payments:\n  timeout: 10\n")
+      write("config/settings.local.yml", "payments:\n  secret: shh\n")
+      write("config/configs/payment_config.rb", <<~RUBY)
+        class PaymentConfig < Anyway::Config
+          attr_config :api_key, timeout: 30
+          required :api_key
+        end
+      RUBY
+      write("app/configs/geo_config.rb", <<~RUBY)
+        class GeoConfig < ApplicationConfig
+          env_prefix :maps
+          attr_config :token
+        end
+      RUBY
+
+      %w[standard full].each do |detail|
+        text = described_class.call(detail: detail).content.first[:text]
+        expect(text).to include("## Settings (config gem, read as `Settings.<key>`; values hidden)")
+        expect(text).to include("- `config/settings.yml`: `payments.provider`, `payments.timeout`")
+        expect(text).to include("- `config/settings/production.yml`: `payments.timeout`")
+        expect(text).not_to include("settings.local.yml")
+        expect(text).to include("## Anyway::Config classes (values hidden)")
+        expect(text).to include("- `PaymentConfig` (`config/configs/payment_config.rb`): `api_key` (`PAYMENT_API_KEY`, required), `timeout` (`PAYMENT_TIMEOUT`)")
+        expect(text).to include("- `GeoConfig` (`app/configs/geo_config.rb`): `token` (`MAPS_TOKEN`)")
+        expect(text).not_to include("stripe")
+      end
+    end
+
+    it "adds nothing for a settings file that is not YAML or a config file that does not parse" do
+      write("config/settings.yml", "payments: [unclosed\n")
+      write("config/configs/bad_config.rb", "class BadConfig < Anyway::Config\n  attr_config (((\n")
+
+      text = described_class.call.content.first[:text]
+      expect(text).not_to include("config/settings.yml")
+    end
+  end
+
   describe ".scan_env_example" do
     before { allow(described_class).to receive(:scan_env_example).and_call_original }
 

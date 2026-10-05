@@ -20,12 +20,13 @@ module RailsAiContext
       JOB_DIRS = %w[app/jobs app/workers app/sidekiq].freeze
       ACTIVE_JOB_BASES = %w[ActiveJob::Base ApplicationJob ActionMailer::MailDeliveryJob].freeze
       QUE_JOB_BASES = %w[Que::Job].freeze
-      JOB_MACROS = %i[
-        queue_as retry_on discard_on
-        sidekiq_options sidekiq_throttle include
-        before_enqueue after_enqueue before_perform after_perform
-        around_perform around_enqueue
+      JOB_CALLBACKS = %i[
+        before_enqueue after_enqueue around_enqueue before_perform after_perform around_perform after_discard
       ].freeze
+      JOB_MACROS = (%i[
+        queue_as queue_with_priority enqueue_after_transaction_commit= limits_concurrency include
+        sidekiq_throttle step
+      ] + RetryPolicy::MACROS + JOB_CALLBACKS).freeze
 
       # @return [Hash] async workers, mailers, and channels
       def call
@@ -36,12 +37,15 @@ module RailsAiContext
           workers: extract_workers,
           job_bases: job_bases,
           enqueue_helpers: enqueue_helpers,
+          async_methods: async_methods,
           mailers: booted_mailers[:mailers],
           mailer_bases: booted_mailers[:bases],
           channels: extract_channels,
           connections: extract_connections,
           recurring_jobs: recurring_jobs,
-          sidekiq_config: extract_sidekiq_config
+          sidekiq_config: extract_sidekiq_config,
+          solid_queue_config: extract_solid_queue_config,
+          mailer_settings: mailer_settings(booted: true)
         }
       end
 
@@ -54,12 +58,15 @@ module RailsAiContext
           workers: extract_workers,
           job_bases: job_bases,
           enqueue_helpers: enqueue_helpers,
+          async_methods: async_methods,
           mailers: source_mailers[:mailers],
           mailer_bases: source_mailers[:bases],
           channels: extract_channels_from_source,
           connections: extract_connections,
           recurring_jobs: recurring_jobs,
-          sidekiq_config: extract_sidekiq_config
+          sidekiq_config: extract_sidekiq_config,
+          solid_queue_config: extract_solid_queue_config,
+          mailer_settings: mailer_settings
         }
       end
 
@@ -95,7 +102,8 @@ module RailsAiContext
             name: job.name,
             file: source_file_for(job),
             queue: queue.to_s,
-            priority: job.priority
+            # A block priority is a Proc here; the source names it instead.
+            priority: (job.priority unless job.priority.is_a?(Proc))
           }.compact
         end.sort_by { |j| j[:name] }
       rescue => e
@@ -114,7 +122,7 @@ module RailsAiContext
       # all its workers use.
       def base_record(name, candidate)
         macros = candidate.ast[:macros]
-        declares = class_body(macros, candidate.source).select { |m| JOB_BASE_DECLARATIONS.include?(m[:macro]) }
+        declares = candidate_body(name).select { |m| JOB_BASE_DECLARATIONS.include?(m[:macro]) }
                          .sort_by { |m| m[:offset] }.map { |m| written(candidate.source, m) }
         heirs = job_candidates.keys.select { |other| other != name && chain_of(other).include?(name) }
         { name: name, file: candidate.file, queue: inherited_queue(name),
@@ -124,10 +132,8 @@ module RailsAiContext
 
       # What a base declares beyond its queue, options and retries: the mixins, the
       # throttle and the callbacks every job below it runs with.
-      JOB_BASE_DECLARATIONS = %i[
-        include sidekiq_throttle before_enqueue after_enqueue before_perform after_perform
-        around_perform around_enqueue
-      ].freeze
+      JOB_BASE_DECLARATIONS = (%i[include sidekiq_throttle queue_with_priority enqueue_after_transaction_commit= limits_concurrency] +
+                               JOB_CALLBACKS).freeze
 
       # Sidekiq hands `sidekiq_options` to a subclass and ActiveJob hands it `queue_as`,
       # so both are read down the app's chain, the nearest class that sets a key winning.
@@ -195,7 +201,7 @@ module RailsAiContext
       PROC_LITERAL = /\A(?:->|(?:lambda|proc|Proc\.new)(?![\w.]))/
 
       QUEUE_AS_LISTENERS = {
-        macros: -> { Listeners::GenericMacroListener.new(*JOB_MACROS, block_source: [ :queue_as ]) },
+        macros: -> { Listeners::GenericMacroListener.new(*JOB_MACROS, block_source: [ :queue_as, :queue_with_priority, *RetryPolicy::BLOCK_MACROS ]) },
         procs:  Listeners::ProcLiteralListener,
         queue_assignments: Listeners::QueueAssignmentListener
       }.freeze
@@ -270,10 +276,25 @@ module RailsAiContext
         { text: text, note: note }
       end
 
-      # One walk of a config file per run, shared by the queue settings and the GoodJob cron.
       def config_assignments(file)
-        @config_walks ||= {}
-        RecurringSchedules.config_assignments(app.root, file, @config_walks)
+        Array(config_walk(file)[:config])
+      end
+
+      CONFIG_FILE_LISTENERS = {
+        config: Listeners::ConfigAssignmentListener,
+        calls: -> { Listeners::MethodCallListener.new(names: REGISTER_CALLS.keys + %w[load_defaults]) },
+        previews: -> { Listeners::PreviewPathsListener.new(framework: :action_mailer) }
+      }.freeze
+
+      # One walk of a config file per run, shared by the queue settings, the GoodJob cron and the mailer settings.
+      def config_walk(relative)
+        @config_file_walks ||= {}
+        @config_file_walks.fetch(relative) do
+          source = RecurringSchedules.read_file(app.root, relative)
+          walked = source ? SourceIntrospector.walk_source(source, CONFIG_FILE_LISTENERS) : {}
+          (@config_walks ||= {})[relative] = Array(walked[:config])
+          @config_file_walks[relative] = walked
+        end
       end
 
       def sidekiq_options(macros)
@@ -290,6 +311,22 @@ module RailsAiContext
 
       def reflected_bases
         @reflected_bases ||= []
+      end
+
+      # delayed_job's handle_asynchronously wraps a model method so every call is
+      # queued; the app has no job class for it at all.
+      def async_methods
+        SourceScan.each(app.root, kind: "app/models").flat_map do |record|
+          next [] unless record.source.include?("handle_asynchronously")
+
+          owner = DeclaredConstant.resolve(record.source, record.path_name)
+          walked = SourceIntrospector.walk_source(record.source, { calls: -> { Listeners::GenericMacroListener.new(:handle_asynchronously) } })
+          walked[:calls].filter_map do |call|
+            method = call[:args].first or next
+            options = call[:option_values].map { |key, value| "#{key}: #{value}" }
+            { owner: owner, method: method.to_s, file: "#{record.file}:#{call[:location]}", options: options.join(", ").presence }.compact
+          end
+        end
       end
 
       ENQUEUE_HELPERS = %w[enqueue enqueue_in enqueue_at].freeze
@@ -357,13 +394,6 @@ module RailsAiContext
           perform_method = ActionResolver.entry_point(ast[:methods], names: que ? ActionResolver::QUE_ENTRY_POINTS : ActionResolver::ENTRY_POINTS)
           perform_signature = ActionResolver.parameter_list(perform_method) if perform_method && perform_method[:params]&.any?
 
-          # Extract job callbacks
-          callback_names = %i[before_enqueue after_enqueue before_perform after_perform around_perform around_enqueue]
-          callbacks = ast[:macros]
-            .select { |m| callback_names.include?(m[:macro]) }
-            .map { |m| m[:macro].to_s }
-            .uniq
-
           retries = RetryPolicy.entries(ast[:macros])
 
           job = { name: name, file: candidate.file }
@@ -372,11 +402,68 @@ module RailsAiContext
           job[:retries] = retries if retries.any?
           job[:perform_signature] = perform_signature if perform_signature
           job[:entry_point] = perform_method[:name] if perform_method && perform_method[:name] != "perform"
-          job[:callbacks] = callbacks if callbacks.any?
+          job.merge!(run_settings(name))
           job
         end.sort_by { |j| j[:name] }
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "extract_jobs_from_source")
+      end
+
+      # What decides when a job runs, as its class (or the nearest base setting it) writes it.
+      def run_settings(name)
+        candidate = job_candidates[name]
+        macros = candidate_body(name)
+        settings = {}
+        priority = nearest_macro(name, :queue_with_priority)
+        if priority
+          value = priority[:values].first
+          settings[:priority] = if priority[:block] then labelled(COMPUTED_PRIORITY, priority[:block])
+          elsif value.is_a?(String) && value.match?(PROC_LITERAL) then labelled(COMPUTED_PRIORITY, value)
+          else value
+          end
+        end
+        commit = nearest_macro(name, :enqueue_after_transaction_commit=)
+        settings[:enqueue_after_transaction_commit] = commit[:values].first.then { |v| v.is_a?(Symbol) ? ":#{v}" : v.to_s } if commit
+        concurrency = nearest_macro(name, :limits_concurrency)
+        settings[:concurrency] = written(job_candidates[concurrency[:owner]].source, concurrency) if concurrency
+        callbacks = macros.select { |m| JOB_CALLBACKS.include?(m[:macro]) }.sort_by { |m| m[:offset] }
+        settings[:callbacks] = callbacks.map { |m| written(candidate.source, m) } if callbacks.any?
+        settings.merge(continuation(name))
+      end
+
+      CONTINUABLE = "ActiveJob::Continuable"
+
+      # ActiveJob::Continuable (Rails 8.1) resumes a retried job at its first
+      # unfinished step, so the steps perform runs, in order, decide what runs again.
+      def continuation(name)
+        continuable = chain_of(name).any? do |link|
+          candidate_body(link).any? { |m| m[:macro] == :include && m[:values].map { |v| v.to_s.delete_prefix("::") }.include?(CONTINUABLE) }
+        end
+        return {} unless continuable
+
+        ast = job_candidates[name].ast
+        perform = ActionResolver.entry_point(ast[:methods])
+        steps = ast[:macros].select do |m|
+          m[:macro] == :step && m[:args].any? && perform && (perform[:offset]...perform[:end_offset]).cover?(m[:offset])
+        end
+        { continuable: true, steps: steps.sort_by { |m| m[:offset] }.map { |m| step_entry(m) } }
+      end
+
+      def step_entry(macro)
+        step = { name: macro[:args].first.to_s, runs: macro[:proc_lines].any? ? "block" : "method" }
+        options = macro[:option_values].slice(:isolated, :start)
+        step[:options] = options.map { |key, value| "#{key}: #{value}" }.join(", ") if options.any?
+        step
+      end
+
+      COMPUTED_PRIORITY = "computed by a block"
+
+      def nearest_macro(name, macro)
+        chain_of(name).each do |link|
+          hit = candidate_body(link).reverse.find { |m| m[:macro] == macro }
+          return hit.merge(owner: link) if hit
+        end
+        nil
       end
 
       # Sidekiq workers, read from source in both tiers: the class is not an
@@ -535,6 +622,7 @@ module RailsAiContext
       end
 
       def recurring_jobs
+        app_config_files.each { |relative| config_walk(relative) }
         RecurringSchedules.read(app.root, @config_walks ||= {})
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "recurring_jobs")
@@ -554,6 +642,35 @@ module RailsAiContext
         config.empty? ? nil : config
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "extract_sidekiq_config")
+      end
+
+      SOLID_QUEUE_FILE = "config/queue.yml"
+
+      # The queues Solid Queue's workers poll, from this environment's section or the
+      # whole file; a worker that names none polls every queue.
+      def extract_solid_queue_config
+        return nil unless solid_queue_adapter?
+
+        data = RecurringSchedules.yaml(app.root, SOLID_QUEUE_FILE)
+        return nil unless data.is_a?(Hash)
+
+        section = data[RailsAiContext.environment_name].is_a?(Hash) ? data[RailsAiContext.environment_name] : data
+        workers = Array(section["workers"]).select { |worker| worker.is_a?(Hash) }
+        return nil if workers.empty?
+
+        queues = workers.flat_map { |worker| worker.key?("queues") ? Array(worker["queues"]).map { |queue| queue.to_s.strip } : [ "*" ] }
+        { file: SOLID_QUEUE_FILE, queues: queues.uniq }
+      rescue StandardError => e
+        RailsAiContext.debug_fail(e, nil, label: "extract_solid_queue_config")
+      end
+
+      # Read from source in both tiers: production's adapter is the one queue.yml is for,
+      # whatever the running environment uses. With no adapter in the config, the Gemfile decides.
+      def solid_queue_adapter?
+        adapters = app_config_files.flat_map do |relative|
+          config_assignments(relative).select { |hit| hit[:assignment] && hit[:path] == %i[active_job queue_adapter] }
+        end.map { |hit| hit[:value].to_s }
+        adapters.any? ? adapters.include?("solid_queue") : GemfileGems.names(app.root).include?("solid_queue")
       end
 
       def sidekiq_yml
@@ -627,12 +744,13 @@ module RailsAiContext
             next
           end
 
+          file = source_file_for(mailer)
           entry = {
             name: mailer.name,
-            file: source_file_for(mailer),
+            file: file,
             actions: actions,
             delivery_method: mailer.delivery_method.to_s
-          }.compact
+          }.compact.merge(mailer_extras(mailer.name, file))
           actions.any? ? entry : entry.merge(no_action_detail(mailer))
         end.sort_by { |m| m[:name] }
       rescue => e
@@ -693,6 +811,7 @@ module RailsAiContext
         before_action after_action around_action
         prepend_before_action prepend_after_action prepend_around_action
         append_before_action append_after_action append_around_action
+        before_deliver after_deliver around_deliver
       ].freeze
 
       def source_mailers
@@ -753,6 +872,136 @@ module RailsAiContext
         @mailer_lookup ||= SuperclassChain.lookup_for(app.root)
       end
 
+      # A mailer's own declarations as written, the template formats of each action, and
+      # its preview class: read from source in both tiers.
+      def mailer_extras(name, file, source = nil, macros = nil)
+        source ||= file && SafeFile.read(File.join(app.root.to_s, file))
+        extras = {}
+        if source
+          macros ||= SourceIntrospector.walk_source(source, {
+            macros: -> { Listeners::GenericMacroListener.new(ACTION_CALLBACKS + MAILER_DECLARATIONS) }
+          })[:macros]
+          declares = class_body(Array(macros), source).select { |m| (MAILER_DECLARATIONS + ACTION_CALLBACKS).include?(m[:macro]) }
+                                                     .sort_by { |m| m[:offset] }.map { |m| written(source, m) }
+          extras[:declares] = declares if declares.any?
+        end
+        templates = mailer_templates(name)
+        extras[:templates] = templates if templates.any?
+        extras[:preview] = mailer_previews[name] if mailer_previews[name]
+        extras
+      rescue StandardError, ScriptError => e
+        RailsAiContext.debug_fail(e, {}, label: "mailer_extras")
+      end
+
+      # welcome.html.erb and welcome.text.erb are one action in two formats; a partial is no action.
+      def mailer_templates(name)
+        dir = File.join(app.root.to_s, "app/views", name.underscore)
+        Dir.glob(File.join(dir, "*")).select { |path| File.file?(path) }.each_with_object({}) do |path, found|
+          action, *middle, handler = File.basename(path).split(".")
+          next if action.start_with?("_") || handler.nil?
+
+          (found[action] ||= []) << (middle.first || "any format")
+        end.transform_values { |formats| formats.uniq.sort }.sort.to_h
+      end
+
+      DEFAULT_MAILER_PREVIEW_DIRS = %w[test/mailers/previews spec/mailers/previews].freeze
+      MAILER_CONFIG_GLOBS = %w[config/application.rb config/environments/*.rb].freeze
+
+      # Rails adds test/mailers/previews and rspec-rails spec/mailers/previews; the app adds the rest.
+      def mailer_preview_dirs
+        @mailer_preview_dirs ||= begin
+          configured = mailer_config_walks.flat_map { |_relative, walked| Array(walked[:previews]) }
+          (DEFAULT_MAILER_PREVIEW_DIRS + configured).uniq.select { |dir| Dir.exist?(File.join(app.root.to_s, dir)) }
+        end
+      end
+
+      def app_config_files
+        @app_config_files ||= MAILER_CONFIG_GLOBS.flat_map { |glob| Dir.glob(File.join(app.root.to_s, glob)).sort }.map { |path| path.delete_prefix("#{app.root}/") }
+      end
+
+      def mailer_config_files
+        @mailer_config_files ||= app_config_files.map { |relative| File.join(app.root.to_s, relative) } + PathResolver.initializer_paths(app.root)
+      end
+
+      # Only a file that mentions mail settings is walked; one walked already for another reader is reused.
+      def mailer_config_walks
+        @mailer_config_walks ||= mailer_config_files.filter_map do |path|
+          relative = path.delete_prefix("#{app.root}/")
+          unless @config_file_walks&.key?(relative)
+            source = SafeFile.read(path)
+            next unless source&.match?(/action_mailer|register_(?:interceptor|observer)|load_defaults/)
+          end
+          [ relative, config_walk(relative) ]
+        end
+      end
+
+      # Mailer name => its preview class, file and the emails it previews.
+      def mailer_previews
+        @mailer_previews ||= mailer_preview_dirs.flat_map { |dir| Dir.glob(File.join(app.root.to_s, dir, "**/*_preview.rb")).sort }
+          .each_with_object({}) do |path, found|
+            next unless SafePath.contained?(File.realpath(path), app_root_real)
+
+            source = SafeFile.read(path) or next
+            declared = DeclaredConstant.declarations(source).find { |d| d.name.end_with?("Preview") } or next
+            methods = SourceIntrospector.walk_source(source, { methods: Listeners::MethodsListener })[:methods]
+            previews = ActionResolver.own_methods(methods, declared.name)
+                                     .select { |m| m[:scope] == :instance && m[:visibility] == :public }.map { |m| m[:name] }
+            found[declared.name.delete_suffix("Preview")] ||= { name: declared.name, file: path.delete_prefix("#{app.root}/"), methods: previews }
+          rescue SystemCallError
+            next
+          end
+      end
+
+      REGISTER_CALLS = { "register_interceptor" => :interceptors, "register_interceptors" => :interceptors,
+                         "register_observer" => :observers, "register_observers" => :observers }.freeze
+
+      # The queue deliver_later uses, and the interceptors and observers the config registers.
+      # Booted, the queue is ActionMailer's own setting; statically it is the config's, else
+      # `load_defaults` 6.1 or later sets it to nil, which is ActiveJob's default queue.
+      def mailer_settings(booted: false)
+        settings = { interceptors: [], observers: [] }
+        queue = nil
+        queue_set = false
+        version = nil
+        mailer_config_walks.each do |relative, walked|
+          Array(walked[:config]).each do |hit|
+            next unless hit[:assignment] && hit[:path].first == :action_mailer && hit[:path].size == 2
+
+            key = hit[:path].last
+            if key == :deliver_later_queue_name && in_this_environment?(relative)
+              queue_set = true
+              queue = hit[:value]&.to_s
+            end
+            Array(hit[:value]).each { |name| settings[key] << { name: name.to_s, file: relative } } if settings.key?(key)
+          end
+          Array(walked[:calls]).each do |call|
+            if call[:name] == "load_defaults"
+              version = defaults_version(call[:arguments].first) if relative == "config/application.rb"
+            else
+              call[:arguments].flatten.each { |name| settings[REGISTER_CALLS[call[:name]]] << { name: name.to_s, file: relative } }
+            end
+          end
+        end
+        if booted && defined?(ActionMailer::Base) && ActionMailer::Base.respond_to?(:deliver_later_queue_name)
+          queue = ActionMailer::Base.deliver_later_queue_name&.to_s
+        elsif !queue_set
+          queue = version && version >= 6.1 ? nil : "mailers"
+        end
+        settings.transform_values! { |list| list.uniq { |entry| entry[:name] } }
+        settings.merge(deliver_later_queue: queue_name_from_part(queue.presence), preview_paths: mailer_preview_dirs)
+      rescue StandardError, ScriptError => e
+        RailsAiContext.debug_fail(e, {}, label: "mailer_settings")
+      end
+
+      # A version that is not a literal is the running Rails's, past every cutoff.
+      def defaults_version(arg)
+        arg.to_s.match?(/\A\d+(\.\d+)?\z/) ? arg.to_s.to_f : Float::INFINITY
+      end
+
+      def in_this_environment?(relative)
+        !relative.start_with?("config/environments/") || relative == "config/environments/#{RailsAiContext.environment_name}.rb"
+      end
+
       # What a base hands every mailer inheriting it, each written the way the
       # app wrote it, the methods it defines, and who inherits it.
       MAILER_DECLARATIONS = %i[layout helper helper_method include default default_url_options=].freeze
@@ -777,6 +1026,12 @@ module RailsAiContext
           text = text.byteslice(0, loc.start_offset - from) + text.byteslice((loc.end_offset - from)..).to_s
         end
         text.gsub(/\s+/, " ").gsub(/\(\s+/, "(").sub(/,?\s*\)\z/, ")").strip
+      end
+
+      # Every job below a base reads its body, so each candidate's is traversed once.
+      def candidate_body(name)
+        @candidate_bodies ||= {}
+        @candidate_bodies[name] ||= class_body(job_candidates[name].ast[:macros], job_candidates[name].source)
       end
 
       # A declaration is a call in the class body; the same name inside a
@@ -821,7 +1076,7 @@ module RailsAiContext
           declarations = DeclaredConstant.declarations(record.source).select(&:superclass)
           next [] if declarations.empty?
 
-          klass = walk_class(record, ACTION_CALLBACKS)
+          klass = walk_class(record, ACTION_CALLBACKS + MAILER_DECLARATIONS)
           next [] if klass.nil? || framework_hook?(klass)
 
           declarations.map { |d| klass.with(name: d.name, parent_class: d.superclass, nesting: d.nesting, mixin: false) }
@@ -855,7 +1110,7 @@ module RailsAiContext
         )
 
         entry = { name: klass.name, file: klass.file, actions: actions,
-                  confidence: RailsAiContext::Confidence::STATIC }
+                  confidence: RailsAiContext::Confidence::STATIC }.merge(mailer_extras(klass.name, klass.file, klass.source, klass.macros))
         return entry if actions.any?
 
         class_actions = ActionResolver.own_methods(klass.methods, klass.name)

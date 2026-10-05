@@ -6,7 +6,7 @@ RSpec.describe RailsAiContext::Introspectors::RetryPolicy do
   # The macros a job introspector walk hands over, from one class's source.
   def entries_for(source)
     hits = RailsAiContext::Introspectors::SourceIntrospector.walk_source(source, {
-      macros: -> { RailsAiContext::Introspectors::Listeners::GenericMacroListener.new(*described_class::MACROS) }
+      macros: -> { RailsAiContext::Introspectors::Listeners::GenericMacroListener.new(*described_class::MACROS, block_source: described_class::BLOCK_MACROS) }
     })[:macros]
     described_class.entries(hits)
   end

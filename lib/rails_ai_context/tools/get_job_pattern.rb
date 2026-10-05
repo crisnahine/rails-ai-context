@@ -48,19 +48,20 @@ module RailsAiContext
         channels = channels.reject { |c| c.is_a?(Hash) && c[:error] }
         channels_note = unavailable_note(jobs_data)
 
-        sidekiq_line = sidekiq_queues_line(jobs_data)
+        queue_line = [ sidekiq_queues_line(jobs_data), solid_queue_line(jobs_data, jobs) ].compact.join(" ").presence
         workers = (jobs_data.is_a?(Hash) ? jobs_data[:workers] : nil) || []
         schedules = Array(jobs_data.is_a?(Hash) ? jobs_data[:recurring_jobs] : nil).select { |task| task.is_a?(Hash) }
 
         if job
-          return format_single_job(job, jobs, real_root, sidekiq_line, workers, job_bases(jobs_data), enqueue_helpers, schedules)
+          return format_single_job(job, jobs, real_root, queue_line, workers, job_bases(jobs_data), enqueue_helpers, schedules)
         end
 
         # No jobs and no channels - bail out. Channel absence is only a real
         # negative when the :jobs section actually ran - if it's unavailable
         # (static tier), say so instead of claiming "no channels detected".
-        if jobs.empty? && channels.empty? && workers.empty?
-          return text_response(with_bases_note(no_jobs_or_channels_message(channels_note, sidekiq_line), jobs_data))
+        async_methods = Array(jobs_data.is_a?(Hash) ? jobs_data[:async_methods] : nil)
+        if jobs.empty? && channels.empty? && workers.empty? && async_methods.empty?
+          return text_response(with_bases_note(no_jobs_or_channels_message(channels_note, queue_line), jobs_data))
         end
 
         # Compose: jobs section (if any) + workers + channels section (if any).
@@ -69,6 +70,13 @@ module RailsAiContext
         if workers.any?
           lines << "" if lines.any?
           lines.concat(format_workers_section(workers, detail))
+        end
+        if async_methods.any?
+          lines << "" if lines.any?
+          lines << "## Background methods (delayed_job `handle_asynchronously`, #{async_methods.size})" << ""
+          async_methods.each do |m|
+            lines << "- `#{m[:owner]}##{m[:method]}`#{" [#{m[:options]}]" if m[:options]} (`#{m[:file]}`)"
+          end
         end
         if channels.any?
           lines << "" if lines.any?
@@ -89,7 +97,7 @@ module RailsAiContext
         end
         # Counts are bounded by the directories scanned, so the caveat goes under any listing.
         lines << "" if lines.any?
-        lines << "_#{[ sidekiq_line, NOT_COVERED ].compact.join(" ")}_"
+        lines << "_#{[ queue_line, NOT_COVERED ].compact.join(" ")}_"
 
         text_response(lines.join("\n"))
       end
@@ -144,9 +152,13 @@ module RailsAiContext
         parts.any? ? " [#{parts.join('; ')}]" : ""
       end
 
-      # `retry:` shows in the worker's bracket, so this line carries only its own retry_on.
+      # `retry:` shows in the worker's bracket, so this line carries only its own retry_on;
+      # a retry block is named by its macro, its body stays on the worker's page.
       private_class_method def self.own_retries(worker)
-        Array(worker[:retries]).reject { |entry| entry.start_with?("sidekiq retry:") }
+        Array(worker[:retries]).reject { |entry| entry.start_with?("sidekiq retry:") }.map do |entry|
+          macro = RailsAiContext::Introspectors::RetryPolicy::BLOCK_MACROS.find { |name| entry.start_with?("#{name} ") || entry == name.to_s }
+          macro ? "#{macro} (block)" : entry
+        end
       end
 
       # An empty answer still names the bases it left out, as every listing
@@ -158,8 +170,8 @@ module RailsAiContext
       HEIRS_SHOWN = 12
       ENQUEUERS_SHOWN = 20
 
-      private_class_method def self.no_job_files_message(sidekiq_line = nil)
-        [ "No jobs found. #{NOT_COVERED}", sidekiq_line ].compact.join(" ")
+      private_class_method def self.no_job_files_message(queue_line = nil)
+        [ "No jobs found. #{NOT_COVERED}", queue_line ].compact.join(" ")
       end
 
       # The "nothing async at all" bail-out, phrased to keep reading naturally
@@ -168,9 +180,9 @@ module RailsAiContext
       # tier) - in that case, asserting "no Action Cable channels detected"
       # would be a fabricated negative rather than an observed one, so the
       # note replaces that claim instead of joining it.
-      private_class_method def self.no_jobs_or_channels_message(channels_note, sidekiq_line = nil)
+      private_class_method def self.no_jobs_or_channels_message(channels_note, queue_line = nil)
         channels_clause = channels_note || "no Action Cable channels detected"
-        [ "No jobs found, and #{channels_clause}. #{NOT_COVERED}", sidekiq_line ].compact.join(" ")
+        [ "No jobs found, and #{channels_clause}. #{NOT_COVERED}", queue_line ].compact.join(" ")
       end
 
       # JobIntrospector#extract_sidekiq_config already read this file, and on an
@@ -188,13 +200,37 @@ module RailsAiContext
         "#{line}."
       end
 
+      private_class_method def self.solid_queue_line(jobs_data, jobs)
+        config = jobs_data.is_a?(Hash) ? jobs_data[:solid_queue_config] : nil
+        return nil unless config.is_a?(Hash)
+
+        queues = Array(config[:queues])
+        line = "#{config[:file]} workers poll #{count_phrase(queues.size, "queue")}: #{queues.join(', ')}."
+        missed = unpolled_queues(jobs_data, jobs).group_by { |job| job[:queue] }
+        return line if missed.empty?
+
+        "#{line} No worker polls #{missed.map { |queue, held| "#{queue} (#{held.filter_map { |j| j[:name] }.join(', ')})" }.join(', ')}."
+      end
+
+      # A plain queue name no worker pattern matches: "*" polls all, "name*" a prefix.
+      private_class_method def self.unpolled_queues(jobs_data, jobs)
+        config = jobs_data.is_a?(Hash) ? jobs_data[:solid_queue_config] : nil
+        return [] unless config.is_a?(Hash)
+
+        patterns = Array(config[:queues])
+        jobs.select do |job|
+          queue = job[:queue].to_s
+          queue.match?(/\A[\w.:-]+\z/) && patterns.none? { |pattern| pattern.end_with?("*") ? queue.start_with?(pattern.delete_suffix("*")) : pattern == queue }
+        end
+      end
+
       # The name never rebuilds the path: the file is the one the introspector
       # recorded, which is the only place a pack job's path is written down.
       private_class_method def self.job_bases(jobs_data)
         (jobs_data.is_a?(Hash) ? jobs_data[:job_bases] : nil).then { |list| Array(list).select { |b| b.is_a?(Hash) } }
       end
 
-      private_class_method def self.format_single_job(job, jobs, root, sidekiq_line, workers, bases = [], helpers = [], schedules = [])
+      private_class_method def self.format_single_job(job, jobs, root, queue_line, workers, bases = [], helpers = [], schedules = [])
         names = jobs.map { |j| j[:name] }
         worker_names = workers.map { |w| w[:name] }.compact
         # A base answers by name because every listing, the empty one too,
@@ -203,7 +239,7 @@ module RailsAiContext
         # "SendWelcomeEmailJob", "send_welcome_email_job" and "send_welcome_email" all name one job.
         query = job.to_s.delete_suffix(".rb")
         if names.empty? && worker_names.empty? && !fuzzy_find_key(base_names, query)
-          return text_response(no_job_files_message(sidekiq_line))
+          return text_response(no_job_files_message(queue_line))
         end
         class_name = fuzzy_find_key(names, query) ||
                      fuzzy_find_key(names, "#{query.underscore.delete_suffix("_job")}_job")
@@ -262,8 +298,13 @@ module RailsAiContext
         # A worker or base declares its queue in `sidekiq_options`, which the introspector read.
         # The record's queue carries the app's prefix and delimiter, which the source line does not.
         queue = (record && (record[:queue] || (record[:options] || {})["queue"])) || extract_queue(source)
-        lines << "**Queue:** #{queue_text(queue)}" if queue
+        unpolled = queue && !worker && unpolled_queues(cached_context[:jobs], [ { queue: queue.to_s } ]).any?
+        lines << "**Queue:** #{queue_text(queue)}#{" (no worker in #{Introspectors::JobIntrospector::SOLID_QUEUE_FILE} polls it)" if unpolled}" if queue
         lines << "**Throttle:** #{worker[:throttle]}" if worker && worker[:throttle]
+        lines << "**Priority:** #{record[:priority]}" if record && !record[:priority].nil?
+        lines << "**Enqueue after transaction commit:** #{record[:enqueue_after_transaction_commit]}" if record&.key?(:enqueue_after_transaction_commit)
+        lines << "**Concurrency:** `#{record[:concurrency]}`" if record && record[:concurrency]
+        lines << "**Continuable:** yes (ActiveJob::Continuable): a retry resumes at the first unfinished step" if record && record[:continuable]
         if base && (declares = Array(base[:declares])).any?
           lines << "" << "## Declares (every job below inherits these)"
           declares.each { |line| lines << "- `#{line}`" }
@@ -274,6 +315,22 @@ module RailsAiContext
           lines << "" << "## Retry Configuration"
           retry_config.each { |r| lines << "- #{r}" }
         end
+
+        steps = Array(record && record[:steps])
+        if steps.any?
+          lines << "" << "## Steps"
+          steps.each_with_index do |step, index|
+            lines << "#{index + 1}. `#{step[:name]}` (#{[ step[:runs], step[:options] ].compact.join(', ')})"
+          end
+          lines << ""
+        end
+
+        callbacks = Array(record && record[:callbacks])
+        if callbacks.any?
+          lines << "" << "## Callbacks"
+          callbacks.each { |c| lines << "- `#{c}`" }
+        end
+        lines << "" if lines.last.to_s.start_with?("- ")
 
         # Perform method signature
         perform_sig = extract_perform_signature(source, record)

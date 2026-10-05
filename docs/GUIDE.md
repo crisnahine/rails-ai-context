@@ -502,7 +502,7 @@ rails_get_controllers(detail: "full")
 
 Returns application configuration. No parameters.
 
-**Returns:** cache store, session store, timezone, queue adapter, mailer settings, the app's own middleware classes with their files and the rest of the stack as additions (framework defaults are filtered out), notable initializers, CurrentAttributes classes.
+**Returns:** cache store, session store, timezone, queue adapter, mailer settings, the app's own middleware classes with their files and the rest of the stack as additions (framework defaults are filtered out), the `use` and `map` calls in `config.ru`, notable initializers, CurrentAttributes classes with the attributes they declare, their defaults and reset hooks.
 
 ```
 rails_get_config()
@@ -914,7 +914,7 @@ rails_get_job_pattern(detail: "full")
 
 ### rails_get_env
 
-Discover environment variables, external service dependencies, and credentials keys used by the app. Scans Ruby files for ENV[], .env.example, Dockerfile, external HTTP calls, and credentials keys (never values).
+Discover environment variables, external service dependencies, and credentials keys used by the app. Scans Ruby files for ENV[], .env.example, Dockerfile, the env Kamal's config/deploy.yml sets (secret names, clear values), config gem setting keys, Anyway::Config attributes with their env names, external HTTP calls, and credentials keys (never values).
 
 **Parameters:**
 
@@ -1442,7 +1442,7 @@ Includes all standard introspectors plus:
 | `seeds` | db/seeds.rb analysis (Faker usage, environment conditionals), seed files in db/seeds/, models seeded. |
 | `middleware` | Custom Rack middleware in app/middleware/ and lib/middleware/ with detected patterns (auth, rate limiting, tenant isolation, logging), what the app's config inserts, moves or removes, and the full middleware stack. |
 | `engines` | Mounted Rails engines from routes.rb with paths and descriptions for 23+ known engines (Sidekiq::Web, Flipper::UI, PgHero, ActiveAdmin, etc.). |
-| `env_config` | Per-environment config files (`config/environments/*.rb`): notable toggles (`force_ssl`, `eager_load`, caching, log level, queue adapter, mailer delivery) with URI credentials redacted, assigned config keys. |
+| `env_config` | Per-environment config files (`config/environments/*.rb`): notable toggles (`force_ssl`, `eager_load`, caching, log level, queue adapter, mailer delivery) with URI credentials redacted, assigned config keys, plus the keys `config/application.rb` sets for every environment and the keys each `config_for` YAML file gives. |
 | `multi_database` | Multiple databases, replicas, sharding config, model-specific `connects_to` declarations. database.yml parsing fallback. |
 | `frontend_frameworks` | Frontend JS framework detection (React/Vue/Svelte/Angular), mounting strategy (Inertia/react-rails), TypeScript config, state management, package manager. |
 | `database_stats` | PostgreSQL approximate row counts via `pg_stat_user_tables`. Gracefully skips on non-PostgreSQL adapters. |

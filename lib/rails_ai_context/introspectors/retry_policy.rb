@@ -2,10 +2,13 @@
 
 module RailsAiContext
   module Introspectors
-    # A job's retry macro as a reader would write it: the exception list, then `attempts:` and
-    # `wait:` in that order, read off the call so a multi-line macro reads the same.
+    # A job's retry macro as a reader would write it: the exception list, then its options in
+    # the order below, read off the call so a multi-line macro reads the same.
     module RetryPolicy
-      MACROS = %i[retry_on discard_on sidekiq_options].freeze
+      # Sidekiq's backoff and its last-retry handler take only a block.
+      BLOCK_MACROS = %i[sidekiq_retry_in sidekiq_retries_exhausted].freeze
+      MACROS = (%i[retry_on discard_on sidekiq_options] + BLOCK_MACROS).freeze
+      RETRY_ON_OPTIONS = %i[attempts wait queue priority jitter].freeze
 
       module_function
 
@@ -18,13 +21,13 @@ module RailsAiContext
           when :retry_on then with_options("retry_on #{hit[:values].join(', ')}", options)
           when :discard_on then "discard_on #{hit[:values].join(', ')}"
           when :sidekiq_options then "sidekiq retry: #{source_of(options[:retry])}" if options[:retry]
+          when *BLOCK_MACROS then "#{hit[:macro]} #{hit[:block]}".strip
           end
         end
       end
 
       def with_options(entry, options)
-        entry += ", attempts: #{source_of(options[:attempts])}" if options[:attempts]
-        entry += ", wait: #{source_of(options[:wait])}" if options[:wait]
+        RETRY_ON_OPTIONS.each { |key| entry += ", #{key}: #{source_of(options[key])}" if options[key] }
         entry
       end
 

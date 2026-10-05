@@ -130,7 +130,12 @@ Composite context: schema + model + controller + routes + views for a resource. 
 
 ### `rails_onboard`
 
-Narrative app walkthrough for getting up to speed.
+Narrative app walkthrough for getting up to speed. It ends with the app's custom
+rake tasks (Rakefile, `lib/tasks`, `rakelib`), each with its arguments,
+description and file: the first 15 at `standard`, every one at `full`.
+Then the app's own generators under `lib/generators` (the `bin/rails generate`
+command and its USAGE line), the `lib/templates` files that replace a built-in
+generator's template, and the Railties under `lib/` with their initializers.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -384,7 +389,7 @@ Auth checks, flash messages, create action template, test patterns.
 
 ### `rails_get_config`
 
-Database config, auth framework, assets, cache, queue, Action Cable.
+Database config, auth framework, assets, cache, queue, Action Cable. The `use` and `map` calls in `config.ru` are listed apart from the stack, since they run before Rails.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -402,7 +407,7 @@ found under a load-order prefix too (`config/initializers/3_omniauth.rb`).
 
 ### `rails_get_env`
 
-Environment variables + credentials keys (values are never exposed). Scans `.rb`, `.rake`, ERB views and config YAML under `app`, `config` and `lib`; files matching `sensitive_patterns` (`config/database.yml`, credentials, keys) are never read, and the answer says so. A variable whose call sites pass different defaults is labelled as such rather than with one site's default; `detail:"full"` names each site's. A default is redacted by the rule a source literal gets: a credential format under any name, a URL's password, and under a secret-named variable a value that is not clearly something else, so an address, URL or hostname default prints as written.
+Environment variables + credentials keys (values are never exposed). Scans `.rb`, `.rake`, ERB views and config YAML under `app`, `config` and `lib`, plus `config.ru`, `db/seeds.rb`, `db/seeds/` and the Ruby scripts in `bin/`; files matching `sensitive_patterns` (`config/database.yml`, credentials, keys) are never read, and the answer says so. The env Kamal's `config/deploy.yml` gives the app container is listed too: secret names only, clear values redacted like any default. So are the setting keys in the config gem's `config/settings.yml` and `config/settings/<env>.yml`, and the attributes of each `Anyway::Config` class in `config/configs` or `app/configs` with the env name it reads (`PAYMENT_API_KEY`), never their values. A variable whose call sites pass different defaults is labelled as such rather than with one site's default; `detail:"full"` names each site's. A default is redacted by the rule a source literal gets: a credential format under any name, a URL's password, and under a secret-named variable a value that is not clearly something else, so an address, URL or hostname default prints as written.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -446,7 +451,18 @@ job inherits from is not counted as a job; the listing names the ones it left
 out, in the sentence the service and mailer listings use, and `job:` answers
 for one of them with what every job below it inherits: its queue, options,
 retries, mixins, throttle and callbacks, and which jobs inherit it. `job:`
-answers a worker name as well as a job name.
+answers a worker name as well as a job name. A job's own page shows its
+`queue_with_priority`, `enqueue_after_transaction_commit` and Solid Queue
+`limits_concurrency` (its own or the nearest base's), every `retry_on` option,
+Sidekiq's `sidekiq_retry_in` and `sidekiq_retries_exhausted` blocks, and its
+enqueue, perform and discard callbacks as written. A job that includes
+`ActiveJob::Continuable` (itself or through a base) is marked continuable, with
+the steps its `perform` runs in order, each a block or a method. A model method
+delayed_job's `handle_asynchronously` wraps is listed as a background method with
+its options, here and on the model's `rails_get_model_details` page. The listing names the queues
+`config/sidekiq.yml` declares and the queues Solid Queue's workers poll in
+`config/queue.yml` (this environment's section), and names each job queue no
+worker polls; that job's page says so beside its queue.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -476,6 +492,19 @@ I18n setup: default/available locales, backend, locale files with key counts, pe
 
 ActionMailer mailers: every mailer class with its delivery actions and delivery method. A mailer that declares no action of its own - one taking them from a gem base or a mixin, or one called through class methods - is listed with where its actions come from rather than left out. A base other mailers inherit from is not one: it leaves the listing, and a line above names the ones left out. Asked for by name, a base answers with what every mailer below it inherits - its layout, helpers, defaults, callbacks and mixins as the app wrote them, the methods it defines - and which mailers inherit it.
 
+Each mailer also shows its own `default`, `layout`, `helper` and action and
+deliver callbacks as written, the template formats of each action under
+`app/views/<mailer>`, and its preview class with the emails it previews (read
+from `test/mailers/previews`, `spec/mailers/previews` and the
+`action_mailer.preview_paths` the config adds). The full listing opens with the
+queue `deliver_later` uses (ActionMailer's setting booted; the config's
+statically, ActiveJob's default queue from `load_defaults` 6.1 on), the
+interceptors and observers the config registers, and the preview paths.
+
+The full listing ends with the Action Mailbox mailboxes: the `routing` rules in
+the order Rails tries them, the mailbox each sends to (and whether `app/mailboxes`
+defines it), and each mailbox's processing callbacks.
+
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `mailer` | string | - | One mailer, by exact name |
@@ -496,13 +525,17 @@ Autoloading setup: Zeitwerk vs Classic mode, autoloaders with collapsed/ignored 
 
 ### `rails_get_active_support`
 
-ActiveSupport surface: concerns registry, deprecators, MessageVerifier/MessageEncryptor usage, tagged logging, subscribed `on_load` hooks, cache store. Validator classes living among the concerns are counted and listed apart from them, as `rails_get_concern` does.
+ActiveSupport surface: concerns registry, deprecators, MessageVerifier/MessageEncryptor usage, the `ActiveSupport::Notifications` events the app subscribes to (`subscribe`, `monotonic_subscribe`, and a Subscriber's `attach_to`) with file and line, read from source in both tiers, tagged logging, subscribed `on_load` hooks, cache store. Validator classes living among the concerns are counted and listed apart from them, as `rails_get_concern` does.
 
 *No parameters.*
 
 ### `rails_get_env_config`
 
-Per-environment configuration from `config/environments/*.rb`: notable toggles (`force_ssl`, `eager_load`, caching, log level, queue adapter, mailer delivery) and every config key each environment sets. A key assigned in more than one branch reports every value with its condition; booted, the running environment reports the value the app resolved.
+Per-environment configuration from `config/environments/*.rb`: notable toggles (`force_ssl`, `eager_load`, caching, log level, queue adapter, mailer delivery) and every config key each environment sets. A key assigned in more than one branch reports every value with its condition; booted, the running environment reports the value the app resolved. An
+"Every environment" block above them lists the keys `config/application.rb`
+sets (`config.x` included) and, for each `config_for(:name)`, the keys
+`config/name.yml` gives the running environment, `shared` merged in, names
+only.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|

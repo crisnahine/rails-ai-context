@@ -247,12 +247,43 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
   # and ActionCable::Channel::Base.descendants. With no booted Rails those
   # constants are undefined, so the static tier answered "no mailers found" for
   # an app with mailers - a false negative served as ground truth.
+  describe "methods delayed_job queues with handle_asynchronously" do
+    let(:model_file) { File.join(Rails.root, "app/models/async_note.rb") }
+
+    before { File.write(model_file, "class AsyncNote < ApplicationRecord\n  def ping; end\n  handle_asynchronously :ping, queue: \"low\"\nend\n") }
+    after { FileUtils.rm_f(model_file) }
+
+    it "reads them from the model source on both tiers" do
+      expected = [ { owner: "AsyncNote", method: "ping", file: "app/models/async_note.rb:3", options: "queue: low" } ]
+
+      expect(described_class.new(Rails.application).call[:async_methods]).to eq(expected)
+      expect(described_class.new(Rails.application).static_call[:async_methods]).to eq(expected)
+    end
+  end
+
   describe "#static_call" do
     def static_result(&build)
       Dir.mktmpdir do |dir|
         build.call(dir)
         return described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
       end
+    end
+
+    it "reads a base's class body once however many jobs inherit it" do
+      base = "class ApplicationJob < ActiveJob::Base\n  queue_with_priority 5\n  before_perform :log\nend\n"
+      traversals = 0
+      allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:calls_outside_methods).and_wrap_original do |original, root, *rest, **opts|
+        traversals += 1 if rest.empty? && root.slice.strip == base.strip
+        original.call(root, *rest, **opts)
+      end
+      jobs = static_result do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/jobs"))
+        File.write(File.join(dir, "app/jobs/application_job.rb"), base)
+        3.times { |i| File.write(File.join(dir, "app/jobs/job#{i}_job.rb"), "class Job#{i}Job < ApplicationJob\n  def perform; end\nend\n") }
+      end[:jobs]
+
+      expect(jobs.map { |job| job[:priority] }.uniq).to eq([ 5 ])
+      expect(traversals).to eq(1)
     end
 
     # The worker's calls came from a second walk of a tree the candidate walk

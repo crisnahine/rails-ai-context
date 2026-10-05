@@ -19,6 +19,11 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(server_context: nil)
+        # config.ru is read from source, so the static tier still shows it under the refusal.
+        if static_refusal_for(:config) && (rackup = rackup_lines).any?
+          return text_response(([ unavailable_text ] + rackup).join("\n"))
+        end
+
         fetch_section(:config, subject: "Config introspection", remedy: "Add :config to introspectors or use `config.preset = :full`.") do |data|
           lines = [ "# Application Configuration", "" ]
 
@@ -59,6 +64,7 @@ module RailsAiContext
           end
 
           lines.concat(middleware_lines(data[:middleware_stack]))
+          lines.concat(rackup_lines)
 
           if data[:initializers]&.any?
             # List every initializer - stock ones often carry active code
@@ -72,11 +78,21 @@ module RailsAiContext
 
           if data[:current_attributes]&.any?
             lines << "" << "## CurrentAttributes"
-            data[:current_attributes].each { |c| lines << "- `#{c}`" }
+            data[:current_attributes].each { |c| lines << current_attributes_line(c, data.dig(:current_attribute_details, c)) }
           end
 
           text_response(lines.join("\n"))
         end
+      end
+
+      private_class_method def self.current_attributes_line(name, detail)
+        line = "- `#{name}`"
+        return line unless detail
+
+        attributes = Array(detail[:attributes]).map { |a| a[:default] ? "#{a[:name]} (default `#{a[:default]}`)" : a[:name] }
+        line += ": #{attributes.join(', ')}" if attributes.any?
+        line += "; hooks: #{detail[:hooks].map { |h| "`#{h}`" }.join(', ')}" if Array(detail[:hooks]).any?
+        line
       end
 
       # Middleware Rails or a development gem puts in every stack.
@@ -106,6 +122,21 @@ module RailsAiContext
         if added.any?
           lines << "### Added to the stack"
           added.each { |m| lines << "- `#{m}`" }
+        end
+        lines
+      end
+
+      private_class_method def self.rackup_lines
+        calls = Array(Payload.section(cached_context, :middleware)&.dig(:rackup))
+        return [] if calls.empty?
+
+        lines = [ "", "## config.ru (runs before the Rails middleware stack)" ]
+        calls.each do |call|
+          lines << if call[:call] == "map"
+            "- `map \"#{call[:target]}\"` (line #{call[:line]}) - its own Rack app; requests under it never reach Rails' router"
+          else
+            "- `use #{call[:target]}` (line #{call[:line]})"
+          end
         end
         lines
       end

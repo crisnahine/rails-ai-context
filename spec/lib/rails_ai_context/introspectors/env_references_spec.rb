@@ -36,6 +36,20 @@ RSpec.describe RailsAiContext::Introspectors::EnvReferences do
     expect(names_in("config/database.yml")).to eq(%w[DB_HOST])
   end
 
+  it "reads config.ru, db/seeds and the Ruby scripts in bin, and skips a shell script there" do
+    write("config.ru", "map \"/health\" do\n  run ->(env) { [200, {}, [ENV.fetch(\"HEALTH_TOKEN\", \"ok\")]] }\nend\n")
+    write("db/seeds.rb", "User.create!(email: ENV.fetch(\"ADMIN_EMAIL\"))\n")
+    write("db/seeds/admins.rb", "ENV[\"SEED_ADMINS\"]\n")
+    write("bin/setup", "#!/usr/bin/env ruby\nputs ENV[\"SETUP_TOKEN\"]\n")
+    write("bin/docker-entrypoint", "#!/bin/bash -e\nif [ -z \"${ENV[\"SHELL_ONLY\"]}\" ]; then exit; fi\n")
+
+    expect(names_in("config.ru")).to eq(%w[HEALTH_TOKEN])
+    expect(names_in("db/seeds.rb")).to eq(%w[ADMIN_EMAIL])
+    expect(names_in("db/seeds/admins.rb")).to eq(%w[SEED_ADMINS])
+    expect(names_in("bin/setup")).to eq(%w[SETUP_TOKEN])
+    expect(names_in("bin/docker-entrypoint")).to be_empty
+  end
+
   it "does not read a commented-out ENV reference" do
     write("lib/tasks/setup.rake", "# ENV[\"GONE\"]\nENV.fetch(\"KEPT\")\n")
 

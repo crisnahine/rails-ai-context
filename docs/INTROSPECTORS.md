@@ -118,9 +118,9 @@ end
 | GemIntrospector | `:gems` | Notable gems with versions and categories |
 | ConventionIntrospector | `:conventions` | Auth patterns, flash messages, test patterns |
 | I18nIntrospector | `:i18n` | Locale files, translation keys |
-| MiddlewareIntrospector | `:middleware` | Rack middleware stack. The static tier declares an alternate source rather than an empty stack: without a booted app it answers only the file facts it can read |
+| MiddlewareIntrospector | `:middleware` | Rack middleware stack. The static tier declares an alternate source rather than an empty stack: without a booted app it answers only the file facts it can read. `config.ru`'s top-level `use` and `map` calls (`rackup`) are read on both tiers with `GenericMacroListener` |
 | EngineIntrospector | `:engines` | Mounted engines |
-| EnvConfigIntrospector | `:env_config` | Per-environment config files: notable toggles (`force_ssl`, `eager_load`, caching, queue adapter), assigned config keys |
+| EnvConfigIntrospector | `:env_config` | Per-environment config files: notable toggles (`force_ssl`, `eager_load`, caching, queue adapter), assigned config keys, plus the keys `config/application.rb` sets and each `config_for` file's keys |
 | DevopsIntrospector | `:devops` | Dockerfile, CI config, deployment |
 
 ### Jobs & Services
@@ -128,7 +128,7 @@ end
 | Introspector | Key | What it extracts |
 |:-------------|:----|:-----------------|
 | JobIntrospector | `:jobs` | Background jobs and Sidekiq workers, read from `app/jobs`, `app/workers` and `app/sidekiq`, and mailers (anywhere under `app/`, by parent chain): queue, retries, `sidekiq_options`, any `sidekiq_throttle`, schedules, and the `file:` each one is defined in |
-| RakeTaskIntrospector | `:rake_tasks` | Custom rake tasks from the Rakefile, lib/tasks and rakelib |
+| RakeTaskIntrospector | `:rake_tasks` | Custom rake tasks from the Rakefile, lib/tasks and rakelib; the app's generators (lib/generators), generator template overrides (lib/templates) and Railties under lib/ |
 
 ### Security & Auth
 
@@ -161,7 +161,7 @@ These introspectors map directly onto the internal RAILS_NERVOUS_SYSTEM checklis
 | InitializerIntrospector | `:initializers` | §2 | `Rails.application.initializers` graph: name, owner, `before:`/`after:` edges, block `source_location`, per-file `config/initializers/*.rb` summary |
 | AutoloadIntrospector | `:autoload` | §3 | Zeitwerk presence, autoloaders (`:main` / `:once`) with collapsed + ignored dirs, `autoload_paths`, `eager_load_paths`, custom inflections (`acronym`, `plural`, `singular`, `irregular`) |
 | ConnectionPoolIntrospector | `:connection_pool` | §10 | Per-database adapter config: pool size, `checkout_timeout`, `reaping_frequency`, `prepared_statements`, `advisory_locks`, replica flag, connection-handler roles, automatic shard selector detection |
-| ActiveSupportIntrospector | `:active_support` | §17 | Concerns in `app/**/concerns/` (ActiveSupport::Concern flags, `included do`/`class_methods do` blocks), deprecators registry, MessageEncryptor/Verifier usage, TaggedLogging config, common on-load hooks, cache store options |
+| ActiveSupportIntrospector | `:active_support` | §17 | Concerns in `app/**/concerns/` (ActiveSupport::Concern flags, `included do`/`class_methods do` blocks), deprecators registry, MessageEncryptor/Verifier usage, notification subscriptions read from source (`subscribe`, `monotonic_subscribe`, `attach_to`), TaggedLogging config, common on-load hooks, cache store options |
 | CredentialsIntrospector | `:credentials` | §30 | Default + per-env encrypted files, master-key source (`env:RAILS_MASTER_KEY` vs `file:config/master.key` vs missing), `require_master_key` flag, arbitrary encrypted configs (`config/*.yml.enc`), top-level key **names only** (never values) |
 | SecurityIntrospector | `:security` | §32 | `force_ssl`, SSL options (HSTS `expires`/`subdomains`/`preload`), `host_authorization` hosts, ContentSecurityPolicy directives + `report_only`, PermissionsPolicy directives, CSRF config (`protect_from_forgery`, `per_form_csrf_tokens`, `origin_check`), cookie session options, Rails 7.2+ `allow_browser` usage |
 | ObservabilityIntrospector | `:observability` | §34 + §38 | `ActiveSupport::LogSubscriber.log_subscribers` catalog, AS::Notifications subscriber registry (pattern + count + sample class), `ActionDispatch::ServerTiming` middleware detection, Rails 8.1 `event_reporter` availability, log level + tags, canonical Rails event-name catalog (10 subsystems) |
@@ -203,7 +203,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 | RouteFilesListener | The route files `config/application.rb` puts in `config.paths["config/routes.rb"]`: an assignment (a list, `.map`ped or not), `<<`/`push`/`concat`, `unshift`/`prepend`, `Rails.root.join` and literal `Dir[...]` globs, each as `set`/`append`/`prepend`. A list the app computes is recorded as `computed` |
 | AutoloadPathsListener | Autoload roots `config/application.rb` adds by hand: `autoload_paths`/`eager_load_paths`/`autoload_once_paths` appends, `autoload_lib`, and `config.paths.add` with `eager_load:`. Literal paths under the app root only |
 | AutoloadIgnoreListener | The lib subdirectories `autoload_lib(ignore:)` and `autoload_lib_once(ignore:)` keep out of autoloading, as `lib/<name>`. Literal strings and symbols only |
-| PreviewPathsListener | ViewComponent preview directories the config sets: `view_component.previews.paths`, `preview_paths`, `preview_path`, in the same literal forms as AutoloadPathsListener |
+| PreviewPathsListener | ViewComponent preview directories the config sets: `view_component.previews.paths`, `preview_paths`, `preview_path`, in the same literal forms as AutoloadPathsListener; with `framework: :action_mailer`, the mailer preview directories `action_mailer.preview_paths` and `preview_path` set |
 | I18nLoadPathListener | Locale files `config.i18n.load_path` or `I18n.load_path` adds: `+=`, `<<`, `push`, `append`, `concat`, with `Dir[]`/`Dir.glob` around the same literal forms as AutoloadPathsListener |
 | FixturePathsListener | Fixture directories a test helper sets: `fixture_paths =`/`<<`/`+=`/`push` and the older `fixture_path =`, on `self`, `config` or no receiver, in the same literal forms as AutoloadPathsListener |
 | ViewPathsListener | View roots `config/application.rb` adds to `config.paths["app/views"]`: `unshift` puts one before app/views, `<<`/`push`/`concat` after it, in the same literal forms as AutoloadPathsListener |
@@ -269,7 +269,7 @@ same wherever it is asked. Those live as their own modules under
 | `RetryPolicy` | What a job does when it raises, as a reader would write it: the macro, its exceptions, then `attempts:` and `wait:` whatever order the source put them in |
 | `SourceCalls` | Which other classes a file hands work to, off the call nodes: the verb list, the framework receivers left out, and the call or the class alone |
 | `ServiceClasses` | Which classes under `app/services` are services and which are only the base of one, for the tool's listing and the generated files' line alike |
-| `EnvReferences` | Every ENV name the app's source reads, file by file, for `rails_get_env` and the context file's `env` section alike: `app`, `config` and `lib` Ruby, ERB and config YAML, with config YAML on `sensitive_patterns` read for the names in its ERB tags only |
+| `EnvReferences` | Every ENV name the app's source reads, file by file, for `rails_get_env` and the context file's `env` section alike: `app`, `config` and `lib` Ruby, ERB and config YAML, `config.ru`, `db/seeds` and the `bin/` scripts whose shebang is Ruby, with config YAML on `sensitive_patterns` read for the names in its ERB tags only |
 | `GemfileGems` | The one Gemfile read, off `GemfileDslListener`: its entries with options and groups (the gems section's local gems and groups) and the gem names (every other asker), so a commented-out `gem` line is no gem anywhere |
 | `ModuleAliases` | Which app file a bare JS import specifier names: tsconfig/jsconfig `compilerOptions.paths` followed through `extends` (relative files and installed packages), and a vite/webpack/rspack `resolve.alias` written as a literal object. The Stimulus scan uses it to tie a registration or a base class to the controller file it imports |
 | `HelperNames` | The helper methods a view can call: every method the app's helper modules define in every code root, and those of a module they `include`, found through the app's autoload roots (`lib` among them) or in its enclosing namespace's file (`CanonicalURL::Helpers` in `canonical_url.rb`). `rails_get_partial_interface` uses it so a helper call is not read as a local |

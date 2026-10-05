@@ -18,6 +18,132 @@ RSpec.describe RailsAiContext::Tools::GetMailers do
     allow(described_class).to receive(:cached_context).and_return({ jobs: jobs_data })
   end
 
+  describe "what one mailer declares, renders and previews" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    def write(path, body)
+      FileUtils.mkdir_p(File.dirname(File.join(tmpdir, path)))
+      File.write(File.join(tmpdir, path), body)
+    end
+
+    before do
+      write("app/mailers/application_mailer.rb", "class ApplicationMailer < ActionMailer::Base\n  layout \"mailer\"\nend\n")
+      write("app/mailers/user_mailer.rb", <<~RUBY)
+        class UserMailer < ApplicationMailer
+          default from: "users@example.com", reply_to: "help@example.com"
+          layout "user_mail"
+          before_action :set_user
+          after_deliver :log_delivery
+          def welcome = mail(to: @user.email)
+          def reset = mail(to: @user.email) { |format| format.text }
+          private
+          def set_user = (@user = params[:user])
+          def log_delivery; end
+        end
+      RUBY
+      %w[welcome.html.erb welcome.text.erb reset.text.erb].each { |f| write("app/views/user_mailer/#{f}", "hi") }
+      write("test/mailers/previews/user_mailer_preview.rb", "class UserMailerPreview < ActionMailer::Preview\n  def welcome = UserMailer.welcome\nend\n")
+      write("lib/mailer_previews/admin_mailer_preview.rb", "class AdminMailerPreview < ActionMailer::Preview\n  def digest; end\nend\n")
+      write("config/application.rb", <<~RUBY)
+        module App
+          class Application < Rails::Application
+            config.active_job.queue_name_prefix = "myapp"
+            config.action_mailer.preview_paths << "\#{root}/lib/mailer_previews"
+            config.action_mailer.interceptors = %w[SandboxInterceptor]
+          end
+        end
+      RUBY
+      write("config/initializers/mail.rb", "ActionMailer::Base.register_observer(DeliveryLogObserver)\n")
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "shows the mailer's own declarations, the template formats per action and its preview" do
+      text = described_class.call(mailer: "UserMailer").content.first[:text]
+
+      expect(text).to include("- **Declares:** `default from: \"users@example.com\", reply_to: \"help@example.com\"`, " \
+                              "`layout \"user_mail\"`, `before_action :set_user`, `after_deliver :log_delivery`")
+      expect(text).to include("- **Templates:** reset (text), welcome (html, text)")
+      expect(text).to include("- **Preview:** UserMailerPreview (`test/mailers/previews/user_mailer_preview.rb`): welcome")
+    end
+
+    it "shows the deliver_later queue, the interceptors, the observers and the preview paths" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("**deliver_later queue:** `myapp_mailers`")
+      expect(text).to include("**Interceptors:** SandboxInterceptor (`config/application.rb`)")
+      expect(text).to include("**Observers:** DeliveryLogObserver (`config/initializers/mail.rb`)")
+      expect(text).to include("**Preview paths:** `test/mailers/previews`, `lib/mailer_previews`")
+    end
+
+    it "walks each config file once for both the preview paths and the mailer settings" do
+      walks = []
+      allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk).and_wrap_original { |m, path, *rest| walks << File.read(path) if path.to_s.include?("/config/"); m.call(path, *rest) }
+      allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source).and_wrap_original { |m, source, *rest| walks << source; m.call(source, *rest) }
+      RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+
+      expect(walks.count { |source| source.include?("preview_paths <<") }).to eq(1)
+    end
+
+    it "never reads a preview linked from outside the app, and survives one it cannot parse" do
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "secret_preview.rb"), "class UserMailerPreview < ActionMailer::Preview\n  def leaked; end\nend\n")
+        FileUtils.rm(File.join(tmpdir, "test/mailers/previews/user_mailer_preview.rb"))
+        File.symlink(File.join(outside, "secret_preview.rb"), File.join(tmpdir, "test/mailers/previews/user_mailer_preview.rb"))
+        write("lib/mailer_previews/broken_preview.rb", "class BrokenPreview < ActionMailer::Preview\n  def x(\n")
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+        text = described_class.call(mailer: "UserMailer").content.first[:text]
+        expect(text).not_to include("leaked")
+        expect(text).to include("- **Templates:** reset (text), welcome (html, text)")
+      end
+    end
+
+    # load_defaults 6.1 sets deliver_later_queue_name to nil, so mail goes to ActiveJob's default queue.
+    it "names ActiveJob's default queue under load_defaults 6.1 or later" do
+      write("config/application.rb", "module App\n  class Application < Rails::Application\n    config.load_defaults 7.1\n  end\nend\n")
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+      expect(described_class.call.content.first[:text]).to include("**deliver_later queue:** `default`")
+    end
+  end
+
+  describe "Action Mailbox mailboxes" do
+    let(:mailbox_data) do
+      {
+        mailboxes: [ { name: "SupportMailbox", file: "app/mailboxes/support_mailbox.rb", routed_from: [ "/^support@/i" ],
+                       callbacks: [ { type: "before_processing", method: "require_user" } ] } ],
+        routes: [
+          { pattern: "/^support@/i", mailbox: "SupportMailbox", file: "app/mailboxes/application_mailbox.rb" },
+          { pattern: ":all", mailbox: "CatchallMailbox", file: "app/mailboxes/application_mailbox.rb" }
+        ]
+      }
+    end
+
+    before do
+      allow(described_class).to receive(:cached_context).and_return({ jobs: jobs_data, action_mailbox: mailbox_data })
+    end
+
+    it "lists the routing in order and each mailbox with its callbacks" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("## Mailboxes (Action Mailbox)")
+      expect(text).to include("Routing, first match wins (`app/mailboxes/application_mailbox.rb`):")
+      expect(text).to include("1. `/^support@/i` -> SupportMailbox")
+      expect(text).to include("2. `:all` -> CatchallMailbox (not defined in app/mailboxes)")
+      expect(text).to include("- **SupportMailbox** (`app/mailboxes/support_mailbox.rb`): before_processing :require_user")
+    end
+
+    it "leaves mailboxes out of a single mailer's answer" do
+      expect(described_class.call(mailer: "UserMailer").content.first[:text]).not_to include("Mailboxes")
+    end
+  end
+
   describe ".call" do
     # A page past the end is not an empty app. "No mailers found." above
     # "No items at offset 9999. Total: 2." contradicts itself, and the first

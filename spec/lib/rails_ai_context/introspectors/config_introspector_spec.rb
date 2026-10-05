@@ -73,6 +73,22 @@ RSpec.describe RailsAiContext::Introspectors::ConfigIntrospector do
       it "detects CurrentAttributes classes" do
         expect(result[:current_attributes]).to include("Current")
       end
+
+      it "reads the attributes it declares, their defaults and its reset hooks" do
+        File.write(fixture_model, <<~RUBY)
+          class Current < ActiveSupport::CurrentAttributes
+            attribute :user, :session
+            attribute :locale, default: "en"
+            resets { Time.zone = nil }
+            before_reset :flush
+          end
+        RUBY
+
+        expect(result[:current_attribute_details]["Current"]).to eq(
+          attributes: [ { name: "user" }, { name: "session" }, { name: "locale", default: '"en"' } ],
+          hooks: %w[resets before_reset]
+        )
+      end
     end
 
     context "with a model file that nests the CurrentAttributes class" do

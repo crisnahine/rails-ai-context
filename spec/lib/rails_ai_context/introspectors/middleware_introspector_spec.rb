@@ -434,6 +434,42 @@ RSpec.describe RailsAiContext::Introspectors::MiddlewareIntrospector do
     end
   end
 
+  describe "config.ru" do
+    let(:rackup) { File.join(app.root.to_s, "config.ru") }
+
+    before do
+      File.write(rackup, <<~RUBY)
+        require_relative "config/environment"
+        use Rack::ContentLength
+        use Rack::Static, urls: ["/assets"]
+        map "/health" do
+          run ->(env) { [200, {}, ["ok"]] }
+        end
+        run Rails.application
+      RUBY
+    end
+
+    after { FileUtils.rm_f(rackup) }
+
+    it "names the middleware and the map mounts it puts in front of Rails, on both tiers" do
+      expected = [
+        { call: "use", target: "Rack::ContentLength", line: 2 },
+        { call: "use", target: "Rack::Static", line: 3 },
+        { call: "map", target: "/health", line: 4 }
+      ]
+
+      expect(introspector.call[:rackup]).to eq(expected)
+      expect(described_class.new(RailsAiContext::StaticApp.new(app.root.to_s)).static_call[:rackup]).to eq(expected)
+    end
+
+    it "gives nothing for a config.ru Prism cannot make sense of" do
+      File.write(rackup, "use (((\n\xFF\n")
+
+      expect { introspector.call }.not_to raise_error
+      expect(Array(introspector.call[:rackup])).to all(include(:call, :target))
+    end
+  end
+
   it "does not report an empty stack when there is no booted app to ask" do
     static = described_class.new(RailsAiContext::StaticApp.new(IntrospectedFixture::ROOT)).static_call
 

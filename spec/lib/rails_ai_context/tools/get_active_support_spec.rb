@@ -157,4 +157,24 @@ RSpec.describe RailsAiContext::Tools::GetActiveSupport do
       end
     end
   end
+
+  describe "notification subscriptions" do
+    it "lists each event the app subscribes to and where" do
+      data = active_support_data.merge(notification_subscriptions: [
+        { event: "process_action.action_controller", via: "RequestSubscriber.attach_to", file: "app/subscribers/request_subscriber.rb", line: 2 },
+        { event: "process_action.action_controller", via: "subscribe", file: "config/initializers/notifications.rb", line: 1 }
+      ])
+      allow(described_class).to receive(:cached_context).and_return({ active_support: data })
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("## Notification Subscriptions (2)")
+      expect(text).to include("- `process_action.action_controller` - RequestSubscriber.attach_to (`app/subscribers/request_subscriber.rb:2`)")
+      expect(text).to include("- `process_action.action_controller` - subscribe (`config/initializers/notifications.rb:1`)")
+    end
+
+    it "leaves the heading out when the app subscribes to nothing" do
+      expect(described_class.call.content.first[:text]).not_to include("Notification Subscriptions")
+    end
+  end
 end

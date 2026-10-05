@@ -11,8 +11,13 @@ module RailsAiContext
       SCAN_PATTERNS = {
         "app"    => %w[**/*.rb **/*.erb],
         "config" => %w[**/*.rb **/*.yml **/*.yaml],
-        "lib"    => %w[**/*.rb **/*.rake]
+        "lib"    => %w[**/*.rb **/*.rake],
+        "db"     => %w[seeds.rb seeds/**/*.rb],
+        "bin"    => %w[*],
+        "."      => %w[config.ru]
       }.freeze
+
+      RUBY_EXTENSIONS = %w[.rb .rake .ru].freeze
 
       COMPUTED_DEFAULT = :computed
 
@@ -24,8 +29,9 @@ module RailsAiContext
         files(root.to_s, real_root).each_with_object({}) do |(path, names_only), found|
           source = RailsAiContext::SafeFile.read(path)
           next unless source&.include?("ENV")
+          next if script?(path) && !source.match?(/\A#!.*\bruby\b/)
           # A YAML or ERB file reads ENV only inside a tag.
-          next if !path.end_with?(".rb", ".rake") && !source.include?("<%")
+          next if !ruby?(path) && !source.include?("<%")
 
           refs = references(ruby_source(path, source))
           refs = refs.map { |ref| ref.except(:default).merge(default_unread: true) } if names_only
@@ -60,9 +66,18 @@ module RailsAiContext
         end.uniq(&:first)
       end
 
+      # A bin/ script has no extension, and only its shebang says it is Ruby.
+      def script?(path)
+        File.extname(path).empty?
+      end
+
+      def ruby?(path)
+        script?(path) || path.end_with?(*RUBY_EXTENSIONS)
+      end
+
       # ERB tags carry the Ruby of a `.yml` or `.erb` file.
       def ruby_source(path, source)
-        return source if path.end_with?(".rb", ".rake")
+        return source if ruby?(path)
 
         RailsAiContext::ErbSource.ruby_in_place(source)
       end
