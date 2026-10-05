@@ -32,11 +32,12 @@ module RailsAiContext
       end
 
       # Rails omits column:/primary_key: only where the convention holds, so
-      # the fallback is what was declared rather than a guess.
+      # the fallback is what was declared rather than a guess. PostgreSQL's
+      # convention drops the schema of a qualified target.
       def foreign_key_entry(from, to, column, primary_key, on_delete: nil, on_update: nil)
         {
           from_table: from, to_table: to,
-          column: primary_key_value(column) || "#{to.to_s.singularize}_id",
+          column: primary_key_value(column) || "#{to.to_s.split('.').last.to_s.singularize}_id",
           primary_key: primary_key_value(primary_key) || "id",
           on_delete: on_delete&.to_s, on_update: on_update&.to_s
         }.compact

@@ -32,6 +32,11 @@ RSpec.describe RailsAiContext::Introspectors::SchemaConventions do
         .to eq(from_table: "posts", to_table: "users", column: "user_id", primary_key: "id")
     end
 
+    it "infers the column from the bare table name of a schema-qualified target" do
+      expect(described_class.foreign_key_entry("public.users", "other.widgets", nil, nil))
+        .to include(to_table: "other.widgets", column: "widget_id")
+    end
+
     it "keeps a composite column list" do
       entry = described_class.foreign_key_entry("a", "b", %w[x y], %w[p q])
       expect(entry).to include(column: %w[x y], primary_key: %w[p q])
