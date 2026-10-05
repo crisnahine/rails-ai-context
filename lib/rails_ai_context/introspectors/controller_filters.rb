@@ -77,6 +77,8 @@ module RailsAiContext
       # @return [Array(Array<Hash>, Array<String>)] the filters, and the
       #   included modules whose file could not be read
       def with_concerns(source, root:, within:, cache: nil)
+        # A tool reading each route's base controller walks the same concerns for every route.
+        cache ||= RunCache.fetch([ :controller_concern_walks ]) { {} }
         walked = SourceIntrospector.walk_source(source, LISTENERS)
         mixins = Array(walked[:mixins])
         calls = CallSites.new(source)

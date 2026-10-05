@@ -39,7 +39,8 @@ module RailsAiContext
         # nothing is reported.
         RailsAiContext::CodeReloader.with_app_code do
           begin
-            append_note(super(**kwargs), invalid_detail_note(discarded))
+            # One call is one run: what it reads per controller or per route is read once.
+            append_note(RailsAiContext::RunCache.around { super(**kwargs) }, invalid_detail_note(discarded))
           rescue StandardError => e
             # A failed call must not leak its recorded params into the next
             # call's session entry.
