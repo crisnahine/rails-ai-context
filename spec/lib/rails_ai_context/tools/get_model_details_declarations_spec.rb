@@ -56,6 +56,25 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     expect(account).to include("- `default_scope` → where.not(state: \"banned\") (all_queries: true) _(applies to every query on Account)_")
   end
 
+  it "lists a base's default scope ahead of the model's own, the order Rails stacks them, and the model's named scope over the base's" do
+    text = details_for("Category", "application_record.rb" => <<~BASE, "category.rb" => <<~RUBY)
+      class ApplicationRecord < ActiveRecord::Base
+        primary_abstract_class
+        default_scope { order(:id) }
+        scope :recent, -> { order(created_at: :desc) }
+      end
+    BASE
+      class Category < ApplicationRecord
+        default_scope { where(name: "x") }
+        scope :recent, -> { where(recent: true) }
+      end
+    RUBY
+
+    expect(text).to match(/`default_scope` → order\(:id\).*\n- `default_scope` → where\(name: "x"\)/)
+    expect(text).to include("`recent` → where(recent: true)")
+    expect(text).not_to include("order(created_at: :desc)")
+  end
+
   describe "association options" do
     let(:files) do
       {

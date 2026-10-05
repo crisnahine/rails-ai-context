@@ -1847,7 +1847,10 @@ module RailsAiContext
       def merge_inherited(mine, inherited)
         merged = mine.merge(inherited) { |_key, ours, theirs| Array(ours) + Array(theirs) }
         merged[:associations] = dedup(merged[:associations]) { |a| [ a[:type], a[:name] ] }
-        merged[:scopes] = dedup(merged[:scopes]) { |s| s[:default] ? [ s[:name], s[:body] ] : s[:name] }
+        # Default scopes stack base first; a named scope the model redefines is its own.
+        base_defaults, base_named = Array(inherited[:scopes]).partition { |s| s[:default] }
+        own_defaults, own_named = Array(mine[:scopes]).partition { |s| s[:default] }
+        merged[:scopes] = dedup(base_defaults + own_defaults + own_named + base_named) { |s| s[:default] ? [ s[:name], s[:body] ] : s[:name] }
         merged[:enums] = dedup(merged[:enums]) { |e| e[:name].to_s }
         # `encrypts :secret` on a base and again on the child is one macro, and
         # the consumers read it as a list of attributes. The key is the
