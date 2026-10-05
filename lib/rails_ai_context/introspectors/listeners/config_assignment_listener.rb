@@ -7,12 +7,17 @@ module RailsAiContext
       #
       #   config.timeout_in = 30.minutes        → path [:timeout_in], assignment
       #   config.action_mailer.delivery = :smtp → path [:action_mailer, :delivery], assignment
-      #   config.jwt do |jwt| ... end           → path [:jwt], not an assignment
+      #   config.jwt do |jwt| ... end           → path [:jwt], not an assignment, write :block
+      #   config.hosts << "x"                   → path [:hosts, :<<], write :call
+      #   config.filter_parameters += [:pin]    → path [:filter_parameters], write :operator
       #
       # The chain is matched from a root receiver name, so
       # `Rails.application.config.assets.paths = x` reports [:assets, :paths].
       class ConfigAssignmentListener < BaseListener
         DEFAULT_ROOTS = %w[config].freeze
+        SETTER = /\A[A-Za-z_]\w*=\z/
+        # A predicate or comparison with arguments reads a setting rather than changing it.
+        MUTATOR = /\A(?:<<|[A-Za-z_]\w*!?)\z/
 
         def initialize(*roots)
           super()
@@ -52,11 +57,27 @@ module RailsAiContext
         def on_call_node_enter(node)
           return if node.receiver.nil?
 
-          if node.name.to_s.end_with?("=")
+          if node.name.to_s.match?(SETTER)
             record_assignment(node)
+          elsif node.arguments
+            return unless node.name.to_s.match?(MUTATOR)
+
+            record_write(node.receiver, node.name, :call, node)
           else
             record_reference(node)
           end
+        end
+
+        def on_call_operator_write_node_enter(node)
+          record_write(node.receiver, node.read_name, :operator, node)
+        end
+
+        def on_call_or_write_node_enter(node)
+          record_write(node.receiver, node.read_name, :operator, node)
+        end
+
+        def on_call_and_write_node_enter(node)
+          record_write(node.receiver, node.read_name, :operator, node)
         end
 
         private
@@ -102,14 +123,31 @@ module RailsAiContext
         # A bare `config.jwt` reference, with or without a block. Enough to tell
         # that a section of the initializer exists at all.
         def record_reference(node)
-          return unless node.arguments.nil?
-
           prefix = chain_path(node.receiver)
           return unless prefix
 
-          @results << {
+          entry = {
             path:       prefix + [ node.name ],
             assignment: false,
+            value:      nil,
+            source:     nil,
+            location:   node.location.start_line
+          }
+          entry[:write] = :block if node.block
+          @results << entry
+        end
+
+        # A setting changed without `=`: a call with arguments or an operator write.
+        def record_write(receiver, name, kind, node)
+          return if receiver.nil?
+
+          prefix = chain_path(receiver)
+          return unless prefix
+
+          @results << {
+            path:       prefix + [ name ],
+            assignment: false,
+            write:      kind,
             value:      nil,
             source:     nil,
             location:   node.location.start_line

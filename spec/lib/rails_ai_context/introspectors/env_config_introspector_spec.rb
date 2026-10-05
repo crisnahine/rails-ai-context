@@ -72,6 +72,31 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
       expect(staging[:config_keys]).to include("active_record.encryption.primary_key")
     end
 
+    it "lists keys set with <<, +=, a method call or a block, and not the receivers of a deeper assignment" do
+      File.write(File.join(env_dir, "staging.rb"), <<~RUBY)
+        Rails.application.configure do
+          config.hosts << "staging.example.com"
+          config.middleware.use Rack::Deflater
+          config.session_store :cookie_store, key: "_x"
+          config.filter_parameters += [:pin_code]
+          config.log_tags ||= [:request_id]
+          config.generators do |g|
+            g.test_framework :rspec
+          end
+          config.after_initialize do
+            Rails.logger.info("boot")
+          end
+          config.x.payments.provider = "acme"
+          config.cache_store = :redis_cache_store, { url: ENV["REDIS_URL"] }
+        end
+      RUBY
+
+      staging = result[:environments].find { |e| e[:name] == "staging" }
+      expect(staging[:config_keys]).to eq(%w[
+        after_initialize cache_store filter_parameters generators hosts log_tags middleware session_store x.payments.provider
+      ])
+    end
+
     it "lifts notable values per environment" do
       prod = result[:environments].find { |e| e[:name] == "production" }
       expect(prod[:notable]["force_ssl"]).to eq("true")
