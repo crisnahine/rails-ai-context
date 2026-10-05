@@ -44,7 +44,9 @@ module RailsAiContext
         end
 
         def on_call_node_leave(node)
-          @blocks.pop if node.block.is_a?(Prism::BlockNode)
+          return unless node.block.is_a?(Prism::BlockNode)
+
+          @pending = [] if @blocks.pop.first == :namespace
         end
 
         private
@@ -58,7 +60,7 @@ module RailsAiContext
           case node.name
           when *VERBS
             @results << { kind: :endpoint, owner: owner, verb: node.name.to_s.upcase, path: literal_string(args.first) || "",
-                          namespace: namespace, params: @pending }
+                          namespace: namespace, params: inherited_params + @pending }
             @pending = []
             [ :endpoint ]
           when *NAMESPACES
@@ -68,7 +70,9 @@ module RailsAiContext
               @pending += [ { name: space, type: type, required: true } ] if type
               space = ":#{space}"
             end
-            [ :namespace, space ]
+            # Grape declares these on the setting the namespace inherits, so every endpoint inside gets them.
+            params, @pending = @pending, []
+            [ :namespace, space, params ]
           when :params
             [ :params ]
           when *PARAMS
@@ -97,6 +101,10 @@ module RailsAiContext
 
         def namespace
           @blocks.filter_map { |kind, space| space if kind == :namespace }
+        end
+
+        def inherited_params
+          @blocks.flat_map { |kind, _, params| kind == :namespace ? params : [] }
         end
 
         def keyword(args, key)

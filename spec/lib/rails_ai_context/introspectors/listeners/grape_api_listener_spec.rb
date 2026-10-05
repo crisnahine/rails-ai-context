@@ -35,6 +35,29 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::GrapeApiListener do
     )
   end
 
+  it "gives a route_param's param and a params block before a namespace to every endpoint inside it, and to none after" do
+    found = records(<<~RUBY).select { |r| r[:kind] == :endpoint }.map { |r| [ r[:path], r[:params].map { |p| p[:name] } ] }
+      class Users < Grape::API
+        route_param :user_id, type: Integer do
+          get(:posts) {}
+          get(:comments) {}
+        end
+        params { requires :token }
+        resource :admin do
+          params { optional :page }
+          get(:list) {}
+          get(:stats) {}
+        end
+        get(:health) {}
+      end
+    RUBY
+
+    expect(found).to eq([
+      [ "posts", [ "user_id" ] ], [ "comments", [ "user_id" ] ],
+      [ "list", [ "token", "page" ] ], [ "stats", [ "token" ] ], [ "health", [] ]
+    ])
+  end
+
   it "records nothing outside a class" do
     expect(records("get '/x'\nnamespace(:a) { post }\n")).to eq([])
   end
