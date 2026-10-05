@@ -71,6 +71,70 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
       end
     end
 
+    it "names a block a module nested in the controller's file declares by its line in that file, once" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        source = <<~RUBY
+          class WidgetsController < ApplicationController
+            module Gate
+              extend ActiveSupport::Concern
+
+              included do
+                x = 1
+                y = 2
+                before_action { head :forbidden }
+              end
+
+              class_methods do
+                def gate(**opts)
+                  before_action(**opts) { head :forbidden }
+                end
+              end
+            end
+
+            include Gate
+            gate only: :show
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "widgets_controller.rb"), source)
+
+        filters, = described_class.with_concerns(source, root: dir, within: "WidgetsController")
+
+        expect(filters.map { |f| [ f[:name], f[:only], f[:from_concern] ] })
+          .to eq([ [ "block (line 8)", nil, "WidgetsController::Gate" ], [ "block (line 13)", [ "show" ], nil ] ])
+      end
+    end
+
+    it "expands a class method of a module nested in a concern once, at its line in the concern's file" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        concern(dir, "SubGate", <<~BODY.strip)
+          module Inner
+              extend ActiveSupport::Concern
+
+              class_methods do
+                def inner_gate(**opts)
+                  before_action(**opts) { head :forbidden }
+                end
+              end
+            end
+
+            include Inner
+        BODY
+        source = <<~RUBY
+          class GadgetsController < ApplicationController
+            include SubGate
+            inner_gate only: :index
+          end
+        RUBY
+
+        filters, = described_class.with_concerns(source, root: dir, within: "GadgetsController")
+
+        expect(filters.map { |f| [ f[:name], f[:only] ] })
+          .to eq([ [ "block (line 8 of app/controllers/concerns/sub_gate.rb)", [ "index" ] ] ])
+      end
+    end
+
     # Mastodon: WebAppControllerConcern's included block calls vary_by, which CacheConcern gives ApplicationController.
     it "reads a base's class method an included concern's block calls, where that concern is included" do
       Dir.mktmpdir do |dir|

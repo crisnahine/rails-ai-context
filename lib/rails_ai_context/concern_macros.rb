@@ -514,7 +514,13 @@ module RailsAiContext
       # The default block belongs to the walk. Once the entries leave it, a
       # caller reading a key the walk never produced would grow one.
       def collected
-        {}.merge(@collected)
+        @collected.to_h do |key, entries|
+          [ key, entries.filter_map do |entry|
+            next entry unless entry.is_a?(Hash) && entry.key?(:nested_def)
+
+            entry.except(:nested_def) unless @own_defs.include?(entry[:nested_def])
+          end ]
+        end
       end
 
       # The method names the walk asked the class's calls about, and whether
@@ -545,6 +551,7 @@ module RailsAiContext
         @included_calls = {}
         @block_sites = {}
         @includer_reads = Set.new
+        @own_defs = Set.new
         @skipped_methods = Set.new
         @consulted = Set.new
         @placement = {}
@@ -614,11 +621,12 @@ module RailsAiContext
           scope = [ singleton, inner + unrun, own_lines, hooks ]
           # The class's own file was read with the class; only its callbacks go by owner.
           keys = nested && source == @own_file ? @keys & [ :callbacks ] : @keys
+          shift = nested ? nested.last.location.start_line - 1 : 0
           keys.each do |key|
-            applied(data[key], bodies, *scope).each { |entry| @collected[key] << tagged(entry, label, hook: in_hook?(entry, hooks)) }
+            applied(data[key], bodies, *scope).each { |entry| @collected[key] << tagged(in_file(entry, shift), label, hook: in_hook?(entry, hooks)) }
           end
-          expand_called(tree, data, own_lines, label, keys).each do |key, entries|
-            entries.each { |entry| @collected[key] << tagged(entry, label) }
+          expand_called(tree, data, [ own_lines, inner ], label, keys, [ path, shift ]).each do |key, entries|
+            entries.each { |entry| @collected[key] << tagged(in_file(entry, shift), label) }
           end
 
           joined = applied(data[:mixins], bodies, *scope, keep_called: true).filter_map do |mixin|
@@ -763,7 +771,7 @@ module RailsAiContext
       end
 
       # Each called method is read again with that call's literal arguments.
-      def expand_called(tree, data, own_lines, label, keys)
+      def expand_called(tree, data, (own_lines, inner), label, keys, (file, shift))
         found = Hash.new { |hash, key| hash[key] = [] }
         # A method declaring none of the keys expands to nothing; `:expanded` marks every call read.
         declared = keys.include?(:expanded) ? nil : keys.flat_map { |key| Array(data[key]) }.filter_map { |entry| entry[:location] if entry.is_a?(Hash) }
@@ -775,6 +783,11 @@ module RailsAiContext
           next if method[:scope] == :class && ConcernMembership::MIXIN_HOOKS.include?(name)
           next if own_lines && !own_lines.cover?(method[:location])
 
+          # The module around a nested one reads the nested one's defs too; the nested one's own walk wins.
+          at = [ file, method[:location] + shift ]
+          nested_def = inner.any? { |range| range.cover?(method[:location]) }
+          @own_defs << at unless nested_def
+
           definition = Introspectors::AstWalk.each(tree).find do |node|
             node.is_a?(Prism::DefNode) && node.name.to_s == name && node.location.start_line == method[:location]
           end
@@ -783,7 +796,7 @@ module RailsAiContext
           expansion, read = ConcernMacros.expand_calls(definition, call_sites.fetch(name), keys, @listeners, includer: @includer_reads) do |entry, call|
             [ at_call(entry, call, [ label, method[:location] ]) ]
           end
-          expansion.each { |key, entries| found[key].concat(entries) }
+          expansion.each { |key, entries| found[key].concat(nested_def ? entries.map { |entry| entry.is_a?(Hash) ? entry.merge(nested_def: at) : entry } : entries) }
           next if read
 
           owner = Array(method[:owner]).join("::")
@@ -905,6 +918,15 @@ module RailsAiContext
         else Array(more).each { |name| (into[name.to_s] ||= []) << nil }
         end
         into
+      end
+
+      # A nested module's walk counts lines from its own slice; the entry carries the file's.
+      def in_file(entry, shift)
+        return entry unless shift.positive? && entry.is_a?(Hash) && entry[:location]
+
+        moved = entry.merge(location: entry[:location] + shift)
+        moved[:proc_lines] = entry[:proc_lines].map { |line| line + shift } if entry[:proc_lines].is_a?(Array)
+        moved
       end
 
       # A mixin hook runs again for a subclass that includes the module again; a Concern's block does not.

@@ -39,6 +39,7 @@ module RailsAiContext
 
       LISTENERS = {
         filters: -> { Listeners::GenericMacroListener.new(*MACROS) },
+        nested: Listeners::NestedConstantsListener,
         mixins: Listeners::MixinsListener,
         # A macro inside a `def` runs when the method is called, so ConcernMacros holds it back by these.
         methods: Listeners::MethodsListener
@@ -95,7 +96,12 @@ module RailsAiContext
         own_defs = singleton_expansions(source, walked, calls, Set.new)
         defined = own_defs.map { |entry| entry[:site].name }.to_set
         # A concern method the body calls declares for the body; one a concern's own block calls stays the concern's.
-        filed = Array(collected[:filters]).map { |entry| with_file(entry, placement.dig(entry[:from_concern], 2), root) }
+        own_file = nil
+        filed = Array(collected[:filters]).map do |entry|
+          path = placement.dig(entry[:from_concern], 2)
+          own_file ||= [ base_source(root, within, nil)&.last ] if path
+          with_file(entry, path, root, own_file&.first)
+        end
         by_body, by_concern = filed.partition { |entry| body_call?(entry, calls) }
         called = by_body.reject { |entry| defined.include?(entry[:site].name) }
         defined.merge(called.map { |entry| entry[:site].name })
@@ -120,12 +126,15 @@ module RailsAiContext
       end
 
       def walk(source)
-        SourceIntrospector.walk_source(source, LISTENERS.slice(:filters, :methods))
+        SourceIntrospector.walk_source(source, LISTENERS.slice(:filters, :methods, :nested))
       end
 
       # The filters the class body declares itself: one inside a `def` runs only when the method is called.
       def class_level(walked)
-        SourceIntrospector.outside_defs(walked[:filters], walked[:methods])
+        nested = Array(walked[:nested])
+        SourceIntrospector.outside_defs(walked[:filters], walked[:methods]).reject do |entry|
+          entry[:offset] && nested.any? { |range| range.cover?(entry[:offset]) }
+        end
       end
 
       # What the class methods `source` defines itself (`def self.x`, `class << self`) declare at
@@ -225,8 +234,9 @@ module RailsAiContext
       end
 
       # The file a block the entry declares sits in, when that is not the class's own.
-      def with_file(entry, path, root)
-        path ? entry.merge(file: PortablePath.relativize(path, root.to_s)) : entry
+      def with_file(entry, path, root, own = nil)
+        file = path && PortablePath.relativize(path, root.to_s)
+        file && file != own ? entry.merge(file: file) : entry
       end
 
       BARE_BLOCK = /\Ablock \(line \d+\)\z/
