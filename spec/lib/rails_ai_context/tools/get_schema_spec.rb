@@ -1057,6 +1057,15 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(described_class.call(table: "PageView").content.first[:text]).to include("## Table: page_views")
     end
 
+    it "names every database that holds the table" do
+      orders = { tables: { "orders" => { columns: [ { name: "total_cents", type: "integer" } ] } } }
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { tables: { "users" => { columns: [] } }, secondary_databases: { "shard_one" => orders, "shard_two" => orders } }, models: {}
+      })
+      expect(described_class.call(table: "orders").content.first[:text]).to include("**Database:** shard_one, shard_two")
+      expect(JSON.parse(described_class.call(table: "orders", format: "json").content.first[:text])["database"]).to eq("shard_one, shard_two")
+    end
+
     it "lists it among the tables a miss names" do
       expect(described_class.call(table: "nope").content.first[:text]).to include("page_views")
     end
@@ -1089,6 +1098,47 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       text = result.content.first[:text]
       expect(text).to include("# Schema Full Detail (1 of 1 table)")
       expect(text).not_to include("1 tables")
+    end
+  end
+
+  describe "a schema with views" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "postgresql", total_tables: 1, tables: {
+          "users" => tables["users"], "instances" => { kind: "materialized_view", columns: [], indexes: [], foreign_keys: [], sql: "SELECT 1" }
+        } },
+        models: {}
+      })
+    end
+
+    it "counts the views apart from the tables in every header" do
+      expect(described_class.call(detail: "summary").content.first[:text]).to include("# Schema Summary (1 table and 1 view)")
+      expect(described_class.call(detail: "standard").content.first[:text]).to include("# Schema (1 table and 1 view, showing 2)")
+      expect(described_class.call(detail: "full").content.first[:text]).to include("# Schema Full Detail (2 of 1 table and 1 view)")
+    end
+
+    it "counts a secondary database's views apart from its tables" do
+      view = { kind: "view", columns: [], indexes: [], foreign_keys: [], sql: "SELECT 1" }
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "postgresql", total_tables: 1, tables: { "users" => tables["users"] },
+                  secondary_databases: { "reporting" => { total_tables: 1, tables: { "users" => tables["users"], "my_view" => view }, note: "Parsed" } } },
+        models: {}
+      })
+
+      expect(described_class.call(detail: "summary").content.first[:text]).to include("- **reporting**: 1 table and 1 view (users, my_view)")
+    end
+
+    it "lists the indexes on a view whose columns the dump does not hold" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "static_parse", total_tables: 0, tables: {
+          "instances" => { kind: "materialized_view", columns: [], foreign_keys: [], sql: "SELECT 1",
+                           indexes: [ { name: "index_instances_on_domain", columns: [ "domain" ], unique: true } ] }
+        } },
+        models: {}
+      })
+
+      text = described_class.call(table: "instances").content.first[:text]
+      expect(text).to include("### Indexes\n- `index_instances_on_domain` on (domain) (unique)\n\n### Definition")
     end
   end
 

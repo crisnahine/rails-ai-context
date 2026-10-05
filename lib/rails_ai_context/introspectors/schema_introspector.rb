@@ -23,7 +23,7 @@ module RailsAiContext
         attach_secondary_databases({
           adapter: adapter_name,
           tables: tables,
-          total_tables: tables.size,
+          total_tables: SchemaConventions.table_count(tables),
           schema_version: current_schema_version,
           # The version stamp is read off db/schema.rb and the tables off the
           # connection, so the two can be one migration apart. The tables the
@@ -107,8 +107,10 @@ module RailsAiContext
       def add_live_relations(tables)
         materialized, extension_owned = pg_view_names
         (connection.views - tables.keys - extension_owned).each do |view|
+          # Only a materialized view holds rows, so only it can carry an index.
+          indexes = materialized.include?(view) ? extract_indexes(view) : []
           tables[view] = SchemaConventions.view_entry(schema_reader.views.dig(view, :sql), materialized: materialized.include?(view),
-                                                      columns: extract_columns(view))
+                                                      columns: extract_columns(view), indexes: indexes)
         end
         sqlite_virtual_tables.each do |name, (mod, arguments)|
           tables[name] ||= SchemaConventions.virtual_table_entry(mod, arguments.to_s.split(", "))
@@ -218,7 +220,7 @@ module RailsAiContext
           bigint = col.respond_to?(:bigint?) && col.bigint?
           entry = {
             name: col.name,
-            type: bigint ? "bigint" : col.type.to_s,
+            type: bigint ? "bigint" : dumped_type(col),
             null: col.null,
             default: col.default,
             **column_detail(table, col, bigint),
@@ -241,6 +243,14 @@ module RailsAiContext
           end
           entry.compact
         end
+      end
+
+      # MySQL's dumper writes an enum or set column by its full SQL type, and a timestamp as one.
+      def dumped_type(col)
+        return col.type.to_s unless connection.respond_to?(:mariadb?)
+        return col.sql_type.to_s if col.sql_type.to_s.match?(/\A(?:enum|set)\b/)
+
+        col.sql_type.to_s.match?(/\Atimestamp\b/) ? "timestamp" : col.type.to_s
       end
 
       def extract_indexes(table)
@@ -391,7 +401,7 @@ module RailsAiContext
         present = dump_candidates.select { |_, path| File.exist?(path) }
         present.each do |format, path|
           result = format == :ruby ? parse_schema_rb(path) : parse_structure_sql(path)
-          return result if result[:total_tables].to_i > 0 || result[:error]
+          return result if result[:tables].present? || result[:error]
         end
 
         return parse_migrations if migration_files.any?
@@ -439,7 +449,7 @@ module RailsAiContext
 
           name = File.basename(path, ".rb").sub(/_schema\z/, "")
           parsed = parse_schema_rb(path)
-          next unless parsed[:total_tables].to_i.positive?
+          next if parsed[:tables].blank?
 
           parsed[:note] = "Parsed from db/#{File.basename(path)} (from committed dump, not a live connection)"
           dumps[name] = parsed
@@ -449,7 +459,7 @@ module RailsAiContext
           next if dumps.key?(name) || primary.include?(path)
 
           parsed = parse_structure_sql(path)
-          next unless parsed[:total_tables].to_i.positive?
+          next if parsed[:tables].blank?
 
           parsed[:note] = "Parsed from db/#{File.basename(path)} (from committed dump, not a live connection)"
           dumps[name] = parsed
@@ -473,7 +483,7 @@ module RailsAiContext
 
           tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
           dumps[name] = {
-            adapter: "static_parse", tables: tables, total_tables: tables.size,
+            adapter: "static_parse", tables: tables, total_tables: SchemaConventions.table_count(tables),
             note: "Reconstructed from the migrations in #{dirs.map { |dir| relative_dump_path(dir) }.join(', ')} (#{connection_state}, no #{name}_schema.rb)"
           }
         end
@@ -566,14 +576,15 @@ module RailsAiContext
           table = tables[constraint[:table]] or next
           (table[:check_constraints] ||= []) << constraint.slice(:name, :expression)
         end
-        SchemaConventions.add_relations(tables, views: schema.views, virtual_tables: schema.virtual_tables, not_dumped: schema.not_dumped)
+        views = schema.views.transform_values { |view| view.merge(indexes: Array(view[:indexes]).filter_map { |i| static_index(i) }) }
+        SchemaConventions.add_relations(tables, views: views, virtual_tables: schema.virtual_tables, not_dumped: schema.not_dumped)
 
         version = schema_version_for(path)
 
         result = {
           adapter: "static_parse",
           tables: tables,
-          total_tables: tables.size,
+          total_tables: SchemaConventions.table_count(tables),
           schema_version: version,
           check_constraints: SchemaConventions.check_constraints_of(tables),
           enum_types: schema.enums,
@@ -608,12 +619,13 @@ module RailsAiContext
           adapter: "static_parse",
           dialect: dialect.to_s,
           tables: tables,
-          total_tables: tables.size,
+          total_tables: SchemaConventions.table_count(tables),
           check_constraints: SchemaConventions.check_constraints_of(tables),
           enum_types: parsed[:enums],
           generated_columns: SchemaConventions.generated_columns_of(tables),
           note: "Parsed from #{relative_dump_path(path)} (#{connection_state})"
         }
+        result[:extensions] = parsed[:extensions] if parsed[:extensions].any?
         if applied.any?
           result[:schema_version] = applied.map(&:to_i).max.to_s
           migrate_dir = migrate_dir_for_dump(path)
@@ -654,7 +666,7 @@ module RailsAiContext
         {
           adapter: "static_parse",
           tables: tables,
-          total_tables: tables.size,
+          total_tables: SchemaConventions.table_count(tables),
           note: replay_note(tables, replayed.counts)
         }
       end

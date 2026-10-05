@@ -62,7 +62,7 @@ module RailsAiContext
       def schema_section
         schema = Payload.section(context, :schema)
 
-        lines = [ "## Database Schema (#{count_phrase(schema[:total_tables], "table")})" ]
+        lines = [ "## Database Schema (#{Introspectors::SchemaConventions.relations_phrase(schema[:tables])})" ]
         schema[:tables]&.each do |name, data|
           cols = (data[:columns] || []).map { |c| c[:type] ? "`#{c[:name]}` (#{c[:type]})" : "`#{c[:name]}`" }.join(", ")
           lines << "### #{escape_markdown(name)}"

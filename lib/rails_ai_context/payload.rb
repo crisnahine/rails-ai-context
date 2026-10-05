@@ -98,6 +98,11 @@ module RailsAiContext
       schema_tables(schema).find { |_, table, _| table.to_s == name.to_s }&.last
     end
 
+    # Every database whose schema holds the table, "primary" for the primary's.
+    def schema_databases(schema, name)
+      schema_tables(schema).filter_map { |db, table, _| db || "primary" if table.to_s == name.to_s }
+    end
+
     def models(ctx)
       value = ctx.is_a?(Hash) ? ctx[:models] : nil
       value.is_a?(Hash) && !value[:error] ? value : {}

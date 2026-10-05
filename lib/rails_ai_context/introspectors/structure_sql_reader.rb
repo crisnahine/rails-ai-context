@@ -33,6 +33,7 @@ module RailsAiContext
           tables[shown] = table if shown.match?(/\A\w+\z/)
         end
 
+        found_views = views(content)
         content.scan(/CREATE (UNIQUE )?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF NOT EXISTS\s+)?[`"]?(\w+)[`"]?\s+ON\s+(?:ONLY\s+)?#{QUALIFIED_NAME}((?:(?!#{NEXT_STATEMENT})[^;])*)/m) do |unique, idx_name, table, rest|
           group = first_paren_group(rest)
           keys = index_keys(group)
@@ -40,7 +41,8 @@ module RailsAiContext
 
           # The condition follows the key list, never inside it.
           where = rest[(rest.index("(") + group.length + 2)..][/\bWHERE\s+(.+)\z/mi, 1]&.strip
-          all.dig(qualified_name(table), :table, :indexes)&.push({ name: idx_name, columns: keys, unique: !!unique, where: where }.compact)
+          target = all.dig(qualified_name(table), :table) || found_views[shown_name(qualified_name(table))]
+          (target[:indexes] ||= []) << { name: idx_name, columns: keys, unique: !!unique, where: where }.compact if target
         end
 
         content.scan(/ALTER TABLE\s+(?:ONLY\s+)?#{QUALIFIED_NAME}\s+ADD CONSTRAINT[^;]*?PRIMARY KEY\s*\(([^)]*)\)/m) do |table, cols|
@@ -80,7 +82,14 @@ module RailsAiContext
         end
 
         { dialect: dialect, tables: tables, enums: enums.map { |name, values| { name: name, values: values } },
-          views: views(content), virtual_tables: virtual_tables(content) }
+          views: found_views, virtual_tables: virtual_tables(content), extensions: extensions(content) }
+      end
+
+      # As PostgreSQL's connection names them: qualified unless in the public schema.
+      def extensions(content)
+        content.scan(/^CREATE EXTENSION (?:IF NOT EXISTS )?("[^"]+"|\w+)(?: WITH SCHEMA ("[^"]+"|\w+))?/).map do |name, schema|
+          [ (schema.delete('"') unless schema.nil? || schema == "public"), name.delete('"') ].compact.join(".")
+        end
       end
 
       # Each view by the name the app reads it under, a later definition of a name replacing a placeholder.

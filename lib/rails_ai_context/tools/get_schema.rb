@@ -65,9 +65,11 @@ module RailsAiContext
             # "Post" and "Admin::ActionLog" are model names here, and the model
             # tier knows the table each of them reads.
             table_as_table = RailsAiContext::Introspectors::TableName.for_model_name(table, models_data)
-            database, table_key, table_data = Payload.schema_tables(schema).find { |_, k, _|
+            _, table_key, table_data = Payload.schema_tables(schema).find { |_, k, _|
               k.downcase == table_down || k == table_as_table || k == table.underscore
             }
+            databases = table_data ? Payload.schema_databases(schema, table_key) : []
+            database = databases.join(", ") unless databases == [ "primary" ]
             table_key ||= table
             unless table_data
               # A table db/schema.rb declares and the connection does not have
@@ -115,7 +117,7 @@ module RailsAiContext
               return text_response("No tables at offset #{page[:offset]}. Total: #{total}. Use `offset:0` to start over.")
             end
 
-            lines = [ "# Schema Summary (#{count_phrase(total, "table")})", "" ]
+            lines = [ "# Schema Summary (#{relations_phrase(tables)})", "" ]
             lines << "**Adapter:** #{adapter_label(ctx)}" if schema[:adapter]
             lines.concat(static_source_lines(schema))
             paginated.each do |name|
@@ -144,7 +146,7 @@ module RailsAiContext
               return text_response("No tables at offset #{page[:offset]}. Total tables: #{total}. Use `offset:0` to start from the beginning.")
             end
 
-            lines = [ "# Schema (#{count_phrase(total, "table")}, showing #{paginated.size})", "" ]
+            lines = [ "# Schema (#{relations_phrase(tables)}, showing #{paginated.size})", "" ]
             lines.concat(static_source_lines(schema))
             paginated.each do |name|
               data = tables[name]
@@ -235,7 +237,7 @@ module RailsAiContext
             coverage = model_coverage_lines(tables, models_data)
             lines.concat(coverage + [ "" ]) if coverage.any?
             lines.concat(secondary_databases_lines(schema))
-            lines << "_Use `detail:\"summary\"` for all #{count_phrase(total, "table")}, `detail:\"full\"` for indexes/FKs, or `table:\"name\"` for one table._" if total > page[:limit]
+            lines << "_Use `detail:\"summary\"` for all #{relations_phrase(tables)}, `detail:\"full\"` for indexes/FKs, or `table:\"name\"` for one table._" if total > page[:limit]
             text_response(lines.join("\n"))
 
           when "full"
@@ -247,7 +249,7 @@ module RailsAiContext
               return text_response("No tables at offset #{page[:offset]}. Total: #{total}. Use `offset:0` to start over.")
             end
 
-            lines = [ "# Schema Full Detail (#{paginated.size} of #{count_phrase(total, "table")})", "" ]
+            lines = [ "# Schema Full Detail (#{paginated.size} of #{relations_phrase(tables)})", "" ]
             lines.concat(note_lines(schema))
             paginated.each do |name|
               lines << format_table_markdown(name, tables[name], models_data, schema[:enum_types])
@@ -403,8 +405,7 @@ module RailsAiContext
 
         lines = [ "", "## Secondary databases", "" ]
         secondary.each do |name, db|
-          count = db[:total_tables]
-          lines << "- **#{name}**: #{count_phrase(count, "table")} (#{db[:tables].keys.join(', ')}) - #{db[:note]}"
+          lines << "- **#{name}**: #{relations_phrase(db[:tables])} (#{db[:tables].keys.join(', ')}) - #{db[:note]}"
         end
         lines
       end
@@ -484,6 +485,10 @@ module RailsAiContext
 
       RELATION_KINDS = { "view" => "View", "materialized_view" => "Materialized view", "virtual_table" => "Virtual table" }.freeze
 
+      private_class_method def self.relations_phrase(tables)
+        RailsAiContext::Introspectors::SchemaConventions.relations_phrase(tables)
+      end
+
       # What a listed name is when it is not a plain table.
       private_class_method def self.relation_suffix(data)
         label = case data[:kind]
@@ -492,6 +497,15 @@ module RailsAiContext
         else "not dumped" if data[:not_dumped]
         end
         label ? " (#{label})" : ""
+      end
+
+      private_class_method def self.index_lines(data)
+        return [] unless data[:indexes]&.any?
+
+        [ "", "### Indexes" ] + data[:indexes].map do |idx|
+          unique = idx[:unique] ? " (unique)" : ""
+          "- `#{idx[:name]}` on (#{Array(idx[:columns]).join(', ')})#{unique}#{RailsAiContext::Introspectors::SchemaConventions.where_clause(idx[:where])}#{index_options_text(idx)}"
+        end
       end
 
       private_class_method def self.format_table_markdown(name, data, models, enum_types = nil)
@@ -513,7 +527,10 @@ module RailsAiContext
         # A table right after a paragraph line would read as part of it.
         lines << "" if lines.size > 2
         definition = data[:sql] ? [ "### Definition", "```sql", data[:sql], "```" ] : []
-        return lines.concat(definition).join("\n").rstrip if columns.empty? && (data[:sql] || data[:not_dumped])
+        if columns.empty? && (data[:sql] || data[:not_dumped])
+          indexes = index_lines(data)
+          return lines.concat(indexes.any? ? indexes.drop(1) + [ "" ] : []).concat(definition).join("\n").rstrip
+        end
 
         has_comments = columns.any? { |c| c[:comment] && !c[:comment].to_s.empty? }
         # A virtual table's module, not a column type, decides what its columns hold.
@@ -542,13 +559,7 @@ module RailsAiContext
           lines << "" << "Inherits from #{parents}, which the structure.sql dump does not define: its columns are not shown."
         end
 
-        if data[:indexes]&.any?
-          lines << "" << "### Indexes"
-          data[:indexes].each do |idx|
-            unique = idx[:unique] ? " (unique)" : ""
-            lines << "- `#{idx[:name]}` on (#{Array(idx[:columns]).join(', ')})#{unique}#{RailsAiContext::Introspectors::SchemaConventions.where_clause(idx[:where])}#{index_options_text(idx)}"
-          end
-        end
+        lines.concat(index_lines(data))
 
         if data[:unique_constraints]&.any?
           lines << "" << "### Unique constraints"

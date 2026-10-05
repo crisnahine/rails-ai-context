@@ -237,7 +237,8 @@ module RailsAiContext
         when :unread_call
           SchemaConventions.note_unread_call(schema[:tables][current], event[:name]) if current
         when :add_index
-          schema[:tables][event[:table]]&.dig(:indexes)&.push(index_entry(event))
+          target = schema[:tables][event[:table]] || schema[:views][event[:table]]
+          (target[:indexes] ||= []) << index_entry(event) if target
         when :foreign_key
           schema[:foreign_keys] << event.slice(:from, :to, :column, :primary_key, :on_delete, :on_update)
         when :unique_constraint
