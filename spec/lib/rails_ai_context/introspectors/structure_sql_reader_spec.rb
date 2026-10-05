@@ -707,6 +707,16 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
       expect(described_class.parse("")[:tables]).to eq({})
     end
 
+    it "splits a one-line table with multibyte text where it should" do
+      sql = <<~SQL
+        CREATE TABLE "notes" ("title" varchar DEFAULT 'é, (ü)' NOT NULL, "note" text DEFAULT 'ñ', CHECK (length("title") > 0));
+      SQL
+      notes = described_class.parse(sql)[:tables]["notes"]
+
+      expect(notes[:columns].map { |c| c.values_at(:name, :default, :null) }).to eq([ [ "title", "é, (ü)", false ], [ "note", "ñ", true ] ])
+      expect(notes[:check_constraints]).to eq([ { expression: 'length("title") > 0' } ])
+    end
+
     it "reads statements with no semicolon" do
       sql = <<~SQL
         CREATE TABLE "accounts" ("id" integer PRIMARY KEY AUTOINCREMENT NOT NULL, "name" varchar NOT NULL)

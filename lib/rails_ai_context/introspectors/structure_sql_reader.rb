@@ -133,6 +133,7 @@ module RailsAiContext
       end
 
       QUOTE_BYTES = "'\"`".bytes.freeze
+      WHITESPACE_BYTES = " \t\n\r\f\v".bytes.freeze
 
       # The byte index of the parenthesis closing the one at `open`, quotes
       # respected; nil when it never closes. Byte-wise, so a long dump costs one pass.
@@ -294,20 +295,30 @@ module RailsAiContext
         end
       end
 
-      # Each character outside quotes, its index, and the parenthesis depth
-      # once it is read. `quotes` are the characters that open a quoted run.
-      def scan_top_level(text, quotes = "'\"`")
+      # Runs of text with nothing a top-level scan stops at, skipped in one regex
+      # step so a megabyte dump is not walked a character at a time in Ruby.
+      PAREN_RUN = /[^'"`()]+/
+      SPLIT_RUN = /[^'"`(),]+/
+      DEFAULT_RUN = /[^'"()\s]+/
+      QUOTE_ENDS = { 39 => /'/, 34 => /"/, 96 => /`/ }.freeze
+
+      # Each byte outside quotes that `run` does not skip, its byte offset, and
+      # the parenthesis depth once it is read. Every byte `run` stops at is ASCII.
+      def scan_top_level(text, run = SPLIT_RUN)
+        scanner = StringScanner.new(text)
         depth = 0
-        quote = nil
-        text.each_char.with_index do |ch, i|
-          if quote
-            quote = nil if ch == quote
-          elsif quotes.include?(ch)
-            quote = ch
+        until scanner.eos?
+          next if scanner.skip(run)
+
+          index = scanner.pos
+          byte = text.getbyte(index)
+          scanner.pos = index + 1
+          if (closing = QUOTE_ENDS[byte])
+            scanner.skip_until(closing) or break
           else
-            depth += 1 if ch == "("
-            depth -= 1 if ch == ")"
-            yield ch, i, depth
+            depth += 1 if byte == 40
+            depth -= 1 if byte == 41
+            yield byte, index, depth
           end
         end
       end
@@ -316,20 +327,20 @@ module RailsAiContext
       def first_paren_group(text)
         start = text.to_s.index("(") or return nil
         group = text[start..]
-        scan_top_level(group) { |ch, i, depth| return group[1, i - 1] if ch == ")" && depth.zero? }
+        scan_top_level(group, PAREN_RUN) { |byte, i, depth| return group.byteslice(1, i - 1) if byte == 41 && depth.zero? }
         nil
       end
 
       def split_top_level(body)
         parts = []
         from = 0
-        scan_top_level(body) do |ch, i, depth|
-          next unless ch == "," && depth.zero?
+        scan_top_level(body) do |byte, i, depth|
+          next unless byte == 44 && depth.zero?
 
-          parts << body[from...i]
+          parts << body.byteslice(from, i - from)
           from = i + 1
         end
-        rest = body[from..]
+        rest = body.byteslice(from, body.bytesize - from)
         parts << rest unless rest.strip.empty?
         parts.map(&:strip)
       end
@@ -413,8 +424,8 @@ module RailsAiContext
 
       # The DEFAULT value's text, up to the next constraint at the top level.
       def default_text(text)
-        scan_top_level(text, "'\"") do |ch, i, depth|
-          return text[0, i].strip if depth.zero? && ch.match?(/\s/) && text[i..].match?(DEFAULT_END)
+        scan_top_level(text, DEFAULT_RUN) do |byte, i, depth|
+          return text.byteslice(0, i).strip if depth.zero? && WHITESPACE_BYTES.include?(byte) && text.byteslice(i, text.bytesize - i).match?(DEFAULT_END)
         end
         text.strip
       end
