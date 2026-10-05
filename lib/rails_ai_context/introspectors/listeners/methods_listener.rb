@@ -211,12 +211,13 @@ module RailsAiContext
         end
 
         # What an includer gains: a `class_methods` def, or a class method written in `included do`.
+        # A `class << self` in `class_methods` opens ClassMethods' own singleton, which no includer gets.
         def includer_gains?(scope)
-          @frames.reverse_each do |frame|
-            return true if frame.kind == :class_methods || (frame.kind == :included && scope == :class)
-            return false unless frame.kind == :singleton
-          end
-          false
+          frame = @frames.last
+          return true if frame.kind == :class_methods
+
+          frame = @frames[-2] if frame.kind == :singleton
+          frame&.kind == :included && scope == :class
         end
 
         def open_frame(kind)

@@ -564,6 +564,22 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener, "visib
       [ "to_param", :instance, false ], [ "own", :class, false ]
     ])
   end
+
+  it "does not mark a def in class << self inside class_methods as a method the includer gains" do
+    source = <<~RUBY
+      module Sluggable
+        extend ActiveSupport::Concern
+        class_methods do
+          def by_slug; end
+          class << self
+            def registry; end
+          end
+        end
+      end
+    RUBY
+    rows = parse_and_dispatch(source).map { |m| [ m[:name], !!m[:class_methods_block] ] }
+    expect(rows).to eq([ [ "by_slug", true ], [ "registry", false ] ])
+  end
 end
 
 RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener, "methods defined without def" do
