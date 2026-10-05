@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "concurrent"
 require "prism"
 
 module RailsAiContext
@@ -19,6 +20,7 @@ module RailsAiContext
       # like a handler is claimed here and then validated. Predicate and bang
       # methods cannot be event names, so they stay the listener's own.
       HANDLER_PATTERN = /\Aon_[a-z0-9_]+\z/
+      CLASS_EVENTS = Concurrent::Map.new
 
       class << self
         # A dispatcher with every listener wired. Validation runs for all of
@@ -32,8 +34,16 @@ module RailsAiContext
           end
         end
 
-        # The listener's handlers, sorted for a stable registration order.
+        # The listener's handlers, sorted for a stable registration order. Every walk
+        # builds fresh listeners, so the reflection is kept per class unless the
+        # instance has methods of its own.
         def events_for(listener)
+          return handler_events(listener) unless listener.singleton_methods.empty?
+
+          CLASS_EVENTS.compute_if_absent(listener.class) { handler_events(listener) }
+        end
+
+        def handler_events(listener)
           events = listener.public_methods.grep(HANDLER_PATTERN).sort
 
           unknown = events.reject { |event| known_event?(event) }

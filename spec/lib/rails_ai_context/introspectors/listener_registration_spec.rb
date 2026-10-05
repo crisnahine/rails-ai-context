@@ -94,6 +94,22 @@ RSpec.describe RailsAiContext::Introspectors::ListenerRegistration do
       expect { described_class.events_for(TypoHandlerListener.new) }
         .to raise_error(described_class::UnknownEventError, /TypoHandlerListener/)
     end
+    it "reads a listener class's handlers once, however many instances a run builds" do
+      reads = 0
+      klass = Class.new(SingleEventListener) do
+        define_method(:public_methods) { |*args| (reads += 1) && super(*args) }
+      end
+
+      expect(Array.new(3) { described_class.events_for(klass.new) }).to all(eq([ :on_call_node_enter ]))
+      expect(reads).to eq(1)
+    end
+
+    it "still finds a handler one instance defines on itself" do
+      listener = SingleEventListener.new
+      def listener.on_def_node_enter(node); end
+
+      expect(described_class.events_for(listener)).to eq(%i[on_call_node_enter on_def_node_enter])
+    end
   end
 
   describe ".known_event?" do
