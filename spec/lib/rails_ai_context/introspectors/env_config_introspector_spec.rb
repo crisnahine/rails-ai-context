@@ -76,6 +76,7 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
       File.write(File.join(env_dir, "staging.rb"), <<~RUBY)
         Rails.application.configure do
           config.hosts << "staging.example.com"
+          config.action_dispatch.default_headers["X-Frame-Options"] = "DENY"
           config.middleware.use Rack::Deflater
           config.session_store :cookie_store, key: "_x"
           config.filter_parameters += [:pin_code]
@@ -93,7 +94,7 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
 
       staging = result[:environments].find { |e| e[:name] == "staging" }
       expect(staging[:config_keys]).to eq(%w[
-        after_initialize cache_store filter_parameters generators hosts log_tags middleware session_store x.payments.provider
+        action_dispatch.default_headers after_initialize cache_store filter_parameters generators hosts log_tags middleware session_store x.payments.provider
       ])
     end
 

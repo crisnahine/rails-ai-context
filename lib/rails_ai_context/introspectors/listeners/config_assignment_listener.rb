@@ -9,6 +9,7 @@ module RailsAiContext
       #   config.action_mailer.delivery = :smtp → path [:action_mailer, :delivery], assignment
       #   config.jwt do |jwt| ... end           → path [:jwt], not an assignment, write :block
       #   config.hosts << "x"                   → path [:hosts, :<<], write :call
+      #   config.headers["X"] = "y"             → path [:headers, :[]=], write :call
       #   config.filter_parameters += [:pin]    → path [:filter_parameters], write :operator
       #
       # The chain is matched from a root receiver name, so
@@ -17,7 +18,7 @@ module RailsAiContext
         DEFAULT_ROOTS = %w[config].freeze
         SETTER = /\A[A-Za-z_]\w*=\z/
         # A predicate or comparison with arguments reads a setting rather than changing it.
-        MUTATOR = /\A(?:<<|[A-Za-z_]\w*!?)\z/
+        MUTATOR = /\A(?:<<|\[\]=|[A-Za-z_]\w*!?)\z/
 
         def initialize(*roots)
           super()
