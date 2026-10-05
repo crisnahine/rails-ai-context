@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "prism"
+
 module RailsAiContext
   module Introspectors
     # Discovers authentication and authorization setup: Devise, Rails 8 auth,
@@ -31,7 +33,8 @@ module RailsAiContext
           SourceScan.classes(root, kind: "app/models").map do |model_name, record|
             [ model_name, SourceIntrospector.walk_source(record.source, {
               devise: -> { Listeners::GenericMacroListener.new(:devise) },
-              macros: Listeners::MacrosListener
+              macros: Listeners::MacrosListener,
+              mixins: Listeners::MixinsListener
             }) ]
           end
         rescue => e
@@ -194,16 +197,35 @@ module RailsAiContext
       def detect_devise_modules_per_model
         result = {}
         model_asts.each do |model_name, ast|
-          hits = ast[:devise]
-          next if hits.empty?
+          next if ast[:devise].empty?
 
-          modules = hits.flat_map { |h| h[:args].map(&:to_s) }
-          result[model_name] = modules if modules.any?
+          result[model_name] = ast[:devise].flat_map { |h| h[:args].map(&:to_s) } | concern_devise_modules(model_name, ast[:mixins])
         end
 
         result
       rescue => e
         RailsAiContext.debug_fail(e, {}, label: "detect_devise_modules_per_model")
+      end
+
+      # The modules an included concern's `devise` adds to a model that calls devise
+      # itself; one under a condition (`if ENV[...]`) depends on the environment, so it is left out.
+      def concern_devise_modules(model_name, mixins)
+        Array(mixins).select { |mixin| mixin[:ancestor] }.flat_map do |mixin|
+          source = ConcernPaths.module_source(root, mixin[:name], prefer: "model", within: model_name)
+          next [] unless source&.include?("devise")
+
+          parsed = AstCache.parse_string(source)
+          SourceIntrospector.walk_source(source, { devise: -> { Listeners::GenericMacroListener.new(:devise) } })[:devise]
+            .reject { |hit| conditional_call?(parsed, hit[:offset]) }
+            .flat_map { |hit| hit[:args].map(&:to_s) }
+        end
+      end
+
+      CONDITIONAL_NODES = [ Prism::IfNode, Prism::UnlessNode, Prism::CaseNode, Prism::DefNode ].freeze
+
+      def conditional_call?(parsed, offset)
+        line = parsed.source.line(offset)
+        parsed.value.tunnel(line, parsed.source.column(offset)).any? { |node| CONDITIONAL_NODES.any? { |kind| node.is_a?(kind) } }
       end
 
       def detect_token_auth

@@ -286,6 +286,36 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
       end
     end
 
+    context "with a Devise module added by a concern's included block" do
+      let(:fixture_model) { File.join(Rails.root, "app/models/member.rb") }
+      let(:fixture_concern) { File.join(Rails.root, "app/models/member_omniauthable.rb") }
+
+      before do
+        File.write(fixture_model, <<~RUBY)
+          class Member < ApplicationRecord
+            include MemberOmniauthable
+            devise :registerable
+          end
+        RUBY
+        File.write(fixture_concern, <<~RUBY)
+          module MemberOmniauthable
+            extend ActiveSupport::Concern
+
+            included do
+              devise :omniauthable
+              devise :pam_authenticatable if ENV["PAM_ENABLED"] == "true"
+            end
+          end
+        RUBY
+      end
+
+      after { FileUtils.rm_f([ fixture_model, fixture_concern ]) }
+
+      it "lists the concern's unconditional modules with the model's own" do
+        expect(result[:devise_modules_per_model]["Member"]).to eq(%w[registerable omniauthable])
+      end
+    end
+
     context "with no Devise models" do
       it "returns empty hash for devise_modules_per_model" do
         expect(result[:devise_modules_per_model]).to eq({})
