@@ -15,6 +15,15 @@ RSpec.describe RailsAiContext::FixtureKeys do
   end
 
   describe ".parse" do
+    it "parses one content once, so every reader of a file shares the parse" do
+      content = "shared_once:\n  title: A\n"
+      first = described_class.parse(content)
+
+      expect(YAML).not_to receive(:safe_load)
+      expect(described_class.parse(content.dup)).to equal(first)
+      expect(first).to be_frozen
+    end
+
     it "reads a file whose first line is an ERB tag, as Rails renders ERB before YAML" do
       parsed = described_class.parse(<<~YAML)
         <% password_digest = BCrypt::Password.create("password") %>

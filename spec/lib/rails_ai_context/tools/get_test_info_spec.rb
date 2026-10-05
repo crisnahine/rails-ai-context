@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "timeout"
 
 RSpec.describe RailsAiContext::Tools::GetTestInfo do
   before { described_class.reset_cache! }
@@ -294,6 +295,13 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       expect(text).to include("- **broken:** one _(not parsed as YAML; labels only)_")
     end
 
+    it "says a set past the read limit was too large, not that it does not parse" do
+      write("test/fixtures/users.yml", "bob:\n  name: #{"B" * 50}\n")
+      allow(RailsAiContext.configuration).to receive(:max_test_file_size).and_return(20)
+
+      expect(full_text).to include("- **users:** bob _(over the 20 byte read limit; labels only)_")
+    end
+
     it "prints no label from a fixture file that links out of the app" do
       Dir.mktmpdir do |outside|
         File.write(File.join(outside, "leak.yml"), "secret_label:\n  key: x\n")
@@ -306,6 +314,20 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
         expect(text).not_to include("secret_label")
         expect(text).not_to include("not parsed as YAML")
       end
+    end
+
+    it "shows an attribute an alias nests deeply without expanding it" do
+      laughs = +"a: &a [x, x, x, x, x, x, x, x, x]\n"
+      levels = ("a".."j").to_a
+      levels.each_cons(2) { |prev, cur| laughs << "#{cur}: &#{cur} [*#{prev}, *#{prev}, *#{prev}, *#{prev}, *#{prev}, *#{prev}, *#{prev}, *#{prev}, *#{prev}]\n" }
+      body = "bomb:\n  title: Short\n" + laughs.lines.map { |line| "  #{line}" }.join + "  tags: [one, two]\n"
+      write("test/fixtures/posts.yml", body)
+
+      text = nil
+      expect { Timeout.timeout(5) { text = full_text } }.not_to raise_error
+      expect(text).to include("- **posts:**\n  - `bomb`: title: Short")
+      expect(text).to include("tags: [\"one\", \"two\"]")
+      expect(text).not_to include("j: ")
     end
   end
 

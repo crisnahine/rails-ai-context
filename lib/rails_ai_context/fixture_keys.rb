@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "date"
+require "digest"
 require "yaml"
 
 module RailsAiContext
@@ -21,8 +22,25 @@ module RailsAiContext
     # read as fixtures. ERB is not run: a tag that prints becomes "erb_value"
     # and one that does not is dropped, so a file opening with
     # `<% digest = ... %>` still reads. Aliases are allowed, as Rails allows
-    # them, and the labels `_fixture: ignore:` names are dropped.
+    # them, and the labels `_fixture: ignore:` names are dropped. A result is
+    # kept by content digest, so the introspector and the tool share a parse.
     def self.parse(content)
+      key = Digest::SHA256.hexdigest(content.to_s)
+      PARSED_MUTEX.synchronize { return PARSED[key] if PARSED.key?(key) }
+
+      parsed = read(content)
+      PARSED_MUTEX.synchronize do
+        PARSED.clear if PARSED.size >= MAX_PARSED
+        PARSED[key] = parsed
+      end
+    end
+
+    PARSED = {}
+    PARSED_MUTEX = Mutex.new
+    MAX_PARSED = 512
+    private_constant :PARSED, :PARSED_MUTEX, :MAX_PARSED
+
+    def self.read(content)
       parsed = YAML.safe_load(without_erb(content), permitted_classes: [ Date, Time, Symbol ], aliases: true)
       return {} unless parsed
       return nil unless parsed.is_a?(Hash)
@@ -34,7 +52,7 @@ module RailsAiContext
         next if label == CONFIG || label == ANCHOR || ignored.include?(label) || !attributes.is_a?(Hash)
 
         entries[label] = attributes
-      end
+      end.freeze
     rescue Psych::Exception, ArgumentError
       nil
     end
@@ -46,6 +64,6 @@ module RailsAiContext
         .gsub(/'<%=.*?%>'/m, "'erb_value'")
         .gsub(/<%=.*?%>/m, "erb_value")
     end
-    private_class_method :without_erb
+    private_class_method :read, :without_erb
   end
 end

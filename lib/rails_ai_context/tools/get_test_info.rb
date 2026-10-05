@@ -109,8 +109,9 @@ module RailsAiContext
               parsed_fixtures = parse_all_fixture_contents(data[:fixtures])
               data[:fixture_names].each do |set, labels|
                 entries = parsed_fixtures[set.to_s]
-                unless entries
-                  lines << "- **#{set}:** #{Array(labels).join(', ')} _(not parsed as YAML; labels only)_"
+                unless entries.is_a?(Hash)
+                  why = entries == :too_large ? "over the #{max_test_file_size} byte read limit" : "not parsed as YAML"
+                  lines << "- **#{set}:** #{Array(labels).join(', ')} _(#{why}; labels only)_"
                   next
                 end
 
@@ -121,7 +122,7 @@ module RailsAiContext
                 end
               end
 
-              relationships = extract_fixture_relationships(parsed_fixtures.compact)
+              relationships = extract_fixture_relationships(parsed_fixtures.select { |_, entries| entries.is_a?(Hash) })
               if relationships.any?
                 lines << "" << "## Fixture Relationships"
                 relationships.each do |parent, children|
@@ -488,15 +489,43 @@ module RailsAiContext
 
       FIXTURE_SKIP_KEYS = %w[created_at updated_at id].freeze
 
-      # A fixture file's labels and their short attributes, or nil when it
-      # was not read or does not parse.
+      FIXTURE_VALUE_LIMIT = 100
+
+      # A fixture file's labels and their short attributes as text, :too_large
+      # past the read limit, or nil when it was not read or does not parse.
       private_class_method def self.parse_fixture_contents(file_path)
+        return :too_large if File.size(file_path) > max_test_file_size
+
         content = RailsAiContext::SafeFile.read(file_path, max_size: max_test_file_size) or return nil
         parsed = RailsAiContext::FixtureKeys.parse(content) or return nil
 
         parsed.transform_values do |attributes|
-          attributes.reject { |key, value| FIXTURE_SKIP_KEYS.include?(key.to_s) || value.to_s.length > 100 }
+          attributes.each_with_object({}) do |(key, value), shown|
+            next if FIXTURE_SKIP_KEYS.include?(key.to_s)
+
+            text = short_text(value)
+            shown[key] = text if text
+          end
         end
+      end
+
+      # The value as text when it is short, else nil. A container is sized
+      # before to_s runs, since YAML aliases can nest one into an exponential
+      # string from a few lines.
+      private_class_method def self.short_text(value)
+        budget = FIXTURE_VALUE_LIMIT
+        pending = [ value ]
+        until pending.empty?
+          item = pending.pop
+          case item
+          when Hash then budget -= item.size; pending.concat(item.keys, item.values)
+          when Array then budget -= item.size; pending.concat(item)
+          else budget -= item.to_s.length
+          end
+          return nil if budget.negative?
+        end
+        text = value.to_s
+        text if text.length <= FIXTURE_VALUE_LIMIT
       end
 
       # { set => entries, or nil when unparsed } over the fixture directories
