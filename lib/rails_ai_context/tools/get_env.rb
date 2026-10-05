@@ -82,7 +82,7 @@ module RailsAiContext
 
       # Named in the answer, because a name missing from it is otherwise
       # indistinguishable from a name the app does not read.
-      SCAN_NOTE = "_Scanned `app`, `config` and `lib` for `.rb`, `.rake`, `.erb` and config `.yml`. " \
+      SCAN_NOTE = "_Scanned `app`, `config` and `lib` for `.rb`, `.rake`, `.erb` and config `.yml`, plus `config.ru`, `db/seeds` and the Ruby scripts in `bin`. " \
         "Config YAML on `sensitive_patterns` (config/database.yml) is read for the ENV names in its ERB tags only; " \
         "credentials, keys and the rest are never read._"
 

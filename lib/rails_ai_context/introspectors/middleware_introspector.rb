@@ -17,6 +17,7 @@ module RailsAiContext
           custom_middleware: discover_custom_middleware(inserted),
           middleware_from_initializers: inserted,
           exceptions_app: exceptions_app,
+          rackup: rackup.presence,
           unavailable_sections: %w[middleware_stack middleware_count]
         }.compact
       rescue StandardError
@@ -32,7 +33,8 @@ module RailsAiContext
           middleware_stack: extract_middleware_stack,
           middleware_count: middleware_count(custom),
           middleware_from_initializers: inserted,
-          exceptions_app: exceptions_app
+          exceptions_app: exceptions_app,
+          rackup: rackup.presence
         }.compact
       end
 
@@ -131,6 +133,20 @@ module RailsAiContext
 
       def declared_name(content, own_name)
         DeclaredConstant.declared_names(content).find { |declared| declared.split("::").last.casecmp?(own_name) } || own_name
+      end
+
+      # config.ru's own `use` and `map` run before Rails.application, so
+      # app.middleware never lists them. Calls inside a `map` block belong to that mount.
+      def rackup
+        path = File.join(root, "config.ru")
+        return [] unless File.file?(path)
+
+        SourceIntrospector.walk(path, { calls: -> { Listeners::GenericMacroListener.new(:use, :map) } })[:calls].filter_map do |call|
+          target = call[:values].first
+          next if call[:parent_offset] || !target.is_a?(String)
+
+          { call: call[:macro].to_s, target: target, line: call[:location] }
+        end
       end
 
       def extract_middleware_stack

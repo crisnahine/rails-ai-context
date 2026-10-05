@@ -386,7 +386,7 @@ Auth checks, flash messages, create action template, test patterns.
 
 ### `rails_get_config`
 
-Database config, auth framework, assets, cache, queue, Action Cable.
+Database config, auth framework, assets, cache, queue, Action Cable. The `use` and `map` calls in `config.ru` are listed apart from the stack, since they run before Rails.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -404,7 +404,7 @@ found under a load-order prefix too (`config/initializers/3_omniauth.rb`).
 
 ### `rails_get_env`
 
-Environment variables + credentials keys (values are never exposed). Scans `.rb`, `.rake`, ERB views and config YAML under `app`, `config` and `lib`; files matching `sensitive_patterns` (`config/database.yml`, credentials, keys) are never read, and the answer says so. The env Kamal's `config/deploy.yml` gives the app container is listed too: secret names only, clear values redacted like any default. A variable whose call sites pass different defaults is labelled as such rather than with one site's default; `detail:"full"` names each site's. A default is redacted by the rule a source literal gets: a credential format under any name, a URL's password, and under a secret-named variable a value that is not clearly something else, so an address, URL or hostname default prints as written.
+Environment variables + credentials keys (values are never exposed). Scans `.rb`, `.rake`, ERB views and config YAML under `app`, `config` and `lib`, plus `config.ru`, `db/seeds.rb`, `db/seeds/` and the Ruby scripts in `bin/`; files matching `sensitive_patterns` (`config/database.yml`, credentials, keys) are never read, and the answer says so. The env Kamal's `config/deploy.yml` gives the app container is listed too: secret names only, clear values redacted like any default. A variable whose call sites pass different defaults is labelled as such rather than with one site's default; `detail:"full"` names each site's. A default is redacted by the rule a source literal gets: a credential format under any name, a URL's password, and under a secret-named variable a value that is not clearly something else, so an address, URL or hostname default prints as written.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|

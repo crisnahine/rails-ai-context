@@ -118,7 +118,7 @@ end
 | GemIntrospector | `:gems` | Notable gems with versions and categories |
 | ConventionIntrospector | `:conventions` | Auth patterns, flash messages, test patterns |
 | I18nIntrospector | `:i18n` | Locale files, translation keys |
-| MiddlewareIntrospector | `:middleware` | Rack middleware stack. The static tier declares an alternate source rather than an empty stack: without a booted app it answers only the file facts it can read |
+| MiddlewareIntrospector | `:middleware` | Rack middleware stack. The static tier declares an alternate source rather than an empty stack: without a booted app it answers only the file facts it can read. `config.ru`'s top-level `use` and `map` calls (`rackup`) are read on both tiers with `GenericMacroListener` |
 | EngineIntrospector | `:engines` | Mounted engines |
 | EnvConfigIntrospector | `:env_config` | Per-environment config files: notable toggles (`force_ssl`, `eager_load`, caching, queue adapter), assigned config keys, plus the keys `config/application.rb` sets and each `config_for` file's keys |
 | DevopsIntrospector | `:devops` | Dockerfile, CI config, deployment |
@@ -268,7 +268,7 @@ same wherever it is asked. Those live as their own modules under
 | `RetryPolicy` | What a job does when it raises, as a reader would write it: the macro, its exceptions, then `attempts:` and `wait:` whatever order the source put them in |
 | `SourceCalls` | Which other classes a file hands work to, off the call nodes: the verb list, the framework receivers left out, and the call or the class alone |
 | `ServiceClasses` | Which classes under `app/services` are services and which are only the base of one, for the tool's listing and the generated files' line alike |
-| `EnvReferences` | Every ENV name the app's source reads, file by file, for `rails_get_env` and the context file's `env` section alike: `app`, `config` and `lib` Ruby, ERB and config YAML, with config YAML on `sensitive_patterns` read for the names in its ERB tags only |
+| `EnvReferences` | Every ENV name the app's source reads, file by file, for `rails_get_env` and the context file's `env` section alike: `app`, `config` and `lib` Ruby, ERB and config YAML, `config.ru`, `db/seeds` and the `bin/` scripts whose shebang is Ruby, with config YAML on `sensitive_patterns` read for the names in its ERB tags only |
 | `GemfileGems` | The one Gemfile read, off `GemfileDslListener`: its entries with options and groups (the gems section's local gems and groups) and the gem names (every other asker), so a commented-out `gem` line is no gem anywhere |
 | `ModuleAliases` | Which app file a bare JS import specifier names: tsconfig/jsconfig `compilerOptions.paths` followed through `extends` (relative files and installed packages), and a vite/webpack/rspack `resolve.alias` written as a literal object. The Stimulus scan uses it to tie a registration or a base class to the controller file it imports |
 | `HelperNames` | The helper methods a view can call: every method the app's helper modules define in every code root, and those of a module they `include`, found through the app's autoload roots (`lib` among them) or in its enclosing namespace's file (`CanonicalURL::Helpers` in `canonical_url.rb`). `rails_get_partial_interface` uses it so a helper call is not read as a local |

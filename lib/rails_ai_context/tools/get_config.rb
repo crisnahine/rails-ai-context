@@ -59,6 +59,7 @@ module RailsAiContext
           end
 
           lines.concat(middleware_lines(data[:middleware_stack]))
+          lines.concat(rackup_lines)
 
           if data[:initializers]&.any?
             # List every initializer - stock ones often carry active code
@@ -106,6 +107,21 @@ module RailsAiContext
         if added.any?
           lines << "### Added to the stack"
           added.each { |m| lines << "- `#{m}`" }
+        end
+        lines
+      end
+
+      private_class_method def self.rackup_lines
+        calls = Array(Payload.section(cached_context, :middleware)&.dig(:rackup))
+        return [] if calls.empty?
+
+        lines = [ "", "## config.ru (runs before the Rails middleware stack)" ]
+        calls.each do |call|
+          lines << if call[:call] == "map"
+            "- `map \"#{call[:target]}\"` (line #{call[:line]}) - its own Rack app; requests under it never reach Rails' router"
+          else
+            "- `use #{call[:target]}` (line #{call[:line]})"
+          end
         end
         lines
       end
