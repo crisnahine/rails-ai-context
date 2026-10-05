@@ -27,12 +27,17 @@ module RailsAiContext
     #
     # Reads content first, then checks size - avoids TOCTOU race where the
     # file could change between File.size and File.read.
-    def self.parse(path)
+    #
+    # `ruby:` is the Ruby version whose grammar decides what is a syntax error;
+    # nil parses as the newest Ruby prism knows.
+    def self.parse(path, ruby: nil)
+      version = prism_version(ruby)
+      seen_key = version ? [ path, version ] : path
       # An unchanged file answers from its stat: the same concern file reaches
       # every model's walk, and reading and hashing it each time dominated the
       # model tier on Canvas. Within one run the stat is asked once.
       signature = RunCache.fetch([ :stat_signature, path.to_s ]) { stat_signature(path) }
-      seen = SEEN[path]
+      seen = SEEN[seen_key]
       if seen && seen[2] && seen.first == signature && (cached = STORE[seen[1]])
         return cached
       end
@@ -43,15 +48,15 @@ module RailsAiContext
       raise ArgumentError, "File too large for AST parsing: #{path} (#{size} bytes, max #{MAX_PARSE_SIZE})" if size > MAX_PARSE_SIZE
 
       mtime = File.mtime(path).to_i
-      key   = "#{path}:#{Digest::SHA256.hexdigest(content)}:#{mtime}"
+      key   = "#{path}:#{Digest::SHA256.hexdigest(content)}:#{mtime}#{":#{version}" if version}"
 
       cached = STORE[key]
       unless cached
         # Evict BEFORE inserting to avoid running inside compute_if_absent
         evict_if_full
-        cached = STORE.compute_if_absent(key) { Prism.parse(content) }
+        cached = STORE.compute_if_absent(key) { prism_parse(content, version) }
       end
-      SEEN[path] = [ signature, key, settled?(signature, read_at) ]
+      SEEN[seen_key] = [ signature, key, settled?(signature, read_at) ]
       cached
     end
 
@@ -83,18 +88,46 @@ module RailsAiContext
 
     # Parse a Ruby source string, cached by content digest, so every extractor
     # handed the same text shares one parse.
-    def self.parse_string(source)
-      return Prism.parse(source) if source.bytesize > MAX_PARSE_SIZE
+    def self.parse_string(source, ruby: nil)
+      version = prism_version(ruby)
+      return prism_parse(source, version) if source.bytesize > MAX_PARSE_SIZE
 
-      key = "string:#{Digest::SHA256.hexdigest(source)}"
+      key = "string:#{Digest::SHA256.hexdigest(source)}#{":#{version}" if version}"
 
       cached = STORE[key]
       return cached if cached
 
       evict_if_full
 
-      STORE.compute_if_absent(key) { Prism.parse(source) }
+      STORE.compute_if_absent(key) { prism_parse(source, version) }
     end
+
+    OLDEST_GRAMMAR = "3.3"
+    GRAMMARS = Concurrent::Map.new # major.minor => whether the loaded prism parses it
+
+    # The grammar prism parses `ruby` with: its own major.minor, the oldest prism
+    # knows for an older Ruby, and nil (the newest) for one newer than prism knows.
+    # ponytail: Ruby 3.1 and 3.2 parse as 3.3; syntax only they accept reads as an error.
+    def self.prism_version(ruby)
+      wanted = ruby.to_s.b[/\A\d+\.\d+/]
+      return nil unless wanted
+
+      wanted = OLDEST_GRAMMAR if Gem::Version.new(wanted) < Gem::Version.new(OLDEST_GRAMMAR)
+      wanted if GRAMMARS.compute_if_absent(wanted) { supported?(wanted) }
+    end
+
+    def self.supported?(version)
+      Prism.parse("", version: version)
+      true
+    rescue ArgumentError
+      false
+    end
+    private_class_method :supported?
+
+    def self.prism_parse(source, version)
+      version ? Prism.parse(source, version: version) : Prism.parse(source)
+    end
+    private_class_method :prism_parse
 
     # Clear the entire cache.
     def self.clear

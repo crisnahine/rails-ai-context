@@ -29,6 +29,38 @@ RSpec.describe RailsAiContext::Tools::Validate do
       end
     end
 
+    # Keyword arguments in index assignment became a syntax error in Ruby 3.4.
+    context "with Ruby the app's own version accepts and the newest rejects" do
+      let(:grid) { File.join(Rails.root, "tmp", "grid_index_kwargs.rb") }
+
+      before do
+        FileUtils.mkdir_p(File.dirname(grid))
+        File.write(grid, "class Grid\n  def put(cells, v)\n    cells[0, strict: true] = v\n  end\nend\n")
+      end
+
+      after { FileUtils.rm_f(grid) }
+
+      def validate_as(ruby, static:)
+        allow(RailsAiContext).to receive(:static_tier?).and_return(static)
+        allow(described_class).to receive(:rails_app).and_return(Rails.application)
+        stub_const("RUBY_VERSION", ruby) unless static
+        lock = instance_double(RailsAiContext::GemLock::Spec, ruby_version: ruby)
+        allow(RailsAiContext::GemLock).to receive(:for).and_call_original
+        allow(RailsAiContext::GemLock).to receive(:for).with(Rails.root.to_s).and_return(lock)
+        described_class.call(files: [ "tmp/grid_index_kwargs.rb" ]).content.first[:text]
+      end
+
+      it "passes it statically for an app that declares Ruby 3.1 or 3.3" do
+        expect(validate_as("3.1.6", static: true)).to include("1/1 files passed")
+        expect(validate_as("3.3.9", static: true)).to include("1/1 files passed")
+      end
+
+      it "passes it booted on Ruby 3.3, and fails it for an app on Ruby 3.4" do
+        expect(validate_as("3.3.9", static: false)).to include("1/1 files passed")
+        expect(validate_as("3.4.9", static: true)).to include("0/1 files passed")
+      end
+    end
+
     # Five SQL-injection warnings for listing.rb printed under public.rb's
     # heading, at the indent that says "this file", because they were appended
     # after the loop.

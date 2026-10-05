@@ -166,4 +166,31 @@ RSpec.describe RailsAiContext::AstCache do
       end
     end
   end
+
+  describe "parsing as a given Ruby" do
+    let(:source) { "cells[0, strict: true] = v\n" }
+
+    it "parses with that Ruby's grammar, the oldest prism knows for an older one, and the newest when unknown" do
+      expect(described_class.parse_string(source, ruby: "3.3.9").success?).to be true
+      expect(described_class.parse_string(source, ruby: "3.1.6").success?).to be true
+      expect(described_class.parse_string(source, ruby: "3.4.1").success?).to be false
+      expect(described_class.parse_string(source, ruby: "99.0.0").success?).to be false
+      expect(described_class.parse_string(source).success?).to be false
+    end
+
+    it "reads a malformed version as no version" do
+      [ nil, "", "jruby-9.4", "\xFF", "3" ].each do |ruby|
+        expect(described_class.prism_version(ruby)).to be_nil
+      end
+    end
+
+    it "keeps one parse per grammar for a file" do
+      path = File.join(Dir.mktmpdir, "grid.rb")
+      File.write(path, source)
+
+      expect(described_class.parse(path, ruby: "3.3.0").success?).to be true
+      expect(described_class.parse(path).success?).to be false
+      expect(described_class.parse(path, ruby: "3.3.0").success?).to be true
+    end
+  end
 end
