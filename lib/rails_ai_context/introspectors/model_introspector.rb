@@ -860,14 +860,14 @@ module RailsAiContext
         # excluded reflection with a broken :through raises, and `call`'s
         # per-model rescue would replace the whole model with one error line.
         model.reflect_on_all_associations.reject { |assoc| excluded_association?(assoc.name) }.map do |assoc|
-          with_declared_options(association_detail(assoc), assoc, declared[[ assoc.macro.to_s, assoc.name.to_s ]]&.first)
+          with_declared_options(association_detail(assoc), declared[[ assoc.macro.to_s, assoc.name.to_s ]]&.first)
         end
       end
 
-      # The source's text where the file declares the association, so both
-      # tiers print one spelling; reflection's own options where it does not.
-      def with_declared_options(detail, assoc, source)
-        options = declared_association_options(detail[:type], source ? source[:options] : assoc.options)
+      # Only what the source declares, so both tiers print one spelling; a gem
+      # macro's generated association carries Rails' options, not the app's.
+      def with_declared_options(detail, source)
+        options = declared_association_options(detail[:type], source&.dig(:options))
         extensions = source&.dig(:extension_methods)
         detail.merge({ declared_options: options, extension_methods: extensions, delegated_types: source&.dig(:delegated_types) }.compact)
       end

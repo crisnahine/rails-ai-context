@@ -5637,6 +5637,19 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       expect(associations.last).to include(name: "reader_emails",
                                            unavailable: "through :reader is not an association")
     end
+
+    # has_one_attached defines avatar_attachment with Rails' own options; the
+    # app wrote none of them, and the static tier has nothing to print.
+    it "prints no options for an association the source does not declare" do
+      generated = double("avatar_attachment", name: :avatar_attachment, macro: :has_one, class_name: "ActiveStorage::Attachment",
+                                              foreign_key: "record_id", options: { as: :record, inverse_of: :record, strict_loading: false })
+      model = double("User", reflect_on_all_associations: [ generated ])
+
+      association = introspector.send(:extract_associations, model).first
+
+      expect(association).to include(name: "avatar_attachment")
+      expect(association).not_to have_key(:declared_options)
+    end
   end
   # A display cap must not decide whether a method exists, so the model's own
   # methods travel uncapped beside the capped list every renderer reads.
