@@ -67,6 +67,53 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text).to include("ExampleJob")
     end
 
+    context "with Solid Queue workers declared in config/queue.yml" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      def answer(queue_yml, **args)
+        FileUtils.mkdir_p(File.join(tmpdir, "app/jobs"))
+        FileUtils.mkdir_p(File.join(tmpdir, "config"))
+        File.write(File.join(tmpdir, "app/jobs/cleanup_job.rb"), "class CleanupJob < ApplicationJob\n  queue_as :maintenance\nend\n")
+        File.write(File.join(tmpdir, "app/jobs/mail_job.rb"), "class MailJob < ApplicationJob\n  queue_as :mailers\nend\n")
+        File.write(File.join(tmpdir, "config/queue.yml"), queue_yml)
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
+        described_class.call(**args).content.first[:text]
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      let(:queue_yml) do
+        "default: &default\n  workers:\n    - queues: [ default, mailers ]\n      threads: 3\ntest:\n  <<: *default\ndevelopment:\n  <<: *default\n"
+      end
+
+      it "names the queues the workers poll and the job queues none of them polls" do
+        text = answer(queue_yml)
+
+        expect(text).to include("config/queue.yml workers poll 2 queues: default, mailers. No worker polls maintenance (CleanupJob).")
+      end
+
+      it "says so on the page of a job whose queue no worker polls" do
+        expect(answer(queue_yml, job: "CleanupJob")).to include("**Queue:** `maintenance` (no worker in config/queue.yml polls it)")
+        expect(answer(queue_yml, job: "MailJob")).to include("**Queue:** `mailers`\n")
+      end
+
+      it "leaves the line out when config/queue.yml is not YAML" do
+        text = answer("test:\n  workers: [unclosed\n")
+
+        expect(text).to include("**Queues:**")
+        expect(text).not_to include("config/queue.yml")
+      end
+
+      it "treats a wildcard and a worker without queues as polling everything" do
+        text = answer("test:\n  workers:\n    - threads: 1\n    - queues: \"main*\"\n")
+
+        expect(text).to include("config/queue.yml workers poll 2 queues: *, main*.")
+        expect(text).not_to include("No worker polls")
+      end
+    end
+
     context "with what decides when a job runs and what happens after its last retry" do
       let(:tmpdir) { Dir.mktmpdir }
 

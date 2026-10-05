@@ -452,7 +452,10 @@ answers a worker name as well as a job name. A job's own page shows its
 `queue_with_priority`, `enqueue_after_transaction_commit` and Solid Queue
 `limits_concurrency` (its own or the nearest base's), every `retry_on` option,
 Sidekiq's `sidekiq_retry_in` and `sidekiq_retries_exhausted` blocks, and its
-enqueue, perform and discard callbacks as written.
+enqueue, perform and discard callbacks as written. The listing names the queues
+`config/sidekiq.yml` declares and the queues Solid Queue's workers poll in
+`config/queue.yml` (this environment's section), and names each job queue no
+worker polls; that job's page says so beside its queue.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|

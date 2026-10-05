@@ -43,6 +43,7 @@ module RailsAiContext
           connections: extract_connections,
           recurring_jobs: recurring_jobs,
           sidekiq_config: extract_sidekiq_config,
+          solid_queue_config: extract_solid_queue_config,
           mailer_settings: mailer_settings(booted: true)
         }
       end
@@ -62,6 +63,7 @@ module RailsAiContext
           connections: extract_connections,
           recurring_jobs: recurring_jobs,
           sidekiq_config: extract_sidekiq_config,
+          solid_queue_config: extract_solid_queue_config,
           mailer_settings: mailer_settings
         }
       end
@@ -576,6 +578,24 @@ module RailsAiContext
         config.empty? ? nil : config
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "extract_sidekiq_config")
+      end
+
+      SOLID_QUEUE_FILE = "config/queue.yml"
+
+      # The queues Solid Queue's workers poll, from this environment's section or the
+      # whole file; a worker that names none polls every queue.
+      def extract_solid_queue_config
+        data = RecurringSchedules.yaml(app.root, SOLID_QUEUE_FILE)
+        return nil unless data.is_a?(Hash)
+
+        section = data[RailsAiContext.environment_name].is_a?(Hash) ? data[RailsAiContext.environment_name] : data
+        workers = Array(section["workers"]).select { |worker| worker.is_a?(Hash) }
+        return nil if workers.empty?
+
+        queues = workers.flat_map { |worker| worker.key?("queues") ? Array(worker["queues"]).map { |queue| queue.to_s.strip } : [ "*" ] }
+        { file: SOLID_QUEUE_FILE, queues: queues.uniq }
+      rescue StandardError => e
+        RailsAiContext.debug_fail(e, nil, label: "extract_solid_queue_config")
       end
 
       def sidekiq_yml
