@@ -526,6 +526,25 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(static[:if]).to eq(booted[:if])
     end
 
+    it "names the if around a filter declaration the way the static tier names it" do
+      ctrl = Class.new(ActionController::Base) do
+        before_action :dev_banner if true
+      end
+      ctrl.define_singleton_method(:name) { "StatusesController" }
+      source = <<~RUBY
+        class StatusesController < ActionController::Base
+          before_action :dev_banner if Rails.env.development?
+        end
+      RUBY
+      allow(introspector).to receive(:read_source) { |k| k == ctrl ? source : nil }
+
+      booted = introspector.send(:extract_filters, ctrl, source).find { |f| f[:name] == "dev_banner" }
+      static = introspector.send(:extract_filters_from_source, source).find { |f| f[:name] == "dev_banner" }
+
+      expect(booted[:condition]).to eq("if Rails.env.development?")
+      expect(static[:condition]).to eq(booted[:condition])
+    end
+
     # Rebuilding the list put every name the body declares behind every name
     # it only inherits, so a prepended filter was reported last, and only
     # when the body also carried a skip. The routes hint shows the first
