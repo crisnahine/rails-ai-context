@@ -394,6 +394,56 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
     expect(tables.keys).to include("project_types")
   end
 
+  describe "a revert block" do
+    let(:create_posts) do
+      <<~RUBY
+        class CreatePosts < ActiveRecord::Migration[8.1]
+          def change
+            create_table :posts do |t|
+              t.string :title
+            end
+            add_column :posts, :slug, :string
+            add_index :posts, :slug
+          end
+        end
+      RUBY
+    end
+
+    it "undoes the create_table it wraps" do
+      tables = replay([ create_posts, <<~RUBY ])
+        class DropPostsAgain < ActiveRecord::Migration[8.1]
+          def change
+            revert do
+              create_table :posts do |t|
+                t.string :title
+              end
+            end
+          end
+        end
+      RUBY
+
+      expect(tables.keys).not_to include("posts")
+    end
+
+    it "runs its statements inverted, last first" do
+      tables = replay([ create_posts, <<~RUBY ])
+        class UndoSlug < ActiveRecord::Migration[8.1]
+          def change
+            revert do
+              add_column :posts, :body, :text
+              rename_column :posts, :title, :headline
+              add_index :posts, :slug
+              remove_column :posts, :draft, :boolean
+            end
+          end
+        end
+      RUBY
+
+      expect(tables["posts"][:columns].map { |c| c[:name] }).to eq(%w[id title slug draft])
+      expect(tables["posts"][:indexes]).to be_empty
+    end
+  end
+
   # Canvas has a migration that calls `create_table table_name do |t|`, where
   # the name is a local computed at run time. A table the replay cannot name is
   # a table it cannot report, and keeping it produced a nil key that took the

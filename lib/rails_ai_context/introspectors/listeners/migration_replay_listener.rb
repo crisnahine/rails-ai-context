@@ -3,8 +3,8 @@
 module RailsAiContext
   module Introspectors
     module Listeners
-      # What a replay needs beyond the DSL listeners: down-only ranges (a revert
-      # block is one), a block's `t.` statements, and four top-level statements.
+      # What a replay needs beyond the DSL listeners: down-only and revert ranges,
+      # a block's `t.` statements, and four top-level statements.
       class MigrationReplayListener < BaseListener
         include SchemaDslListener::TableBlock
 
@@ -26,7 +26,7 @@ module RailsAiContext
           note_block(node)
           args = node.arguments&.arguments || []
           if %i[down revert].include?(node.name) && node.block
-            @results << { kind: :down, range: node.location.start_line..node.location.end_line }
+            @results << { kind: node.name, range: node.location.start_line..node.location.end_line }
           elsif TABLE_OPS[node.name] == :remove_reference && block_column?(node.receiver)
             # Table#remove_references drops each name it is given.
             args.reject { |arg| arg.is_a?(Prism::KeywordHashNode) }.each do |arg|

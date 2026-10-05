@@ -6,7 +6,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MigrationReplayListener
   def downs(results) = results.select { |r| r[:kind] == :down }.map { |r| r[:range] }
   def timestamps(results) = results.select { |r| r[:action] == :add_timestamps }.map { |r| r[:location] }
 
-  it "records a down method, a down block and a revert block as down ranges" do
+  it "records a down method and a down block as down ranges, and a revert block as its own" do
     results = parse_and_dispatch(<<~RUBY)
       class Migrate < ActiveRecord::Migration[7.1]
         def up
@@ -28,7 +28,8 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MigrationReplayListener
       end
     RUBY
 
-    expect(downs(results)).to eq([ 6..8, 12..12, 14..16 ])
+    expect(downs(results)).to eq([ 6..8, 12..12 ])
+    expect(results.select { |r| r[:kind] == :revert }.map { |r| r[:range] }).to eq([ 14..16 ])
   end
 
   it "records t.timestamps whether t reads as a local or a bare call" do

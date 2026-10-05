@@ -185,13 +185,14 @@ module RailsAiContext
         })
 
         # A down body undoes the migration, so replaying it beside up cancels it out.
-        skipped = ast_data[:replay].filter_map { |hit| hit[:range] } + helper_ranges
-        statements = ast_data[:replay].reject { |hit| hit[:kind] == :down }
+        skipped = ast_data[:replay].select { |hit| hit[:kind] == :down }.map { |hit| hit[:range] } + helper_ranges
+        reverts = ast_data[:replay].select { |hit| hit[:kind] == :revert }.map { |hit| hit[:range] }
+        statements = ast_data[:replay].reject { |hit| %i[down revert].include?(hit[:kind]) }
         module_entries = Helpers.module_helper_entries(tree, run.root) + Helpers.app_constant_call_markers(tree, run.root)
         collected = (ast_data[:migration] + ast_data[:schema] + statements + module_entries)
           .reject { |r| skipped.any? { |range| range.cover?(r[:location]) } }
-        entries = Helpers.follow_local_methods(tree, collected, run.helpers)
-          .sort_by.with_index { |r, i| [ r[:location], r[:order] || 0, i ] }
+        entries = invert_reverts(Helpers.follow_local_methods(tree, collected, run.helpers)
+          .sort_by.with_index { |r, i| [ r[:location], r[:order] || 0, i ] }, reverts)
 
         inferred = inferred_table_name(content, path)
         inferred_existed = tables.key?(inferred)
@@ -234,6 +235,43 @@ module RailsAiContext
             SchemaConventions.note_unread_call(tables[current_table], entry[:name])
           end
         end
+      end
+
+      INVERSE = { create_table: :drop_table, add_column: :remove_column, add_index: :remove_index,
+                  add_reference: :remove_reference, add_belongs_to: :remove_reference,
+                  add_foreign_key: :remove_foreign_key }.freeze
+
+      # Migration#revert runs its block's statements inverted and last first.
+      def invert_reverts(entries, ranges)
+        outermost = ranges.reject { |range| ranges.any? { |other| other != range && other.cover?(range.first) && other.cover?(range.last) } }
+        outermost.reduce(entries) do |list, range|
+          first = list.index { |e| range.cover?(e[:location]) } or next list
+          last = list.rindex { |e| range.cover?(e[:location]) }
+          groups = list[first..last].slice_before { |e| e.key?(:action) && !e[:block] }
+          list[0...first] + groups.reverse_each.flat_map { |group| inverted(group) } + list[(last + 1)..]
+        end
+      end
+
+      # A statement with its block, inverted; one CommandRecorder cannot invert is not replayed.
+      def inverted(group)
+        head, *body = group
+        return group unless head.key?(:action) && !head[:block]
+
+        inverse = case head[:action]
+        when *INVERSE.keys then head.merge(action: INVERSE[head[:action]])
+        when :drop_table then head.merge(action: :create_table) if body.any?
+        when :remove_column then head.merge(action: :add_column) if head[:column_type]
+        when :rename_column then head.merge(column: head[:new_name], new_name: head[:column])
+        when :rename_table then head.merge(table: head[:new_name], new_name: head[:table])
+        when :add_timestamps then head.merge(action: :remove_columns, columns: %w[created_at updated_at])
+        when :change_column_null then head.merge(null: !head[:null]) unless head[:null].nil?
+        when :change_column_default
+          options = head[:options] || {}
+          head.merge(options: options.merge(from: options[:to], to: options[:from])) if options.key?(:from) && options.key?(:to)
+        end
+        return [ { kind: :not_replayed, location: head[:location] } ] unless inverse
+
+        inverse[:action] == :create_table ? [ inverse, *body ] : [ inverse ]
       end
 
       # Counted after the flow, so a call only down or a rescue reaches is not.
