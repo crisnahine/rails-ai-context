@@ -847,6 +847,42 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
     expect(text).to include("cache_ids")
   end
 
+  # A full listing prints each method's own body: a same-named def elsewhere
+  # in the file (a private instance twin, a delegate) is a different method.
+  it "prints a ClassMethods method's own body under its heading" do
+    File.write(File.join(model_concerns_dir, "xwiki_request.rb"), <<~RUBY)
+      module XwikiRequest
+        extend ActiveSupport::Concern
+
+        delegate :fields, to: :class
+
+        module ClassMethods
+          def fetch_json(json_hash, *keys)
+            keys.inject(json_hash) { |json, key| json.fetch(key) }
+          end
+
+          def fields
+            _fields
+          end
+        end
+
+        private
+
+        def fetch_json(json_hash, key)
+          self.class.fetch_json(json_hash, key)
+        end
+      end
+    RUBY
+    described_class.reset_cache!
+
+    text = described_class.call(name: "XwikiRequest", detail: "full").content.first[:text]
+    class_section = text[/## Class Methods\n(.*)/m, 1]
+
+    expect(class_section).to include("### fetch_json(json_hash, *keys)\n```ruby\n    def fetch_json(json_hash, *keys)")
+    expect(class_section).not_to include("self.class.fetch_json")
+    expect(class_section).to include("### fields\n```ruby\n    def fields\n      _fields")
+  end
+
   # A concern that only adds private helpers read as an empty module.
   context "on a concern whose methods are all private" do
     before do
