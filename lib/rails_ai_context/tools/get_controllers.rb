@@ -288,7 +288,8 @@ module RailsAiContext
                 lines << "- requires: `:#{sp[:requires]}`" if sp[:requires]
                 lines << "- permits: #{sp[:permits].map { |p| "`:#{p}`" }.join(', ')}" if sp[:permits]&.any?
                 sp[:nested]&.each do |key, fields|
-                  lines << "- nested `#{key}:` #{fields.map { |f| "`#{permit_field_text(f, braced: true)}`" }.join(', ')}"
+                  members = fields.is_a?(Hash) ? fields.map { |inner, v| permit_field_text({ inner => v }) } : fields.map { |f| permit_field_text(f, braced: true) }
+                  lines << "- nested `#{key}:` #{members.map { |m| "`#{m}`" }.join(', ')}"
                 end
                 sp[:arrays]&.each { |a| lines << "- array: `#{a}: []`" }
                 sp[:hashes]&.each { |h| lines << "- hash: `#{h}: {}`" }
@@ -359,12 +360,16 @@ module RailsAiContext
         end
       end
 
-      # One field of a permit list as Ruby spells it: `:name`, `key: [...]` or `key: {}`, braced inside a list.
+      # One field of a permit list as Ruby spells it: `:name`, `key: [...]`, `key: {}` or `key: { ... }`, braced inside a list.
       private_class_method def self.permit_field_text(field, braced: false)
         return ":#{field}" unless field.is_a?(Hash)
 
         key, value = field.first
-        text = value.is_a?(Hash) ? "#{key}: {}" : "#{key}: [#{value.map { |f| permit_field_text(f, braced: true) }.join(', ')}]"
+        text = if value.is_a?(Hash)
+          value.empty? ? "#{key}: {}" : "#{key}: { #{value.map { |inner, v| permit_field_text({ inner => v }) }.join(', ')} }"
+        else
+          "#{key}: [#{value.map { |f| permit_field_text(f, braced: true) }.join(', ')}]"
+        end
         braced ? "{ #{text} }" : text
       end
 

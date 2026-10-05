@@ -340,6 +340,25 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
                            nested: { "filters" => [ "module_id", { "module_ids" => [] } ] }, hashes: [ "colors" ])
     end
 
+    # Rails treats only an empty `{}` as any hash; a hash with keys permits those keys only.
+    it "keeps the keys a non-empty hash filter permits" do
+      source = <<~RUBY
+        def s_params
+          params.require(:s).permit(prefs: { theme: [] }, rows: [ { opts: { size: [], extra: {} } } ])
+        end
+        def t_params
+          params.expect(t: [ { prefs: { theme: [] } } ])
+        end
+      RUBY
+
+      permit, expect_call = introspector.send(:extract_strong_params, source)
+
+      expect(permit).to eq(name: "s_params", requires: "s",
+                           nested: { "prefs" => { "theme" => [] },
+                                     "rows" => [ { "opts" => { "size" => [], "extra" => {} } } ] })
+      expect(expect_call).to eq(name: "t_params", requires: "t", nested: { "prefs" => { "theme" => [] } })
+    end
+
     it "returns name only when method has no permit call" do
       source = <<~RUBY
         def post_params

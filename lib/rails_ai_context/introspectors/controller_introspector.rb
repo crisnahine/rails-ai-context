@@ -586,11 +586,9 @@ module RailsAiContext
               next unless assoc.is_a?(Prism::AssocNode)
               key = extract_ast_value(assoc.key).to_s
               val = assoc.value
-              if val.is_a?(Prism::ArrayNode)
-                fields = permit_fields(val)
-                fields.any? ? nested[key] = fields : arrays << key
-              elsif val.is_a?(Prism::HashNode)
-                hashes << key
+              if val.is_a?(Prism::ArrayNode) || val.is_a?(Prism::HashNode)
+                fields = permit_value(val)
+                fields.any? ? nested[key] = fields : (val.is_a?(Prism::HashNode) ? hashes : arrays) << key
               else
                 permits << key
               end
@@ -661,7 +659,8 @@ module RailsAiContext
               elsif inner.value.is_a?(Prism::ArrayNode)
                 nested[inner_key] = permit_fields(inner.value)
               elsif inner.value.is_a?(Prism::HashNode)
-                hashes << inner_key
+                fields = permit_value(inner.value)
+                fields.any? ? nested[inner_key] = fields : hashes << inner_key
               else
                 permits << inner_key
               end
@@ -671,7 +670,8 @@ module RailsAiContext
       end
 
       # What a nested list permits: a scalar by name, `{ key => fields }` for an
-      # array (empty for scalars), `{ key => {} }` for any hash.
+      # array (empty for scalars), `{ key => {} }` for any hash, and
+      # `{ key => { inner => fields } }` for a hash that names its keys.
       def permit_fields(array_node)
         array_node.elements.flat_map do |el|
           case el
@@ -680,13 +680,22 @@ module RailsAiContext
           when Prism::KeywordHashNode, Prism::HashNode
             el.elements.grep(Prism::AssocNode).map do |assoc|
               key = extract_ast_value(assoc.key).to_s
-              case assoc.value
-              when Prism::ArrayNode then { key => permit_fields(assoc.value) }
-              when Prism::HashNode then { key => {} }
-              else key
-              end
+              value = permit_value(assoc.value)
+              value.nil? ? key : { key => value }
             end
           else []
+          end
+        end
+      end
+
+      # Rails reads only an empty `{}` as any hash; a hash with keys permits those keys alone.
+      def permit_value(node)
+        case node
+        when Prism::ArrayNode then permit_fields(node)
+        when Prism::HashNode
+          node.elements.grep(Prism::AssocNode).each_with_object({}) do |assoc, members|
+            value = permit_value(assoc.value)
+            members[extract_ast_value(assoc.key).to_s] = value unless value.nil?
           end
         end
       end
