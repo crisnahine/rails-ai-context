@@ -255,15 +255,24 @@ module RailsAiContext
       # under the names Rails gives them. A view replaces a table of its name: mysqldump
       # writes a placeholder table before the view it stands in for.
       def add_relations(tables, views: {}, virtual_tables: {}, not_dumped: {})
-        views.each { |name, view| tables[name] = view_entry(view[:sql], materialized: view[:materialized]) }
+        views.each { |name, view| tables[name] = view_entry(view[:sql], materialized: view[:materialized], indexes: view[:indexes]) }
         virtual_tables.each { |name, table| tables[name] = virtual_table_entry(table[:module], table[:arguments]) }
         not_dumped.each { |name, reason| tables[name] ||= { columns: [], indexes: [], foreign_keys: [], not_dumped: reason } }
         tables
       end
 
+      def view?(table)
+        table.is_a?(Hash) && %w[view materialized_view].include?(table[:kind])
+      end
+
+      # Views sit beside the tables in one Hash, and a table count leaves them out.
+      def table_count(tables)
+        tables.count { |_, table| !view?(table) }
+      end
+
       # A dump holds a view's SQL, not its columns; only a connection lists those.
-      def view_entry(sql, materialized:, columns: [])
-        { kind: materialized ? "materialized_view" : "view", columns: columns, indexes: [], foreign_keys: [], sql: sql }.compact
+      def view_entry(sql, materialized:, columns: [], indexes: [])
+        { kind: materialized ? "materialized_view" : "view", columns: columns, indexes: Array(indexes), foreign_keys: [], sql: sql }.compact
       end
 
       # A virtual table's columns are its module arguments that set no option (fts5's tokenize=...).

@@ -23,7 +23,7 @@ module RailsAiContext
         attach_secondary_databases({
           adapter: adapter_name,
           tables: tables,
-          total_tables: tables.size,
+          total_tables: SchemaConventions.table_count(tables),
           schema_version: current_schema_version,
           # The version stamp is read off db/schema.rb and the tables off the
           # connection, so the two can be one migration apart. The tables the
@@ -107,8 +107,10 @@ module RailsAiContext
       def add_live_relations(tables)
         materialized, extension_owned = pg_view_names
         (connection.views - tables.keys - extension_owned).each do |view|
+          # Only a materialized view holds rows, so only it can carry an index.
+          indexes = materialized.include?(view) ? extract_indexes(view) : []
           tables[view] = SchemaConventions.view_entry(schema_reader.views.dig(view, :sql), materialized: materialized.include?(view),
-                                                      columns: extract_columns(view))
+                                                      columns: extract_columns(view), indexes: indexes)
         end
         return tables unless connection.respond_to?(:virtual_tables)
 
@@ -467,7 +469,7 @@ module RailsAiContext
 
           tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
           dumps[name] = {
-            adapter: "static_parse", tables: tables, total_tables: tables.size,
+            adapter: "static_parse", tables: tables, total_tables: SchemaConventions.table_count(tables),
             note: "Reconstructed from the migrations in #{dirs.map { |dir| relative_dump_path(dir) }.join(', ')} (#{connection_state}, no #{name}_schema.rb)"
           }
         end
@@ -560,14 +562,15 @@ module RailsAiContext
           table = tables[constraint[:table]] or next
           (table[:check_constraints] ||= []) << constraint.slice(:name, :expression)
         end
-        SchemaConventions.add_relations(tables, views: schema.views, virtual_tables: schema.virtual_tables, not_dumped: schema.not_dumped)
+        views = schema.views.transform_values { |view| view.merge(indexes: Array(view[:indexes]).filter_map { |i| static_index(i) }) }
+        SchemaConventions.add_relations(tables, views: views, virtual_tables: schema.virtual_tables, not_dumped: schema.not_dumped)
 
         version = schema_version_for(path)
 
         result = {
           adapter: "static_parse",
           tables: tables,
-          total_tables: tables.size,
+          total_tables: SchemaConventions.table_count(tables),
           schema_version: version,
           check_constraints: SchemaConventions.check_constraints_of(tables),
           enum_types: schema.enums,
@@ -602,7 +605,7 @@ module RailsAiContext
           adapter: "static_parse",
           dialect: dialect.to_s,
           tables: tables,
-          total_tables: tables.size,
+          total_tables: SchemaConventions.table_count(tables),
           check_constraints: SchemaConventions.check_constraints_of(tables),
           enum_types: parsed[:enums],
           generated_columns: SchemaConventions.generated_columns_of(tables),
@@ -648,7 +651,7 @@ module RailsAiContext
         {
           adapter: "static_parse",
           tables: tables,
-          total_tables: tables.size,
+          total_tables: SchemaConventions.table_count(tables),
           note: replay_note(tables, replayed.counts)
         }
       end

@@ -1092,6 +1092,36 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     end
   end
 
+  describe "a schema with views" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "postgresql", total_tables: 1, tables: {
+          "users" => tables["users"], "instances" => { kind: "materialized_view", columns: [], indexes: [], foreign_keys: [], sql: "SELECT 1" }
+        } },
+        models: {}
+      })
+    end
+
+    it "counts the views apart from the tables in every header" do
+      expect(described_class.call(detail: "summary").content.first[:text]).to include("# Schema Summary (1 table and 1 view)")
+      expect(described_class.call(detail: "standard").content.first[:text]).to include("# Schema (1 table and 1 view, showing 2)")
+      expect(described_class.call(detail: "full").content.first[:text]).to include("# Schema Full Detail (2 of 1 table and 1 view)")
+    end
+
+    it "lists the indexes on a view whose columns the dump does not hold" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "static_parse", total_tables: 0, tables: {
+          "instances" => { kind: "materialized_view", columns: [], foreign_keys: [], sql: "SELECT 1",
+                           indexes: [ { name: "index_instances_on_domain", columns: [ "domain" ], unique: true } ] }
+        } },
+        models: {}
+      })
+
+      text = described_class.call(table: "instances").content.first[:text]
+      expect(text).to include("### Indexes\n- `index_instances_on_domain` on (domain) (unique)\n\n### Definition")
+    end
+  end
+
   # Every read of the shared cache is a deep copy of the whole payload, so a
   # listing that reads it once per table pays for the app several times over.
   describe "shared context reads in the table listing" do

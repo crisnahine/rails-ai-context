@@ -1626,6 +1626,45 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       expect(tables["user_stats"]).to include(kind: "materialized_view", sql: "SELECT count(*) AS total FROM users;")
     end
 
+    def view_with_index_dumps
+      rb = static_of("schema.rb", <<~RUBY)
+        ActiveRecord::Schema[8.1].define(version: 2026_01_01_000002) do
+          create_table "users", force: :cascade do |t|
+            t.string "email", null: false
+          end
+
+          create_view "user_stats", materialized: true, sql_definition: <<-SQL
+              SELECT email, count(*) AS total FROM users GROUP BY email;
+          SQL
+          add_index "user_stats", ["email"], name: "index_user_stats_on_email", unique: true
+        end
+      RUBY
+      sql = static_of("structure.sql", <<~SQL)
+        CREATE TABLE public.users (
+            id bigint NOT NULL,
+            email character varying
+        );
+        CREATE MATERIALIZED VIEW public.user_stats AS
+         SELECT email, count(*) AS total
+           FROM public.users
+          GROUP BY email
+          WITH NO DATA;
+        CREATE UNIQUE INDEX index_user_stats_on_email ON public.user_stats USING btree (email);
+      SQL
+
+      [ rb, sql ]
+    end
+
+    it "counts a view apart from the tables" do
+      expect(view_with_index_dumps.map { |result| result[:total_tables] }).to eq([ 1, 1 ])
+    end
+
+    it "keeps the indexes declared on a materialized view" do
+      view_with_index_dumps.each do |result|
+        expect(result[:tables]["user_stats"][:indexes]).to eq([ { name: "index_user_stats_on_email", columns: [ "email" ], unique: true } ])
+      end
+    end
+
     it "lists a SQLite virtual table from schema.rb with its columns" do
       tables = static_of("schema.rb", <<~RUBY)[:tables]
         ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
@@ -1707,13 +1746,24 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
     end
 
     it "tells PostgreSQL's materialized views apart and leaves out an extension's views" do
-      connection = double("pg", views: %w[user_stats geometry_columns], columns: [], native_database_types: {})
+      connection = double("pg", views: %w[user_stats geometry_columns], columns: [], indexes: [], native_database_types: {})
       allow(connection).to receive(:select_rows).and_return([ [ "user_stats", "m", false ], [ "geometry_columns", "v", true ] ])
       allow(introspector).to receive_messages(connection: connection, adapter_name: "PostgreSQL")
 
       tables = introspector.send(:add_live_relations, {})
       expect(tables.keys).to eq(%w[user_stats])
       expect(tables["user_stats"]).to include(kind: "materialized_view")
+    end
+
+    it "reads the indexes on a booted materialized view" do
+      index = ActiveRecord::ConnectionAdapters::IndexDefinition.new("user_stats", "index_user_stats_on_email", true, [ "email" ])
+      connection = double("pg", views: %w[user_stats], columns: [], native_database_types: {})
+      allow(connection).to receive(:select_rows).and_return([ [ "user_stats", "m", false ] ])
+      allow(connection).to receive(:indexes).with("user_stats").and_return([ index ])
+      allow(introspector).to receive_messages(connection: connection, adapter_name: "PostgreSQL")
+
+      expect(introspector.send(:add_live_relations, {})["user_stats"][:indexes])
+        .to eq([ { name: "index_user_stats_on_email", columns: [ "email" ], unique: true } ])
     end
 
     it "lists a booted view with the connection's columns and the dump's SQL" do
