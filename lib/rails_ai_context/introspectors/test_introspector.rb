@@ -11,6 +11,11 @@ module RailsAiContext
       static_tier :files_only
 
       TEST_FILE_GLOB = "*_{spec,test}.rb"
+
+      # An engine's test/dummy is tested by the engine's suite.
+      def root
+        @root ||= PathResolver.test_root(app.root)
+      end
       RAILS_CI = "config/ci.rb"
 
       def call

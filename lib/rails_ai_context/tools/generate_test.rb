@@ -121,7 +121,7 @@ module RailsAiContext
         # the subject's existing test, so the answer can point there instead of a new file.
         def test_path(base, kind, stem, fallback_dir, fallback_suffix)
           framework = RailsAiContext::TestFramework
-          root = rails_app.root.to_s
+          root = RailsAiContext::PathResolver.test_root(rails_app.root.to_s)
           dir, suffix = framework.layout(root, base, kind, framework.subject_stems(cached_context, kind))
           dir ||= fallback_dir
           suffix ||= fallback_suffix

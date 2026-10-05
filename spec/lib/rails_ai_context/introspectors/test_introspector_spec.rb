@@ -6,6 +6,23 @@ require "tmpdir"
 RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
   let(:introspector) { described_class.new(Rails.application) }
 
+  describe "an engine's test/dummy" do
+    it "reads the engine's suite" do
+      Dir.mktmpdir do |engine|
+        dummy = File.join(engine, "test", "dummy")
+        FileUtils.mkdir_p([ File.join(engine, "test", "fixtures", "shop"), File.join(engine, "test", "models"), dummy ])
+        File.write(File.join(engine, "test", "fixtures", "shop", "widgets.yml"), "one:\n  name: x\n")
+        File.write(File.join(engine, "test", "models", "widget_test.rb"), "")
+        allow(RailsAiContext::PathResolver).to receive(:enclosing_engine_roots).and_return([ engine ])
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dummy)).call
+
+        expect(result[:fixtures]).to include(location: "test/fixtures")
+        expect(result[:test_files]).to include("models")
+      end
+    end
+  end
+
   describe "#call" do
     subject(:result) { introspector.call }
 

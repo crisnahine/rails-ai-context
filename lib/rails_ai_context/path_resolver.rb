@@ -263,6 +263,22 @@ module RailsAiContext
       end
     end
 
+    # The root whose suite tests the app: an engine's test/dummy keeps none of its own.
+    def test_root(root)
+      root = root.to_s
+      return root if %w[test spec].any? { |dir| Dir.exist?(File.join(root, dir)) }
+
+      enclosing_engine_roots(root).first || root
+    end
+
+    # Inside the app root, or inside the engine its test/dummy runs in.
+    def project_file?(path, root)
+      real = File.realpath(path)
+      [ root.to_s, *enclosing_engine_roots(root) ].any? { |dir| SafePath.contained?(real, root_key(dir)) }
+    rescue SystemCallError
+      false
+    end
+
     def root_key(root)
       File.realpath(root)
     rescue SystemCallError

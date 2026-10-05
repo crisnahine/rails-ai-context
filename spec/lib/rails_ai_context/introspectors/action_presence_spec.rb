@@ -31,6 +31,23 @@ RSpec.describe RailsAiContext::Introspectors::ActionPresence do
     end
   end
 
+  it "reads a controller of the engine an app's test/dummy runs inside, and finds its templates" do
+    Dir.mktmpdir do |engine|
+      dummy = File.join(engine, "test", "dummy")
+      FileUtils.mkdir_p([ File.join(engine, "app/controllers/shop"), File.join(engine, "app/views/shop/widgets"), dummy ])
+      File.write(File.join(engine, "app/controllers/shop/widgets_controller.rb"), "class Shop::WidgetsController < ActionController::Base\n  def index; end\nend\n")
+      File.write(File.join(engine, "app/views/shop/widgets/show.html.erb"), "")
+      allow(RailsAiContext::PathResolver).to receive(:enclosing_engine_roots).and_return([ engine ])
+      controllers = { "Shop::WidgetsController" => { file: "../../app/controllers/shop/widgets_controller.rb" } }
+
+      lookup = described_class.lookup(dummy, controllers)
+      chain = described_class.read(dummy, "Shop::WidgetsController", lookup.call("Shop::WidgetsController"), prefix: "shop/widgets", lookup: lookup)
+
+      expect(chain.defines?("index")).to be true
+      expect(described_class.template?(dummy, chain, "show")).to be true
+    end
+  end
+
   it "follows a compact controller's bare superclass to the top-level class" do
     Dir.mktmpdir do |root|
       {

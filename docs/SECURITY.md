@@ -188,6 +188,14 @@ trust as the app's own `Gemfile.lock`, only when their directory is inside the a
 git repository, never above its root and never outside a repository. Nothing else in
 that directory is read, and a file there that links out of it is refused.
 
+### The engine an app's test/dummy runs in
+
+Booted from an engine's `test/dummy`, the engine whose root holds the app root (a loaded
+`Rails::Engine`, never this gem) is the project's own source: its `app/` code, its
+`app/views` layouts and templates, and, when the dummy keeps no `test/` or `spec/` of its
+own, its test suite are read. Paths into it are printed relative to the app root
+(`../../app/models/...`), and symlink containment applies relative to the engine root.
+
 ### How a refusal is reported
 
 A path refused on policy - outside the app, a traversal, a sensitive file - comes back as an
