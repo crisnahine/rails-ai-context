@@ -275,14 +275,14 @@ module RailsAiContext
       # reader the chain walk uses, so this line and `rails_get_controllers`
       # cannot disagree about one file. "Global" is the claim the generated
       # files make, so a `skip_before_action` and a filter carrying
-      # only:/except:/if:/unless: are both out.
+      # only:/except:/if:/unless: or an if around it are both out.
       def detect_before_actions(root = project_root)
         source = ActionFilters.base_controller_source("ApplicationController", root)
         return [] unless source
 
         Introspectors::ControllerFilters.with_concerns(source, root: root.to_s, within: "ApplicationController").first
           .select { |filter| filter[:kind] == "before" && !filter[:skipped] }
-          .reject { |filter| filter[:only] || filter[:except] || filter[:if] || filter[:unless] }
+          .reject { |filter| filter[:only] || filter[:except] || filter[:if] || filter[:unless] || filter[:condition] }
           .map { |filter| filter[:name] }
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "Before actions scan")
