@@ -242,8 +242,29 @@ module RailsAiContext
       # A parameter the body assigns or changes in place, in a block too, no
       # longer holds the call's argument wherever it is read, so it is bound to nothing.
       def unwritten(bindings, body)
-        changed(body).each { |name| bindings[name] = unknown if bindings.key?(name) }
+        changed(body, deleted_keys(bindings, body)).each { |name| bindings[name] = unknown if bindings.key?(name) }
         bindings
+      end
+
+      # The leading `options.delete(:key)` statements on a hash parameter the call passed as a literal:
+      # the parameter holds the rest from there on. Returns the statements taken.
+      def deleted_keys(bindings, body)
+        return [] unless body.is_a?(Prism::StatementsNode)
+
+        body.body.take_while do |node|
+          call = node.is_a?(Prism::LocalVariableWriteNode) ? node.value : node
+          next false unless call.is_a?(Prism::CallNode) && call.name == :delete && call.block.nil?
+
+          receiver = call.receiver
+          key = Array(call.arguments&.arguments)
+          binding = receiver.is_a?(Prism::LocalVariableReadNode) && receiver.depth.zero? && bindings[receiver.name]
+          next false unless binding&.value_sources && key.one? && key.first.is_a?(Prism::SymbolNode)
+          next false if node.is_a?(Prism::LocalVariableWriteNode) && node.name == receiver.name
+
+          key = key.first.unescaped.to_sym
+          value = binding.value.is_a?(Hash) ? binding.value.except(key) : binding.value
+          bindings[receiver.name] = hash_binding(value, binding.value_sources.except(key))
+        end
       end
 
       # `local[key] ||= v`, `&&=` and `+=` change the local in place too.

@@ -413,6 +413,21 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
       expect(filters(method_source, "has_orders %w[new old], only: :show")).to eq([ [ :before_action, { only: :show } ] ])
       expect(filters(method_source, "has_orders %w[new old]")).to eq([ [ :before_action, {} ] ])
     end
+
+    # Canvas's batch_jobs_in_actions takes its own key off the options before passing the rest on.
+    it "reads a hash parameter after the leading statements delete a key from it" do
+      method_source = <<~RUBY
+        def batch_jobs_in_actions(opts = {})
+          batch_opts = opts.delete(:batch)
+          around_action(opts) do |_controller, action|
+            action.call
+          end
+        end
+      RUBY
+
+      expect(filters(method_source, "batch_jobs_in_actions only: :create, batch: { priority: 1 }"))
+        .to eq([ [ :around_action, { only: :create } ] ])
+    end
   end
 
   describe "a hash parameter the body changes in place" do
