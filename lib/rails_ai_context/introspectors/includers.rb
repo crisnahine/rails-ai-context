@@ -21,6 +21,12 @@ module RailsAiContext
 
         segments = names.map { |name| name.split("::").last }.uniq
         found = Hash.new { |hash, key| hash[key] = [] }
+        # One run, so the directories every resolution walks are listed once for the whole scan.
+        RunCache.around { collect(root, sources, segments, known, macros, found) }
+        found.transform_values(&:uniq)
+      end
+
+      def collect(root, sources, segments, known, macros, found)
         sources.each do |_path, source|
           next unless source && segments.any? { |segment| source.include?(segment) }
 
@@ -35,7 +41,6 @@ module RailsAiContext
             found[name] << includer if name
           end
         end
-        found.transform_values(&:uniq)
       end
 
       # The name asked about the written one means, or nil when the nearest
