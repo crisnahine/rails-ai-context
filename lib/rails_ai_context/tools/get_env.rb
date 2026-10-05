@@ -455,6 +455,7 @@ module RailsAiContext
         "Net::HTTP" => /Net::HTTP\.\w+#{HTTP_URL_ARG.source}/,
         "HTTParty" => /HTTParty\.\w+#{HTTP_URL_ARG.source}/
       }.freeze
+      HTTP_CLIENT_NAME = Regexp.union(HTTP_CLIENT_CALLS.keys)
 
       private_class_method def self.detect_http_clients(root)
         services = []
@@ -466,7 +467,7 @@ module RailsAiContext
 
           safe_glob(scan_dir, "**/*.rb", real_root).each do |file|
             source = safe_read(file)
-            next unless source
+            next unless source&.match?(HTTP_CLIENT_NAME)
 
             relative = file.sub("#{real_root}/", "")
             HTTP_CLIENT_CALLS.each do |detection, pattern|
