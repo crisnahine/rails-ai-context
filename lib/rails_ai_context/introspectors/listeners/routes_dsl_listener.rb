@@ -51,6 +51,8 @@ module RailsAiContext
           when :resource then handle_resources(node, singular: true)
           when :member then enter_member_collection(node, :member)
           when :collection then enter_member_collection(node, :collection)
+          when :new then enter_member_collection(node, :new)
+          when :shallow then push_frame(node, shallow: true) if node.block
           when :concern then define_concern(node)
           when :concerns then apply_concerns(node)
           when :with_options then enter_with_options(node)
@@ -230,10 +232,14 @@ module RailsAiContext
           return unless node.block
 
           opts = route_options(node)
+          path = (opts[:path] || name).to_s
+          as = (opts[:as] || name).to_s
           push_frame(node,
-                     prefix: join_path(current_prefix, (opts[:path] || name).to_s),
+                     prefix: join_path(current_prefix, path),
                      mod: (opts[:module] || name).to_s,
-                     name_prefix: (opts[:as] || name).to_s)
+                     name_prefix: as,
+                     shallow_path: join_path(current_shallow_path, (literal_option(opts[:shallow_path]) || path).to_s),
+                     shallow_prefix: join_names(current_shallow_prefix, (literal_option(opts[:shallow_prefix]) || as).to_s))
         end
 
         def enter_scope(node)
@@ -242,12 +248,18 @@ module RailsAiContext
           opts = route_options(node)
           first = literal_first_arg(node)
           path = (first || opts[:path])&.to_s
-          push_frame(node,
-                     prefix: path ? join_path(current_prefix, path) : current_prefix,
-                     mod: opts[:module]&.to_s,
-                     name_prefix: opts[:as]&.to_s,
-                     controller: opts[:controller]&.to_s,
-                     via: opts[:via])
+          shallow_path = (literal_option(opts[:shallow_path]) || path)&.to_s
+          shallow_prefix = (literal_option(opts[:shallow_prefix]) || literal_option(opts[:as]))&.to_s
+          frame = { prefix: path ? join_path(current_prefix, path) : current_prefix,
+                    mod: opts[:module]&.to_s,
+                    name_prefix: opts[:as]&.to_s,
+                    controller: opts[:controller]&.to_s,
+                    via: opts[:via],
+                    path_names: path_names_option(opts) }
+          frame[:shallow_path] = join_path(current_shallow_path, shallow_path) if shallow_path
+          frame[:shallow_prefix] = join_names(current_shallow_prefix, shallow_prefix) if shallow_prefix
+          frame[:shallow] = opts[:shallow] == true if opts.key?(:shallow)
+          push_frame(node, **frame)
         end
 
         def handle_resources(node, singular:)
@@ -256,7 +268,7 @@ module RailsAiContext
           return emit_dynamic(node) if current_route_set
 
           names = extract_symbol_args(node)
-          if names.empty?
+          if names.empty? || opaque_options?(node)
             emit_dynamic(node)
             # Same reasoning as the namespace case: a block we can't attach
             # resource info to still opens a nested scope, so its children
@@ -289,47 +301,131 @@ module RailsAiContext
 
         # Routes nested under this resource inherit its singular route key as a
         # name prefix (resources :posts { resources :comments } -> the comments
-        # index route is named "post_comments", not "comments").
+        # index route is named "post_comments", not "comments"). A shallow
+        # resource nests its children under the shallow path and prefix alone.
         def push_resource_frame(node, name, opts, singular:)
-          base = join_path(current_prefix, (opts[:path] || name).to_s)
-          key = singular_route_key(name, opts, singular: singular)
-          param = resource_param(opts)
-          push_frame(node,
-                     prefix: singular ? base : "#{base}/:#{key}_#{param}",
-                     mod: opts[:module]&.to_s,
-                     name_prefix: key,
-                     resource: {
-                       name: name,
-                       singular: singular,
-                       controller: resource_controller(name, opts, singular: singular),
-                       base: base,
-                       member_path: member_path(base, singular, param),
-                       singular_route_name: route_name_for(key),
-                       plural_route_name: route_name_for(collection_route_key(name, opts, singular: singular))
-                     })
+          layout = resource_layout(name, opts, singular: singular)
+          frame = {
+            prefix: layout[:nested_prefix],
+            mod: opts[:module]&.to_s,
+            name_prefix: layout[:shallow] ? join_names(current_shallow_prefix, layout[:key]) : layout[:key],
+            name_root: layout[:shallow],
+            path_names: path_names_option(opts),
+            resource: {
+              name: name,
+              singular: singular,
+              controller: resource_controller(name, opts, singular: singular),
+              base: layout[:base],
+              member_path: layout[:member_path],
+              new_path: layout[:new_path],
+              singular_route_name: layout[:member_name],
+              new_route_name: layout[:singular_name],
+              plural_route_name: layout[:plural_name]
+            }
+          }
+          frame[:shallow] = opts[:shallow] == true if opts.key?(:shallow)
+          push_frame(node, **frame)
         end
 
         def emit_resource_routes(node, name, opts, singular:)
-          base = join_path(current_prefix, (opts[:path] || name).to_s)
+          layout = resource_layout(name, opts, singular: singular)
+          base = layout[:base]
+          member = layout[:member_path]
+          member_name = layout[:member_name]
           controller = resource_controller(name, opts, singular: singular)
           actions = requested_actions(singular ? SINGULAR_ACTIONS : PLURAL_ACTIONS, opts)
-          param = resource_param(opts)
-          plural_name = route_name_for(collection_route_key(name, opts, singular: singular))
-          singular_name = route_name_for(singular_route_key(name, opts, singular: singular))
 
           actions.each do |action|
             case action
-            when :index   then emit(node, "GET", base, controller, "index", plural_name)
-            when :create  then emit(node, "POST", base, controller, "create", singular ? singular_name : plural_name)
-            when :new     then emit(node, "GET", "#{base}/new", controller, "new", "new_#{singular_name}")
-            when :edit    then emit(node, "GET", edit_path(base, singular, param), controller, "edit", "edit_#{singular_name}")
-            when :show    then emit(node, "GET", member_path(base, singular, param), controller, "show", singular_name)
+            when :index   then emit(node, "GET", base, controller, "index", layout[:plural_name])
+            when :create  then emit(node, "POST", base, controller, "create", singular ? layout[:singular_name] : layout[:plural_name])
+            when :new     then emit(node, "GET", layout[:new_path], controller, "new", "new_#{layout[:singular_name]}")
+            when :edit    then emit(node, "GET", layout[:edit_path], controller, "edit", "edit_#{member_name}")
+            when :show    then emit(node, "GET", member, controller, "show", member_name)
             when :update
-              emit(node, "PATCH", member_path(base, singular, param), controller, "update", singular_name)
-              emit(node, "PUT", member_path(base, singular, param), controller, "update", singular_name)
-            when :destroy then emit(node, "DELETE", member_path(base, singular, param), controller, "destroy", singular_name)
+              emit(node, "PATCH", member, controller, "update", member_name)
+              emit(node, "PUT", member, controller, "update", member_name)
+            when :destroy then emit(node, "DELETE", member, controller, "destroy", member_name)
             end
           end
+        end
+
+        # Rails draws a shallow resource's member routes in the shallow scope: the
+        # namespace and scope paths and names around it, none of its parents'.
+        # A singleton resource is never shallow. `new` and `edit` come from path_names.
+        def resource_layout(name, opts, singular:)
+          path = (opts[:path] || name).to_s
+          base = join_path(current_prefix, path)
+          key = singular_route_key(name, opts, singular: singular)
+          param = resource_param(opts)
+          path_names = current_path_names.merge(path_names_option(opts))
+          shallow = !singular && (opts.key?(:shallow) ? opts[:shallow] == true : current_shallow)
+          shallow_base = join_path(current_shallow_path, path)
+          member = singular ? base : "#{shallow ? shallow_base : base}/:#{param}"
+          {
+            base: base,
+            key: key,
+            shallow: shallow,
+            member_path: member,
+            edit_path: join_path(member, (path_names[:edit] || "edit").to_s),
+            new_path: join_path(base, (path_names[:new] || "new").to_s),
+            nested_prefix: singular ? base : "#{shallow ? shallow_base : base}/:#{key}_#{param}",
+            singular_name: route_name_for(key),
+            member_name: shallow ? join_names(current_shallow_prefix, key) : route_name_for(key),
+            plural_name: route_name_for(collection_route_key(name, opts, singular: singular))
+          }
+        end
+
+        def current_shallow
+          @stack.reverse.find { |f| f.key?(:shallow) }&.dig(:shallow) == true
+        end
+
+        def current_shallow_path
+          @stack.reverse.find { |f| f[:shallow_path] }&.dig(:shallow_path) || "/"
+        end
+
+        def current_shallow_prefix
+          @stack.reverse.find { |f| f[:shallow_prefix] }&.dig(:shallow_prefix)
+        end
+
+        def current_path_names
+          @stack.filter_map { |f| f[:path_names] }.reduce({}, :merge)
+        end
+
+        def path_names_option(opts)
+          names = opts[:path_names]
+          names.is_a?(Hash) ? names.transform_keys(&:to_sym) : {}
+        end
+
+        # A value the source spells out; an expression reads as INFERRED and adds nothing.
+        def literal_option(value)
+          value if (value.is_a?(String) || value.is_a?(Symbol)) && value != RailsAiContext::Confidence::INFERRED
+        end
+
+        def join_names(*parts)
+          joined = parts.compact.map(&:to_s).reject(&:empty?).join("_")
+          joined unless joined.empty?
+        end
+
+        # Options Rails reads that the source does not spell out: a positional
+        # variable (`resources :x, opts`), a `**splat`, or an only:/except: list
+        # held in a constant or a call.
+        def opaque_options?(node)
+          (node.arguments&.arguments || []).any? do |arg|
+            case arg
+            when Prism::SymbolNode, Prism::StringNode then false
+            when Prism::KeywordHashNode, Prism::HashNode
+              arg.elements.any? { |assoc| !assoc.is_a?(Prism::AssocNode) || opaque_action_list?(assoc) }
+            else true
+            end
+          end
+        end
+
+        def opaque_action_list?(assoc)
+          return false unless %i[only except].include?(extract_key(assoc.key))
+
+          values = assoc.value.is_a?(Prism::ArrayNode) ? assoc.value.elements : [ assoc.value ]
+          !values.all? { |v| v.is_a?(Prism::SymbolNode) || v.is_a?(Prism::StringNode) }
         end
 
         # `as:` renames the route helpers and the nested param, and leaves the
@@ -360,27 +456,30 @@ module RailsAiContext
           (opts[:param] || "id").to_s
         end
 
-        def member_path(base, singular, param)
-          singular ? base : "#{base}/:#{param}"
-        end
-
-        def edit_path(base, singular, param)
-          singular ? "#{base}/edit" : "#{base}/:#{param}/edit"
-        end
-
         def emit_verb_route(node)
           return if suppressed?
 
           opts = route_options(node)
           via = opts.key?(:via) ? opts[:via] : @stack.reverse.find { |f| f[:via] }&.dig(:via)
           verb = node.name == :match ? match_verb(via) : node.name.to_s.upcase
-          return emit_dynamic(node) unless verb
+          return emit_dynamic(node) if verb.nil? || opaque_options?(node)
 
-          segment = literal_first_arg(node)&.to_s
           rocket_key = opts.keys.find { |k| k.is_a?(String) }
-          segment ||= rocket_key
-          return emit_dynamic(node) unless segment
+          paths = literal_paths(node)
+          paths = [ [ rocket_key, false ] ] if paths.empty? && rocket_key
+          return emit_dynamic(node) if paths.empty?
 
+          paths.each { |segment, action| emit_verb_path(node, verb, segment, action, opts, rocket_key) }
+        end
+
+        # Rails 7.x and 8.0 draw every path of `get "/a", "/b"`, strings before symbols.
+        # @return [Array<[String, Boolean]>] each path, and whether it names an action
+        def literal_paths(node)
+          args = (node.arguments&.arguments || []).select { |a| a.is_a?(Prism::StringNode) || a.is_a?(Prism::SymbolNode) }
+          args.sort_by { |a| a.is_a?(Prism::StringNode) ? 0 : 1 }.map { |a| [ a.unescaped, a.is_a?(Prism::SymbolNode) ] }
+        end
+
+        def emit_verb_path(node, verb, segment, action_given, opts, rocket_key)
           target_given = opts.key?(:to) || !rocket_key.nil?
           target = opts[:to] || (rocket_key && opts[rocket_key])
           return emit_dynamic(node) if target_given && unreadable_target?(target)
@@ -396,7 +495,9 @@ module RailsAiContext
           return emit_dynamic(node) unless controller && action
 
           name = route_set ? as && verb_route_name(as, segment, opts[:on]) : verb_route_name(opts[:as], segment, opts[:on])
-          emit(node, verb, verb_route_path(segment, opts[:on]), controller, action, name)
+          # Rails maps an action given as a symbol through path_names; a string is the path.
+          path = action_given ? (current_path_names[segment.to_sym] || segment).to_s : segment
+          emit(node, verb, verb_route_path(path, opts[:on]), controller, action, name)
         end
 
         # Rails draws one route answering every verb in `via:` ("GET|POST"), and
@@ -418,7 +519,7 @@ module RailsAiContext
           resource = current_resource
           return unless resource
 
-          prefix = kind == :member ? resource[:member_path] : resource[:base]
+          prefix = { member: resource[:member_path], new: resource[:new_path] }.fetch(kind, resource[:base])
           push_frame(node, prefix: prefix, kind: kind)
         end
 
@@ -434,7 +535,7 @@ module RailsAiContext
         def verb_route_path(segment, on_option)
           resource = current_resource
           if on_option && resource
-            base = on_option.to_sym == :member ? resource[:member_path] : resource[:base]
+            base = { member: resource[:member_path], new: resource[:new_path] }.fetch(on_option.to_sym, resource[:base])
             return join_path(base, segment)
           end
 
@@ -587,7 +688,11 @@ module RailsAiContext
         end
 
         def current_name_prefix
-          parts = @stack.filter_map { |f| f[:name_prefix] }
+          parts = []
+          @stack.reverse_each do |frame|
+            parts.unshift(frame[:name_prefix]) if frame[:name_prefix]
+            break if frame[:name_root]
+          end
           parts.empty? ? nil : parts.join("_")
         end
 
@@ -608,7 +713,8 @@ module RailsAiContext
           kind = member_collection_kind(on_option)
           resource = current_resource
           if kind && resource
-            resource_key = kind == :member ? resource[:singular_route_name] : resource[:plural_route_name]
+            resource_key = { member: resource[:singular_route_name], new: "new_#{resource[:new_route_name]}" }
+              .fetch(kind, resource[:plural_route_name])
             base = as_option ? as_option.to_s : plain_segment_name(segment)
             return nil unless base && resource_key && !resource_key.empty?
 

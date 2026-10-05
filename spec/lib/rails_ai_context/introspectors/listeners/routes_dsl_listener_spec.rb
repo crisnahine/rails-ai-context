@@ -699,4 +699,140 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
 
     expect(records.map { |r| r[:name] }).to eq(%w[admin_republishing_index root])
   end
+
+  describe "shallow nesting, path_names, a new block, options in a variable and several paths" do
+    def rows(source)
+      route_records(source).map { |r| [ r[:verb], r[:path], "#{r[:controller]}##{r[:action]}", r[:name] ] }
+    end
+
+    it "draws a shallow child's member routes outside the parent, as Rails does" do
+      drawn = rows(<<~RUBY)
+        Rails.application.routes.draw do
+          resources :articles, shallow: true do
+            resources :comments
+          end
+        end
+      RUBY
+
+      expect(drawn).to include(
+        [ "GET", "/articles/:article_id/comments", "comments#index", "article_comments" ],
+        [ "GET", "/articles/:article_id/comments/new", "comments#new", "new_article_comment" ],
+        [ "GET", "/comments/:id/edit", "comments#edit", "edit_comment" ],
+        [ "GET", "/comments/:id", "comments#show", "comment" ],
+        [ "DELETE", "/comments/:id", "comments#destroy", nil ]
+      )
+      expect(drawn.map { |r| r[1] }).not_to include("/articles/:article_id/comments/:id")
+    end
+
+    it "keeps a namespace's path and name on shallow routes, and nests the grandchild under its parent alone" do
+      drawn = rows(<<~RUBY)
+        Rails.application.routes.draw do
+          namespace :admin do
+            resources :posts, shallow: true do
+              resources :notes do
+                resources :tags, only: [:index, :show]
+                member { get :pin }
+              end
+            end
+          end
+        end
+      RUBY
+
+      expect(drawn).to include(
+        [ "GET", "/admin/posts/:post_id/notes", "admin/notes#index", "admin_post_notes" ],
+        [ "GET", "/admin/notes/:id", "admin/notes#show", "admin_note" ],
+        [ "GET", "/admin/notes/:id/pin", "admin/notes#pin", "pin_admin_note" ],
+        [ "GET", "/admin/notes/:note_id/tags", "admin/tags#index", "admin_note_tags" ],
+        [ "GET", "/admin/tags/:id", "admin/tags#show", "admin_tag" ]
+      )
+    end
+
+    it "reads the shallow block form under a scope's path and as:" do
+      drawn = rows(<<~RUBY)
+        Rails.application.routes.draw do
+          scope "/v1", as: "v1" do
+            shallow do
+              resources :books, only: [:index] do
+                resources :pages, only: [:show, :index]
+              end
+            end
+          end
+        end
+      RUBY
+
+      expect(drawn).to contain_exactly(
+        [ "GET", "/v1/books", "books#index", "v1_books" ],
+        [ "GET", "/v1/books/:book_id/pages", "pages#index", "v1_book_pages" ],
+        [ "GET", "/v1/pages/:id", "pages#show", "v1_page" ]
+      )
+    end
+
+    it "adds nothing for a shallow_path the source computes" do
+      drawn = rows(<<~RUBY)
+        Rails.application.routes.draw do
+          scope Config.prefix, shallow_path: Config.prefix do
+            resources :posts, only: [] do
+              resources :remarks, only: [:show], shallow: true
+            end
+          end
+        end
+      RUBY
+
+      expect(drawn).to eq([ [ "GET", "/remarks/:id", "remarks#show", "remark" ] ])
+    end
+
+    it "takes the new and edit segments from path_names, on the resource or a scope" do
+      drawn = rows(<<~RUBY)
+        Rails.application.routes.draw do
+          resources :photos, path_names: { new: "make", edit: "change" }
+          scope path_names: { new: "neu" } do
+            resources :cars, only: [:new]
+          end
+        end
+      RUBY
+
+      expect(drawn).to include(
+        [ "GET", "/photos/make", "photos#new", "new_photo" ],
+        [ "GET", "/photos/:id/change", "photos#edit", "edit_photo" ],
+        [ "GET", "/cars/neu", "cars#new", "new_car" ]
+      )
+    end
+
+    it "scopes a new block to the new path" do
+      drawn = rows(<<~RUBY)
+        Rails.application.routes.draw do
+          resources :users, only: [:index, :show], param: :slug do
+            new do
+              get :preview
+            end
+          end
+        end
+      RUBY
+
+      expect(drawn).to include([ "GET", "/users/new/preview", "users#preview", "preview_new_user" ])
+    end
+
+    it "counts a resource whose options are a variable as a construct it did not expand" do
+      records = routes_for(<<~RUBY)
+        Rails.application.routes.draw do
+          opts = { only: [:index] }
+          resources :hashargs, opts
+          resources :splatted, **opts
+        end
+      RUBY
+
+      expect(records.select { |r| r[:type] == :route }).to be_empty
+      expect(records.count { |r| r[:type] == :dynamic }).to eq(2)
+    end
+
+    it "draws every path of a multi-path route" do
+      drawn = rows(<<~RUBY)
+        Rails.application.routes.draw do
+          get "/one", "/two", to: "pages#two"
+        end
+      RUBY
+
+      expect(drawn).to eq([ [ "GET", "/one", "pages#two", "one" ], [ "GET", "/two", "pages#two", "two" ] ])
+    end
+  end
 end
