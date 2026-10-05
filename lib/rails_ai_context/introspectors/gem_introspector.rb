@@ -57,7 +57,7 @@ module RailsAiContext
         "lookbook"        => { category: :frontend, note: "UI component preview and documentation via Lookbook." },
 
         # API
-        "rswag-api"       => { category: :api, note: "Serves OpenAPI specs from openapi/ directory." },
+        "rswag-api"       => { category: :api, note: "Serves OpenAPI specs from its openapi_root, swagger/ as rswag's installer sets it. Set in config/initializers/rswag_api.rb." },
         "rswag-ui"        => { category: :api, note: "Swagger UI for API documentation." },
         "grape-swagger"   => { category: :api, note: "Swagger docs for Grape APIs." },
         "apipie-rails"    => { category: :api, note: "API documentation DSL for Rails." },
