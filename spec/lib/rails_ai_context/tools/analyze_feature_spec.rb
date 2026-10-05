@@ -284,6 +284,24 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       end
     end
 
+    it "finds the tests of the engine an app's test/dummy runs inside" do
+      Dir.mktmpdir("rac_engine") do |engine|
+        engine = File.realpath(engine)
+        dummy = File.join(engine, "test", "dummy")
+        FileUtils.mkdir_p([ File.join(engine, "test", "models", "shop"), File.join(dummy, "app") ])
+        File.write(File.join(engine, "test", "models", "shop", "widget_test.rb"), "class Shop::WidgetTest\n  test \"x\" do\n  end\nend\n")
+
+        allow(RailsAiContext::PathResolver).to receive(:enclosing_engine_roots).and_return([ engine ])
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dummy)))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        text = described_class.call(feature: "widget").content.first[:text]
+
+        expect(text).to include("## Tests (1)")
+        expect(text).to include("- `../models/shop/widget_test.rb` (1 test)")
+      end
+    end
+
     # The path match put the suite's own directory names in scope, so
     # "spec" or "test" matched every file in it.
     it "does not treat the suite's own directory as a feature word" do

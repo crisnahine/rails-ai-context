@@ -6,6 +6,39 @@ require "tmpdir"
 RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
   let(:introspector) { described_class.new(Rails.application) }
 
+  describe "an engine's test/dummy" do
+    it "reads the engine's suite" do
+      Dir.mktmpdir do |engine|
+        dummy = File.join(engine, "test", "dummy")
+        FileUtils.mkdir_p([ File.join(engine, "test", "fixtures", "shop"), File.join(engine, "test", "models"), dummy ])
+        File.write(File.join(engine, "test", "fixtures", "shop", "widgets.yml"), "one:\n  name: x\n")
+        File.write(File.join(engine, "test", "models", "widget_test.rb"), "")
+        allow(RailsAiContext::PathResolver).to receive(:enclosing_engine_roots).and_return([ engine ])
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dummy)).call
+
+        expect(result[:fixtures]).to include(location: "test/fixtures")
+        expect(result[:test_files]).to include("models")
+      end
+    end
+
+    it "reports the dummy's config/ci.rb with its steps, and the engine's .github, as the project's CI" do
+      Dir.mktmpdir do |engine|
+        dummy = File.join(engine, "test", "dummy")
+        FileUtils.mkdir_p([ File.join(engine, ".github", "workflows"), File.join(engine, "test", "models"), File.join(dummy, "config") ])
+        File.write(File.join(engine, "test", "models", "widget_test.rb"), "")
+        File.write(File.join(dummy, "config", "ci.rb"), %(CI.run do\n  step "Tests: Rails", "bin/rails test"\nend\n))
+        allow(RailsAiContext::PathResolver).to receive(:enclosing_engine_roots).and_return([ engine ])
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dummy)).call
+
+        expect(result[:ci_config]).to eq(%w[rails_ci github_actions])
+        expect(result[:ci_steps]).to eq([ { name: "Tests: Rails", command: "bin/rails test" } ])
+        expect(result[:test_files]).to include("models")
+      end
+    end
+  end
+
   describe "#call" do
     subject(:result) { introspector.call }
 

@@ -385,26 +385,27 @@ module RailsAiContext
         end
 
         def discover_tests(root, pattern, lines)
-          test_dirs = [ File.join(root, "spec"), File.join(root, "test") ]
           real_root = File.realpath(root).to_s
           found = []
           truncated = false
 
-          test_dirs.each do |dir|
+          base = RailsAiContext::PathResolver.test_root(root)
+          real_base = File.realpath(base).to_s
+          [ File.join(base, "spec"), File.join(base, "test") ].each do |dir|
             next unless Dir.exist?(dir)
-            suffix_glob = safe_glob(dir, "**/*_{test,spec}.rb", real_root).first(MAX_SCAN_FILES)
+            suffix_glob = safe_glob(dir, "**/*_{test,spec}.rb", real_base).first(MAX_SCAN_FILES)
             truncated = true if suffix_glob.size == MAX_SCAN_FILES
             # The path, not the basename: the gap checker below matches this
             # way for the same reason, and a spec whose feature word is a
             # directory (billing/invoices/create_spec.rb) is the normal shape
             # of a namespaced suite.
             suffix_glob.each do |path|
-              found << path if feature_word_match?(relative_test_name(path, real_root), pattern)
+              found << path if feature_word_match?(relative_test_name(path, real_base), pattern)
             end
-            prefix_glob = safe_glob(dir, "**/{test,spec}_*.rb", real_root).first(MAX_SCAN_FILES)
+            prefix_glob = safe_glob(dir, "**/{test,spec}_*.rb", real_base).first(MAX_SCAN_FILES)
             truncated = true if prefix_glob.size == MAX_SCAN_FILES
             prefix_glob.each do |path|
-              found << path if feature_word_match?(relative_test_name(path, real_root), pattern)
+              found << path if feature_word_match?(relative_test_name(path, real_base), pattern)
             end
           end
           found.uniq!
@@ -413,7 +414,7 @@ module RailsAiContext
           header = "## Tests (#{found.size}#{truncated ? " - first #{MAX_SCAN_FILES} per glob scanned" : ""})"
           lines << header
           found.each do |path|
-            relative = path.sub("#{real_root}/", "")
+            relative = Pathname.new(path).relative_path_from(Pathname.new(real_root)).to_s
             source = RailsAiContext::SafeFile.read(path) or next
             test_count = source.each_line.count do |line|
               line.match?(/^\s*(?:test|it|specify)\s+["']/) || line.match?(/^\s*def\s+test_/)

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "concurrent"
+require "pathname"
 
 module RailsAiContext
   # Resolves where a kind of Rails app code can live for a given app root.
@@ -114,15 +115,17 @@ module RailsAiContext
       PATH_GEM_LIBS.compute_if_absent(key) { read_path_gem_libs(key) }
     end
 
+    # Remotes are relative to the lockfile, which for a test/dummy is the engine's.
     def read_path_gem_libs(root)
-      lock = SafeFile.read(File.join(root, GemLock.lockfile_name(root)))
+      bundle = GemLock.bundle(root)
+      lock = bundle[:lockfile] && SafeFile.read(bundle[:lockfile])
       return [] unless lock
 
-      real_root = File.realpath(root)
+      trusted = File.realpath(bundle[:trusted])
       remotes = lock.scan(/^PATH\r?\n  remote: (.+?)\r?$/).flatten.map(&:strip)
       remotes.flat_map do |remote|
-        base = File.expand_path(remote, root)
-        next [] unless Dir.exist?(base) && SafePath.contained?(File.realpath(base), real_root)
+        base = File.expand_path(remote, bundle[:dir])
+        next [] unless Dir.exist?(base) && SafePath.contained?(File.realpath(base), trusted)
 
         # Bundler's own glob for the gemspecs a path source holds.
         Dir.glob(File.join(base, "{,*,*/*}.gemspec")).map { |spec| File.join(File.dirname(spec), "lib") }
@@ -245,6 +248,62 @@ module RailsAiContext
         end
         relative.map { |dir| dir.start_with?(File::SEPARATOR) ? dir : File.join(root, dir) }.freeze
       end
+    end
+
+    # Booted from an engine's test/dummy, the engine whose root holds the app
+    # root: its classes, views and tests are the project's own. Never this gem.
+    def enclosing_engine_roots(root)
+      return [] unless defined?(::Rails::Engine)
+
+      RunCache.fetch([ :enclosing_engine_roots, root.to_s ]) do
+        inside = "#{root_key(root.to_s)}#{File::SEPARATOR}"
+        ::Rails::Engine.subclasses.filter_map do |engine|
+          next if engine.root.nil? || (defined?(RailsAiContext::Engine) && engine.equal?(RailsAiContext::Engine))
+
+          dir = engine.root.to_s
+          dir if inside.start_with?("#{root_key(dir)}#{File::SEPARATOR}")
+        rescue StandardError
+          nil
+        end
+      end
+    end
+
+    # The root whose suite tests the app: an engine's test/dummy keeps none of its own.
+    def test_root(root)
+      root = root.to_s
+      return root if %w[test spec].any? { |dir| Dir.exist?(File.join(root, dir)) }
+
+      RunCache.fetch([ :test_root, root ]) { enclosing_engine_roots(root).first || bundle_engine_root(root) || root }
+    end
+
+    # Unbooted, the engine is the gemspec directory holding the bundle config/boot.rb
+    # names, which GemLock only resolves inside the app's git repository.
+    def bundle_engine_root(root)
+      dir = GemLock.bundle(root)[:dir]
+      real_root = root_key(root)
+      return nil if dir == root || !real_root.start_with?("#{dir}#{File::SEPARATOR}") || Dir.glob(File.join(dir, "*.gemspec")).empty?
+
+      # In the root's own spelling, which every caller strips from the paths it prints.
+      depth = real_root.delete_prefix("#{dir}#{File::SEPARATOR}").split(File::SEPARATOR).size
+      depth.times.reduce(File.expand_path(root)) { |path, _| File.dirname(path) }
+    end
+    private_class_method :bundle_engine_root
+
+    # A path under the suite root as the app root reads it: `../models/x_test.rb` from a test/dummy.
+    def suite_relative(root, relative)
+      suite = test_root(root)
+      return relative if suite == root.to_s
+
+      Pathname.new(File.join(root_key(suite), relative)).relative_path_from(Pathname.new(root_key(root))).to_s
+    end
+
+    # Inside the app root, or inside the engine its test/dummy runs in.
+    def project_file?(path, root)
+      real = File.realpath(path)
+      dirs = RunCache.fetch([ :project_dirs, root.to_s ]) { [ root.to_s, *enclosing_engine_roots(root) ].map { |dir| root_key(dir) } }
+      dirs.any? { |dir| SafePath.contained?(real, dir) }
+    rescue SystemCallError
+      false
     end
 
     def root_key(root)

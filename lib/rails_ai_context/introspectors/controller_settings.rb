@@ -121,7 +121,11 @@ module RailsAiContext
 
       def layout_names(root)
         RunCache.fetch([ :layout_names, root.to_s ]) do
-          ViewFile.each(root.to_s, "layouts/**/*").filter_map do |path, relative|
+          engine_layouts = PathResolver.enclosing_engine_roots(root.to_s).flat_map do |engine|
+            dir = File.join(engine, "app/views")
+            Dir.glob(File.join(dir, "layouts/**/*")).map { |path| [ path, path.delete_prefix("#{dir}/") ] }
+          end
+          (ViewFile.each(root.to_s, "layouts/**/*") + engine_layouts).filter_map do |path, relative|
             relative.delete_prefix("layouts/").sub(/\.[^\/]*\z/, "") if ViewFile.layout?(path)
           end.to_set
         end

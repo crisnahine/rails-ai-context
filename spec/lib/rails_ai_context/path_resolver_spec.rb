@@ -20,6 +20,38 @@ RSpec.describe RailsAiContext::PathResolver do
 
   # Two callers each wrapped initializer_files with the same
   # sub("#{root}/", ""), and both wanted the app-relative path.
+  describe ".test_root" do
+    it "is the engine's root for a test/dummy with no suite of its own, else the app's" do
+      dummy = File.join(@root, "test", "dummy")
+      FileUtils.mkdir_p(dummy)
+      allow(described_class).to receive(:enclosing_engine_roots).and_return([ @root ])
+
+      expect(described_class.test_root(dummy)).to eq(@root)
+
+      FileUtils.mkdir_p(File.join(dummy, "test"))
+      expect(described_class.test_root(dummy)).to eq(dummy)
+
+      allow(described_class).to receive(:enclosing_engine_roots).and_return([])
+      expect(described_class.test_root(@root)).to eq(@root)
+    end
+
+    it "is the engine's root without booting, from the gemspec bundle config/boot.rb names inside the repository" do
+      dummy = File.join(@root, "test", "dummy")
+      FileUtils.mkdir_p([ File.join(dummy, "config"), File.join(@root, ".git") ])
+      File.write(File.join(dummy, "config", "boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n))
+      File.write(File.join(@root, "Gemfile"), "gemspec\n")
+      File.write(File.join(@root, "Gemfile.lock"), "GEM\n  specs:\n")
+      allow(described_class).to receive(:enclosing_engine_roots).and_return([])
+      expect(described_class.test_root(dummy)).to eq(dummy)
+
+      File.write(File.join(@root, "shop.gemspec"), "")
+      expect(described_class.test_root(dummy)).to eq(@root)
+
+      FileUtils.rm_rf(File.join(@root, ".git"))
+      expect(described_class.test_root(dummy)).to eq(dummy)
+    end
+  end
+
   describe ".app_initializer_files" do
     it "answers the initializers app-relative, however the app spells them" do
       mkdirs("config/initializers")
@@ -293,6 +325,18 @@ RSpec.describe RailsAiContext::PathResolver do
 
         expect(described_class.path_gem_libs(dir)).to eq([ File.join(dir, "gems", "broadcast_policy", "lib") ])
       end
+    end
+
+    it "reads the engine's own path gem from the bundle an engine's test/dummy boots with" do
+      dummy = File.join(@root, "test", "dummy")
+      FileUtils.mkdir_p([ File.join(dummy, "config"), File.join(@root, ".git"), File.join(@root, "lib") ])
+      File.write(File.join(dummy, "config", "boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n))
+      File.write(File.join(@root, "shop.gemspec"), "")
+      File.write(File.join(@root, "Gemfile"), "gemspec\n")
+      File.write(File.join(@root, "Gemfile.lock"), "PATH\n  remote: .\n  specs:\n    shop (0.1.0)\n\nGEM\n  specs:\n")
+      described_class.clear_code_roots
+
+      expect(described_class.path_gem_libs(dummy)).to eq([ File.join(File.realpath(@root), "lib") ])
     end
   end
 

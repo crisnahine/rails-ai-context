@@ -15,14 +15,16 @@ module RailsAiContext
       # Every `gem` and `group` entry, with its options and groups.
       # @return [Array<Hash>] empty when there is no Gemfile or it cannot be read
       def entries(root)
-        root = root.to_s
-        read(root, GemLock.gemfile_name(root), [], [])
+        bundle = GemLock.bundle(root)
+        gemfile = bundle[:gemfile] or return []
+
+        read(bundle[:dir], File.basename(gemfile), [], [])
       rescue StandardError => e
         RailsAiContext.debug_fail(e, [], label: "GemfileGems.entries")
       end
 
       # Bundler evaluates an eval_gemfile file into the same Gemfile, inside
-      # the groups around the call. Never read outside the app root.
+      # the groups around the call. Never read outside the bundle's directory.
       def read(root, relative, groups, seen)
         resolution = SafePath.locate(relative, under: root)
         return [] if !resolution.ok? || seen.include?(resolution.realpath)

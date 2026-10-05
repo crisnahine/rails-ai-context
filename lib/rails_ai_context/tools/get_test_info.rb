@@ -51,6 +51,7 @@ module RailsAiContext
           when "summary"
             lines = [ "# Test Infrastructure", "" ]
             lines << "- **Framework:** #{data[:framework]}"
+            lines.concat(suite_lines)
             lines << "- **Factories:** #{count_phrase(data[:factories][:count], "file")}" if data[:factories]
             lines << "- **Fabricators:** #{count_phrase(data[:fabricators][:count], "file")}" if data[:fabricators]
             lines << "- **Cucumber:** #{count_phrase(data[:cucumber][:count], "feature file")}" if data[:cucumber]
@@ -65,6 +66,7 @@ module RailsAiContext
           when "standard"
             lines = [ "# Test Infrastructure", "" ]
             lines << "- **Framework:** #{data[:framework]}"
+            lines.concat(suite_lines)
             lines << "- **Factories:** #{data[:factories][:location]} (#{count_phrase(data[:factories][:count], "file")})" if data[:factories]
             lines << "- **Fabricators:** #{data[:fabricators][:location]} (#{count_phrase(data[:fabricators][:count], "file")})" if data[:fabricators]
             lines << cucumber_line(data[:cucumber]) if data[:cucumber]
@@ -97,6 +99,7 @@ module RailsAiContext
           when "full"
             lines = [ "# Test Infrastructure (Full Detail)", "" ]
             lines << "- **Framework:** #{data[:framework]}"
+            lines.concat(suite_lines)
             lines << "- **CI:** #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
             lines << "- **Coverage:** #{data[:coverage]}" if data[:coverage]
             lines << cucumber_line(data[:cucumber]) if data[:cucumber]
@@ -174,6 +177,26 @@ module RailsAiContext
         RailsAiContext.configuration.max_test_file_size
       end
 
+      # An engine's test/dummy is tested by the engine's suite, which every path here is under.
+      private_class_method def self.suite_root
+        RailsAiContext::PathResolver.test_root(rails_app.root.to_s)
+      end
+
+      private_class_method def self.suite_lines
+        app_root = rails_app.root.to_s
+        return unread_suite_lines(app_root) if suite_root == app_root
+
+        [ "- **Suite:** the engine's, at `#{RailsAiContext::PathResolver.suite_relative(app_root, ".")}`; the paths below are under it" ]
+      end
+
+      # A dummy with no suite of its own whose engine bundle is not read: the engine's suite is not either.
+      private_class_method def self.unread_suite_lines(app_root)
+        outside = RailsAiContext::GemLock.for(app_root).outside_gemfile
+        return [] if outside.nil? || %w[test spec].any? { |dir| Dir.exist?(File.join(app_root, dir)) }
+
+        [ "- **Suite:** not read: config/boot.rb points Bundler at #{outside}, outside the app's git repository; an engine's suite there is not read" ]
+      end
+
       private_class_method def self.find_test_file(name, type, detail = "full")
         # Normalize: accept "Admin::PostsController", "admin/posts", "Posts", "posts" (plural)
         snake = case type
@@ -195,13 +218,13 @@ module RailsAiContext
         refused = refuse_unsafe_paths([ name ])
         return refused if refused
 
-        candidates = RailsAiContext::TestFramework.candidates(rails_app.root.to_s, type, snake, cached_context)
+        candidates = RailsAiContext::TestFramework.candidates(suite_root, type, snake, cached_context)
         exercising = type == :controller ? exercising_tests(snake, candidates) : []
 
         contained = []
         too_large = nil
         candidates.each do |rel|
-          content, resolution = RailsAiContext::SafePath.read(rel, under: rails_app.root.to_s, max_size: max_test_file_size)
+          content, resolution = RailsAiContext::SafePath.read(rel, under: suite_root, max_size: max_test_file_size)
           contained << rel unless ESCAPING_REFUSALS.include?(resolution.refusal)
           too_large ||= resolution if resolution.refusal == :too_large
           next unless content
@@ -250,7 +273,7 @@ module RailsAiContext
       #
       # @return [Array<Array(String, String, String)>] [path, kind, source]
       private_class_method def self.exercising_tests(snake, primary)
-        root = rails_app.root.to_s
+        root = suite_root
         real_root = File.realpath(root)
         routes = Array(RouteCoverage.all_by_controller(cached_context[:routes])[snake])
         helpers = routes.filter_map { |route| route[:name] }.uniq
@@ -317,7 +340,7 @@ module RailsAiContext
       # Nearby test files, to help the agent find the right one. The glob base
       # is the realpath, so a symlinked test directory cannot widen it.
       private_class_method def self.nearby_tests_hint(candidates)
-        root = rails_app.root.to_s
+        root = suite_root
         real_root = File.realpath(root)
 
         nearby = candidates.map { |rel| File.dirname(File.join(root, rel)) }.uniq.flat_map do |dir|
@@ -387,9 +410,9 @@ module RailsAiContext
           # Detect Devise + sign_in pattern from existing tests
           has_devise = false
           has_sign_in = false
-          test_dir = rails_app.root.join("test").to_s
+          test_dir = File.join(suite_root, "test")
           if Dir.exist?(test_dir)
-            real_root = File.realpath(rails_app.root).to_s
+            real_root = File.realpath(suite_root).to_s
             safe_glob(test_dir, "**/*_test.rb", real_root).first(5).each do |path|
               content = RailsAiContext::SafeFile.read(path) or next
               has_devise = true if content.include?("Devise::Test")
@@ -456,10 +479,10 @@ module RailsAiContext
       private_class_method def self.parse_factory_details(relative_path)
         # Try common factory locations
         candidates = [
-          rails_app.root.join("spec/factories/#{relative_path}"),
-          rails_app.root.join("test/factories/#{relative_path}"),
-          rails_app.root.join("spec/factories", relative_path),
-          rails_app.root.join("test/factories", relative_path)
+          File.join(suite_root, "spec/factories/#{relative_path}"),
+          File.join(suite_root, "test/factories/#{relative_path}"),
+          File.join(suite_root, "spec/factories", relative_path),
+          File.join(suite_root, "test/factories", relative_path)
         ]
         path = candidates.find { |p| File.exist?(p) }
         return nil unless path
@@ -533,7 +556,7 @@ module RailsAiContext
       private_class_method def self.parse_all_fixture_contents(fixtures)
         return {} unless fixtures.is_a?(Hash)
 
-        root = rails_app.root.to_s
+        root = suite_root
         real_root = File.realpath(root)
         results = {}
         Array(fixtures[:locations]).each do |rel|

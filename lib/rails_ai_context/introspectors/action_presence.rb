@@ -63,12 +63,13 @@ module RailsAiContext
         lambda do |name|
           file = controllers.is_a?(Hash) && controllers[name].is_a?(Hash) ? controllers[name][:file] : nil
           path = file && File.expand_path(file, root)
-          (path && SafePath.contained?(path, root) && SafeFile.read(path)) || by_path.call(name)
+          (path && PathResolver.project_file?(path, root) && SafeFile.read(path)) || by_path.call(name)
         end
       end
 
       def template?(root, chain, action)
-        chain.prefixes.any? { |prefix| Dir.glob(File.join(root.to_s, "app", "views", prefix, "#{action}.*")).any? }
+        roots = [ root.to_s, *PathResolver.enclosing_engine_roots(root.to_s) ]
+        chain.prefixes.any? { |prefix| roots.any? { |dir| Dir.glob(File.join(dir, "app", "views", prefix, "#{action}.*")).any? } }
       end
 
       def read_class(source, name, defs, names)

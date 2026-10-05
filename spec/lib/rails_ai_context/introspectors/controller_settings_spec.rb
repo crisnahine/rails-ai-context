@@ -90,6 +90,19 @@ RSpec.describe RailsAiContext::Introspectors::ControllerSettings do
       expect(described_class.resolve(context, "TagsController", root: @root)[:layout]).to eq(name: "application", implied: true)
     end
 
+    it "finds a layout in the engine an app's test/dummy runs inside" do
+      Dir.mktmpdir("engine") do |engine|
+        FileUtils.mkdir_p(File.join(engine, "app/views/layouts/shop"))
+        File.write(File.join(engine, "app/views/layouts/shop/application.html.erb"), "")
+        allow(RailsAiContext::PathResolver).to receive(:enclosing_engine_roots).with(@root).and_return([ engine ])
+        context = ctx("Shop::ApplicationController" => { parent_class: "ActionController::Base" },
+                      "Shop::WidgetsController" => { parent_class: "Shop::ApplicationController" })
+
+        expect(described_class.resolve(context, "Shop::WidgetsController", root: @root)[:layout])
+          .to eq(name: "shop/application", implied: true)
+      end
+    end
+
     it "takes an ancestor's declaration over the name lookup, as the class attribute does" do
       context = ctx("Admin::BaseController" => { parent_class: "ApplicationController", layout: { name: "admin" } },
                     "Admin::PostsController" => { parent_class: "BaseController" })

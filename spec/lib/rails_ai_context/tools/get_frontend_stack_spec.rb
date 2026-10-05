@@ -366,6 +366,16 @@ RSpec.describe RailsAiContext::Tools::GetFrontendStack do
         expect(text).not_to include("TypeScript: disabled")
       end
 
+      it "does not deny an asset pipeline when the gems could not be read" do
+        allow(described_class).to receive(:cached_context).and_return({
+          frontend_frameworks: empty_frontend_data, gems: { unavailable: "No Gemfile.lock found" }
+        })
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("Asset pipeline not known: No Gemfile.lock found.")
+        expect(text).not_to include("no asset pipeline")
+      end
+
       it "still says so at detail:full" do
         result = described_class.call(detail: "full")
         text = result.content.first[:text]

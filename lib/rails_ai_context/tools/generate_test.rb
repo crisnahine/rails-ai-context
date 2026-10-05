@@ -121,7 +121,7 @@ module RailsAiContext
         # the subject's existing test, so the answer can point there instead of a new file.
         def test_path(base, kind, stem, fallback_dir, fallback_suffix)
           framework = RailsAiContext::TestFramework
-          root = rails_app.root.to_s
+          root = RailsAiContext::PathResolver.test_root(rails_app.root.to_s)
           dir, suffix = framework.layout(root, base, kind, framework.subject_stems(cached_context, kind))
           dir ||= fallback_dir
           suffix ||= fallback_suffix
@@ -131,7 +131,9 @@ module RailsAiContext
             full = File.expand_path(rel, root)
             RailsAiContext::SafePath.contained?(full, root) && File.file?(full)
           end
-          [ "#{dir}/#{stem}#{suffix}", existing, dir ]
+          app_root = rails_app.root.to_s
+          [ RailsAiContext::PathResolver.suite_relative(app_root, "#{dir}/#{stem}#{suffix}"),
+            existing && RailsAiContext::PathResolver.suite_relative(app_root, existing), dir ]
         rescue => e
           RailsAiContext.debug_fail(e, [ "#{fallback_dir}/#{stem}#{fallback_suffix}", nil, fallback_dir ], label: "test_path")
         end
@@ -643,7 +645,7 @@ module RailsAiContext
           file_path, existing, dir = test_path("test", :controller, snake, "test/controllers", "_controller_test.rb")
           return existing_test_response(existing) if existing
 
-          style = RailsAiContext::TestFramework.test_style(rails_app.root, dir)
+          style = RailsAiContext::TestFramework.test_style(RailsAiContext::PathResolver.test_root(rails_app.root.to_s), dir)
           res = res.merge(test_case: style[:test_case] == true)
           res[:factory] = find_factory_name(res[:model], tests_data) if style[:factories] && res[:model]
           res[:parents] = route_parents(routes, res, tests_data, ref: "@") if res[:factory]

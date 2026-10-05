@@ -164,7 +164,7 @@ module RailsAiContext
               return [ "# Frontend Stack", "", *outside_line, *pipeline_lines, "- **JavaScript build:** none (no app/javascript, no package.json)" ].join("\n")
             end
 
-            note = api_only_note("a frontend") || "No frontend stack detected (no app/javascript, no package.json, no asset pipeline)."
+            note = api_only_note("a frontend") || no_frontend_note
             return [ "# Frontend Stack", "", note, *([ "", outside_line ] if outside_line) ].join("\n")
           end
 
@@ -230,6 +230,15 @@ module RailsAiContext
           end
 
           lines.join("\n")
+        end
+
+        # Gems that could not be read deny no asset pipeline.
+        def no_frontend_note
+          gems = cached_context[:gems]
+          unread = gems[:unavailable] || gems[:error] if gems.is_a?(Hash)
+          return "No frontend stack detected (no app/javascript, no package.json, no asset pipeline)." unless unread
+
+          "No frontend stack detected (no app/javascript, no package.json). Asset pipeline not known: #{unread}."
         end
 
         # Read from the gems, as rails_get_config does: the :assets section is

@@ -15,14 +15,19 @@ module RailsAiContext
       def call
         once = config_paths(:autoload_once_paths)
         eager = config_paths(:eager_load_paths)
+        main_roots = loader_roots(:main)
+        once_roots = loader_roots(:once)
         {
           mode: detect_mode,
           zeitwerk_available: zeitwerk_available?,
           autoloaders: extract_autoloaders,
           # Rails' own formula (Engine#_all_autoload_paths): eager-load paths
           # autoload too, and an autoload-once path is the once loader's.
-          autoload_paths: relativize(config_paths(:autoload_paths) + eager - once),
-          autoload_once_paths: relativize(once),
+          # The loaders also hold what never passes through the app's config:
+          # other engines' app/* and an initializer's push_dir.
+          autoload_paths: relativize(config_paths(:autoload_paths) + eager - once + app_first(main_roots.keys)),
+          autoload_once_paths: relativize(once + app_first(once_roots.keys)),
+          autoload_namespaces: relativize_namespaces(main_roots.merge(once_roots)),
           eager_load_paths: relativize(eager),
           eager_load: !!app.config.eager_load,
           custom_inflections: extract_custom_inflections
@@ -62,7 +67,7 @@ module RailsAiContext
           entry[:tag] = loader.tag.to_s if loader.respond_to?(:tag)
           entry[:collapsed] = relativize(extract_collapsed(loader))
           entry[:ignored]   = relativize(extract_ignored(loader))
-          entry[:root_dirs] = relativize(extract_root_dirs(loader))
+          entry[:root_dirs] = relativize(root_dirs_with_namespaces(loader).keys)
           entry[:not_eager_loaded] = relativize(loader_set(loader, :@eager_load_exclusions))
           entry
         rescue => e
@@ -91,13 +96,42 @@ module RailsAiContext
         set.respond_to?(:to_a) ? set.to_a.map(&:to_s) : []
       end
 
-      def extract_root_dirs(loader)
-        return loader.dirs.to_a if loader.respond_to?(:dirs) && loader.dirs.respond_to?(:to_a)
-        roots = loader.instance_variable_get(:@roots)
-        return roots.keys.map(&:to_s) if roots.respond_to?(:keys)
-        []
+      def loader_roots(kind)
+        return {} unless zeitwerk_available? && Rails.autoloaders.respond_to?(kind)
+
+        loader = Rails.autoloaders.public_send(kind)
+        loader ? root_dirs_with_namespaces(loader) : {}
+      end
+
+      # { dir => namespace name }; Zeitwerk before 2.6 has no dirs(namespaces:).
+      def root_dirs_with_namespaces(loader)
+        roots =
+          if loader.respond_to?(:dirs)
+            keyword = loader.method(:dirs).parameters.any? { |_, name| name == :namespaces }
+            keyword ? loader.dirs(namespaces: true) : loader.dirs
+          else
+            loader.instance_variable_get(:@root_dirs) || loader.instance_variable_get(:@roots)
+          end
+        roots = roots.to_h { |dir| [ dir, nil ] } if roots.is_a?(Array)
+        return {} unless roots.respond_to?(:each_pair)
+
+        roots.each_pair.to_h { |dir, namespace| [ dir.to_s, namespace.respond_to?(:name) ? namespace.name : namespace&.to_s ] }
       rescue => e
-        RailsAiContext.debug_fail(e, [], label: "extract_root_dirs")
+        RailsAiContext.debug_fail(e, {}, label: "root_dirs_with_namespaces")
+      end
+
+      def app_first(dirs)
+        app_root = "#{root}#{File::SEPARATOR}"
+        dirs.partition { |dir| dir.start_with?(app_root) }.flatten
+      end
+
+      def relativize_namespaces(roots)
+        roots.each_with_object({}) do |(dir, namespace), named|
+          next if namespace.nil? || namespace == "Object"
+
+          path = relativize([ dir ]).first
+          named[path] = namespace if path
+        end
       end
 
       # Collect `inflect` blocks and `Zeitwerk::Inflector` customizations

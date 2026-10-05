@@ -211,6 +211,58 @@ RSpec.describe RailsAiContext::Introspectors::ComponentIntrospector do
         expect(result[:summary][:phlex]).to eq(1)
       end
     end
+
+    it "reads components from a namespace root outside app/components, and nothing else there" do
+      Dir.mktmpdir do |dir|
+        views = File.join(dir, "app", "views", "components")
+        FileUtils.mkdir_p([ views, File.join(dir, "config", "initializers") ])
+        File.write(File.join(dir, "config", "initializers", "phlex.rb"), <<~RUBY)
+          Rails.autoloaders.main.push_dir(Rails.root.join("app/views/components"), namespace: Components)
+        RUBY
+        File.write(File.join(views, "base.rb"), "class Components::Base < Phlex::HTML\nend\n")
+        File.write(File.join(views, "badge.rb"), "class Components::Badge < Components::Base\nend\n")
+        File.write(File.join(views, "helpers.rb"), "module Components::Helpers\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:components].map { |c| [ c[:name], c[:type] ] }).to eq([ [ "Badge", :phlex ] ])
+        expect(result[:bases].map { |c| c[:file] }).to eq([ "app/views/components/base.rb" ])
+      end
+    end
+
+    it "never reads the views root phlex-rails installs under the Views namespace as components" do
+      Dir.mktmpdir do |dir|
+        components = File.join(dir, "app", "components")
+        posts = File.join(dir, "app", "views", "posts")
+        FileUtils.mkdir_p([ components, posts, File.join(dir, "config", "initializers") ])
+        File.write(File.join(dir, "config", "initializers", "phlex.rb"), <<~RUBY)
+          module Views
+          end
+
+          module Components
+            extend Phlex::Kit
+          end
+
+          Rails.autoloaders.main.push_dir(
+            Rails.root.join("app/views"), namespace: Views
+          )
+
+          Rails.autoloaders.main.push_dir(
+            Rails.root.join("app/components"), namespace: Components
+          )
+        RUBY
+        File.write(File.join(components, "base.rb"), "class Components::Base < Phlex::HTML\nend\n")
+        File.write(File.join(components, "button.rb"), "class Components::Button < Components::Base\nend\n")
+        File.write(File.join(dir, "app", "views", "base.rb"), "class Views::Base < Components::Base\nend\n")
+        File.write(File.join(posts, "index.rb"), "class Views::Posts::Index < Views::Base\nend\n")
+        File.write(File.join(posts, "show.rb"), "class Views::Posts::Show < Views::Base\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:components].map { |c| c[:file] }).to eq([ "app/components/button.rb" ])
+        expect(result[:bases].map { |c| c[:file] }).to eq([ "app/components/base.rb" ])
+      end
+    end
   end
 
   describe "a compact component whose bare superclass names a top-level base" do

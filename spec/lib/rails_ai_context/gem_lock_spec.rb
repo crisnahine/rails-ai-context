@@ -291,8 +291,45 @@ RSpec.describe RailsAiContext::GemLock do
         spec = described_class.for(dummy)
 
         expect(spec.present?("rails")).to be false
-        expect(spec.reason).to eq("No Gemfile.lock in the app; config/boot.rb points Bundler at ../../Gemfile, outside the app root, which is not read")
+        expect(spec.reason).to eq("No Gemfile.lock in the app; config/boot.rb points Bundler at ../../Gemfile, outside the app's git repository, which is not read")
         expect(spec.outside_gemfile).to eq("../../Gemfile")
+      end
+    end
+
+    it "reads that bundle when it sits inside the app's git repository" do
+      Dir.mktmpdir do |engine|
+        FileUtils.mkdir_p(File.join(engine, ".git"))
+        File.write(File.join(engine, "Gemfile"), %(source "https://rubygems.org"\ngemspec\n))
+        File.write(File.join(engine, "Gemfile.lock"),
+                   "GEM\n  specs:\n    propshaft (1.3.2)\n    rails (8.1.4)\n\nDEPENDENCIES\n  propshaft\n\nRUBY VERSION\n   ruby 3.4.9p0\n")
+        dummy = File.join(engine, "test/dummy")
+        FileUtils.mkdir_p(File.join(dummy, "config"))
+        File.write(File.join(dummy, "config/boot.rb"), boot)
+
+        spec = described_class.for(dummy)
+
+        expect(spec.version("rails")).to eq("8.1.4")
+        expect(spec.direct?("propshaft")).to be true
+        expect(spec.missing?).to be false
+        expect(spec.outside_gemfile).to be_nil
+        expect([ spec.ruby_version, spec.ruby_version_source ]).to eq([ "3.4.9p0", "../../Gemfile.lock" ])
+      end
+    end
+
+    it "never reads a bundle above the git root, nor a lockfile that links out of its directory" do
+      Dir.mktmpdir do |engine|
+        File.write(File.join(engine, "Gemfile.lock"), "GEM\n  specs:\n    rails (8.1.4)\n")
+        dummy = File.join(engine, "test/dummy")
+        FileUtils.mkdir_p([ File.join(dummy, "config"), File.join(dummy, ".git") ])
+        File.write(File.join(dummy, "config/boot.rb"), boot)
+        expect(described_class.for(dummy).present?("rails")).to be false
+
+        FileUtils.rm_rf(File.join(dummy, ".git"))
+        FileUtils.mkdir_p(File.join(engine, "repo", ".git"))
+        FileUtils.mv(File.join(engine, "test"), File.join(engine, "repo", "test"))
+        dummy = File.join(engine, "repo", "test", "dummy")
+        File.symlink(File.join(engine, "Gemfile.lock"), File.join(engine, "repo", "Gemfile.lock"))
+        expect(described_class.for(dummy).present?("rails")).to be false
       end
     end
 

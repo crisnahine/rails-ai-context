@@ -179,6 +179,28 @@ lockfiles and the presence of a bundler config (`vite.config.*` and similar) are
 read there. Sensitive patterns and symlink containment apply relative to that
 directory, and frontend_stack names it in its answer.
 
+### The bundle config/boot.rb declares
+
+An app with no lockfile of its own (an engine's `test/dummy`) has its gems in the
+Gemfile its `config/boot.rb` sets as `BUNDLE_GEMFILE` (`../../Gemfile`). That
+Gemfile and its lockfile (`gems.rb` and `gems.locked` alike) are read with the same
+trust as the app's own `Gemfile.lock`, only when their directory is inside the app's
+git repository, never above its root and never outside a repository. Besides those two,
+only a file that Gemfile names with `eval_gemfile` inside that directory, and the `lib/`
+of a path gem the lockfile names inside the repository (the engine's own `remote: .`),
+are read. A file there that links out of the directory is refused.
+
+### The engine an app's test/dummy runs in
+
+Booted from an engine's `test/dummy`, the engine whose root holds the app root (a loaded
+`Rails::Engine`, never this gem) is the project's own source: its `app/` code, its
+`app/views` layouts and templates, and, when the dummy keeps no `test/` or `spec/` of its
+own, its test suite are read. Paths into it are printed relative to the app root
+(`../../app/models/...`), and symlink containment applies relative to the engine root.
+Without booting, only the test suite is read this way, and only from the directory of the
+bundle `config/boot.rb` declares (read under the rule above) when it holds a `*.gemspec`
+and contains the app root.
+
 ### How a refusal is reported
 
 A path refused on policy - outside the app, a traversal, a sensitive file - comes back as an

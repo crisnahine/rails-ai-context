@@ -60,4 +60,25 @@ RSpec.describe RailsAiContext::Introspectors::GemfileGems do
     expect(described_class.names(@root)).to eq([])
     expect(described_class.entries(@root)).to eq([])
   end
+
+  describe "an engine's test/dummy, whose config/boot.rb points Bundler at the engine's Gemfile" do
+    let(:dummy) { File.join(@root, "test", "dummy") }
+
+    before do
+      FileUtils.mkdir_p([ File.join(dummy, "config"), File.join(@root, ".git") ])
+      File.write(File.join(dummy, "config", "boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n))
+      File.write(File.join(@root, "Gemfile"), %(source "https://rubygems.org"\ngemspec\ngem "stripe"\n))
+      File.write(File.join(@root, "Gemfile.lock"), "GEM\n  specs:\n    stripe (13.0.0)\n")
+    end
+
+    it "names the gems of that Gemfile, the one GemLock reads" do
+      expect(described_class.names(dummy)).to eq(%w[stripe])
+    end
+
+    it "names none when that Gemfile is outside the app's git repository" do
+      FileUtils.rm_rf(File.join(@root, ".git"))
+
+      expect(described_class.names(dummy)).to eq([])
+    end
+  end
 end

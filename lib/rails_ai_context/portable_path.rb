@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require "concurrent"
+require "pathname"
+
 module RailsAiContext
   # Rewrites a path so it means the same thing on another machine. What is
   # generated here ends up in .ai-context.json, which the app commits: an
@@ -20,6 +23,9 @@ module RailsAiContext
       gem_roots.each do |gem_root|
         return path.delete_prefix(gem_root) if path.start_with?(gem_root)
       end
+
+      enclosing = enclosing_relative(path, root)
+      return enclosing if enclosing
 
       gem_checkouts.each do |dir, name|
         return File.join(name, path.delete_prefix(dir)) if path.start_with?(dir)
@@ -68,9 +74,10 @@ module RailsAiContext
       path = path.to_s
       root = root.to_s
       return false if !root.empty? && path.start_with?("#{root}/")
+      return true if gem_roots.any? { |gem_root| path.start_with?(gem_root) }
+      return false if enclosing_relative(path, root)
 
-      gem_roots.any? { |gem_root| path.start_with?(gem_root) } ||
-        gem_checkouts.any? { |dir, _name| path.start_with?(dir) }
+      gem_checkouts.any? { |dir, _name| path.start_with?(dir) }
     end
 
     # The relative form, or nil for a path no portable form names: the
@@ -92,6 +99,44 @@ module RailsAiContext
       text.to_s
         .gsub(%r{(\A|[\s"'`(:\[=,])(?:#{alternation})/}, '\1')
         .gsub(%r{(\A|[\s"'`(:\[=,])(?:#{alternation})(?=\z|[\s"'`)\],;:])}, '\1.')
+    end
+
+    # A file of the gem the app sits inside (an engine's test/dummy) is the
+    # app's own source: "../../app/models/x.rb". Compared as real paths, since
+    # Bundler and the autoloader can spell one directory two ways (/tmp, /private/tmp).
+    def enclosing_relative(path, root)
+      real_root, gem_dir = enclosing_gem(root)
+      return nil unless gem_dir
+
+      real = real_path(path)
+      return nil unless real.start_with?("#{gem_dir}/")
+
+      Pathname.new(real).relative_path_from(Pathname.new(real_root)).to_s
+    end
+
+    ENCLOSING = Concurrent::Map.new
+    private_constant :ENCLOSING
+
+    # [real root, real dir of the loaded gem holding it, or nil].
+    def enclosing_gem(root)
+      return nil if root.empty?
+
+      ENCLOSING.compute_if_absent(root) do
+        real_root = real_path(root)
+        dir = Gem.loaded_specs.each_value.filter_map { |spec|
+          next if spec.default_gem?
+
+          dir = real_path(spec.full_gem_path.to_s)
+          dir if real_root.start_with?("#{dir}/")
+        }.max_by(&:length)
+        [ real_root, dir ].freeze
+      end
+    end
+
+    def real_path(path)
+      File.realpath(path)
+    rescue SystemCallError
+      File.expand_path(path)
     end
 
     def relativize_all(paths, root)
