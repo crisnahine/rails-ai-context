@@ -444,6 +444,29 @@ module RailsAiContext
           parsed[:note] = "Parsed from db/#{File.basename(path)} (from committed dump, not a live connection)"
           dumps[name] = parsed
         end
+        replay_secondary_migrations(dumps)
+      end
+
+      # A database whose dump is not written yet answers from its own migrations_paths.
+      def replay_secondary_migrations(dumps)
+        config = RailsAiContext::DatabaseYml.env(app.root)
+        return dumps unless config.is_a?(Hash) && config.size > 1 && config.values.all?(Hash)
+
+        primary = config.key?("primary") ? "primary" : config.keys.first
+        config.each do |name, entry|
+          next if name == primary || dumps.key?(name)
+
+          dirs = MigrationReplay.configured_dirs(app.root.to_s, entry) or next
+          pk_type = SchemaConventions.implicit_pk_type(app.root.to_s, "#{name}_schema.rb")
+          tables = MigrationReplay.tables(dirs, pk_type: pk_type, root: app.root.to_s)
+          next if tables.empty?
+
+          tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
+          dumps[name] = {
+            adapter: "static_parse", tables: tables, total_tables: tables.size,
+            note: "Reconstructed from the migrations in #{dirs.map { |dir| relative_dump_path(dir) }.join(', ')} (#{connection_state}, no #{name}_schema.rb)"
+          }
+        end
         dumps
       end
 

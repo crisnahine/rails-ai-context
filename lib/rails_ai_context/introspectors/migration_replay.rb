@@ -40,9 +40,27 @@ module RailsAiContext
                 counts: Counts.new(0, 0, 0, 0))
       end
 
-      # db/migrate and db/post_migrate, for the app and each in-repo engine.
+      # database.yml's migrations_paths for the primary, else db/migrate and db/post_migrate
+      # for the app and each in-repo engine.
       def migration_dirs(root)
-        PathResolver.dirs_for(root.to_s, "db/migrate") + PathResolver.dirs_for(root.to_s, "db/post_migrate")
+        configured_dirs(root, RailsAiContext::DatabaseYml.primary(root)) ||
+          PathResolver.dirs_for(root.to_s, "db/migrate") + PathResolver.dirs_for(root.to_s, "db/post_migrate")
+      end
+
+      # A database entry's migrations_paths, which replace the default list as
+      # ConnectionPool#migrations_paths does; nil when the entry names none.
+      def configured_dirs(root, config)
+        paths = Array(config.is_a?(Hash) ? config["migrations_paths"] : nil)
+          .select { |path| path.is_a?(String) && !path.empty? && !RailsAiContext::DatabaseYml.computed?(path) }
+        return nil if paths.empty?
+
+        real_root = File.realpath(root.to_s)
+        paths.filter_map do |path|
+          dir = File.expand_path(path, root.to_s)
+          dir if SafePath.contained?(File.realpath(dir), real_root)
+        rescue SystemCallError
+          nil
+        end
       end
 
       # Rails' own glob: versioned files at any depth, run in version order.

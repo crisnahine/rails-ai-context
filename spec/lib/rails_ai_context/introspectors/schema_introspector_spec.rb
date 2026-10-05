@@ -1046,6 +1046,68 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
     end
   end
 
+  describe "migrations_paths in database.yml" do
+    def write_app(dir, files)
+      files.each do |path, body|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+        File.write(File.join(dir, path), body)
+      end
+    end
+
+    let(:create_posts) do
+      "class CreatePosts < ActiveRecord::Migration[8.1]\n  def change\n    create_table :posts do |t|\n      t.string :title\n    end\n  end\nend\n"
+    end
+
+    it "replays the primary's migrations from the path it names" do
+      Dir.mktmpdir do |dir|
+        write_app(dir, "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  database: db/dev.sqlite3\n  migrations_paths: db/main_migrate\n",
+                       "db/main_migrate/20240101000000_create_posts.rb" => create_posts)
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:tables].keys).to eq([ "posts" ])
+        expect(result[:note]).to include("Reconstructed from 1 migration file")
+      end
+    end
+
+    it "replays a secondary database that has migrations and no dump yet" do
+      Dir.mktmpdir do |dir|
+        write_app(dir, "config/database.yml" => <<~YAML,
+                    #{RailsAiContext.environment_name}:
+                      primary:
+                        adapter: sqlite3
+                        database: db/dev.sqlite3
+                      queue:
+                        adapter: sqlite3
+                        database: db/queue.sqlite3
+                        migrations_paths: db/queue_migrate
+                  YAML
+                       "db/migrate/20240101000000_create_posts.rb" => create_posts,
+                       "db/queue_migrate/20240101000000_create_jobs.rb" => create_posts.sub("CreatePosts", "CreateJobs").sub(":posts", ":jobs"))
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:tables].keys).to eq([ "posts" ])
+        expect(result[:secondary_databases].keys).to eq([ "queue" ])
+        expect(result[:secondary_databases]["queue"][:tables].keys).to eq([ "jobs" ])
+        expect(result[:secondary_databases]["queue"][:note]).to include("db/queue_migrate")
+      end
+    end
+
+    it "reads no migrations_paths outside the app" do
+      Dir.mktmpdir do |outside|
+        write_app(outside, "20240101000000_create_posts.rb" => create_posts)
+        Dir.mktmpdir do |dir|
+          write_app(dir, "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  migrations_paths: #{outside}\n")
+
+          result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+          expect(result).to have_key(:unavailable)
+        end
+      end
+    end
+  end
+
   describe "secondary database dumps" do
     it "reports db/*_schema.rb dumps under secondary_databases" do
       Dir.mktmpdir do |dir|
