@@ -92,6 +92,19 @@ RSpec.describe RailsAiContext::ConcernMacros do
       .to include([ :dry_runs, "DryRunnable::Wrapper" ])
   end
 
+  # OpenProject's acts_as_customizable extends with HumanAttributeName from lib/human_attribute_name.rb,
+  # which declares Redmine::Acts::Customizable::HumanAttributeName.
+  it "names a module found beside the file naming it by the constant that file declares" do
+    lib = File.join(tmpdir, "plugins", "cust", "lib")
+    FileUtils.mkdir_p(lib)
+    File.write(File.join(lib, "thing.rb"), "module Ns\n  module Thing\n    extend ActiveSupport::Concern\n    include Helper\n  end\nend\n")
+    File.write(File.join(lib, "helper.rb"), "module Ns\n  module Helper\n    extend ActiveSupport::Concern\n    included do\n      has_many :helped\n    end\n  end\nend\n")
+    extra = [ RailsAiContext::BaseMixins::Mixin.new("Ns::Thing", File.join(lib, "thing.rb"), :include) ]
+    collected, = described_class.collect(tmpdir, [], keys: %i[associations], extra: extra)
+
+    expect(collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to eq([ [ :helped, "Ns::Helper" ] ])
+  end
+
   # An app that adds lib to its autoload paths has a mixin there autoloaded
   # like any concern; one that does not has it unread, honestly.
   it "reads a mixin from an autoload root the app declares, and only then" do
@@ -473,6 +486,15 @@ RSpec.describe RailsAiContext::ConcernMacros do
       collected, = described_class.collect(tmpdir, [], keys: %i[associations], extra: extra)
 
       expect(collected[:associations].map { |a| a[:name] }).to eq([ :extended_items ])
+    end
+
+    it "reads a name the class writes as what it resolves to, not as a base module of the same bare name" do
+      FileUtils.mkdir_p(File.join(concern_dir, "admin"))
+      File.write(File.join(concern_dir, "admin", "dual.rb"), "module Admin\n  module Dual\n    def self.included(base)\n      base.has_many :admin_items\n    end\n  end\nend\n")
+      extra = [ RailsAiContext::BaseMixins::Mixin.new("Dual", File.join(concern_dir, "dual.rb"), :extend) ]
+      collected, = described_class.collect(tmpdir, mixin("Dual"), keys: %i[associations], extra: extra, within: "Admin")
+
+      expect(collected[:associations].map { |a| a[:name] }).to contain_exactly(:admin_items, :extended_items)
     end
   end
 

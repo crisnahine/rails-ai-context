@@ -518,7 +518,6 @@ module RailsAiContext
         # The class's own file, which can declare a module it includes.
         @own_file = file
         @paths = extra.to_h { |mixin| [ mixin.name, mixin.path ] }
-        @macros = extra.to_h { |mixin| [ mixin.name, mixin.macro ] }
         @root = root
         @dirs = dirs
         @keys = keys
@@ -529,6 +528,7 @@ module RailsAiContext
         @seen = Set.new
         @collected = Hash.new { |hash, key| hash[key] = [] }
         @unresolved = []
+        # Written at the top level, so each name is the constant it resolves to.
         @hidden = []
         @included_calls = {}
         @block_sites = {}
@@ -549,18 +549,20 @@ module RailsAiContext
         # `names` may be the mixin records themselves, which say how each
         # module is mixed in; that decides which of its hooks run.
         names.each do |mixin|
-          name, written = mixin.is_a?(Hash) ? mixin.values_at(:name, :macro) : mixin
+          name, written, given = mixin.is_a?(Hash) ? mixin.values_at(:name, :macro, :path) : mixin
+          # A base module comes with the file its top-level name resolves to.
+          base = mixin.is_a?(Hash) && mixin.key?(:path)
           @top = name if file.nil?
           next unless ConcernMembership.candidate?(name)
 
           source = file || @own_file
-          nested = source && nested_module(source, name, within)
+          nested = !base && source && nested_module(source, name, within)
           label, path =
-            if nested then [ nested.first, source ]
-            elsif @paths.key?(name) then [ name, @paths[name] ]
-            else ConcernPaths.find_named(@root, name, within: within, dirs: @dirs) || beside(file, name, within)
+            if base then [ name, given ]
+            elsif nested then [ nested.first, source ]
+            else named(name, within) || beside(file, name, within)
             end
-          if path.nil? && (outer = in_outer_file(name, within))
+          if path.nil? && !base && (outer = in_outer_file(name, within))
             source, nested = outer
             label, path = nested.first, source
           end
@@ -568,13 +570,13 @@ module RailsAiContext
           # a name resolving to none keeps no module's place.
           next unless @seen.add?(path ? label : [ :unresolved, name ])
 
-          macro = @macros[name] || written || :include
+          macro = written || :include
           singleton = ConcernMembership::SINGLETON_MACROS.include?(macro)
           if ConcernMembership.excluded?(name)
             # Hiding a concern hides what it declared. Only one whose file is
             # here would have been read, so only that one is worth counting.
             # A module mixed in from outside the class's file is not its concern to hide.
-            @hidden << name if path && !@paths.key?(name) && !singleton
+            @hidden << name if path && !@paths.key?(label) && !singleton
             next
           end
 
@@ -660,9 +662,22 @@ module RailsAiContext
 
         memo([ :beside, file, name, within ]) do
           dir = File.dirname(file)
-          ConcernPaths.candidate_names(name, within).map { |candidate| [ candidate, File.join(dir, "#{candidate.underscore}.rb") ] }
-                      .find { |_, path| File.file?(path) }
+          candidates = ConcernPaths.candidate_names(name, within)
+          candidate, path = candidates.map { |each| [ each, File.join(dir, "#{each.underscore}.rb") ] }.find { |_, each| File.file?(each) }
+          # The file can sit under a shorter path than the constant it declares.
+          declared = path && Introspectors::DeclaredConstant.named(File.read(path), candidate)
+          [ candidates.include?(declared) ? declared : candidate, path ] if path
         end
+      end
+
+      # The first candidate Ruby would find, a base module or a file.
+      def named(name, within)
+        found = ConcernPaths.find_named(@root, name, within: within, dirs: @dirs)
+        candidates = ConcernPaths.candidate_names(name, within)
+        extra = candidates.find { |candidate| @paths.key?(candidate) }
+        return found unless extra && (found.nil? || candidates.index(extra) <= candidates.index(found.first))
+
+        [ extra, @paths[extra] ]
       end
 
       # `Outer::Inner` with no file of its own, from Outer's file, which Zeitwerk loads it with.
@@ -952,7 +967,7 @@ module RailsAiContext
                 listeners: Introspectors::SourceIntrospector::LISTENER_MAP, extra: [], file: nil)
       # A module the class extends itself with gives it class methods, though no ancestor.
       walked = Array(mixins).select { |mixin| SingletonLookup.joins?(mixin, true) } +
-               extra.map { |mixin| { name: mixin.name, macro: mixin.macro } }
+               extra.map { |mixin| { name: mixin.name, macro: mixin.macro, path: mixin.path } }
       return [ {}, [], [], {}, {}, Set.new, {}, [] ] if walked.empty?
 
       # Most walks never look at the class's calls, so a base's walk is the
