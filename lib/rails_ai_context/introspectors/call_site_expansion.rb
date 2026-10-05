@@ -30,12 +30,13 @@ module RailsAiContext
         end
 
         # A line takes the source line of the first code written on it; the
-        # indentation before a pruned branch's body is not code.
-        def append(chunk, source_line)
+        # indentation before a pruned branch's body is not code. Text the call
+        # site supplies (`from_call`) stands where its parameter does, however many lines it takes.
+        def append(chunk, source_line, from_call: false)
           chunk.each_char do |char|
             @text << char
             if char == "\n"
-              source_line += 1
+              source_line += 1 unless from_call
               @code = false
             elsif !@code && !char.match?(/\s/)
               @lines[line] = source_line
@@ -467,7 +468,7 @@ module RailsAiContext
         case node
         when Prism::LocalVariableReadNode
           source = bound(bindings, node, depth)&.source
-          return out.append(source, node.location.start_line) if source
+          return out.append(source, node.location.start_line, from_call: true) if source
         when Prism::InterpolatedSymbolNode, Prism::InterpolatedStringNode
           folded = !heredoc?(node) && interpolated(node, bindings, depth)
           return out.append(folded.inspect, node.location.start_line) if folded
@@ -475,7 +476,7 @@ module RailsAiContext
           return emit_each(node, bindings, out, undecided, depth, conditions) if unrolled?(node, bindings, depth)
 
           looked_up = hash_lookup(node, bindings, depth)
-          return out.append(looked_up, node.location.start_line) if looked_up
+          return out.append(looked_up, node.location.start_line, from_call: true) if looked_up
         when Prism::IfNode, Prism::UnlessNode
           return emit_branch(node, bindings, out, undecided, depth, conditions)
         when Prism::CaseNode
@@ -565,7 +566,7 @@ module RailsAiContext
           next if pairs&.empty?
 
           out.append(", ", argument.location.start_line) if written
-          pairs ? out.append(pairs, argument.location.start_line) : emit(argument, bindings, out, undecided, depth, conditions)
+          pairs ? out.append(pairs, argument.location.start_line, from_call: true) : emit(argument, bindings, out, undecided, depth, conditions)
           written = true
         end
         out

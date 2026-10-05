@@ -414,6 +414,16 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
       expect(filters(method_source, "has_orders %w[new old]")).to eq([ [ :before_action, {} ] ])
     end
 
+    # OpenProject's authorize_with_permission, called with an `only:` list over three lines.
+    it "keeps the block on the method's line when the call's arguments span several" do
+      definition = Prism.parse("def guard(**args)\n  before_action(**args) do\n    head :ok\n  end\nend\n").value.statements.body.first
+      call = Prism.parse("guard only: %i[a\n            b\n            c]\n").value.statements.body.first
+
+      found = described_class.entries(definition, call, RailsAiContext::Introspectors::ControllerFilters::LISTENERS)[:filters]
+
+      expect(found.map { |f| [ f[:location], f[:proc_lines], f[:options] ] }).to eq([ [ 2, [ 2 ], { only: %i[a b c] } ] ])
+    end
+
     # Canvas's batch_jobs_in_actions takes its own key off the options before passing the rest on.
     it "reads a hash parameter after the leading statements delete a key from it" do
       method_source = <<~RUBY
