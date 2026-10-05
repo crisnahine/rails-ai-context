@@ -343,7 +343,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       {
         "Customer" => {
           mongoid: true,
-          fields: [ { name: :name, type: "String" }, { name: :active, type: "Boolean" } ],
+          fields: [ { name: :name, type: "String" }, { name: :active, type: "Boolean" }, { name: :age, type: "Integer", default: "0" } ],
           embeds: [ { type: :embeds_many, name: :orders } ],
           associations: [],
           validations: []
@@ -361,6 +361,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).to include("## Fields")
       expect(text).to include("name")
       expect(text).to include("String")
+      expect(text).to include("- `age`: Integer, default: 0")
     end
 
     it "renders embedded relations" do

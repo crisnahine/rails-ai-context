@@ -192,7 +192,7 @@ module RailsAiContext
             lines << "" << "## Fields"
             data[:fields].each do |f|
               type_str = f[:type] ? ": #{f[:type]}" : ""
-              lines << "- `#{f[:name]}`#{type_str}"
+              lines << "- `#{f[:name]}`#{type_str}#{", default: #{f[:default]}" if f.key?(:default)}"
             end
           end
 

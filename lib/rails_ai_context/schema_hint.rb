@@ -11,6 +11,11 @@ module RailsAiContext
     :associations,  # [{name: "comments", type: "has_many", class_name: "Comment"}, ...]
     :validations,   # [{kind: "presence", attributes: ["title"]}, ...]
     :primary_key,   # "id"
-    :confidence     # "[VERIFIED]", "[STATIC]" or "[INFERRED]"
-  )
+    :confidence,    # "[VERIFIED]", "[STATIC]" or "[INFERRED]"
+    :collection     # true for a Mongoid document: table_name is its collection
+  ) do
+    def initialize(collection: false, **members)
+      super
+    end
+  end
 end

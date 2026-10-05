@@ -19,10 +19,14 @@ module RailsAiContext
         model_info = models_data[model_key]
         return nil unless model_info.is_a?(Hash)
 
-        table_name = model_info[:table_name]
-        table_data = schema_data.dig(:tables, table_name) if table_name
+        mongoid = model_info[:mongoid] == true
+        # Mongoid's collection_name: store_in's, else the class name tableized with "/" as "_".
+        table_name = mongoid ? (model_info[:collection] || model_key.to_s.underscore.pluralize.tr("/", "_")) : model_info[:table_name]
+        table_data = schema_data.dig(:tables, table_name) if table_name && !mongoid
 
-        columns = if table_data
+        columns = if mongoid
+          Array(model_info[:fields]).map { |field| { name: field[:name].to_s, type: field[:type] }.compact }
+        elsif table_data
           (table_data[:columns] || []).map do |col|
             { name: col[:name], type: col[:type], null: col[:null], array: col[:array] }.compact
           end
@@ -47,7 +51,7 @@ module RailsAiContext
           }.compact
         end
 
-        primary_key = table_data&.dig(:primary_key) || "id"
+        primary_key = mongoid ? "_id" : table_data&.dig(:primary_key) || "id"
 
         # A static record already carries [STATIC]; a booted one has no
         # confidence key, and a resolved table there is reflection-confirmed.
@@ -60,7 +64,8 @@ module RailsAiContext
           associations: associations,
           validations: validations,
           primary_key: Introspectors::SchemaConventions.primary_key_label(primary_key),
-          confidence: confidence
+          confidence: confidence,
+          collection: mongoid
         )
       end
     end

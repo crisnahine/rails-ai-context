@@ -1914,8 +1914,7 @@ module RailsAiContext
         details = {
           confidence: Confidence::STATIC,
           mongoid: true,
-          fields: macros.select { |m| m[:macro] == :field }
-                        .map { |m| { name: m[:args].first, type: m[:options][:type] }.compact },
+          fields: macros.select { |m| m[:macro] == :field }.map { |m| mongoid_field(m) },
           embeds: macros.select { |m| %i[embeds_many embeds_one embedded_in].include?(m[:macro]) }
                         .map { |m| { type: m[:macro], name: m[:args].first } },
           # An embedded child is a relation like any other, so every count and the graph see it.
@@ -1934,6 +1933,13 @@ module RailsAiContext
         collection = macros.find { |m| m[:macro] == :store_in }&.dig(:options, :collection)
         details[:collection] = collection if collection
         downgrade_records(details)
+      end
+
+      # A default Mongoid computes (a lambda) is left out, as the replay leaves a computed column default.
+      def mongoid_field(macro)
+        options = macro[:options]
+        default = SchemaConventions.format_default(options[:default]) unless options[:default] == Confidence::INFERRED
+        { name: macro[:args].first, type: options[:type], default: default }.compact
       end
 
       def embedded_associations(macros)

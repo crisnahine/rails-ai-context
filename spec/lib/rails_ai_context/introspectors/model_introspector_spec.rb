@@ -1683,6 +1683,8 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
             store_in collection: "legacy_orders"
             field :total, type: BigDecimal
             field :tags
+            field :age, type: Integer, default: 0
+            field :labels, type: Array, default: []
             embeds_many :line_items
             embeds_one :address
             embedded_in :customer
@@ -1692,7 +1694,8 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         order = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Order"]
 
         expect(order[:collection]).to eq("legacy_orders")
-        expect(order[:fields]).to eq([ { name: :total, type: "BigDecimal" }, { name: :tags } ])
+        expect(order[:fields]).to eq([ { name: :total, type: "BigDecimal" }, { name: :tags },
+                                       { name: :age, type: "Integer", default: "0" }, { name: :labels, type: "Array", default: "[]" } ])
         expect(order[:embeds]).to eq([
           { type: :embeds_many, name: :line_items },
           { type: :embeds_one, name: :address },

@@ -26,14 +26,18 @@ module RailsAiContext
       def self.format_hint(hint)
         lines = []
         lines << "### #{hint.model_name} #{hint.confidence}"
-        lines << "**Table:** `#{hint.table_name}` (pk: `#{hint.primary_key}`)"
+        lines << if hint.collection
+          "**Collection:** `#{hint.table_name}` (key: `#{hint.primary_key}`)"
+        else
+          "**Table:** `#{hint.table_name}` (pk: `#{hint.primary_key}`)"
+        end
 
         if hint.columns.any?
           col_summary = hint.columns.first(10).map { |c|
             "`#{c[:name]}` #{c[:type]}#{'[]' if c[:array]}#{c[:null] == false ? ' NOT NULL' : ''}"
           }
           col_summary << "... #{hint.columns.size - 10} more" if hint.columns.size > 10
-          lines << "**Columns:** #{col_summary.join(', ')}"
+          lines << "**#{hint.collection ? 'Fields' : 'Columns'}:** #{col_summary.join(', ')}"
         end
 
         if hint.associations.any?
