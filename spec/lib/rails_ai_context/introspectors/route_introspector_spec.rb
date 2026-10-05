@@ -326,6 +326,28 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       expect(booted["statuses"]).to eq([ [ "/accounts/:account_id/statuses/:id", '{id: /-?\d+/, account_id: /-?\d+/}' ] ])
       expect(static).to eq(booted)
     end
+
+    it "lists an option Rails does not know as the route's default, as Rails does" do
+      booted, static = both_tiers(<<~'RUBY')
+        resources :boards, only: :show do
+          member do
+            get "details/:work_package_id(/:tab)", action: :split_view, defaults: { tab: :overview }, as: :details,
+                work_package_split_view: true
+          end
+        end
+        get "x/:wp", to: "x#show", flag: true, constraints: { wp: /\d+/ }, defaults: { tab: :o }
+        scope "/s", foo: :bar do
+          get "y", to: "y#show", baz: 1, foo: "own"
+        end
+        resources :things, only: :index, mode: "ro"
+        namespace :admin, level: 2 do
+          get "z", to: "z#show"
+        end
+      RUBY
+
+      expect(booted["boards"]).to include([ "/boards/:id/details/:work_package_id(/:tab)", "{tab: :overview, work_package_split_view: true}" ])
+      expect(static).to eq(booted)
+    end
   end
 
   describe "#static_call" do

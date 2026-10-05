@@ -340,6 +340,10 @@ module RailsAiContext
         # Mapper's URL options, which a hash constraint turns into route defaults.
         URL_OPTIONS = %w[protocol subdomain domain host port].freeze
         ROUTE_LEVEL = (VERB_METHODS + %i[match root]).freeze
+        # Calls whose options Rails passes on to the mapping, where one it does not know becomes a default.
+        OPTION_CARRIERS = (ROUTE_LEVEL + %i[scope namespace resources resource with_options]).freeze
+        MAPPER_OPTIONS = %w[as via to controller action on defaults constraints anchor format path internal shallow_path
+                            shallow_prefix module path_names shallow blocks options only except param concerns].freeze
 
         # What `bin/rails routes` prints beside a route: its defaults, then the
         # constraints on its path segments. Scope URL options win over the
@@ -351,6 +355,7 @@ module RailsAiContext
           scopes << own unless route_level || own.empty?
           own = {} unless route_level
           defaults = (own[:url] || {}).merge(scopes.map { |c| c[:url].merge(c[:defaults]) }.reduce({}, :merge)).merge(own[:defaults] || {})
+          defaults = defaults.merge(scopes.map { |c| c[:options] }.reduce({}, :merge)).merge(own[:options] || {})
           params = path.scan(/[:*](\w+)/).flatten << "format"
           segments = scopes.map { |c| c[:segment] }.reduce({}, :merge).merge(own[:segment] || {}).select { |key, _| params.include?(key) }
           all = defaults.merge(segments)
@@ -363,7 +368,7 @@ module RailsAiContext
           return unless hash
 
           # `scoped` is what Rails keeps in the scope's constraints, which nested resources read.
-          found = { url: {}, defaults: {}, segment: {}, scoped: {} }
+          found = { url: {}, defaults: {}, segment: {}, scoped: {}, options: {} }
           if node.name == :constraints && node.receiver.nil?
             read_constraint_hash(hash, found)
           else
@@ -375,7 +380,10 @@ module RailsAiContext
               when "constraints" then read_constraint_hash(assoc.value, found)
               when "defaults" then each_literal(assoc.value) { |k, v| found[:defaults][k] = constraint_value(v) }
               else
-                next unless assoc.value.is_a?(Prism::RegularExpressionNode)
+                unless assoc.value.is_a?(Prism::RegularExpressionNode)
+                  found[:options][key] = constraint_value(assoc.value) if OPTION_CARRIERS.include?(node.name) && !MAPPER_OPTIONS.include?(key)
+                  next
+                end
 
                 found[:segment][key] = constraint_value(assoc.value)
                 # A resource moves its regexp options into its constraints.
@@ -626,7 +634,7 @@ module RailsAiContext
 
           key = "#{layout[:key]}_#{param}"
           frame = @stack.last
-          own = frame[:route_constraints] || { url: {}, defaults: {}, segment: {}, scoped: {} }
+          own = frame[:route_constraints] || { url: {}, defaults: {}, segment: {}, scoped: {}, options: {} }
           frame[:route_constraints] = own.merge(segment: own[:segment].merge(key => constraint_value(value)),
                                                 scoped: own[:scoped].merge(key => value))
         end
