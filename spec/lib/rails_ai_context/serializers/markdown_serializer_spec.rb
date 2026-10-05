@@ -229,6 +229,14 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
       expect(output).not_to include("Sidekiq::Web` at")
     end
 
+    it "names the condition a mount is drawn under" do
+      output = described_class.new({ engines: { mounted_engines: [
+        { engine: "Lookbook::Engine", path: "/lookbook", condition: "if Rails.env.development?" }
+      ] } }).call
+
+      expect(output).to include("- `Lookbook::Engine` at `/lookbook` (`if Rails.env.development?`)\n")
+    end
+
     it "names the app's own in-repo engines under the mounts" do
       output = described_class.new({
         engines: { mounted_engines: [ { engine: "Sidekiq::Web", path: "/sidekiq" } ],

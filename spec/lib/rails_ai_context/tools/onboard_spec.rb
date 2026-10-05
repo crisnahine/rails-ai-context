@@ -454,6 +454,15 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       expect(text).to include("Sidekiq::Web")
     end
 
+    it "names the condition a mount is drawn under" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "TestApp", rails_version: "8.0", ruby_version: "3.4",
+        engines: { mounted_engines: [ { engine: "Lookbook::Engine", path: "/lookbook", condition: "if Rails.env.development?" } ] }
+      })
+      text = described_class.call(detail: "full").content.first[:text]
+      expect(text).to include("- **Lookbook::Engine** at `/lookbook` (`if Rails.env.development?`)\n")
+    end
+
     it "names a mounted app with no known path without inventing one" do
       allow(described_class).to receive(:cached_context).and_return({
         app_name: "TestApp",

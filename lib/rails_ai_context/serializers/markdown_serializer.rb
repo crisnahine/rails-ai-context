@@ -485,6 +485,7 @@ module RailsAiContext
           data[:mounted_engines].each do |e|
             desc = e[:description] ? " - #{e[:description]}" : ""
             at = e[:path] ? " at `#{e[:path]}`" : ""
+            at += " (`#{e[:condition]}`)" if e[:condition]
             lines << "- `#{e[:engine]}`#{at}#{desc}"
           end
         else
