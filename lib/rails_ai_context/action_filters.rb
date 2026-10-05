@@ -14,7 +14,8 @@ module RailsAiContext
 
     module_function
 
-    # { own: [filter], inherited: [filter], skipped: [name] } for one action.
+    # { own: [filter], inherited: [filter], chain: [filter], skipped: [name] } for one action:
+    # `chain` is own and inherited together, in the order Rails runs them.
     # `source:` is the controller's source when the caller already has it.
     def for(ctx, controller_name, action, source: nil, root: nil)
       split(ctx, controller_name, action.to_s, source: source, root: root)
@@ -37,13 +38,13 @@ module RailsAiContext
 
     def split(ctx, controller_name, action, source:, root:)
       info = Payload.controllers(ctx)[controller_name.to_s]
-      return { own: [], inherited: [], skipped: [] } unless info.is_a?(Hash)
+      return { own: [], inherited: [], chain: [], skipped: [] } unless info.is_a?(Hash)
 
       skips = own_skips(ctx, controller_name, info, action, root: root, source: source)
       skipped = absolute_names(skips, action)
       # A skip record states what does not run, so it is never a filter.
       declared = Array(info[:filters]).grep(Hash).reject { |f| f[:skipped] }
-      parent, dropped, inherited_conditions, declares = parent_filters(ctx, info[:parent_class], action, skipped,
+      parent, dropped, inherited_conditions, declares, whole_chain = parent_filters(ctx, info[:parent_class], action, skipped,
                                                                        root: root, within: controller_name.to_s)
       conditions = merge_conditions(inherited_conditions, conditions_by_name(skips, action))
       # The runtime tier's list is the whole chain, so an ancestor's skip
@@ -73,16 +74,40 @@ module RailsAiContext
                           runs_once?(f[:from_concern], root, controller_name))
       end
       own = mark_conditional_skips(applicable.reject(&inherited_here), conditions, action)
+      # The runtime tier's list is the whole chain: once the body and every ancestor were read,
+      # a name none of them declares was installed from outside it (a gem's on_load).
+      outside = []
+      if whole_chain && Array(info[:filters]).grep(Hash).any? { |f| f[:declared] || f[:skipped] }
+        outside, own = own.partition { |f| !f[:declared] }
+        outside = outside.map { |f| f.merge(provenance: "not declared in the controller chain") }
+      end
       inherited = mark_conditional_skips(
         parent.reject { |f| declared_names.include?(entry_key(f)) } +
           applicable.select(&inherited_here)
             .map { |f| f.except(:from, :from_concern, :provenance).merge(attribution_of[entry_key(f)]) }, conditions, action
-      )
+      ) + outside
+      inherited += unplaced_conditional_skips(own + inherited, conditions, action,
+                                              declares | declared.map { |f| f[:name].to_s }.to_set)
+      chain = run_sequence(inherited + own, info)
+      mine = own.to_set.compare_by_identity
 
-      { own: own,
-        inherited: inherited + unplaced_conditional_skips(own + inherited, conditions, action,
-                                                          declares | declared.map { |f| f[:name].to_s }.to_set),
-        skipped: skipped }
+      { own: chain.select { |f| mine.include?(f) }, inherited: chain.reject { |f| mine.include?(f) },
+        chain: chain, skipped: skipped }
+    end
+
+    # The runtime tier's list is the reflection list, already in run order; a filter it
+    # does not carry keeps its place. The static tier's lists are declarations, which
+    # Rails appends in turn and a prepend_* macro unshifts.
+    def run_sequence(filters, info)
+      if RailsAiContext.static_tier?
+        return filters.each_with_object([]) { |f, list| f[:prepend] ? list.unshift(f) : list.push(f) }
+      end
+
+      rank = {}
+      Array(info[:filters]).grep(Hash).reject { |f| f[:skipped] }.each_with_index { |f, i| rank[entry_key(f)] ||= i }
+      slots = filters.each_index.select { |i| rank.key?(entry_key(filters[i])) }
+      ranked = slots.map { |i| filters[i] }.each_with_index.sort_by { |f, i| [ rank[entry_key(f)], i ] }.map(&:first)
+      filters.dup.tap { |out| slots.zip(ranked) { |i, f| out[i] = f } }
     end
 
     # A skip of a name no ancestor in the payload declares is the only
@@ -194,6 +219,7 @@ module RailsAiContext
       evidence = {}
       depth = 0
       dropped = skipped.map(&:to_s).to_set
+      whole = true
       name = Introspectors::ActionResolver.resolve_entry_name(controllers, parent_class, within)
 
       while name && !seen.include?(name)
@@ -203,6 +229,7 @@ module RailsAiContext
         source = info.is_a?(Hash) ? nil : base_controller_source(name, root)
         info ||= { filters: base_filters(source, name, root) } if source
         unless info.is_a?(Hash)
+          whole &&= name.to_s.delete_prefix("::").start_with?("ActionController::")
           name = gem_controller_base(name, root)
           next
         end
@@ -233,7 +260,7 @@ module RailsAiContext
         name = Introspectors::ActionResolver.resolve_entry_name(controllers, info[:parent_class], name)
       end
 
-      [ run_order(found, attributed, positions, evidence), dropped, conditions, declares ]
+      [ run_order(found, attributed, positions, evidence), dropped, conditions, declares, whole ]
     end
 
     # The closest ancestor carrying a filter keeps its constraints, but a
@@ -457,6 +484,6 @@ module RailsAiContext
                          :skip_calls, :base_filters, :skip_flag_records, :redeclared_names, :last_records, :own_skips,
                          :record_attribution, :conditional?, :partial?, :absolute_names, :conditions_by_name,
                          :merge_conditions, :mark_conditional_skips, :skip_tail, :action_names, :condition_text,
-                         :unplaced_conditional_skips, :evidence_skips, :configured_base, :runs_once?
+                         :unplaced_conditional_skips, :evidence_skips, :configured_base, :runs_once?, :run_sequence
   end
 end

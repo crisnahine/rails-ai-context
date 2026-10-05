@@ -44,7 +44,7 @@ module RailsAiContext
       # stated rather than silent.
       def self.filter_hint(ctrl_class, ctx)
         chain = RailsAiContext::ActionFilters.for_controller(ctx, ctrl_class, root: rails_app&.root&.to_s)
-        names = (chain[:inherited] + chain[:own]).map { |f| f[:name] }
+        names = chain[:chain].map { |f| f[:name] }
         return nil if names.empty?
 
         rest = names.size - HINTED_FILTERS

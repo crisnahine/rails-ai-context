@@ -234,8 +234,7 @@ module RailsAiContext
 
         if applicable.values.any?(&:any?)
           lines << "" << "## Applicable Filters"
-          applicable[:inherited].each { |f| lines << filter_line(f) }
-          applicable[:own].each { |f| lines << filter_line(f) }
+          applicable[:chain].each { |f| lines << filter_line(f) }
           applicable[:skipped].each { |name| lines << "- ~~#{name}~~ _(skipped)_" }
         end
 
@@ -451,8 +450,7 @@ module RailsAiContext
         chain = RailsAiContext::ActionFilters.for_controller(ctx, name, root: rails_app.root.to_s)
         if chain.values.any?(&:any?)
           lines << "" << "## Filters"
-          chain[:inherited].each { |f| lines << filter_line(f) }
-          chain[:own].each { |f| lines << filter_line(f) }
+          chain[:chain].each { |f| lines << filter_line(f) }
           chain[:skipped].each { |skipped| lines << "- ~~#{skipped}~~ _(skipped)_" }
         end
         if info[:concerns_unread]&.any?
