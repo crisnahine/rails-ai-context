@@ -29,6 +29,8 @@ module RailsAiContext
       html text js css xml json ics csv vcf vtt md svg rss atom yaml
     ].freeze
 
+    RUBY_HANDLER_EXTENSIONS = %w[rb ruby builder jbuilder rabl prawn arb].freeze
+
     MARKUP_GLOB = "**/*.{erb,haml,slim}"
 
     module_function
@@ -82,10 +84,10 @@ module RailsAiContext
       handler_extensions.include?(ext) || RAW_FORMAT_EXTENSIONS.include?(ext)
     end
 
-    # A raw template is not ERB: its tags print as written.
+    # Labelled by the handler: html, csv and the like render raw, so their tags print as written.
     def fence(path)
       ext = File.extname(path.to_s).delete_prefix(".").downcase
-      handler_extensions.include?(ext) ? "erb" : ext
+      RUBY_HANDLER_EXTENSIONS.include?(ext) ? "ruby" : ext
     end
 
     # app/views/layouts also holds the partials those layouts render, and the

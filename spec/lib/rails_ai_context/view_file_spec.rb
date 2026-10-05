@@ -50,6 +50,21 @@ RSpec.describe RailsAiContext::ViewFile do
     end
   end
 
+  describe ".fence" do
+    it "labels a template by the handler that renders it" do
+      fences = %w[
+        posts/index.html.erb pages/about.html reports/export.csv feed.atom posts/show.html.haml
+        posts/index.json.jbuilder sitemap.xml.builder pwa/service-worker.js notes/body.text
+      ].to_h { |name| [ name, described_class.fence(name) ] }
+
+      expect(fences).to eq(
+        "posts/index.html.erb" => "erb", "pages/about.html" => "html", "reports/export.csv" => "csv",
+        "feed.atom" => "atom", "posts/show.html.haml" => "haml", "posts/index.json.jbuilder" => "ruby",
+        "sitemap.xml.builder" => "ruby", "pwa/service-worker.js" => "js", "notes/body.text" => "text"
+      )
+    end
+  end
+
   describe ".locate" do
     it "resolves an app/views-relative path with its extension" do
       result = described_class.locate(@root, "posts/index.html.erb")
