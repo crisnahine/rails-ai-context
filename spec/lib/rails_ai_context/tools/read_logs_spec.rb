@@ -240,6 +240,40 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
       end
     end
 
+    context "when one message in a severity-less log starts with a severity word" do
+      before do
+        File.write(File.join(log_dir, "test.log"), <<~LOG)
+          Started GET "/ok" for ::1 at 2026-10-05 10:00:00 +0000
+          Processing by ProbeController#ok as */*
+          WARN: disk almost full
+          Completed 200 OK in 0ms
+          Started GET "/boom" for ::1 at 2026-10-05 10:00:02 +0000
+          Completed 500 Internal Server Error in 0ms
+        LOG
+      end
+
+      it "does not filter on that one line" do
+        text = described_class.call(level: "ERROR").content.first[:text]
+        expect(text).to include("no severity field")
+        expect(text).to include('Started GET "/boom"')
+        expect(text).to include("Level: all levels")
+      end
+    end
+
+    it "filters a Logger::Formatter log whose tail is mostly one long backtrace" do
+      frames = Array.new(20) { |i| "[req-1] app/models/user.rb:#{i}:in 'save'" }
+      File.write(File.join(log_dir, "test.log"), <<~LOG)
+        I, [2026-03-29T10:00:00 #1]  INFO -- : Started GET "/users"
+        F, [2026-03-29T10:00:01 #1] FATAL -- : [req-1]#{'  '}
+        [req-1] RuntimeError (boom):
+        #{frames.join("\n")}
+        I, [2026-03-29T10:00:02 #1]  INFO -- : Started GET "/ok"
+      LOG
+      text = described_class.call(level: "ERROR").content.first[:text]
+      expect(text).to include("RuntimeError (boom)", "app/models/user.rb:19")
+      expect(text).not_to include("Started GET")
+    end
+
     {
       "Sidekiq 6 and 7" => <<~LOG,
         2026-10-05T10:00:00.000Z pid=1 tid=abc class=HardJob jid=f00 INFO: start

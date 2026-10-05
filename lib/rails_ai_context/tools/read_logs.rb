@@ -90,8 +90,8 @@ module RailsAiContext
 
         # Detect format and filter by level
         format = detect_format(raw_lines)
-        if level != "all" && raw_lines.none? { |l| extract_level(l, format) }
-          warnings << "these lines have no severity field, so they cannot be filtered by level; showing every line"
+        if level != "all" && !severity_format?(raw_lines, format)
+          warnings << "most of these lines have no severity field, so they cannot be filtered by level; showing every line"
           level = "all"
         end
         filtered = filter_by_level(raw_lines, level, format)
@@ -174,6 +174,15 @@ module RailsAiContext
       )
 
       ANSI_COLOR = /\e\[[\d;]*m/
+      BACKTRACE_FRAME = /\S:\d+:in /
+
+      # Filtering by level needs a severity on most lines: one message that
+      # happens to start with "WARN:" in a log that writes no severity must
+      # not turn every other line into its continuation.
+      private_class_method def self.severity_format?(lines, format)
+        heads = lines.reject { |l| l.strip.empty? || l.match?(/\A\s/) || l.match?(BACKTRACE_FRAME) }
+        heads.count { |l| extract_level(l, format) } * 2 > heads.size
+      end
 
       private_class_method def self.extract_level(line, format)
         case format
