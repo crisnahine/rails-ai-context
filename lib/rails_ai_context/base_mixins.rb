@@ -46,11 +46,13 @@ module RailsAiContext
     end
     private_class_method :discover
 
-    # [file, tree] for each scanned file that names a model base.
+    # [file, tree] for each scanned file that names a model base; models and bodies both ask.
     def marked(root)
-      scanned_files(root).filter_map do |file|
-        source = SafeFile.read(file)
-        [ file, AstCache.parse(file).value ] if source && MARKERS.any? { |marker| source.include?(marker) }
+      RunCache.fetch([ :base_mixins_marked, root ]) do
+        scanned_files(root).filter_map do |file|
+          source = SafeFile.read(file)
+          [ file, AstCache.parse(file).value ] if source && MARKERS.any? { |marker| source.include?(marker) }
+        end
       end
     end
     private_class_method :marked

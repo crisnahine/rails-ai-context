@@ -204,6 +204,7 @@ module RailsAiContext
         filters, unread = ControllerFilters.with_concerns(source, root: app.root.to_s, within: class_name,
                                                                   cache: (@concern_cache ||= {}))
         concerns = extract_concerns_from_source(source)
+        walked = class_body_walk(source)
         own = ActionResolver.actions_from_source(source, class_name: class_name, filters: filter_names(filters))
         mixed_in = concern_actions(concerns, class_name, filters) - own
         details = {
@@ -218,9 +219,9 @@ module RailsAiContext
           strong_params: extract_strong_params(source),
           respond_to_formats: extract_respond_to(source),
           rescue_from: extract_rescue_from(source),
-          rate_limits: extract_rate_limits(source).presence,
+          rate_limits: extract_rate_limits(source, walked).presence,
           turbo_stream_actions: extract_turbo_stream_actions(source),
-          **ControllerSettings.from_source(source),
+          **ControllerSettings.from_source(source, walked),
           file: relative_file
         }.compact
         details
@@ -241,6 +242,7 @@ module RailsAiContext
         # What the file does not define itself is inherited or mixed in, for
         # the routes to settle as they do for a statically read entry.
         own = source ? ActionResolver.actions_from_source(source, class_name: ctrl.name, filters: filter_names(filters)) : actions
+        walked = class_body_walk(source)
 
         {
           parent_class: ctrl.superclass.name,
@@ -253,9 +255,9 @@ module RailsAiContext
           strong_params: extract_strong_params(source),
           respond_to_formats: extract_respond_to(source),
           rescue_from: extract_rescue_from(source),
-          rate_limits: extract_rate_limits(source).presence,
+          rate_limits: extract_rate_limits(source, walked).presence,
           turbo_stream_actions: extract_turbo_stream_actions(source),
-          **ControllerSettings.from_source(source),
+          **ControllerSettings.from_source(source, walked),
           file: relative_source_path(ctrl)
         }.compact
       end
@@ -772,13 +774,20 @@ module RailsAiContext
 
       # Each `rate_limit` the class body declares (`name:` lets one controller declare
       # several), as its options read and the literals among them.
-      def extract_rate_limits(source)
-        return [] if source.nil?
+      # One walk of the class body serves the rate limits and the settings.
+      def class_body_walk(source)
+        return nil if source.nil?
 
-        walked = SourceIntrospector.walk_source(source, {
-          rate_limit: -> { Listeners::GenericMacroListener.new(:rate_limit) },
-          methods: Listeners::MethodsListener
-        })
+        SourceIntrospector.walk_source(source, ControllerSettings::LISTENERS.merge(
+          rate_limit: -> { Listeners::GenericMacroListener.new(:rate_limit) }
+        ))
+      rescue => e
+        RailsAiContext.debug_fail(e, nil, label: "class_body_walk")
+      end
+
+      def extract_rate_limits(source, walked = class_body_walk(source))
+        return [] if walked.nil?
+
         SourceIntrospector.outside_defs(walked[:rate_limit], walked[:methods]).map do |entry|
           options = entry[:options] || {}
           sources = entry[:option_values] || {}

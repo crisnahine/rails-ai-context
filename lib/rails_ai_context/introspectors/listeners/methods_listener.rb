@@ -49,6 +49,10 @@ module RailsAiContext
           class_attribute: %i[reader writer], mattr_reader: [ :reader ], cattr_reader: [ :reader ],
           mattr_writer: [ :writer ], cattr_writer: [ :writer ], mattr_accessor: %i[reader writer], cattr_accessor: %i[reader writer]
         }.freeze
+        # Sets, because a `when *names` allocates on every call node of every walk.
+        BLOCK_FRAME_NAMES = BLOCK_FRAMES.keys.to_set.freeze
+        DELEGATOR_NAMES = DELEGATORS.to_set.freeze
+        DEFINERS = Set[*ATTR_DEFINERS.keys, :define_method, :alias_method, *CLASS_ACCESSORS.keys].freeze
 
         def on_class_node_enter(node)
           open_frame(:body)
@@ -100,11 +104,11 @@ module RailsAiContext
             else
               mark(node.arguments.arguments, :module_function, :instance)
             end
-          when *BLOCK_FRAMES.keys
+          when BLOCK_FRAME_NAMES
             @scoped_blocks[node.block] = BLOCK_FRAMES[node.name] if node.block.is_a?(Prism::BlockNode)
-          when *DELEGATORS
+          when DELEGATOR_NAMES
             record_delegated(node) if @def_depth.zero?
-          when *ATTR_DEFINERS.keys, :define_method, :alias_method, *CLASS_ACCESSORS.keys
+          when DEFINERS
             record_defined(node) if @def_depth.zero? && @frames.last.kind != :extension
           end
         end

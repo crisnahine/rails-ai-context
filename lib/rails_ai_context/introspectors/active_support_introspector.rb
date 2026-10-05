@@ -116,6 +116,8 @@ module RailsAiContext
       end
 
       SUBSCRIBE_CALLS = %w[subscribe monotonic_subscribe].freeze
+      # Only the receivers subscriptions_in keeps, so a newsletter `subscribe` is not parsed.
+      SUBSCRIPTION_HINT = /Notifications\s*&?\.\s*(?:monotonic_)?subscribe\b|\battach_to\b/
 
       # One read of lib/, app/ and the initializers serves both lists; only a file
       # that mentions a subscription is parsed.
@@ -126,10 +128,15 @@ module RailsAiContext
           source_paths.each do |path|
             content = RailsAiContext::SafeFile.read(path) or next
             relative = path.sub("#{root}/", "")
-            encryptor = content.match?(ENCRYPTOR_USE)
-            verifies = content.match?(VERIFIER_USE)
-            verifier << { file: relative, encryptor: encryptor, verifier: verifies } if (encryptor || verifies) && !relative.start_with?("config/")
-            subscriptions.concat(subscriptions_in(content, relative)) if content.match?(/subscribe|attach_to/)
+            # A literal check first: these patterns have no literal prefix, so each scans the whole file.
+            if content.include?("MessageEncryptor") || content.include?("MessageVerifier") || content.include?("message_verifier")
+              encryptor = content.match?(ENCRYPTOR_USE)
+              verifies = content.match?(VERIFIER_USE)
+              verifier << { file: relative, encryptor: encryptor, verifier: verifies } if (encryptor || verifies) && !relative.start_with?("config/")
+            end
+            next unless content.include?("subscribe") || content.include?("attach_to")
+
+            subscriptions.concat(subscriptions_in(content, relative)) if content.match?(SUBSCRIPTION_HINT)
           end
           { message_verifier_usage: verifier, notification_subscriptions: subscriptions.sort_by { |s| [ s[:file], s[:line], s[:event] ] } }
         end

@@ -258,15 +258,18 @@ module RailsAiContext
       # Where apps keep a spec: rswag's swagger/, a docs site, public/ for a served spec,
       # and app/ beside a Grape or versioned API.
       OPENAPI_GLOBS = %w[
-        *.{json,yaml,yml} {openapi,swagger,doc,docs,public,app,config}/**/*.{json,yaml,yml}
+        *.{json,yaml,yml} {openapi,swagger,doc,docs,public,app,config}/**/*
       ].freeze
+      OPENAPI_EXTENSIONS = %w[.json .yaml .yml].freeze
       OPENAPI_YAML_KEY = /^["']?(?:openapi|swagger)["']?[ \t]*:/
       OPENAPI_SKIP = %r{(?:\A|/)(?:node_modules|packs|assets|vite)/}
 
       # A file is a spec by its top-level `openapi` or `swagger` key, never by where it is.
+      # Braces expand to one glob each, so the extension is checked after a single walk per tree.
       def detect_openapi_specs
         OPENAPI_GLOBS.flat_map { |pattern| Dir.glob(pattern, base: root.to_s) }
-          .uniq.reject { |relative| relative.match?(OPENAPI_SKIP) }
+          .uniq.select { |relative| relative.end_with?(*OPENAPI_EXTENSIONS) }
+          .reject { |relative| relative.match?(OPENAPI_SKIP) }
           .select { |relative| openapi_document?(relative) }
           .sort
       rescue => e
@@ -279,11 +282,14 @@ module RailsAiContext
       # The key sits at the top, so a bounded head decides it: a spec over the
       # per-file read limit is still listed, and no file is read whole for one key.
       def openapi_document?(relative)
-        resolution = SafePath.locate(relative, under: root.to_s, max_size: Float::INFINITY)
+        resolution = SafePath.locate(relative, under: root.to_s, max_size: Float::INFINITY, listed: true)
         return false unless resolution.ok?
 
-        head = File.read(resolution.realpath, OPENAPI_HEAD).to_s.force_encoding(Encoding::UTF_8).scrub("?")
-        return false unless head.match?(/openapi|swagger/)
+        raw = File.read(resolution.realpath, OPENAPI_HEAD).to_s
+        # Bytewise include? before any transcoding: most candidates are locale files.
+        return false unless raw.include?("openapi") || raw.include?("swagger")
+
+        head = raw.force_encoding(Encoding::UTF_8).scrub("?")
         return head.match?(OPENAPI_YAML_KEY) unless relative.end_with?(".json")
         return json_top_level_key?(head) if File.size(resolution.realpath) > OPENAPI_HEAD
 

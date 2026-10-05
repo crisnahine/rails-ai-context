@@ -97,6 +97,26 @@ RSpec.describe RailsAiContext::SafePath do
     end
   end
 
+  describe ".locate with a listed path" do
+    it "resolves a plain file and a linked one as realpath does, and refuses a link to a secret" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "real/config"))
+        File.write(File.join(dir, "real/config/api.yml"), "openapi: 3.0.0\n")
+        File.write(File.join(dir, "real/config/master.key"), "secret")
+        File.symlink("real", File.join(dir, "app"))
+        File.symlink("api.yml", File.join(dir, "real/config/linked.yml"))
+        File.symlink("master.key", File.join(dir, "real/config/key.yml"))
+
+        plain = described_class.locate("app/config/api.yml", under: dir, listed: true)
+        linked = described_class.locate("app/config/linked.yml", under: dir, listed: true)
+        expect(plain.realpath).to eq(File.realpath(File.join(dir, "real/config/api.yml")))
+        expect(linked.realpath).to eq(plain.realpath)
+        expect(described_class.locate("app/config/key.yml", under: dir, listed: true).refusal).to eq(:sensitive)
+        expect(described_class.locate("app/config/none.yml", under: dir, listed: true).refusal).to eq(:missing)
+      end
+    end
+  end
+
   describe ".read" do
     it "returns the content with the resolution for a readable file" do
       content, result = described_class.read("posts/index.html.erb", under: views, root: @root)

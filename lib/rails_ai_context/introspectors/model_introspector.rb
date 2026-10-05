@@ -206,7 +206,7 @@ module RailsAiContext
       # process cannot stat is an error entry rather than one that quietly
       # is not there. The count is an answer too.
       def static_candidates
-        SourceScan.paths(app.root, kind: "app/models", skip_concerns: false).each_with_object({}) do |record, found|
+        SourceScan.model_paths(app.root).each_with_object({}) do |record, found|
           begin
             source = model_source(record.path) if File.size(record.path) <= RailsAiContext.configuration.max_file_size
             if source.nil?
@@ -507,7 +507,7 @@ module RailsAiContext
         # out. A top-level `app/models/concerns` is an autoload root instead,
         # so its files declare no `Concerns::` prefix and that path name never
         # constantizes.
-        SourceScan.paths(app.root, kind: "app/models", skip_concerns: false).each do |record|
+        SourceScan.model_paths(app.root, base_model: model_base_check).each do |record|
           next if record.path_name.start_with?("Concerns::")
           next if known.include?(record.path_name)
           next if config.excluded_models.include?(record.path_name)

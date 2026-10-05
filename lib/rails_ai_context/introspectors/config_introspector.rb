@@ -119,7 +119,7 @@ module RailsAiContext
 
       # class name => the attributes it declares and its reset hooks.
       def current_attributes
-        @current_attributes ||= SourceScan.classes(root, kind: "app/models").filter_map do |name, record|
+        @current_attributes ||= model_classes.filter_map do |name, record|
           declared = DeclaredConstant.declarations(record.source).first
           [ name, current_attribute_detail(record.source) ] if declared && CURRENT_ATTRIBUTE_BASES.include?(declared.superclass)
         end.to_h

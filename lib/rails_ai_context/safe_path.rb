@@ -20,16 +20,18 @@ module RailsAiContext
 
     # relative: the caller's path, relative to `under`. root: the directory
     # the sensitive patterns are matched against (the app root for most tools).
-    def locate(relative, under:, root: under, max_size: nil)
+    # listed: the path came from a listing of `under`, so it is spelled as on disk.
+    def locate(relative, under:, root: under, max_size: nil, listed: false)
       relative = relative.to_s
       return refuse(:traversal) if traversal?(relative)
       return refuse(:sensitive) if sensitive?(relative)
 
-      real = File.realpath(File.join(under.to_s, relative))
-      real_under = File.realpath(under.to_s)
+      path = File.join(under.to_s, relative)
+      real = listed ? real_file(path) : File.realpath(path)
+      real_under = real_base(under)
       return refuse(:outside) unless contained?(real, real_under)
 
-      real_root = File.realpath(root.to_s)
+      real_root = real_base(root)
       root_relative = real == real_root ? "" : real.delete_prefix(dir_prefix(real_root))
       return refuse(:sensitive) if sensitive?(root_relative)
       return refuse(:missing) unless File.file?(real)
@@ -40,6 +42,20 @@ module RailsAiContext
       Resolution.new(realpath: real, relative: root_relative, refusal: nil)
     rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP, Errno::ENAMETOOLONG, Errno::ENOTDIR
       refuse(:missing)
+    end
+
+    # A directory resolves to the same path for every lookup in a run.
+    def real_base(dir)
+      RunCache.fetch([ :safe_path_base, dir.to_s ]) { File.realpath(dir.to_s) }
+    end
+
+    # A file that is not a link is its directory's real path plus its name, so a
+    # scan of hundreds of files in one directory resolves the directory once. A
+    # typed path keeps realpath, which also corrects its case on macOS.
+    def real_file(path)
+      return File.realpath(path) unless File.lstat(path).file?
+
+      File.join(real_base(File.dirname(path)), File.basename(path))
     end
 
     def read(relative, under:, root: under, max_size: nil)

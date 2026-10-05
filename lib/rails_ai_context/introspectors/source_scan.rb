@@ -33,24 +33,19 @@ module RailsAiContext
         PathResolver.dirs_for(root, kind).each do |dir|
           scan_dir(dir, root, real_root, skip_concerns, &block)
         end
-        scan_extra_model_roots(root, real_root, &block) if kind == "app/models"
       rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
         nil
       end
 
       def scan_dir(dir, root, real_root, skip_concerns)
         real_dir = File.realpath(dir)
-        ruby_files(dir, [ real_dir, real_root ], Set.new).sort.each do |path|
+        ruby_files(dir, real_dir, [ real_dir, real_root ], Set.new).sort_by(&:first).each do |path, real|
           relative_to_dir = path.delete_prefix(dir + File::SEPARATOR)
           next if skip_concerns && relative_to_dir.start_with?("concerns/")
-
-          real = File.realpath(path)
           next unless within?(real, real_dir, real_root)
 
           path_name = relative_to_dir.sub(/\.rb\z/, "").split("/").map(&:camelize).join("::")
           yield Record.new(path: real, file: relative_file(path, real, root, real_root), path_name: path_name, source: nil)
-        rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
-          next
         end
       rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
         nil
@@ -60,29 +55,35 @@ module RailsAiContext
       # own tree; a directory reached twice (a link back up) is walked once.
       # Linked directories wait until the real tree is done, so a directory
       # both spell is named by its real path whatever order the disk lists.
-      def ruby_files(dir, bounds, visited)
-        pending = [ dir ]
+      # Each entry is [path as spelled, real path].
+      def ruby_files(dir, real_dir, bounds, visited)
+        pending = [ [ dir, real_dir ] ]
         found = []
-        found.concat(walk_dir(pending.shift, bounds, visited, pending)) while pending.any?
+        found.concat(walk_dir(*pending.shift, bounds, visited, pending)) while pending.any?
         found
       end
 
-      def walk_dir(dir, bounds, visited, links)
-        return [] unless visited.add?(File.realpath(dir))
+      # One lstat per entry: below a real directory only a link needs a realpath.
+      def walk_dir(dir, real_dir, bounds, visited, links)
+        return [] unless visited.add?(real_dir)
 
         Dir.children(dir).sort.flat_map do |name|
           next [] if name.start_with?(".")
 
           path = File.join(dir, name)
-          if !File.directory?(path)
-            name.end_with?(".rb") ? [ path ] : []
-          elsif !within?(File.realpath(path), *bounds)
-            []
-          elsif File.symlink?(path)
-            links << path
-            []
+          stat = File.lstat(path)
+          if stat.symlink?
+            real = File.realpath(path)
+            if !File.directory?(real)
+              name.end_with?(".rb") ? [ [ path, real ] ] : []
+            else
+              links << [ path, real ] if within?(real, *bounds)
+              []
+            end
+          elsif stat.directory?
+            walk_dir(path, File.join(real_dir, name), bounds, visited, links)
           else
-            walk_dir(path, bounds, visited, links)
+            name.end_with?(".rb") ? [ [ path, File.join(real_dir, name) ] ] : []
           end
         rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
           []
@@ -95,41 +96,97 @@ module RailsAiContext
         SafePath.contained?(real, real_dir) || SafePath.contained?(real, real_root)
       end
 
-      SUPERCLASS_DECLARATION = /^[^\S\n]*class[^\S\n]+[\w:]+[^\S\n]*</
+      # The model directories plus the classes elsewhere that could be a model.
+      # Only the model listing wants the second half: a count or a per-model
+      # read of app/models would take in every service with a superclass.
+      # A booted caller passes `base_model`, called with [name, superclass] for a
+      # superclass the scan does not know, since a gem or initializer can define it.
+      def model_paths(root, base_model: nil, &block)
+        return enum_for(:model_paths, root, base_model: base_model) unless block
+
+        RunCache.fetch([ :source_scan_models, root.to_s, !base_model.nil? ]) do
+          found = paths(root, kind: "app/models", skip_concerns: false).to_a
+          found + extra_model_candidates(root.to_s, found, base_model)
+        end.each(&block)
+      end
+
+      CLASS_WITH_SUPERCLASS = /class[^\S\n]+([\w:]+)[^\S\n]*<[^\S\n]*(?:::)?([\w:]+)/
+      MODEL_BASES = %w[ActiveRecord::Base ApplicationRecord].freeze
 
       # Rails autoloads every app/* directory and the roots config/application.rb
-      # adds, so a model can live outside app/models. Only a file that declares
-      # a class with a superclass is kept: each one is read here, and parsed later.
+      # adds, so a model can live outside app/models. A class there is kept when
+      # its superclass, by last name segment, is a model base or a class already
+      # kept; the listing still decides modelhood, but a thousand services are not parsed.
+      def extra_model_candidates(root, model_records, base_model = nil)
+        pending = RunCache.fetch([ :source_scan_model_declarations, root ]) { extra_model_declarations(root, File.realpath(root)) }
+        known = model_records.to_set { |record| record.path_name.split("::").last }.merge(MODEL_BASES)
+        loaded = Hash.new { |cache, pair| cache[pair] = base_model ? base_model.call(*pair) : false }
+        kept = Set.new
+        loop do
+          added = pending.select do |record, pairs|
+            !kept.include?(record) && pairs.any? do |name, base|
+              # A nested `class Item < Base` names no namespace; the path does.
+              known.include?(base) || known.include?(base.split("::").last) || loaded[[ name.include?("::") ? name : record.path_name, base ]]
+            end
+          end
+          break if added.empty?
+
+          added.each do |record, pairs|
+            kept << record
+            known.merge(pairs.map { |name, _| name.split("::").last })
+          end
+        end
+        pending.filter_map { |record, _| record if kept.include?(record) }
+      rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
+        []
+      end
+
       # ponytail: the app/* kinds Rails generates for other code are skipped by name.
-      def scan_extra_model_roots(root, real_root)
+      def extra_model_declarations(root, real_root)
         seen = Set.new
         ignored = PathResolver.ignored_dirs(root).map { |dir| PathResolver.root_key(dir) }
-        PathResolver.extra_model_roots(root).each do |dir|
+        PathResolver.extra_model_roots(root).each_with_object([]) do |dir, found|
           scan_dir(dir, root, real_root, true) do |record|
             next unless seen.add?(record.path)
             next if ignored.any? { |ignored_dir| SafePath.contained?(record.path, ignored_dir) }
 
-            source = SafeFile.read(record.path)
-            yield record if source&.match?(SUPERCLASS_DECLARATION)
+            pairs = class_declarations(SafeFile.read(record.path).to_s)
+            found << [ record, pairs ] if pairs.any?
           end
         end
       end
 
-      private_class_method :scan, :scan_dir, :ruby_files, :walk_dir, :within?, :scan_extra_model_roots
-
-      def each(root, kind:, skip_concerns: true)
-        return enum_for(:each, root, kind: kind, skip_concerns: skip_concerns) unless block_given?
-
-        paths(root, kind: kind, skip_concerns: skip_concerns) do |record|
-          source = SafeFile.read(record.path) or next
-          yield record.with(source: source)
+      # [name, superclass] of each `class X < Y` that starts its line. A `^` anchor
+      # makes Onigmo try every offset, ten times slower over a service tree.
+      def class_declarations(source)
+        pairs = []
+        source.scan(CLASS_WITH_SUPERCLASS) do |name, base|
+          start = Regexp.last_match.begin(0)
+          line_start = start.zero? ? 0 : (source.rindex("\n", start - 1) || -1) + 1
+          pairs << [ name, base ] if source[line_start...start].match?(/\A[^\S\n]*\z/)
         end
+        pairs
+      end
+
+      private_class_method :scan, :scan_dir, :ruby_files, :walk_dir, :within?, :extra_model_candidates, :extra_model_declarations, :class_declarations
+
+      # `kind: :models` reads model_paths: what model_details lists, not only app/models.
+      def each(root, kind:, skip_concerns: true, base_model: nil, &block)
+        return enum_for(:each, root, kind: kind, skip_concerns: skip_concerns, base_model: base_model) unless block
+
+        read = lambda do |record|
+          source = SafeFile.read(record.path) or next
+          block.call(record.with(source: source))
+        end
+        return paths(root, kind: kind, skip_concerns: skip_concerns, &read) unless kind == :models
+
+        model_paths(root, base_model: base_model) { |record| read.call(record) unless skip_concerns && record.path_name.start_with?("Concerns::") }
       end
 
       # The eager form: reads and parses every file for its declared name.
       # A caller that names only some files resolves DeclaredConstant itself.
-      def classes(root, kind:)
-        each(root, kind: kind).filter_map do |record|
+      def classes(root, kind:, base_model: nil)
+        each(root, kind: kind, base_model: base_model).filter_map do |record|
           next unless DeclaredConstant.declares_class?(record.source)
 
           [ DeclaredConstant.resolve(record.source, record.path_name), record ]

@@ -22,6 +22,21 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
 
   after { @built_tools.each(&:abstract!) }
 
+  it "runs a tool call as one run, so a lookup it repeats per route is answered once" do
+    reads = 0
+    tool = build_tool do
+      define_singleton_method(:call) do |server_context: nil|
+        2.times { RailsAiContext::RunCache.fetch([ :spec_probe ]) { reads += 1 } }
+        text_response("ok")
+      end
+    end
+
+    2.times { tool.call }
+
+    expect(reads).to eq(2)
+    expect(RailsAiContext::RunCache.active?).to be false
+  end
+
   describe "call parameter recording" do
     it "records a tool's own arguments with no per-tool code" do
       tool = build_tool do

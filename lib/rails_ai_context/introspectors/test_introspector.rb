@@ -134,10 +134,17 @@ module RailsAiContext
       # The files a glob under the suite root matches, sorted, leaving out any whose
       # real path leaves the app or names a sensitive file. A count (`read: false`)
       # keeps a sensitive-named file that sits where it is listed, since it opens nothing.
+      # A directory is resolved once for all its files; only a linked file needs its own realpath.
       def app_files(pattern, read: true)
         real_root = (@real_root ||= File.realpath(suite_root))
+        real_dirs = {}
         Dir.glob(File.join(suite_root, pattern)).sort.select do |path|
-          real = File.realpath(path)
+          real = if File.lstat(path).symlink?
+            File.realpath(path)
+          else
+            dir = File.dirname(path)
+            File.join(real_dirs[dir] ||= File.realpath(dir), File.basename(path))
+          end
           relative = real.delete_prefix("#{real_root}/")
           linked = relative != path.delete_prefix("#{suite_root}/")
           File.file?(real) && RailsAiContext::SafePath.contained?(real, real_root) &&
