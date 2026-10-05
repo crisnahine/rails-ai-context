@@ -56,6 +56,17 @@ RSpec.describe RailsAiContext::Introspectors::ApartmentConfig do
     expect(push).to eq(excluded_models_source: "c.excluded_models << \"Organization\"", file: "config/initializers/apartment.rb")
   end
 
+  it "reads a list the block only iterates over afterwards" do
+    found = read_with("config/initializers/apartment.rb" => <<~RUBY)
+      Apartment.configure do |config|
+        config.excluded_models = %w[Organization]
+        config.excluded_models.each { |name| name.constantize }
+      end
+    RUBY
+
+    expect(found).to eq(excluded_models: %w[Organization], file: "config/initializers/apartment.rb")
+  end
+
   it "answers nil without an Apartment.configure, and for a file that does not parse" do
     expect(read_with("config/initializers/other.rb" => "config.excluded_models = %w[A]\n")).to be_nil
     expect(read_with("config/initializers/apartment.rb" => "Apartment.configure do |config|\n  config.excluded_models = %w[\n")).to be_nil

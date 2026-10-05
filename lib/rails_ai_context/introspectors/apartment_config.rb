@@ -20,7 +20,7 @@ module RailsAiContext
           listener = -> { Listeners::ConfigAssignmentListener.new(block_param(source)) }
           # `+=`, `<<` or `concat` builds on a list the source does not show whole.
           hit = SourceIntrospector.walk_source(source, { config: listener })[:config]
-                                  .reverse.find { |h| h[:path].first == :excluded_models && (h[:assignment] || h[:write]) }
+                                  .reverse.find { |h| list_write?(h) }
           return { excluded_models: [], file: file } unless hit
           return { excluded_models_source: hit[:source], file: file } unless hit[:assignment] && literal_names?(hit[:value])
 
@@ -33,6 +33,14 @@ module RailsAiContext
 
       def block_param(source)
         source[/Apartment\.configure\s*(?:do|\{)\s*\|\s*([a-z_]\w*)\s*\|/, 1] || "config"
+      end
+
+      # A block on a read (`.each { }`) leaves the list as it was.
+      def list_write?(hit)
+        return hit[:path].size == 2 && hit[:path].first == :excluded_models if hit[:write] == :call
+        return false if hit[:write] == :block
+
+        hit[:path] == [ :excluded_models ] && (hit[:assignment] || hit[:write] == :operator)
       end
 
       def literal_names?(value)
