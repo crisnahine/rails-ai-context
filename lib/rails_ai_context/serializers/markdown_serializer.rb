@@ -332,6 +332,7 @@ module RailsAiContext
         lines = [ "## Testing" ]
         lines << "- Framework: #{data[:framework]}"
         lines << "- Factories: #{data[:factories][:location]} (#{count_phrase(data[:factories][:count], "file")})" if data[:factories]
+        lines << "- Fabricators: #{data[:fabricators][:location]} (#{count_phrase(data[:fabricators][:count], "file")})" if data[:fabricators]
         lines << "- Fixtures: #{data[:fixtures][:location]} (#{TestFramework.fixture_phrase(data[:fixtures])})" if data[:fixtures]
         lines << "- System tests: #{data[:system_tests][:location]}" if data[:system_tests]
         lines << "- CI: #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?

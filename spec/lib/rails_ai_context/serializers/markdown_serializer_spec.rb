@@ -35,6 +35,14 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
     end
   end
 
+  describe "the Testing section" do
+    it "names the fabricators a Fabrication suite builds its data with" do
+      context = { tests: { framework: "rspec", fabricators: { location: "spec/fabricators", count: 2 } } }
+
+      expect(described_class.new(context).call).to include("- Fabricators: spec/fabricators (2 files)")
+    end
+  end
+
   describe "the Multi-Database section" do
     it "labels each adapter the way every other surface does" do
       context = {
