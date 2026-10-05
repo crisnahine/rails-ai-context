@@ -442,6 +442,16 @@ RSpec.describe RailsAiContext::Tools::GetFrontendStack do
         expect(described_class.call(detail: "summary").content.first[:text]).to eq("React 19.0.0 + Bootstrap")
       end
 
+      it "says a frontend_paths entry outside the app root was not read" do
+        allow(described_class).to receive(:cached_context).and_return(
+          frontend_frameworks: no_js_data.merge(skipped_frontend_paths: [ "../web-client" ]), stimulus: {}, gems: { notable_gems: [] }
+        )
+
+        text = described_class.call(detail: "standard").content.first[:text]
+        expect(text).to include("`frontend_paths` entries outside the app root are not read: `../web-client`")
+        expect(text).not_to include("API-only")
+      end
+
       it "reads a manifest.js with bytes that are not UTF-8" do
         FileUtils.mkdir_p(File.join(@root, "app/assets/config"))
         File.binwrite(File.join(@root, "app/assets/config/manifest.js"), "//= link_tree ../images\n\xFF\xFE\n".b)

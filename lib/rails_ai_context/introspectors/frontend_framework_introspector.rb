@@ -97,6 +97,7 @@ module RailsAiContext
 
         {
           frontend_roots: enriched_roots,
+          skipped_frontend_paths: skipped_frontend_paths,
           frameworks: frameworks,
           mounting_strategy: mounting,
           state_management: state,
@@ -323,6 +324,15 @@ module RailsAiContext
         RailsAiContext::PackageJson::FRONTEND_DIRS.filter_map do |dir|
           { path: dir, detected_from: "convention" } if usable_dir?(dir)
         end
+      end
+
+      # A configured path that exists outside the app root is never read, and
+      # the answer has to say so rather than look like an app with no frontend.
+      def skipped_frontend_paths
+        configured = RailsAiContext.configuration.frontend_paths
+        return [] unless configured.is_a?(Array)
+
+        configured.select { |p| Dir.exist?(File.join(root, p.to_s)) && !usable_dir?(p.to_s) }.map(&:to_s)
       end
 
       def usable_dir?(relative)

@@ -116,6 +116,8 @@ module RailsAiContext
           lines << "- **Package manager:** #{data[:package_manager]}" if data[:package_manager]
           pipeline_lines = asset_pipeline_lines
           pipeline_lines << "- **CSS framework:** #{css_framework}" if css_framework
+          skipped = Array(data[:skipped_frontend_paths])
+          skipped_note = "_`frontend_paths` entries outside the app root are not read: #{skipped.map { |p| "`#{p}`" }.join(', ')}._" if skipped.any?
           lines.concat(pipeline_lines)
 
           # TypeScript
@@ -155,11 +157,12 @@ module RailsAiContext
 
           if no_frontend_evidence
             if pipeline_lines.any?
-              return [ "# Frontend Stack", "", *pipeline_lines, "- **JavaScript build:** none (no app/javascript, no package.json)" ].join("\n")
+              return [ "# Frontend Stack", "", *pipeline_lines, "- **JavaScript build:** none (no app/javascript, no package.json)",
+                       *([ "", skipped_note ] if skipped_note) ].join("\n")
             end
 
             note = api_only_note("a frontend") || "No frontend stack detected (no app/javascript, no package.json, no asset pipeline)."
-            return "# Frontend Stack\n\n#{note}"
+            return [ "# Frontend Stack", "", note, *([ "", skipped_note ] if skipped_note) ].join("\n")
           end
 
           lines.concat(hotwire_lines)
@@ -182,6 +185,7 @@ module RailsAiContext
             end
           end
 
+          lines << "" << skipped_note if skipped_note
           lines.join("\n")
         end
 
