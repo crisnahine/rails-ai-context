@@ -15,9 +15,10 @@ module RailsAiContext
   # manifest is read and merged, the root one winning a version disagreement.
   # Callers ask what the app depends on, never which directory holds the file.
   #
-  # The JS workspace root a lockfile sits in, above the app root, is read for
-  # frontend manifests only, with the sensitive-file and symlink rules
-  # applied relative to that directory.
+  # Two kinds of directory outside the app root are read, for frontend
+  # manifests only: a `frontend_paths` entry the app declared, and the JS
+  # workspace root a lockfile sits in. Each is read with the sensitive-file
+  # and symlink rules applied relative to that directory.
   module PackageJson
     # Where a frontend app lives when it has not been declared through
     # `frontend_paths`. Same list the frontend introspector falls back to.
@@ -36,9 +37,9 @@ module RailsAiContext
     module_function
 
     def deps(root)
-      manifest_dirs(root).reduce({}) do |merged, dir|
-        merged.merge(read(File.join(dir, "package.json")))
-      end
+      outside = configured_outside(root).filter_map { |dir| outside_file(dir[:dir], "package.json") }
+      inside = manifest_dirs(root).map { |dir| File.join(dir, "package.json") }
+      (outside + inside).reduce({}) { |merged, path| merged.merge(read(path)) }
     end
 
     # The first lockfile found in the app root, then in each directory outside
@@ -56,7 +57,23 @@ module RailsAiContext
     end
 
     def outside_roots(root)
-      [ workspace_root(root) ].compact
+      configured_outside(root) + [ workspace_root(root) ].compact
+    end
+
+    # Declared frontend_paths entries that resolve to a directory outside the
+    # app root, labelled as the app wrote them.
+    def configured_outside(root)
+      real_root = File.realpath(root.to_s)
+      declared_paths.filter_map do |path|
+        real = File.realpath(File.join(root.to_s, path.to_s))
+        next if SafePath.contained?(real, real_root) || !File.directory?(real)
+
+        { dir: real, label: path.to_s, source: "configuration" }
+      rescue SystemCallError
+        nil
+      end
+    rescue SystemCallError
+      []
     end
 
     # The nearest ancestor that holds a lockfile or declares workspaces,
@@ -104,12 +121,17 @@ module RailsAiContext
     end
 
     def frontend_dirs(root)
-      configured = RailsAiContext.configuration.respond_to?(:frontend_paths) &&
-                   RailsAiContext.configuration.frontend_paths
-      declared = configured.is_a?(Array) && configured.any? ? configured : FRONTEND_DIRS
-      declared.map { |dir| File.join(root, dir.to_s) }
+      declared = declared_paths
+      (declared.any? ? declared : FRONTEND_DIRS).map { |dir| File.join(root, dir.to_s) }
     end
     private_class_method :frontend_dirs
+
+    def declared_paths
+      configured = RailsAiContext.configuration.respond_to?(:frontend_paths) &&
+                   RailsAiContext.configuration.frontend_paths
+      configured.is_a?(Array) ? configured : []
+    end
+    private_class_method :declared_paths
 
     def workspace?(dir)
       return true if LOCKFILES.keys.any? { |file| outside_file(dir, file) }

@@ -229,8 +229,8 @@ module RailsAiContext
         "Frontend" => <<~SECTION
             # ── Frontend Framework Detection ─────────────────────────────────
             # Auto-detected from package.json, config/vite.json, etc. Override only if needed.
-            # Paths inside the app root only; one outside it is not read.
-            # config.frontend_paths = ["app/frontend", "client"]
+            # A path outside the app root is read for package.json, lockfiles and bundler config only.
+            # config.frontend_paths = ["app/frontend", "../web-client"]
         SECTION
       }.freeze
 

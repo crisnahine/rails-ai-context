@@ -554,18 +554,58 @@ RSpec.describe RailsAiContext::Introspectors::FrontendFrameworkIntrospector do
   end
 
   describe "a frontend_paths entry outside the app root" do
-    it "is not read, and is named as skipped" do
+    def web_client
       Dir.mktmpdir do |tmp|
         base = File.realpath(tmp)
         root = File.join(base, "backend")
-        FileUtils.mkdir_p([ root, File.join(base, "web-client/src") ])
-        File.write(File.join(base, "web-client/package.json"), JSON.generate("dependencies" => { "react" => "^19.0.0" }))
+        client = File.join(base, "web-client")
+        FileUtils.mkdir_p([ root, File.join(client, "src") ])
+        File.write(File.join(client, "package.json"), JSON.generate(
+          "dependencies" => { "react" => "^19.0.0", "react-dom" => "^19.0.0" },
+          "devDependencies" => { "vite" => "^7.0.0", "typescript" => "^5.6.0" }
+        ))
+        File.write(File.join(client, "src/App.tsx"), "export const App = () => null\n")
         allow(RailsAiContext.configuration).to receive(:frontend_paths).and_return([ "../web-client" ])
+        yield root, client
+      end
+    end
+
+    it "reads its manifests and names it" do
+      web_client do |root, client|
+        File.write(File.join(client, "yarn.lock"), "")
+        File.write(File.join(client, "vite.config.ts"), "export default {}\n")
         result = described_class.new(RailsAiContext::StaticApp.new(root)).call
 
-        expect(result[:frameworks]).to be_empty
+        expect(result[:frameworks]).to eq(react: "^19.0.0")
+        expect(result[:outside_frontend_roots]).to eq([ "../web-client" ])
+        expect(result[:package_manager]).to eq("yarn")
+        expect(result[:package_manager_dir]).to eq("../web-client")
+        expect(result[:build_tool]).to eq("vite")
         expect(result[:frontend_roots]).to be_empty
-        expect(result[:skipped_frontend_paths]).to eq([ "../web-client" ])
+        expect(result).not_to have_key(:skipped_frontend_paths)
+      end
+    end
+
+    it "refuses a manifest symlinked out of that directory" do
+      web_client do |root, client|
+        Dir.mktmpdir do |elsewhere|
+          FileUtils.mv(File.join(client, "package.json"), File.join(elsewhere, "package.json"))
+          File.symlink(File.join(elsewhere, "package.json"), File.join(client, "package.json"))
+          result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+
+          expect(result[:frameworks]).to be_empty
+          expect(result[:outside_frontend_roots]).to eq([ "../web-client" ])
+        end
+      end
+    end
+
+    it "skips an entry that does not exist" do
+      web_client do |root, _client|
+        allow(RailsAiContext.configuration).to receive(:frontend_paths).and_return([ "../missing" ])
+        result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+
+        expect(result[:outside_frontend_roots]).to eq([])
+        expect(result[:frameworks]).to be_empty
       end
     end
   end
