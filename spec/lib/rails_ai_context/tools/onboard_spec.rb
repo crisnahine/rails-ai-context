@@ -22,6 +22,23 @@ RSpec.describe RailsAiContext::Tools::Onboard do
     end
   end
 
+  describe "an app with no tables yet" do
+    it "names the adapter database.yml declares" do
+      Dir.mktmpdir do |dir|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+        allow(described_class).to receive(:cached_context).and_return({
+          app_name: "Fresh", models: {},
+          schema: { unavailable: "No db/schema.rb, db/structure.sql, or migrations found" },
+          multi_database: { databases: [ { name: "primary", adapter: "postgresql" } ] }
+        })
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("application on PostgreSQL.")
+      end
+    end
+  end
+
   describe ".call" do
     it "returns an MCP::Tool::Response" do
       result = described_class.call

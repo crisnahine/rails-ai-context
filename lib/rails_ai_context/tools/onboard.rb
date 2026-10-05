@@ -130,7 +130,7 @@ module RailsAiContext
             database = RailsAiContext::AppKind.mongoid_database(rails_app.root)
             db = "MongoDB through Mongoid#{" (database #{database})" if database}"
           else
-            db = "unknown"
+            db = RailsAiContext::SchemaAdapter.label(ctx)
           end
           rails = named_rails_version(ctx)
           lines << "#{ctx[:app_name]} is a Rails#{" #{rails}" if rails} application#{ruby_clause(ctx)} on #{db}."
