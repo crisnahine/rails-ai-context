@@ -324,7 +324,6 @@ module RailsAiContext
 
       def detect_missing_counter_cache(model_data, schema_data)
         missing = []
-        written = app_written_counter_columns
 
         model_data.each do |model|
           model[:has_many].each do |assoc|
@@ -340,7 +339,7 @@ module RailsAiContext
             next unless table
             next unless table[:columns].any? { |c| c[:name] == count_col }
             next if options.key?(:counter_cache)
-            next if written.include?(count_col)
+            next if app_written_counter_columns.include?(count_col)
 
             belongs_to_model = association_model(model_data, assoc, model[:name])
             next unless belongs_to_model
