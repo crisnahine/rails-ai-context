@@ -16,6 +16,13 @@ RSpec.describe RailsAiContext::Introspector do
       expect(result[:generated_at]).to be_a(String)
     end
 
+    it "names a booted run's engine when it is not CRuby" do
+      expect(introspector.send(:ruby_engine)).to be_nil
+      stub_const("RUBY_ENGINE", "jruby")
+      stub_const("RUBY_ENGINE_VERSION", "9.4.8.0")
+      expect(introspector.send(:ruby_engine)).to eq("JRuby 9.4.8.0")
+    end
+
     # Every count in a generated file is a different number depending on this,
     # and the files carried nothing that said which one they held.
     it "records the tier the run was answered in" do
@@ -308,6 +315,26 @@ RSpec.describe RailsAiContext::Introspector do
         result = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(dir)).call
 
         expect(result[:ruby_version]).to eq("4.0.6")
+      end
+    end
+
+    it "says why the Rails version is unknown when boot.rb's Gemfile is outside the app" do
+      Dir.mktmpdir do |engine|
+        dummy = File.join(engine, "test/dummy")
+        FileUtils.mkdir_p(File.join(dummy, "config"))
+        File.write(File.join(dummy, "config/boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n))
+        result = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(dummy)).call
+
+        expect(result[:rails_version]).to include("config/boot.rb points Bundler at ../../Gemfile, outside the app root")
+      end
+    end
+
+    it "answers the Ruby engine the app's lockfile names" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  specs:\n    rails (7.2.2)\n\nRUBY VERSION\n   ruby 3.1.4p0 (jruby 9.4.8.0)\n")
+        result = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:ruby_engine]).to eq("JRuby 9.4.8.0")
       end
     end
 

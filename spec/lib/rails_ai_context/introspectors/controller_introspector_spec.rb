@@ -713,6 +713,18 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
     end
 
+    it "names cancancan's block callbacks for the macro that added them, as the static tier does" do
+      gem_dir = "/gems/cancancan-3.6.1/lib/cancan"
+      resource = eval("method = :load_and_authorize_resource; proc { |c| method }", binding, "#{gem_dir}/controller_resource.rb", 15)
+      check = eval("options = {}; proc { |c| options }", binding, "#{gem_dir}/controller_additions.rb", 266)
+      skip = eval("args = []; proc { |c| args }", binding, "#{gem_dir}/controller_additions.rb", 287)
+      in_dir = described_class.new(double("app", root: Pathname.new(Dir.pwd)))
+
+      expect(in_dir.send(:callback_name, resource)).to eq("load_and_authorize_resource")
+      expect(in_dir.send(:callback_name, check)).to eq("check_authorization")
+      expect(in_dir.send(:callback_name, skip)).to eq("skip_authorization_check")
+    end
+
     it "names an object filter by its class, in both tiers, the same on every run" do
       stub_const("TimingFilter", Class.new { def around(_controller) = yield })
       stub_const("ClassFilter", Class.new { def self.before(_controller); end })

@@ -1048,7 +1048,7 @@ In addition to tools, the gem registers static MCP resources that AI clients can
 | `rails://schema` | Full database schema (JSON) |
 | `rails://routes` | All routes (JSON) |
 | `rails://conventions` | Detected patterns and architecture (JSON) |
-| `rails://gems` | Notable gems with categories, plus `declared_ruby_version` and which of the lockfile, Gemfile, `.ruby-version` or `.tool-versions` answered (JSON) |
+| `rails://gems` | Notable gems with categories, plus `declared_ruby_version` and which of the lockfile, Gemfile, `.ruby-version`, `.tool-versions` or a mise config file answered (JSON) |
 | `rails://controllers` | All controllers with actions and filters (JSON) |
 | `rails://config` | Application configuration (JSON) |
 | `rails://tests` | Test infrastructure details (JSON) |

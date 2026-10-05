@@ -2,6 +2,7 @@
 
 require "spec_helper"
 require "tmpdir"
+require "fileutils"
 
 RSpec.describe RailsAiContext::GemLock do
   let(:lock_text) do
@@ -252,6 +253,174 @@ RSpec.describe RailsAiContext::GemLock do
       expect(spec.absent?).to be true
       expect(spec.reason).to eq("No Gemfile.lock found")
       expect(spec.present?("rails")).to be false
+    end
+  end
+
+  it "reads gems.locked beside gems.rb, the pair Bundler uses before Gemfile" do
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "gems.rb"), "source \"https://rubygems.org\"\nruby \"3.4.9\"\ngem \"devise\"\n")
+      File.write(File.join(dir, "gems.locked"), <<~LOCK)
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            devise (4.9.4)
+            rails (8.1.4)
+
+        DEPENDENCIES
+          devise
+      LOCK
+
+      spec = described_class.for(dir)
+
+      expect(spec).not_to be_absent
+      expect(spec.version("rails")).to eq("8.1.4")
+      expect(spec.ruby_versions).to eq("gems.rb" => "3.4.9")
+      expect(described_class.lockfile_name(dir)).to eq("gems.locked")
+    end
+  end
+  describe "a lockfile config/boot.rb points outside the app" do
+    let(:boot) { %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n\nrequire "bundler/setup" if File.exist?(ENV["BUNDLE_GEMFILE"])\n) }
+
+    it "says which Gemfile boot.rb names and that it is not read" do
+      Dir.mktmpdir do |engine|
+        File.write(File.join(engine, "Gemfile.lock"), "GEM\n  specs:\n    rails (8.1.4)\n")
+        dummy = File.join(engine, "test/dummy")
+        FileUtils.mkdir_p(File.join(dummy, "config"))
+        File.write(File.join(dummy, "config/boot.rb"), boot)
+
+        spec = described_class.for(dummy)
+
+        expect(spec.present?("rails")).to be false
+        expect(spec.reason).to eq("No Gemfile.lock in the app; config/boot.rb points Bundler at ../../Gemfile, outside the app root, which is not read")
+        expect(spec.outside_gemfile).to eq("../../Gemfile")
+      end
+    end
+
+    it "keeps the plain reason for a boot.rb that names the app's own Gemfile, or none it can read" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config/boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../Gemfile", __dir__)\n))
+        expect(described_class.for(dir).reason).to eq("No Gemfile.lock found")
+
+        File.binwrite(File.join(dir, "config/boot.rb"), "ENV[\"BUNDLE_GEMFILE\"] ||= ENV.fetch(\"X\") \xFF".b)
+        File.utime(Time.now + 2, Time.now + 2, File.join(dir, "config/boot.rb"))
+        expect(described_class.for(dir).outside_gemfile).to be_nil
+      end
+    end
+  end
+
+  describe "mise config" do
+    it "reads the ruby tool of mise.toml when nothing else names a version" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "mise.toml"), "[env]\nruby = \"no\"\n\n[tools]\nnode = \"22\"\nruby = \"3.3.6\"\n")
+
+        spec = described_class.for(dir)
+
+        expect(spec.ruby_version).to eq("3.3.6")
+        expect(spec.ruby_version_source).to eq("mise.toml")
+      end
+    end
+
+    it "reads the other names mise looks for, the array and table forms, and mise.local.toml first" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, ".config"))
+        File.write(File.join(dir, ".config/mise.toml"), "[tools]\nruby = { version = \"3.2.5\" }\n")
+        expect(described_class.for(dir).ruby_versions).to eq(".config/mise.toml" => "3.2.5")
+
+        File.write(File.join(dir, "mise.local.toml"), "[tools]\nruby = [\"3.4.9\", \"3.3.6\"]\n")
+        expect(described_class.for(dir).ruby_version).to eq("3.4.9")
+      end
+    end
+
+    it "does not follow a mise directory symlinked out of the app" do
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "config.toml"), "[tools]\nruby = \"3.3.6\"\n")
+        Dir.mktmpdir do |dir|
+          File.symlink(outside, File.join(dir, "mise"))
+          expect(described_class.for(dir).ruby_versions).to eq({})
+        end
+      end
+    end
+
+    it "reads nothing from a mise.toml with no ruby tool or an unreadable one" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "mise.toml"), "[tools]\nruby = \"latest\"\n")
+        expect(described_class.for(dir).ruby_versions).to eq({})
+        File.binwrite(File.join(dir, "mise.toml"), "\xFF\xFE[tools]\nruby = \"\xFF\"\n".b)
+        File.utime(Time.now + 2, Time.now + 2, File.join(dir, "mise.toml"))
+        expect(described_class.for(dir).ruby_versions).to eq({})
+      end
+    end
+  end
+
+  describe "the Ruby engine" do
+    it "reads an engine-prefixed .ruby-version as that engine, with no Ruby version" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".ruby-version"), "jruby-9.4.8.0\n")
+
+        spec = described_class.for(dir)
+
+        expect(spec.ruby_engine).to eq("JRuby 9.4.8.0")
+        expect(spec.ruby_version).to be_nil
+      end
+    end
+
+    it "reads the engine Bundler writes into RUBY VERSION" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile.lock"), <<~LOCK)
+          GEM
+            remote: https://rubygems.org/
+            specs:
+              rails (8.1.4)
+
+          RUBY VERSION
+             ruby 3.1.4p0 (jruby 9.4.8.0)
+        LOCK
+
+        spec = described_class.for(dir)
+
+        expect(spec.ruby_version).to eq("3.1.4p0")
+        expect(spec.ruby_engine).to eq("JRuby 9.4.8.0")
+      end
+    end
+
+    it "reads engine: and engine_version: on the Gemfile's ruby line" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile"), %(ruby "3.1.4", engine: "jruby", engine_version: "9.4.8.0"\ngem "rails"\n))
+
+        spec = described_class.for(dir)
+
+        expect(spec.ruby_version).to eq("3.1.4")
+        expect(spec.ruby_engine).to eq("JRuby 9.4.8.0")
+      end
+    end
+
+    it "reads an engine in .tool-versions" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".tool-versions"), "ruby truffleruby-24.1.1\n")
+
+        expect(described_class.for(dir).ruby_engine).to eq("TruffleRuby 24.1.1")
+      end
+    end
+
+    it "names no engine for CRuby, however the version is written" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".ruby-version"), "ruby-3.4.9\n")
+
+        spec = described_class.for(dir)
+
+        expect(spec.ruby_engine).to be_nil
+        expect(spec.ruby_version).to eq("3.4.9")
+      end
+    end
+
+    it "takes the engine from the file that decides the version" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (8.1.4)\n\nRUBY VERSION\n   ruby 3.4.9p82\n")
+        File.write(File.join(dir, ".ruby-version"), "jruby-9.4.8.0\n")
+
+        expect(described_class.for(dir).ruby_engine).to be_nil
+      end
     end
   end
 end

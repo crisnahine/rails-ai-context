@@ -484,19 +484,128 @@ RSpec.describe RailsAiContext::Introspectors::FrontendFrameworkIntrospector do
     end
   end
 
+  describe "a lockfile at the JS workspace root above the app" do
+    def workspace(lockfile: "yarn.lock", git: true, workspaces: [ "backend" ])
+      Dir.mktmpdir do |tmp|
+        repo = File.realpath(tmp)
+        root = File.join(repo, "backend")
+        FileUtils.mkdir_p(root)
+        FileUtils.mkdir_p(File.join(repo, ".git")) if git
+        File.write(File.join(repo, "package.json"), JSON.generate("private" => true, "workspaces" => workspaces))
+        File.write(File.join(repo, lockfile), "") if lockfile
+        File.write(File.join(root, "package.json"), "{}")
+        yield repo, root
+      end
+    end
+
+    it "names the workspace's package manager and the directory its lockfile is in" do
+      workspace do |_repo, root|
+        result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+
+        expect(result[:package_manager]).to eq("yarn")
+        expect(result[:package_manager_dir]).to eq("..")
+        expect(described_class.package_manager(root)).to eq("yarn")
+      end
+    end
+
+    it "prefers a lockfile in the app root" do
+      workspace do |_repo, root|
+        File.write(File.join(root, "package-lock.json"), "{}")
+        result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+
+        expect(result[:package_manager]).to eq("npm")
+        expect(result[:package_manager_dir]).to be_nil
+      end
+    end
+
+    it "never looks above the git root" do
+      workspace do |repo, root|
+        FileUtils.rm_rf(File.join(repo, ".git"))
+        FileUtils.mkdir_p(File.join(root, ".git"))
+
+        expect(described_class.package_manager(root)).to be_nil
+      end
+    end
+
+    it "does not walk up at all outside a git repository" do
+      workspace(git: false) do |_repo, root|
+        expect(described_class.package_manager(root)).to be_nil
+      end
+    end
+
+    it "refuses a lockfile symlinked out of the workspace root" do
+      workspace(lockfile: nil) do |repo, root|
+        Dir.mktmpdir do |elsewhere|
+          File.write(File.join(elsewhere, "yarn.lock"), "")
+          File.symlink(File.join(elsewhere, "yarn.lock"), File.join(repo, "yarn.lock"))
+
+          expect(described_class.package_manager(root)).to be_nil
+        end
+      end
+    end
+
+    it "survives a workspace package.json that is not JSON" do
+      workspace(lockfile: nil) do |repo, root|
+        File.write(File.join(repo, "package.json"), "{ not json")
+
+        expect(described_class.package_manager(root)).to be_nil
+      end
+    end
+  end
+
   describe "a frontend_paths entry outside the app root" do
-    it "is not read, and is named as skipped" do
+    def web_client
       Dir.mktmpdir do |tmp|
         base = File.realpath(tmp)
         root = File.join(base, "backend")
-        FileUtils.mkdir_p([ root, File.join(base, "web-client/src") ])
-        File.write(File.join(base, "web-client/package.json"), JSON.generate("dependencies" => { "react" => "^19.0.0" }))
+        client = File.join(base, "web-client")
+        FileUtils.mkdir_p([ root, File.join(client, "src") ])
+        File.write(File.join(client, "package.json"), JSON.generate(
+          "dependencies" => { "react" => "^19.0.0", "react-dom" => "^19.0.0" },
+          "devDependencies" => { "vite" => "^7.0.0", "typescript" => "^5.6.0" }
+        ))
+        File.write(File.join(client, "src/App.tsx"), "export const App = () => null\n")
         allow(RailsAiContext.configuration).to receive(:frontend_paths).and_return([ "../web-client" ])
+        yield root, client
+      end
+    end
+
+    it "reads its manifests and names it" do
+      web_client do |root, client|
+        File.write(File.join(client, "yarn.lock"), "")
+        File.write(File.join(client, "vite.config.ts"), "export default {}\n")
         result = described_class.new(RailsAiContext::StaticApp.new(root)).call
 
-        expect(result[:frameworks]).to be_empty
+        expect(result[:frameworks]).to eq(react: "^19.0.0")
+        expect(result[:outside_frontend_roots]).to eq([ "../web-client" ])
+        expect(result[:package_manager]).to eq("yarn")
+        expect(result[:package_manager_dir]).to eq("../web-client")
+        expect(result[:build_tool]).to eq("vite")
         expect(result[:frontend_roots]).to be_empty
-        expect(result[:skipped_frontend_paths]).to eq([ "../web-client" ])
+        expect(result).not_to have_key(:skipped_frontend_paths)
+      end
+    end
+
+    it "refuses a manifest symlinked out of that directory" do
+      web_client do |root, client|
+        Dir.mktmpdir do |elsewhere|
+          FileUtils.mv(File.join(client, "package.json"), File.join(elsewhere, "package.json"))
+          File.symlink(File.join(elsewhere, "package.json"), File.join(client, "package.json"))
+          result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+
+          expect(result[:frameworks]).to be_empty
+          expect(result[:outside_frontend_roots]).to eq([ "../web-client" ])
+        end
+      end
+    end
+
+    it "skips an entry that does not exist" do
+      web_client do |root, _client|
+        allow(RailsAiContext.configuration).to receive(:frontend_paths).and_return([ "../missing" ])
+        result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+
+        expect(result[:outside_frontend_roots]).to eq([])
+        expect(result[:frameworks]).to be_empty
       end
     end
   end

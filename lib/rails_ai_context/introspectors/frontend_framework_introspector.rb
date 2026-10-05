@@ -70,7 +70,7 @@ module RailsAiContext
         mounting = detect_mounting_strategy(all_deps)
         state = labels_for(STATE_MARKERS, all_deps)
         testing = labels_for(TEST_MARKERS, all_deps)
-        pkg_mgr = detect_package_manager
+        pkg_mgr, pkg_mgr_dir = RailsAiContext::PackageJson.package_manager(root)
         mono = detect_monorepo
         build = detect_build_tool
         vite_fw = detect_vite_config_frameworks
@@ -97,12 +97,13 @@ module RailsAiContext
 
         {
           frontend_roots: enriched_roots,
-          skipped_frontend_paths: skipped_frontend_paths,
+          outside_frontend_roots: RailsAiContext::PackageJson.configured_outside(root).map { |dir| dir[:label] },
           frameworks: frameworks,
           mounting_strategy: mounting,
           state_management: state,
           testing: testing,
           package_manager: pkg_mgr,
+          package_manager_dir: pkg_mgr_dir,
           typescript: ts,
           monorepo: mono,
           build_tool: build,
@@ -194,19 +195,8 @@ module RailsAiContext
 
       # ---- Package manager ----
 
-      def detect_package_manager
-        self.class.package_manager(root)
-      end
-
-      # Bun 1.2 writes a text bun.lock, older bun the binary bun.lockb.
       def self.package_manager(root)
-        root = root.to_s
-        return "bun" if File.exist?(File.join(root, "bun.lock")) || File.exist?(File.join(root, "bun.lockb"))
-        return "pnpm" if File.exist?(File.join(root, "pnpm-lock.yaml"))
-        return "yarn" if File.exist?(File.join(root, "yarn.lock"))
-        return "npm" if File.exist?(File.join(root, "package-lock.json"))
-
-        nil
+        RailsAiContext::PackageJson.package_manager(root)&.first
       end
 
       # ---- TypeScript ----
@@ -282,8 +272,17 @@ module RailsAiContext
         %w[webpack rollup bun].each do |tool|
           return tool if Dir.glob(File.join(root, "#{tool}.config.*")).any?
         end
+        outside = RailsAiContext::PackageJson.configured_outside(root).map { |dir| dir[:dir] }
+        %w[vite webpack rollup bun].each do |tool|
+          return tool if outside.any? { |dir| outside_config?(dir, "#{tool}.config.*") }
+        end
         %w[esbuild webpack rollup].find { |pkg| RailsAiContext::PackageJson.present?(root, pkg) }
       end
+
+      def self.outside_config?(dir, pattern)
+        Dir.glob(pattern, base: dir).any? { |name| RailsAiContext::PackageJson.outside_file(dir, name) }
+      end
+      private_class_method :outside_config?
 
       # ---- Vite config framework detection ----
 
@@ -324,15 +323,6 @@ module RailsAiContext
         RailsAiContext::PackageJson::FRONTEND_DIRS.filter_map do |dir|
           { path: dir, detected_from: "convention" } if usable_dir?(dir)
         end
-      end
-
-      # A configured path that exists outside the app root is never read, and
-      # the answer has to say so rather than look like an app with no frontend.
-      def skipped_frontend_paths
-        configured = RailsAiContext.configuration.frontend_paths
-        return [] unless configured.is_a?(Array)
-
-        configured.select { |p| Dir.exist?(File.join(root, p.to_s)) && !usable_dir?(p.to_s) }.map(&:to_s)
       end
 
       def usable_dir?(relative)

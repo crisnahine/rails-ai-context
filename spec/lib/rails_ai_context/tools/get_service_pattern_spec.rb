@@ -1133,6 +1133,180 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
     end
   end
 
+
+  # T::Struct, Dry::Struct, dry-initializer and attr_extras declare the
+  # constructor through macros, so there is no `def initialize` to read.
+  describe "a constructor declared by macros" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    before do
+      dir = File.join(tmpdir, "app", "services")
+      FileUtils.mkdir_p(dir)
+      File.write(File.join(dir, "line_item_input.rb"), <<~RUBY)
+        class LineItemInput < T::Struct
+          const :sku, String
+          prop :quantity, Integer, default: 1
+          prop :note, T.nilable(String)
+
+          class Nested < T::Struct
+            const :ignored, String
+          end
+        end
+      RUBY
+      File.write(File.join(dir, "charge_service.rb"), <<~RUBY)
+        class ChargeService
+          extend Dry::Initializer
+          param :order
+          option :gateway, default: -> { :stripe }
+          option :retries, optional: true
+          def call = order
+        end
+      RUBY
+      File.write(File.join(dir, "notify_service.rb"), <<~RUBY)
+        class NotifyService
+          pattr_initialize :channel, [:user!, :message, priority: :low]
+          def call = user
+        end
+      RUBY
+      File.write(File.join(dir, "money_value.rb"), <<~RUBY)
+        class MoneyValue < Dry::Struct
+          attribute :amount, Types::Integer
+          attribute :currency, Types::String.default("USD")
+          attribute? :memo, Types::String
+        end
+      RUBY
+      File.write(File.join(dir, "form_like.rb"), <<~RUBY)
+        class FormLike
+          include ActiveModel::Attributes
+          attribute :name, :string
+          param :not_dry
+          def call = name
+        end
+      RUBY
+      File.write(File.join(dir, "explicit_service.rb"), <<~RUBY)
+        class ExplicitService
+          attr_initialize :a
+          def initialize(b); end
+          def call = b
+        end
+      RUBY
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      described_class.reset_cache!
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    def single(name)
+      described_class.call(service: name).content.first[:text]
+    end
+
+    it "reads a T::Struct's const and prop declarations" do
+      text = single("LineItemInput")
+
+      expect(text).to include("**Initialize:** `initialize(sku:, quantity: 1, note: nil)`")
+      expect(text).to include("## Inputs (T::Struct)")
+      expect(text).to include("- `const :sku, String`")
+      expect(text).to include("- `prop :quantity, Integer, default: 1`")
+      expect(text).not_to include("ignored")
+    end
+
+    it "reads dry-initializer params and options" do
+      text = single("ChargeService")
+
+      expect(text).to include("**Initialize:** `initialize(order, gateway: :stripe, retries: nil)`")
+      expect(text).to include("## Inputs (dry-initializer)")
+      expect(text).to include("- `param :order`")
+    end
+
+    it "reads an attr_extras initializer" do
+      expect(single("NotifyService")).to include("**Initialize:** `initialize(channel, user:, message: nil, priority: :low)`")
+    end
+
+    it "reads a Dry::Struct's attributes" do
+      expect(single("MoneyValue")).to include("**Initialize:** `initialize(amount:, currency: \"USD\", memo: nil)`")
+    end
+
+    it "reads no constructor from macros of the same name outside those libraries" do
+      expect(single("FormLike")).not_to include("**Initialize:**")
+    end
+
+    it "prefers a def initialize the class writes itself" do
+      expect(single("ExplicitService")).to include("**Initialize:** `initialize(b)`")
+    end
+
+    it "prints the Initialize line in the full listing" do
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("- **Initialize:** `initialize(sku:, quantity: 1, note: nil)`")
+      expect(text).to include("- **Initialize:** `initialize(amount:, currency: \"USD\", memo: nil)`")
+    end
+  end
+
+
+  # active_interaction recommends app/interactions and interactor-rails
+  # generates into app/interactors; both are service roots.
+  describe "interactions and interactors outside app/services" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    before do
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "interactions"))
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "interactors", "orders"))
+      File.write(File.join(tmpdir, "app", "interactions", "create_account.rb"), <<~RUBY)
+        class CreateAccount < ActiveInteraction::Base
+          string :subdomain
+          record :user
+          def execute
+            Account.create!(subdomain: subdomain)
+          end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "interactors", "place_order.rb"), <<~RUBY)
+        class PlaceOrder
+          include Interactor::Organizer
+          organize ChargeCard, SendReceipt
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "interactors", "orders", "charge_card.rb"), <<~RUBY)
+        module Orders
+          class ChargeCard
+            include Interactor
+            def call; end
+          end
+        end
+      RUBY
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      described_class.reset_cache!
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "reads an interaction in app/interactions with its filters" do
+      text = described_class.call(service: "CreateAccount").content.first[:text]
+
+      expect(text).to include("**File:** `app/interactions/create_account.rb`")
+      expect(text).to include("## Inputs (ActiveInteraction)")
+      expect(text).to include("- `string :subdomain`")
+      expect(text).to include("- `record :user`")
+    end
+
+    it "reads an organizer in app/interactors with its steps" do
+      text = described_class.call(service: "PlaceOrder").content.first[:text]
+
+      expect(text).to include("## Organizes")
+      expect(text).to include("1. `ChargeCard`\n2. `SendReceipt`")
+    end
+
+    it "names an interactor by its path under app/interactors" do
+      expect(described_class.call(service: "Orders::ChargeCard").content.first[:text]).to include("# Orders::ChargeCard")
+    end
+
+    it "lists them all" do
+      text = described_class.call(detail: "summary").content.first[:text]
+
+      expect(text).to include("- CreateAccount", "- PlaceOrder", "- Orders::ChargeCard")
+    end
+  end
+
   # A scheduled enqueue and the app's own helper enqueue as surely as
   # perform_later does, and a comment naming one does not.
   describe "the job enqueue side effect" do

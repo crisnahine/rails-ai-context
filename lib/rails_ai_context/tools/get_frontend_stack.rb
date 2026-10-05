@@ -43,12 +43,6 @@ module RailsAiContext
         private
 
         def build_summary(data)
-          skipped = Array(data[:skipped_frontend_paths])
-          summary = stack_summary(data)
-          skipped.any? ? "#{summary}; frontend_paths outside the app root not read: #{skipped.join(', ')}" : summary
-        end
-
-        def stack_summary(data)
           parts = []
           framework = framework_label(data)
           parts << framework if framework
@@ -119,11 +113,15 @@ module RailsAiContext
           state_management = data[:state_management]
           state_management = state_management.join(", ") if state_management.is_a?(Array)
           lines << "- **State management:** #{state_management}" if state_management.present?
-          lines << "- **Package manager:** #{data[:package_manager]}" if data[:package_manager]
+          if data[:package_manager]
+            where = " (lockfile in `#{data[:package_manager_dir]}`)" if data[:package_manager_dir]
+            lines << "- **Package manager:** #{data[:package_manager]}#{where}"
+          end
           pipeline_lines = asset_pipeline_lines
           pipeline_lines << "- **CSS framework:** #{css_framework}" if css_framework
-          skipped = Array(data[:skipped_frontend_paths])
-          skipped_note = "_`frontend_paths` entries outside the app root are not read: #{skipped.map { |p| "`#{p}`" }.join(', ')}._" if skipped.any?
+          outside = Array(data[:outside_frontend_roots])
+          outside_line = "- **Outside the app root (manifests only):** #{outside.map { |p| "`#{p}`" }.join(', ')}" if outside.any?
+          lines << outside_line if outside_line
           lines.concat(pipeline_lines)
 
           # TypeScript
@@ -163,12 +161,11 @@ module RailsAiContext
 
           if no_frontend_evidence
             if pipeline_lines.any?
-              return [ "# Frontend Stack", "", *pipeline_lines, "- **JavaScript build:** none (no app/javascript, no package.json)",
-                       *([ "", skipped_note ] if skipped_note) ].join("\n")
+              return [ "# Frontend Stack", "", *outside_line, *pipeline_lines, "- **JavaScript build:** none (no app/javascript, no package.json)" ].join("\n")
             end
 
             note = api_only_note("a frontend") || "No frontend stack detected (no app/javascript, no package.json, no asset pipeline)."
-            return [ "# Frontend Stack", "", note, *([ "", skipped_note ] if skipped_note) ].join("\n")
+            return [ "# Frontend Stack", "", note, *([ "", outside_line ] if outside_line) ].join("\n")
           end
 
           lines.concat(hotwire_lines)
@@ -191,7 +188,6 @@ module RailsAiContext
             end
           end
 
-          lines << "" << skipped_note if skipped_note
           lines.join("\n")
         end
 

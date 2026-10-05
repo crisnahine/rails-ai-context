@@ -38,7 +38,13 @@ module RailsAiContext
           result[:dynamic_routes] = dynamic if dynamic.positive?
           engine_routes = booted_engine_routes
           result[:engine_routes] = engine_routes if engine_routes.any?
+          add_grape_endpoints(result)
         end
+      end
+
+      def add_grape_endpoints(result)
+        grape = GrapeEndpoints.call(app.root, result[:mounted_engines])
+        result[:grape_endpoints] = grape if grape.any?
       end
 
       # Static tier: answer route questions from config/routes.rb and the
@@ -88,6 +94,7 @@ module RailsAiContext
         result[:engine_routes] = engine_routes if engine_routes.any?
         unread = (in_repo_route_files - in_repo.keys).size
         result[:in_repo_route_files] = unread if unread.positive?
+        add_grape_endpoints(result)
         result
       end
 

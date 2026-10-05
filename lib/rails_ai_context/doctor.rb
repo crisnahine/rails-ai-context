@@ -144,11 +144,11 @@ module RailsAiContext
     end
 
     def check_gems
-      lock_path = File.join(app.root, "Gemfile.lock")
-      if File.exist?(lock_path)
-        Check.new(name: "Gems", status: :pass, message: "Gemfile.lock found", fix: nil)
+      lockfile = GemLock.lockfile_name(app.root)
+      if File.exist?(File.join(app.root, lockfile))
+        Check.new(name: "Gems", status: :pass, message: "#{lockfile} found", fix: nil)
       else
-        Check.new(name: "Gems", status: :warn, message: "Gemfile.lock not found", fix: "Run `bundle install`")
+        Check.new(name: "Gems", status: :warn, message: "#{lockfile} not found", fix: "Run `bundle install`")
       end
     end
 

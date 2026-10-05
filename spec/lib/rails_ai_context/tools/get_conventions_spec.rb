@@ -81,6 +81,18 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
       expect(text).to include("Service objects")
     end
 
+    it "lists admin resources by gem" do
+      Dir.mktmpdir do |tmp|
+        FileUtils.mkdir_p(File.join(tmp, "app", "avo", "resources"))
+        File.write(File.join(tmp, "app", "avo", "resources", "user.rb"), "class Avo::Resources::User < Avo::BaseResource\nend\n")
+        allow(RailsAiContext).to receive(:default_app).and_return(double("app", root: Pathname.new(tmp)))
+
+        text = described_class.call.content.first[:text]
+        expect(text).to include("## Admin Resources")
+        expect(text).to include("- Avo `User` (`app/avo/resources/user.rb`)")
+      end
+    end
+
     it "shows notable config files, filtering obvious ones" do
       result = described_class.call
       text = result.content.first[:text]
@@ -516,6 +528,19 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
     it "names bun from the text bun.lock that bun 1.2 writes" do
       File.write(File.join(@root, "bun.lock"), "{}")
       expect(stack({})).to include("bun (package manager)")
+    end
+
+    it "names the package manager whose lockfile sits at the workspace root above the app" do
+      Dir.mktmpdir do |tmp|
+        repo = File.realpath(tmp)
+        root = File.join(repo, "backend")
+        FileUtils.mkdir_p([ root, File.join(repo, ".git") ])
+        File.write(File.join(repo, "package.json"), JSON.generate("workspaces" => [ "backend" ]))
+        File.write(File.join(repo, "pnpm-lock.yaml"), "")
+        allow(RailsAiContext).to receive(:default_app).and_return(double("app", root: Pathname.new(root)))
+
+        expect(described_class.send(:detect_frontend_stack)).to include("pnpm (package manager)")
+      end
     end
   end
 

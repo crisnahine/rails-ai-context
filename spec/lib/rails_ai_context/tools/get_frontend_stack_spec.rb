@@ -442,16 +442,25 @@ RSpec.describe RailsAiContext::Tools::GetFrontendStack do
         expect(described_class.call(detail: "summary").content.first[:text]).to eq("React 19.0.0 + Bootstrap")
       end
 
-      it "says a frontend_paths entry outside the app root was not read" do
+      it "names the directory outside the app a workspace lockfile was found in" do
         allow(described_class).to receive(:cached_context).and_return(
-          frontend_frameworks: no_js_data.merge(skipped_frontend_paths: [ "../web-client" ]), stimulus: {}, gems: { notable_gems: [] }
+          frontend_frameworks: no_js_data.merge(package_manager: "yarn", package_manager_dir: ".."), stimulus: {}, gems: { notable_gems: [] }
+        )
+
+        expect(described_class.call(detail: "standard").content.first[:text]).to include("- **Package manager:** yarn (lockfile in `..`)")
+      end
+
+      it "names a frontend_paths entry outside the app root whose manifests were read" do
+        allow(described_class).to receive(:cached_context).and_return(
+          frontend_frameworks: no_js_data.merge(frameworks: { react: "^19.0.0" }, outside_frontend_roots: [ "../web-client" ]),
+          stimulus: {}, gems: { notable_gems: [] }
         )
 
         text = described_class.call(detail: "standard").content.first[:text]
-        expect(text).to include("`frontend_paths` entries outside the app root are not read: `../web-client`")
-        expect(text).not_to include("API-only")
-        expect(described_class.call(detail: "summary").content.first[:text])
-          .to end_with("; frontend_paths outside the app root not read: ../web-client")
+        expect(text).to include("- **Framework:** React 19.0.0")
+        expect(text).to include("- **Outside the app root (manifests only):** `../web-client`")
+        expect(text).not_to include("not read")
+        expect(described_class.call(detail: "summary").content.first[:text]).to eq("React 19.0.0")
       end
 
       it "reads a manifest.js with bytes that are not UTF-8" do

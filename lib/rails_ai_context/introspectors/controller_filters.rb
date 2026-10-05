@@ -10,13 +10,26 @@ module RailsAiContext
     # `before_action` in ApplicationController reached the generated overview
     # through its own file read and reached no tool at all.
     module ControllerFilters
-      MACROS = %i[
+      # Macros a gem defines to add one callback: cancancan's controller_additions.rb
+      # (load and authorize blocks, check_authorization after) and acts_as_tenant's
+      # controller extensions, which add a named before_action.
+      GEM_FILTERS = {
+        load_and_authorize_resource: [ :before_action, :load_and_authorize_resource ],
+        load_resource: [ :before_action, :load_resource ],
+        authorize_resource: [ :before_action, :authorize_resource ],
+        check_authorization: [ :after_action, :check_authorization ],
+        skip_authorization_check: [ :before_action, :skip_authorization_check ],
+        set_current_tenant_by_subdomain: [ :before_action, :find_tenant_by_subdomain ],
+        set_current_tenant_by_subdomain_or_domain: [ :before_action, :find_tenant_by_subdomain_or_domain ]
+      }.freeze
+
+      MACROS = (%i[
         before_action after_action around_action
         prepend_before_action append_before_action
         prepend_after_action prepend_around_action append_after_action append_around_action
         skip_before_action skip_after_action skip_around_action skip_forgery_protection
         http_basic_authenticate_with
-      ].freeze
+      ] + GEM_FILTERS.keys).freeze
 
       # The block filter http_authentication.rb adds, named for the macro: its keywords are credentials.
       BASIC_AUTH = { macro: :before_action, args: [ :http_basic_authenticate_with ], proc_lines: [] }.freeze
@@ -194,6 +207,9 @@ module RailsAiContext
       def record(entry)
         entry = entry.merge(FORGERY_SKIP) if entry[:macro] == :skip_forgery_protection
         entry = entry.merge(BASIC_AUTH) if entry[:macro] == :http_basic_authenticate_with
+        if (macro, name = GEM_FILTERS[entry[:macro]])
+          entry = entry.merge(macro: macro, args: [ name ], values: [], proc_lines: [])
+        end
         macro = entry[:macro].to_s
         skipped = macro.start_with?("skip_")
         names = positional_names(entry, skipped ? [] : Array(entry[:proc_lines]).map { |line| "block (line #{line})" })

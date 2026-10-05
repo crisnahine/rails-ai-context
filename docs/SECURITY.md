@@ -169,6 +169,16 @@ raise unless real_path.start_with?(Rails.root.to_s)
 
 The VFS (`rails-ai-context://views/{path}`) applies the same protection for view template reads.
 
+### Frontend roots outside the app
+
+Two directories outside `Rails.root` are read, for frontend manifests only: each
+`frontend_paths` entry you configure (`../web-client`), and the JS workspace root
+above the app (the nearest ancestor holding a lockfile or declaring `workspaces`,
+never above the git root and never outside a git repository). Only `package.json`,
+lockfiles and the presence of a bundler config (`vite.config.*` and similar) are
+read there. Sensitive patterns and symlink containment apply relative to that
+directory, and frontend_stack names it in its answer.
+
 ### How a refusal is reported
 
 A path refused on policy - outside the app, a traversal, a sensitive file - comes back as an

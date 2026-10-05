@@ -29,6 +29,16 @@ RSpec.describe RailsAiContext::Introspectors::ConventionIntrospector do
       expect(result[:config_files]).to be_an(Array)
     end
 
+    it "names the linter and type-checker config files beside .rubocop.yml" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "sorbet"))
+        %w[.rubocop.yml .standard.yml .erb_lint.yml sorbet/config Steepfile].each { |name| File.write(File.join(dir, name), "") }
+        app = double("app", root: Pathname.new(dir), config: double(api_only: false))
+
+        expect(described_class.new(app).call[:config_files]).to include(".rubocop.yml", ".standard.yml", ".erb_lint.yml", "sorbet/config", "Steepfile")
+      end
+    end
+
     it "returns custom_directories as an array" do
       expect(result[:custom_directories]).to be_an(Array)
     end

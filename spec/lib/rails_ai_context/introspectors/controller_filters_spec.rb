@@ -109,4 +109,29 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
         .to eq([ { name: "verify_authenticity_token", kind: "before", skipped: true, only: [ "create" ] } ])
     end
   end
+
+  # cancancan's controller_additions.rb and acts_as_tenant's controller
+  # extensions add callbacks under their own macro names.
+  describe "filters a gem's macro adds" do
+    it "reads cancancan's and acts_as_tenant's macros as the callbacks they add" do
+      source = <<~RUBY
+        class PostsController < ApplicationController
+          set_current_tenant_by_subdomain(:account, :subdomain)
+          load_and_authorize_resource
+          authorize_resource :comment, prepend: true, except: :index
+          check_authorization
+          skip_authorization_check only: :index
+          def index; end
+        end
+      RUBY
+
+      expect(described_class.from_source(source)).to eq([
+        { name: "find_tenant_by_subdomain", kind: "before", declared: true },
+        { name: "load_and_authorize_resource", kind: "before", declared: true },
+        { name: "authorize_resource", kind: "before", declared: true, except: [ "index" ] },
+        { name: "check_authorization", kind: "after", declared: true },
+        { name: "skip_authorization_check", kind: "before", declared: true, only: [ "index" ] }
+      ])
+    end
+  end
 end

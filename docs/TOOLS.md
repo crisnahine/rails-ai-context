@@ -111,7 +111,7 @@ Method-aware code extraction with surrounding class context. Every line returned
 
 ### `rails_analyze_feature`
 
-Full-stack feature analysis: models + controllers + routes + services + jobs + views + tests in one call.
+Full-stack feature analysis: models + controllers + routes + services + admin resources + jobs + views + tests in one call.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -240,7 +240,9 @@ fully qualified controller key answers with its own routes only; a short name
 reaches the controller whose trailing segments it spells, and not the ones that
 merely start with it. Rack apps attached with `mount`
 or `match ... to:` are named with the path they answer on, when the source
-spells one out.
+spells one out. A mounted Grape API lists its endpoints under the mount (verb,
+full path, declared params), read from its classes in `app/api` and `lib/api`;
+the summary counts them.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -381,7 +383,7 @@ API layer: api_only mode, serialization strategy (Jbuilder, serializers), GraphQ
 
 ### `rails_get_conventions`
 
-Auth checks, flash messages, create action template, test patterns.
+Auth checks, flash messages, create action template, test patterns, and the admin resources ActiveAdmin, Administrate, Avo, Madmin and Trestle register (with ActiveAdmin's permitted params).
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -423,7 +425,9 @@ Application and framework helpers with view cross-references.
 
 ### `rails_get_service_pattern`
 
-Service object interface, dependencies, side effects, callers. An
+Service object interface, dependencies, side effects, callers, read from
+`app/services/`, `app/interactions/` and `app/interactors/`. An interactor
+organizer lists the steps it runs, in order. An
 ActiveInteraction's inputs include the ones it inherits, with the filters
 nested inside a `hash` filter shown under it. Callers are read from every
 `app/` and `lib/` tree, and on a booted app from any other directory it

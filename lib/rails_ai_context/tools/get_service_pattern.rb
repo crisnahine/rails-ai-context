@@ -4,7 +4,7 @@ module RailsAiContext
   module Tools
     class GetServicePattern < BaseTool
       tool_name "rails_get_service_pattern"
-      description "Analyze service objects in app/services/: patterns, interfaces, dependencies, and side effects. " \
+      description "Analyze service objects in app/services/, app/interactions/ and app/interactors/: patterns, interfaces, dependencies, and side effects. " \
         "Use when: understanding how services are structured, adding a new service, or tracing what a service does. " \
         "Specify service:\"CreateOrder\" for full detail, or omit to detect the common pattern and list all services."
 
@@ -26,15 +26,19 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
+      # active_interaction recommends app/interactions, and interactor-rails
+      # autoloads and generates into app/interactors.
+      SERVICE_ROOTS = %w[app/services app/interactions app/interactors].freeze
+
       def self.call(service: nil, detail: "standard", server_context: nil)
         blank = blank_name_response("service", service)
         return blank if blank
 
         root = rails_app.root.to_s
-        service_dirs = PathResolver.dirs_for(root, "app/services")
+        service_dirs = SERVICE_ROOTS.flat_map { |kind| PathResolver.dirs_for(root, kind) }.uniq
 
         if service_dirs.empty?
-          searched = PathResolver.search_patterns(root, "app/services").map { |pattern| "#{pattern}/" }
+          searched = SERVICE_ROOTS.flat_map { |kind| PathResolver.search_patterns(root, kind) }.uniq.map { |pattern| "#{pattern}/" }
           return text_response("No services directory found. Searched #{searched.join(', ')}. " \
             "This app may not use the service objects pattern.")
         end
@@ -127,11 +131,20 @@ module RailsAiContext
           lines.concat(inputs)
         end
 
-        owned = owned_methods(source, constant_for(file, service_dirs))
+        owned, macros, steps = class_interface(source, constant_for(file, service_dirs))
+        built = macro_constructor(macros, record, lookup)
 
-        # Initialize params
-        init_params = extract_initialize_params(owned)
+        init_params = extract_initialize_params(owned) || built&.dig(:signature)
         lines << "**Initialize:** `#{init_params}`" if init_params
+        if built
+          lines << "" << "## Inputs (#{built[:library]})"
+          built[:inputs].each { |input| lines << "- `#{input}`" }
+        end
+
+        if steps.any?
+          lines << "" << "## Organizes"
+          steps.each_with_index { |step, index| lines << "#{index + 1}. `#{step}`" }
+        end
 
         # Public methods
         public_methods = extract_public_methods(owned)
@@ -215,7 +228,7 @@ module RailsAiContext
           next unless record[:source]
 
           file, source = record.values_at(:path, :source)
-          owned = owned_methods(source, constant_for(file, service_dirs))
+          owned, macros = class_interface(source, constant_for(file, service_dirs))
 
           {
             file: file.sub("#{root}/", ""),
@@ -224,7 +237,7 @@ module RailsAiContext
             nesting: record[:nesting],
             line_count: source.lines.size,
             public_methods: extract_public_methods(owned),
-            init_params: extract_initialize_params(owned),
+            init_params: extract_initialize_params(owned) || macro_constructor(macros, record, lookup)&.dig(:signature),
             class_method_call: owned.any? { |m| m[:scope] == :class && m[:name] == "call" },
             result_object: source.match?(/Result\.new|OpenStruct\.new|Struct\.new|\.success|\.failure/),
             active_interaction: Introspectors::Interaction.interaction?(source, lookup: lookup),
@@ -380,18 +393,72 @@ module RailsAiContext
       # outermost definition in the file.
       #
       # One walk per file: the interface and the constructor have to resolve
-      # the same owner, and a second walk could pick a different one.
-      private_class_method def self.owned_methods(source, expected_constant = nil)
+      # the same owner, and a second walk could pick a different one. The
+      # constructor macros come from the same walk, outside any `def`.
+      private_class_method def self.class_interface(source, expected_constant = nil)
         ast = Introspectors::SourceIntrospector.walk_source(
-          source, { methods: -> { Introspectors::Listeners::MethodsListener.new(include_initialize: true) } }
+          source, { methods: -> { Introspectors::Listeners::MethodsListener.new(include_initialize: true) },
+                    macros: Introspectors::Listeners::ConstructorMacroListener,
+                    organize: -> { Introspectors::Listeners::GenericMacroListener.new(:organize) } }
         )
         methods = ast[:methods] || []
-        return [] if methods.empty?
+        macros = Introspectors::SourceIntrospector.outside_defs(ast[:macros], methods)
+        owners = (methods + macros).map { |m| Introspectors::ActionResolver.owner_name(m) }
+        # An organizer's steps, in the order interactor runs them.
+        steps = Introspectors::SourceIntrospector.outside_defs(ast[:organize], methods).flat_map { |m| Array(m[:values]) }
+          .flat_map { |value| Array(value) }.select { |value| value.is_a?(String) }
+        return [ [], [], steps ] if owners.empty?
 
-        owner = primary_owner(methods, expected_constant)
-        Introspectors::ActionResolver.own_methods(methods, owner)
+        owner = primary_owner(owners, expected_constant)
+        [ Introspectors::ActionResolver.own_methods(methods, owner),
+          macros.select { |m| Introspectors::ActionResolver.owner_name(m) == owner }, steps ]
       rescue => e
-        RailsAiContext.debug_fail(e, [], label: "owned_methods AST")
+        RailsAiContext.debug_fail(e, [ [], [], [] ], label: "class_interface AST")
+      end
+
+      T_STRUCT_BASES = %w[T::Struct T::ImmutableStruct T::InexactStruct].freeze
+      DRY_STRUCT_BASES = %w[Dry::Struct Dry::Struct::Value].freeze
+
+      # The constructor a library's macros define, kept only when the class is
+      # that library's: `attribute` is also ActiveModel's, `param` anybody's.
+      private_class_method def self.macro_constructor(macros, record, lookup)
+        return nil if macros.empty?
+
+        dry_initializer = macros.any? { |m| m[:macro] == :extend && Array(m[:values]).include?("Dry::Initializer") }
+        library = ->(bases) { reaches?(record, bases, lookup) }
+        kept = macros.select do |m|
+          case m[:macro]
+          when :extend then false
+          when :const, :prop then library.call(T_STRUCT_BASES)
+          when :attribute, :attribute? then library.call(DRY_STRUCT_BASES)
+          when :param, :option then dry_initializer
+          else true
+          end
+        end
+        return nil if kept.empty?
+
+        names = { const: "T::Struct", prop: "T::Struct", attribute: "Dry::Struct", attribute?: "Dry::Struct",
+                  param: "dry-initializer", option: "dry-initializer" }
+        { library: kept.map { |m| names.fetch(m[:macro], "attr_extras") }.uniq.join(", "),
+          signature: "initialize(#{kept.flat_map { |m| m[:params] }.map { |param| param_text(param) }.join(', ')})",
+          inputs: kept.map { |m| m[:source] } }
+      end
+
+      private_class_method def self.reaches?(record, bases, lookup)
+        return true if bases.include?(record[:superclass].to_s.delete_prefix("::"))
+        return false unless record[:superclass]
+
+        Introspectors::SuperclassChain.to(record[:source], bases: bases, lookup: lookup, only: record[:class_name]).any?
+      end
+
+      private_class_method def self.param_text(param)
+        kind, name, default = param
+        case kind
+        when :req then name
+        when :opt then "#{name} = #{default}"
+        when :keyreq then "#{name}:"
+        else "#{name}: #{default}"
+        end
       end
 
       # A service that defines no constructor answers `.new` with no arguments.
@@ -407,8 +474,7 @@ module RailsAiContext
              .map { |m| m[:signature] }
       end
 
-      private_class_method def self.primary_owner(methods, expected_constant)
-        owners = methods.map { |m| Introspectors::ActionResolver.owner_name(m) }
+      private_class_method def self.primary_owner(owners, expected_constant)
         return expected_constant if expected_constant && owners.include?(expected_constant)
 
         owners.min_by { |o| [ o.count(":"), o.length ] }

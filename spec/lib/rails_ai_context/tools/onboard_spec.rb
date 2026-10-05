@@ -392,6 +392,45 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       [ standard, quick ].each { |text| expect(text.lines.first(4).join).not_to include("UNAVAILABLE") }
     end
 
+    it "names the Ruby engine the app declares, with the Ruby version it implements" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "Fx", rails_version: "8.1.4", ruby_version: "3.1.4",
+        ruby_engine: "JRuby 9.4.8.0", tier: "static"
+      })
+
+      standard = described_class.call(detail: "standard").content.first[:text]
+      quick = described_class.call(detail: "quick").content.first[:text]
+
+      expect(standard).to include("Fx is a Rails 8.1.4 application declaring JRuby 9.4.8.0 (Ruby 3.1.4) on")
+      expect(quick).to include("**Fx** is a Rails 8.1.4 / JRuby 9.4.8.0 (Ruby 3.1.4) app")
+    end
+
+    it "names the engine alone when the app declares no Ruby version" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "Fx", rails_version: "8.1.4",
+        ruby_version: RailsAiContext::Confidence.unavailable("app declares none"),
+        ruby_engine: "JRuby 9.4.8.0", tier: "static"
+      })
+
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("Fx is a Rails 8.1.4 application declaring JRuby 9.4.8.0 on")
+    end
+
+    it "says the gems are not read when boot.rb names a Gemfile outside the app" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "Dummy", rails_version: RailsAiContext::Confidence.unavailable("x"),
+        ruby_version: RailsAiContext::Confidence.unavailable("app declares none"), tier: "static"
+      })
+      allow(RailsAiContext::GemLock).to receive(:for).and_return(
+        RailsAiContext::GemLock::Spec.new({}, reason: "x", absent: true, outside_gemfile: "../../Gemfile")
+      )
+
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("Its gems and Rails version are not read: config/boot.rb points Bundler at `../../Gemfile`, outside the app root.")
+    end
+
     it "says a booted run is running that ruby" do
       allow(described_class).to receive(:cached_context).and_return({
         app_name: "TestApp",

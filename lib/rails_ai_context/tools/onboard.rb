@@ -58,14 +58,14 @@ module RailsAiContext
         def compose_quick(ctx)
           app = ctx[:app_name] || "This Rails app"
 
-          version = named_ruby_version(ctx)
+          ruby = ruby_phrase(ctx)
           rails = named_rails_version(ctx)
           head = "**#{app}** is a Rails#{" #{rails}" if rails}"
           # The slash pairs two versions; with no Rails version to pair, the
           # Ruby one follows the noun instead of sitting in front of it.
-          head += " / Ruby #{version}" if version && rails
+          head += " / #{ruby}" if ruby && rails
           parts = [ head, "app" ]
-          parts << "running Ruby #{version}" if version && !rails
+          parts << "running #{ruby}" if ruby && !rails
 
           # Stats: tables, models, jobs
           stats = []
@@ -136,6 +136,8 @@ module RailsAiContext
           end
           rails = named_rails_version(ctx)
           lines << "#{ctx[:app_name]} is a Rails#{" #{rails}" if rails} application#{ruby_clause(ctx)} #{db ? "on #{db}" : "without Active Record"}."
+          outside = RailsAiContext::GemLock.for(rails_app.root).outside_gemfile unless rails
+          lines << "Its gems and Rails version are not read: config/boot.rb points Bundler at `#{outside}`, outside the app root." if outside
 
           notable = Payload.notable_gems(ctx)
           if notable.any?
@@ -647,10 +649,20 @@ module RailsAiContext
         # is the interpreter running this tool, which says nothing about the
         # app. Then the sentence names no Ruby at all.
         def ruby_clause(ctx)
-          version = named_ruby_version(ctx)
-          return "" unless version
+          ruby = ruby_phrase(ctx)
+          return "" unless ruby
 
-          ctx[:tier].to_s == "static" ? " declaring Ruby #{version}" : " running Ruby #{version}"
+          ctx[:tier].to_s == "static" ? " declaring #{ruby}" : " running #{ruby}"
+        end
+
+        # "Ruby 3.4.9", or the engine first ("JRuby 9.4.8.0 (Ruby 3.1.4)"):
+        # JRuby's own version is not the Ruby version it implements.
+        def ruby_phrase(ctx)
+          version = named_ruby_version(ctx)
+          engine = ctx[:ruby_engine].to_s
+          return version && "Ruby #{version}" if engine.empty?
+
+          version ? "#{engine} (Ruby #{version})" : engine
         end
 
         # The version a sentence may name, or nil. Statically that is the one

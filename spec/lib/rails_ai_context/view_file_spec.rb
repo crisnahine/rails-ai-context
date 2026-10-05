@@ -123,4 +123,22 @@ RSpec.describe RailsAiContext::ViewFile do
       expect(described_class.template?("posts/README")).to be(false)
     end
   end
+
+  describe ".alternate_of" do
+    it "names the variant and the locale of the template a file renders for, as Rails parses them" do
+      expect(described_class.alternate_of("posts/show.html+mobile.erb")).to eq("`mobile` variant of `show`")
+      expect(described_class.alternate_of("posts/show.fr.html.erb")).to eq("`fr` locale of `show`")
+      expect(described_class.alternate_of("posts/show.pt-BR.html+phone.erb")).to eq("`pt-BR` locale, `phone` variant of `show`")
+      expect(described_class.alternate_of("posts/show+tablet.erb")).to eq("`tablet` variant of `show`")
+    end
+
+    it "leaves a plain template, a format that looks like a locale and an odd name alone" do
+      expect(described_class.alternate_of("posts/show.html.erb")).to be_nil
+      expect(described_class.alternate_of("posts/show.js.erb")).to be_nil
+      expect(described_class.alternate_of("posts/show.erb")).to be_nil
+      expect(described_class.alternate_of("posts/_form.html.erb")).to be_nil
+      expect(described_class.alternate_of("")).to be_nil
+      expect(described_class.alternate_of(nil)).to be_nil
+    end
+  end
 end

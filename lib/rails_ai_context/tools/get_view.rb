@@ -121,7 +121,8 @@ module RailsAiContext
               stim = meta[:stimulus]&.any? ? " stimulus: #{meta[:stimulus].join(', ')}" : ""
               comps = meta[:components]&.any? ? " components: #{meta[:components].join(', ')}" : ""
               phlex_tag = meta[:phlex] ? " [phlex]" : ""
-              lines << "- #{name} (#{count_phrase(meta[:lines], "line")}#{phlex_tag})#{parts}#{comps}#{stim}"
+              alternate = (note = RailsAiContext::ViewFile.alternate_of(name)) ? " #{note}" : ""
+              lines << "- #{name} (#{count_phrase(meta[:lines], "line")}#{phlex_tag})#{alternate}#{parts}#{comps}#{stim}"
             end
             ctrl_partials.sort.each do |name, meta|
               lines << "- #{name} (#{count_phrase(meta[:lines], "line")})"
@@ -154,7 +155,7 @@ module RailsAiContext
 
             lines << "## #{group_heading(ctrl)}" unless controller && all_dirs.size == 1
             ctrl_templates.sort.each do |name, meta|
-              detail_parts = []
+              detail_parts = [ RailsAiContext::ViewFile.alternate_of(name) ].compact
               extra = metadata[name]
 
               if meta[:phlex]
@@ -470,7 +471,7 @@ module RailsAiContext
 
         templates, partials = files.partition { |f| !File.basename(f).start_with?("_") }
         lines = views_header_lines(templates, partials, controller ? [] : layout_files, controller: controller)
-        files.each { |f| lines << "- #{f}" }
+        files.each { |f| lines << [ "- #{f}", RailsAiContext::ViewFile.alternate_of(f) ].compact.join(" - ") }
         text_response(lines.join("\n"))
       end
     end

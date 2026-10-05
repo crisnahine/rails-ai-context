@@ -75,6 +75,18 @@ RSpec.describe RailsAiContext::PackageJson do
       expect(described_class.present?(@root, "svelte")).to be(true)
     end
 
+    it "reads a frontend_paths entry outside the app root" do
+      Dir.mktmpdir do |tmp|
+        base = File.realpath(tmp)
+        root = File.join(base, "backend")
+        FileUtils.mkdir_p([ root, File.join(base, "web-client") ])
+        File.write(File.join(base, "web-client/package.json"), JSON.generate("dependencies" => { "react" => "^19.0.0" }))
+        allow(RailsAiContext.configuration).to receive(:frontend_paths).and_return([ "../web-client" ])
+
+        expect(described_class.present?(root, "react")).to be(true)
+      end
+    end
+
     it "lets the root manifest win a version disagreement" do
       write(JSON.generate("dependencies" => { "vue" => "2.7.0" }))
       write_frontend("frontend", JSON.generate("dependencies" => { "vue" => "3.4.0" }))

@@ -24,6 +24,7 @@ module RailsAiContext
       context = {
         app_name: app_name,
         ruby_version: ruby_version,
+        ruby_engine: ruby_engine,
         rails_version: rails_version,
         environment: environment_name,
         tier: RailsAiContext.static_tier? ? "static" : "booted",
@@ -203,6 +204,14 @@ module RailsAiContext
       GemLock.for(app.root).ruby_version || Confidence.unavailable("app declares none")
     end
 
+    # Nil for CRuby, else the engine and its own version ("JRuby 9.4.8.0").
+    def ruby_engine
+      return GemLock.for(app.root).ruby_engine if RailsAiContext.static_tier?
+      return nil if RUBY_ENGINE == "ruby"
+
+      [ GemLock::ENGINE_NAMES.fetch(RUBY_ENGINE, RUBY_ENGINE), RUBY_ENGINE_VERSION ].join(" ")
+    end
+
     def rails_version
       return Rails.version if defined?(Rails) && Rails.respond_to?(:version) && !RailsAiContext.static_tier?
 
@@ -210,7 +219,7 @@ module RailsAiContext
       # mid-sentence into files the user commits. An app can bundle railties
       # without the `rails` meta-gem and still be a Rails app at that version.
       lock = GemLock.for(app.root)
-      lock.version("rails") || lock.version("railties") || Confidence.unavailable("app not booted")
+      lock.version("rails") || lock.version("railties") || Confidence.unavailable(lock.outside_gemfile ? lock.reason : "app not booted")
     end
 
     def environment_name

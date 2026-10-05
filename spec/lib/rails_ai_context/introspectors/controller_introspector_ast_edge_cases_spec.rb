@@ -487,6 +487,35 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
     end
   end
 
+  describe "the responders gem's class-level respond_to" do
+    it "reads the formats a bare respond_to declares in the class body" do
+      source = <<~RUBY
+        class WidgetsController < ApplicationController
+          respond_to :json
+          respond_to :html, :xml, only: :index
+
+          def index
+            respond_with([])
+          end
+        end
+      RUBY
+      formats = introspector.send(:extract_respond_to, source)
+      expect(formats).to eq(%w[html json xml])
+    end
+
+    it "ignores respond_to? and a respond_to with a receiver" do
+      source = <<~RUBY
+        class OddController < ApplicationController
+          def index
+            obj.respond_to(:csv)
+            respond_to?(:pdf)
+          end
+        end
+      RUBY
+      expect(introspector.send(:extract_respond_to, source)).to eq([])
+    end
+  end
+
   # ────────────────────────────────────────────────────────────
   # Edge case 13: rescue_from with no handler (block form)
   # ────────────────────────────────────────────────────────────

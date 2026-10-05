@@ -362,7 +362,7 @@ module RailsAiContext
     attr_accessor :concern_paths          # Where to look for concern source files (default: nil, discovers app/*/concerns)
 
     # Frontend framework detection (optional overrides - auto-detected if nil)
-    attr_accessor :frontend_paths         # User-declared frontend dirs (e.g. ["app/frontend", "client"]; paths outside the app root are not read)
+    attr_accessor :frontend_paths         # User-declared frontend dirs (e.g. ["app/frontend", "../web-client"]; one outside the app root is read for manifests only)
 
     # Additional app-root-relative directories that also contain Rails app
     # code (e.g. ["src", "vendor/internal"]). Code discovery scans each

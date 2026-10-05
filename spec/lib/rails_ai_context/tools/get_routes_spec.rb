@@ -213,6 +213,35 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
 
   # A Rack app attached in the routes file is counted and then dropped from
   # the body, so the one place it could be found by path named it nowhere.
+  describe "a mounted Grape API" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        routes: {
+          total_routes: 0, by_controller: {}, api_namespaces: [], unrouted_mounts: 1,
+          mounted_engines: [ { engine: "V1::Users", path: "/api" } ],
+          grape_endpoints: { "V1::Users" => [
+            { verb: "GET", path: "/api/v1/users/:id", params: [ { name: "id", type: "Integer", required: true } ], file: "app/api/v1/users.rb" },
+            { verb: "POST", path: "/api/v1/users", params: [], file: "app/api/v1/users.rb" }
+          ] }
+        }
+      })
+    end
+
+    it "lists its endpoints under the mount in standard and full" do
+      %w[standard full].each do |detail|
+        text = described_class.call(detail: detail).content.first[:text]
+
+        expect(text).to include("- **V1::Users** at `/api`\n  - `GET` `/api/v1/users/:id` - params: id (Integer, required)\n  - `POST` `/api/v1/users`"), detail
+      end
+    end
+
+    it "counts them in the summary" do
+      text = described_class.call(detail: "summary").content.first[:text]
+
+      expect(text).to include("- **V1::Users** at `/api` (2 Grape endpoints, listed at detail:\"standard\")")
+    end
+  end
+
   describe "an app with mounted Rack endpoints" do
     before do
       allow(described_class).to receive(:cached_context).and_return({
