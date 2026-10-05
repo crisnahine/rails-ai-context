@@ -56,6 +56,15 @@ RSpec.describe RailsAiContext::Introspectors::EnvReferences do
     expect(names_in("lib/tasks/setup.rake")).to eq(%w[KEPT])
   end
 
+  it "skips a file too large to read and still reads the ENV in the files next to it" do
+    write("db/seeds.rb", "User.create!(name: \"#{"x" * 200}\")\n")
+    write("config/initializers/keys.rb", "KEY = ENV.fetch(\"API_KEY\")\n")
+    allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(100)
+
+    expect(names_in("config/initializers/keys.rb")).to eq(%w[API_KEY])
+    expect(names_in("db/seeds.rb")).to be_empty
+  end
+
   it "leaves out a file that reads no ENV" do
     write("app/models/user.rb", "class User; end\n")
 
