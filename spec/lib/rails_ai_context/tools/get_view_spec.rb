@@ -544,4 +544,42 @@ RSpec.describe RailsAiContext::Tools::GetView do
       end
     end
   end
+
+  describe "a variant and a locale of one template" do
+    around do |example|
+      Dir.mktmpdir("view-alternates") do |dir|
+        @root = File.realpath(dir)
+        FileUtils.mkdir_p(File.join(@root, "app/views/posts"))
+        File.write(File.join(@root, "app/views/posts/show.html.erb"), "<%= @post.title %>\n")
+        File.write(File.join(@root, "app/views/posts/show.html+mobile.erb"), "<%= @post.title %>\n")
+        File.write(File.join(@root, "app/views/posts/show.fr.html.erb"), "<%= @post.title %>\n")
+        example.run
+      end
+    end
+
+    before { allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root)) }
+
+    let(:templates) do
+      %w[posts/show.html.erb posts/show.html+mobile.erb posts/show.fr.html.erb].to_h { |t| [ t, { lines: 1 } ] }
+    end
+
+    %w[summary standard].each do |detail|
+      it "ties each to show in the #{detail} listing" do
+        allow(described_class).to receive(:cached_context).and_return(view_templates: { templates: templates, partials: {} })
+        text = described_class.call(controller: "posts", detail: detail).content.first[:text]
+
+        expect(text).to match(/posts\/show\.html\+mobile\.erb\** \(1 line\).*`mobile` variant of `show`/)
+        expect(text).to match(/posts\/show\.fr\.html\.erb\** \(1 line\).*`fr` locale of `show`/)
+        expect(text).not_to match(/posts\/show\.html\.erb.*of `show`/)
+      end
+    end
+
+    it "ties each to show when the listing is read off disk" do
+      allow(described_class).to receive(:cached_context).and_return({})
+      text = described_class.call(controller: "posts", detail: "summary").content.first[:text]
+
+      expect(text).to include("- posts/show.html+mobile.erb - `mobile` variant of `show`")
+      expect(text).to include("- posts/show.fr.html.erb - `fr` locale of `show`")
+    end
+  end
 end

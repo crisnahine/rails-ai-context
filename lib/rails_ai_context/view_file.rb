@@ -84,6 +84,27 @@ module RailsAiContext
       handler_extensions.include?(ext) || RAW_FORMAT_EXTENSIONS.include?(ext)
     end
 
+    # Mime types Rails registers itself; a segment named one is a format before it is a locale.
+    FORMAT_EXTENSIONS = (RAW_FORMAT_EXTENSIONS + %w[turbo_stream pdf zip]).freeze
+    LOCALE = /\A[a-z]{2}(?:[-_][A-Z]{2})?\z/
+
+    # @param path [String] a view path such as "posts/show.fr.html+mobile.erb"
+    # @return [String, nil] the locale and variant the file renders for, and the template name it shares
+    def alternate_of(path)
+      base = File.basename(path.to_s)
+      return nil if base.empty?
+
+      rest = base.sub(/\.[^.+]+\z/, "")
+      variant = rest[/\+([^.]*)\z/, 1]
+      segments = rest.sub(/\+[^.]*\z/, "").split(".")
+      segments.pop if segments.size > 1 && FORMAT_EXTENSIONS.include?(segments.last)
+      locale = segments.pop if segments.size > 1 && segments.last.match?(LOCALE)
+      parts = [ ("`#{locale}` locale" if locale), ("`#{variant}` variant" if variant.present?) ].compact
+      return nil if parts.empty? || segments.empty?
+
+      "#{parts.join(', ')} of `#{segments.join('.').delete_prefix('_')}`"
+    end
+
     # Labelled by the handler: html, csv and the like render raw, so their tags print as written.
     def fence(path)
       ext = File.extname(path.to_s).delete_prefix(".").downcase
