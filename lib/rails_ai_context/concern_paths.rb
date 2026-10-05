@@ -215,7 +215,6 @@ module RailsAiContext
       File.identical?(File.join(dir, name), File.join(dir, name.swapcase))
     end
     private_class_method :case_insensitive?
-    private_class_method :file_exist?
 
     def ordered_dirs(root, prefer, dirs = nil)
       dirs ||= resolve(root)

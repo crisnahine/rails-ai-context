@@ -669,7 +669,7 @@ module RailsAiContext
 
       # The first candidate Ruby would find, a base module or a file.
       def named(name, within)
-        found = ConcernPaths.find_named(@root, name, within: within, dirs: @dirs)
+        found = memo([ :named, @dirs, name, within ]) { ConcernPaths.find_named(@root, name, within: within, dirs: @dirs) }
         candidates = ConcernPaths.candidate_names(name, within)
         extra = candidates.find { |candidate| @paths.key?(candidate) }
         return found unless extra && (found.nil? || candidates.index(extra) <= candidates.index(found.first))
@@ -763,9 +763,14 @@ module RailsAiContext
       # Each called method is read again with that call's literal arguments.
       def expand_called(tree, data, own_lines, label, keys)
         found = Hash.new { |hash, key| hash[key] = [] }
+        # A method that declares none of the keys expands to nothing, so the class's calls of it
+        # need not be asked about; `:expanded` marks every call read, so it asks about all.
+        declared = keys.include?(:expanded) ? nil : keys.flat_map { |key| Array(data[key]) }.filter_map { |entry| entry[:location] if entry.is_a?(Hash) }
         Array(data[:methods]).each do |method|
           name = method[:name].to_s
-          next unless calls?(name) && method[:location]
+          next unless method[:location]
+          next if declared && declared.none? { |line| (method[:location]..method[:end_location].to_i).cover?(line) }
+          next unless calls?(name)
           next if method[:scope] == :class && ConcernMembership::MIXIN_HOOKS.include?(name)
           next if own_lines && !own_lines.cover?(method[:location])
 

@@ -720,6 +720,33 @@ RSpec.describe RailsAiContext::ConcernMacros do
       expect(calling).to eq(described_class.collect(tmpdir, mixin("Trackable"), keys: %i[associations], within: "Base",
                                                     calls: singleton_lookup({ "tracks" => [ nil ] })).first)
     end
+
+    # OpenProject's authorization concern overrides `before_action`, which every
+    # controller calls: each one walked ApplicationController's concerns again.
+    it "is kept for a class that calls a concern method declaring nothing the walk collects" do
+      File.write(File.join(concern_dir, "trackable.rb"), <<~RUBY)
+        module Trackable
+          extend ActiveSupport::Concern
+          class_methods do
+            def has_many(*names)
+              super
+            end
+
+            def tracks(name)
+              has_many name
+            end
+          end
+        end
+      RUBY
+      cache = {}
+      runs = 0
+      allow(described_class::Run).to receive(:new).and_wrap_original { |original, *args| runs += 1; original.call(*args) }
+
+      collect_for({ "has_many" => [ nil ] }, cache)
+      collect_for({ "has_many" => [ nil ] }, cache)
+
+      expect(runs).to eq(1)
+    end
   end
 
   # The exclusion is applied inside the walk, so the walk is the only place
