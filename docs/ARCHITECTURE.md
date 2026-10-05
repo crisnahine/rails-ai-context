@@ -26,7 +26,7 @@ graph TD
         subgraph engine["Introspection Engine"]
             direction LR
             I["Introspectors\n40 modules\nPresets\nCached"]
-            AST["AST Engine\nPrism\n26 listeners\nConfidence tags"]
+            AST["AST Engine\nPrism\n40 listeners\nConfidence tags"]
             H["Hydration Layer\nSchema hints\ninjected into\ntool responses"]
         end
 
