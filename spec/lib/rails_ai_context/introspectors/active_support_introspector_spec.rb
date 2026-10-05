@@ -144,4 +144,38 @@ RSpec.describe RailsAiContext::Introspectors::ActiveSupportIntrospector do
       expect(result[:concerns]).to be_a(Hash)
     end
   end
+
+  describe "message verifier usage" do
+    it "lists Rails.application.message_verifier calls and skips a file that only rescues InvalidSignature" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/models"))
+        FileUtils.mkdir_p(File.join(dir, "app/controllers"))
+        FileUtils.mkdir_p(File.join(dir, "lib/crypto"))
+        File.write(File.join(dir, "app/models/user.rb"), <<~RUBY)
+          class User < ApplicationRecord
+            def unsubscribe_token
+              Rails.application.message_verifier(:unsubscribe).generate(id)
+            end
+
+            def reset_token = Rails.application.message_verifiers["reset"].generate(id)
+          end
+        RUBY
+        File.write(File.join(dir, "app/controllers/passwords_controller.rb"), <<~RUBY)
+          class PasswordsController < ApplicationController
+            def edit
+            rescue ActiveSupport::MessageVerifier::InvalidSignature
+              redirect_to root_path
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "lib/crypto/box.rb"), "BOX = ActiveSupport::MessageEncryptor.new(KEY)\n")
+        allow(introspector).to receive(:root).and_return(dir)
+
+        expect(introspector.send(:extract_message_verifier_usage)).to eq([
+          { file: "lib/crypto/box.rb", encryptor: true, verifier: false },
+          { file: "app/models/user.rb", encryptor: false, verifier: true }
+        ])
+      end
+    end
+  end
 end
