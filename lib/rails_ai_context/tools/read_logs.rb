@@ -22,7 +22,7 @@ module RailsAiContext
           },
           file: {
             type: "string",
-            description: "Log file name (e.g. 'production', 'sidekiq'). Defaults to current Rails.env log. '.log' suffix optional."
+            description: "Log file name (e.g. 'production', 'sidekiq', or a rotated 'development.log.0'). Defaults to current Rails.env log. '.log' suffix optional."
           },
           search: {
             type: "string",
@@ -123,15 +123,15 @@ module RailsAiContext
 
       # ── Log file resolution ─────────────────────────────────────────
 
+      ROTATED_LOG = /\.log\.\d+\z/
+
       private_class_method def self.resolve_log_file(file_name)
-        name = if file_name
-          File.basename(file_name.to_s.strip.delete("\0").delete_suffix(".log"))
-        else
-          rails_env_name
-        end
+        base = file_name ? File.basename(file_name.to_s.strip.delete("\0")) : rails_env_name.to_s
+        # Logger rotates by size to development.log.0, .1 and so on.
+        base = "#{base.delete_suffix(".log")}.log" unless base.match?(ROTATED_LOG)
 
         # A log is tailed, never read whole, so the per-file cap does not apply.
-        located = RailsAiContext::SafePath.locate(File.join("log", "#{name}.log"), under: rails_app.root.to_s, max_size: Float::INFINITY)
+        located = RailsAiContext::SafePath.locate(File.join("log", base), under: rails_app.root.to_s, max_size: Float::INFINITY)
         located.ok? ? located.realpath : nil
       end
 
@@ -209,9 +209,9 @@ module RailsAiContext
       private_class_method def self.available_log_files
         log_dir = File.join(rails_app.root.to_s, "log")
         return [] unless Dir.exist?(log_dir)
-        Dir.glob(File.join(log_dir, "*.log"))
+        Dir.glob(File.join(log_dir, "*.log{,.*}"))
           .map { |f| File.basename(f) }
-          .select { |f| f.match?(/\A[\w.\-]+\.log\z/) } # Only clean filenames (alphanumeric, dots, hyphens, underscores)
+          .select { |f| f.match?(/\A[\w.\-]+\.log(?:\.\d+)?\z/) } # Only clean filenames (alphanumeric, dots, hyphens, underscores)
           .sort
       end
     end

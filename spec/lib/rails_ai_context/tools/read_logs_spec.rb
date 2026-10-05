@@ -84,6 +84,18 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
       expect(text).to include("test.log")
     end
 
+    it "reads a rotated log and names it under the available files" do
+      File.write(File.join(log_dir, "test.log.0"), "I, [2026-03-28T09:00:00 #1] INFO -- : Started GET \"/rotated\"\n")
+
+      text = described_class.call(file: "test.log.0").content.first[:text]
+
+      expect(text).to include("# Log: test.log.0")
+      expect(text).to include('Started GET "/rotated"')
+      expect(text).to include("Available log files: test.log, test.log.0")
+    ensure
+      FileUtils.rm_f(File.join(log_dir, "test.log.0"))
+    end
+
     it "filters by ERROR level and includes stack traces" do
       result = described_class.call(level: "ERROR")
       text = result.content.first[:text]
