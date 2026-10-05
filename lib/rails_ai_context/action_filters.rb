@@ -458,6 +458,6 @@ module RailsAiContext
                          :skip_calls, :base_filters, :skip_flag_records, :redeclared_names, :last_records, :own_skips,
                          :record_attribution, :conditional?, :partial?, :absolute_names, :conditions_by_name,
                          :merge_conditions, :mark_conditional_skips, :skip_tail, :action_names, :condition_text,
-                         :unplaced_conditional_skips, :evidence_skips, :gem_controller_base, :configured_base, :runs_once?
+                         :unplaced_conditional_skips, :evidence_skips, :configured_base, :runs_once?
   end
 end

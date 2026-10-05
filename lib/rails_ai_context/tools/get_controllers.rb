@@ -438,6 +438,8 @@ module RailsAiContext
         lines << "**Parent:** `#{resolved_parent(name, info, ctx)}`" if info[:parent_class]
         lines << "**API controller:** yes" if info[:api_controller]
         lines << "**Formats:** #{info[:respond_to_formats].join(', ')}" if info[:respond_to_formats]&.any?
+        declared = RailsAiContext::Introspectors::ControllerSettings.resolve(ctx, name, root: rails_app.root.to_s)
+        lines << "**Layout:** #{RailsAiContext::Introspectors::ControllerSettings.layout_phrase(declared[:layout])}" if declared[:layout]
 
         lines << "" << "## Actions"
         lines << if info[:actions]&.any?
@@ -471,6 +473,11 @@ module RailsAiContext
               lines << "- `#{sp}`"
             end
           end
+        end
+
+        if declared[:settings].any?
+          lines << "" << "## Settings"
+          declared[:settings].each { |setting| lines << "- `#{setting[:text]}`#{" _(from #{setting[:from]})_" unless setting[:from] == name}" }
         end
 
         # Rescue handlers

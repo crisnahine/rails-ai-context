@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
 
 RSpec.describe RailsAiContext::Tools::GetView do
   before { described_class.reset_cache! }
@@ -244,6 +245,36 @@ RSpec.describe RailsAiContext::Tools::GetView do
     # A template at the root of app/views has no directory. Splitting its key
     # on "/" made its own filename the group, so the group was empty, the row
     # never printed, and the header counted a file the body never listed.
+    context "with a controller that declares its layout" do
+      around do |example|
+        Dir.mktmpdir("view-layout") do |root|
+          FileUtils.mkdir_p(File.join(root, "app/views/layouts"))
+          FileUtils.mkdir_p(File.join(root, "app/views/users"))
+          File.write(File.join(root, "app/views/layouts/admin.html.erb"), "")
+          File.write(File.join(root, "app/views/users/index.html.erb"), "<h1>Users</h1>\n")
+          @root = root
+          example.run
+        end
+      end
+
+      before do
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(@root))
+        allow(described_class).to receive(:cached_context).and_return(
+          view_templates: { templates: { "users/index.html.erb" => { lines: 1 } }, partials: {} },
+          controllers: { controllers: { "UsersController" => { parent_class: "ActionController::Base", layout: { name: "admin", only: [ "index" ] },
+                                                               file: "app/controllers/users_controller.rb" } } }
+        )
+      end
+
+      it "says which layout the controller's views render in, at every detail level" do
+        %w[summary standard full].each do |detail|
+          text = described_class.call(controller: "users", detail: detail).content.first[:text]
+
+          expect(text).to include("**Layout:** `admin` (declared in UsersController, only: index); other actions: none")
+        end
+      end
+    end
+
     context "with a template directly under app/views" do
       before do
         allow(described_class).to receive(:cached_context).and_return(

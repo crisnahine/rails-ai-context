@@ -17,8 +17,7 @@ module RailsAiContext
           view_components: extract_view_components,
           template_engines: detect_template_engines,
           form_builders_detected: detect_form_builders,
-          component_usage: detect_component_usage,
-          conditional_layouts: detect_conditional_layouts
+          component_usage: detect_component_usage
         }
       end
 
@@ -201,43 +200,6 @@ module RailsAiContext
         components.to_a.sort
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "detect_component_usage")
-      end
-
-      def detect_conditional_layouts
-        layouts = []
-        controllers_dir = File.join(app.root, "app", "controllers")
-        return layouts unless Dir.exist?(controllers_dir)
-
-        Dir.glob(File.join(controllers_dir, "**", "*.rb")).each do |path|
-          ast_data = SourceIntrospector.walk(path, {
-            layout_calls: -> { Listeners::GenericMacroListener.new(:layout) }
-          })
-
-          ast_data[:layout_calls].each do |macro|
-            layout_name = macro[:args]&.first&.to_s
-            # Also check options for string-based layout names
-            layout_name ||= macro[:options].values.first&.to_s if macro[:options]&.any?
-            next unless layout_name
-
-            entry = { layout: layout_name, controller: File.basename(path, ".rb").camelize }
-            opts = macro[:options] || {}
-            entry[:only] = Array(opts[:only]).map(&:to_s) if opts[:only]
-            entry[:except] = Array(opts[:except]).map(&:to_s) if opts[:except]
-
-            # Build condition string from options for backward compat
-            condition_parts = []
-            condition_parts << "only: #{opts[:only].inspect}" if opts[:only]
-            condition_parts << "except: #{opts[:except].inspect}" if opts[:except]
-            entry[:condition] = condition_parts.join(", ") if condition_parts.any?
-
-            layouts << entry
-          end
-        rescue => e
-          RailsAiContext.debug_fail(e, label: "detect_conditional_layouts")
-        end
-        layouts
-      rescue => e
-        RailsAiContext.debug_fail(e, [], label: "detect_conditional_layouts")
       end
     end
   end

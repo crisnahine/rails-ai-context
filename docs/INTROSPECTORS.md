@@ -253,6 +253,7 @@ same wherever it is asked. Those live as their own modules under
 |:-------|:---------------|
 | `DeclaredConstant` | The constant a source file calls its own class, against the one its path camelizes to |
 | `ActionPresence` | Whether a controller has an action: the public methods and `define_method` names of the controller, its ancestors up to Rails' base and the modules they include, the templates at each ancestor's view prefix, and the ancestors or modules no app source holds, which leave a missing action unverified. `rails_validate` and `rails_generate_test` both ask it |
+| `ControllerSettings` | The layout a controller renders in (declared on it or an ancestor, else the `layouts/<controller_path>` file Rails finds by name, walking up the chain) and the `allow_browser`, `protect_from_forgery`, `add_flash_types`, `default_form_builder` and `wrap_parameters` calls it and its ancestors make. `rails_get_controllers` and `rails_get_view` both ask it |
 | `TableName` | The table a model reads, from its own declarations |
 | `HabtmJoinTables` | The join tables every `has_and_belongs_to_many` under the app's code and lib names, lib patches and engines included, for the schema's model-less table warning |
 | `SuperclassChain` | What a class inherits from, followed through the app's own sources: the chain from a file's class up to a named base, and the constant-to-source lookup over the app's autoload roots that walks it |
