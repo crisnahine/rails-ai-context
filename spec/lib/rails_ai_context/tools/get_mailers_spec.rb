@@ -18,6 +18,77 @@ RSpec.describe RailsAiContext::Tools::GetMailers do
     allow(described_class).to receive(:cached_context).and_return({ jobs: jobs_data })
   end
 
+  describe "what one mailer declares, renders and previews" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    def write(path, body)
+      FileUtils.mkdir_p(File.dirname(File.join(tmpdir, path)))
+      File.write(File.join(tmpdir, path), body)
+    end
+
+    before do
+      write("app/mailers/application_mailer.rb", "class ApplicationMailer < ActionMailer::Base\n  layout \"mailer\"\nend\n")
+      write("app/mailers/user_mailer.rb", <<~RUBY)
+        class UserMailer < ApplicationMailer
+          default from: "users@example.com", reply_to: "help@example.com"
+          layout "user_mail"
+          before_action :set_user
+          after_deliver :log_delivery
+          def welcome = mail(to: @user.email)
+          def reset = mail(to: @user.email) { |format| format.text }
+          private
+          def set_user = (@user = params[:user])
+          def log_delivery; end
+        end
+      RUBY
+      %w[welcome.html.erb welcome.text.erb reset.text.erb].each { |f| write("app/views/user_mailer/#{f}", "hi") }
+      write("test/mailers/previews/user_mailer_preview.rb", "class UserMailerPreview < ActionMailer::Preview\n  def welcome = UserMailer.welcome\nend\n")
+      write("lib/mailer_previews/admin_mailer_preview.rb", "class AdminMailerPreview < ActionMailer::Preview\n  def digest; end\nend\n")
+      write("config/application.rb", <<~RUBY)
+        module App
+          class Application < Rails::Application
+            config.active_job.queue_name_prefix = "myapp"
+            config.action_mailer.preview_paths << "\#{root}/lib/mailer_previews"
+            config.action_mailer.interceptors = %w[SandboxInterceptor]
+          end
+        end
+      RUBY
+      write("config/initializers/mail.rb", "ActionMailer::Base.register_observer(DeliveryLogObserver)\n")
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "shows the mailer's own declarations, the template formats per action and its preview" do
+      text = described_class.call(mailer: "UserMailer").content.first[:text]
+
+      expect(text).to include("- **Declares:** `default from: \"users@example.com\", reply_to: \"help@example.com\"`, " \
+                              "`layout \"user_mail\"`, `before_action :set_user`, `after_deliver :log_delivery`")
+      expect(text).to include("- **Templates:** reset (text), welcome (html, text)")
+      expect(text).to include("- **Preview:** UserMailerPreview (`test/mailers/previews/user_mailer_preview.rb`): welcome")
+    end
+
+    it "shows the deliver_later queue, the interceptors, the observers and the preview paths" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("**deliver_later queue:** `myapp_mailers`")
+      expect(text).to include("**Interceptors:** SandboxInterceptor (`config/application.rb`)")
+      expect(text).to include("**Observers:** DeliveryLogObserver (`config/initializers/mail.rb`)")
+      expect(text).to include("**Preview paths:** `test/mailers/previews`, `lib/mailer_previews`")
+    end
+
+    # load_defaults 6.1 sets deliver_later_queue_name to nil, so mail goes to ActiveJob's default queue.
+    it "names ActiveJob's default queue under load_defaults 6.1 or later" do
+      write("config/application.rb", "module App\n  class Application < Rails::Application\n    config.load_defaults 7.1\n  end\nend\n")
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+      expect(described_class.call.content.first[:text]).to include("**deliver_later queue:** `default`")
+    end
+  end
+
   describe "Action Mailbox mailboxes" do
     let(:mailbox_data) do
       {

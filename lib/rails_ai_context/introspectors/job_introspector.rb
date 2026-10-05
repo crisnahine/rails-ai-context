@@ -42,7 +42,8 @@ module RailsAiContext
           channels: extract_channels,
           connections: extract_connections,
           recurring_jobs: recurring_jobs,
-          sidekiq_config: extract_sidekiq_config
+          sidekiq_config: extract_sidekiq_config,
+          mailer_settings: mailer_settings(booted: true)
         }
       end
 
@@ -60,7 +61,8 @@ module RailsAiContext
           channels: extract_channels_from_source,
           connections: extract_connections,
           recurring_jobs: recurring_jobs,
-          sidekiq_config: extract_sidekiq_config
+          sidekiq_config: extract_sidekiq_config,
+          mailer_settings: mailer_settings
         }
       end
 
@@ -647,12 +649,13 @@ module RailsAiContext
             next
           end
 
+          file = source_file_for(mailer)
           entry = {
             name: mailer.name,
-            file: source_file_for(mailer),
+            file: file,
             actions: actions,
             delivery_method: mailer.delivery_method.to_s
-          }.compact
+          }.compact.merge(mailer_extras(mailer.name, file))
           actions.any? ? entry : entry.merge(no_action_detail(mailer))
         end.sort_by { |m| m[:name] }
       rescue => e
@@ -713,6 +716,7 @@ module RailsAiContext
         before_action after_action around_action
         prepend_before_action prepend_after_action prepend_around_action
         append_before_action append_after_action append_around_action
+        before_deliver after_deliver around_deliver
       ].freeze
 
       def source_mailers
@@ -771,6 +775,131 @@ module RailsAiContext
 
       def mailer_lookup
         @mailer_lookup ||= SuperclassChain.lookup_for(app.root)
+      end
+
+      # A mailer's own declarations as written, the template formats of each action, and
+      # its preview class: read from source in both tiers.
+      def mailer_extras(name, file, source = nil, macros = nil)
+        source ||= file && SafeFile.read(File.join(app.root.to_s, file))
+        extras = {}
+        if source
+          macros ||= SourceIntrospector.walk_source(source, {
+            macros: -> { Listeners::GenericMacroListener.new(ACTION_CALLBACKS + MAILER_DECLARATIONS) }
+          })[:macros]
+          declares = class_body(Array(macros), source).select { |m| (MAILER_DECLARATIONS + ACTION_CALLBACKS).include?(m[:macro]) }
+                                                     .sort_by { |m| m[:offset] }.map { |m| written(source, m) }
+          extras[:declares] = declares if declares.any?
+        end
+        templates = mailer_templates(name)
+        extras[:templates] = templates if templates.any?
+        extras[:preview] = mailer_previews[name] if mailer_previews[name]
+        extras
+      rescue StandardError, ScriptError => e
+        RailsAiContext.debug_fail(e, {}, label: "mailer_extras")
+      end
+
+      # welcome.html.erb and welcome.text.erb are one action in two formats; a partial is no action.
+      def mailer_templates(name)
+        dir = File.join(app.root.to_s, "app/views", name.underscore)
+        Dir.glob(File.join(dir, "*")).select { |path| File.file?(path) }.each_with_object({}) do |path, found|
+          action, *middle, handler = File.basename(path).split(".")
+          next if action.start_with?("_") || handler.nil?
+
+          (found[action] ||= []) << (middle.first || "any format")
+        end.transform_values { |formats| formats.uniq.sort }.sort.to_h
+      end
+
+      DEFAULT_MAILER_PREVIEW_DIRS = %w[test/mailers/previews spec/mailers/previews].freeze
+      MAILER_CONFIG_GLOBS = %w[config/application.rb config/environments/*.rb].freeze
+
+      # Rails adds test/mailers/previews and rspec-rails spec/mailers/previews; the app adds the rest.
+      def mailer_preview_dirs
+        @mailer_preview_dirs ||= begin
+          configured = mailer_config_files.flat_map do |file|
+            SourceIntrospector.walk(file, { previews: -> { Listeners::PreviewPathsListener.new(framework: :action_mailer) } })[:previews]
+          end
+          (DEFAULT_MAILER_PREVIEW_DIRS + configured).uniq.select { |dir| Dir.exist?(File.join(app.root.to_s, dir)) }
+        end
+      end
+
+      def mailer_config_files
+        @mailer_config_files ||= MAILER_CONFIG_GLOBS.flat_map { |glob| Dir.glob(File.join(app.root.to_s, glob)).sort } +
+                                 PathResolver.initializer_paths(app.root)
+      end
+
+      # Mailer name => its preview class, file and the emails it previews.
+      def mailer_previews
+        @mailer_previews ||= mailer_preview_dirs.flat_map { |dir| Dir.glob(File.join(app.root.to_s, dir, "**/*_preview.rb")).sort }
+          .each_with_object({}) do |path, found|
+            next unless SafePath.contained?(File.realpath(path), app_root_real)
+
+            source = SafeFile.read(path) or next
+            declared = DeclaredConstant.declarations(source).find { |d| d.name.end_with?("Preview") } or next
+            methods = SourceIntrospector.walk_source(source, { methods: Listeners::MethodsListener })[:methods]
+            previews = ActionResolver.own_methods(methods, declared.name)
+                                     .select { |m| m[:scope] == :instance && m[:visibility] == :public }.map { |m| m[:name] }
+            found[declared.name.delete_suffix("Preview")] ||= { name: declared.name, file: path.delete_prefix("#{app.root}/"), methods: previews }
+          rescue SystemCallError
+            next
+          end
+      end
+
+      REGISTER_CALLS = { "register_interceptor" => :interceptors, "register_interceptors" => :interceptors,
+                         "register_observer" => :observers, "register_observers" => :observers }.freeze
+
+      # The queue deliver_later uses, and the interceptors and observers the config registers.
+      # Booted, the queue is ActionMailer's own setting; statically it is the config's, else
+      # `load_defaults` 6.1 or later sets it to nil, which is ActiveJob's default queue.
+      def mailer_settings(booted: false)
+        settings = { interceptors: [], observers: [] }
+        queue = nil
+        queue_set = false
+        version = nil
+        mailer_config_files.each do |path|
+          relative = path.delete_prefix("#{app.root}/")
+          source = SafeFile.read(path) or next
+          next unless source.match?(/action_mailer|register_(?:interceptor|observer)|load_defaults/)
+
+          walked = SourceIntrospector.walk_source(source, {
+            config: Listeners::ConfigAssignmentListener,
+            calls: -> { Listeners::MethodCallListener.new(names: REGISTER_CALLS.keys + %w[load_defaults]) }
+          })
+          Array(walked[:config]).each do |hit|
+            next unless hit[:assignment] && hit[:path].first == :action_mailer && hit[:path].size == 2
+
+            key = hit[:path].last
+            if key == :deliver_later_queue_name && in_this_environment?(relative)
+              queue_set = true
+              queue = hit[:value]&.to_s
+            end
+            Array(hit[:value]).each { |name| settings[key] << { name: name.to_s, file: relative } } if settings.key?(key)
+          end
+          Array(walked[:calls]).each do |call|
+            if call[:name] == "load_defaults"
+              version = defaults_version(call[:arguments].first) if relative == "config/application.rb"
+            else
+              call[:arguments].flatten.each { |name| settings[REGISTER_CALLS[call[:name]]] << { name: name.to_s, file: relative } }
+            end
+          end
+        end
+        if booted && defined?(ActionMailer::Base) && ActionMailer::Base.respond_to?(:deliver_later_queue_name)
+          queue = ActionMailer::Base.deliver_later_queue_name&.to_s
+        elsif !queue_set
+          queue = version && version >= 6.1 ? nil : "mailers"
+        end
+        settings.transform_values! { |list| list.uniq { |entry| entry[:name] } }
+        settings.merge(deliver_later_queue: queue_name_from_part(queue.presence), preview_paths: mailer_preview_dirs)
+      rescue StandardError, ScriptError => e
+        RailsAiContext.debug_fail(e, {}, label: "mailer_settings")
+      end
+
+      # A version that is not a literal is the running Rails's, past every cutoff.
+      def defaults_version(arg)
+        arg.to_s.match?(/\A\d+(\.\d+)?\z/) ? arg.to_s.to_f : Float::INFINITY
+      end
+
+      def in_this_environment?(relative)
+        !relative.start_with?("config/environments/") || relative == "config/environments/#{RailsAiContext.environment_name}.rb"
       end
 
       # What a base hands every mailer inheriting it, each written the way the
@@ -841,7 +970,7 @@ module RailsAiContext
           declarations = DeclaredConstant.declarations(record.source).select(&:superclass)
           next [] if declarations.empty?
 
-          klass = walk_class(record, ACTION_CALLBACKS)
+          klass = walk_class(record, ACTION_CALLBACKS + MAILER_DECLARATIONS)
           next [] if klass.nil? || framework_hook?(klass)
 
           declarations.map { |d| klass.with(name: d.name, parent_class: d.superclass, nesting: d.nesting, mixin: false) }
@@ -875,7 +1004,7 @@ module RailsAiContext
         )
 
         entry = { name: klass.name, file: klass.file, actions: actions,
-                  confidence: RailsAiContext::Confidence::STATIC }
+                  confidence: RailsAiContext::Confidence::STATIC }.merge(mailer_extras(klass.name, klass.file, klass.source, klass.macros))
         return entry if actions.any?
 
         class_actions = ActionResolver.own_methods(klass.methods, klass.name)

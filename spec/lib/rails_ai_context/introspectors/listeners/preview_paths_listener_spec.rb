@@ -22,4 +22,16 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::PreviewPathsListener do
       config.paths.add "lib/base", eager_load: true
     RUBY
   end
+
+  it "reads the mailer preview directories when asked for action_mailer, and nothing of view_component's" do
+    listener = -> { described_class.new(framework: :action_mailer) }
+    found = RailsAiContext::Introspectors::SourceIntrospector.walk_source(<<~RUBY, { previews: listener })[:previews]
+      config.action_mailer.preview_paths << "\#{root}/lib/mailer_previews"
+      config.action_mailer.preview_path = Rails.root.join("spec/mailers/previews")
+      config.view_component.preview_paths << "\#{Rails.root}/spec/previews"
+      config.view_component.previews.paths += ["x"]
+    RUBY
+
+    expect(found).to eq(%w[lib/mailer_previews spec/mailers/previews])
+  end
 end
