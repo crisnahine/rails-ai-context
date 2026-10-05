@@ -987,6 +987,32 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
     end
   end
 
+  # Ruby runs a mixin hook on the module itself; no includer gains it.
+  it "lists the class methods an includer gains, and not the module's own mixin hooks" do
+    File.write(File.join(model_concerns_dir, "trackable.rb"), <<~RUBY)
+      module Trackable
+        def self.included(base)
+          base.extend(ClassMethods)
+        end
+
+        def self.extended(base); end
+
+        module ClassMethods
+          def tracked_since(date) = where("created_at > ?", date)
+        end
+
+        def track!; end
+      end
+    RUBY
+    allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(tmpdir))
+    described_class.reset_cache!
+
+    text = described_class.call(name: "Trackable").content.first[:text]
+    class_methods = text[/## Class Methods\n(?:- .*\n?)*/]
+
+    expect(class_methods).to eq("## Class Methods\n- `tracked_since(date)`\n")
+  end
+
   # ActiveSupport::Concern supports prepend, with its own prepended block.
   describe "a concern a model prepends" do
     before do

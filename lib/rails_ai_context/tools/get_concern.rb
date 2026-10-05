@@ -266,8 +266,11 @@ module RailsAiContext
       end
 
       # `module ClassMethods` defs count too: ActiveSupport::Concern extends the includer with it.
+      # A mixin hook runs on the module itself, so no includer gains it.
       private_class_method def self.concern_class_methods(source, name)
-        (Introspectors::ActionResolver.class_methods_from_source(source, owner: name) +
+        own = Introspectors::ActionResolver.class_methods_from_source(source, owner: name)
+          .reject { |signature| ConcernMembership::MIXIN_HOOKS.include?(signature.split("(").first) }
+        (own +
           Introspectors::ActionResolver.public_methods_from_source(source, owner: "#{name}::ClassMethods")).uniq
       end
 
