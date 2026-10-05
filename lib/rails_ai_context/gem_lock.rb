@@ -2,6 +2,7 @@
 
 require "set"
 require_relative "safe_file"
+require_relative "safe_path"
 
 module RailsAiContext
   # Which gems an app resolved, read once per lockfile, and the one answer
@@ -30,8 +31,13 @@ module RailsAiContext
       "mruby" => "mruby", "rbx" => "Rubinius"
     }.freeze
     # Bundler's order: what the lockfile resolved, what the Gemfile asked for, then the
-    # version-manager files the shell picks when neither says.
-    VERSION_FILES = [ ".ruby-version", ".tool-versions" ].freeze
+    # version-manager files the shell picks when neither says, mise's last.
+    # mise's project files, highest precedence first (mise docs, configuration).
+    MISE_FILES = [ "mise.local.toml", "mise.toml", ".mise.toml", "mise/config.toml", ".config/mise.toml" ].freeze
+    VERSION_FILES = [ ".ruby-version", ".tool-versions", *MISE_FILES ].freeze
+    MISE_TOOLS = /^[ \t]*\[tools\][ \t]*$(.*?)(?=^[ \t]*\[|\z)/m
+    # ruby = "3.3.6", ruby = ["3.3.6", ...] or ruby = { version = "3.3.6" }
+    MISE_RUBY = /^[ \t]*["']?ruby["']?[ \t]*=[ \t]*(?:\[[ \t]*|\{[^}\n]*?version[ \t]*=[ \t]*)?["']([^"'\n]+)["']/
 
     class Spec
       # `remote:` of each PATH section, as the lockfile writes it.
@@ -202,11 +208,34 @@ module RailsAiContext
         lockfile_name(root) => locked,
         gemfile_name(root) => gemfile_ruby(File.join(root, gemfile_name(root))),
         ".ruby-version" => version_string(SafeFile.read(File.join(root, ".ruby-version"), max_size: MAX_SIZE)&.strip),
-        ".tool-versions" => version_string(SafeFile.read(File.join(root, ".tool-versions"), max_size: MAX_SIZE)&.[](TOOL_VERSIONS_RUBY, 1))
+        ".tool-versions" => version_string(SafeFile.read(File.join(root, ".tool-versions"), max_size: MAX_SIZE)&.[](TOOL_VERSIONS_RUBY, 1)),
+        **mise_ruby(root)
       }.compact
       { ruby_versions: declared.transform_values(&:first).compact, ruby_engine: declared.values.first&.last }
     end
     private_class_method :declared_ruby
+
+    # SafePath's containment without its sensitive-pattern check, which needs
+    # the configuration: the CLI reads GemLock before loading it.
+    def read_inside(root, relative)
+      real = File.realpath(File.join(root, relative))
+      SafeFile.read(real, max_size: MAX_SIZE) if SafePath.contained?(real, File.realpath(root))
+    rescue SystemCallError
+      nil
+    end
+    private_class_method :read_inside
+
+    # The ruby tool of the mise file that wins, keyed by that file's name.
+    def mise_ruby(root)
+      MISE_FILES.each do |name|
+        content = read_inside(root, name)
+        tools = content&.[](MISE_TOOLS, 1)
+        declared = version_string(tools&.[](MISE_RUBY, 1))
+        return { name => declared } if declared
+      end
+      {}
+    end
+    private_class_method :mise_ruby
 
     # "3.4.9" and "ruby-3.4.9" are CRuby; "jruby-9.4.8.0" names an engine
     # version, not the Ruby version that engine implements.

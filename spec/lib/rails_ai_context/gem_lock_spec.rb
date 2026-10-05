@@ -2,6 +2,7 @@
 
 require "spec_helper"
 require "tmpdir"
+require "fileutils"
 
 RSpec.describe RailsAiContext::GemLock do
   let(:lock_text) do
@@ -277,6 +278,50 @@ RSpec.describe RailsAiContext::GemLock do
       expect(described_class.lockfile_name(dir)).to eq("gems.locked")
     end
   end
+  describe "mise config" do
+    it "reads the ruby tool of mise.toml when nothing else names a version" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "mise.toml"), "[env]\nruby = \"no\"\n\n[tools]\nnode = \"22\"\nruby = \"3.3.6\"\n")
+
+        spec = described_class.for(dir)
+
+        expect(spec.ruby_version).to eq("3.3.6")
+        expect(spec.ruby_version_source).to eq("mise.toml")
+      end
+    end
+
+    it "reads the other names mise looks for, the array and table forms, and mise.local.toml first" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, ".config"))
+        File.write(File.join(dir, ".config/mise.toml"), "[tools]\nruby = { version = \"3.2.5\" }\n")
+        expect(described_class.for(dir).ruby_versions).to eq(".config/mise.toml" => "3.2.5")
+
+        File.write(File.join(dir, "mise.local.toml"), "[tools]\nruby = [\"3.4.9\", \"3.3.6\"]\n")
+        expect(described_class.for(dir).ruby_version).to eq("3.4.9")
+      end
+    end
+
+    it "does not follow a mise directory symlinked out of the app" do
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "config.toml"), "[tools]\nruby = \"3.3.6\"\n")
+        Dir.mktmpdir do |dir|
+          File.symlink(outside, File.join(dir, "mise"))
+          expect(described_class.for(dir).ruby_versions).to eq({})
+        end
+      end
+    end
+
+    it "reads nothing from a mise.toml with no ruby tool or an unreadable one" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "mise.toml"), "[tools]\nruby = \"latest\"\n")
+        expect(described_class.for(dir).ruby_versions).to eq({})
+        File.binwrite(File.join(dir, "mise.toml"), "\xFF\xFE[tools]\nruby = \"\xFF\"\n".b)
+        File.utime(Time.now + 2, Time.now + 2, File.join(dir, "mise.toml"))
+        expect(described_class.for(dir).ruby_versions).to eq({})
+      end
+    end
+  end
+
   describe "the Ruby engine" do
     it "reads an engine-prefixed .ruby-version as that engine, with no Ruby version" do
       Dir.mktmpdir do |dir|
