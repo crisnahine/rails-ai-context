@@ -33,7 +33,6 @@ module RailsAiContext
         PathResolver.dirs_for(root, kind).each do |dir|
           scan_dir(dir, root, real_root, skip_concerns, &block)
         end
-        scan_extra_model_roots(root, real_root, &block) if kind == "app/models"
       rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
         nil
       end
@@ -95,27 +94,59 @@ module RailsAiContext
         SafePath.contained?(real, real_dir) || SafePath.contained?(real, real_root)
       end
 
-      SUPERCLASS_DECLARATION = /^[^\S\n]*class[^\S\n]+[\w:]+[^\S\n]*</
+      # The model directories plus the classes elsewhere that could be a model.
+      # Only the model listing wants the second half: a count or a per-model
+      # read of app/models would take in every service with a superclass.
+      def model_paths(root, &block)
+        return enum_for(:model_paths, root) unless block
+
+        RunCache.fetch([ :source_scan_models, root.to_s ]) do
+          found = paths(root, kind: "app/models", skip_concerns: false).to_a
+          found + extra_model_candidates(root.to_s, found)
+        end.each(&block)
+      end
+
+      CLASS_WITH_SUPERCLASS = /^[^\S\n]*class[^\S\n]+([\w:]+)[^\S\n]*<[^\S\n]*(?:::)?([\w:]+)/
+      MODEL_BASES = %w[ActiveRecord::Base ApplicationRecord].freeze
 
       # Rails autoloads every app/* directory and the roots config/application.rb
-      # adds, so a model can live outside app/models. Only a file that declares
-      # a class with a superclass is kept: each one is read here, and parsed later.
+      # adds, so a model can live outside app/models. A class there is kept when
+      # its superclass, by last name segment, is a model base or a class already
+      # kept; the listing still decides modelhood, but a thousand services are not parsed.
+      def extra_model_candidates(root, model_records)
+        pending = extra_model_declarations(root, File.realpath(root))
+        known = model_records.to_set { |record| record.path_name.split("::").last }.merge(MODEL_BASES)
+        kept = Set.new
+        loop do
+          added = pending.select { |record, pairs| !kept.include?(record) && pairs.any? { |_, base| known.include?(base) || known.include?(base.split("::").last) } }
+          break if added.empty?
+
+          added.each do |record, pairs|
+            kept << record
+            known.merge(pairs.map { |name, _| name.split("::").last })
+          end
+        end
+        pending.filter_map { |record, _| record if kept.include?(record) }
+      rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
+        []
+      end
+
       # ponytail: the app/* kinds Rails generates for other code are skipped by name.
-      def scan_extra_model_roots(root, real_root)
+      def extra_model_declarations(root, real_root)
         seen = Set.new
         ignored = PathResolver.ignored_dirs(root).map { |dir| PathResolver.root_key(dir) }
-        PathResolver.extra_model_roots(root).each do |dir|
+        PathResolver.extra_model_roots(root).each_with_object([]) do |dir, found|
           scan_dir(dir, root, real_root, true) do |record|
             next unless seen.add?(record.path)
             next if ignored.any? { |ignored_dir| SafePath.contained?(record.path, ignored_dir) }
 
-            source = SafeFile.read(record.path)
-            yield record if source&.match?(SUPERCLASS_DECLARATION)
+            pairs = SafeFile.read(record.path)&.scan(CLASS_WITH_SUPERCLASS)
+            found << [ record, pairs ] if pairs&.any?
           end
         end
       end
 
-      private_class_method :scan, :scan_dir, :ruby_files, :walk_dir, :within?, :scan_extra_model_roots
+      private_class_method :scan, :scan_dir, :ruby_files, :walk_dir, :within?, :extra_model_candidates, :extra_model_declarations
 
       def each(root, kind:, skip_concerns: true)
         return enum_for(:each, root, kind: kind, skip_concerns: skip_concerns) unless block_given?

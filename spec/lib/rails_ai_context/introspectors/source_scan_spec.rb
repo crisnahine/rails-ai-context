@@ -68,7 +68,7 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
     end
   end
 
-  it "adds the classes with a superclass under other app/ roots to app/models, and survives odd files there" do
+  it "lists the classes with a superclass under other app/ roots as model candidates, and survives odd files there" do
     Dir.mktmpdir do |dir|
       FileUtils.mkdir_p(File.join(dir, "app/models"))
       FileUtils.mkdir_p(File.join(dir, "app/domain/concerns"))
@@ -81,9 +81,41 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
       File.write(File.join(dir, "app/controllers/invoices_controller.rb"), "class InvoicesController < ApplicationController\nend\n")
       File.symlink(File.join(dir, "app/domain"), File.join(dir, "app/domain/loop"))
 
-      files = described_class.paths(dir, kind: "app/models").map(&:file)
+      files = described_class.model_paths(dir).map(&:file)
       expect(files).to contain_exactly("app/domain/invoice.rb", "app/domain/odd.rb")
       expect(described_class.paths(dir, kind: "app/controllers").map(&:file)).to eq([ "app/controllers/invoices_controller.rb" ])
+    end
+  end
+
+  it "keeps app/models to the model directories, so a service with a superclass is not counted or read as a model file" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "app/models"))
+      FileUtils.mkdir_p(File.join(dir, "app/services"))
+      File.write(File.join(dir, "app/models/user.rb"), "class User < ApplicationRecord\nend\n")
+      File.write(File.join(dir, "app/services/charge_card.rb"), "class ChargeCard < BaseService\nend\n")
+
+      expect(described_class.paths(dir, kind: "app/models").map(&:file)).to eq([ "app/models/user.rb" ])
+      expect(described_class.each(dir, kind: "app/models").map(&:file)).to eq([ "app/models/user.rb" ])
+      expect(described_class.model_paths(dir).map(&:file)).to eq([ "app/models/user.rb" ])
+    end
+  end
+
+  it "keeps a class outside app/models whose chain reaches a model base through another such class" do
+    Dir.mktmpdir do |dir|
+      {
+        "app/models/user.rb" => "class User < ApplicationRecord\nend\n",
+        "app/domain/billing/a_invoice.rb" => "module Billing\n  class AInvoice < Billing::Document\n  end\nend\n",
+        "app/domain/billing/document.rb" => "module Billing\n  class Document < ::ActiveRecord::Base\n  end\nend\n",
+        "app/domain/admin_user.rb" => "class AdminUser < User\nend\n",
+        "app/domain/report.rb" => "class Report < ApplicationService\nend\n"
+      }.each do |name, source|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+        File.write(File.join(dir, name), source)
+      end
+
+      expect(described_class.model_paths(dir).map(&:file)).to contain_exactly(
+        "app/models/user.rb", "app/domain/billing/a_invoice.rb", "app/domain/billing/document.rb", "app/domain/admin_user.rb"
+      )
     end
   end
 
@@ -144,7 +176,7 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
         File.write(File.join(dir, name), source)
       end
 
-      files = described_class.paths(dir, kind: "app/models").map(&:file)
+      files = described_class.model_paths(dir).map(&:file)
       expect(files).to contain_exactly("app/models/application_record.rb", "lib/lib_record.rb", "lib/tasks_helper/thing.rb")
     end
   end
