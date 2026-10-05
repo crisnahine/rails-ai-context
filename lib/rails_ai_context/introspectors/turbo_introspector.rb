@@ -90,7 +90,7 @@ module RailsAiContext
       # The views root a path was found under, for the containment check that
       # keeps a symlink escaping the tree out of the answer.
       def views_root_of(path)
-        PathResolver.view_dirs(root).find { |dir| path.start_with?("#{dir}/") } || views_dir
+        RailsAiContext::ViewFile.root_for(path, PathResolver.view_dirs(root)) || views_dir
       end
 
       # Views are not Ruby, so they are read line by line. Files are yielded

@@ -228,7 +228,7 @@ module RailsAiContext
       # A view file's name as the app renders it: its path under the innermost
       # views root that holds it.
       private_class_method def self.view_relative(path, view_dirs)
-        dir = view_dirs.select { |d| path.start_with?(d + File::SEPARATOR) }.max_by(&:length)
+        dir = RailsAiContext::ViewFile.root_for(path, view_dirs)
         dir ? path.delete_prefix(dir + File::SEPARATOR) : path
       end
 

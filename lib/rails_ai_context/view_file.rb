@@ -54,6 +54,12 @@ module RailsAiContext
       Dir.glob(File.join(dir, pattern)).sort.reject { |path| nested.any? { |other| path.start_with?("#{other}/") } }
     end
 
+    # The innermost views root holding path: app/views/themes/posts/x renders as
+    # posts/x when app/views/themes is a root of its own.
+    def root_for(path, dirs)
+      dirs.select { |dir| path.start_with?("#{dir}/") }.max_by(&:length)
+    end
+
     # @return [Array<String>] the template handler extensions this app has
     def handler_extensions
       return @handler_extensions if defined?(@handler_extensions) && @handler_extensions

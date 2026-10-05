@@ -278,7 +278,7 @@ module RailsAiContext
           raw = RailsAiContext::SafeFile.read(path) or next
           next unless Introspectors::StimulusIntrospector.identifiers_in(path, raw).include?(token)
 
-          dir = view_dirs.find { |d| path.start_with?("#{d}/") }
+          dir = RailsAiContext::ViewFile.root_for(path, view_dirs)
           dir ? [ path.delete_prefix("#{dir}/"), true ] : [ path.delete_prefix("#{root}/"), false ]
         rescue SystemCallError
           next
