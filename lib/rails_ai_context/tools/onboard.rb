@@ -546,19 +546,14 @@ module RailsAiContext
         def section_api(ctx)
           api = Payload.section(ctx, :api)
           return [] unless api
-          return [] if api.empty? || (api[:endpoints]&.empty? && api[:graphql].nil?)
 
-          lines = [ "## API", "" ]
-          if api[:graphql]
-            lines << "GraphQL API detected."
-          end
-          if api[:endpoints]&.any?
-            lines << "#{count_phrase(api[:endpoints].size, "API endpoint")}."
-          end
-          classes = Array(api.dig(:serializers, :serializer_classes))
-          lines << "Serializers: #{classes.size}." if classes.any?
-          lines << ""
-          lines
+          lines = []
+          lines << "GraphQL API detected." if api[:graphql]
+          serialization = GetApi.serialization_found(api)
+          lines << "Serialization: #{serialization}." if serialization
+          return [] if lines.empty?
+
+          [ "## API", "", *lines, "" ]
         end
 
         def section_devops(ctx)
