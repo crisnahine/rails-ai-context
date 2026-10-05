@@ -2455,6 +2455,30 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       expect(booted["ZzLostRecord"][:error]).to be_a(String)
       expect(static.keys).to include("ZzLostRecord")
     end
+
+    it "keeps one in the booted tier whose superclass is a record base loaded from outside the scanned roots" do
+      allow(RailsAiContext::PathResolver).to receive(:extra_model_roots).and_return([ domain.to_s ])
+      stub_const("ZzVendorish::Model", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+      stub_const("ZzShop::Model", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+      FileUtils.mkdir_p(domain.join("zz_shop"))
+      File.write(domain.join("zz_vendor_widget.rb"), "class ZzVendorWidget < ZzVendorish::Model\nend\n")
+      File.write(domain.join("zz_shop", "zz_shop_item.rb"), "module ZzShop\n  class ZzShopItem < Model\n  end\nend\n")
+      Object.autoload(:ZzVendorWidget, domain.join("zz_vendor_widget.rb").to_s)
+      ZzShop.autoload(:ZzShopItem, domain.join("zz_shop", "zz_shop_item.rb").to_s)
+
+      booted = described_class.new(Rails.application).call
+
+      expect(booted.keys).to include("ZzVendorWidget", "ZzShop::ZzShopItem")
+      expect(booted.keys).not_to include("ZzUnknownBase", "ZzWidgetGenerator")
+    ensure
+      # Abstract, so the loaded classes left in ActiveRecord::Base.descendants list nowhere else.
+      [ [ Object, :ZzVendorWidget ], [ ZzShop, :ZzShopItem ] ].each do |owner, name|
+        next unless owner.const_defined?(name, false)
+
+        owner.const_get(name, false).abstract_class = true if owner.autoload?(name).nil?
+        owner.send(:remove_const, name)
+      end
+    end
   end
 
   # Rebuilding app/models/<underscored>.rb from the name is wrong for a model

@@ -99,12 +99,14 @@ module RailsAiContext
       # The model directories plus the classes elsewhere that could be a model.
       # Only the model listing wants the second half: a count or a per-model
       # read of app/models would take in every service with a superclass.
-      def model_paths(root, &block)
-        return enum_for(:model_paths, root) unless block
+      # A booted caller passes `base_model`, called with [name, superclass] for a
+      # superclass the scan does not know, since a gem or initializer can define it.
+      def model_paths(root, base_model: nil, &block)
+        return enum_for(:model_paths, root, base_model: base_model) unless block
 
-        RunCache.fetch([ :source_scan_models, root.to_s ]) do
+        RunCache.fetch([ :source_scan_models, root.to_s, !base_model.nil? ]) do
           found = paths(root, kind: "app/models", skip_concerns: false).to_a
-          found + extra_model_candidates(root.to_s, found)
+          found + extra_model_candidates(root.to_s, found, base_model)
         end.each(&block)
       end
 
@@ -115,12 +117,18 @@ module RailsAiContext
       # adds, so a model can live outside app/models. A class there is kept when
       # its superclass, by last name segment, is a model base or a class already
       # kept; the listing still decides modelhood, but a thousand services are not parsed.
-      def extra_model_candidates(root, model_records)
-        pending = extra_model_declarations(root, File.realpath(root))
+      def extra_model_candidates(root, model_records, base_model = nil)
+        pending = RunCache.fetch([ :source_scan_model_declarations, root ]) { extra_model_declarations(root, File.realpath(root)) }
         known = model_records.to_set { |record| record.path_name.split("::").last }.merge(MODEL_BASES)
+        loaded = Hash.new { |cache, pair| cache[pair] = base_model ? base_model.call(*pair) : false }
         kept = Set.new
         loop do
-          added = pending.select { |record, pairs| !kept.include?(record) && pairs.any? { |_, base| known.include?(base) || known.include?(base.split("::").last) } }
+          added = pending.select do |record, pairs|
+            !kept.include?(record) && pairs.any? do |name, base|
+              # A nested `class Item < Base` names no namespace; the path does.
+              known.include?(base) || known.include?(base.split("::").last) || loaded[[ name.include?("::") ? name : record.path_name, base ]]
+            end
+          end
           break if added.empty?
 
           added.each do |record, pairs|

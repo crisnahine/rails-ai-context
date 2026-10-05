@@ -485,6 +485,17 @@ module RailsAiContext
         false
       end
 
+      # The superclass as Ruby resolves it from the class's namespace outward.
+      def loaded_record_base?(name, base)
+        scopes = name.split("::")[0...-1]
+        scopes.size.downto(0).any? do |depth|
+          klass = [ *scopes.first(depth), base ].join("::").safe_constantize
+          break klass < ActiveRecord::Base if klass.is_a?(Class)
+        end
+      rescue StandardError, LoadError, ScriptError
+        false
+      end
+
       def model_dir_file?(path)
         PathResolver.model_dirs(app.root).any? { |dir| SafePath.contained?(path, PathResolver.root_key(dir)) }
       end
@@ -507,7 +518,7 @@ module RailsAiContext
         # out. A top-level `app/models/concerns` is an autoload root instead,
         # so its files declare no `Concerns::` prefix and that path name never
         # constantizes.
-        SourceScan.model_paths(app.root).each do |record|
+        SourceScan.model_paths(app.root, base_model: method(:loaded_record_base?)).each do |record|
           next if record.path_name.start_with?("Concerns::")
           next if known.include?(record.path_name)
           next if config.excluded_models.include?(record.path_name)
