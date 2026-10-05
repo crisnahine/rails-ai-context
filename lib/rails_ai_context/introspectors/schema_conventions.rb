@@ -22,9 +22,13 @@ module RailsAiContext
         composite_pk = !pk_opt.nil? && !pk_opt.is_a?(String) && !pk_opt.is_a?(Symbol)
         return [] if options[:id] == false || composite_pk
 
-        id_type = options[:id].is_a?(String) || options[:id].is_a?(Symbol) ? options[:id].to_s : pk_type
+        # set_primary_key (7.0 to 8.1): an id: hash gives the type, its other keys the column's options.
+        id = options[:id]
+        id_options = id.is_a?(Hash) ? id.except(:type).reject { |_, value| value == RailsAiContext::Confidence::INFERRED } : {}
+        id = id[:type] if id.is_a?(Hash)
+        id_type = (id.is_a?(String) || id.is_a?(Symbol)) && id.to_s != "primary_key" ? id.to_s : pk_type
         [ { name: pk_opt ? pk_opt.to_s : "id", type: id_type, default: nil,
-            options: { null: false }, primary_key: true } ]
+            options: { null: false }.merge(id_options), primary_key: true } ]
       end
 
       # Rails omits column:/primary_key: only where the convention holds, so

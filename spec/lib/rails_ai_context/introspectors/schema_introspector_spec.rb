@@ -1324,6 +1324,18 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       RUBY
     end
 
+    it "types a key written as an id: hash by its type" do
+      tokens = static_parse_of(<<~RUBY)["tokens"]
+        ActiveRecord::Schema[8.1].define(version: 2026_01_01_000000) do
+          create_table "tokens", id: { type: :string, limit: 36 }, force: :cascade do |t|
+            t.string "name"
+          end
+        end
+      RUBY
+
+      expect(tokens[:columns].first).to include(name: "id", type: "string", limit: 36, primary_key: true)
+    end
+
     it "names the key on the table and flags its columns, for the implicit id too" do
       expect(tables.transform_values { |t| t[:primary_key] }).to eq(
         "orders" => %w[shop_id id], "legacy_widgets" => "widget_code", "posts" => "id", "tags_posts" => nil
