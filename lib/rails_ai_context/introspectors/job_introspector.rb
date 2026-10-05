@@ -25,7 +25,7 @@ module RailsAiContext
       ].freeze
       JOB_MACROS = (%i[
         queue_as queue_with_priority enqueue_after_transaction_commit= limits_concurrency include
-        sidekiq_throttle
+        sidekiq_throttle step
       ] + RetryPolicy::MACROS + JOB_CALLBACKS).freeze
 
       # @return [Hash] async workers, mailers, and channels
@@ -389,7 +389,33 @@ module RailsAiContext
         settings[:concurrency] = written(job_candidates[concurrency[:owner]].source, concurrency) if concurrency
         callbacks = macros.select { |m| JOB_CALLBACKS.include?(m[:macro]) }.sort_by { |m| m[:offset] }
         settings[:callbacks] = callbacks.map { |m| written(candidate.source, m) } if callbacks.any?
-        settings
+        settings.merge(continuation(name))
+      end
+
+      CONTINUABLE = "ActiveJob::Continuable"
+
+      # ActiveJob::Continuable (Rails 8.1) resumes a retried job at its first
+      # unfinished step, so the steps perform runs, in order, decide what runs again.
+      def continuation(name)
+        continuable = chain_of(name).any? do |link|
+          candidate = job_candidates[link]
+          class_body(candidate.ast[:macros], candidate.source).any? { |m| m[:macro] == :include && m[:values].map { |v| v.to_s.delete_prefix("::") }.include?(CONTINUABLE) }
+        end
+        return {} unless continuable
+
+        ast = job_candidates[name].ast
+        perform = ActionResolver.entry_point(ast[:methods])
+        steps = ast[:macros].select do |m|
+          m[:macro] == :step && m[:args].any? && perform && (perform[:offset]...perform[:end_offset]).cover?(m[:offset])
+        end
+        { continuable: true, steps: steps.sort_by { |m| m[:offset] }.map { |m| step_entry(m) } }
+      end
+
+      def step_entry(macro)
+        step = { name: macro[:args].first.to_s, runs: macro[:proc_lines].any? ? "block" : "method" }
+        options = macro[:option_values].slice(:isolated, :start)
+        step[:options] = options.map { |key, value| "#{key}: #{value}" }.join(", ") if options.any?
+        step
       end
 
       COMPUTED_PRIORITY = "computed by a block"

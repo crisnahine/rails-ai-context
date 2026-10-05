@@ -292,6 +292,7 @@ module RailsAiContext
         lines << "**Priority:** #{record[:priority]}" if record && !record[:priority].nil?
         lines << "**Enqueue after transaction commit:** #{record[:enqueue_after_transaction_commit]}" if record&.key?(:enqueue_after_transaction_commit)
         lines << "**Concurrency:** `#{record[:concurrency]}`" if record && record[:concurrency]
+        lines << "**Continuable:** yes (ActiveJob::Continuable): a retry resumes at the first unfinished step" if record && record[:continuable]
         if base && (declares = Array(base[:declares])).any?
           lines << "" << "## Declares (every job below inherits these)"
           declares.each { |line| lines << "- `#{line}`" }
@@ -301,6 +302,15 @@ module RailsAiContext
         if retry_config.any?
           lines << "" << "## Retry Configuration"
           retry_config.each { |r| lines << "- #{r}" }
+        end
+
+        steps = Array(record && record[:steps])
+        if steps.any?
+          lines << "" << "## Steps"
+          steps.each_with_index do |step, index|
+            lines << "#{index + 1}. `#{step[:name]}` (#{[ step[:runs], step[:options] ].compact.join(', ')})"
+          end
+          lines << ""
         end
 
         callbacks = Array(record && record[:callbacks])

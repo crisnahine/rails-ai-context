@@ -114,6 +114,53 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       end
     end
 
+    context "with a job that includes ActiveJob::Continuable" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app/jobs"))
+        File.write(File.join(tmpdir, "app/jobs/import_job.rb"), <<~RUBY)
+          class ImportJob < ApplicationJob
+            include ActiveJob::Continuable
+            queue_as :default
+
+            def perform(import_id)
+              step :fetch do |step|
+                step.advance!
+              end
+              step :process, isolated: true
+              step :finish
+            end
+
+            private
+
+            def finish; end
+          end
+        RUBY
+        File.write(File.join(tmpdir, "app/jobs/base_continuable_job.rb"), "class BaseContinuableJob < ApplicationJob\n  include ActiveJob::Continuable\nend\n")
+        File.write(File.join(tmpdir, "app/jobs/sync_job.rb"), "class SyncJob < BaseContinuableJob\n  def perform\n    step :pull\n  end\nend\n")
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "marks it continuable and lists its steps in order" do
+        text = described_class.call(job: "ImportJob").content.first[:text]
+
+        expect(text).to include("**Continuable:** yes (ActiveJob::Continuable): a retry resumes at the first unfinished step")
+        expect(text).to include("## Steps\n1. `fetch` (block)\n2. `process` (method, isolated: true)\n3. `finish` (method)\n\n")
+      end
+
+      it "marks a job continuable through its base" do
+        text = described_class.call(job: "SyncJob").content.first[:text]
+
+        expect(text).to include("**Continuable:** yes")
+        expect(text).to include("1. `pull` (method)")
+      end
+    end
+
     context "with what decides when a job runs and what happens after its last retry" do
       let(:tmpdir) { Dir.mktmpdir }
 
