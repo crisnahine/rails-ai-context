@@ -397,7 +397,11 @@ module RailsAiContext
         if data[:delegations]&.any?
           lines << "" << "## Delegations"
           data[:delegations].each do |d|
-            lines << "- delegate #{d[:methods].map { |m| ":#{m}" }.join(', ')} to: :#{d[:to]}"
+            line = "- delegate #{d[:methods].map { |m| ":#{m}" }.join(', ')} to: :#{d[:to]}"
+            line += " → #{d[:defines].join(', ')}" if d[:defines]
+            line += " → #{RailsAiContext::Confidence::INFERRED} (the prefix is computed)" if d[:prefix_computed]
+            line += " (private)" if d[:private]
+            lines << line
           end
         end
         lines << "- `delegate_missing_to` :#{data[:delegate_missing_to]}" if data[:delegate_missing_to]

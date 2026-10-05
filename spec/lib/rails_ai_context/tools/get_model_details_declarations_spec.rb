@@ -202,4 +202,23 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     expect(text).to include("- `tier`: low(0) [integer] methods: [INFERRED] (the prefix or suffix is computed)")
     expect(text).not_to include("alias_attribute")
   end
+
+  it "names the methods a prefixed delegate defines, and marks a private one" do
+    text = details_for("Gadget", "gadget.rb" => <<~RUBY)
+      class Gadget < ApplicationRecord
+        delegate :name, to: :owner, prefix: true
+        delegate :email, to: :owner, prefix: :contact, private: true
+        delegate :title, to: :owner
+        delegate :size, to: :owner, prefix: compute_prefix
+        delegate :lost, prefix: true
+        delegate
+      end
+    RUBY
+
+    expect(text).to include("- delegate :name to: :owner → owner_name\n")
+    expect(text).to include("- delegate :email to: :owner → contact_email (private)\n")
+    expect(text).to include("- delegate :title to: :owner\n")
+    expect(text).to include("- delegate :size to: :owner → [INFERRED] (the prefix is computed)\n")
+    expect(text).not_to include("_lost")
+  end
 end

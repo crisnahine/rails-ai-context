@@ -1115,7 +1115,7 @@ module RailsAiContext
           elsif (key = ATTRIBUTE_MACRO_MAP[macro])
             (macros[key] ||= []) << m[:attribute]
           elsif macro == :delegate
-            (macros[:delegations] ||= []) << { methods: m[:methods], to: m[:to] }
+            (macros[:delegations] ||= []) << delegation_entry(m)
           elsif macro == :delegate_missing_to
             macros[:delegate_missing_to] = m[:to]
           elsif macro == :attribute
@@ -1134,6 +1134,24 @@ module RailsAiContext
         macros[:constants] = constants if constants&.any?
 
         macros.reject { |_, v| v.is_a?(Array) && v.empty? }
+      end
+
+      # ActiveSupport names a prefixed delegate "#{prefix == true ? to : prefix}_#{method}".
+      def delegation_entry(macro)
+        options = macro[:options] || {}
+        entry = { methods: macro[:methods], to: macro[:to] }
+        entry[:private] = true if options[:private] == true
+        prefix = options[:prefix]
+        case prefix
+        when true, Symbol, String
+          if prefix == RailsAiContext::Confidence::INFERRED
+            entry[:prefix_computed] = true
+          else
+            head = prefix == true ? macro[:to] : prefix
+            entry[:defines] = macro[:methods].map { |name| "#{head}_#{name}" } if head
+          end
+        end
+        entry
       end
 
       # Extract constant definitions from source via AST.
