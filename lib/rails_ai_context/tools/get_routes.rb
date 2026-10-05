@@ -36,6 +36,9 @@ module RailsAiContext
 
       HINTED_FILTERS = 3
 
+      GEM_DRAWN_NOTE = "_Read from source: routes Rails' own engines and gems draw into the app's table " \
+                       "(Active Storage, Action Mailbox, conductor) are read only with the app booted, so no count here includes them._"
+
       # The filters this controller actually runs, read the way every other
       # surface reads them, so a skipped one is never named here. The cut is
       # stated rather than silent.
@@ -160,8 +163,10 @@ module RailsAiContext
           by_controller = by_controller.transform_values { |actions| RailsAiContext::RouteCoverage.dedupe_put_patch_routes(actions) }
           filtered_total = by_controller.values.sum(&:size)
           count_label = count_phrase(filtered_total, "route")
+          from_source = routes[:confidence] == RailsAiContext::Confidence::STATIC && controller.nil?
           if excluded_framework_count > 0 && controller.nil?
             count_label += ", excluding #{count_phrase(excluded_framework_count, "framework route")}"
+            count_label += " drawn in the app's route files" if from_source
           end
           # "engine mount" named the wrong thing: a plain Rack app attached
           # with `mount` or with `match ... to:` is not an engine, and both
@@ -220,6 +225,7 @@ module RailsAiContext
             end
 
             lines.concat(mounted_apps_lines(mounted_apps, controller ? [] : routes[:engine_routes]))
+            lines << "" << GEM_DRAWN_NOTE if from_source
 
             if routes[:api_namespaces]&.any?
               lines << "" << "API namespaces: #{routes[:api_namespaces].join(', ')}"
@@ -283,6 +289,7 @@ module RailsAiContext
               lines << "" << "_#{count_phrase(excluded_framework_count, "framework route")} hidden. " \
                              "Use `app_only:false` to include them._"
             end
+            lines << "" << GEM_DRAWN_NOTE if from_source
 
             lines << "" << page[:hint] unless page[:hint].empty?
             text_response(lines.join("\n"))
@@ -300,6 +307,7 @@ module RailsAiContext
               lines << "| #{cells.map { |cell| cell.to_s.gsub("|", "\\|") }.join(' | ')} |"
             end
             lines.concat(mounted_apps_lines(mounted_apps, controller ? [] : routes[:engine_routes]))
+            lines << "" << GEM_DRAWN_NOTE if from_source
 
             if routes[:api_namespaces]&.any?
               lines << "" << "## API namespaces: #{routes[:api_namespaces].join(', ')}"

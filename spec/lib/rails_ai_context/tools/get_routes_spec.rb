@@ -322,6 +322,39 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
     end
   end
 
+  describe "the framework count read from source" do
+    let(:static_routes) do
+      { total_routes: 2, confidence: RailsAiContext::Confidence::STATIC, api_namespaces: [],
+        by_controller: { "posts" => [ { verb: "GET", path: "/posts", action: "index", name: "posts" } ],
+                         "rails/health" => [ { verb: "GET", path: "/up", action: "show", name: "rails_health_check" } ] } }
+    end
+
+    before { allow(described_class).to receive(:cached_context).and_return({ routes: static_routes }) }
+
+    it "says it covers only the app's route files" do
+      %w[summary standard full].each do |detail|
+        text = described_class.call(detail: detail).content.first[:text]
+
+        expect(text).to include("excluding 1 framework route drawn in the app's route files")
+        expect(text).to include(described_class::GEM_DRAWN_NOTE)
+      end
+    end
+
+    it "says so even when the app's files draw no framework route" do
+      static_routes[:by_controller].delete("rails/health")
+
+      expect(described_class.call.content.first[:text]).to include(described_class::GEM_DRAWN_NOTE)
+    end
+
+    it "is not said of a booted table, or of one controller's routes" do
+      expect(described_class.call(controller: "posts").content.first[:text]).not_to include(described_class::GEM_DRAWN_NOTE)
+      static_routes.delete(:confidence)
+      text = described_class.call.content.first[:text]
+      expect(text).to include("excluding 1 framework route)")
+      expect(text).not_to include(described_class::GEM_DRAWN_NOTE)
+    end
+  end
+
   describe "PUT/PATCH deduplication" do
     it "combines PUT and PATCH into a single entry" do
       result = described_class.call(controller: "posts", detail: "full")
