@@ -261,4 +261,28 @@ RSpec.describe RailsAiContext::PathResolver do
       end
     end
   end
+
+  describe "a root an initializer pushes under a namespace" do
+    it "finds the namespace's constants under it, and reads nothing outside the app" do
+      FileUtils.mkdir_p([ File.join(@root, "app/components"), File.join(@root, "config/initializers") ])
+      File.write(File.join(@root, "app/components/base.rb"), "class Components::Base < Phlex::HTML\nend\n")
+      File.write(File.join(@root, "config/initializers/phlex.rb"),
+                 "Rails.autoloaders.main.push_dir(Rails.root.join(\"app/components\"), namespace: Components)\n" \
+                 "Rails.autoloaders.main.push_dir(Rails.root.join(\"../outside\"), namespace: ::Outside)\n")
+      outside = File.join(File.dirname(@root), "outside")
+      FileUtils.mkdir_p(outside)
+
+      expect(described_class.file_for_constant(@root, "Components::Base")).to eq(File.join(@root, "app/components/base.rb"))
+      expect(described_class.namespaced_roots(@root)).to eq([ [ File.join(@root, "app/components"), "Components" ] ])
+    ensure
+      FileUtils.rm_rf(outside) if outside
+    end
+
+    it "skips an initializer whose bytes are not UTF-8" do
+      FileUtils.mkdir_p(File.join(@root, "config/initializers"))
+      File.binwrite(File.join(@root, "config/initializers/broken.rb"), "push_dir(\xFF\xFE \n".b)
+
+      expect(described_class.file_for_constant(@root, "Components::Base")).to be_nil
+    end
+  end
 end
