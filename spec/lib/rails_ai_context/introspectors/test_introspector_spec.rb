@@ -505,6 +505,53 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
     end
   end
 
+  # The layout `rails new` and `bin/rails g authentication` write in 8.1.
+  describe "test helpers and the setup the helper files run" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def write(rel, body = "")
+      path = File.join(@root, rel)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, body)
+    end
+
+    before do
+      write("test/helpers/users_helper_test.rb", "class UsersHelperTest < ActionView::TestCase\nend\n")
+      write("test/test_helpers/session_test_helper.rb", "module SessionTestHelper\n  def sign_in_as(user)\n  end\nend\n")
+      write("test/test_helper.rb", <<~RUBY)
+        require "rails/test_help"
+        require_relative "test_helpers/session_test_helper"
+
+        module ActiveSupport
+          class TestCase
+            parallelize(workers: :number_of_processors)
+            fixtures :all
+          end
+        end
+      RUBY
+      write("test/application_system_test_case.rb", <<~RUBY)
+        class ApplicationSystemTestCase < ActionDispatch::SystemTestCase
+          driven_by :selenium, using: :headless_chrome, screen_size: [ 1400, 1400 ]
+        end
+      RUBY
+    end
+
+    let(:result) { described_class.new(double("app", root: @root)).call }
+
+    it "names test/test_helpers and leaves helper tests to the test files" do
+      expect(result[:test_helpers]).to eq(%w[test/test_helpers/session_test_helper.rb])
+      expect(result[:test_files]["helpers"]).to eq(location: "test/helpers", count: 1)
+    end
+
+    it "shows the parallelize, fixtures and driven_by calls" do
+      expect(result[:test_helper_setup]).to eq([
+        "parallelize(workers: :number_of_processors)",
+        "fixtures :all",
+        "driven_by :selenium, using: :headless_chrome, screen_size: [ 1400, 1400 ]"
+      ])
+    end
+  end
+
   describe "#detect_framework" do
     around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
 

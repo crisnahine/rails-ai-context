@@ -86,16 +86,12 @@ module RailsAiContext
         { location: rows.map(&:first).join(", "), count: rows.sum(&:last) }
       end
 
-      def detect_test_helpers
-        dirs = [
-          File.join(root, "spec/support"),
-          File.join(root, "test/helpers")
-        ]
+      # Where suites keep helper modules. test/helpers is not one: Rails runs
+      # it as a test folder for helper tests.
+      HELPER_DIRS = %w[spec/support test/support test/test_helpers].freeze
 
-        dirs.filter_map do |dir|
-          next unless Dir.exist?(dir)
-          Dir.glob(File.join(dir, "**/*.rb")).map { |f| f.sub("#{root}/", "") }
-        end.flatten.sort
+      def detect_test_helpers
+        HELPER_DIRS.flat_map { |rel| Dir.glob(File.join(root, rel, "**/*.rb")) }.map { |f| f.sub("#{root}/", "") }.sort
       end
 
       def detect_factory_names
@@ -155,24 +151,31 @@ module RailsAiContext
         nil
       end
 
+      # Calls that configure every test or every system test, shown as written.
+      SETUP_MACROS = %i[parallelize fixtures driven_by].freeze
+
       def detect_test_helper_setup
-        helpers = %w[spec/rails_helper.rb spec/spec_helper.rb test/test_helper.rb].map { |rel| File.join(root, rel) }
+        helpers = %w[spec/rails_helper.rb spec/spec_helper.rb test/test_helper.rb test/application_system_test_case.rb].map { |rel| File.join(root, rel) }
         # Apps also configure helpers in support files (Errbit's spec/support/devise.rb). A bare
         # include there is usually a support module's own mixin, so only config.include counts.
-        support = %w[spec/support test/support].flat_map { |rel| Dir.glob(File.join(root, rel, "**", "*.rb")).sort }
+        support = HELPER_DIRS.flat_map { |rel| Dir.glob(File.join(root, rel, "**", "*.rb")).sort }
 
         setup = []
+        calls = []
         (helpers + support).each do |path|
           next unless File.file?(path)
           ast = SourceIntrospector.walk(path, {
             bare:    -> { Listeners::GenericMacroListener.new(:include) },
-            chained: -> { Listeners::ChainedCallListener.new(:include, receiver: :config) }
+            chained: -> { Listeners::ChainedCallListener.new(:include, receiver: :config) },
+            setup:   -> { Listeners::GenericMacroListener.new(*SETUP_MACROS) }
           })
           hits = helpers.include?(path) ? ast[:bare] + ast[:chained] : ast[:chained]
           # `config.include Helpers, :js` scopes Helpers to tagged examples; the tag is no helper.
           hits.each { |hit| setup.concat(hit[:values].map(&:to_s).grep(/\A[A-Z]\w*(?:::[A-Z]\w*)*\z/)) }
+          source = AstCache.parse(path).source
+          ast[:setup].each { |hit| calls << source.slice(hit[:offset], hit[:end_offset] - hit[:offset]).squish }
         end
-        setup.uniq
+        (setup + calls).uniq
       end
 
       def detect_vcr
