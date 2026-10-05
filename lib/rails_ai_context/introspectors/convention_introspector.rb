@@ -86,16 +86,17 @@ module RailsAiContext
             ast = SourceIntrospector.walk_source(record.source, {
               macros: -> {
                 Listeners::GenericMacroListener.new(
-                  :acts_as_paranoid, :discard, :has_paper_trail, :audited,
+                  :acts_as_paranoid, :has_paper_trail, :audited,
                   :aasm, :state_machine, :workflow,
-                  :acts_as_tenant, :apartment,
-                  :searchkick, :pg_search, :ransack,
+                  :acts_as_tenant, :multi_tenant,
+                  :searchkick, :pg_search_scope, :multisearchable,
                   :acts_as_taggable, :acts_as_taggable_on,
-                  :friendly_id, :sluggable,
-                  :acts_as_nested_set, :ancestry, :closure_tree
+                  :friendly_id,
+                  :acts_as_nested_set, :has_ancestry, :has_closure_tree, :acts_as_tree
                 )
               },
               builtin_macros: Listeners::MacrosListener,
+              mixins: Listeners::MixinsListener,
               associations: Listeners::AssociationsListener,
               # self.inheritance_column= is an assignment via CallNode with self receiver
               inheritance: -> { Listeners::ChainedCallListener.new(:inheritance_column=) }
@@ -103,6 +104,7 @@ module RailsAiContext
 
             ast[:macros].each { |h| all_macros << h[:macro] }
             ast[:builtin_macros].each { |h| all_macros << h[:macro] }
+            all_macros << :discard if ast[:mixins].any? { |m| m[:ancestor] && m[:name] == "Discard::Model" }
             ast[:associations].each { |a| all_association_options << a[:options] }
             has_inheritance_column = true if ast[:inheritance].any? { |call| sti_column?(call[:values].first) }
 
@@ -121,9 +123,9 @@ module RailsAiContext
           # structure.sql have no schema.rb to read, and fall back to the
           # looser source match.
           has_deleted_at = if schema_readable
-            schema.any_column?("deleted_at")
+            schema.any_column?("deleted_at") || schema.any_column?("discarded_at")
           else
-            model_records.any? { |record| record.source.match?(/deleted_at/) }
+            model_records.any? { |record| record.source.match?(/deleted_at|discarded_at/) }
           end
 
           patterns << "sti" if has_inheritance_column || has_sti_subclass
@@ -132,11 +134,11 @@ module RailsAiContext
           patterns << "soft_delete" if all_macros.intersect?(%i[acts_as_paranoid discard].to_set) || has_deleted_at
           patterns << "versioning" if all_macros.intersect?(%i[has_paper_trail audited].to_set)
           patterns << "state_machine" if all_macros.intersect?(%i[aasm state_machine workflow].to_set)
-          patterns << "multi_tenancy" if all_macros.intersect?(%i[acts_as_tenant apartment].to_set)
-          patterns << "searchable" if all_macros.intersect?(%i[searchkick pg_search ransack].to_set)
+          patterns << "multi_tenancy" if all_macros.intersect?(%i[acts_as_tenant multi_tenant].to_set)
+          patterns << "searchable" if all_macros.intersect?(%i[searchkick pg_search_scope multisearchable].to_set)
           patterns << "taggable" if all_macros.intersect?(%i[acts_as_taggable acts_as_taggable_on].to_set)
-          patterns << "sluggable" if all_macros.intersect?(%i[friendly_id sluggable].to_set)
-          patterns << "nested_set" if all_macros.intersect?(%i[acts_as_nested_set ancestry closure_tree].to_set)
+          patterns << "sluggable" if all_macros.intersect?(%i[friendly_id].to_set)
+          patterns << "nested_set" if all_macros.intersect?(%i[acts_as_nested_set has_ancestry has_closure_tree acts_as_tree].to_set)
           patterns << "current_attributes" if has_current_attributes
           patterns << "encrypted_attributes" if all_macros.include?(:encrypts)
           patterns << "normalizations" if all_macros.include?(:normalizes)
