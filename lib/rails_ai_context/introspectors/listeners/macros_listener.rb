@@ -16,7 +16,13 @@ module RailsAiContext
 
         ATTRIBUTE_MACROS = %i[
           encrypts normalizes has_one_attached has_many_attached
-          has_rich_text generates_token_for serialize
+          has_rich_text generates_token_for serialize attr_readonly query_constraints
+        ].to_set.freeze
+
+        # Class settings each change how the model reads, writes or loads; kept as written.
+        SETTINGS = %i[
+          inheritance_column= store_full_sti_class= strict_loading_by_default=
+          implicit_order_column= locking_column=
         ].to_set.freeze
 
         STORE_MACROS = %i[store store_accessor].to_set.freeze
@@ -37,6 +43,7 @@ module RailsAiContext
 
         def on_call_node_enter(node)
           return record_ignored_columns(node, :assign) if node.name == :ignored_columns= && node.receiver.is_a?(Prism::SelfNode)
+          return record_setting(node) if SETTINGS.include?(node.name) && node.receiver.is_a?(Prism::SelfNode)
           return unless in_scope?(node)
           return read_aasm(node) if @aasm
 
@@ -85,6 +92,12 @@ module RailsAiContext
         end
 
         private
+
+        def record_setting(node)
+          value = node.arguments&.arguments&.first or return
+          @results << { macro: :model_setting, setting: node.name.to_s.delete_suffix("="), value: value.slice,
+                        location: node.location.start_line, confidence: confidence_for(node) }
+        end
 
         def record_gem_macro(node)
           text = node.block ? node.slice[0, node.block.location.start_offset - node.location.start_offset] : node.slice

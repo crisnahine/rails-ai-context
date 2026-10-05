@@ -134,6 +134,11 @@ module RailsAiContext
         lines
       end
 
+      private_class_method def self.sti_line(sti)
+        place = sti[:sti_parent] ? "subclass of `#{sti[:sti_parent]}`" : "base of #{sti[:sti_children].map { |c| "`#{c}`" }.join(', ')}"
+        "**STI:** #{place}#{", type column `#{sti[:type_column]}`" if sti[:type_column]}"
+      end
+
       private_class_method def self.unavailable_row(name, data)
         Serializers::SectionFacts.unread_row("- **#{name}**", data)
       end
@@ -150,6 +155,7 @@ module RailsAiContext
         end
         lines = [ "# #{name}#{header_tag}", "" ]
         lines << "**Table:** `#{data[:table_name]}`" if data[:table_name]
+        lines << sti_line(data[:sti]) if data[:sti].is_a?(Hash) && (data[:sti][:sti_parent] || data[:sti][:sti_children])
         # A base class is not a concern, and the child may have no concerns at
         # all, so this stands outside that section.
         bases_unread = data[:bases_unread]
@@ -373,6 +379,9 @@ module RailsAiContext
         if data[:alias_attributes]&.any?
           macro_lines << "- `alias_attribute` #{data[:alias_attributes].map { |a| ":#{a[:name]} → :#{a[:target]}" }.join(', ')}"
         end
+        (data[:model_settings] || {}).each { |setting, value| macro_lines << "- `self.#{setting} = #{value}`" }
+        macro_lines << "- `attr_readonly` #{data[:attr_readonly].map { |f| ":#{f}" }.join(', ')}" if data[:attr_readonly]&.any?
+        macro_lines << "- `query_constraints` #{data[:query_constraints].map { |f| ":#{f}" }.join(', ')}" if data[:query_constraints]&.any?
         Array(data[:gem_macros]).each do |gem_macro|
           adds = Array(gem_macro[:adds]).map { |name| "`#{name}`" }
           macro_lines << "- `#{gem_macro[:text]}`#{" (adds #{adds.join(', ')})" if adds.any?}"

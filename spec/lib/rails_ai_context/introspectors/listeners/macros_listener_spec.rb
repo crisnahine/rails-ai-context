@@ -157,3 +157,26 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "gem ma
     expect(results.filter_map { |r| r[:adds] }).to eq([ %w[price], %w[fee] ])
   end
 end
+
+RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "model settings" do
+  it "reads the class settings that change how the model behaves, as written" do
+    results = parse_and_dispatch(<<~RUBY)
+      class Post < ApplicationRecord
+        self.inheritance_column = :kind
+        self.store_full_sti_class = false
+        self.strict_loading_by_default = true
+        self.implicit_order_column = "published_at"
+        self.locking_column = :row_version
+        attr_readonly :email_address, :slug
+        query_constraints :order_shop_id, :id
+      end
+    RUBY
+    settings = results.select { |r| r[:macro] == :model_setting }.map { |r| [ r[:setting], r[:value] ] }
+    expect(settings).to eq([
+      [ "inheritance_column", ":kind" ], [ "store_full_sti_class", "false" ], [ "strict_loading_by_default", "true" ],
+      [ "implicit_order_column", "\"published_at\"" ], [ "locking_column", ":row_version" ]
+    ])
+    expect(results.select { |r| r[:macro] == :attr_readonly }.map { |r| r[:attribute] }).to eq(%w[email_address slug])
+    expect(results.select { |r| r[:macro] == :query_constraints }.map { |r| r[:attribute] }).to eq(%w[order_shop_id id])
+  end
+end

@@ -566,6 +566,32 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  describe "class settings and STI" do
+    it "names the STI parent and type column and prints each setting as written" do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Car" => { table_name: "vehicles", sti: { sti_base: false, sti_parent: "Vehicle", type_column: "kind" } },
+          "Vehicle" => { table_name: "vehicles", sti: { sti_base: true, sti_children: %w[Car], type_column: "kind" } },
+          "Post" => { table_name: "posts",
+                      model_settings: { "strict_loading_by_default" => "true", "implicit_order_column" => "\"published_at\"" },
+                      attr_readonly: %w[email_address], query_constraints: %w[order_shop_id id] }
+        }
+      )
+
+      car = described_class.call(model: "Car").content.first[:text]
+      vehicle = described_class.call(model: "Vehicle").content.first[:text]
+      post = described_class.call(model: "Post").content.first[:text]
+
+      expect(car).to include("**STI:** subclass of `Vehicle`, type column `kind`")
+      expect(vehicle).to include("**STI:** base of `Car`, type column `kind`")
+      expect(post).to include("- `self.strict_loading_by_default = true`")
+      expect(post).to include("- `self.implicit_order_column = \"published_at\"`")
+      expect(post).to include("- `attr_readonly` :email_address")
+      expect(post).to include("- `query_constraints` :order_shop_id, :id")
+    end
+  end
+
   describe "callbacks" do
     before do
       described_class.reset_cache!

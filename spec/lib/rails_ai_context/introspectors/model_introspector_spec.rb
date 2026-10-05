@@ -5647,6 +5647,18 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  describe "STI on the booted tier" do
+    it "reads the type column the model names, not a fixed one" do
+      parent = Class.new { def self.name = "Vehicle" }
+      model = double("Car", inheritance_column: "kind", connected?: true, table_exists?: true,
+                     columns_hash: { "kind" => double }, descendants: [], superclass: parent)
+
+      sti = described_class.new(Rails.application).send(:extract_sti_info, model)
+
+      expect(sti).to eq(sti_base: false, sti_parent: "Vehicle", type_column: "kind")
+    end
+  end
+
   describe "STI on the static tier" do
     # The booted tier reports the hierarchy under :sti and the graph tool
     # renders it from there. The static tier resolves the same chain to share
@@ -5663,8 +5675,29 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
         models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
-        expect(models["Post"][:sti]).to eq(sti_base: true, sti_children: [ "Article" ])
-        expect(models["Article"][:sti]).to eq(sti_base: false, sti_parent: "Post")
+        expect(models["Post"][:sti]).to eq(sti_base: true, sti_children: [ "Article" ], type_column: "type")
+        expect(models["Article"][:sti]).to eq(sti_base: false, sti_parent: "Post", type_column: "type")
+      end
+    end
+
+    it "takes the type column from an inheritance_column a base sets" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "vehicle.rb"), <<~RUBY)
+          class Vehicle < ApplicationRecord
+            self.inheritance_column = :kind
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "car.rb"), "class Car < Vehicle\nend\n")
+        File.write(File.join(dir, "app", "models", "boat.rb"), "class Boat < ApplicationRecord\n  self.inheritance_column = KIND\nend\n")
+        File.write(File.join(dir, "app", "models", "dinghy.rb"), "class Dinghy < Boat\nend\n")
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["Car"][:sti]).to include(sti_parent: "Vehicle", type_column: "kind")
+        expect(models["Car"][:model_settings]).to eq("inheritance_column" => ":kind")
+        expect(models["Vehicle"][:sti]).to include(type_column: "kind")
+        expect(models["Boat"][:sti]).to include(type_column: RailsAiContext::Confidence::INFERRED)
       end
     end
 

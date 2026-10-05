@@ -144,6 +144,12 @@ module RailsAiContext
         }.compact
       end
 
+      # The value as written, read the way Rails reads it: a symbol or a string names the column.
+      def static_type_column(settings)
+        written = settings&.dig("inheritance_column") or return "type"
+        written[/\A:"?(\w+)"?\z/, 1] || written[/\A["'](\w+)["']\z/, 1] || RailsAiContext::Confidence::INFERRED
+      end
+
       # A model file the app cannot load leaves its class out of reflection,
       # and leaving it out here answers that the model does not exist and that
       # its table has no model at all. The file is a fact the source walk
@@ -961,10 +967,11 @@ module RailsAiContext
       end
 
       def extract_sti_info(model)
+        type_column = model.inheritance_column.to_s
         has_type_column = if model.connected? && model.table_exists?
-          model.columns_hash.key?("type")
+          model.columns_hash.key?(type_column)
         else
-          SchemaReader.for(app.root).column?(model.table_name, "type")
+          SchemaReader.for(app.root).column?(model.table_name, type_column)
         end
 
         return nil unless has_type_column
@@ -986,7 +993,8 @@ module RailsAiContext
         {
           sti_base: sti_parent.nil? && children.any?,
           sti_parent: sti_parent,
-          sti_children: children.empty? ? nil : children
+          sti_children: children.empty? ? nil : children,
+          type_column: type_column
         }.compact
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "extract_sti_info")
@@ -1145,7 +1153,9 @@ module RailsAiContext
         has_rich_text: :has_rich_text,
         generates_token_for: :generates_token_for,
         serialize: :serialize,
-        has_secure_token: :has_secure_token
+        has_secure_token: :has_secure_token,
+        attr_readonly: :attr_readonly,
+        query_constraints: :query_constraints
       }.freeze
 
       STORE_MACROS = %i[store store_accessor].to_set.freeze
@@ -1175,6 +1185,9 @@ module RailsAiContext
             (macros[:attributes] ||= []) << { name: m[:attribute], type: m[:type], default: m.dig(:options, :default) }.compact
           elsif macro == :alias_attribute
             (macros[:alias_attributes] ||= []) << { name: m[:attribute], target: m[:target] }
+          elsif macro == :model_setting
+            # Bases arrive first, so the class's own assignment wins.
+            (macros[:model_settings] ||= {})[m[:setting]] = m[:value]
           elsif macro == :gem_macro
             (macros[:gem_macros] ||= []) << m.slice(:text, :adds)
           elsif macro == :aasm
@@ -1571,6 +1584,7 @@ module RailsAiContext
         }
         details.merge!(extract_macros_from_ast(data, path))
         details.merge!(extract_detailed_macros_from_ast(data))
+        details[:sti] = sti.merge(type_column: static_type_column(details[:model_settings])) if sti
         downgrade_records(details.compact)
       end
 
