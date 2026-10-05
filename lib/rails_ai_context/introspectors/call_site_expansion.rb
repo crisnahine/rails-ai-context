@@ -212,6 +212,9 @@ module RailsAiContext
       MUTATORS = %i[<< []= push append unshift prepend insert concat pop shift delete delete_at delete_if keep_if
                     clear replace store update fill].freeze
 
+      # Readers that return an object the receiver holds, not a copy.
+      HELD_READERS = %i[[] fetch dig].freeze
+
       # The method's own locals the body writes or changes in place, outside the `kept` statements.
       def changed(body, kept = [])
         found = Set.new
@@ -223,8 +226,8 @@ module RailsAiContext
           found << node.name if WRITES.include?(node.class) && node.depth == blocks
           receiver = node.receiver if INDEX_WRITES.include?(node.class) ||
                                       (node.is_a?(Prism::CallNode) && (MUTATORS.include?(node.name) || node.name.match?(/\w!\z/)))
-          # `options[:a][:b] = v` changes what `options` holds.
-          receiver = receiver.receiver while receiver.is_a?(Prism::CallNode)
+          # `options[:a][:b] = v` changes what `options` holds; `options.dup[:a] = v` changes a copy.
+          receiver = receiver.receiver while receiver.is_a?(Prism::CallNode) && HELD_READERS.include?(receiver.name)
           found << receiver.name if receiver.is_a?(Prism::LocalVariableReadNode) && receiver.depth == blocks
           blocks += 1 if node.is_a?(Prism::BlockNode) || node.is_a?(Prism::LambdaNode)
           stack.concat(node.compact_child_nodes.map { |child| [ child, blocks ] })

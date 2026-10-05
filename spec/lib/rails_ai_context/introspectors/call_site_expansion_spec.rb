@@ -305,6 +305,18 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
       end
     end
 
+    # Ruby registers :x, :a and :a, :b: each change is made to a new object.
+    it "stays bound when the method changes a copy of the local" do
+      [ "options.dup[:on] = false", "options.except(:z)[:on] = false" ].each do |change|
+        data = expand("def vl(*args)\n  options = args.extract_options!\n  #{change}\n  before_save :x if options[:on]\nend\n", "vl :a, on: true")
+
+        expect(Array(data[:callbacks]).map { |cb| cb[:method] }).to eq(%w[x])
+      end
+      expect(Array(expand("def vl(name)\n  x = 1\n  name.to_s.strip!\n  before_save name\nend\n", "vl :a")[:callbacks]).map { |cb| cb[:method] }).to eq(%w[a])
+      expect(Array(expand("def vl(*names)\n  x = 1\n  names.flatten.compact!\n  names.each { |n| before_save n }\nend\n", "vl :a, :b")[:callbacks])
+               .map { |cb| cb[:method] }).to eq(%w[a b])
+    end
+
     it "takes only the arguments past the other parameters" do
       method_source = "def vl(name, *args)\n  options = args.extract_options!\n  before_save :x if options[:allow_nil]\nend\n"
 
