@@ -43,6 +43,12 @@ module RailsAiContext
         private
 
         def build_summary(data)
+          skipped = Array(data[:skipped_frontend_paths])
+          summary = stack_summary(data)
+          skipped.any? ? "#{summary}; frontend_paths outside the app root not read: #{skipped.join(', ')}" : summary
+        end
+
+        def stack_summary(data)
           parts = []
           framework = framework_label(data)
           parts << framework if framework

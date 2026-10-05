@@ -450,6 +450,8 @@ RSpec.describe RailsAiContext::Tools::GetFrontendStack do
         text = described_class.call(detail: "standard").content.first[:text]
         expect(text).to include("`frontend_paths` entries outside the app root are not read: `../web-client`")
         expect(text).not_to include("API-only")
+        expect(described_class.call(detail: "summary").content.first[:text])
+          .to end_with("; frontend_paths outside the app root not read: ../web-client")
       end
 
       it "reads a manifest.js with bytes that are not UTF-8" do
