@@ -79,6 +79,21 @@ RSpec.describe RailsAiContext::Tools::GetMailers do
       expect(text).to include("**Preview paths:** `test/mailers/previews`, `lib/mailer_previews`")
     end
 
+    it "never reads a preview linked from outside the app, and survives one it cannot parse" do
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "secret_preview.rb"), "class UserMailerPreview < ActionMailer::Preview\n  def leaked; end\nend\n")
+        FileUtils.rm(File.join(tmpdir, "test/mailers/previews/user_mailer_preview.rb"))
+        File.symlink(File.join(outside, "secret_preview.rb"), File.join(tmpdir, "test/mailers/previews/user_mailer_preview.rb"))
+        write("lib/mailer_previews/broken_preview.rb", "class BrokenPreview < ActionMailer::Preview\n  def x(\n")
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+        text = described_class.call(mailer: "UserMailer").content.first[:text]
+        expect(text).not_to include("leaked")
+        expect(text).to include("- **Templates:** reset (text), welcome (html, text)")
+      end
+    end
+
     # load_defaults 6.1 sets deliver_later_queue_name to nil, so mail goes to ActiveJob's default queue.
     it "names ActiveJob's default queue under load_defaults 6.1 or later" do
       write("config/application.rb", "module App\n  class Application < Rails::Application\n    config.load_defaults 7.1\n  end\nend\n")
