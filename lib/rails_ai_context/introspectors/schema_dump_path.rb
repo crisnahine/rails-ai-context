@@ -13,12 +13,15 @@ module RailsAiContext
       # [format, absolute path] pairs to try in order: the configured dump first, then
       # the default file of each format, for an app whose configured file is missing.
       # Only the first is the file Rails would load.
+      # Every schema reader asks, so a run reads the config files once.
       def candidates(root)
         root = root.to_s
-        config = RailsAiContext::DatabaseYml.primary(root) || {}
-        format = schema_format(root, config)
-        defaults = [ format, (%i[ruby sql] - [ format ]).first ].map { |f| [ f, File.join(root, "db", FILE_NAMES[f]) ] }
-        ([ configured(root, config, format) ].compact + defaults).uniq
+        RailsAiContext::RunCache.fetch([ :schema_dump_candidates, root ]) do
+          config = RailsAiContext::DatabaseYml.primary(root) || {}
+          format = schema_format(root, config)
+          defaults = [ format, (%i[ruby sql] - [ format ]).first ].map { |f| [ f, File.join(root, "db", FILE_NAMES[f]) ] }
+          ([ configured(root, config, format) ].compact + defaults).uniq
+        end
       end
 
       # The first candidate on disk, which the readers answer from.
