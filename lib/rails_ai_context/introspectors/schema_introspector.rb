@@ -611,6 +611,7 @@ module RailsAiContext
           generated_columns: SchemaConventions.generated_columns_of(tables),
           note: "Parsed from #{relative_dump_path(path)} (#{connection_state})"
         }
+        result[:extensions] = parsed[:extensions] if parsed[:extensions].any?
         if applied.any?
           result[:schema_version] = applied.map(&:to_i).max.to_s
           migrate_dir = migrate_dir_for_dump(path)

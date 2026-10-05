@@ -82,7 +82,14 @@ module RailsAiContext
         end
 
         { dialect: dialect, tables: tables, enums: enums.map { |name, values| { name: name, values: values } },
-          views: found_views, virtual_tables: virtual_tables(content) }
+          views: found_views, virtual_tables: virtual_tables(content), extensions: extensions(content) }
+      end
+
+      # As PostgreSQL's connection names them: qualified unless in the public schema.
+      def extensions(content)
+        content.scan(/^CREATE EXTENSION (?:IF NOT EXISTS )?("[^"]+"|\w+)(?: WITH SCHEMA ("[^"]+"|\w+))?/).map do |name, schema|
+          [ (schema.delete('"') unless schema.nil? || schema == "public"), name.delete('"') ].compact.join(".")
+        end
       end
 
       # Each view by the name the app reads it under, a later definition of a name replacing a placeholder.

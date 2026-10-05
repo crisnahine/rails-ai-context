@@ -1722,6 +1722,19 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       expect(tables["user_stats"]).to include(kind: "materialized_view", sql: "SELECT count(*) AS total\n   FROM public.users")
     end
 
+    it "names the extensions a structure.sql dump creates, as the connection names them" do
+      result = static_of("structure.sql", <<~SQL)
+        CREATE EXTENSION IF NOT EXISTS hstore WITH SCHEMA public;
+        CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA extensions;
+        CREATE EXTENSION pg_trgm;
+        CREATE TABLE public.users (
+            id bigint NOT NULL
+        );
+      SQL
+
+      expect(result[:extensions]).to eq(%w[hstore extensions.uuid-ossp pg_trgm])
+    end
+
     it "skips a view or virtual table it cannot read instead of failing" do
       rb = static_of("schema.rb", <<~RUBY)[:tables]
         ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
