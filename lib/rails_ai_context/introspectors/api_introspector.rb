@@ -256,15 +256,18 @@ module RailsAiContext
       # Where apps keep a spec: rswag's swagger/, a docs site, public/ for a served spec,
       # and app/ beside a Grape or versioned API.
       OPENAPI_GLOBS = %w[
-        *.{json,yaml,yml} {openapi,swagger,doc,docs,public,app,config}/**/*.{json,yaml,yml}
+        *.{json,yaml,yml} {openapi,swagger,doc,docs,public,app,config}/**/*
       ].freeze
+      OPENAPI_EXTENSIONS = %w[.json .yaml .yml].freeze
       OPENAPI_YAML_KEY = /^["']?(?:openapi|swagger)["']?[ \t]*:/
       OPENAPI_SKIP = %r{(?:\A|/)(?:node_modules|packs|assets|vite)/}
 
       # A file is a spec by its top-level `openapi` or `swagger` key, never by where it is.
+      # Braces expand to one glob each, so the extension is checked after a single walk per tree.
       def detect_openapi_specs
         OPENAPI_GLOBS.flat_map { |pattern| Dir.glob(pattern, base: root.to_s) }
-          .uniq.reject { |relative| relative.match?(OPENAPI_SKIP) }
+          .uniq.select { |relative| relative.end_with?(*OPENAPI_EXTENSIONS) }
+          .reject { |relative| relative.match?(OPENAPI_SKIP) }
           .select { |relative| openapi_document?(relative) }
           .sort
       rescue => e
