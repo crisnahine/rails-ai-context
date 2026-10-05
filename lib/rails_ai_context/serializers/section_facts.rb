@@ -161,7 +161,7 @@ module RailsAiContext
 
       def chain_filter_parts(ctx, name, root)
         chain = ActionFilters.for_controller(ctx, name, root: root)
-        (chain[:inherited] + chain[:own]).map { |f| "#{f[:kind]} #{f[:name]}#{filter_condition_tail(f)}" } +
+        chain[:chain].map { |f| "#{f[:kind]} #{f[:name]}#{filter_condition_tail(f)}" } +
           chain[:skipped].map { |skipped| "~~#{skipped}~~ _(skipped)_" }
       end
 

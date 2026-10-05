@@ -224,6 +224,8 @@ module RailsAiContext
         # the body that made it, so an ancestor's skip of the same name does
         # not reach it.
         mark = skipped ? { skipped: true } : { declared: true }
+        # Rails unshifts each name onto the chain the class inherited; ActionFilters places it.
+        mark[:prepend] = true if macro.start_with?("prepend_")
         tail = constraints(entry)
         names.map { |name| { name: name, kind: kind, **mark, **tail } }
       end

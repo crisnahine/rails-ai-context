@@ -310,6 +310,47 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       })
     end
 
+    # Rails unshifts a prepended filter onto the chain the class inherited, so
+    # z runs first, then ApplicationController's prepended y.
+    describe "a prepended filter" do
+      around do |example|
+        previous = RailsAiContext.tier
+        RailsAiContext.tier = :static
+        example.run
+      ensure
+        RailsAiContext.tier = previous
+      end
+
+      before do
+        stub_controllers({
+          "ApplicationController" => { actions: [], parent_class: "ActionController::Base",
+                                       filters: [ { kind: "before", name: "x", declared: true },
+                                                  { kind: "before", name: "y", prepend: true, declared: true } ] },
+          "KidsController" => { actions: %w[index], parent_class: "ApplicationController",
+                                filters: [ { kind: "before", name: "k", declared: true },
+                                           { kind: "before", name: "z", prepend: true, declared: true } ] }
+        })
+      end
+
+      it "leads the controller's filter list" do
+        text = described_class.call(controller: "KidsController").content.first[:text]
+
+        expect(text.scan(/^- `before` \*\*(\w+)\*\*/).flatten).to eq(%w[z y x k])
+      end
+
+      it "leads an action's filter list" do
+        text = described_class.call(controller: "KidsController", action: "index").content.first[:text]
+
+        expect(text.scan(/^- `before` \*\*(\w+)\*\*/).flatten).to eq(%w[z y x k])
+      end
+
+      it "leads the full listing's filter line" do
+        text = described_class.call(detail: "full").content.first[:text]
+
+        expect(text).to include("- Filters: before z, before y, before x, before k")
+      end
+    end
+
     # A base controller with no public actions rendered as a name, a dash and
     # nothing, which reads as a truncated line rather than an answer.
     it "says so when a controller has no public actions" do
@@ -376,6 +417,25 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       text = described_class.call(controller: "UsersController").content.first[:text]
 
       expect(text).to include("- `user_params` (requires: :user) permits: :name, preferences: [:color], tags: []")
+    end
+
+    it "summarizes the arrays and hashes a nested key permits" do
+      params = [ { name: "s_params", requires: "s", permits: [ "hide" ], hashes: [ "colors" ],
+                   nested: { "filters" => [ "module_id", { "module_ids" => [] }, { "range" => %w[from to] }, { "opts" => {} } ] } } ]
+      stub_controllers({ "SController" => { actions: %w[update], filters: [], parent_class: "ApplicationController", strong_params: params } })
+
+      text = described_class.call(controller: "SController").content.first[:text]
+
+      expect(text).to include("permits: :hide, filters: [:module_id, { module_ids: [] }, { range: [:from, :to] }, { opts: {} }], colors: {}")
+    end
+
+    it "prints a hash filter with keys as the keys it permits" do
+      params = [ { name: "s_params", requires: "s", nested: { "prefs" => { "theme" => [], "extra" => {} } } } ]
+      stub_controllers({ "SController" => { actions: %w[update], filters: [], parent_class: "ApplicationController", strong_params: params } })
+
+      text = described_class.call(controller: "SController").content.first[:text]
+
+      expect(text).to include("permits: prefs: { theme: [], extra: {} }")
     end
 
     it "names both strong params methods of a controller under an app parent" do

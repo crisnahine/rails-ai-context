@@ -198,7 +198,22 @@ RSpec.describe RailsAiContext::VFS do
       it "carries the inherited filters, ahead of the controller's own" do
         result = described_class.resolve("rails-ai-context://controllers/posts/show")
         data = JSON.parse(result.first[:text])
-        expect(data["filters"].map { |f| f["name"] }).to eq(%w[set_locale authenticate_user! set_post])
+        # Declaring authenticate_user! again moves it to the end of the chain, after set_post.
+        expect(data["filters"].map { |f| f["name"] }).to eq(%w[set_locale set_post authenticate_user!])
+      end
+
+      it "lists a prepended filter of the controller's own ahead of the inherited ones" do
+        controllers = context[:controllers][:controllers]
+        controllers["ApplicationController"][:filters].each { |f| f[:declared] = true }
+        controllers["PostsController"][:filters].each { |f| f[:declared] = true }
+        controllers["PostsController"][:filters] << { kind: "before", name: "first_of_all", prepend: true, declared: true }
+        previous = RailsAiContext.tier
+        RailsAiContext.tier = :static
+        result = described_class.resolve("rails-ai-context://controllers/posts/show")
+        data = JSON.parse(result.first[:text])
+        expect(data["filters"].map { |f| f["name"] }).to eq(%w[first_of_all set_locale set_post authenticate_user!])
+      ensure
+        RailsAiContext.tier = previous
       end
     end
 

@@ -17,7 +17,8 @@ RSpec.describe RailsAiContext::ActionFilters do
 
     output = `ruby -e #{script.shellescape} 2>&1`
 
-    expect(output).to include("{own: [], inherited: [], skipped: []}").or include("{:own=>[], :inherited=>[], :skipped=>[]}")
+    expect(output).to include("{own: [], inherited: [], chain: [], skipped: []}")
+      .or include("{:own=>[], :inherited=>[], :chain=>[], :skipped=>[]}")
     expect($?.exitstatus).to eq(0)
   end
 
@@ -74,6 +75,15 @@ RSpec.describe RailsAiContext::ActionFilters do
       previous = RailsAiContext.tier
       RailsAiContext.tier = :static
       RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(dir)).call
+    ensure
+      RailsAiContext.tier = previous
+    end
+
+    def static_chain(dir, name)
+      ctx = static_context(dir)
+      previous = RailsAiContext.tier
+      RailsAiContext.tier = :static
+      described_class.for_controller(ctx, name, root: dir)[:chain].map { |f| f[:name] }
     ensure
       RailsAiContext.tier = previous
     end
@@ -181,6 +191,65 @@ RSpec.describe RailsAiContext::ActionFilters do
         expect(chain[:own].map { |f| f[:name] }).not_to include("set_locale")
         expect(chain[:inherited].find { |f| f[:name] == "set_locale" })
           .to include(from: "ApplicationController", from_concern: "Localized")
+      end
+    end
+
+    # Rails unshifts each name a prepend_* macro gives, in turn, onto the chain the class inherited.
+    it "lists prepended filters at the front, in the order Rails runs them" do
+      Dir.mktmpdir do |dir|
+        app_with_base(dir)
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"), <<~RUBY)
+          class ApplicationController < ActionController::Base
+            around_action :generate_flamegraph
+            prepend_before_action :load_user, :load_account
+            skip_before_action :activate_authlogic
+            prepend_before_action :activate_authlogic
+            before_action :respect_account_privacy
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "pages_controller.rb"), <<~RUBY)
+          class PagesController < ApplicationController
+            before_action :set_page
+            prepend_before_action :first_of_all
+
+            def index; end
+          end
+        RUBY
+
+        expect(static_chain(dir, "PagesController")).to eq(
+          %w[first_of_all activate_authlogic load_account load_user generate_flamegraph respect_account_privacy set_page]
+        )
+      end
+    end
+
+    it "lists a concern's prepend_around_action ahead of the filters declared before it" do
+      Dir.mktmpdir do |dir|
+        app_with_base(dir)
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        File.write(File.join(dir, "app", "controllers", "concerns", "devise_like.rb"), <<~RUBY)
+          module DeviseLike
+            extend ActiveSupport::Concern
+
+            included do
+              prepend_around_action :set_current_locale
+              before_action :store_current_location
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"),
+                   "class ApplicationController < ActionController::Base\n  around_action :switch_locale\nend\n")
+        File.write(File.join(dir, "app", "controllers", "pages_controller.rb"), <<~RUBY)
+          class PagesController < ApplicationController
+            before_action :check_user_not_blocked
+            include DeviseLike
+
+            def index; end
+          end
+        RUBY
+
+        expect(static_chain(dir, "PagesController")).to eq(
+          %w[set_current_locale switch_locale check_user_not_blocked store_current_location]
+        )
       end
     end
 
@@ -678,7 +747,7 @@ RSpec.describe RailsAiContext::ActionFilters do
   end
 
   it "answers empty lists for an unknown controller" do
-    expect(described_class.for(context, "Nope", "show")).to eq({ own: [], inherited: [], skipped: [] })
+    expect(described_class.for(context, "Nope", "show")).to eq({ own: [], inherited: [], chain: [], skipped: [] })
   end
 
   # An ancestor's skip joined the dropped set only after that ancestor's own
@@ -787,7 +856,7 @@ RSpec.describe RailsAiContext::ActionFilters do
     end
 
     it "answers empty lists for an unknown controller" do
-      expect(described_class.for_controller(context, "Nope")).to eq({ own: [], inherited: [], skipped: [] })
+      expect(described_class.for_controller(context, "Nope")).to eq({ own: [], inherited: [], chain: [], skipped: [] })
     end
   end
 
@@ -934,6 +1003,98 @@ RSpec.describe RailsAiContext::ActionFilters do
 
       expect(entry).not_to have_key(:from)
       expect(entry[:provenance]).to eq("not declared in the controller chain")
+    end
+
+    # paper_trail's on_load includes its callbacks into ActionController::Base, so
+    # they run ahead of everything ApplicationController declares, and the reflection
+    # list says so. The class's own copy is not one its body declares.
+    it "keeps the reflection order and credits no class for a gem's callback on the class's own list" do
+      reflection = [ { kind: "after", name: "p_after", declared: true },
+                     { kind: "before", name: "set_paper_trail_enabled_for_controller" },
+                     { kind: "before", name: "set_request_locale" },
+                     { kind: "before", name: "a_one", declared: true } ]
+      ctx = { controllers: { controllers: {
+        "ApplicationController" => { filters: [ reflection[1], reflection[2].merge(declared: true) ],
+                                     parent_class: "ActionController::Base" },
+        "KitchensController" => { parent_class: "ApplicationController", filters: reflection }
+      } } }
+
+      result = described_class.for_controller(ctx, "KitchensController")
+
+      expect(result[:chain].map { |f| f[:name] })
+        .to eq(%w[p_after set_paper_trail_enabled_for_controller set_request_locale a_one])
+      expect(result[:own].map { |f| f[:name] }).to eq(%w[p_after a_one])
+    end
+
+    it "takes a gem callback off the class's own list when no ancestor carries it" do
+      reflection = [ { kind: "before", name: "set_paper_trail_enabled_for_controller" },
+                     { kind: "before", name: "set_request_locale" },
+                     { kind: "before", name: "a_one", declared: true } ]
+      ctx = { controllers: { controllers: {
+        "ApplicationController" => { filters: [ reflection[1].merge(declared: true) ], parent_class: "ActionController::Base" },
+        "KitchensController" => { parent_class: "ApplicationController", filters: reflection }
+      } } }
+
+      result = described_class.for_controller(ctx, "KitchensController")
+      paper_trail = result[:chain].first
+
+      expect(result[:chain].map { |f| f[:name] }).to eq(%w[set_paper_trail_enabled_for_controller set_request_locale a_one])
+      expect(result[:own].map { |f| f[:name] }).to eq(%w[a_one])
+      expect(paper_trail).to include(name: "set_paper_trail_enabled_for_controller", provenance: "not declared in the controller chain")
+    end
+
+    # An ancestor that could not be read ends the walk early, so a name no read
+    # class declares may still be that ancestor's own.
+    it "labels nothing as undeclared when an ancestor could not be read" do
+      ctx = { controllers: { controllers: {
+        "Admin::BaseController" => { error: "boom" },
+        "Admin::UsersController" => { parent_class: "Admin::BaseController",
+                                      filters: [ { kind: "before", name: "require_admin" },
+                                                 { kind: "before", name: "set_user", declared: true } ] }
+      } } }
+
+      result = described_class.for_controller(ctx, "Admin::UsersController")
+
+      expect(result[:chain].map { |f| f[:name] }).to eq(%w[require_admin set_user])
+      expect(result[:chain]).to all(satisfy { |f| !f.key?(:provenance) })
+    end
+
+    # The booted listing leaves ApplicationController out, so the walk reads its
+    # file; the superclass that file names carries the walk on to the framework.
+    it "labels a gem callback when the walk reads the base from its file" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"), <<~RUBY)
+          class ApplicationController < ActionController::Base
+            before_action :set_request_locale
+          end
+        RUBY
+        ctx = { controllers: { controllers: {
+          "KitchensController" => { parent_class: "ApplicationController",
+                                    filters: [ { kind: "before", name: "set_paper_trail_enabled_for_controller" },
+                                               { kind: "before", name: "set_request_locale" },
+                                               { kind: "before", name: "a_one", declared: true } ] }
+        } } }
+
+        chain = described_class.for_controller(ctx, "KitchensController", root: dir)[:chain]
+
+        expect(chain.first).to include(name: "set_paper_trail_enabled_for_controller",
+                                       provenance: "not declared in the controller chain")
+      end
+    end
+
+    it "labels nothing as undeclared when the walk stops short of ActionController" do
+      ctx = { controllers: { controllers: {
+        "ApplicationController" => { filters: [ { kind: "before", name: "set_locale", declared: true } ] },
+        "UsersController" => { parent_class: "ApplicationController",
+                               filters: [ { kind: "before", name: "set_locale" },
+                                          { kind: "before", name: "require_admin" },
+                                          { kind: "before", name: "set_user", declared: true } ] }
+      } } }
+
+      result = described_class.for_controller(ctx, "UsersController")
+
+      expect(result[:chain]).to all(satisfy { |f| !f.key?(:provenance) })
     end
 
     it "keeps the concern an ancestor's filter came from on the booted tier's copy" do
@@ -1216,7 +1377,7 @@ RSpec.describe RailsAiContext::ActionFilters do
       } } }
 
       expect(described_class.for(ctx, "PostsController", "index"))
-        .to eq({ own: [], inherited: [], skipped: [] })
+        .to eq({ own: [], inherited: [], chain: [], skipped: [] })
       expect(described_class.for(ctx, "PostsController", "show")[:inherited].map { |f| f[:from] })
         .to eq([ "ApplicationController" ])
     end
@@ -1232,7 +1393,7 @@ RSpec.describe RailsAiContext::ActionFilters do
       } } }
 
       expect(described_class.for(ctx, "PostsController", "show"))
-        .to eq({ own: [], inherited: [], skipped: [] })
+        .to eq({ own: [], inherited: [], chain: [], skipped: [] })
     end
 
     it "says nothing when an intermediate ancestor took the filter out outright" do
@@ -1249,7 +1410,7 @@ RSpec.describe RailsAiContext::ActionFilters do
       } } }
 
       expect(described_class.for_controller(ctx, "PostsController"))
-        .to eq({ own: [], inherited: [], skipped: [] })
+        .to eq({ own: [], inherited: [], chain: [], skipped: [] })
     end
   end
 
