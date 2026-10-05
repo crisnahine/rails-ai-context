@@ -240,6 +240,33 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
       end
     end
 
+    {
+      "Sidekiq 6 and 7" => <<~LOG,
+        2026-10-05T10:00:00.000Z pid=1 tid=abc class=HardJob jid=f00 INFO: start
+        2026-10-05T10:00:01.000Z pid=1 tid=abc class=HardJob jid=f00 elapsed=0.5 ERROR: kaboom
+        2026-10-05T10:00:02.000Z pid=1 tid=abc INFO: done
+      LOG
+      "Sidekiq 8" => <<~LOG,
+        \e[1;34mINFO \e[0m 2026-10-05T10:00:00.000Z pid=1 tid=abc class=HardJob jid=f00: start
+        \e[1;31mERROR\e[0m 2026-10-05T10:00:01.000Z pid=1 tid=abc class=HardJob jid=f00: kaboom
+        \e[1;34mINFO \e[0m 2026-10-05T10:00:02.000Z pid=1 tid=abc: done
+      LOG
+      "Sidekiq JSON" => <<~LOG
+        {"ts":"2026-10-05T10:00:00.000Z","pid":1,"tid":"abc","lvl":"INFO","msg":"start"}
+        {"ts":"2026-10-05T10:00:01.000Z","pid":1,"tid":"abc","lvl":"ERROR","msg":"kaboom"}
+        {"ts":"2026-10-05T10:00:02.000Z","pid":1,"tid":"abc","lvl":"INFO","msg":"done"}
+      LOG
+    }.each do |format, log|
+      it "filters a #{format} log by level" do
+        File.write(File.join(log_dir, "sidekiq.log"), log)
+        text = described_class.call(file: "sidekiq", level: "ERROR").content.first[:text]
+        expect(text).to include("kaboom", "Level: ERROR+")
+        expect(text).not_to include("start", "done")
+      ensure
+        FileUtils.rm_f(File.join(log_dir, "sidekiq.log"))
+      end
+    end
+
     it "reads the severity field, never a severity word inside the message" do
       File.write(File.join(log_dir, "test.log"), <<~LOG)
         I, [2026-03-29T10:00:00 #1]  INFO -- : Started GET "/warn"

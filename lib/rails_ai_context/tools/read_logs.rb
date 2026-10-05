@@ -91,7 +91,7 @@ module RailsAiContext
         # Detect format and filter by level
         format = detect_format(raw_lines)
         if level != "all" && raw_lines.none? { |l| extract_level(l, format) }
-          warnings << "this log has no severity field (Rails' default formatter writes none), so it cannot be filtered by level; showing every line"
+          warnings << "these lines have no severity field, so they cannot be filtered by level; showing every line"
           level = "all"
         end
         filtered = filter_by_level(raw_lines, level, format)
@@ -162,22 +162,26 @@ module RailsAiContext
 
       SEVERITY = "DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL|UNKNOWN|ANY"
       # Only where a formatter writes a severity: Logger::Formatter's "I, [ts]  INFO --",
-      # a leading "INFO"/"[INFO]", "[ts] INFO", "<timestamp> INFO", or logfmt level=.
+      # a leading "INFO"/"[INFO]", "[ts] INFO", "<timestamp> INFO", Sidekiq 6/7's
+      # "pid=.. tid=.. INFO: ", or logfmt level=.
       SEVERITY_FIELD = Regexp.union(
         /\A[DIWEFA], \[[^\]]*\]\s+(#{SEVERITY}) -- /o,
         /\A\[?(#{SEVERITY})\]?(?=[\s:]|\z)/o,
         /\A\[[^\]]*\]\s+\[?(#{SEVERITY})\]?\s/o,
         /\A\d{4}-\d\d-\d\d[T ][\d:.,]+(?:Z|[+-]\d\d:?\d\d)?\s+\[?(#{SEVERITY})\]?\s/o,
+        /\A(?:\S+ )?pid=\d+ tid=\S+(?: [\w.]+=\S*)* (#{SEVERITY}): /o,
         /\b(?:level|severity)=(#{SEVERITY})\b/io
       )
+
+      ANSI_COLOR = /\e\[[\d;]*m/
 
       private_class_method def self.extract_level(line, format)
         case format
         when :json
-          match = line.match(/"(?:level|severity)"\s*:\s*"(\w+)"/i)
+          match = line.match(/"(?:level|severity|lvl)"\s*:\s*"(\w+)"/i)
           match[1].upcase if match
         when :standard
-          match = line.match(SEVERITY_FIELD)
+          match = line.gsub(ANSI_COLOR, "").match(SEVERITY_FIELD)
           level = match&.captures&.compact&.first&.upcase
           level == "WARNING" ? "WARN" : level
         end
