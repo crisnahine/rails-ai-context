@@ -121,6 +121,16 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
       expect(text).to include("2 callbacks")
     end
 
+    # Equal counts keep one order, so one model gaining a callback moves only its own section.
+    it "lists models by callback count, then by name, at every level" do
+      models.replace("Zed" => { callbacks: { "before_save" => %w[a] } }, "Post" => models["Post"], "Abe" => { callbacks: { "after_save" => %w[b] } },
+                     "Mid" => { callbacks: { "before_save" => %w[c] } })
+      %w[summary standard full].each do |detail|
+        text = described_class.call(detail: detail).content.first[:text]
+        expect(text.scan(/^(?:- \*\*|## )(Zed|Post|Abe|Mid)\b/).flatten).to eq(%w[Post Abe Mid Zed])
+      end
+    end
+
     it "returns callbacks in execution order for detail:standard" do
       result = described_class.call(detail: "standard")
       text = result.content.first[:text]

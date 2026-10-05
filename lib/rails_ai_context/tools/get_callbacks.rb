@@ -162,10 +162,12 @@ module RailsAiContext
         end
 
         lines = [ "# Model Callbacks (#{count_phrase(models_with_callbacks.size, "model")})", "" ]
+        # By name within a count, so a model gaining a callback moves only its own section.
+        by_count = models_with_callbacks.sort_by { |name, data| [ -data[:callbacks].values.flatten.size, name.to_s ] }
 
         case detail
         when "summary"
-          models_with_callbacks.sort_by { |_name, data| -(data[:callbacks]&.values&.flatten&.size || 0) }.each do |name, data|
+          by_count.each do |name, data|
             total = data[:callbacks].values.flatten.size
             types = data[:callbacks].keys.map { |t| callback_type_label(t) }.join(", ")
             lines << "- **#{name}** - #{count_phrase(total, "callback")} (#{types})"
@@ -173,7 +175,7 @@ module RailsAiContext
           lines << "" << "_Use `model:\"Name\"` for callbacks by type._"
 
         when "standard"
-          models_with_callbacks.sort_by { |_name, data| -(data[:callbacks]&.values&.flatten&.size || 0) }.each do |name, data|
+          by_count.each do |name, data|
             ordered = order_callbacks(data[:callbacks])
             lines << "## #{name}"
             ordered.each do |type, methods|
@@ -184,7 +186,7 @@ module RailsAiContext
           lines << "_Use `model:\"Name\"` with `detail:\"full\"` for callback source code._"
 
         when "full"
-          models_with_callbacks.sort_by { |_name, data| -(data[:callbacks]&.values&.flatten&.size || 0) }.each do |name, data|
+          by_count.each do |name, data|
             ordered = order_callbacks(data[:callbacks])
             lines << "## #{name}"
             ordered.each do |type, methods|
