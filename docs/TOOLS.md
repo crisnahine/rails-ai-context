@@ -457,7 +457,9 @@ answers a worker name as well as a job name. A job's own page shows its
 Sidekiq's `sidekiq_retry_in` and `sidekiq_retries_exhausted` blocks, and its
 enqueue, perform and discard callbacks as written. A job that includes
 `ActiveJob::Continuable` (itself or through a base) is marked continuable, with
-the steps its `perform` runs in order, each a block or a method. The listing names the queues
+the steps its `perform` runs in order, each a block or a method. A model method
+delayed_job's `handle_asynchronously` wraps is listed as a background method with
+its options, here and on the model's `rails_get_model_details` page. The listing names the queues
 `config/sidekiq.yml` declares and the queues Solid Queue's workers poll in
 `config/queue.yml` (this environment's section), and names each job queue no
 worker polls; that job's page says so beside its queue.

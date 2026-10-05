@@ -37,6 +37,7 @@ module RailsAiContext
           workers: extract_workers,
           job_bases: job_bases,
           enqueue_helpers: enqueue_helpers,
+          async_methods: async_methods,
           mailers: booted_mailers[:mailers],
           mailer_bases: booted_mailers[:bases],
           channels: extract_channels,
@@ -57,6 +58,7 @@ module RailsAiContext
           workers: extract_workers,
           job_bases: job_bases,
           enqueue_helpers: enqueue_helpers,
+          async_methods: async_methods,
           mailers: source_mailers[:mailers],
           mailer_bases: source_mailers[:bases],
           channels: extract_channels_from_source,
@@ -294,6 +296,22 @@ module RailsAiContext
 
       def reflected_bases
         @reflected_bases ||= []
+      end
+
+      # delayed_job's handle_asynchronously wraps a model method so every call is
+      # queued; the app has no job class for it at all.
+      def async_methods
+        SourceScan.each(app.root, kind: "app/models").flat_map do |record|
+          next [] unless record.source.include?("handle_asynchronously")
+
+          owner = DeclaredConstant.resolve(record.source, record.path_name)
+          walked = SourceIntrospector.walk_source(record.source, { calls: -> { Listeners::GenericMacroListener.new(:handle_asynchronously) } })
+          walked[:calls].filter_map do |call|
+            method = call[:args].first or next
+            options = call[:option_values].map { |key, value| "#{key}: #{value}" }
+            { owner: owner, method: method.to_s, file: "#{record.file}:#{call[:location]}", options: options.join(", ").presence }.compact
+          end
+        end
       end
 
       ENQUEUE_HELPERS = %w[enqueue enqueue_in enqueue_at].freeze

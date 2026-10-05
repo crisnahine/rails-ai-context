@@ -52,6 +52,19 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     allow(described_class).to receive(:cached_context).and_return({ models: models })
   end
 
+  describe "a model method delayed_job runs in the background" do
+    it "is named with its options" do
+      allow(described_class).to receive(:cached_context).and_return({
+        models: models,
+        jobs: { async_methods: [ { owner: "User", method: "send_welcome", file: "app/models/user.rb:3", options: "priority: 20" } ] }
+      })
+
+      text = described_class.call(model: "User").content.first[:text]
+
+      expect(text).to include("## Runs in the background (delayed_job)\n- `send_welcome` [priority: 20]: every call is queued by `handle_asynchronously` (`app/models/user.rb:3`)")
+    end
+  end
+
   describe ".call with no params" do
     it "reads a junk detail as standard" do
       text = described_class.call(detail: "verbose").content.first[:text]

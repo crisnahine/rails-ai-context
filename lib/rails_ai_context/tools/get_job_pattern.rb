@@ -59,7 +59,8 @@ module RailsAiContext
         # No jobs and no channels - bail out. Channel absence is only a real
         # negative when the :jobs section actually ran - if it's unavailable
         # (static tier), say so instead of claiming "no channels detected".
-        if jobs.empty? && channels.empty? && workers.empty?
+        async_methods = Array(jobs_data.is_a?(Hash) ? jobs_data[:async_methods] : nil)
+        if jobs.empty? && channels.empty? && workers.empty? && async_methods.empty?
           return text_response(with_bases_note(no_jobs_or_channels_message(channels_note, queue_line), jobs_data))
         end
 
@@ -69,6 +70,13 @@ module RailsAiContext
         if workers.any?
           lines << "" if lines.any?
           lines.concat(format_workers_section(workers, detail))
+        end
+        if async_methods.any?
+          lines << "" if lines.any?
+          lines << "## Background methods (delayed_job `handle_asynchronously`, #{async_methods.size})" << ""
+          async_methods.each do |m|
+            lines << "- `#{m[:owner]}##{m[:method]}`#{" [#{m[:options]}]" if m[:options]} (`#{m[:file]}`)"
+          end
         end
         if channels.any?
           lines << "" if lines.any?

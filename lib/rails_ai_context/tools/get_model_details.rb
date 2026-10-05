@@ -493,6 +493,14 @@ module RailsAiContext
           end
         end
 
+        async = Array(Payload.section(cached_context, :jobs)&.dig(:async_methods)).select { |m| m[:owner] == name }
+        if async.any?
+          lines << "" << "## Runs in the background (delayed_job)"
+          async.each do |m|
+            lines << "- `#{m[:method]}`#{" [#{m[:options]}]" if m[:options]}: every call is queued by `handle_asynchronously` (`#{m[:file]}`)"
+          end
+        end
+
         # Cross-reference hints - guide AI to related tools
         hints = []
         hints << "`rails_get_schema(table:\"#{data[:table_name]}\")` for columns/indexes" if data[:table_name]

@@ -247,6 +247,20 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
   # and ActionCable::Channel::Base.descendants. With no booted Rails those
   # constants are undefined, so the static tier answered "no mailers found" for
   # an app with mailers - a false negative served as ground truth.
+  describe "methods delayed_job queues with handle_asynchronously" do
+    let(:model_file) { File.join(Rails.root, "app/models/async_note.rb") }
+
+    before { File.write(model_file, "class AsyncNote < ApplicationRecord\n  def ping; end\n  handle_asynchronously :ping, queue: \"low\"\nend\n") }
+    after { FileUtils.rm_f(model_file) }
+
+    it "reads them from the model source on both tiers" do
+      expected = [ { owner: "AsyncNote", method: "ping", file: "app/models/async_note.rb:3", options: "queue: low" } ]
+
+      expect(described_class.new(Rails.application).call[:async_methods]).to eq(expected)
+      expect(described_class.new(Rails.application).static_call[:async_methods]).to eq(expected)
+    end
+  end
+
   describe "#static_call" do
     def static_result(&build)
       Dir.mktmpdir do |dir|

@@ -114,6 +114,37 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       end
     end
 
+    context "with a delayed_job app whose models use handle_asynchronously" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app/models"))
+        File.write(File.join(tmpdir, "app/models/note.rb"), <<~RUBY)
+          class Note < ApplicationRecord
+            def send_welcome; end
+            handle_asynchronously :send_welcome, priority: 20
+
+            def archive; end
+            handle_asynchronously :archive
+          end
+        RUBY
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "names each method delayed_job queues, with its options, instead of saying no jobs" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).not_to include("No jobs found")
+        expect(text).to include("## Background methods (delayed_job `handle_asynchronously`, 2)")
+        expect(text).to include("- `Note#send_welcome` [priority: 20] (`app/models/note.rb:3`)")
+        expect(text).to include("- `Note#archive` (`app/models/note.rb:6`)")
+      end
+    end
+
     context "with a job that includes ActiveJob::Continuable" do
       let(:tmpdir) { Dir.mktmpdir }
 
