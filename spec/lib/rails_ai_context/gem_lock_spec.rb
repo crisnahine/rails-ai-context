@@ -278,6 +278,37 @@ RSpec.describe RailsAiContext::GemLock do
       expect(described_class.lockfile_name(dir)).to eq("gems.locked")
     end
   end
+  describe "a lockfile config/boot.rb points outside the app" do
+    let(:boot) { %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n\nrequire "bundler/setup" if File.exist?(ENV["BUNDLE_GEMFILE"])\n) }
+
+    it "says which Gemfile boot.rb names and that it is not read" do
+      Dir.mktmpdir do |engine|
+        File.write(File.join(engine, "Gemfile.lock"), "GEM\n  specs:\n    rails (8.1.4)\n")
+        dummy = File.join(engine, "test/dummy")
+        FileUtils.mkdir_p(File.join(dummy, "config"))
+        File.write(File.join(dummy, "config/boot.rb"), boot)
+
+        spec = described_class.for(dummy)
+
+        expect(spec.present?("rails")).to be false
+        expect(spec.reason).to eq("No Gemfile.lock in the app; config/boot.rb points Bundler at ../../Gemfile, outside the app root, which is not read")
+        expect(spec.outside_gemfile).to eq("../../Gemfile")
+      end
+    end
+
+    it "keeps the plain reason for a boot.rb that names the app's own Gemfile, or none it can read" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config/boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../Gemfile", __dir__)\n))
+        expect(described_class.for(dir).reason).to eq("No Gemfile.lock found")
+
+        File.binwrite(File.join(dir, "config/boot.rb"), "ENV[\"BUNDLE_GEMFILE\"] ||= ENV.fetch(\"X\") \xFF".b)
+        File.utime(Time.now + 2, Time.now + 2, File.join(dir, "config/boot.rb"))
+        expect(described_class.for(dir).outside_gemfile).to be_nil
+      end
+    end
+  end
+
   describe "mise config" do
     it "reads the ruby tool of mise.toml when nothing else names a version" do
       Dir.mktmpdir do |dir|

@@ -348,6 +348,20 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       expect(text).to include("Fx is a Rails 8.1.4 application declaring JRuby 9.4.8.0 on")
     end
 
+    it "says the gems are not read when boot.rb names a Gemfile outside the app" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "Dummy", rails_version: RailsAiContext::Confidence.unavailable("x"),
+        ruby_version: RailsAiContext::Confidence.unavailable("app declares none"), tier: "static"
+      })
+      allow(RailsAiContext::GemLock).to receive(:for).and_return(
+        RailsAiContext::GemLock::Spec.new({}, reason: "x", absent: true, outside_gemfile: "../../Gemfile")
+      )
+
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("Its gems and Rails version are not read: config/boot.rb points Bundler at `../../Gemfile`, outside the app root.")
+    end
+
     it "says a booted run is running that ruby" do
       allow(described_class).to receive(:cached_context).and_return({
         app_name: "TestApp",

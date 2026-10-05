@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "set"
+require "pathname"
 require_relative "safe_file"
 require_relative "safe_path"
 
@@ -35,6 +36,8 @@ module RailsAiContext
     # mise's project files, highest precedence first (mise docs, configuration).
     MISE_FILES = [ "mise.local.toml", "mise.toml", ".mise.toml", "mise/config.toml", ".config/mise.toml" ].freeze
     VERSION_FILES = [ ".ruby-version", ".tool-versions", *MISE_FILES ].freeze
+    # The line `rails new` and `rails plugin new` write into config/boot.rb.
+    BOOT_GEMFILE = /^\s*ENV\[["']BUNDLE_GEMFILE["']\]\s*\|\|=\s*File\.expand_path\(\s*["']([^"']+)["']\s*,\s*__dir__\s*\)/
     MISE_TOOLS = /^[ \t]*\[tools\][ \t]*$(.*?)(?=^[ \t]*\[|\z)/m
     # ruby = "3.3.6", ruby = ["3.3.6", ...] or ruby = { version = "3.3.6" }
     MISE_RUBY = /^[ \t]*["']?ruby["']?[ \t]*=[ \t]*(?:\[[ \t]*|\{[^}\n]*?version[ \t]*=[ \t]*)?["']([^"'\n]+)["']/
@@ -42,10 +45,13 @@ module RailsAiContext
     class Spec
       # `remote:` of each PATH section, as the lockfile writes it.
       # `ruby_engine` names a non-CRuby engine and its own version ("JRuby 9.4.8.0"), else nil.
-      attr_reader :ruby_versions, :ruby_engine, :reason, :path_remotes
+      # The Gemfile config/boot.rb names outside the app root, relative to it; never read.
+      attr_reader :ruby_versions, :ruby_engine, :reason, :path_remotes, :outside_gemfile
 
-      def initialize(versions, ruby_versions: {}, ruby_engine: nil, reason: nil, absent: false, direct: nil, path_remotes: [])
+      def initialize(versions, ruby_versions: {}, ruby_engine: nil, reason: nil, absent: false, direct: nil, path_remotes: [],
+                     outside_gemfile: nil)
         @versions = versions
+        @outside_gemfile = outside_gemfile
         @path_remotes = path_remotes
         @ruby_versions = ruby_versions
         @ruby_engine = ruby_engine
@@ -122,7 +128,7 @@ module RailsAiContext
       root = root.to_s
       path = File.join(root, lockfile_name(root))
       gemfile = File.join(root, gemfile_name(root))
-      stamp = [ path, gemfile, *VERSION_FILES.map { |name| File.join(root, name) } ].map { |file| mtime(file) }
+      stamp = [ path, gemfile, File.join(root, "config/boot.rb"), *VERSION_FILES.map { |name| File.join(root, name) } ].map { |file| mtime(file) }
 
       MUTEX.synchronize do
         cached = CACHE[path]
@@ -134,12 +140,38 @@ module RailsAiContext
         spec = if stamp.first
           parse(path, gemfile, root)
         else
-          Spec.new({}, **declared_ruby(nil, root), reason: "No #{File.basename(path)} found", absent: true)
+          absent_spec(root, path)
         end
         CACHE[path] = { stamp: stamp, spec: spec }
         spec
       end
     end
+
+    # An engine's test/dummy has no lockfile of its own: its boot.rb points
+    # Bundler at the engine's Gemfile, which is outside the app and not read.
+    def absent_spec(root, path)
+      outside = outside_boot_gemfile(root)
+      reason = if outside
+        "No #{File.basename(path)} in the app; config/boot.rb points Bundler at #{outside}, outside the app root, which is not read"
+      else
+        "No #{File.basename(path)} found"
+      end
+      Spec.new({}, **declared_ruby(nil, root), reason: reason, absent: true, outside_gemfile: outside)
+    end
+    private_class_method :absent_spec
+
+    def outside_boot_gemfile(root)
+      content = read_inside(root, "config/boot.rb")
+      literal = content&.[](BOOT_GEMFILE, 1)
+      return nil unless literal
+
+      real_root = File.expand_path(root)
+      target = File.expand_path(literal, File.join(real_root, "config"))
+      return nil if target.start_with?(real_root + File::SEPARATOR)
+
+      Pathname.new(target).relative_path_from(Pathname.new(real_root)).to_s
+    end
+    private_class_method :outside_boot_gemfile
 
     def mtime(path)
       File.mtime(path)

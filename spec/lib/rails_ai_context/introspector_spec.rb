@@ -318,6 +318,17 @@ RSpec.describe RailsAiContext::Introspector do
       end
     end
 
+    it "says why the Rails version is unknown when boot.rb's Gemfile is outside the app" do
+      Dir.mktmpdir do |engine|
+        dummy = File.join(engine, "test/dummy")
+        FileUtils.mkdir_p(File.join(dummy, "config"))
+        File.write(File.join(dummy, "config/boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n))
+        result = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(dummy)).call
+
+        expect(result[:rails_version]).to include("config/boot.rb points Bundler at ../../Gemfile, outside the app root")
+      end
+    end
+
     it "answers the Ruby engine the app's lockfile names" do
       Dir.mktmpdir do |dir|
         File.write(File.join(dir, "Gemfile.lock"), "GEM\n  specs:\n    rails (7.2.2)\n\nRUBY VERSION\n   ruby 3.1.4p0 (jruby 9.4.8.0)\n")

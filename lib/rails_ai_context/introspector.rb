@@ -219,7 +219,7 @@ module RailsAiContext
       # mid-sentence into files the user commits. An app can bundle railties
       # without the `rails` meta-gem and still be a Rails app at that version.
       lock = GemLock.for(app.root)
-      lock.version("rails") || lock.version("railties") || Confidence.unavailable("app not booted")
+      lock.version("rails") || lock.version("railties") || Confidence.unavailable(lock.outside_gemfile ? lock.reason : "app not booted")
     end
 
     def environment_name
