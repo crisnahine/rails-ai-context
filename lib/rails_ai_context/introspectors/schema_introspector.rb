@@ -214,7 +214,7 @@ module RailsAiContext
           bigint = col.respond_to?(:bigint?) && col.bigint?
           entry = {
             name: col.name,
-            type: bigint ? "bigint" : col.type.to_s,
+            type: bigint ? "bigint" : dumped_type(col),
             null: col.null,
             default: col.default,
             **column_detail(table, col, bigint),
@@ -237,6 +237,14 @@ module RailsAiContext
           end
           entry.compact
         end
+      end
+
+      # MySQL's dumper writes an enum or set column by its full SQL type, and a timestamp as one.
+      def dumped_type(col)
+        return col.type.to_s unless connection.respond_to?(:mariadb?)
+        return col.sql_type.to_s if col.sql_type.to_s.match?(/\A(?:enum|set)\b/)
+
+        col.sql_type.to_s.match?(/\Atimestamp\b/) ? "timestamp" : col.type.to_s
       end
 
       def extract_indexes(table)

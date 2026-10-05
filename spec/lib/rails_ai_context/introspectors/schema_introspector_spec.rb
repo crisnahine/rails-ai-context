@@ -286,6 +286,16 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(introspector.send(:extract_columns, "pa_v_posts")).to eq([ { name: "body", type: "text", null: true, size: "medium" } ])
       end
 
+      it "names a MySQL enum, set or timestamp column by the type schema.rb writes" do
+        columns = { "kind" => [ :string, "enum('a','b')" ], "flags" => [ :string, "set('x','y')" ], "seen_at" => [ :datetime, "timestamp" ] }.map do |name, (type, sql_type)|
+          double(name: name, type: type, null: true, default: nil, limit: nil, precision: nil,
+                 scale: nil, comment: nil, collation: nil, sql_type: sql_type, array?: false)
+        end
+        allow(introspector).to receive(:connection).and_return(double("mysql2", columns: columns, native_database_types: {}, mariadb?: false))
+
+        expect(introspector.send(:extract_columns, "pa_v_shapes").map { |c| c[:type] }).to eq([ "enum('a','b')", "set('x','y')", "timestamp" ])
+      end
+
       # ActiveRecord gives an expression index's columns as one String; the
       # static readers split it into keys, and every consumer maps the list.
       it "reads an expression index's columns as the static readers do" do
