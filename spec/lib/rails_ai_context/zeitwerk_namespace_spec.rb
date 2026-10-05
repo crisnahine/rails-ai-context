@@ -38,8 +38,25 @@ end
 RSpec.describe "Zeitwerk loader for the gem" do
   let(:entry) { File.expand_path("../../../lib/rails_ai_context.rb", __dir__) }
 
-  it "calls for_gem with no arguments" do
-    expect(File.read(entry).scan(/Loader\.for_gem(\S*)/)).to eq([ [ "" ] ])
+  it "loads under a for_gem that takes no arguments, as 2.5's does" do
+    lib = File.dirname(entry)
+    script = <<~'RUBY'
+      require "zeitwerk"
+      Zeitwerk::Loader.singleton_class.prepend(Module.new do
+        def for_gem(*args, **kwargs)
+          raise ArgumentError, "for_gem takes no arguments on zeitwerk 2.5" unless args.empty? && kwargs.empty?
+
+          Zeitwerk::Registry.loader_for_gem(caller_locations(1, 1).first.path, namespace: Object, warn_on_extra_files: true)
+        end
+      end)
+      require "rails_ai_context"
+      RailsAiContext::Tools::BaseTool
+      print RailsAiContext.const_defined?(:Data, false)
+    RUBY
+
+    out, err, status = Open3.capture3(RbConfig.ruby, "-I", lib, "-e", script)
+
+    expect([ out, status.success? ]).to eq([ "false", true ]), err
   end
 
   # 2.5 names a module after a directory that holds no Ruby, and
