@@ -2078,7 +2078,7 @@ module RailsAiContext
       # A path the read could not answer falls through to the path walk, which raises. A class
       # nested in the model's file includes for itself, not for the model.
       def own_body(data, class_name)
-        data.merge(mixins: ConcernMembership.owned_by(data[:mixins], class_name),
+        data.merge(mixins: ConcernMembership.owned_by(data[:mixins], class_name, root: app.root),
                    callbacks: ConcernMembership.owned_by(data[:callbacks], class_name))
       end
 

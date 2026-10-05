@@ -566,6 +566,32 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    it "merges an edition module GitLab's prepend_mod_with names, and a prepend written after the class" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "config/application.rb" => "module X\n  class Application < Rails::Application\n    config.autoload_paths << Rails.root.join(\"ee/app/models\")\n  end\nend\n",
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "ee/app/models/ee/note.rb" => "module EE\n  module Note\n    extend ActiveSupport::Concern\n    prepended do\n      has_many :epics\n      validates :body, presence: true\n    end\n  end\nend\n",
+          "app/models/note.rb" => "class Note < ApplicationRecord\n  validates :title, presence: true\nend\n\nNote.prepend_mod_with(\"Note\")\n",
+          "app/models/concerns/flaggable.rb" => "module Flaggable\n  extend ActiveSupport::Concern\n  prepended do\n    has_many :flags\n  end\nend\n",
+          "app/models/post.rb" => "class Post < ApplicationRecord\nend\nPost.prepend(Flaggable)\nPost.prepend_mod\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["Note"][:associations].map { |a| a[:name] }).to eq([ "epics" ])
+        expect(models["Note"][:validations].map { |v| [ v[:kind], v[:attributes] ] }).to include([ "presence", [ "body" ] ], [ "presence", [ "title" ] ])
+        expect(models["Note"][:concerns]).to eq([ "EE::Note" ])
+        expect(models["Post"][:associations].map { |a| a[:name] }).to eq([ "flags" ])
+        expect(models["Post"][:concerns]).to eq([ "Flaggable" ])
+        expect(models["Post"]).not_to have_key(:concerns_unread)
+      end
+    end
+
     describe "pluralize_table_names" do
       def tables_with(files)
         Dir.mktmpdir do |dir|
