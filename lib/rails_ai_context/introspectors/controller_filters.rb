@@ -222,13 +222,16 @@ module RailsAiContext
 
       def constant_source(root, candidate)
         prefix = "#{root.to_s.chomp("/")}/"
-        file = "#{candidate.underscore}.rb"
+        underscored = "#{candidate.underscore}.rb"
         PathResolver.controller_dirs(root.to_s).each do |dir|
-          next unless dir.start_with?(prefix) && ConcernPaths.file_exist?(dir, file)
+          file = dir.start_with?(prefix) && ConcernPaths.spelled(dir, underscored)
+          next unless file
 
           relative = File.join(dir.delete_prefix(prefix), file)
           source, resolution = SafePath.read(relative, under: root.to_s)
-          return [ candidate, source, resolution.realpath, relative ] if source
+          next unless source && (file == underscored || DeclaredConstant.declarations(source).any? { |d| d.name == candidate })
+
+          return [ candidate, source, resolution.realpath, relative ]
         end
         nil
       end

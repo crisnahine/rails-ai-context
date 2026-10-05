@@ -105,6 +105,30 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
       end
     end
 
+    # Mastodon registers the acronym ActivityPub, so its base sits in activitypub/, not activity_pub/.
+    it "follows a base whose directory an app acronym spells" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "activitypub"))
+        concern(dir, "CacheConcern", <<~BODY.strip)
+          class_methods do
+              def vary_by(value, **kwargs)
+                before_action(**kwargs) { response.headers["Vary"] = value }
+              end
+            end
+        BODY
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"),
+                   "class ApplicationController < ActionController::Base\n  include CacheConcern\nend\n")
+        File.write(File.join(dir, "app", "controllers", "activitypub", "base_controller.rb"),
+                   "class ActivityPub::BaseController < ApplicationController\nend\n")
+        source = "class ActivityPub::OutboxesController < ActivityPub::BaseController\n  vary_by \"Signature\"\nend\n"
+
+        filters, = described_class.with_concerns(source, root: dir, within: "ActivityPub::OutboxesController")
+
+        expect(filters.map { |f| f[:name] }).to eq([ "block (line 5 of app/controllers/concerns/cache_concern.rb)" ])
+      end
+    end
+
     it "expands a class method of a module nested in a concern once, at its line in the concern's file" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))

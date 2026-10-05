@@ -193,8 +193,26 @@ module RailsAiContext
       RunCache.fetch([ :exist, current ]) { File.exist?(current) }
     end
 
+    # `relative` as the disk spells it: an app acronym underscores `ActivityPub` to `activitypub`,
+    # where this process, which has none of the app's acronyms, writes `activity_pub`. Nil when absent.
+    def spelled(dir, relative)
+      return relative if file_exist?(dir, relative)
+
+      current = dir
+      segments = relative.split("/").map do |segment|
+        found = listing(current).squashed[segment.delete("_")] or return nil
+        current = File.join(current, found)
+        found
+      end
+      RunCache.fetch([ :exist, current ]) { File.exist?(current) } ? segments.join("/") : nil
+    end
+
     Listing = Struct.new(:names, :folded) do
       def include?(name) = names.include?(name)
+
+      def squashed
+        @squashed ||= names.each_with_object({}) { |name, found| found[name.delete("_")] ||= name }
+      end
     end
 
     def listing(dir)
