@@ -43,9 +43,9 @@ RSpec.describe RailsAiContext::ActionFilters do
   # printed its filters. One run, two answers.
   describe "a skip on a line a def shares" do
     it "is the class body's, while one inside the def is not" do
-      calls = described_class.send(:skip_calls, "class C < ApplicationController; def index; end; skip_before_action :x; def a; skip_before_action :y; end; end")
+      skips = described_class.send(:skip_records, "class C < ApplicationController; def index; end; skip_before_action :x; def a; skip_before_action :y; end; end")
 
-      expect(calls.map { |call| call[:arguments] }).to eq([ [ :x ] ])
+      expect(skips.map { |skip| skip[:name] }).to eq([ "x" ])
     end
   end
 

@@ -192,6 +192,7 @@ module RailsAiContext
         tail = +""
         tail << " (skipped if: #{option_text(filter[:skipped_if])})" if filter[:skipped_if]
         tail << " (skipped unless: #{option_text(filter[:skipped_unless])})" if filter[:skipped_unless]
+        tail << " (skipped `#{filter[:skipped_condition]}`)" if filter[:skipped_condition]
         tail << " (skipped on: #{filter[:skipped_on]})" if filter[:skipped_on]
         tail << " (skipped except: #{filter[:skipped_except]})" if filter[:skipped_except]
         tail

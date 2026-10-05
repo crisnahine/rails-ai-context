@@ -10,8 +10,6 @@ module RailsAiContext
   # excludes what the class skipped, so the parent's filters are separated by
   # name rather than added.
   module ActionFilters
-    SKIP_MACROS = %i[skip_before_action skip_after_action skip_around_action].freeze
-
     module_function
 
     # { own: [filter], inherited: [filter], skipped: [name] } for one action.
@@ -98,7 +96,7 @@ module RailsAiContext
     # A conditional skip never removes the filter; the record carries the
     # condition. See CONTEXT.md, "Filter chain".
     def conditional?(skip, action)
-      !skip[:if].nil? || !skip[:unless].nil? || partial?(skip, action)
+      !skip[:if].nil? || !skip[:unless].nil? || !skip[:condition].nil? || partial?(skip, action)
     end
 
     # Partial only where the answer covers every action: a per-action answer
@@ -139,6 +137,7 @@ module RailsAiContext
 
       tail[:skipped_if] = condition_text(skip[:if]) if skip[:if]
       tail[:skipped_unless] = condition_text(skip[:unless]) if skip[:unless]
+      tail[:skipped_condition] = skip[:condition] if skip[:condition]
       return tail unless partial?(skip, action)
 
       tail[:skipped_on] = action_names(skip[:only]) if Array(skip[:only]).any?
@@ -313,7 +312,8 @@ module RailsAiContext
     def skip_flag_records(info, action)
       last_records(info, action).select { |_, f| f[:skipped] }
         .map do |name, f|
-          { name: name, kind: f[:kind], if: f[:if], unless: f[:unless], only: f[:only], except: f[:except] }
+          { name: name, kind: f[:kind], if: f[:if], unless: f[:unless], only: f[:only], except: f[:except],
+            condition: f[:condition] }
         end
     end
 
@@ -344,17 +344,9 @@ module RailsAiContext
       source ||= carried_source(ctx, controller_name, root)
       return [] unless source
 
-      skip_calls(source).flat_map do |call|
-        options = call[:options] || {}
-        next [] unless applies?({ only: options[:only], except: options[:except] }, action)
-
-        kind = call[:name].to_s.sub(/\Askip_/, "").sub(/_action\z/, "")
-        Array(call[:arguments]).select { |a| a.is_a?(Symbol) || a.is_a?(String) }
-          .map do |a|
-            { name: a.to_s, kind: kind, if: options[:if], unless: options[:unless],
-              only: options[:only], except: options[:except] }
-          end
-      end.uniq { |skip| skip[:name] }
+      skip_records(source).select { |skip| applies?(skip, action) }
+        .map { |skip| skip.slice(:name, :kind, :if, :unless, :only, :except, :condition) }
+        .uniq { |skip| skip[:name] }
     rescue => e
       RailsAiContext.debug_fail(e, [], label: "ActionFilters skip_source_records")
     end
@@ -442,19 +434,18 @@ module RailsAiContext
       SafeFile.read(File.join(root.to_s, file))
     end
 
-    # A skip inside a `def` runs only when the method is called, which ControllerFilters reads.
-    def skip_calls(source)
-      walked = Introspectors::SourceIntrospector.walk_source(source, {
-        skips: -> { Introspectors::Listeners::MethodCallListener.new(names: SKIP_MACROS) },
-        methods: Introspectors::Listeners::MethodsListener
-      })
-      Introspectors::SourceIntrospector.outside_defs(walked[:skips], walked[:methods])
+    # The reader the listing uses, so a skip carries the same only:/except:/if:/unless: and the
+    # if/unless around it; one inside a `def` runs only when called, which ControllerFilters reads.
+    def skip_records(source)
+      RunCache.fetch([ :skip_records, source ]) do
+        Introspectors::ControllerFilters.from_source(source).select { |f| f[:skipped] }
+      end
     end
 
     private_class_method :default_root, :split, :applies?, :parent_filters, :skip_source_records, :carried_source,
                          :entry_key,
 
-                         :skip_calls, :base_filters, :skip_flag_records, :redeclared_names, :last_records, :own_skips,
+                         :skip_records, :base_filters, :skip_flag_records, :redeclared_names, :last_records, :own_skips,
                          :record_attribution, :conditional?, :partial?, :absolute_names, :conditions_by_name,
                          :merge_conditions, :mark_conditional_skips, :skip_tail, :action_names, :condition_text,
                          :unplaced_conditional_skips, :evidence_skips, :configured_base, :runs_once?

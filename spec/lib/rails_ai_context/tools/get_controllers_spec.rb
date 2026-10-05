@@ -799,6 +799,35 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(single).to include("(skipped if: -> { [:json, :rss].include?(request.format&.to_sym) })")
       expect(single).not_to include("[INFERRED]")
     end
+
+    it "keeps a filter a skip takes out only under an if around it, and names that if" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/controllers"))
+        source = <<~RUBY
+          class PostsController < ApplicationController
+            skip_before_action :authenticate if Rails.env.development?
+            def show; end
+          end
+        RUBY
+        File.write(File.join(root, "app/controllers/posts_controller.rb"), source)
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+        stub_controllers({
+          "ApplicationController" => { actions: [], filters: [ { kind: "before", name: "authenticate", declared: true } ], strong_params: [] },
+          "PostsController" => {
+            actions: %w[show], parent_class: "ApplicationController", strong_params: [],
+            file: "app/controllers/posts_controller.rb",
+            filters: RailsAiContext::Introspectors::ControllerFilters.from_source(source)
+          }
+        })
+
+        [ { controller: "PostsController" }, { controller: "PostsController", action: "show" } ].each do |args|
+          text = described_class.call(**args).content.first[:text]
+
+          expect(text).not_to include("~~authenticate~~")
+          expect(text).to include("authenticate** _(from ApplicationController)_ (skipped `if Rails.env.development?`)")
+        end
+      end
+    end
   end
 
   describe "an action calling a protected method" do
