@@ -423,4 +423,13 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
       end
     end
   end
+
+  describe "a model whose table lives in a secondary database" do
+    it "counts the table's columns as known names" do
+      allow(described_class).to receive(:cached_context).and_return(
+        schema: { tables: {}, secondary_databases: { "analytics" => { tables: { "page_views" => { columns: [ { name: "path", type: "string" } ] } } } } }
+      )
+      expect(described_class.send(:known_model_methods, { table_name: "page_views" })).to include("path")
+    end
+  end
 end

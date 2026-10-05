@@ -99,7 +99,7 @@ module RailsAiContext
         end
 
         # Check if table exists
-        table_exists = schema && schema[:tables]&.key?(table)
+        table_exists = !RailsAiContext::Payload.schema_table(schema, table).nil?
 
         case action
         when "add_column"
@@ -180,7 +180,7 @@ module RailsAiContext
 
           lines = []
 
-          table_exists = schema && schema[:tables]&.key?(table)
+          table_exists = !RailsAiContext::Payload.schema_table(schema, table).nil?
           unless table_exists
             lines << "**Warning:** Table `#{table}` not found in current schema. This migration will fail."
             lines << ""
@@ -495,9 +495,7 @@ module RailsAiContext
 
         def column_exists?(table, column)
           schema = cached_context[:schema]
-          return false unless schema.is_a?(Hash) && schema[:tables]
-
-          table_data = schema[:tables][table]
+          table_data = RailsAiContext::Payload.schema_table(schema, table)
           return false unless table_data
 
           col_str = column.to_s
@@ -506,9 +504,7 @@ module RailsAiContext
 
         def index_exists?(table, column)
           schema = cached_context[:schema]
-          return false unless schema.is_a?(Hash) && schema[:tables]
-
-          table_data = schema[:tables][table]
+          table_data = RailsAiContext::Payload.schema_table(schema, table)
           return false unless table_data
 
           # add_index collides only with the name it would give the index; a
@@ -521,9 +517,7 @@ module RailsAiContext
         end
 
         def find_column_type(table, column, schema)
-          return nil unless schema.is_a?(Hash) && schema[:tables]
-
-          table_data = schema[:tables][table]
+          table_data = RailsAiContext::Payload.schema_table(schema, table)
           return nil unless table_data
 
           col = (table_data[:columns] || []).find { |c| c[:name] == column }

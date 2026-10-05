@@ -363,7 +363,7 @@ module RailsAiContext
           names += Array(model_data[:scopes]).filter_map { |s| s.is_a?(Hash) ? (s[:name] || s["name"])&.to_s : s.to_s }
 
           table = model_data[:table_name].to_s
-          columns = cached_context.dig(:schema, :tables, table, :columns)
+          columns = RailsAiContext::Payload.schema_table(cached_context[:schema], table)&.dig(:columns)
           names += Array(columns).filter_map { |c| (c[:name] || c["name"])&.to_s }
 
           names.uniq

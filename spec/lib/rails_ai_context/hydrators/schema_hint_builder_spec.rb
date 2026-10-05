@@ -138,4 +138,10 @@ RSpec.describe RailsAiContext::Hydrators::SchemaHintBuilder do
       expect(hint.columns).to eq([])
     end
   end
+
+  it "reads the columns of a table in a secondary database" do
+    ctx = { models: { "PageView" => { table_name: "page_views" } },
+            schema: { tables: {}, secondary_databases: { "analytics" => { tables: { "page_views" => { columns: [ { name: "path", type: "string" } ] } } } } } }
+    expect(described_class.build("PageView", context: ctx).columns.map { |c| c[:name] }).to eq([ "path" ])
+  end
 end
