@@ -26,10 +26,10 @@ module RailsAiContext
       return refuse(:sensitive) if sensitive?(relative)
 
       real = File.realpath(File.join(under.to_s, relative))
-      real_under = File.realpath(under.to_s)
+      real_under = real_base(under)
       return refuse(:outside) unless contained?(real, real_under)
 
-      real_root = File.realpath(root.to_s)
+      real_root = real_base(root)
       root_relative = real == real_root ? "" : real.delete_prefix(real_root + File::SEPARATOR)
       return refuse(:sensitive) if sensitive?(root_relative)
       return refuse(:missing) unless File.file?(real)
@@ -40,6 +40,11 @@ module RailsAiContext
       Resolution.new(realpath: real, relative: root_relative, refusal: nil)
     rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP, Errno::ENAMETOOLONG, Errno::ENOTDIR
       refuse(:missing)
+    end
+
+    # The base directories are the same for every lookup in a run; the file is resolved each time.
+    def real_base(dir)
+      RunCache.fetch([ :safe_path_base, dir.to_s ]) { File.realpath(dir.to_s) }
     end
 
     def read(relative, under:, root: under, max_size: nil)
