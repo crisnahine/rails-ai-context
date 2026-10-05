@@ -100,7 +100,7 @@ module RailsAiContext
         action_data = {
           controller: key,
           action: action.to_s,
-          filters: applicable[:inherited] + applicable[:own],
+          filters: applicable[:chain],
           # Every params method the controller declares, not only the ones
           # this action reaches, so the scope is stated rather than implied.
           strong_params: info[:strong_params],
