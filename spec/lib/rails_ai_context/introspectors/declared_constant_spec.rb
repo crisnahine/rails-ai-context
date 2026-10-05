@@ -242,9 +242,9 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
     it "walks the tree once" do
       source = "module Billing\n  class Invoice < ApplicationRecord\n  end\nend\n"
       walks = 0
-      allow(described_class).to receive(:constants).and_wrap_original do |original, root, &block|
+      allow(described_class).to receive(:constants).and_wrap_original do |original, root, **options, &block|
         walks += 1 if block
-        original.call(root, &block)
+        original.call(root, **options, &block)
       end
 
       3.times { expect(described_class.declared_names(source)).to eq([ "Billing::Invoice" ]) }
@@ -254,6 +254,34 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
       expect(described_class.declarations(source).map(&:name)).to eq([ "Billing::Invoice" ])
     end
   end
+  describe ".declarations of a Class.new assignment" do
+    it "reads the class and its superclass, and skips other constant writes" do
+      source = <<~RUBY
+        AdminNote = Class.new(ApplicationRecord) do
+          belongs_to :note
+        end
+        module Admin
+          Flag = Class.new(::Base)
+          Pin = Class.new(Flag)
+        end
+        Admin::Mark = Class.new(Admin::Flag)
+        Plain = Class.new
+        LIMIT = 5
+        Other = Struct.new(:a)
+      RUBY
+
+      found = described_class.declarations(source).to_h { |d| [ d.name, [ d.superclass, d.nesting ] ] }
+
+      expect(found).to eq(
+        "AdminNote" => [ "ApplicationRecord", [] ],
+        "Admin::Flag" => [ "Base", [] ],
+        "Admin::Pin" => [ "Flag", [ "Admin" ] ],
+        "Admin::Mark" => [ "Admin::Flag", [] ],
+        "Plain" => [ nil, [] ]
+      )
+    end
+  end
+
   describe ".declarations nesting" do
     def nesting_of(source, name)
       described_class.declarations(source).find { |d| d.name == name }.nesting

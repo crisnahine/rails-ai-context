@@ -514,6 +514,29 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    it "finds a model assigned Class.new of a record base, with what its block declares" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/note.rb" => "class Note < ApplicationRecord\nend\n",
+          "app/models/admin_note.rb" => "AdminNote = Class.new(ApplicationRecord) do\n  belongs_to :note\nend\n",
+          "app/models/admin/flag.rb" => "module Admin\n  Flag = Class.new(::ApplicationRecord)\nend\n",
+          "app/models/plain.rb" => "Plain = Class.new\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models.keys).to contain_exactly("Note", "AdminNote", "Admin::Flag")
+        expect(models["AdminNote"]).to include(table_name: "admin_notes")
+        expect(models["AdminNote"][:associations].map { |a| [ a[:type], a[:name] ] }).to eq([ %w[belongs_to note] ])
+        expect(models["Admin::Flag"]).to include(table_name: "flags")
+      end
+    end
+
     describe "pluralize_table_names" do
       def tables_with(files)
         Dir.mktmpdir do |dir|
