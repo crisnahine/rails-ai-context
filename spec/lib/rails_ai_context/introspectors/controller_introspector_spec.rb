@@ -658,227 +658,229 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
     end
 
-    # actionpack turns a block into a callback of its own; the static tier names it by its line.
-    it "names a block filter the app wrote by its line, and leaves a framework block out" do
-      Dir.mktmpdir do |dir|
-        path = File.join(dir, "app/controllers/users_controller.rb")
-        FileUtils.mkdir_p(File.dirname(path))
+    describe "names a block or a callback object the way both tiers do" do
+      # actionpack turns a block into a callback of its own; the static tier names it by its line.
+      it "names a block filter the app wrote by its line, and leaves a framework block out" do
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, "app/controllers/users_controller.rb")
+          FileUtils.mkdir_p(File.dirname(path))
+          source = <<~RUBY
+            class UsersController < ApplicationController
+              prepend_around_action :par
+              before_action(only: :index) { |c| c.head(:forbidden) }
+            end
+          RUBY
+          File.write(path, source)
+          ctrl = Class.new(ActionController::Base) { before_action { head :ok } }
+          ctrl.define_singleton_method(:name) { "UsersController" }
+          ctrl.class_eval(source.lines[1..2].join, path, 2)
+          in_dir = described_class.new(double("app", root: Pathname.new(dir)))
+
+          booted = in_dir.send(:extract_filters, ctrl, source).map { |f| [ f[:kind], f[:name], f[:only] ] }
+          static = in_dir.send(:extract_filters_from_source, source).map { |f| [ f[:kind], f[:name], f[:only] ] }
+
+          expect(booted).to eq([ [ "around", "par", nil ], [ "before", "block (line 3)", [ "index" ] ] ])
+          expect(static).to eq(booted)
+        end
+      end
+
+      # Mastodon: CacheConcern's vary_by block and the controller's own lambda both open on line 8.
+      it "names a block outside the controller's file by that file, and pairs each block with its own options" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app/controllers/concerns"))
+          cache_path = File.join(dir, "app/controllers/concerns/cache_concern.rb")
+          File.write(cache_path, <<~RUBY)
+            module CacheConcern
+              extend ActiveSupport::Concern
+              class_methods do
+                def vary_by(value, **kwargs)
+                  before_action(**kwargs) { response.headers["Vary"] = value }
+                end
+              end
+            end
+          RUBY
+          limit_path = File.join(dir, "app/controllers/concerns/rate_limited.rb")
+          File.write(limit_path, <<~RUBY)
+            module RateLimited
+              extend ActiveSupport::Concern
+              class_methods do
+                def limit_rate(method_name)
+                  around_action(only: method_name) { |_controller, block| block.call }
+                end
+              end
+            end
+          RUBY
+          File.write(File.join(dir, "app/controllers/application_controller.rb"), <<~RUBY)
+            class ApplicationController < ActionController::Base
+              include CacheConcern
+              vary_by "Authorization"
+            end
+          RUBY
+          source = <<~RUBY
+            class PostsController < ApplicationController
+              include RateLimited
+
+              before_action -> { head :ok }, except: :create
+              before_action -> { head :ok }, only: :create
+              limit_rate :create
+              limit_rate :update
+            end
+          RUBY
+          File.write(File.join(dir, "app/controllers/posts_controller.rb"), source)
+          base = Class.new(ActionController::Base)
+          base.singleton_class.class_eval(<<~RUBY, cache_path, 4)
+            def vary_by(value, **kwargs)
+              before_action(**kwargs) { response.headers["Vary"] = value }
+            end
+          RUBY
+          base.singleton_class.class_eval(<<~RUBY, limit_path, 4)
+            def limit_rate(method_name)
+              around_action(only: method_name) { |_controller, block| block.call }
+            end
+          RUBY
+          base.vary_by("Authorization")
+          base.define_singleton_method(:name) { "ApplicationController" }
+          ctrl = Class.new(base)
+          ctrl.class_eval(source.lines[3..6].join, File.join(dir, "app/controllers/posts_controller.rb"), 4)
+          ctrl.define_singleton_method(:name) { "PostsController" }
+          in_dir = described_class.new(double("app", root: Pathname.new(dir)))
+
+          booted = in_dir.send(:extract_filters, ctrl, source).map { |f| [ f[:kind], f[:name], f[:only] || f[:except] ] }
+
+          expect(booted).to eq([
+            [ "before", "block (line 5 of app/controllers/concerns/cache_concern.rb)", nil ],
+            [ "before", "block (line 4)", [ "create" ] ],
+            [ "before", "block (line 5)", [ "create" ] ],
+            [ "around", "block (line 5 of app/controllers/concerns/rate_limited.rb)", [ "create" ] ],
+            [ "around", "block (line 5 of app/controllers/concerns/rate_limited.rb)", [ "update" ] ]
+          ])
+        end
+      end
+
+      # Mastodon's StatusesController: vary_by from ApplicationController's chain, from WebAppControllerConcern, and its own.
+      it "credits each of a body's blocks that share a name to the concern or body that declared it" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app/controllers/concerns"))
+          cache_path = File.join(dir, "app/controllers/concerns/cache_concern.rb")
+          File.write(cache_path, <<~RUBY)
+            module CacheConcern
+              extend ActiveSupport::Concern
+              class_methods do
+                def vary_by(value)
+                  before_action { response.headers["Vary"] = value }
+                end
+              end
+            end
+          RUBY
+          File.write(File.join(dir, "app/controllers/concerns/web_app.rb"),
+                     "module WebApp\n  extend ActiveSupport::Concern\n  included do\n    vary_by \"Accept\"\n  end\nend\n")
+          File.write(File.join(dir, "app/controllers/application_controller.rb"),
+                     "class ApplicationController < ActionController::Base\n  include CacheConcern\n  vary_by \"Authorization\"\nend\n")
+          source = "class PostsController < ApplicationController\n  include WebApp\n  vary_by \"Cookie\"\nend\n"
+          File.write(File.join(dir, "app/controllers/posts_controller.rb"), source)
+          base = Class.new(ActionController::Base)
+          base.singleton_class.class_eval(<<~RUBY, cache_path, 4)
+            def vary_by(value)
+              before_action { response.headers["Vary"] = value }
+            end
+          RUBY
+          base.vary_by("Authorization")
+          base.define_singleton_method(:name) { "ApplicationController" }
+          ctrl = Class.new(base)
+          ctrl.vary_by("Accept")
+          ctrl.vary_by("Cookie")
+          ctrl.define_singleton_method(:name) { "PostsController" }
+          in_dir = described_class.new(double("app", root: Pathname.new(dir)))
+
+          booted = in_dir.send(:extract_filters, ctrl, source).map { |f| f.slice(:declared, :from_concern) }
+
+          expect(booted).to eq([ {}, { declared: true, from_concern: "WebApp" }, { declared: true } ])
+        end
+      end
+
+      it "lists a call's lambdas and names in argument order, in both tiers" do
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, "app/controllers/users_controller.rb")
+          source = "class UsersController < ApplicationController\n  before_action -> { head :ok }, :a\nend\n"
+          ctrl = Class.new(ActionController::Base)
+          ctrl.define_singleton_method(:name) { "UsersController" }
+          ctrl.class_eval(source.lines[1], path, 2)
+          in_dir = described_class.new(double("app", root: Pathname.new(dir)))
+
+          booted = in_dir.send(:extract_filters, ctrl, source).map { |f| f[:name] }
+
+          expect(booted).to eq([ "block (line 2)", "a" ])
+          expect(in_dir.send(:extract_filters_from_source, source).map { |f| f[:name] }).to eq(booted)
+        end
+      end
+
+      it "leaves out a gem's block when the bundle is installed under the app root" do
+        Dir.mktmpdir do |dir|
+          gem_dir = File.join(dir, ".bundle/ruby/3.4.0/gems/actionpack-8.1.0")
+          gem_block = eval("proc { }", binding, File.join(gem_dir, "lib/action_controller/metal/allow_browser.rb"), 58)
+          app_block = eval("proc { }", binding, File.join(dir, "app/controllers/users_controller.rb"), 3)
+          allow(Gem).to receive(:loaded_specs)
+            .and_return("actionpack" => double(full_gem_path: gem_dir, source: Bundler::Source::Rubygems.allocate))
+          in_dir = described_class.new(double("app", root: Pathname.new(dir)))
+
+          expect(in_dir.send(:callback_name, gem_block)).to be_nil
+          expect(in_dir.send(:callback_name, app_block)).to eq("block (line 3)")
+        end
+      end
+
+      it "names cancancan's block callbacks for the macro that added them, as the static tier does" do
+        gem_dir = "/gems/cancancan-3.6.1/lib/cancan"
+        resource = eval("method = :load_and_authorize_resource; proc { |c| method }", binding, "#{gem_dir}/controller_resource.rb", 15)
+        check = eval("options = {}; proc { |c| options }", binding, "#{gem_dir}/controller_additions.rb", 266)
+        skip = eval("args = []; proc { |c| args }", binding, "#{gem_dir}/controller_additions.rb", 287)
+        in_dir = described_class.new(double("app", root: Pathname.new(Dir.pwd)))
+
+        expect(in_dir.send(:callback_name, resource)).to eq("load_and_authorize_resource")
+        expect(in_dir.send(:callback_name, check)).to eq("check_authorization")
+        expect(in_dir.send(:callback_name, skip)).to eq("skip_authorization_check")
+      end
+
+      it "names an object filter by its class, in both tiers, the same on every run" do
+        stub_const("TimingFilter", Class.new { def around(_controller) = yield })
+        stub_const("ClassFilter", Class.new { def self.before(_controller); end })
         source = <<~RUBY
-          class UsersController < ApplicationController
-            prepend_around_action :par
-            before_action(only: :index) { |c| c.head(:forbidden) }
+          class WidgetsController < ApplicationController
+            around_action TimingFilter.new, only: :index
+            before_action ClassFilter, :plain_filter
           end
         RUBY
-        File.write(path, source)
-        ctrl = Class.new(ActionController::Base) { before_action { head :ok } }
-        ctrl.define_singleton_method(:name) { "UsersController" }
-        ctrl.class_eval(source.lines[1..2].join, path, 2)
-        in_dir = described_class.new(double("app", root: Pathname.new(dir)))
-
-        booted = in_dir.send(:extract_filters, ctrl, source).map { |f| [ f[:kind], f[:name], f[:only] ] }
-        static = in_dir.send(:extract_filters_from_source, source).map { |f| [ f[:kind], f[:name], f[:only] ] }
-
-        expect(booted).to eq([ [ "around", "par", nil ], [ "before", "block (line 3)", [ "index" ] ] ])
-        expect(static).to eq(booted)
-      end
-    end
-
-    # Mastodon: CacheConcern's vary_by block and the controller's own lambda both open on line 8.
-    it "names a block outside the controller's file by that file, and pairs each block with its own options" do
-      Dir.mktmpdir do |dir|
-        FileUtils.mkdir_p(File.join(dir, "app/controllers/concerns"))
-        cache_path = File.join(dir, "app/controllers/concerns/cache_concern.rb")
-        File.write(cache_path, <<~RUBY)
-          module CacheConcern
-            extend ActiveSupport::Concern
-            class_methods do
-              def vary_by(value, **kwargs)
-                before_action(**kwargs) { response.headers["Vary"] = value }
-              end
-            end
-          end
-        RUBY
-        limit_path = File.join(dir, "app/controllers/concerns/rate_limited.rb")
-        File.write(limit_path, <<~RUBY)
-          module RateLimited
-            extend ActiveSupport::Concern
-            class_methods do
-              def limit_rate(method_name)
-                around_action(only: method_name) { |_controller, block| block.call }
-              end
-            end
-          end
-        RUBY
-        File.write(File.join(dir, "app/controllers/application_controller.rb"), <<~RUBY)
-          class ApplicationController < ActionController::Base
-            include CacheConcern
-            vary_by "Authorization"
-          end
-        RUBY
-        source = <<~RUBY
-          class PostsController < ApplicationController
-            include RateLimited
-
-            before_action -> { head :ok }, except: :create
-            before_action -> { head :ok }, only: :create
-            limit_rate :create
-            limit_rate :update
-          end
-        RUBY
-        File.write(File.join(dir, "app/controllers/posts_controller.rb"), source)
-        base = Class.new(ActionController::Base)
-        base.singleton_class.class_eval(<<~RUBY, cache_path, 4)
-          def vary_by(value, **kwargs)
-            before_action(**kwargs) { response.headers["Vary"] = value }
-          end
-        RUBY
-        base.singleton_class.class_eval(<<~RUBY, limit_path, 4)
-          def limit_rate(method_name)
-            around_action(only: method_name) { |_controller, block| block.call }
-          end
-        RUBY
-        base.vary_by("Authorization")
-        base.define_singleton_method(:name) { "ApplicationController" }
-        ctrl = Class.new(base)
-        ctrl.class_eval(source.lines[3..6].join, File.join(dir, "app/controllers/posts_controller.rb"), 4)
-        ctrl.define_singleton_method(:name) { "PostsController" }
-        in_dir = described_class.new(double("app", root: Pathname.new(dir)))
-
-        booted = in_dir.send(:extract_filters, ctrl, source).map { |f| [ f[:kind], f[:name], f[:only] || f[:except] ] }
-
-        expect(booted).to eq([
-          [ "before", "block (line 5 of app/controllers/concerns/cache_concern.rb)", nil ],
-          [ "before", "block (line 4)", [ "create" ] ],
-          [ "before", "block (line 5)", [ "create" ] ],
-          [ "around", "block (line 5 of app/controllers/concerns/rate_limited.rb)", [ "create" ] ],
-          [ "around", "block (line 5 of app/controllers/concerns/rate_limited.rb)", [ "update" ] ]
-        ])
-      end
-    end
-
-    # Mastodon's StatusesController: vary_by from ApplicationController's chain, from WebAppControllerConcern, and its own.
-    it "credits each of a body's blocks that share a name to the concern or body that declared it" do
-      Dir.mktmpdir do |dir|
-        FileUtils.mkdir_p(File.join(dir, "app/controllers/concerns"))
-        cache_path = File.join(dir, "app/controllers/concerns/cache_concern.rb")
-        File.write(cache_path, <<~RUBY)
-          module CacheConcern
-            extend ActiveSupport::Concern
-            class_methods do
-              def vary_by(value)
-                before_action { response.headers["Vary"] = value }
-              end
-            end
-          end
-        RUBY
-        File.write(File.join(dir, "app/controllers/concerns/web_app.rb"),
-                   "module WebApp\n  extend ActiveSupport::Concern\n  included do\n    vary_by \"Accept\"\n  end\nend\n")
-        File.write(File.join(dir, "app/controllers/application_controller.rb"),
-                   "class ApplicationController < ActionController::Base\n  include CacheConcern\n  vary_by \"Authorization\"\nend\n")
-        source = "class PostsController < ApplicationController\n  include WebApp\n  vary_by \"Cookie\"\nend\n"
-        File.write(File.join(dir, "app/controllers/posts_controller.rb"), source)
-        base = Class.new(ActionController::Base)
-        base.singleton_class.class_eval(<<~RUBY, cache_path, 4)
-          def vary_by(value)
-            before_action { response.headers["Vary"] = value }
-          end
-        RUBY
-        base.vary_by("Authorization")
-        base.define_singleton_method(:name) { "ApplicationController" }
-        ctrl = Class.new(base)
-        ctrl.vary_by("Accept")
-        ctrl.vary_by("Cookie")
-        ctrl.define_singleton_method(:name) { "PostsController" }
-        in_dir = described_class.new(double("app", root: Pathname.new(dir)))
-
-        booted = in_dir.send(:extract_filters, ctrl, source).map { |f| f.slice(:declared, :from_concern) }
-
-        expect(booted).to eq([ {}, { declared: true, from_concern: "WebApp" }, { declared: true } ])
-      end
-    end
-
-    it "lists a call's lambdas and names in argument order, in both tiers" do
-      Dir.mktmpdir do |dir|
-        path = File.join(dir, "app/controllers/users_controller.rb")
-        source = "class UsersController < ApplicationController\n  before_action -> { head :ok }, :a\nend\n"
-        ctrl = Class.new(ActionController::Base)
-        ctrl.define_singleton_method(:name) { "UsersController" }
-        ctrl.class_eval(source.lines[1], path, 2)
-        in_dir = described_class.new(double("app", root: Pathname.new(dir)))
-
-        booted = in_dir.send(:extract_filters, ctrl, source).map { |f| f[:name] }
-
-        expect(booted).to eq([ "block (line 2)", "a" ])
-        expect(in_dir.send(:extract_filters_from_source, source).map { |f| f[:name] }).to eq(booted)
-      end
-    end
-
-    it "leaves out a gem's block when the bundle is installed under the app root" do
-      Dir.mktmpdir do |dir|
-        gem_dir = File.join(dir, ".bundle/ruby/3.4.0/gems/actionpack-8.1.0")
-        gem_block = eval("proc { }", binding, File.join(gem_dir, "lib/action_controller/metal/allow_browser.rb"), 58)
-        app_block = eval("proc { }", binding, File.join(dir, "app/controllers/users_controller.rb"), 3)
-        allow(Gem).to receive(:loaded_specs)
-          .and_return("actionpack" => double(full_gem_path: gem_dir, source: Bundler::Source::Rubygems.allocate))
-        in_dir = described_class.new(double("app", root: Pathname.new(dir)))
-
-        expect(in_dir.send(:callback_name, gem_block)).to be_nil
-        expect(in_dir.send(:callback_name, app_block)).to eq("block (line 3)")
-      end
-    end
-
-    it "names cancancan's block callbacks for the macro that added them, as the static tier does" do
-      gem_dir = "/gems/cancancan-3.6.1/lib/cancan"
-      resource = eval("method = :load_and_authorize_resource; proc { |c| method }", binding, "#{gem_dir}/controller_resource.rb", 15)
-      check = eval("options = {}; proc { |c| options }", binding, "#{gem_dir}/controller_additions.rb", 266)
-      skip = eval("args = []; proc { |c| args }", binding, "#{gem_dir}/controller_additions.rb", 287)
-      in_dir = described_class.new(double("app", root: Pathname.new(Dir.pwd)))
-
-      expect(in_dir.send(:callback_name, resource)).to eq("load_and_authorize_resource")
-      expect(in_dir.send(:callback_name, check)).to eq("check_authorization")
-      expect(in_dir.send(:callback_name, skip)).to eq("skip_authorization_check")
-    end
-
-    it "names an object filter by its class, in both tiers, the same on every run" do
-      stub_const("TimingFilter", Class.new { def around(_controller) = yield })
-      stub_const("ClassFilter", Class.new { def self.before(_controller); end })
-      source = <<~RUBY
-        class WidgetsController < ApplicationController
+        ctrl = Class.new(ActionController::Base) do
           around_action TimingFilter.new, only: :index
           before_action ClassFilter, :plain_filter
         end
-      RUBY
-      ctrl = Class.new(ActionController::Base) do
-        around_action TimingFilter.new, only: :index
-        before_action ClassFilter, :plain_filter
+        ctrl.define_singleton_method(:name) { "WidgetsController" }
+
+        booted = introspector.send(:extract_filters, ctrl, source).map { |f| [ f[:kind], f[:name], f[:only] ] }
+        static = introspector.send(:extract_filters_from_source, source).map { |f| [ f[:kind], f[:name], f[:only] ] }
+
+        expect(booted).to eq([ [ "around", "TimingFilter (object)", [ "index" ] ], [ "before", "ClassFilter", nil ],
+                               [ "before", "plain_filter", nil ] ])
+        expect(static).to eq(booted)
       end
-      ctrl.define_singleton_method(:name) { "WidgetsController" }
 
-      booted = introspector.send(:extract_filters, ctrl, source).map { |f| [ f[:kind], f[:name], f[:only] ] }
-      static = introspector.send(:extract_filters_from_source, source).map { |f| [ f[:kind], f[:name], f[:only] ] }
+      # http_authentication.rb: `before_action(options) { http_basic_authenticate_or_request_with ... }`.
+      it "names the filter http_basic_authenticate_with adds, in both tiers, password left out" do
+        source = <<~RUBY
+          class ReportsController < ApplicationController
+            http_basic_authenticate_with name: "admin", password: "secret", except: :index
+          end
+        RUBY
+        ctrl = Class.new(ActionController::Base) { http_basic_authenticate_with name: "admin", password: "secret", except: :index }
+        ctrl.define_singleton_method(:name) { "ReportsController" }
 
-      expect(booted).to eq([ [ "around", "TimingFilter (object)", [ "index" ] ], [ "before", "ClassFilter", nil ],
-                             [ "before", "plain_filter", nil ] ])
-      expect(static).to eq(booted)
-    end
+        booted = introspector.send(:extract_filters, ctrl, source)
+        static = introspector.send(:extract_filters_from_source, source)
 
-    # http_authentication.rb: `before_action(options) { http_basic_authenticate_or_request_with ... }`.
-    it "names the filter http_basic_authenticate_with adds, in both tiers, password left out" do
-      source = <<~RUBY
-        class ReportsController < ApplicationController
-          http_basic_authenticate_with name: "admin", password: "secret", except: :index
-        end
-      RUBY
-      ctrl = Class.new(ActionController::Base) { http_basic_authenticate_with name: "admin", password: "secret", except: :index }
-      ctrl.define_singleton_method(:name) { "ReportsController" }
-
-      booted = introspector.send(:extract_filters, ctrl, source)
-      static = introspector.send(:extract_filters_from_source, source)
-
-      expect(booted.map { |f| f.slice(:kind, :name, :except) })
-        .to eq([ { kind: "before", name: "http_basic_authenticate_with", except: [ "index" ] } ])
-      expect(static.map { |f| f.slice(:kind, :name, :except) }).to eq(booted.map { |f| f.slice(:kind, :name, :except) })
-      expect((booted + static).inspect).not_to include("secret")
+        expect(booted.map { |f| f.slice(:kind, :name, :except) })
+          .to eq([ { kind: "before", name: "http_basic_authenticate_with", except: [ "index" ] } ])
+        expect(static.map { |f| f.slice(:kind, :name, :except) }).to eq(booted.map { |f| f.slice(:kind, :name, :except) })
+        expect((booted + static).inspect).not_to include("secret")
+      end
     end
 
     def with_concern(body)

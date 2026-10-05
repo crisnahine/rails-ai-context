@@ -38,8 +38,6 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
       end
     end
 
-    # A macro inside a `def` runs when the method runs: never for a method nobody
-    # calls, and with the call's options where the body calls it.
     # The block opens in the method's file; the expansion re-reads the method's body on its own.
     it "names a block a class method declares by its line in the file that defines the method, and that file when it is not the class's" do
       Dir.mktmpdir do |dir|
@@ -128,6 +126,8 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
       end
     end
 
+    # A macro inside a `def` runs when the method runs: never for a method nobody
+    # calls, and with the call's options where the body calls it.
     it "reads a filter inside a method only where the class calls the method" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
