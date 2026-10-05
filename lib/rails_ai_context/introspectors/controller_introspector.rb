@@ -290,10 +290,10 @@ module RailsAiContext
       # would have Rails dispatch to; the routes decide which are actions.
       def concern_actions(concerns, within, filters)
         Array(concerns).flat_map do |concern|
-          path = ConcernPaths.find_file(app.root.to_s, concern.to_s, prefer: "controller", within: within)
-          next [] unless path
+          source = ConcernPaths.module_source(app.root.to_s, concern.to_s, prefer: "controller", within: within)
+          next [] unless source
 
-          offered = (@concern_actions ||= {})[path] ||= (source = SafeFile.read(path)) ? ActionResolver.module_actions(source) : []
+          offered = (@concern_actions ||= {})[source] ||= ActionResolver.module_actions(source)
           ActionResolver.deliverable_actions(offered, filter_names(filters))
         end.uniq
       rescue => e

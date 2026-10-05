@@ -401,11 +401,10 @@ module RailsAiContext
     # A module whose file is not found is taken for a concern.
     def runs_once?(name, root, within)
       root ||= default_root
-      path = root && ConcernPaths.find_file(root.to_s, name, prefer: "controller", within: within.to_s)
-      source = path && SafeFile.read(path)
+      source = root && ConcernPaths.module_source(root.to_s, name, prefer: "controller", within: within.to_s)
       return true unless source
 
-      RunCache.fetch([ :concern_module, path ]) do
+      RunCache.fetch([ :concern_module, source ]) do
         Introspectors::SourceIntrospector.walk_source(source, { mixins: Introspectors::Listeners::MixinsListener })[:mixins]
           .any? { |mixin| mixin[:macro] == :extend && mixin[:name] == "ActiveSupport::Concern" }
       end

@@ -133,8 +133,30 @@ module RailsAiContext
     #   bare `include DebugConcern` inside Fasp::Provider resolves at runtime
     #   to Fasp::Provider::DebugConcern, which the literal spelling misses.
     # @param dirs [Array<String>, nil] pre-resolved concern directories
-    def find_file(root, concern_name, prefer: nil, within: nil, dirs: nil)
-      find_named(root, concern_name, prefer: prefer, within: within, dirs: dirs)&.last
+    # @param outer [Boolean] whether a module with no file of its own is found in its outer constant's file
+    def find_file(root, concern_name, prefer: nil, within: nil, dirs: nil, outer: true)
+      found = find_named(root, concern_name, prefer: prefer, within: within, dirs: dirs)
+      (found || (outer_named(root, concern_name, within: within, dirs: dirs) if outer))&.last
+    end
+
+    # The source of the module a reference resolves to: its file, or its own node in its outer constant's file.
+    def module_source(root, concern_name, prefer: nil, within: nil)
+      path = find_file(root, concern_name, prefer: prefer, within: within, outer: false)
+      return SafeFile.read(path) if path
+
+      name, path = outer_named(root, concern_name, within: within)
+      path && Introspectors::DeclaredConstant.module_node(AstCache.parse(path).value, name)&.slice
+    end
+
+    # [`Outer::Inner`, Outer's file] for a module with no file of its own, which Zeitwerk loads with Outer.
+    def outer_named(root, concern_name, within: nil, dirs: nil)
+      RunCache.fetch([ :outer_named, root, concern_name, within, dirs ]) do
+        candidate_names(concern_name, within).lazy.filter_map do |name|
+          outer = name.rpartition("::").first
+          path = !outer.empty? && find_file(root, outer, dirs: dirs)
+          [ name, path ] if path && Introspectors::DeclaredConstant.module_node(AstCache.parse(path).value, name)
+        end.first
+      end
     end
 
     # [the constant the reference resolves to, its file] for `find_file`'s file, or nil.

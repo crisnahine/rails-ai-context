@@ -668,12 +668,9 @@ module RailsAiContext
       # `Outer::Inner` with no file of its own, from Outer's file, which Zeitwerk loads it with.
       def in_outer_file(name, within)
         memo([ :outer, name, within ]) do
-          ConcernPaths.candidate_names(name, within).lazy.filter_map do |candidate|
-            outer = candidate.rpartition("::").first
-            file = !outer.empty? && ConcernPaths.find_file(@root, outer, dirs: @dirs)
-            found = file && nested_module(file, candidate, nil)
-            [ file, found ] if found
-          end.first
+          candidate, file = ConcernPaths.outer_named(@root, name, within: within, dirs: @dirs)
+          found = file && nested_module(file, candidate, nil)
+          [ file, found ] if found
         end
       end
 

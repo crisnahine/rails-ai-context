@@ -168,6 +168,19 @@ RSpec.describe RailsAiContext::ConcernPaths do
       expect(described_class.find_file(tmpdir, "DebugConcern")).to be_nil
     end
 
+    # Canvas declares Role::AssociationHelper in role.rb, which Zeitwerk loads it with.
+    it "finds a module with no file of its own in its outer constant's file, and reads only that module" do
+      models = File.join(tmpdir, "app", "models")
+      FileUtils.mkdir_p(models)
+      File.write(File.join(models, "role.rb"), "class Role < ApplicationRecord\n  module AssociationHelper\n    def helped; end\n  end\n\n  def outer; end\nend\n")
+
+      expect(described_class.find_file(tmpdir, "Role::AssociationHelper")).to eq(File.join(models, "role.rb"))
+      expect(described_class.find_file(tmpdir, "AssociationHelper", within: "Role")).to eq(File.join(models, "role.rb"))
+      expect(described_class.find_file(tmpdir, "Role::Missing")).to be_nil
+      expect(described_class.module_source(tmpdir, "Role::AssociationHelper")).to eq("module AssociationHelper\n    def helped; end\n  end")
+      expect(described_class.module_source(tmpdir, "Role")).to start_with("class Role")
+    end
+
     # Rails autoloads every app/* directory, and Mastodon's controllers
     # include RoutingHelper and DomainControlHelper from app/helpers.
     it "finds a module in any app/* directory" do

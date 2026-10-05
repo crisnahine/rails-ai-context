@@ -104,8 +104,10 @@ module RailsAiContext
       end
 
       def module_source(root, mod, owner)
-        path = ConcernPaths.find_file(root.to_s, mod, within: owner) ||
-               SuperclassChain.resolve_in_scope(owner, mod) { |c| PathResolver.file_for_constant(root.to_s, c) }
+        source = ConcernPaths.module_source(root.to_s, mod, within: owner)
+        return source if source
+
+        path = SuperclassChain.resolve_in_scope(owner, mod) { |c| PathResolver.file_for_constant(root.to_s, c) }
         path && SafeFile.read(path)
       end
 
