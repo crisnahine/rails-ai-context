@@ -242,9 +242,6 @@ RSpec.describe RailsAiContext::Tools::GetView do
       end
     end
 
-    # A template at the root of app/views has no directory. Splitting its key
-    # on "/" made its own filename the group, so the group was empty, the row
-    # never printed, and the header counted a file the body never listed.
     context "with a controller that declares its layout" do
       around do |example|
         Dir.mktmpdir("view-layout") do |root|
@@ -275,6 +272,9 @@ RSpec.describe RailsAiContext::Tools::GetView do
       end
     end
 
+    # A template at the root of app/views has no directory. Splitting its key
+    # on "/" made its own filename the group, so the group was empty, the row
+    # never printed, and the header counted a file the body never listed.
     context "with a template directly under app/views" do
       before do
         allow(described_class).to receive(:cached_context).and_return(

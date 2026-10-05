@@ -190,8 +190,6 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
     end
   end
 
-  # An options hash the call leaves at its empty default wrote `has_one :picture, `
-  # with a dangling comma, and the next line became that call's argument.
   describe "a `**options` parameter passed on" do
     def filters(call_source)
       definition = Prism.parse(<<~RUBY).value.statements.body.first
@@ -219,6 +217,8 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
     end
   end
 
+  # An options hash the call leaves at its empty default wrote `has_one :picture, `
+  # with a dangling comma, and the next line became that call's argument.
   it "drops an empty options argument whole, keeping the next declaration" do
     data = expand(<<~RUBY, "attachable :picture")
       def attachable(name, options = {})
