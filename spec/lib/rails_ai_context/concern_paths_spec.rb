@@ -5,6 +5,23 @@ require "tmpdir"
 require "fileutils"
 
 RSpec.describe RailsAiContext::ConcernPaths do
+  describe ".find_named" do
+    it "resolves a qualified name from the namespace outward, and answers it once per run" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/services/wiki/concerns"))
+        File.write(File.join(dir, "app/services/wiki/concerns/request.rb"), "module Wiki::Concerns::Request\nend\n")
+        expected = [ "Wiki::Concerns::Request", File.join(dir, "app/services/wiki/concerns/request.rb") ]
+
+        expect(described_class.find_named(dir, "::Concerns::Request", within: "Wiki::Queries::Search")).to be_nil
+        RailsAiContext::RunCache.around do
+          expect(described_class.find_named(dir, "Concerns::Request", within: "Wiki::Queries::Search")).to eq(expected)
+          expect(RailsAiContext::PathResolver).not_to receive(:app_roots)
+          expect(described_class.find_named(dir, "Concerns::Request", within: "Wiki::Queries::Search")).to eq(expected)
+        end
+      end
+    end
+  end
+
   describe ".resolve" do
     let(:tmpdir) { Dir.mktmpdir }
 
