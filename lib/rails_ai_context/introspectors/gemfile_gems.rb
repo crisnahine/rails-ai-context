@@ -15,7 +15,7 @@ module RailsAiContext
       # Every `gem` and `group` entry, with its options and groups.
       # @return [Array<Hash>] empty when there is no Gemfile or it cannot be read
       def entries(root)
-        path = File.join(root.to_s, "Gemfile")
+        path = File.join(root.to_s, GemLock.gemfile_name(root))
         return [] unless File.file?(path)
 
         Array(SourceIntrospector.walk(path, { gems: -> { Listeners::GemfileDslListener.new } })[:gems])

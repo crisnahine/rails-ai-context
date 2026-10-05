@@ -115,7 +115,7 @@ module RailsAiContext
     end
 
     def read_path_gem_libs(root)
-      lock = SafeFile.read(File.join(root, "Gemfile.lock"))
+      lock = SafeFile.read(File.join(root, GemLock.lockfile_name(root)))
       return [] unless lock
 
       real_root = File.realpath(root)

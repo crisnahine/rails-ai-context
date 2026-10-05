@@ -254,4 +254,27 @@ RSpec.describe RailsAiContext::GemLock do
       expect(spec.present?("rails")).to be false
     end
   end
+
+  it "reads gems.locked beside gems.rb, the pair Bundler uses before Gemfile" do
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "gems.rb"), "source \"https://rubygems.org\"\nruby \"3.4.9\"\ngem \"devise\"\n")
+      File.write(File.join(dir, "gems.locked"), <<~LOCK)
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            devise (4.9.4)
+            rails (8.1.4)
+
+        DEPENDENCIES
+          devise
+      LOCK
+
+      spec = described_class.for(dir)
+
+      expect(spec).not_to be_absent
+      expect(spec.version("rails")).to eq("8.1.4")
+      expect(spec.ruby_versions).to eq("gems.rb" => "3.4.9")
+      expect(described_class.lockfile_name(dir)).to eq("gems.locked")
+    end
+  end
 end

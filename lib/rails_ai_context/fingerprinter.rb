@@ -10,6 +10,8 @@ module RailsAiContext
     WATCHED_FILES = %w[
       Gemfile
       Gemfile.lock
+      gems.rb
+      gems.locked
       package.json
       tsconfig.json
     ].freeze

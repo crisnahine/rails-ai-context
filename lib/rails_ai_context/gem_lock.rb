@@ -22,7 +22,7 @@ module RailsAiContext
     TOOL_VERSIONS_RUBY = /^ruby[ \t]+(\S+)/
     # Bundler's order: what the lockfile resolved, what the Gemfile asked for, then the
     # version-manager files the shell picks when neither says.
-    RUBY_SOURCES = [ "Gemfile.lock", "Gemfile", ".ruby-version", ".tool-versions" ].freeze
+    VERSION_FILES = [ ".ruby-version", ".tool-versions" ].freeze
 
     class Spec
       # `remote:` of each PATH section, as the lockfile writes it.
@@ -91,11 +91,21 @@ module RailsAiContext
 
     module_function
 
+    # Bundler looks for gems.rb before Gemfile.
+    def gemfile_name(root)
+      File.file?(File.join(root.to_s, "gems.rb")) ? "gems.rb" : "Gemfile"
+    end
+
+    # gems.rb locks to gems.locked, Gemfile to Gemfile.lock.
+    def lockfile_name(root)
+      gemfile_name(root) == "gems.rb" ? "gems.locked" : "Gemfile.lock"
+    end
+
     def for(root)
       root = root.to_s
-      path = File.join(root, "Gemfile.lock")
-      gemfile = File.join(root, "Gemfile")
-      stamp = RUBY_SOURCES.map { |name| mtime(File.join(root, name)) }
+      path = File.join(root, lockfile_name(root))
+      gemfile = File.join(root, gemfile_name(root))
+      stamp = [ path, gemfile, *VERSION_FILES.map { |name| File.join(root, name) } ].map { |file| mtime(file) }
 
       MUTEX.synchronize do
         cached = CACHE[path]
@@ -108,7 +118,7 @@ module RailsAiContext
           parse(path, gemfile, root)
         else
           Spec.new({}, ruby_versions: declared_ruby_versions(nil, root),
-                       reason: "No Gemfile.lock found", absent: true)
+                       reason: "No #{File.basename(path)} found", absent: true)
         end
         CACHE[path] = { stamp: stamp, spec: spec }
         spec
@@ -124,7 +134,7 @@ module RailsAiContext
 
     def parse(path, gemfile, root)
       content = SafeFile.read(path, max_size: MAX_SIZE)
-      return Spec.new({}, reason: "Gemfile.lock could not be read") unless content
+      return Spec.new({}, reason: "#{File.basename(path)} could not be read") unless content
 
       versions = {}
       direct = Set.new
@@ -158,7 +168,7 @@ module RailsAiContext
       # An empty Gemfile still locks to a file with a specs: section, so no
       # gems is an answer there. A file without one is not a lockfile at all,
       # and answering it as an app with no gems denies every gem it holds.
-      return Spec.new({}, reason: "Gemfile.lock has no specs section") unless specs_section
+      return Spec.new({}, reason: "#{File.basename(path)} has no specs section") unless specs_section
 
       Spec.new(versions, ruby_versions: declared_ruby_versions(ruby_version, root), direct: direct, path_remotes: path_remotes)
     end
@@ -178,8 +188,8 @@ module RailsAiContext
 
     def declared_ruby_versions(locked, root)
       {
-        "Gemfile.lock" => locked,
-        "Gemfile" => gemfile_ruby_version(File.join(root, "Gemfile")),
+        lockfile_name(root) => locked,
+        gemfile_name(root) => gemfile_ruby_version(File.join(root, gemfile_name(root))),
         ".ruby-version" => ruby_version_file(File.join(root, ".ruby-version")),
         ".tool-versions" => tool_versions_ruby(File.join(root, ".tool-versions"))
       }.compact
