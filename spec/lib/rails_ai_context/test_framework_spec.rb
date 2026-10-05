@@ -137,6 +137,25 @@ RSpec.describe RailsAiContext::TestFramework do
       expect(style[:test_case]).to be(true)
     end
 
+    it "reads a compact test class's bare superclass from the top level, and a nested one's from its module" do
+      bases = {
+        "test/base_test_case.rb" => "class BaseTestCase < ActionController::TestCase\nend\n",
+        "test/admin/base_test_case.rb" => "module Admin\n  class BaseTestCase < ActionDispatch::IntegrationTest\n  end\nend\n"
+      }
+      compact = tests(bases.merge(
+        "test/controllers/admin/users_controller_test.rb" => "class Admin::UsersControllerTest < BaseTestCase\nend\n",
+        "test/controllers/admin/posts_controller_test.rb" => "class Admin::PostsControllerTest < BaseTestCase\nend\n"
+      ))
+      expect(compact[:test_case]).to be(true)
+
+      FileUtils.rm_rf(File.join(@root, "test"))
+      nested = tests(bases.merge(
+        "test/controllers/admin/users_controller_test.rb" => "module Admin\n  class UsersControllerTest < BaseTestCase\n  end\nend\n",
+        "test/controllers/admin/posts_controller_test.rb" => "module Admin\n  class PostsControllerTest < BaseTestCase\n  end\nend\n"
+      ))
+      expect(nested[:test_case]).to be(false)
+    end
+
     it "counts FactoryBot.create as building with factories" do
       style = tests(
         "test/controllers/users_controller_test.rb" =>

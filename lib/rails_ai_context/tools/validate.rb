@@ -157,7 +157,7 @@ module RailsAiContext
       end
 
       private_class_method def self.validate_ruby_prism(full_path)
-        result = AstCache.parse(full_path.to_s)
+        result = AstCache.parse(full_path.to_s, ruby: app_ruby_version)
         basename = File.basename(full_path.to_s)
         warnings = result.warnings.map do |w|
           "#{basename}:#{w.location.start_line}:#{w.location.start_column}: warning: #{w.message}"
@@ -173,6 +173,11 @@ module RailsAiContext
         end
       rescue => _e
         validate_ruby_subprocess(full_path)
+      end
+
+      # Booted, the interpreter running this is the app's own; statically the app's declared Ruby, else this one.
+      private_class_method def self.app_ruby_version
+        (GemLock.for(rails_app.root.to_s).ruby_version if RailsAiContext.static_tier?) || RUBY_VERSION
       end
 
       private_class_method def self.validate_ruby_subprocess(full_path)
@@ -200,7 +205,7 @@ module RailsAiContext
         erb_src.force_encoding("UTF-8")
         compiled = "# encoding: utf-8\ndef __erb_syntax_check\n#{erb_src}\nend"
 
-        result = AstCache.parse_string(compiled)
+        result = AstCache.parse_string(compiled, ruby: app_ruby_version)
         if result.success?
           [ true, nil, [] ]
         else

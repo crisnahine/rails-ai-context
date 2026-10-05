@@ -19,7 +19,10 @@ module RailsAiContext
     # the namespace when the source does not, which is what
     # `application_cable/channel.rb` needs.
     module DeclaredConstant
-      Declaration = Data.define(:name, :superclass)
+      # `nesting` is Module.nesting where the superclass is read, innermost
+      # first: `class Api::UsersController < BaseController` reads it at the
+      # top level, and `< ::BaseController` reads it from the root anywhere.
+      Declaration = Data.define(:name, :superclass, :nesting)
 
       DECLARATIONS = ObjectSpace::WeakMap.new
       MODULE_NAMES = ObjectSpace::WeakMap.new
@@ -144,8 +147,11 @@ module RailsAiContext
 
         # Keyed by the cached tree, so the entry lives as long as the parse:
         # one run asks the same file three or four times.
-        (DECLARATIONS[root] ||= constants(root).filter_map do |name, node|
-          Declaration.new(name: name, superclass: superclass_name(node.superclass)) if node.is_a?(Prism::ClassNode)
+        (DECLARATIONS[root] ||= constants(root).filter_map do |name, node, nesting|
+          next unless node.is_a?(Prism::ClassNode)
+
+          rooted = node.superclass&.slice&.start_with?("::")
+          Declaration.new(name: name, superclass: superclass_name(node.superclass), nesting: rooted ? [] : nesting.drop(1))
         end.freeze).dup
       rescue StandardError, ScriptError => e
         RailsAiContext.debug_fail(e, [], label: "DeclaredConstant")

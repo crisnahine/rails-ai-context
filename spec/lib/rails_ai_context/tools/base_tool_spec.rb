@@ -200,6 +200,31 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
       expect(described_class.extract_method_source_from_string(source, "save!")[:start_line]).to eq(10)
     end
 
+    it "answers the file's own class before a nested class that defines the name first" do
+      source = <<~RB
+        class Order
+          class Line
+            def normalize
+              :line
+            end
+          end
+
+          def normalize
+            :order
+          end
+
+          module ClassMethods
+            def build
+              new
+            end
+          end
+        end
+      RB
+
+      expect(described_class.extract_method_source_from_string(source, "normalize")[:start_line]).to eq(8)
+      expect(described_class.extract_method_source_from_string(source, "build")[:start_line]).to eq(13)
+    end
+
     it "does not answer a ?, ! or = method for the plain name declared after it" do
       source = <<~RB
         class Post
@@ -222,6 +247,27 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
       RB
 
       expect(described_class.extract_method_source_from_string(source, "touch")[:start_line]).to eq(14)
+    end
+
+    it "cuts a one-line or endless method at its own line" do
+      source = <<~RB
+        class User < ApplicationRecord
+          before_validation :strip_name
+          around_save :wrap_save
+          private
+          def strip_name; end
+          def wrap_save = yield
+          def self.build = new
+          def other; end
+        end
+      RB
+
+      expect(described_class.extract_method_source_from_string(source, "strip_name"))
+        .to eq(code: "  def strip_name; end", start_line: 5, end_line: 5)
+      expect(described_class.extract_method_source_from_string(source, "wrap_save"))
+        .to eq(code: "  def wrap_save = yield", start_line: 6, end_line: 6)
+      expect(described_class.extract_method_source_from_string(source, "self.build"))
+        .to eq(code: "  def self.build = new", start_line: 7, end_line: 7)
     end
   end
 

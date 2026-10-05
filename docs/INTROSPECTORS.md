@@ -128,7 +128,7 @@ end
 | Introspector | Key | What it extracts |
 |:-------------|:----|:-----------------|
 | JobIntrospector | `:jobs` | Background jobs and Sidekiq workers, read from `app/jobs`, `app/workers` and `app/sidekiq`, and mailers (anywhere under `app/`, by parent chain): queue, retries, `sidekiq_options`, any `sidekiq_throttle`, schedules, and the `file:` each one is defined in |
-| RakeTaskIntrospector | `:rake_tasks` | Custom rake tasks |
+| RakeTaskIntrospector | `:rake_tasks` | Custom rake tasks from the Rakefile, lib/tasks and rakelib |
 
 ### Security & Auth
 
@@ -197,7 +197,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 | GenericMacroListener | Any receiver-less macro you name: `GenericMacroListener.new(:devise, :rate_limit)`. Returns args, values (with a source-slice fallback), options, option values and option nodes, plus the nesting: `parent_offset` is the offset of the target macro call whose block this one sits in, paired against each call's own `offset` rather than its line |
 | ChainedCallListener | Calls on a receiver: `ChainedCallListener.new(:includes)`, or `receiver: :inflect` to pin the receiver. Reports the receiver name |
 | ConfigAssignmentListener | `config.key = value` and `config.a.b = value` in initializers and `config/environments/*.rb`, plus bare `config.jwt do ... end` section references. Takes a root name (`:config` by default, e.g. `:DatabaseCleaner`) |
-| ClassDefinitionListener | Class definitions with their superclass, namespaces resolved |
+| ClassDefinitionListener | Class definitions with their superclass and the nesting a bare superclass is read in |
 | ComponentStructureListener | ViewComponent and Phlex structure: `renders_one`/`renders_many`, slot methods, hash/array constant tables, `case @ivar` variant branching, `CONST[@ivar]` indexing |
 | MiddlewareConfigListener | The app's own stack, reached through its config (`config.middleware`, `Rails.configuration.middleware`, `app.config.middleware`), through the app (`Rails.application.middleware`, `app.middleware`) or through the app's own application class (`MyApp::Application.config.middleware`, given as `app_class:`), never another rack stack: any other constant anywhere in the chain (`MyEngine.config.middleware`, `GoodJob::Engine.middleware`) is an engine's. Reads `use`, `insert`, `insert_before`, `insert_after`, `unshift`, `swap`, `move_before`, `move_after`, `delete`, and `config.exceptions_app =` as its own `exceptions_app` action |
 | RouteFilesListener | The route files `config/application.rb` puts in `config.paths["config/routes.rb"]`: an assignment (a list, `.map`ped or not), `<<`/`push`/`concat`, `unshift`/`prepend`, `Rails.root.join` and literal `Dir[...]` globs, each as `set`/`append`/`prepend`. A list the app computes is recorded as `computed` |
@@ -209,7 +209,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 | RoutesDslListener | `config/routes.rb`, resolving namespace/scope/resources nesting into flat routes (a `controller:` with a leading slash is absolute, as in Rails); routing concerns (`concern` definitions replayed at each `concerns:` site), `with_options` defaults merged under each inner call, `match ... via:` (or the `via:` of an enclosing `scope`) as one route answering each verb it names (`GET|POST`, and `ANY` for `via: :all`, as the booted table has it), the controller a `scope(controller:)` or a route's own `controller:` names (with Rails' `a/b` shorthand when no action is given), and the `as:`, `param:`, `module:`, `path:` and `only:`/`except:` options. A block drawn through an app class (`ApiRouteSet::V1.draw(self) do`) takes the path and `as:` prefixes that class's `self.prefix` and `mapper_prefix` return as literals, or a literal prefix argument; a class whose prefix is not a literal, and that class's own `resources`, are counted as unexpanded. Routes drawn into an engine's table (`Spree::Core::Engine.routes.draw`) sit under the engine's namespace and carry `engine:`, which the route introspector files under that engine's mount, apart from the app's count. A file pulled in by `draw` is walked inside the scope its `draw` sits in, once per scope that draws it, so `draw :api` under `namespace :api` and `scope module: :v1` routes to `api/v1/...` at `/api/...` |
 | MountListener | `mount Sidekiq::Web, at: "/sidekiq"`, the hash form, and a Rack app attached with `match "/metrics", to: MetricsApp` - `mount` is that call with a name derived. Paths carry the enclosing `namespace`/`scope` prefix; a scope whose own name is an expression yields no path rather than an unprefixed one, and `scope path: nil` adds no segment. A mounted app built by a call on a constant (`Flipper::UI.app(Flipper)`) is named by that call, arguments off |
 | GemfileDslListener | `gem "name", "version"` and `group :development do ... end` |
-| RakeTaskDslListener | `namespace`, `desc`, `task` in `.rake` files |
+| RakeTaskDslListener | `namespace` (with the span its block covers), `desc`, `task`, `multitask` in `.rake` files |
 | EnvAccessListener | `ENV["KEY"]`, `ENV.fetch("KEY")`, `ENV.fetch("KEY", default)` |
 | MailboxRoutingListener | Action Mailbox `routing` and processing callbacks |
 | ModelReferenceListener | Model constants used in controllers: `Post.find`, `params.require(:post)`, ivar writes |

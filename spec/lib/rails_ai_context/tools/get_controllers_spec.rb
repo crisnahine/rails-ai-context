@@ -525,6 +525,20 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(single).to include("**Parent:** `Settings::BaseController`")
     end
 
+    it "heads a compact controller with the top-level parent its nesting reads" do
+      stub_controllers({
+        "BaseController" => { actions: [], filters: [], strong_params: [], parent_class: "ApplicationController" },
+        "Api::BaseController" => { actions: [], filters: [], strong_params: [], parent_class: "ApplicationController" },
+        "Api::UsersController" => {
+          actions: %w[index], filters: [], strong_params: [], parent_class: "BaseController", parent_nesting: []
+        }
+      })
+
+      single = described_class.call(controller: "Api::UsersController").content.first[:text]
+
+      expect(single).to include("**Parent:** `BaseController`")
+    end
+
     # Nothing in the payload can qualify a framework or gem base, and
     # inventing a namespace for it would be a guess.
     it "keeps the raw spelling of a parent no entry resolves" do

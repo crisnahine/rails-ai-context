@@ -765,11 +765,11 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
           end
         end
       RUBY
-      parent = introspector.send(:parent_class_of, source, "Api::V1::WidgetsController")
-      expect(parent).to eq("Api::V1::BaseController")
+      parent = introspector.send(:parent_declaration, source, "Api::V1::WidgetsController")
+      expect(parent.superclass).to eq("Api::V1::BaseController")
     end
 
-    it "returns Unknown for a class with no superclass" do
+    it "finds no declaration for a class with no superclass" do
       source = <<~RUBY
         class OrphanController
           def index
@@ -777,8 +777,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
           end
         end
       RUBY
-      parent = introspector.send(:parent_class_of, source, "OrphanController")
-      expect(parent).to eq("Unknown")
+      expect(introspector.send(:parent_declaration, source, "OrphanController")).to be_nil
     end
 
     it "answers with the superclass of the class the file is named for" do
@@ -789,7 +788,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
         class WidgetsController < ApplicationController
         end
       RUBY
-      expect(introspector.send(:parent_class_of, source, "WidgetsController")).to eq("ApplicationController")
+      expect(introspector.send(:parent_declaration, source, "WidgetsController").superclass).to eq("ApplicationController")
     end
 
     it "falls back to another class in the file when its own names no superclass" do
@@ -800,7 +799,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
         class LegacyWidgetsController < ApplicationController
         end
       RUBY
-      expect(introspector.send(:parent_class_of, source, "WidgetsController")).to eq("ApplicationController")
+      expect(introspector.send(:parent_declaration, source, "WidgetsController").superclass).to eq("ApplicationController")
     end
   end
 

@@ -37,6 +37,8 @@ module RailsAiContext
       # shift-assign, which does assign.
       ASSIGNMENT = /(?<![=!<>~])=(?![=~])|(?<![<>])(?:<<|>>)=/
 
+      WALKED_METHODS = ObjectSpace::WeakMap.new
+
       module_function
 
       def framework?(klass, kind:)
@@ -130,7 +132,7 @@ module RailsAiContext
       # inside `class_methods do` or `class << self`.
       def class_methods_from_source(source, owner: nil)
         own_methods_in(source, owner)
-          .select { |m| m[:scope] == :class && (m[:visibility] == :public || m[:signature].to_s.start_with?("self.")) }
+          .select { |m| m[:scope] == :class && m[:visibility] == :public }
           .map { |m| signature(m) }.uniq
       end
 
@@ -242,8 +244,13 @@ module RailsAiContext
         action_source.to_s.scan(/render\s+(?:json|xml):\s*@(\w+)/).flatten.uniq
       end
 
+      # Keyed by the cached tree, so a tool asking one file for each of its
+      # callbacks walks it once.
       def methods_in(source)
-        SourceIntrospector.walk_source(source, { methods: Listeners::MethodsListener })[:methods] || []
+        result = AstCache.parse_string(source.to_s)
+        (WALKED_METHODS[result.value] ||= Array(
+          SourceIntrospector.walk_dispatch(result, { methods: Listeners::MethodsListener })[:methods]
+        ).each(&:freeze).freeze).dup
       end
 
       def own_methods_in(source, owner)
@@ -324,24 +331,22 @@ module RailsAiContext
         found.uniq.sort
       end
 
-      # Ruby resolves a bare superclass from the enclosing namespace outward,
-      # so `module Settings; class ProfileController < BaseController` keys the
-      # listing under Settings::BaseController even when a top-level
-      # BaseController exists too. A qualified name the listing holds is taken as written, one
-      # it lacks resolves outward too, and a rooted or unresolved name comes back as written.
+      # Ruby resolves a bare superclass through the nesting the class is
+      # written in, so `module Settings; class ProfileController < BaseController`
+      # keys the listing under Settings::BaseController even when a top-level
+      # BaseController exists too, and `class Settings::ProfileController <
+      # BaseController` keys it under BaseController. The entry's
+      # `parent_nesting` carries a nesting its name does not imply. A
+      # qualified name the listing holds is taken as written, one it lacks
+      # resolves outward too, and a rooted or unresolved name comes back as written.
       def resolve_entry_name(entries, name, within)
         rooted = name.to_s.start_with?("::")
         name = name&.to_s&.delete_prefix("::")
         return name if name.nil? || within.nil? || rooted || (name.include?("::") && entries.key?(name))
 
-        scope = within.to_s.split("::")[0..-2]
-        while scope.any?
-          qualified = (scope + [ name ]).join("::")
-          return qualified if entries.key?(qualified)
-
-          scope.pop
-        end
-        name
+        info = entries[within]
+        nesting = info[:parent_nesting] if info.is_a?(Hash)
+        SuperclassChain.resolve_in_scope(within, name, nesting: nesting) { |qualified| qualified if entries.key?(qualified) } || name
       end
 
       # `action_methods` subtracts inherited methods only as far as the

@@ -987,6 +987,91 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
     end
   end
 
+  # Ruby runs a mixin hook on the module itself; no includer gains it.
+  it "lists the class methods an includer gains, and not the module's own mixin hooks" do
+    File.write(File.join(model_concerns_dir, "trackable.rb"), <<~RUBY)
+      module Trackable
+        def self.included(base)
+          base.extend(ClassMethods)
+        end
+
+        def self.extended(base); end
+
+        module ClassMethods
+          def tracked_since(date) = where("created_at > ?", date)
+        end
+
+        def track!; end
+      end
+    RUBY
+    allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(tmpdir))
+    described_class.reset_cache!
+
+    text = described_class.call(name: "Trackable").content.first[:text]
+    class_methods = text[/## Class Methods\n(?:- .*\n?)*/]
+
+    expect(class_methods).to eq("## Class Methods\n- `tracked_since(date)`\n")
+  end
+
+  # Only class_methods and ClassMethods reach an includer; `def self.x` stays on the module.
+  it "lists the module's own singleton methods apart from the class methods an includer gains" do
+    File.write(File.join(model_concerns_dir, "sluggable.rb"), <<~RUBY)
+      module Sluggable
+        extend ActiveSupport::Concern
+
+        def self.normalize(text) = text.parameterize
+
+        class << self
+          def separator = "-"
+        end
+
+        class_methods do
+          def find_by_slug(slug) = find_by(slug: slug)
+        end
+
+        def self.included(base)
+          super
+        end
+      end
+    RUBY
+    allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(tmpdir))
+    described_class.reset_cache!
+
+    text = described_class.call(name: "Sluggable").content.first[:text]
+
+    expect(text[/## Class Methods\n(?:- .*\n?)*/]).to eq("## Class Methods\n- `find_by_slug(slug)`\n")
+    expect(text[/## Module Methods\n(?:- .*\n?)*/]).to eq("## Module Methods\n- `normalize(text)`\n- `separator`\n")
+  end
+
+  # ActiveSupport::Concern supports prepend, with its own prepended block.
+  describe "a concern a model prepends" do
+    before do
+      File.write(File.join(model_concerns_dir, "archivable.rb"), <<~RUBY)
+        module Archivable
+          extend ActiveSupport::Concern
+
+          prepended do
+            scope :archived, -> { where(archived: true) }
+          end
+
+          def archive!; end
+        end
+      RUBY
+      File.write(File.join(models_dir, "part.rb"), "class Part < ApplicationRecord\n  prepend Archivable\nend\n")
+      File.write(File.join(models_dir, "badge.rb"), "class Badge < ApplicationRecord\n  extend Archivable\nend\n")
+      allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(tmpdir))
+      described_class.reset_cache!
+    end
+
+    it "names the model under Included By, and not one that extends the concern" do
+      text = described_class.call(name: "Archivable").content.first[:text]
+
+      expect(text).to include("## Included By (1)")
+      expect(text).to include("- Part")
+      expect(text).not_to include("- Badge")
+    end
+  end
+
   describe "a concern whose namespace the path does not camelize to" do
     before do
       FileUtils.mkdir_p(File.join(model_concerns_dir, "sdg"))

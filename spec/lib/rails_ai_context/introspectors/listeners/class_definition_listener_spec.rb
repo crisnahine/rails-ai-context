@@ -65,4 +65,23 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ClassDefinitionListener
 
     expect(results.map { |c| c[:name] }).to eq([ "Post" ])
   end
+
+  it "records the nesting a bare superclass is read in" do
+    results = classes(<<~RUBY)
+      class Admin::Compact < Base; end
+      module Admin
+        class Nested < Base; end
+        module Reports
+          class Deep < Base; end
+          class Rooted < ::Base; end
+        end
+        class ::Top < Base; end
+      end
+    RUBY
+
+    expect(results.to_h { |r| [ r[:name], r[:nesting] ] }).to eq(
+      "Admin::Compact" => [], "Nested" => %w[Admin], "Deep" => %w[Admin::Reports Admin],
+      "Rooted" => [], "Top" => %w[Admin]
+    )
+  end
 end

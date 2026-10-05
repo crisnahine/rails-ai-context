@@ -348,7 +348,7 @@ module RailsAiContext
 
       # One class file. `declares` carries every constant in it, so a subclass
       # elsewhere can find its base here.
-      Candidate = Data.define(:file, :source, :declared, :declares, :superclass, :ast)
+      Candidate = Data.define(:file, :source, :declared, :declares, :superclass, :nesting, :ast)
 
       # Every class in every job directory, one walk each. The kind of job waits for the
       # whole map: the mixin or ActiveJob ancestry is often on a base in another file.
@@ -367,6 +367,7 @@ module RailsAiContext
               declared: declaration.name,
               declares: declarations.map(&:name),
               superclass: declaration.superclass,
+              nesting: declaration.nesting,
               ast: SourceIntrospector.walk_source(record.source, QUEUE_AS_LISTENERS.merge(
                 methods: Listeners::MethodsListener,
                 calls:   SourceCalls.listener
@@ -397,7 +398,7 @@ module RailsAiContext
       def superclass_of(name)
         candidate = job_candidates[name] or return nil
 
-        SuperclassChain.resolve_in_scope(candidate.declared, candidate.superclass) do |qualified|
+        SuperclassChain.resolve_in_scope(candidate.declared, candidate.superclass, nesting: candidate.nesting) do |qualified|
           candidate_names[qualified]
         end
       end
@@ -638,7 +639,7 @@ module RailsAiContext
                        mailers_outside_mailer_dirs(scanned.map(&:file))
           # A mixin under app/mailers holds a mailer's actions (an Emails::* module); a class
           # is a mailer only when its chain reaches one.
-          parent_of = candidates.reject(&:mixin).to_h { |klass| [ klass.name, klass.parent_class ] }
+          parent_of = candidates.reject(&:mixin).to_h { |klass| [ klass.name, [ klass.parent_class, klass.nesting ] ] }
           klasses = candidates.select { |klass| klass.mixin || reaches_mailer?(klass.name, parent_of) }
           bases = abstract_mailer_bases(klasses.reject(&:mixin))
           mailers = klasses.reject { |klass| bases.include?(klass.name) }
@@ -659,13 +660,14 @@ module RailsAiContext
       end
 
       # ActionMailer::Base, or a gem parent the app does not define whose name ends in
-      # Mailer. An app parent is followed through its autoload roots, cached in `parent_of`.
+      # Mailer. An app parent is followed through its autoload roots, cached in `parent_of`
+      # as [parent, the nesting it is read in].
       def reaches_mailer?(name, parent_of, seen = [])
-        parent = parent_of[name]
+        parent, nesting = parent_of[name]
         return false if parent.nil? || seen.include?(name) || seen.size >= SuperclassChain::MAX_DEPTH
         return true if parent == MAILER_BASE
 
-        app_parent = SuperclassChain.resolve_in_scope(name, parent) { |candidate| candidate if app_class?(candidate, parent_of) }
+        app_parent = SuperclassChain.resolve_in_scope(name, parent, nesting: nesting) { |candidate| candidate if app_class?(candidate, parent_of) }
         return reaches_mailer?(app_parent, parent_of, seen + [ name ]) if app_parent
 
         parent.split("::").last.end_with?("Mailer")
@@ -680,7 +682,7 @@ module RailsAiContext
         declaration = DeclaredConstant.declaration_named(DeclaredConstant.declarations(source), name)
         return false unless declaration
 
-        parent_of[name] = declaration.superclass
+        parent_of[name] = [ declaration.superclass, declaration.nesting ]
         true
       end
 
@@ -726,7 +728,8 @@ module RailsAiContext
       def inherits_from?(name, base, parent_of, seen = [])
         return false if seen.include?(name) || seen.size >= SuperclassChain::MAX_DEPTH
 
-        parent = SuperclassChain.resolve_in_scope(name, parent_of[name]) { |candidate| candidate if parent_of.key?(candidate) }
+        superclass, nesting = parent_of[name]
+        parent = SuperclassChain.resolve_in_scope(name, superclass, nesting: nesting) { |candidate| candidate if parent_of.key?(candidate) }
         return false unless parent
         return true if parent == base
 
@@ -740,7 +743,7 @@ module RailsAiContext
         return [] if named.empty?
 
         inherited = klasses.filter_map do |klass|
-          SuperclassChain.resolve_in_scope(klass.name, klass.parent_class) do |candidate|
+          SuperclassChain.resolve_in_scope(klass.name, klass.parent_class, nesting: klass.nesting) do |candidate|
             candidate if named.include?(candidate)
           end
         end
@@ -758,7 +761,7 @@ module RailsAiContext
           klass = walk_class(record, ACTION_CALLBACKS)
           next [] if klass.nil? || framework_hook?(klass)
 
-          declarations.map { |d| klass.with(name: d.name, parent_class: d.superclass, mixin: false) }
+          declarations.map { |d| klass.with(name: d.name, parent_class: d.superclass, nesting: d.nesting, mixin: false) }
         end
       end
 
@@ -834,7 +837,7 @@ module RailsAiContext
         end
       end
 
-      SourceClass = Data.define(:name, :methods, :file, :macros, :parent_class, :mixin, :source)
+      SourceClass = Data.define(:name, :methods, :file, :macros, :parent_class, :nesting, :mixin, :source)
 
       # The methods are the file's, since a mailer's actions are often on a mixin; a file
       # declaring a mailer and an interceptor is read as one, and the hook drops both.
@@ -846,9 +849,10 @@ module RailsAiContext
         declarations = DeclaredConstant.declarations(record.source)
         name = declarations.map(&:name).find { |n| n.casecmp?(record.path_name) } ||
                DeclaredConstant.resolve(record.source, record.path_name)
+        own = declarations.find { |d| d.name == name }
         SourceClass.new(name: name, methods: walked[:methods] || [], file: record.file,
                         macros: walked[:macros] || [],
-                        parent_class: declarations.find { |d| d.name == name }&.superclass,
+                        parent_class: own&.superclass, nesting: own&.nesting,
                         mixin: declarations.empty?, source: record.source)
       rescue StandardError, ScriptError => e
         RailsAiContext.debug_fail(e, nil, label: "source_classes for #{record.path}")

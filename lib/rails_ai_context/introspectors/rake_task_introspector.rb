@@ -2,73 +2,55 @@
 
 module RailsAiContext
   module Introspectors
-    # Discovers custom rake tasks from lib/tasks/.
+    # Discovers custom rake tasks from the Rakefile, lib/tasks/ and rakelib/.
     class RakeTaskIntrospector < Base
       extend StaticTier
       static_tier :files_only
 
+      # The names Rake looks for, Rakefile first so a case-insensitive disk prints it as written.
+      RAKEFILES = %w[Rakefile rakefile Rakefile.rb rakefile.rb].freeze
+
+      # lib/tasks paths stay relative to lib/tasks; the Rakefile and rakelib are named from the root.
       def call
         tasks_dir = File.join(root, "lib/tasks")
-        return { tasks: [] } unless Dir.exist?(tasks_dir)
+        rakefile = RAKEFILES.map { |name| File.join(root, name) }.find { |path| File.file?(path) }
+        sources = [ ([ rakefile, root ] if rakefile) ]
+        sources += Dir.glob(File.join(tasks_dir, "**/*.rake")).sort.map { |path| [ path, tasks_dir ] }
+        # Rake imports rakelib/*.rake, one level only.
+        sources += Dir.glob(File.join(root, "rakelib", "*.rake")).sort.map { |path| [ path, root ] }
 
-        tasks = Dir.glob(File.join(tasks_dir, "**/*.rake")).sort.flat_map do |path|
-          parse_rake_file(path, tasks_dir)
-        end
-
-        { tasks: tasks }
+        { tasks: sources.compact.flat_map { |path, base| parse_rake_file(path, base) } }
       end
 
       private
 
       def parse_rake_file(path, base_dir)
-        content = RailsAiContext::SafeFile.read(path)
-        return [ { file: path.sub("#{base_dir}/", ""), error: "unreadable" } ] unless content
         relative = path.sub("#{base_dir}/", "")
+        content, located = RailsAiContext::SafePath.read(path.delete_prefix("#{root}/"), under: root)
+        return [] if %i[outside sensitive traversal].include?(located.refusal)
+        return [ { file: relative, error: "unreadable" } ] unless content
 
-        ast_data = SourceIntrospector.walk(path, { rake: -> { Listeners::RakeTaskDslListener.new } })
+        ast_data = SourceIntrospector.walk_source(content, { rake: -> { Listeners::RakeTaskDslListener.new } })
         results = ast_data[:rake]
 
-        # Track namespace and desc ordering to associate descs with tasks
+        # Rake's desc applies to the next task defined, whatever namespace it is in.
         last_desc = nil
-        current_namespace = []
-        namespace_indents = []
+        scopes = []
         tasks = []
+        results.each do |entry|
+          scopes.pop while scopes.any? && entry[:offset] >= scopes.last[:end_offset]
 
-        # RakeTaskDslListener returns tasks, descs and namespaces in source
-        # order but without block scope, so where a `namespace` block closes is
-        # tracked by indentation. Regex over the line, not over Ruby structure.
-        line_events = {}
-        results.each { |r| (line_events[r[:location]] ||= []) << r }
-
-        content.each_line.with_index(1) do |line, line_no|
-          indent = line.match(/^(\s*)/)[1].length
-
-          if line.match?(/^\s*end\b/) && namespace_indents.any? && indent <= namespace_indents.last
-            current_namespace.pop
-            namespace_indents.pop
-          end
-
-          next unless line_events[line_no]
-
-          line_events[line_no].each do |entry|
-            case entry[:type]
-            when :namespace
-              current_namespace.push(entry[:name])
-              namespace_indents.push(indent)
-            when :desc
-              last_desc = entry[:description]
-            when :task
-              name = (current_namespace + [ entry[:name] ]).join(":")
-              task = {
-                name: name,
-                description: last_desc,
-                file: relative
-              }
-              task[:dependencies] = entry[:deps] if entry[:deps]&.any?
-              task[:args] = entry[:args] if entry[:args]&.any?
-              tasks << task.compact
-              last_desc = nil
-            end
+          case entry[:type]
+          when :namespace
+            scopes.push(entry)
+          when :desc
+            last_desc = entry[:description]
+          when :task
+            task = { name: (scopes.map { |ns| ns[:name] } + [ entry[:name] ]).join(":"), description: last_desc, file: relative }
+            task[:dependencies] = entry[:deps] if entry[:deps]&.any?
+            task[:args] = entry[:args] if entry[:args]&.any?
+            tasks << task.compact
+            last_desc = nil
           end
         end
 

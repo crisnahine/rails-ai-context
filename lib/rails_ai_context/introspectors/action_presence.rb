@@ -44,7 +44,7 @@ module RailsAiContext
           parent = declaration.superclass
           break if parent.nil? || BASES.include?(parent)
 
-          found = SuperclassChain.resolve_in_scope(name, parent) { |c| (src = lookup.call(c)) && [ c, src ] }
+          found = SuperclassChain.resolve_in_scope(name, parent, nesting: declaration.nesting) { |c| (src = lookup.call(c)) && [ c, src ] }
           unless found
             unread_parent = parent
             break unread << parent

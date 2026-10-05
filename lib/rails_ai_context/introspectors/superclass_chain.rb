@@ -95,21 +95,23 @@ module RailsAiContext
         name == base || name.end_with?("::#{base}")
       end
 
-      # Ruby resolves a bare superclass from the enclosing namespace outward,
-      # so `Fasp::BackfillWorker < BaseWorker` means Fasp::BaseWorker where
-      # that exists and ::BaseWorker where it does not.
+      # Ruby resolves a bare superclass through Module.nesting where the class
+      # is written, so `module Fasp; class BackfillWorker < BaseWorker` means
+      # Fasp::BaseWorker where that exists and ::BaseWorker where it does not,
+      # while `class Fasp::BackfillWorker < BaseWorker` at the top level means
+      # ::BaseWorker only.
       #
       # @param declared [String] the subclass's fully qualified name
       # @param parent [String, nil] the superclass as the source writes it
+      # @param nesting [Array<String>, nil] the declaration's nesting; nil reads
+      #   it off the declared name, which is right for the nested form only
       # @yieldparam candidate [String] a name to try, nearest scope first
       # @return [Object, nil] the block's first truthy answer
-      def resolve_in_scope(declared, parent)
+      def resolve_in_scope(declared, parent, nesting: nil)
         parent = parent.to_s.delete_prefix("::")
         return nil if parent.empty?
 
-        scope = declared.to_s.split("::")[0..-2]
-        scope.size.downto(0) do |i|
-          candidate = (scope.first(i) + [ parent ]).join("::")
+        ((nesting || nesting_of(declared)).map { |scope| "#{scope}::#{parent}" } + [ parent ]).each do |candidate|
           # `class CostQuery::Export < Export` names the top-level Export; the
           # nearest candidate is the class itself, which is nobody's parent.
           next if candidate == declared.to_s
@@ -118,6 +120,12 @@ module RailsAiContext
           return found if found
         end
         nil
+      end
+
+      # The nesting the nested form gives a class: every enclosing name, innermost first.
+      def nesting_of(declared)
+        scope = declared.to_s.split("::")[0..-2]
+        scope.size.downto(1).map { |i| scope.first(i).join("::") }
       end
 
       # A callable from a constant name to the source of the file declaring

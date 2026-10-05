@@ -166,6 +166,18 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
     end
   end
 
+  describe ".methods_in" do
+    it "walks one source once however often it is asked" do
+      source = "class Once\n  def a; end\n  def b; end\nend\n"
+      allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_dispatch).and_call_original
+
+      2.times { described_class.methods_in(source) }
+
+      expect(RailsAiContext::Introspectors::SourceIntrospector).to have_received(:walk_dispatch).once
+      expect(described_class.methods_in(source).map { |m| m[:name] }).to eq(%w[a b])
+    end
+  end
+
   describe ".public_methods_from_source" do
     let(:source) { "class Widget\n  def full_name(sep = ' ')\n  end\n\n  def self.build(attrs)\n  end\n\n  private\n\n  def secret\n  end\nend\n" }
 
@@ -176,6 +188,18 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
     it "lists private and class methods separately" do
       expect(described_class.private_methods_from_source(source)).to eq(%w[secret])
       expect(described_class.class_methods_from_source(source)).to eq([ "build(attrs)" ])
+    end
+
+    it "leaves a private_class_method out of the class methods and keeps def Widget.x in" do
+      source = <<~RUBY
+        class Widget
+          def Widget.beta_class_via_const; end
+          private_class_method def self.zeta_private_class; end
+          def self.eta_class; end
+          private_class_method :eta_class
+        end
+      RUBY
+      expect(described_class.class_methods_from_source(source)).to eq(%w[beta_class_via_const])
     end
 
     it "reads a module as the owner and keeps a nested class out of it" do

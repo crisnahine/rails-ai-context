@@ -622,6 +622,25 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       } ])
     end
 
+    # `class Admin::X < Parent` reads Parent at the top level, whatever Admin holds.
+    it "follows a compact mailer's bare superclass to the top-level class" do
+      result = static_result do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "mailers", "admin"))
+        File.write(File.join(dir, "app", "mailers", "application_mailer.rb"), "class ApplicationMailer < ActionMailer::Base\nend\n")
+        File.write(File.join(dir, "app", "mailers", "base_mailer.rb"), "class BaseMailer < ApplicationMailer\nend\n")
+        File.write(File.join(dir, "app", "mailers", "notifier.rb"), "class Notifier < ApplicationMailer\nend\n")
+        File.write(File.join(dir, "app", "mailers", "admin", "base_mailer.rb"),
+                   "module Admin\n  class BaseMailer < ApplicationMailer\n    def hi = mail\n  end\nend\n")
+        File.write(File.join(dir, "app", "mailers", "admin", "notifier.rb"), "module Admin\n  class Notifier\n  end\nend\n")
+        File.write(File.join(dir, "app", "mailers", "admin", "report_mailer.rb"), "class Admin::ReportMailer < BaseMailer\n  def report = mail\nend\n")
+        File.write(File.join(dir, "app", "mailers", "admin", "alert.rb"), "class Admin::Alert < Notifier\n  def alert = mail\nend\n")
+      end
+
+      expect(result[:mailer_bases].map { |b| [ b[:name], b[:inherited_by] ] }).to include([ "BaseMailer", %w[Admin::ReportMailer] ])
+      expect(result[:mailer_bases].map { |b| b[:name] }).not_to include("Admin::BaseMailer")
+      expect(result[:mailers].map { |m| m[:name] }).to include("Admin::Alert", "Admin::BaseMailer")
+    end
+
     # A Base nobody inherits from is somebody's only mailer.
     it "keeps a base-named mailer nothing inherits from" do
       result = static_result do |dir|
@@ -1407,6 +1426,18 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
           { name: "ImportJobBase", file: "app/jobs/import_job_base.rb", queue: "imports",
             retries: [ "discard_on ActiveJob::DeserializationError" ], inherited_by: %w[ImportUsersJob] }
         ])
+      end
+
+      it "reads a compact job's bare superclass from the top level" do
+        result = static_result do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "jobs", "admin"))
+          File.write(File.join(dir, "app", "jobs", "base_job.rb"), "class BaseJob < ActiveJob::Base\n  queue_as :web\nend\n")
+          File.write(File.join(dir, "app", "jobs", "admin", "base_job.rb"),
+                     "module Admin\n  class BaseJob < ActiveJob::Base\n    queue_as :admin\n  end\nend\n")
+          File.write(File.join(dir, "app", "jobs", "admin", "sync_job.rb"), "class Admin::SyncJob < BaseJob\n  def perform; end\nend\n")
+        end
+
+        expect(result[:jobs].find { |j| j[:name] == "Admin::SyncJob" }[:queue]).to eq("web")
       end
 
       # Both halves of the base rule matter: a base nobody inherits from is

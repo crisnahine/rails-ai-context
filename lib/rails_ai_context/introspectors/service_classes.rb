@@ -10,20 +10,20 @@ module RailsAiContext
       # The declared constant and its superclass from one parse; the path fills in a
       # namespace the source leaves out.
       #
-      # @return [Array(String, String)] name, superclass
+      # @return [Array(String, String, Array<String>)] name, superclass, the nesting it is read in
       def declaration(source, path_name)
         own = DeclaredConstant.declaration_for(DeclaredConstant.declarations(source), path_name)
-        [ own&.name || DeclaredConstant.resolve(source, path_name), own&.superclass ]
+        [ own&.name || DeclaredConstant.resolve(source, path_name), own&.superclass, own&.nesting ]
       end
 
-      # The bases among the given [name, superclass] pairs: a Base-named class
+      # The bases among the given [name, superclass, nesting] triples: a Base-named class
       # something else in the list inherits from, or one of Rails' own.
-      def abstract_names(pairs)
-        named = pairs.map(&:first).select { |name| SuperclassChain.abstract_base_name?(name) }
+      def abstract_names(declared)
+        named = declared.map(&:first).select { |name| SuperclassChain.abstract_base_name?(name) }
         return [] if named.empty?
 
-        inherited = pairs.filter_map do |name, superclass|
-          SuperclassChain.resolve_in_scope(name, superclass) { |candidate| candidate if named.include?(candidate) }
+        inherited = declared.filter_map do |name, superclass, nesting|
+          SuperclassChain.resolve_in_scope(name, superclass, nesting: nesting) { |candidate| candidate if named.include?(candidate) }
         end
         named.select { |name| SuperclassChain.abstract_base?(name, inherited: inherited.include?(name)) }.uniq.sort
       end
@@ -85,10 +85,10 @@ module RailsAiContext
         SourceScan.each(root, kind: "app/services") do |record|
           next if concern?(record.file, record.source)
 
-          name, superclass = declaration(record.source, record.path_name)
+          name, superclass, nesting = declaration(record.source, record.path_name)
           next if mailer?(record.source, name, superclass, lookup)
 
-          pairs << [ name, superclass ]
+          pairs << [ name, superclass, nesting ]
           modules << name if entryless_module?(record.source, name)
         end
         left_out = abstract_names(pairs) + mixed_in(root, modules)

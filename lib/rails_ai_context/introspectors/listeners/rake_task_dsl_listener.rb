@@ -4,7 +4,8 @@ module RailsAiContext
   module Introspectors
     module Listeners
       # Detects rake task DSL patterns via Prism AST:
-      # namespace :name, desc "...", task :name => [:dep1]
+      # namespace :name, desc "...", task :name => [:dep1], multitask.
+      # Each entry carries its byte offset, and a namespace its end, so a reader can scope tasks.
       class RakeTaskDslListener < BaseListener
         def on_call_node_enter(node)
           return unless node.receiver.nil?
@@ -14,7 +15,7 @@ module RailsAiContext
             extract_namespace(node)
           when :desc
             extract_desc(node)
-          when :task
+          when :task, :multitask
             extract_task(node)
           end
         end
@@ -26,9 +27,11 @@ module RailsAiContext
           return if name == RailsAiContext::Confidence::INFERRED
 
           @results << {
-            type:     :namespace,
-            name:     name.to_s,
-            location: node.location.start_line
+            type:       :namespace,
+            name:       name.to_s,
+            location:   node.location.start_line,
+            offset:     node.location.start_offset,
+            end_offset: node.location.end_offset
           }
         end
 
@@ -40,7 +43,8 @@ module RailsAiContext
           @results << {
             type:        :desc,
             description: text.unescaped,
-            location:    node.location.start_line
+            location:    node.location.start_line,
+            offset:      node.location.start_offset
           }
         end
 
@@ -52,7 +56,7 @@ module RailsAiContext
           task_args = []
 
           case first
-          when Prism::SymbolNode
+          when Prism::SymbolNode, Prism::StringNode
             name = first.unescaped
             deps = extract_task_deps(args)
             # Check for task arguments: task :name, [:arg1, :arg2] => :environment
@@ -73,7 +77,8 @@ module RailsAiContext
             name:     name,
             deps:     deps || [],
             args:     task_args,
-            location: node.location.start_line
+            location: node.location.start_line,
+            offset:   node.location.start_offset
           }
         end
 

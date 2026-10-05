@@ -262,6 +262,8 @@ module RailsAiContext
       # that is not the model file.
       private_class_method def self.source_location(source)
         prefix = source[:from_concern] ? "#{source[:from_concern]} " : ""
+        return "#{prefix}line #{source[:start_line]}" if source[:start_line] == source[:end_line]
+
         "#{prefix}lines #{source[:start_line]}-#{source[:end_line]}"
       end
 

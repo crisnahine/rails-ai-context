@@ -324,3 +324,151 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener do
     ])
   end
 end
+
+RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener, "visibility scopes" do
+  def rows(source)
+    parse_and_dispatch(source).map { |m| [ m[:name], m[:scope], m[:visibility] ] }
+  end
+
+  it "keeps a private inside class << self to the singleton body" do
+    source = <<~RUBY
+      class OrdersController
+        class << self
+          private
+          def internal_helper; end
+        end
+        def index; end
+      end
+    RUBY
+    expect(rows(source)).to eq([ [ "internal_helper", :class, :private ], [ "index", :instance, :public ] ])
+  end
+
+  it "starts a class << self body public after a private section" do
+    source = <<~RUBY
+      class Widget
+        def theta_instance; end
+        private
+        class << self
+          def iota_class_after_private_section; end
+        end
+        def still_private; end
+      end
+    RUBY
+    expect(rows(source)).to eq([
+      [ "theta_instance", :instance, :public ],
+      [ "iota_class_after_private_section", :class, :public ],
+      [ "still_private", :instance, :private ]
+    ])
+  end
+
+  it "keeps a private inside a concerning block to that block" do
+    source = <<~RUBY
+      class WidgetLog
+        concerning :Exporting do
+          def export; end
+          private
+          def export_rows; end
+        end
+        def summary_after_concerning; end
+      end
+    RUBY
+    expect(rows(source)).to eq([
+      [ "export", :instance, :public ], [ "export_rows", :instance, :private ],
+      [ "summary_after_concerning", :instance, :public ]
+    ])
+  end
+
+  it "flips only the singleton method on private :x inside class << self" do
+    source = "class Widget\n  def x; end\n  class << self\n    def x; end\n    private :x\n  end\nend\n"
+    expect(rows(source)).to eq([ [ "x", :instance, :public ], [ "x", :class, :private ] ])
+  end
+
+  it "reads def Const.x as a class method of that constant" do
+    source = "class Widget\n  def Widget.beta_class_via_const; end\nend\n"
+    expect(parse_and_dispatch(source).first).to include(name: "beta_class_via_const", scope: :class,
+                                                        visibility: :public, signature: "self.beta_class_via_const")
+  end
+
+  it "leaves a singleton def on another object out of the class's methods" do
+    expect(rows("class Widget\n  def other.x; end\n  def Other.y; end\nend\n")).to eq([])
+  end
+
+  it "keeps def self.x public after a bare private, as Ruby does" do
+    expect(rows("class Widget\n  private\n  def self.x; end\nend\n")).to eq([ [ "x", :class, :public ] ])
+  end
+
+  it "reads private_class_method, inline and by name, as private class methods" do
+    source = <<~RUBY
+      class Widget
+        private_class_method def self.zeta_private_class; end
+        def self.eta_class; end
+        private_class_method :eta_class
+        def eta_class; end
+      end
+    RUBY
+    expect(rows(source)).to eq([
+      [ "zeta_private_class", :class, :private ], [ "eta_class", :class, :private ], [ "eta_class", :instance, :public ]
+    ])
+  end
+
+  it "reads module_function as a public module method and a private instance method" do
+    source = <<~RUBY
+      module PriceCalc
+        module_function
+        def total(items) = items.sum
+      end
+      module Fmt
+        def money(x) = x
+        module_function :money
+      end
+    RUBY
+    methods = parse_and_dispatch(source)
+    expect(methods.map { |m| [ m[:name], m[:scope], m[:visibility] ] }).to contain_exactly(
+      [ "total", :instance, :private ], [ "total", :class, :public ],
+      [ "money", :instance, :private ], [ "money", :class, :public ]
+    )
+    expect(methods.find { |m| m[:name] == "total" && m[:scope] == :class }[:signature]).to eq("self.total(items)")
+  end
+
+  it "leaves methods in a scope or association extension block out of the model" do
+    source = <<~RUBY
+      class User
+        scope :recent, -> { order(created_at: :desc) } do
+          def first_two = limit(2)
+        end
+        has_many :ext_users, class_name: "User" do
+          def newest; end
+        end
+        has_one :profile do
+          def ignored; end
+        end
+        with_options presence: true do
+          def kept; end
+        end
+      end
+    RUBY
+    expect(rows(source)).to eq([ [ "kept", :instance, :public ] ])
+  end
+
+  it "leaves methods in a Struct.new, Data.define, Class.new or Module.new block out of the class" do
+    source = <<~RUBY
+      class PointHolder < ApplicationRecord
+        Point = Struct.new(:x) do
+          def dist; end
+        end
+        Coord = ::Data.define(:lat) do
+          def to_s = lat.to_s
+        end
+        Anon = Class.new(Base) do
+          def anon_m; end
+        end
+        Mixin = Module.new { def mixed; end }
+        Other = Builder.new do
+          def built; end
+        end
+        def real_m; end
+      end
+    RUBY
+    expect(rows(source)).to eq([ [ "built", :instance, :public ], [ "real_m", :instance, :public ] ])
+  end
+end

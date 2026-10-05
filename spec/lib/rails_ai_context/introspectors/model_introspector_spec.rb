@@ -433,6 +433,22 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
   end
 
   describe "#static_call" do
+    it "reads a compact model's bare superclass from the top level, as Ruby does" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "admin"))
+        File.write(File.join(dir, "app", "models", "base.rb"), "class Base\nend\n")
+        File.write(File.join(dir, "app", "models", "admin", "base.rb"),
+                   "module Admin\n  class Base < ApplicationRecord\n    self.abstract_class = true\n  end\nend\n")
+        File.write(File.join(dir, "app", "models", "admin", "thing.rb"), "class Admin::Thing < Base\nend\n")
+        File.write(File.join(dir, "app", "models", "admin", "widget.rb"), "module Admin\n  class Widget < Base\n  end\nend\n")
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models).not_to have_key("Admin::Thing")
+        expect(models).to have_key("Admin::Widget")
+      end
+    end
+
     # OpenProject mixes Acts::Journalized into ActiveRecord::Base from a
     # plugin's init.rb, and the module lives in the file that init requires.
     # Every model has the module; a model whose concern's `included do` calls

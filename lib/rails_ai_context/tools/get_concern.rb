@@ -192,10 +192,12 @@ module RailsAiContext
 
         public_methods = Introspectors::ActionResolver.public_methods_from_source(source, owner: name)
         class_methods = concern_class_methods(source, name)
+        own_module_methods = module_methods(source, name)
         render_methods(lines, source, detail, "Public Methods", public_methods)
         render_methods(lines, source, detail, "Class Methods", class_methods, self_prefix: true)
+        render_methods(lines, source, detail, "Module Methods", own_module_methods, self_prefix: true)
         # A module of private helpers is not an empty one.
-        if public_methods.empty? && class_methods.empty?
+        if public_methods.empty? && class_methods.empty? && own_module_methods.empty?
           render_methods(lines, source, detail, "Private Methods",
             Introspectors::ActionResolver.private_methods_from_source(source, owner: name))
         end
@@ -267,8 +269,20 @@ module RailsAiContext
 
       # `module ClassMethods` defs count too: ActiveSupport::Concern extends the includer with it.
       private_class_method def self.concern_class_methods(source, name)
-        (Introspectors::ActionResolver.class_methods_from_source(source, owner: name) +
+        gained = own_class_methods(source, name).select { |m| m[:class_methods_block] }
+        (gained.map { |m| Introspectors::ActionResolver.signature(m) } +
           Introspectors::ActionResolver.public_methods_from_source(source, owner: "#{name}::ClassMethods")).uniq
+      end
+
+      # `def self.x` and `class << self` methods live on the module; no includer gains them, nor a mixin hook.
+      private_class_method def self.module_methods(source, name)
+        own_class_methods(source, name)
+          .reject { |m| m[:class_methods_block] || ConcernMembership::MIXIN_HOOKS.include?(m[:name]) }
+          .map { |m| Introspectors::ActionResolver.signature(m) }.uniq
+      end
+
+      private_class_method def self.own_class_methods(source, name)
+        Introspectors::ActionResolver.own_methods_in(source, name).select { |m| m[:scope] == :class && m[:visibility] == :public }
       end
 
       private_class_method def self.methods_phrase(concern)
@@ -299,7 +313,7 @@ module RailsAiContext
           if source
             public_methods = Introspectors::ActionResolver.public_methods_from_source(source, owner: concern_name)
             class_methods = concern_class_methods(source, concern_name)
-            method_count = public_methods.size + class_methods.size
+            method_count = public_methods.size + class_methods.size + module_methods(source, concern_name).size
             private_count = Introspectors::ActionResolver.private_methods_from_source(source, owner: concern_name).size if method_count.zero?
           end
 
@@ -507,7 +521,7 @@ module RailsAiContext
         sources = includer_dirs(root).flat_map { |dir| safe_glob(dir, "**/*.rb", real_root) }.uniq
           .reject { |file_path| file_path.include?("/concerns/") }
           .filter_map { |file_path| (source = RailsAiContext::SafeFile.read(file_path)) && [ file_path, source ] }
-        Introspectors::Includers.of(root, sources, [ concern_name ], macros: %i[include]).values.flatten.uniq.sort
+        Introspectors::Includers.of(root, sources, [ concern_name ], macros: %i[include prepend]).values.flatten.uniq.sort
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "find_includers")
       end

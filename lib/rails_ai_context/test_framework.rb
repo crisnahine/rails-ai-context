@@ -158,7 +158,7 @@ module RailsAiContext
         parent = klass[:superclass] or next
         return parent if bases.include?(parent)
 
-        chain = Introspectors::SuperclassChain.resolve_in_scope(klass[:name], parent) do |candidate|
+        chain = Introspectors::SuperclassChain.resolve_in_scope(klass[:name], parent, nesting: klass[:nesting]) do |candidate|
           source = lookup.call(candidate)
           source && Introspectors::SuperclassChain.to(source, bases: bases, lookup: lookup).presence
         end
@@ -170,13 +170,16 @@ module RailsAiContext
 
     # A test base class lives beside the tests, outside the autoload roots
     # SuperclassChain.lookup_for probes, at the path its name underscores to.
+    # The glob also matches a namesake one directory down (test/admin/base_test.rb
+    # for BaseTest), so the file must declare the name itself.
     def test_class_lookup(root)
       sources = {}
       lambda do |name|
         sources.fetch(name) do
           rel = "#{name.underscore}.rb"
-          path = BASES.flat_map { |base| Dir.glob(File.join(root.to_s, base, "**", rel)) }.min
-          sources[name] = path && SafeFile.read(path)
+          paths = BASES.flat_map { |base| Dir.glob(File.join(root.to_s, base, "**", rel)) }.sort
+          sources[name] = paths.lazy.filter_map { |path| SafeFile.read(path) }
+                               .find { |source| Introspectors::DeclaredConstant.declarations(source).any? { |d| d.name == name } }
         end
       end
     end

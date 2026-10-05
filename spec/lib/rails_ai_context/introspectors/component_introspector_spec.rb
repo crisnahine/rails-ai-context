@@ -177,6 +177,23 @@ RSpec.describe RailsAiContext::Introspectors::ComponentIntrospector do
     end
   end
 
+  describe "a compact component whose bare superclass names a top-level base" do
+    it "names the top-level base, which Ruby resolves, and keeps the namespaced one" do
+      Dir.mktmpdir do |dir|
+        admin = File.join(dir, "app", "components", "admin")
+        FileUtils.mkdir_p(admin)
+        File.write(File.join(dir, "app", "components", "base_component.rb"), "class BaseComponent < ViewComponent::Base\nend\n")
+        File.write(File.join(admin, "base_component.rb"), "module Admin\n  class BaseComponent < ViewComponent::Base\n  end\nend\n")
+        File.write(File.join(admin, "table_component.rb"), "class Admin::TableComponent < BaseComponent\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:bases].map { |c| c[:name] }).to eq([ "BaseComponent" ])
+        expect(result[:components].map { |c| c[:name] }).to eq(%w[Admin::BaseComponent Admin::TableComponent])
+      end
+    end
+  end
+
   describe "an app whose engines hold components" do
     it "reads components from every app tree, typed the same way" do
       Dir.mktmpdir do |dir|

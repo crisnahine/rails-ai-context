@@ -69,4 +69,75 @@ RSpec.describe RailsAiContext::Introspectors::RakeTaskIntrospector do
       end
     end
   end
+
+  # What Rake.application.tasks holds after loading these files.
+  context "with brace namespaces, string names, multitask, a Rakefile and rakelib" do
+    let(:tmpdir) { Dir.mktmpdir }
+    let(:introspector) { described_class.new(double(root: Pathname.new(tmpdir))) }
+
+    before do
+      FileUtils.mkdir_p(File.join(tmpdir, "lib", "tasks"))
+      FileUtils.mkdir_p(File.join(tmpdir, "rakelib", "nested"))
+      File.write(File.join(tmpdir, "lib", "tasks", "leak.rake"), <<~RUBY)
+        namespace :alpha do
+          namespace(:beta) { task :inside }
+          desc "Should be alpha:after"
+          task :after
+        end
+
+        desc "Old hash-rocket"
+        task :legacy_rocket => :environment
+
+        task "string:named" do
+        end
+
+        multitask parallel: %w[alpha:after legacy_rocket]
+        namespace(:one) { task :a }; task :b
+      RUBY
+      File.write(File.join(tmpdir, "Rakefile"), "require_relative \"config/application\"\ntask :from_rakefile\n")
+      File.write(File.join(tmpdir, "rakelib", "extra.rake"), "task :from_rakelib\n")
+      File.write(File.join(tmpdir, "rakelib", "nested", "deep.rake"), "task :not_loaded\n")
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "reads a rake file it cannot parse cleanly without failing the others" do
+      File.binwrite(File.join(tmpdir, "lib", "tasks", "broken.rake"), "namespace :x do\n  task \xFF\xFE (\n".b)
+
+      expect(introspector.call[:tasks].map { |t| t[:name] }).to include("legacy_rocket", "from_rakelib")
+    end
+
+    it "does not follow a Rakefile, rakelib or lib/tasks symlink out of the app root" do
+      outside = Dir.mktmpdir
+      File.write(File.join(outside, "outside.rake"), "task :outside_secret_task\n")
+      File.symlink(File.join(outside, "outside.rake"), File.join(tmpdir, "rakelib", "linked.rake"))
+      File.symlink(File.join(outside, "outside.rake"), File.join(tmpdir, "lib", "tasks", "linked.rake"))
+      File.delete(File.join(tmpdir, "Rakefile"))
+      File.symlink(File.join(outside, "outside.rake"), File.join(tmpdir, "Rakefile"))
+
+      tasks = introspector.call[:tasks]
+
+      expect(tasks.map { |t| t[:name] }).not_to include("outside_secret_task")
+      expect(tasks.map { |t| t[:name] }).to include("from_rakelib", "legacy_rocket")
+    ensure
+      FileUtils.remove_entry(outside)
+    end
+
+    it "parses each rake file from the one read it makes" do
+      expect(RailsAiContext::Introspectors::SourceIntrospector).not_to receive(:walk)
+
+      expect(introspector.call[:tasks].map { |t| t[:name] }).to include("from_rakefile", "from_rakelib")
+    end
+
+    it "names each task as Rake defines it" do
+      tasks = introspector.call[:tasks]
+
+      expect(tasks.map { |t| t[:name] }).to eq(%w[
+        from_rakefile alpha:beta:inside alpha:after legacy_rocket string:named parallel one:a b from_rakelib
+      ])
+      expect(tasks.find { |t| t[:name] == "alpha:after" }[:description]).to eq("Should be alpha:after")
+      expect(tasks.find { |t| t[:name] == "parallel" }[:dependencies]).to eq(%w[alpha:after legacy_rocket])
+      expect(tasks.map { |t| t[:file] }.uniq).to eq(%w[Rakefile leak.rake rakelib/extra.rake])
+    end
+  end
 end

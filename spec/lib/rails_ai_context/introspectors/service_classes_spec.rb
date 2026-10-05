@@ -23,6 +23,24 @@ RSpec.describe RailsAiContext::Introspectors::ServiceClasses do
     end
   end
 
+  # `class Admin::ReportService < BaseService` reads BaseService at the top level.
+  it "takes the top-level base a compact class names as the base, not the namespaced one" do
+    Dir.mktmpdir do |root|
+      FileUtils.mkdir_p(File.join(root, "app", "services", "admin"))
+      File.write(File.join(root, "app", "services", "base_service.rb"), "class BaseService; end\n")
+      File.write(File.join(root, "app", "services", "admin", "base_service.rb"), "module Admin\n  class BaseService; end\nend\n")
+      File.write(File.join(root, "app", "services", "admin", "report_service.rb"), "class Admin::ReportService < BaseService; end\n")
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(root))
+      RailsAiContext::Tools::GetServicePattern.reset_cache!
+
+      listed = RailsAiContext::Tools::GetServicePattern.call(detail: "summary").content.first[:text]
+        .lines.filter_map { |l| l[/\A- (.+)\n/, 1] }
+
+      expect(described_class.names(root)).to eq(%w[Admin::BaseService Admin::ReportService])
+      expect(listed.sort).to eq(%w[Admin::BaseService Admin::ReportService])
+    end
+  end
+
   # `include ServiceHelper` in AssetManager names AssetManager::ServiceHelper;
   # matching the last segment left out Billing::ServiceHelper too, which
   # nothing mixes in.
