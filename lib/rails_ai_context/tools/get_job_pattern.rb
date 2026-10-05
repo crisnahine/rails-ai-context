@@ -60,8 +60,10 @@ module RailsAiContext
         # negative when the :jobs section actually ran - if it's unavailable
         # (static tier), say so instead of claiming "no channels detected".
         async_methods = Array(jobs_data.is_a?(Hash) ? jobs_data[:async_methods] : nil)
+        recurring = detail == "full" ? recurring_lines(schedules) : []
         if jobs.empty? && channels.empty? && workers.empty? && async_methods.empty?
-          return text_response(with_bases_note(no_jobs_or_channels_message(channels_note, queue_line), jobs_data))
+          message = with_bases_note(no_jobs_or_channels_message(channels_note, queue_line), jobs_data)
+          return text_response([ message, *("\n#{recurring.join("\n")}" if recurring.any?) ].join("\n"))
         end
 
         # Compose: jobs section (if any) + workers + channels section (if any).
@@ -82,13 +84,9 @@ module RailsAiContext
           lines << "" if lines.any?
           lines.concat(format_channels_section(channels, jobs_data[:connections]))
         end
-        if detail == "full" && schedules.any?
+        if recurring.any?
           lines << "" if lines.any?
-          lines << "## Recurring Tasks"
-          schedules.each do |task|
-            label = task[:name] ? "`#{task[:name]}`: " : ""
-            lines << "- #{label}`#{task[:class] || task[:command]}` #{schedule_text(task)}"
-          end
+          lines.concat(recurring)
         end
         bases = bases_note("jobs", job_bases(jobs_data).map { |base| base[:name] })
         if bases
@@ -579,6 +577,15 @@ module RailsAiContext
         effects << "notification" if source.match?(/ActiveSupport::Notifications\.instrument/)
 
         effects.to_a.sort
+      end
+
+      private_class_method def self.recurring_lines(schedules)
+        return [] if schedules.empty?
+
+        [ "## Recurring Tasks", *schedules.map { |task|
+          label = task[:name] ? "`#{task[:name]}`: " : ""
+          "- #{label}`#{task[:class] || task[:command]}` #{schedule_text(task)}"
+        } ]
       end
 
       private_class_method def self.schedule_text(task)

@@ -747,6 +747,14 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
                                 "every hour at minute 12 (production, from config/recurring.yml)")
         expect(text).to include("- `nightly_cleanup`: `CleanupJob` every day at 3am (production, from config/recurring.yml)")
       end
+
+      it "lists the recurring tasks of an app with no job classes" do
+        FileUtils.rm_rf(File.join(tmpdir, "app/jobs"))
+        text = text_for(detail: "full")
+        expect(text).to include("No jobs found")
+        expect(text).to include("## Recurring Tasks")
+        expect(text).to include("- `clear_solid_queue_finished_jobs`: ")
+      end
     end
 
     it "reads GoodJob cron from config/application.rb" do
