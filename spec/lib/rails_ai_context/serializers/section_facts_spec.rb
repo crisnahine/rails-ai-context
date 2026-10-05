@@ -29,6 +29,12 @@ RSpec.describe RailsAiContext::Serializers::SectionFacts do
       expect(described_class.auth_line(ctx)).to eq("- Auth: policies in app/policies + Ability class in app/models/ability.rb")
     end
 
+    it "names Rodauth and Action Policy" do
+      ctx = { auth: { authentication: { rodauth: { classes: [ "RodauthMain" ] } }, authorization: { action_policy: [ "PostPolicy" ] } } }
+
+      expect(described_class.auth_line(ctx)).to eq("- Auth: Rodauth + Action Policy")
+    end
+
     it "answers nil for a refused auth section" do
       expect(described_class.auth_line({ auth: { unavailable: "requires a booted Rails app" } })).to be_nil
     end
