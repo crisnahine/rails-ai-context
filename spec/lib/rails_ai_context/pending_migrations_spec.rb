@@ -56,18 +56,48 @@ RSpec.describe RailsAiContext::PendingMigrations do
         .to eq(%w[20240101000000 20240201000000 20240301000000])
     end
 
+    it "names a scoped engine migration without its scope suffix" do
+      File.write(File.join(@migrate, "20240104000000_create_active_storage_tables.active_storage.rb"), "")
+      expect(described_class.migration_files(@migrate).map { |m| m[:name] }).to include("CreateActiveStorageTables")
+    end
+
+    it "counts a migration in a subdirectory, in version order" do
+      FileUtils.mkdir_p(File.join(@migrate, "archive"))
+      File.write(File.join(@migrate, "archive", "20240102000000_create_comments.rb"), "")
+      expect(described_class.migration_files(@migrate).map { |m| m[:version] })
+        .to eq(%w[20240101000000 20240102000000 20240201000000 20240301000000])
+    end
+
     it "carries the path of each file it counted" do
       expect(described_class.migration_files(@migrate).map { |m| File.basename(m[:path]) })
         .to include("20240201000000_add_index.rb")
     end
   end
 
-  describe ".migrate_dir_for" do
+  describe ".migrate_dirs_for" do
     it "maps a named schema dump to its migrate directory" do
-      expect(described_class.migrate_dir_for("/app", "/app/db/queue_schema.rb")).to eq("/app/db/queue_migrate")
-      expect(described_class.migrate_dir_for("/app", "/app/db/schema.rb")).to eq("/app/db/migrate")
-      expect(described_class.migrate_dir_for("/app")).to eq("/app/db/migrate")
-      expect(described_class.migrate_dir_for("/app", "/app/db/schema.sql")).to eq("/app/db/migrate")
+      expect(described_class.migrate_dirs_for("/app", "/app/db/queue_schema.rb")).to eq([ "/app/db/queue_migrate" ])
+      expect(described_class.migrate_dirs_for("/app", "/app/db/schema.rb")).to eq([ "/app/db/migrate" ])
+      expect(described_class.migrate_dirs_for("/app")).to eq([ "/app/db/migrate" ])
+      expect(described_class.migrate_dirs_for("/app", "/app/db/schema.sql")).to eq([ "/app/db/migrate" ])
+    end
+
+    it "takes the migrations_paths database.yml names for the database" do
+      Dir.mktmpdir do |dir|
+        root = File.realpath(dir)
+        FileUtils.mkdir_p(%w[config db/main_migrate db/queue_side].map { |path| File.join(root, path) })
+        File.write(File.join(root, "config/database.yml"), <<~YAML)
+          #{Rails.env}:
+            primary:
+              adapter: sqlite3
+              migrations_paths: db/main_migrate
+            queue:
+              adapter: sqlite3
+              migrations_paths: db/queue_side
+        YAML
+        expect(described_class.migrate_dirs_for(root)).to eq([ File.join(root, "db/main_migrate") ])
+        expect(described_class.migrate_dirs_for(root, File.join(root, "db/queue_schema.rb"))).to eq([ File.join(root, "db/queue_side") ])
+      end
     end
   end
 

@@ -1392,14 +1392,12 @@ module RailsAiContext
         end
 
         def schema_content_columns(table)
-          tables = (cached_context[:schema] || {})[:tables] || {}
-          cols = (tables[table] || tables[table.to_sym] || {})[:columns] || []
+          cols = (RailsAiContext::Payload.schema_table(cached_context[:schema], table) || {})[:columns] || []
           cols.map { |c| c[:name].to_s } - %w[id created_at updated_at]
         end
 
         def schema_column_type(table, column)
-          tables = (cached_context[:schema] || {})[:tables] || {}
-          cols = (tables[table] || tables[table.to_sym] || {})[:columns] || []
+          cols = (RailsAiContext::Payload.schema_table(cached_context[:schema], table) || {})[:columns] || []
           col = cols.find { |c| c[:name].to_s == column }
           (col && col[:type]).to_s
         end
@@ -1408,8 +1406,7 @@ module RailsAiContext
         # own value for one of these raises RecordNotUnique even when the
         # model declares no uniqueness validation.
         def unique_index_columns(table)
-          tables = (cached_context[:schema] || {})[:tables] || {}
-          indexes = (tables[table] || tables[table.to_sym] || {})[:indexes] || []
+          indexes = (RailsAiContext::Payload.schema_table(cached_context[:schema], table) || {})[:indexes] || []
           indexes.select { |i| i[:unique] }.flat_map { |i| Array(i[:columns]).map(&:to_s) }
         end
 

@@ -680,6 +680,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         result = introspector.call
         expect(result[:adapter]).to eq("static_parse")
         expect(result[:note]).to include("migration")
+        expect(result[:note]).to end_with("(no DB connection, db/schema.rb declares no tables)")
       end
 
       it "says nothing about unnamed tables when every create_table named one" do
@@ -900,7 +901,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       it "carries the connection's pending migrations, which name what adds the table" do
         pending = [ { version: "20260921000000", name: "CreateOrderComments" } ]
         allow(RailsAiContext::PendingMigrations).to receive(:live)
-          .with(File.join(fixture_path, "db", "migrate")).and_return(pending)
+          .with([ File.join(fixture_path, "db", "migrate") ]).and_return(pending)
 
         expect(introspector.call[:pending_migrations]).to eq(pending)
       end
@@ -1046,6 +1047,98 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
     end
   end
 
+  describe "an app that does not load Active Record" do
+    it "says so instead of calling the schema files missing" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config/application.rb"), "require \"rails\"\nrequire \"active_model/railtie\"\n# require \"active_record/railtie\"\nrequire \"action_controller/railtie\"\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:unavailable]).to eq("this app does not load Active Record; ActiveRecord schema introspection does not apply")
+      end
+    end
+  end
+
+  describe "a sequel-rails app" do
+    it "says the app uses Sequel instead of replaying its migrations as Active Record" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "db/migrate"))
+        File.write(File.join(dir, "config/application.rb"), "require \"rails\"\n# require \"active_record/railtie\"\nrequire \"sequel_rails\"\nrequire \"action_controller/railtie\"\n")
+        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    sequel-rails (1.2.4)\n\nDEPENDENCIES\n  sequel-rails\n")
+        File.write(File.join(dir, "db/schema.rb"), "Sequel.migration do\n  change do\n    create_table(:artists) do\n      primary_key :id\n    end\n  end\nend\n")
+        File.write(File.join(dir, "db/migrate/20260101000001_create_artists.rb"), "Sequel.migration do\n  change do\n    create_table(:artists) do\n      String :name\n    end\n  end\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result).to eq(unavailable: "this app uses Sequel; ActiveRecord schema introspection does not apply")
+      end
+    end
+  end
+
+  describe "migrations_paths in database.yml" do
+    def write_app(dir, files)
+      files.each do |path, body|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+        File.write(File.join(dir, path), body)
+      end
+    end
+
+    let(:create_posts) do
+      "class CreatePosts < ActiveRecord::Migration[8.1]\n  def change\n    create_table :posts do |t|\n      t.string :title\n    end\n  end\nend\n"
+    end
+
+    it "replays the primary's migrations from the path it names" do
+      Dir.mktmpdir do |dir|
+        write_app(dir, "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  database: db/dev.sqlite3\n  migrations_paths: db/main_migrate\n",
+                       "db/main_migrate/20240101000000_create_posts.rb" => create_posts)
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:tables].keys).to eq([ "posts" ])
+        expect(result[:note]).to include("Reconstructed from 1 migration file")
+      end
+    end
+
+    it "replays a secondary database that has migrations and no dump yet" do
+      Dir.mktmpdir do |dir|
+        write_app(dir, "config/database.yml" => <<~YAML,
+                    #{RailsAiContext.environment_name}:
+                      primary:
+                        adapter: sqlite3
+                        database: db/dev.sqlite3
+                      queue:
+                        adapter: sqlite3
+                        database: db/queue.sqlite3
+                        migrations_paths: db/queue_migrate
+                  YAML
+                       "db/migrate/20240101000000_create_posts.rb" => create_posts,
+                       "db/queue_migrate/20240101000000_create_jobs.rb" => create_posts.sub("CreatePosts", "CreateJobs").sub(":posts", ":jobs"))
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:tables].keys).to eq([ "posts" ])
+        expect(result[:secondary_databases].keys).to eq([ "queue" ])
+        expect(result[:secondary_databases]["queue"][:tables].keys).to eq([ "jobs" ])
+        expect(result[:secondary_databases]["queue"][:note]).to include("db/queue_migrate")
+      end
+    end
+
+    it "reads no migrations_paths outside the app" do
+      Dir.mktmpdir do |outside|
+        write_app(outside, "20240101000000_create_posts.rb" => create_posts)
+        Dir.mktmpdir do |dir|
+          write_app(dir, "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  migrations_paths: #{outside}\n")
+
+          result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+          expect(result).to have_key(:unavailable)
+        end
+      end
+    end
+  end
+
   describe "secondary database dumps" do
     it "reports db/*_schema.rb dumps under secondary_databases" do
       Dir.mktmpdir do |dir|
@@ -1073,6 +1166,26 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(result[:secondary_databases]["queue"][:tables]).to have_key("solid_queue_jobs")
         expect(result[:secondary_databases]["queue"][:note]).to include("queue_schema.rb")
         expect(result[:secondary_databases]["queue"][:schema_version]).to eq("20190920000000")
+      end
+    end
+
+    it "lists the secondary dumps of a new app whose primary has no tables yet" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "queue_schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.0].define(version: 1) do
+            create_table "solid_queue_jobs" do |t|
+              t.string "queue_name", null: false
+            end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result).not_to have_key(:unavailable)
+        expect(result[:total_tables]).to eq(0)
+        expect(result[:secondary_databases].keys).to eq([ "queue" ])
+        expect(result[:secondary_databases]["queue"][:tables]).to have_key("solid_queue_jobs")
       end
     end
 

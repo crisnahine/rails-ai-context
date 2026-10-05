@@ -36,7 +36,7 @@ module RailsAiContext
           generated_columns: SchemaConventions.generated_columns_of(tables),
           extensions: extensions,
           # What names the migration behind a declared table the connection lacks.
-          pending_migrations: RailsAiContext::PendingMigrations.live(RailsAiContext::PendingMigrations.migrate_dir_for(app.root))
+          pending_migrations: RailsAiContext::PendingMigrations.live(RailsAiContext::PendingMigrations.migrate_dirs_for(app.root))
         }.compact)
       end
 
@@ -343,7 +343,7 @@ module RailsAiContext
       end
 
       def migrate_dir_for_dump(path)
-        RailsAiContext::PendingMigrations.migrate_dir_for(app.root, secondary_dump(path))
+        RailsAiContext::PendingMigrations.migrate_dirs_for(app.root, secondary_dump(path))
       end
 
       def relative_dump_path(path)
@@ -378,6 +378,10 @@ module RailsAiContext
 
       # The configured dump first (database.yml's schema_dump, schema_format), then the default files.
       def static_schema_sources
+        if (reason = RailsAiContext::AppKind.without_active_record(app.root))
+          return { unavailable: "#{reason}; ActiveRecord schema introspection does not apply" }
+        end
+
         present = dump_candidates.select { |_, path| File.exist?(path) }
         present.each do |format, path|
           result = format == :ruby ? parse_schema_rb(path) : parse_structure_sql(path)
@@ -403,6 +407,10 @@ module RailsAiContext
           return { unavailable: "this app uses Mongoid; ActiveRecord schema introspection does not apply" }
         end
 
+        if secondary_database_dumps.any?
+          return { total_tables: 0, tables: {}, note: "The primary database has no tables yet: no db/schema.rb, db/structure.sql, or migrations found." }
+        end
+
         # An absent data source, not a failure: :unavailable keeps a fresh
         # greenfield app out of the "introspection failed" warnings banner.
         { unavailable: "No db/schema.rb, db/structure.sql, or migrations found" }
@@ -414,6 +422,10 @@ module RailsAiContext
       # dump keeps the top-level :tables shape; secondaries ride their own
       # key so single-database consumers are unaffected.
       def secondary_database_dumps
+        @secondary_database_dumps ||= read_secondary_database_dumps
+      end
+
+      def read_secondary_database_dumps
         dumps = {}
         primary = dump_candidates.map(&:last)
         Dir.glob(File.join(app.root.to_s, "db", "*_schema.rb")).sort.each do |path|
@@ -435,6 +447,29 @@ module RailsAiContext
 
           parsed[:note] = "Parsed from db/#{File.basename(path)} (from committed dump, not a live connection)"
           dumps[name] = parsed
+        end
+        replay_secondary_migrations(dumps)
+      end
+
+      # A database whose dump is not written yet answers from its own migrations_paths.
+      def replay_secondary_migrations(dumps)
+        config = RailsAiContext::DatabaseYml.env(app.root)
+        return dumps unless config.is_a?(Hash) && config.size > 1 && config.values.all?(Hash)
+
+        primary = config.key?("primary") ? "primary" : config.keys.first
+        config.each do |name, entry|
+          next if name == primary || dumps.key?(name)
+
+          dirs = MigrationReplay.configured_dirs(app.root.to_s, entry) or next
+          pk_type = SchemaConventions.implicit_pk_type(app.root.to_s, "#{name}_schema.rb")
+          tables = MigrationReplay.tables(dirs, pk_type: pk_type, root: app.root.to_s)
+          next if tables.empty?
+
+          tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
+          dumps[name] = {
+            adapter: "static_parse", tables: tables, total_tables: tables.size,
+            note: "Reconstructed from the migrations in #{dirs.map { |dir| relative_dump_path(dir) }.join(', ')} (#{connection_state}, no #{name}_schema.rb)"
+          }
         end
         dumps
       end
@@ -589,8 +624,9 @@ module RailsAiContext
       # count says how many names came from the file instead.
       def replay_note(tables, counts)
         inferred = tables.count { |_, data| data[:inferred_name] }
+        _, dump = SchemaDumpPath.present(app.root.to_s)
         note = "Reconstructed from #{CountPhrase.call(migration_files.size, "migration file")} " \
-               "(#{connection_state}, no schema.rb)"
+               "(#{connection_state}, #{dump ? "#{relative_dump_path(dump)} declares no tables" : "no schema.rb"})"
         note += ", #{CountPhrase.call(inferred, "table name")} read from the file rather than the create_table call" if inferred.positive?
         note += ", #{CountPhrase.call(counts.unnamed, "create_table call")} left unnamed" if counts.unnamed.positive?
         note += ", #{CountPhrase.call(counts.unnamed_columns, "added column")} left unnamed" if counts.unnamed_columns.positive?

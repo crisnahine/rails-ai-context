@@ -12,20 +12,20 @@ module RailsAiContext
   # ActiveRecord version actually exposes instead of guessing from a version
   # number.
   module MigrationStatus
-    # @param migrate_dir [String] path to the migrations directory to check
+    # @param migrate_dir [String, Array<String>] the migrations directories to check
     # @return [Array<Hash>, nil] [{ version:, name: }, ...] in pending order,
     #   or nil when pending status can't be determined (no migrations
     #   directory, ActiveRecord not loaded, or the database is unreachable).
     def self.pending(migrate_dir)
-      return nil unless migrate_dir && Dir.exist?(migrate_dir)
-      return nil unless defined?(ActiveRecord::Base)
+      dirs = Array(migrate_dir).select { |dir| Dir.exist?(dir) }
+      return nil if dirs.empty? || !defined?(ActiveRecord::Base)
 
-      context = migration_context(migrate_dir)
+      context = migration_context(dirs)
       begin
         context.open.pending_migrations.map { |m| { version: m.version.to_s, name: m.name } }
       rescue ActiveRecord::MigrationError
         # A future or duplicate version stops Rails loading the directory; the applied set still answers.
-        PendingMigrations.for(migrate_dir: migrate_dir, applied: context.get_all_versions)
+        PendingMigrations.for(migrate_dir: dirs, applied: context.get_all_versions)
       end
     rescue => e
       RailsAiContext.debug_fail(e, nil, label: "MigrationStatus.pending")

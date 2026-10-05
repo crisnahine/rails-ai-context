@@ -9,6 +9,8 @@ module RailsAiContext
     ERB_SENTINEL = "__rails_ai_context_erb__"
     # `ENV["X"].presence || "mysql2"`: the literal is what runs with the variable unset.
     ERB_DEFAULT = /\|\|\s*(["'])([\w.-]+)\1\s*\z/
+    # ActiveRecord.protocol_adapters' defaults.
+    URL_SCHEME_ADAPTERS = { "postgres" => "postgresql", "mysql" => "mysql2", "sqlite" => "sqlite3" }.freeze
 
     module_function
 
@@ -36,6 +38,25 @@ module RailsAiContext
       return config unless config.values.all? { |value| value.is_a?(Hash) }
 
       config["primary"] || config.values.first
+    end
+
+    # The named database's settings in the running environment, or nil.
+    def entry(root, name)
+      config = env(root)
+      return nil unless config.is_a?(Hash) && config.any?
+      return (config if name == "primary") unless config.values.all? { |value| value.is_a?(Hash) }
+
+      config[name] || (config.values.first if name == "primary")
+    end
+
+    # Rails' DatabaseConfigurations: an entry's own url wins over its keys, and an entry
+    # without one takes <NAME>_DATABASE_URL, or DATABASE_URL for the primary.
+    def url_adapter(name, own_url)
+      url = own_url.nil? ? ENV["#{name.upcase}_DATABASE_URL"] || (ENV["DATABASE_URL"] if name == "primary") : own_url.to_s
+      return nil if url.to_s.empty? || computed?(url)
+
+      scheme = url[/\A([a-z][a-z0-9+.-]*):/i, 1]&.tr("-", "_")
+      scheme && URL_SCHEME_ADAPTERS.fetch(scheme, scheme)
     end
 
     # An output tag becomes an unknown marker, other tags go, and both keep their

@@ -492,7 +492,7 @@ module RailsAiContext
         return nil unless model_data
 
         table_name = model_data[:table_name]
-        table_data = schema[:tables] && schema[:tables][table_name]
+        table_data = RailsAiContext::Payload.schema_table(schema, table_name)
         return nil unless table_data
 
         table_columns = Set.new
@@ -526,7 +526,7 @@ module RailsAiContext
           next unless model_data
 
           table_name = model_data[:table_name]
-          table_data = schema[:tables] && schema[:tables][table_name]
+          table_data = RailsAiContext::Payload.schema_table(schema, table_name)
           next unless table_data
 
           valid = Set.new
@@ -684,7 +684,7 @@ module RailsAiContext
         return warnings unless model_data
 
         table_name = model_data[:table_name]
-        table_data = schema[:tables] && schema[:tables][table_name]
+        table_data = RailsAiContext::Payload.schema_table(schema, table_name)
         # A static table whose block called what no reader interprets has columns and indexes unknown.
         return warnings if table_data.nil? || table_data[:unread_calls]
 

@@ -91,7 +91,7 @@ module RailsAiContext
           }
 
           case node.name
-          when :add_column
+          when :add_column, :remove_column
             result[:column_type] = literal_string(args[2])
           when :rename_column
             result[:new_name] = literal_string(args[2])

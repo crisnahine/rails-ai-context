@@ -415,4 +415,12 @@ RSpec.describe RailsAiContext::VFS do
       described_class.resolve("rails-ai-context://routes/posts")
     end
   end
+
+  it "enriches a model resource with a table from a secondary database" do
+    allow(RailsAiContext).to receive(:introspect).and_return(
+      models: { "PageView" => { table_name: "page_views" } },
+      schema: { tables: {}, secondary_databases: { "analytics" => { tables: { "page_views" => { columns: [ { name: "path", type: "string" } ] } } } } }
+    )
+    expect(described_class.resolve("rails-ai-context://models/PageView").first[:text]).to include("\"path\"")
+  end
 end

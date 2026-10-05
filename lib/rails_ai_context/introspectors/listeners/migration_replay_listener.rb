@@ -3,8 +3,8 @@
 module RailsAiContext
   module Introspectors
     module Listeners
-      # What a replay needs beyond the DSL listeners: down-only ranges (a revert
-      # block is one), a block's `t.` statements, and four top-level statements.
+      # What a replay needs beyond the DSL listeners: down-only and revert ranges,
+      # a block's `t.` statements, and four top-level statements.
       class MigrationReplayListener < BaseListener
         include SchemaDslListener::TableBlock
 
@@ -26,7 +26,10 @@ module RailsAiContext
           note_block(node)
           args = node.arguments&.arguments || []
           if %i[down revert].include?(node.name) && node.block
-            @results << { kind: :down, range: node.location.start_line..node.location.end_line }
+            @results << { kind: node.name, range: node.location.start_line..node.location.end_line }
+          elsif node.name == :revert && node.receiver.nil? && args.any?
+            # `revert SomeMigration` runs another file's statements inverted, which this file does not hold.
+            @results << { kind: :not_replayed, location: node.location.start_line }
           elsif TABLE_OPS[node.name] == :remove_reference && block_column?(node.receiver)
             # Table#remove_references drops each name it is given.
             args.reject { |arg| arg.is_a?(Prism::KeywordHashNode) }.each do |arg|
@@ -38,29 +41,33 @@ module RailsAiContext
             tables = args.reject { |arg| arg.is_a?(Prism::KeywordHashNode) }.first(2).map { |arg| literal_string(arg) }
             @results << { action: :create_join_table, tables: tables, options: extract_keyword_options(node),
                           location: node.location.start_line }
-          elsif %i[remove_columns add_timestamps].include?(node.name) && node.receiver.nil?
+          elsif %i[remove_columns add_timestamps rename_index].include?(node.name) && node.receiver.nil?
             @results << top_level(node, args)
           elsif node.name == :execute && node.receiver.nil?
-            dropped_tables(args.first).each do |table|
-              @results << { action: :drop_table, table: table, options: {}, location: node.location.start_line }
+            sql_statements(args.first).each do |sql|
+              if (match = DROP_TABLE.match(sql))
+                match[1].split(",").each do |name|
+                  @results << { action: :drop_table, table: name.strip.delete('"`').split(".").last, options: {}, location: node.location.start_line }
+                end
+              elsif sql.match?(CREATE_TABLE)
+                @results << { action: :create_table_sql, sql: sql, location: node.location.start_line }
+              end
             end
           end
         end
 
         DROP_TABLE = /\A\s*DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?((?:[\w."`]+\s*,\s*)*[\w."`]+)(?:\s+(?:CASCADE|RESTRICT))?\s*\z/i
+        CREATE_TABLE = /\A\s*CREATE\s+TABLE\s/i
 
         private
 
-        # The tables a literal SQL string drops, one statement at a time; any
-        # other SQL, or a string built at run time, drops nothing here.
-        def dropped_tables(node)
+        # A literal SQL string's statements, which drop or create tables here;
+        # a string built at run time does nothing.
+        def sql_statements(node)
           node = node.receiver if node.is_a?(Prism::CallNode) && node.name == :squish && node.arguments.nil?
           return [] unless node.is_a?(Prism::StringNode)
 
-          node.unescaped.split(";").flat_map do |sql|
-            match = DROP_TABLE.match(sql) or next []
-            match[1].split(",").map { |name| name.strip.delete('"`').split(".").last }
-          end
+          node.unescaped.split(";")
         end
 
         # A statement naming a table it cannot read is counted, never given another table.
@@ -81,6 +88,7 @@ module RailsAiContext
           # remove_index takes one column or an array of them.
           when :remove_index then result[:columns] = literal_strings(positional.first)
           when :rename_column then result.merge!(column: names[0], new_name: names[1])
+          when :rename_index then result.merge!(old_name: names[0], new_name: names[1])
           when :change_column then result.merge!(column: names[0], column_type: names[1])
           when :change_column_null then result.merge!(column: names[0], null: boolean_value(positional[1]))
           when :change_column_default

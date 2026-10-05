@@ -129,11 +129,13 @@ module RailsAiContext
           elsif RailsAiContext::AppKind.mongoid?(rails_app.root)
             database = RailsAiContext::AppKind.mongoid_database(rails_app.root)
             db = "MongoDB through Mongoid#{" (database #{database})" if database}"
+          elsif !RailsAiContext::AppKind.active_record?(rails_app.root)
+            db = nil
           else
-            db = "unknown"
+            db = RailsAiContext::SchemaAdapter.label(ctx)
           end
           rails = named_rails_version(ctx)
-          lines << "#{ctx[:app_name]} is a Rails#{" #{rails}" if rails} application#{ruby_clause(ctx)} on #{db}."
+          lines << "#{ctx[:app_name]} is a Rails#{" #{rails}" if rails} application#{ruby_clause(ctx)} #{db ? "on #{db}" : "without Active Record"}."
 
           notable = Payload.notable_gems(ctx)
           if notable.any?

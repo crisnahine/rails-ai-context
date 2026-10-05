@@ -43,6 +43,9 @@ module RailsAiContext
             key = fuzzy_find_key(models.keys, model) || model
             data = models[key]
             unless data
+              reason = RailsAiContext::AppKind.without_active_record(rails_app.root)
+              return empty_response("#{model} is not an Active Record model: #{reason}.") if reason && models.empty?
+
               return not_found_response("Model", model, models.keys.sort,
                 recovery_tool: "Call rails_get_model_details(detail:\"summary\") to see all models")
             end
@@ -162,9 +165,8 @@ module RailsAiContext
 
         # Schema columns - inline from schema introspection
         if data[:table_name]
-          schema = Payload.section(cached_context, :schema)
-          if schema && schema[:tables]&.key?(data[:table_name])
-            table_data = schema[:tables][data[:table_name]]
+          table_data = Payload.schema_table(Payload.section(cached_context, :schema), data[:table_name])
+          if table_data
             ignored = Array(data[:ignored_columns])
             cols = (table_data[:columns] || []).reject { |c| ignored.include?(c[:name].to_s) }
             if table_data[:primary_key]
@@ -192,7 +194,7 @@ module RailsAiContext
             lines << "" << "## Fields"
             data[:fields].each do |f|
               type_str = f[:type] ? ": #{f[:type]}" : ""
-              lines << "- `#{f[:name]}`#{type_str}"
+              lines << "- `#{f[:name]}`#{type_str}#{", default: #{f[:default]}" if f.key?(:default)}"
             end
           end
 

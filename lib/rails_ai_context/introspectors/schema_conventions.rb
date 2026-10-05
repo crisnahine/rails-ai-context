@@ -180,11 +180,15 @@ module RailsAiContext
         adapter&.start_with?("sqlite") ? "integer" : "bigint"
       end
 
-      # Best-effort adapter lookup from config/database.yml without booting:
-      # a keyed entry for this database name wins; a file with exactly one
+      # Best-effort adapter lookup without booting: a URL Rails would merge in
+      # wins, as DatabaseYml.url_adapter rules; then in database.yml a keyed entry for this database name wins; a file with exactly one
       # distinct adapter is unambiguous; anything else falls back to the
       # first adapter (the primary comes first in generated configs).
       def database_adapter_for(root, db_name)
+        entry = RailsAiContext::DatabaseYml.entry(root, db_name)
+        url_adapter = RailsAiContext::DatabaseYml.url_adapter(db_name, entry.is_a?(Hash) ? entry["url"] : nil)
+        return url_adapter if url_adapter
+
         content = database_yml_content(root)
         return nil if content.empty?
 

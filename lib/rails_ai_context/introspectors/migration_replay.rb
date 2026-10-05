@@ -8,7 +8,7 @@ module RailsAiContext
     module MigrationReplay
       Counts = Struct.new(:unnamed, :unnamed_columns, :helper_calls, :failed_files)
       Result = Struct.new(:tables, :counts)
-      Run = Struct.new(:pk_type, :root, :db_dirs, :read, :helpers, :counts, keyword_init: true)
+      Run = Struct.new(:pk_type, :root, :real_root, :db_dirs, :read, :helpers, :counts, keyword_init: true)
 
       module_function
 
@@ -36,17 +36,41 @@ module RailsAiContext
 
       def new_run(dirs, pk_type:, root: nil)
         root = File.expand_path((root || File.join(dirs.first.to_s, "..", "..")).to_s)
-        Run.new(pk_type: pk_type, root: root, db_dirs: db_dirs(root, dirs), read: [], helpers: Set.new,
+        real_root = begin
+          File.realpath(root)
+        rescue SystemCallError
+          root
+        end
+        Run.new(pk_type: pk_type, root: root, real_root: real_root, db_dirs: db_dirs(root, dirs), read: [], helpers: Set.new,
                 counts: Counts.new(0, 0, 0, 0))
       end
 
-      # db/migrate and db/post_migrate, for the app and each in-repo engine.
+      # database.yml's migrations_paths for the primary, else db/migrate and db/post_migrate
+      # for the app and each in-repo engine.
       def migration_dirs(root)
-        PathResolver.dirs_for(root.to_s, "db/migrate") + PathResolver.dirs_for(root.to_s, "db/post_migrate")
+        configured_dirs(root, RailsAiContext::DatabaseYml.primary(root)) ||
+          PathResolver.dirs_for(root.to_s, "db/migrate") + PathResolver.dirs_for(root.to_s, "db/post_migrate")
       end
 
+      # A database entry's migrations_paths, which replace the default list as
+      # ConnectionPool#migrations_paths does; nil when the entry names none.
+      def configured_dirs(root, config)
+        paths = Array(config.is_a?(Hash) ? config["migrations_paths"] : nil)
+          .select { |path| path.is_a?(String) && !path.empty? && !RailsAiContext::DatabaseYml.computed?(path) }
+        return nil if paths.empty?
+
+        real_root = File.realpath(root.to_s)
+        paths.filter_map do |path|
+          dir = File.expand_path(path, root.to_s)
+          dir if SafePath.contained?(File.realpath(dir), real_root)
+        rescue SystemCallError
+          nil
+        end
+      end
+
+      # Rails' own glob: versioned files at any depth, run in version order.
       def migration_files(dirs)
-        Array(dirs).flat_map { |dir| Dir.glob(File.join(dir, "*.rb")) }
+        Array(dirs).flat_map { |dir| Dir.glob(File.join(dir.to_s, "**", "[0-9]*_*.rb")) }
           .sort_by { |path| [ File.basename(path), path ] }
       end
 
@@ -67,7 +91,7 @@ module RailsAiContext
         rescue SystemCallError
           return
         end
-        return if run.read.include?(real)
+        return if run.read.include?(real) || !SafePath.contained?(real, run.real_root)
 
         run.read << real
         content = RailsAiContext::SafeFile.read(real, max_size: RailsAiContext.configuration.max_schema_file_size)
@@ -166,13 +190,14 @@ module RailsAiContext
         })
 
         # A down body undoes the migration, so replaying it beside up cancels it out.
-        skipped = ast_data[:replay].filter_map { |hit| hit[:range] } + helper_ranges
-        statements = ast_data[:replay].reject { |hit| hit[:kind] == :down }
+        skipped = ast_data[:replay].select { |hit| hit[:kind] == :down }.map { |hit| hit[:range] } + helper_ranges
+        reverts = ast_data[:replay].select { |hit| hit[:kind] == :revert }.map { |hit| hit[:range] }
+        statements = ast_data[:replay].reject { |hit| %i[down revert].include?(hit[:kind]) }
         module_entries = Helpers.module_helper_entries(tree, run.root) + Helpers.app_constant_call_markers(tree, run.root)
         collected = (ast_data[:migration] + ast_data[:schema] + statements + module_entries)
           .reject { |r| skipped.any? { |range| range.cover?(r[:location]) } }
-        entries = Helpers.follow_local_methods(tree, collected, run.helpers)
-          .sort_by.with_index { |r, i| [ r[:location], r[:order] || 0, i ] }
+        entries = invert_reverts(Helpers.follow_local_methods(tree, collected, run.helpers)
+          .sort_by.with_index { |r, i| [ r[:location], r[:order] || 0, i ] }, reverts)
 
         inferred = inferred_table_name(content, path)
         inferred_existed = tables.key?(inferred)
@@ -180,7 +205,8 @@ module RailsAiContext
         version = migration_version(tree)
         entries.each { |entry| entry[:migration_version] = version }
 
-        dispatch(entries, tables, run.pk_type)
+        # Migration[5.0] and older run Compatibility::V5_0, which keys a table and its references with integer.
+        dispatch(entries, tables, version && (version <=> [ 5, 0 ]) <= 0 ? "integer" : run.pk_type)
         mark_inferred(tables, inferred, inferred_existed) if used_inferred
         count(entries, run.counts)
       end
@@ -197,6 +223,10 @@ module RailsAiContext
           if entry.key?(:action)
             case entry[:action]
             when :create_table, :change_table
+              if entry[:action] == :create_table && skipped_create?(entry, tables)
+                current_table = nil
+                next
+              end
               current_table = entry[:table]
               creating = entry[:action] == :create_table
             when :drop_table, :rename_table then current_table = nil
@@ -215,6 +245,61 @@ module RailsAiContext
             SchemaConventions.note_unread_call(tables[current_table], entry[:name])
           end
         end
+      end
+
+      INVERSE = { create_table: :drop_table, add_column: :remove_column, add_index: :remove_index,
+                  add_reference: :remove_reference, add_belongs_to: :remove_reference,
+                  add_foreign_key: :remove_foreign_key }.freeze
+
+      # Migration#revert runs its block's statements inverted and last first.
+      # CommandRecorder#revert flips reverting, so a revert inside one runs forward.
+      def invert_reverts(entries, ranges, reverting = false)
+        outermost = ranges.reject { |range| ranges.any? { |other| other != range && other.cover?(range.first) && other.cover?(range.last) } }
+        units = []
+        entries.each do |entry|
+          range = outermost.find { |r| r.cover?(entry[:location]) }
+          if range ? units.last&.first == range : (reverting && units.last && !units.last.first && !(entry.key?(:action) && !entry[:block]))
+            units.last.last << entry
+          else
+            units << [ range, [ entry ] ]
+          end
+        end
+        units = units.map do |range, group|
+          if range
+            invert_reverts(group, ranges.select { |o| o != range && range.cover?(o.first) && range.cover?(o.last) }, !reverting)
+          else
+            reverting ? inverted(group) : group
+          end
+        end
+        (reverting ? units.reverse : units).flatten(1)
+      end
+
+      # A statement with its block, inverted; one CommandRecorder cannot invert is not replayed.
+      def inverted(group)
+        head, *body = group
+        return group unless head.key?(:action) && !head[:block]
+
+        inverse = case head[:action]
+        when *INVERSE.keys then head.merge(action: INVERSE[head[:action]])
+        when :drop_table then head.merge(action: :create_table) if body.any?
+        when :remove_column then head.merge(action: :add_column) if head[:column_type]
+        when :rename_column then head.merge(column: head[:new_name], new_name: head[:column])
+        when :rename_table then head.merge(table: head[:new_name], new_name: head[:table])
+        when :add_timestamps then head.merge(action: :remove_columns, columns: %w[created_at updated_at])
+        when :change_column_null then head.merge(null: !head[:null]) unless head[:null].nil?
+        when :change_column_default
+          options = head[:options] || {}
+          head.merge(options: options.merge(from: options[:to], to: options[:from])) if options.key?(:from) && options.key?(:to)
+        end
+        return [ { kind: :not_replayed, location: head[:location] } ] unless inverse
+
+        inverse[:action] == :create_table ? [ inverse, *body ] : [ inverse ]
+      end
+
+      # A temporary table is gone with the connection, and if_not_exists leaves a table that exists as it is.
+      def skipped_create?(entry, tables)
+        options = entry[:options] || {}
+        options[:temporary] == true || (options[:if_not_exists] == true && tables.key?(entry[:table]))
       end
 
       # Counted after the flow, so a call only down or a rescue reaches is not.

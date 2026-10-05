@@ -458,6 +458,42 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    describe "pluralize_table_names" do
+      def tables_with(files)
+        Dir.mktmpdir do |dir|
+          files.each do |path, body|
+            FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+            File.write(File.join(dir, path), body)
+          end
+          described_class.new(RailsAiContext::StaticApp.new(dir)).static_call.transform_values { |m| m[:table_name] }
+        end
+      end
+
+      it "keeps a singular table for a class that turns it off, and its STI child and nested class follow" do
+        tables = tables_with(
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/person.rb" => "class Person < ApplicationRecord\n  self.pluralize_table_names = false\nend\n",
+          "app/models/admin.rb" => "class Admin < Person\nend\n",
+          "app/models/person/note.rb" => "class Person::Note < ApplicationRecord\nend\n",
+          "app/models/post.rb" => "class Post < ApplicationRecord\nend\n"
+        )
+        expect(tables).to include("Person" => "person", "Admin" => "person", "Person::Note" => "person_notes", "Post" => "posts")
+      end
+
+      it "reads the app-wide setting and a base class's, which every child inherits" do
+        expect(tables_with(
+          "config/application.rb" => "module X\n  class Application < Rails::Application\n    config.active_record.pluralize_table_names = false\n  end\nend\n",
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/user.rb" => "class User < ApplicationRecord\nend\n"
+        )).to include("User" => "user")
+
+        expect(tables_with(
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\n  self.pluralize_table_names = false\nend\n",
+          "app/models/user.rb" => "class User < ApplicationRecord\nend\n"
+        )).to include("User" => "user")
+      end
+    end
+
     it "reads a compact model's bare superclass from the top level, as Ruby does" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models", "admin"))
@@ -1672,6 +1708,8 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
             store_in collection: "legacy_orders"
             field :total, type: BigDecimal
             field :tags
+            field :age, type: Integer, default: 0
+            field :labels, type: Array, default: []
             embeds_many :line_items
             embeds_one :address
             embedded_in :customer
@@ -1681,7 +1719,8 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         order = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Order"]
 
         expect(order[:collection]).to eq("legacy_orders")
-        expect(order[:fields]).to eq([ { name: :total, type: "BigDecimal" }, { name: :tags } ])
+        expect(order[:fields]).to eq([ { name: :total, type: "BigDecimal" }, { name: :tags },
+                                       { name: :age, type: "Integer", default: "0" }, { name: :labels, type: "Array", default: "[]" } ])
         expect(order[:embeds]).to eq([
           { type: :embeds_many, name: :line_items },
           { type: :embeds_one, name: :address },

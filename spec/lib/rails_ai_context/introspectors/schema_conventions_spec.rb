@@ -178,6 +178,12 @@ RSpec.describe RailsAiContext::Introspectors::SchemaConventions do
       expect(described_class.implicit_pk_type(@root, "db/structure.sql")).to eq("bigint")
     end
 
+    it "takes the adapter a DATABASE_URL names over database.yml, as Rails merges it" do
+      database_yml("#{Rails.env}:\n  adapter: sqlite3\n")
+      stub_const("ENV", ENV.to_h.merge("DATABASE_URL" => "postgresql://u@localhost:5432/fx"))
+      expect(described_class.implicit_pk_type(@root, "db/schema.rb")).to eq("bigint")
+    end
+
     it "is nil with no database.yml" do
       expect(described_class.database_adapter_for(@root, "primary")).to be_nil
     end

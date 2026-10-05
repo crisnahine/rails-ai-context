@@ -26,7 +26,7 @@ module RailsAiContext
       private
 
       def migrate_dir
-        File.join(root, "db/migrate")
+        @migrate_dir ||= RailsAiContext::PendingMigrations.migrate_dirs_for(root)
       end
 
       # The same file scan the pending derivation runs, with each file's

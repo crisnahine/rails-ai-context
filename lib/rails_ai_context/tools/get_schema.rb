@@ -65,10 +65,10 @@ module RailsAiContext
             # "Post" and "Admin::ActionLog" are model names here, and the model
             # tier knows the table each of them reads.
             table_as_table = RailsAiContext::Introspectors::TableName.for_model_name(table, models_data)
-            table_key = tables.keys.find { |k|
+            database, table_key, table_data = Payload.schema_tables(schema).find { |_, k, _|
               k.downcase == table_down || k == table_as_table || k == table.underscore
-            } || table
-            table_data = tables[table_key]
+            }
+            table_key ||= table
             unless table_data
               # A table db/schema.rb declares and the connection does not have
               # is not a misspelling: the migration that adds it has not run
@@ -91,11 +91,12 @@ module RailsAiContext
               if [ schema[:adapter], schema[:adapter_source] ].include?("static_parse")
                 recovery += ". Without a connection a view is listed only when the dump records it: structure.sql does, schema.rb only through a gem such as scenic"
               end
-              return not_found_response("Table", table, tables.keys.sort, recovery_tool: recovery)
+              return not_found_response("Table", table, Payload.schema_tables(schema).map { |_, name, _| name }.uniq.sort, recovery_tool: recovery)
             end
-            return json_response(table_data.except(:unread_calls)) if format == "json"
+            return json_response(table_data.except(:unread_calls).merge({ database: database }.compact)) if format == "json"
 
             output = format_table_markdown(table_key, table_data, models_data, schema[:enum_types])
+            output = output.sub("\n\n", "\n\n**Database:** #{database}\n") if database
             # Cross-reference hint for AI: suggest next tool call
             model_refs = models_for_table(table_key, models_data)
             if model_refs.any?
@@ -139,7 +140,7 @@ module RailsAiContext
             paginated = page[:items]
             return json_page_response(schema, tables, paginated, models_data) if format == "json"
 
-            if paginated.empty?
+            if paginated.empty? && total > 0
               return text_response("No tables at offset #{page[:offset]}. Total tables: #{total}. Use `offset:0` to start from the beginning.")
             end
 

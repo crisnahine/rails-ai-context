@@ -109,4 +109,28 @@ RSpec.describe RailsAiContext::AppKind do
       Dir.mktmpdir { |dir| expect(described_class.api_only?(dir)).to be(false) }
     end
   end
+
+  describe ".active_record?" do
+    def app_with(application_rb)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config/application.rb"), application_rb) if application_rb
+        yield dir
+      end
+    end
+
+    it "is false when application.rb leaves the railtie commented out" do
+      app_with("require \"rails\"\nrequire \"active_model/railtie\"\n# require \"active_record/railtie\"\nrequire \"action_controller/railtie\"\n") { |dir| expect(described_class.active_record?(dir)).to be(false) }
+    end
+
+    it "is true for rails/all, the railtie, or a list of railties it requires in a loop" do
+      app_with("require \"rails/all\"\n") { |dir| expect(described_class.active_record?(dir)).to be(true) }
+      app_with("%w[active_record/railtie action_controller/railtie].each { |r| require r }\n") { |dir| expect(described_class.active_record?(dir)).to be(true) }
+    end
+
+    it "is true when there is no application.rb to read, or it does not parse" do
+      app_with(nil) { |dir| expect(described_class.active_record?(dir)).to be(true) }
+      app_with("\xff\xfe class (") { |dir| expect(described_class.active_record?(dir)).to be(true) }
+    end
+  end
 end

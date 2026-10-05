@@ -299,8 +299,20 @@ module RailsAiContext
 
         [ namespace_affix(class_name, candidates, :table_name_prefix),
           contained_prefix(class_name, candidates, seen),
-          TableName.stem(candidate[:path]),
+          TableName.stem(candidate[:path], pluralize_tables?(class_name, candidates)),
           namespace_affix(class_name, candidates, :table_name_suffix) ].join
+      end
+
+      # A class attribute: the class's own assignment, else its superclass chain's, else the app's.
+      def pluralize_tables?(class_name, candidates, seen = [])
+        own = candidates.dig(class_name, :pluralize_table_names)
+        return own unless own.nil?
+
+        parent = candidates.dig(class_name, :superclass)
+        resolved = parent && !seen.include?(class_name) && resolve_superclass(parent, class_name, candidates)
+        return pluralize_tables?(resolved, candidates, seen + [ class_name ]) if resolved && candidates.key?(resolved)
+
+        TableName.app_affixes(app.root)[:pluralize_table_names] != false
       end
 
       # compute_table_name (7.0 and 8.1): a class nested in a concrete model
@@ -311,7 +323,9 @@ module RailsAiContext
         return "" unless model_class?(parent, candidates)
 
         table = resolve_table_name(parent, candidates, seen + [ class_name ])
-        table.to_s.empty? ? "" : "#{table.singularize}_"
+        return "" if table.to_s.empty?
+
+        "#{pluralize_tables?(parent, candidates) ? table.singularize : table}_"
       end
 
       # Every class this one inherits declarations from: the superclass chain
@@ -2087,8 +2101,7 @@ module RailsAiContext
         details = {
           confidence: Confidence::STATIC,
           mongoid: true,
-          fields: macros.select { |m| m[:macro] == :field }
-                        .map { |m| { name: m[:args].first, type: m[:options][:type] }.compact },
+          fields: macros.select { |m| m[:macro] == :field }.map { |m| mongoid_field(m) },
           embeds: macros.select { |m| %i[embeds_many embeds_one embedded_in].include?(m[:macro]) }
                         .map { |m| { type: m[:macro], name: m[:args].first } },
           # An embedded child is a relation like any other, so every count and the graph see it.
@@ -2107,6 +2120,13 @@ module RailsAiContext
         collection = macros.find { |m| m[:macro] == :store_in }&.dig(:options, :collection)
         details[:collection] = collection if collection
         downgrade_records(details)
+      end
+
+      # A default Mongoid computes (a lambda) is left out, as the replay leaves a computed column default.
+      def mongoid_field(macro)
+        options = macro[:options]
+        default = SchemaConventions.format_default(options[:default]) unless options[:default] == Confidence::INFERRED
+        { name: macro[:args].first, type: options[:type], default: default }.compact
       end
 
       def embedded_associations(macros)

@@ -147,8 +147,7 @@ module RailsAiContext
               lines << "**Table:** `#{data[:table_name]}`" if data[:table_name]
 
               table_name = data[:table_name]
-              if table_name && (tables = ctx.dig(:schema, :tables))
-                table_data = tables[table_name]
+              if table_name && (table_data = RailsAiContext::Payload.schema_table(ctx[:schema], table_name))
                 if table_data&.dig(:columns)&.any?
                   cols = table_data[:columns].reject { |c| %w[id created_at updated_at].include?(c[:name]) }
                   col_strs = cols.map { |c| col_type = c[:array] ? "#{c[:type]}[]" : c[:type]; [ c[:name], col_type ].compact.join(":") }

@@ -92,6 +92,22 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  describe "an app that does not load Active Record" do
+    it "says the class is not an Active Record model" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config/application.rb"), "require \"rails\"\nrequire \"active_model/railtie\"\n# require \"active_record/railtie\"\nrequire \"action_controller/railtie\"\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+        allow(described_class).to receive(:cached_context).and_return({ models: {} })
+
+        text = described_class.call(model: "Contact").content.first[:text]
+
+        expect(text).to include("Contact is not an Active Record model: this app does not load Active Record.")
+        expect(text).not_to include("Recovery")
+      end
+    end
+  end
+
   describe ".call with model not found" do
     it "returns a not-found response with available models" do
       result = described_class.call(model: "Nonexistent")
@@ -131,6 +147,21 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
 
       expect(text).to include("**Primary key:** `shop_id, id`")
       expect(text).to include("- **shop_id** | integer | primary key")
+    end
+  end
+
+  describe "a model on a secondary database" do
+    it "lists the columns its database's dump declares" do
+      allow(described_class).to receive(:cached_context).and_return({
+        models: { "PageView" => { table_name: "page_views" } },
+        schema: { tables: { "users" => { columns: [] } }, secondary_databases: {
+          "analytics" => { tables: { "page_views" => { columns: [ { name: "path", type: "string", null: false } ] } } }
+        } }
+      })
+
+      text = described_class.call(model: "PageView").content.first[:text]
+
+      expect(text).to include("## Columns", "- **path** | string | NOT NULL")
     end
   end
 
@@ -312,7 +343,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       {
         "Customer" => {
           mongoid: true,
-          fields: [ { name: :name, type: "String" }, { name: :active, type: "Boolean" } ],
+          fields: [ { name: :name, type: "String" }, { name: :active, type: "Boolean" }, { name: :age, type: "Integer", default: "0" } ],
           embeds: [ { type: :embeds_many, name: :orders } ],
           associations: [],
           validations: []
@@ -330,6 +361,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).to include("## Fields")
       expect(text).to include("name")
       expect(text).to include("String")
+      expect(text).to include("- `age`: Integer, default: 0")
     end
 
     it "renders embedded relations" do

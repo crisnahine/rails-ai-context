@@ -31,29 +31,27 @@ module RailsAiContext
       RunCache.fetch([ :pending_migrations, migrate_dir.to_s ]) { MigrationStatus.pending(migrate_dir) }
     end
 
-    # Each secondary database keeps its own migrate directory, so a secondary
-    # dump compared against db/migrate would report the primary's files.
-    def migrate_dir_for(root, dump_path = nil)
-      base = if dump_path
-        File.basename(dump_path.to_s).sub(/\.(rb|sql)\z/, "").sub(/_?(schema|structure)\z/, "")
-      else
-        ""
-      end
-      File.join(root.to_s, "db", base.empty? ? "migrate" : "#{base}_migrate")
+    # Each database keeps its own migrations: the migrations_paths its
+    # database.yml entry names, else db/migrate or db/<name>_migrate. The
+    # schema replay reads the same list.
+    def migrate_dirs_for(root, dump_path = nil)
+      base = dump_path ? File.basename(dump_path.to_s).sub(/\.(rb|sql)\z/, "").sub(/_?(schema|structure)\z/, "") : ""
+      entry = RailsAiContext::DatabaseYml.entry(root, base.empty? ? "primary" : base)
+      Introspectors::MigrationReplay.configured_dirs(root, entry) ||
+        [ File.join(root.to_s, "db", base.empty? ? "migrate" : "#{base}_migrate") ]
     end
 
-    # Every versioned migration file in the directory. One file scan behind
+    # Every versioned migration file under the directory or directories. One file scan behind
     # both the pending derivation and the migrations listing, so the two
     # cannot disagree on which files count.
     def migration_files(migrate_dir)
-      return [] unless migrate_dir && Dir.exist?(migrate_dir)
-
-      Dir.glob(File.join(migrate_dir, "*.rb")).sort.filter_map do |path|
+      dirs = Array(migrate_dir).select { |dir| Dir.exist?(dir) }
+      Introspectors::MigrationReplay.migration_files(dirs).filter_map do |path|
         base = File.basename(path, ".rb")
         version = base[/\A\d+/] or next
         # The class name, so a static entry names the migration the way the
-        # connection's own pending list does.
-        name = base.sub(/\A\d+_/, "").camelize
+        # connection's own pending list does; Rails drops an engine's ".scope" suffix.
+        name = base.sub(/\A\d+_/, "").split(".", 2).first.to_s.camelize
         { version: version, name: name, path: path }
       end
     end

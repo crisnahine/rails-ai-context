@@ -128,10 +128,10 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
     end
   end
 
-  # The three declarations are one question about one class body, and asking
+  # The four declarations are one question about one class body, and asking
   # them one at a time parsed and descended the same file three times.
   describe ".declarations" do
-    it "reads all three out of one body" do
+    it "reads all four out of one body" do
       source = <<~RUBY
         module Legacy
           def self.table_name_prefix
@@ -143,21 +143,22 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
           end
 
           self.table_name = "ledger"
+          self.pluralize_table_names = false
         end
       RUBY
 
       expect(described_class.declarations(source, "Legacy")).to eq(
-        table_name: "ledger", table_name_prefix: "legacy_", table_name_suffix: "_v1"
+        table_name: "ledger", table_name_prefix: "legacy_", table_name_suffix: "_v1", pluralize_table_names: false
       )
     end
 
-    it "answers all three as nil when the file declares no such scope" do
+    it "answers all four as nil when the file declares no such scope" do
       expect(described_class.declarations("class Widget\nend\n", "Other")).to eq(
-        table_name: nil, table_name_prefix: nil, table_name_suffix: nil
+        table_name: nil, table_name_prefix: nil, table_name_suffix: nil, pluralize_table_names: nil
       )
     end
 
-    it "descends the file once for the three" do
+    it "descends the file once for the four" do
       source = "class Widget < ApplicationRecord\n  self.table_name = 'gizmos'\nend\n"
       allow(RailsAiContext::AstCache).to receive(:parse_string).and_call_original
 

@@ -394,6 +394,161 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
     expect(tables.keys).to include("project_types")
   end
 
+  describe "statements Rails runs differently from how they read" do
+    let(:tables) do
+      replay([ <<~RUBY, <<~RUBY2 ])
+        class CreateUsers < ActiveRecord::Migration[8.1]
+          def change
+            create_table :users do |t|
+              t.string :email
+              if connection.supports_datetime_with_precision?
+                t.datetime :created_at, precision: 6, null: false
+              else
+                t.datetime :created_at, null: false
+              end
+            end
+            add_index :users, :email
+            rename_index :users, "index_users_on_email", "uniq_email"
+            create_table :users, if_not_exists: true do |t|
+              t.string :never_added
+            end
+            create_table :scratch, temporary: true do |t|
+              t.string :x
+            end
+            create_table :user_copies, as: "SELECT id, email FROM users"
+            execute "CREATE TABLE raw_things (id integer primary key, name varchar)"
+          end
+        end
+      RUBY
+        class Legacy < ActiveRecord::Migration[5.0]
+          def change
+            create_table :legacies do |t|
+              t.references :user
+            end
+          end
+        end
+      RUBY2
+    end
+
+    it "keeps one column when both branches of an if declare it" do
+      expect(tables["users"][:columns].map { |c| c[:name] }).to eq(%w[id email created_at])
+    end
+
+    it "renames an index rename_index names" do
+      expect(tables["users"][:indexes].map { |i| i[:name] }).to eq([ "uniq_email" ])
+    end
+
+    it "leaves out temporary tables and keeps the select's columns for an as: table" do
+      expect(tables.keys).not_to include("scratch")
+      expect(tables["user_copies"][:columns].map { |c| c[:name] }).to eq(%w[id email])
+    end
+
+    it "reads a table an execute creates" do
+      expect(tables["raw_things"][:columns].map { |c| c[:name] }).to eq(%w[id name])
+    end
+
+    it "survives SQL it cannot read" do
+      odd = replay([ <<~RUBY ])
+        class Odd < ActiveRecord::Migration[8.1]
+          def change
+            create_table :copies, as: "SELECT lower(email) FROM missing"
+            create_table :empty_copies, as: ""
+            execute "CREATE TABLE ("
+          end
+        end
+      RUBY
+
+      expect(odd["copies"][:columns]).to eq([])
+      expect(odd["empty_copies"][:columns]).to eq([])
+    end
+
+    it "gives a Migration[5.0] table integer keys" do
+      expect(tables["legacies"][:columns].map { |c| [ c[:name], c[:type] ] }).to eq([ %w[id integer], %w[user_id integer] ])
+    end
+  end
+
+  describe "a revert block" do
+    let(:create_posts) do
+      <<~RUBY
+        class CreatePosts < ActiveRecord::Migration[8.1]
+          def change
+            create_table :posts do |t|
+              t.string :title
+            end
+            add_column :posts, :slug, :string
+            add_index :posts, :slug
+          end
+        end
+      RUBY
+    end
+
+    it "undoes the create_table it wraps" do
+      tables = replay([ create_posts, <<~RUBY ])
+        class DropPostsAgain < ActiveRecord::Migration[8.1]
+          def change
+            revert do
+              create_table :posts do |t|
+                t.string :title
+              end
+            end
+          end
+        end
+      RUBY
+
+      expect(tables.keys).not_to include("posts")
+    end
+
+    it "runs its statements inverted, last first" do
+      tables = replay([ create_posts, <<~RUBY ])
+        class UndoSlug < ActiveRecord::Migration[8.1]
+          def change
+            revert do
+              add_column :posts, :body, :text
+              rename_column :posts, :title, :headline
+              add_index :posts, :slug
+              remove_column :posts, :draft, :boolean
+            end
+          end
+        end
+      RUBY
+
+      expect(tables["posts"][:columns].map { |c| c[:name] }).to eq(%w[id title slug draft])
+      expect(tables["posts"][:indexes]).to be_empty
+    end
+
+    it "runs a revert nested in a revert forward, as Rails flips it back" do
+      tables = replay([ create_posts, <<~RUBY ])
+        class Twice < ActiveRecord::Migration[8.1]
+          def change
+            revert do
+              add_column :posts, :body, :text
+              revert do
+                add_column :posts, :summary, :text
+                add_column :posts, :lede, :text
+              end
+            end
+          end
+        end
+      RUBY
+
+      expect(tables["posts"][:columns].map { |c| c[:name] }).to eq(%w[id title slug summary lede])
+    end
+
+    it "counts the class form it cannot see into as not replayed" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "20240101000000_create_posts.rb"), create_posts)
+        File.write(File.join(dir, "20240101000001_undo_posts.rb"), <<~RUBY)
+          class UndoPosts < ActiveRecord::Migration[8.1]
+            def change
+              revert CreatePosts
+            end
+          end
+        RUBY
+        expect(described_class.replayed(dir, pk_type: "bigint").counts.helper_calls).to eq(1)
+      end
+    end
+  end
+
   # Canvas has a migration that calls `create_table table_name do |t|`, where
   # the name is a local computed at run time. A table the replay cannot name is
   # a table it cannot report, and keeping it produced a nil key that took the
@@ -1801,6 +1956,32 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       RUBY
 
       expect(tables["pull_requests_work_packages"][:indexes].map { |i| i[:name] }).to eq(%w[pr_wp_pr_id])
+    end
+  end
+
+  it "replays a migration in a subdirectory, in version order, as Rails reads them" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "archive"))
+      File.write(File.join(dir, "20240102000000_create_comments.rb"),
+                 "class CreateComments < ActiveRecord::Migration[8.1]\n  def change\n    create_table :comments\n  end\nend\n")
+      File.write(File.join(dir, "archive", "20240101000000_create_posts.rb"),
+                 "class CreatePosts < ActiveRecord::Migration[8.1]\n  def change\n    create_table :posts\n  end\nend\n")
+      File.write(File.join(dir, "helper.rb"), "")
+
+      expect(described_class.migration_files([ dir ]).map { |path| File.basename(path) })
+        .to eq(%w[20240101000000_create_posts.rb 20240102000000_create_comments.rb])
+      expect(described_class.tables(dir, pk_type: "bigint").keys).to contain_exactly("posts", "comments")
+    end
+  end
+
+  it "does not read a migration file symlinked from outside the app" do
+    Dir.mktmpdir do |dir|
+      app = File.join(dir, "app")
+      FileUtils.mkdir_p([ File.join(app, "db/migrate"), File.join(dir, "outside") ])
+      File.write(File.join(dir, "outside/secrets.rb"), "create_table :secrets do |t|\n  t.string :token\nend\n")
+      File.symlink(File.join(dir, "outside/secrets.rb"), File.join(app, "db/migrate/20240101000001_link.rb"))
+
+      expect(described_class.tables(File.join(app, "db/migrate"), pk_type: "bigint", root: app)).not_to have_key("secrets")
     end
   end
 end

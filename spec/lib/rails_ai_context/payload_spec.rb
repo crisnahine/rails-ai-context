@@ -414,4 +414,17 @@ RSpec.describe RailsAiContext::Payload do
       expect(described_class.in_repo_engines_with_models({})).to eq([])
     end
   end
+
+  describe ".schema_table" do
+    it "finds a primary table first, then a secondary database's" do
+      schema = { tables: { "users" => { a: 1 } }, secondary_databases: { "analytics" => { tables: { "page_views" => { b: 2 }, "users" => { c: 3 } } } } }
+      expect(described_class.schema_table(schema, "users")).to eq({ a: 1 })
+      expect(described_class.schema_table(schema, :page_views)).to eq({ b: 2 })
+    end
+
+    it "answers nil for a missing or malformed section" do
+      expect(described_class.schema_table(nil, "users")).to be_nil
+      expect(described_class.schema_table({ tables: nil, secondary_databases: { "x" => nil } }, "users")).to be_nil
+    end
+  end
 end

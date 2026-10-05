@@ -113,7 +113,7 @@ module RailsAiContext
     def check_pending_migrations
       return nil unless defined?(ActiveRecord::Base)
 
-      pending = RailsAiContext::PendingMigrations.live(RailsAiContext::PendingMigrations.migrate_dir_for(app.root))
+      pending = RailsAiContext::PendingMigrations.live(RailsAiContext::PendingMigrations.migrate_dirs_for(app.root))
       return nil unless pending
 
       if pending.empty?
@@ -182,9 +182,8 @@ module RailsAiContext
     end
 
     def check_migrations
-      migrate_dir = File.join(app.root, "db/migrate")
-      if Dir.exist?(migrate_dir) && Dir.glob(File.join(migrate_dir, "*.rb")).any?
-        count = Dir.glob(File.join(migrate_dir, "*.rb")).size
+      count = RailsAiContext::PendingMigrations.migration_files(RailsAiContext::PendingMigrations.migrate_dirs_for(app.root)).size
+      if count.positive?
         Check.new(name: "Migrations", status: :pass, message: count_phrase(count, "migration file"), fix: nil)
       else
         Check.new(name: "Migrations", status: :warn, message: "No migrations", fix: nil)

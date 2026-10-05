@@ -690,4 +690,14 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       expect(text).not_to include("AiMatchListing")
     end
   end
+
+  describe "a model whose table lives in a secondary database" do
+    it "lists the table's columns" do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "PageView" => { table_name: "page_views", associations: [], validations: [], scopes: [] } },
+        schema: { tables: {}, secondary_databases: { "analytics" => { tables: { "page_views" => { columns: [ { name: "path", type: "string" } ] } } } } }
+      )
+      expect(described_class.call(feature: "page_view").content.first[:text]).to include("**Columns:** path:string")
+    end
+  end
 end

@@ -51,6 +51,25 @@ RSpec.describe RailsAiContext::Hydrators::SchemaHintBuilder do
     }
   end
 
+  describe "a Mongoid document" do
+    let(:mongoid_context) do
+      { schema: { unavailable: "this app uses Mongoid; ActiveRecord schema introspection does not apply" },
+        models: { "Book" => { mongoid: true, fields: [ { name: :title, type: "String" } ] },
+                  "Admin::Shelf" => { mongoid: true, collection: "legacy_shelves", fields: [] } } }
+    end
+
+    it "names its collection and _id key, and lists its fields" do
+      hint = described_class.build("Book", context: mongoid_context)
+      expect(hint).to have_attributes(table_name: "books", primary_key: "_id", collection: true)
+      expect(hint.columns).to eq([ { name: "title", type: "String" } ])
+      expect(RailsAiContext::Hydrators::HydrationFormatter.format_hint(hint)).to include("**Collection:** `books` (key: `_id`)\n**Fields:** `title` String")
+    end
+
+    it "takes the collection store_in names" do
+      expect(described_class.build("Admin::Shelf", context: mongoid_context).table_name).to eq("legacy_shelves")
+    end
+  end
+
   describe ".build" do
     it "builds a SchemaHint from context for a known model" do
       hint = described_class.build("Post", context: context)
@@ -118,5 +137,11 @@ RSpec.describe RailsAiContext::Hydrators::SchemaHintBuilder do
       expect(hint.confidence).to eq("[INFERRED]")
       expect(hint.columns).to eq([])
     end
+  end
+
+  it "reads the columns of a table in a secondary database" do
+    ctx = { models: { "PageView" => { table_name: "page_views" } },
+            schema: { tables: {}, secondary_databases: { "analytics" => { tables: { "page_views" => { columns: [ { name: "path", type: "string" } ] } } } } } }
+    expect(described_class.build("PageView", context: ctx).columns.map { |c| c[:name] }).to eq([ "path" ])
   end
 end

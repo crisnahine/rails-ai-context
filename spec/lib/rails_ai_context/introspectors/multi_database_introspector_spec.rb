@@ -175,6 +175,40 @@ RSpec.describe RailsAiContext::Introspectors::MultiDatabaseIntrospector do
     end
   end
 
+  describe "a DATABASE_URL in the environment" do
+    def databases_with(yaml, env)
+      hide_const("ActiveRecord")
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "database.yml"), yaml) if yaml
+        stub_const("ENV", ENV.to_h.merge(env))
+        described_class.new(RailsAiContext::StaticApp.new(dir)).call[:databases]
+      end
+    end
+
+    it "takes the primary adapter from the URL, as Rails merges it" do
+      yaml = "#{Rails.env}:\n  adapter: sqlite3\n  database: storage/development.sqlite3\n"
+      expect(databases_with(yaml, "DATABASE_URL" => "postgres://u@localhost:5432/fx"))
+        .to eq([ { name: "primary", adapter: "postgresql" } ])
+    end
+
+    it "takes a named database's adapter from its own <NAME>_DATABASE_URL only" do
+      yaml = "#{Rails.env}:\n  primary:\n    adapter: sqlite3\n  analytics:\n    adapter: sqlite3\n"
+      expect(databases_with(yaml, "ANALYTICS_DATABASE_URL" => "mysql2://h/a", "DATABASE_URL" => nil))
+        .to eq([ { name: "primary", adapter: "sqlite3" }, { name: "analytics", adapter: "mysql2" } ])
+    end
+
+    it "leaves an entry with its own url alone, as Rails does" do
+      yaml = "#{Rails.env}:\n  url: sqlite3:storage/dev.sqlite3\n"
+      expect(databases_with(yaml, "DATABASE_URL" => "postgresql://h/fx"))
+        .to eq([ { name: "primary", adapter: "sqlite3" } ])
+    end
+
+    it "builds the primary from DATABASE_URL when database.yml has no entry for the environment" do
+      expect(databases_with(nil, "DATABASE_URL" => "trilogy://h/fx")).to eq([ { name: "primary", adapter: "trilogy" } ])
+    end
+  end
+
   describe "a database.yml that shares its adapter through an anchor" do
     it "resolves the merge key so every entry names its adapter" do
       hide_const("ActiveRecord")
@@ -370,7 +404,7 @@ RSpec.describe RailsAiContext::Introspectors::MultiDatabaseIntrospector do
         #{Rails.env}:
           url: postgres://localhost/app
       YAML
-        expect(result[:databases]).to eq([ { name: "primary", adapter: nil } ])
+        expect(result[:databases]).to eq([ { name: "primary", adapter: "postgresql" } ])
         expect(result[:multi_db]).to be(false)
       end
     end

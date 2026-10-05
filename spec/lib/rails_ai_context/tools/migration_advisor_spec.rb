@@ -476,4 +476,16 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       end
     end
   end
+
+  describe "a table in a secondary database" do
+    it "finds the table and its columns" do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {},
+        schema: { tables: {}, secondary_databases: { "analytics" => { tables: { "page_views" => { columns: [ { name: "path", type: "string" } ] } } } } }
+      )
+      text = described_class.call(action: "remove_column", table: "page_views", column: "path").content.first[:text]
+      expect(text).not_to include("not found in current schema")
+      expect(text).not_to include("does not exist on")
+    end
+  end
 end
