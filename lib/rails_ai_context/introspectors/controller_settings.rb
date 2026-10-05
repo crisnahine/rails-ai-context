@@ -12,15 +12,18 @@ module RailsAiContext
 
       module_function
 
+      LISTENERS = {
+        settings_calls: -> { Listeners::GenericMacroListener.new(:layout, *MACROS) },
+        methods: -> { Listeners::MethodsListener.new }
+      }.freeze
+
       # { layout: {...}, settings: ["allow_browser versions: :modern"] } for one class body.
-      def from_source(source)
+      # A caller already walking the body with LISTENERS passes that walk.
+      def from_source(source, walked = nil)
         return {} if source.nil?
 
-        walked = SourceIntrospector.walk_source(source, {
-          calls: -> { Listeners::GenericMacroListener.new(:layout, *MACROS) },
-          methods: Listeners::MethodsListener
-        })
-        calls = SourceIntrospector.outside_defs(walked[:calls], walked[:methods])
+        walked ||= SourceIntrospector.walk_source(source, LISTENERS)
+        calls = SourceIntrospector.outside_defs(walked[:settings_calls], walked[:methods])
         layout_call, settings = calls.partition { |call| call[:macro] == :layout }
         {
           layout: layout_call.last && layout_of(layout_call.last),
