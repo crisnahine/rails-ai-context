@@ -597,13 +597,18 @@ module RailsAiContext
         # One method's source and the lines it occupies, as the parser bounds
         # the def, so a one-line or endless def is its own line. "self.x"
         # asks for the class method. Returns { code:, start_line:, end_line: }
-        # or nil. Shared by get_callbacks, get_concern.
+        # or nil. The file's own class answers before a nested one; a nested
+        # module (a concern's ClassMethods) answers when the class has none.
+        # Shared by get_callbacks, get_concern.
         def extract_method_source_from_string(source, method_name)
           name = method_name.to_s
           scope = name.start_with?("self.") ? :class : :instance
           bare = name.delete_prefix("self.")
-          method = Introspectors::ActionResolver.methods_in(source).find { |m| m[:name] == bare && m[:scope] == scope }
-          method && Introspectors::ActionResolver.body_of(source, method)
+          resolver = Introspectors::ActionResolver
+          methods = resolver.methods_in(source)
+          named = methods.select { |m| m[:name] == bare && m[:scope] == scope }
+          method = resolver.own_methods(named, resolver.default_owner(source, methods)).first || named.first
+          method && resolver.body_of(source, method)
         rescue => e
           RailsAiContext.debug_fail(e, nil, label: "extract_method_source_from_string")
         end
