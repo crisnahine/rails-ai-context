@@ -90,6 +90,10 @@ module RailsAiContext
 
         # Detect format and filter by level
         format = detect_format(raw_lines)
+        if level != "all" && raw_lines.none? { |l| extract_level(l, format) }
+          warnings << "this log has no severity field (Rails' default formatter writes none), so it cannot be filtered by level; showing every line"
+          level = "all"
+        end
         filtered = filter_by_level(raw_lines, level, format)
 
         redacted = RailsAiContext::Redaction.redact_log_lines(filtered, search: search)
@@ -156,18 +160,26 @@ module RailsAiContext
         :standard
       end
 
+      SEVERITY = "DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL|UNKNOWN|ANY"
+      # Only where a formatter writes a severity: Logger::Formatter's "I, [ts]  INFO --",
+      # a leading "INFO"/"[INFO]", "[ts] INFO", "<timestamp> INFO", or logfmt level=.
+      SEVERITY_FIELD = Regexp.union(
+        /\A[DIWEFA], \[[^\]]*\]\s+(#{SEVERITY}) -- /o,
+        /\A\[?(#{SEVERITY})\]?(?=[\s:]|\z)/o,
+        /\A\[[^\]]*\]\s+\[?(#{SEVERITY})\]?\s/o,
+        /\A\d{4}-\d\d-\d\d[T ][\d:.,]+(?:Z|[+-]\d\d:?\d\d)?\s+\[?(#{SEVERITY})\]?\s/o,
+        /\b(?:level|severity)=(#{SEVERITY})\b/io
+      )
+
       private_class_method def self.extract_level(line, format)
         case format
         when :json
-          match = line.match(/"level"\s*:\s*"(\w+)"/i)
+          match = line.match(/"(?:level|severity)"\s*:\s*"(\w+)"/i)
           match[1].upcase if match
         when :standard
-          # Rails format: I, [timestamp] INFO -- : message
-          # Or: [2026-03-29 10:00:00] INFO  message
-          match = line.match(/\b(DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL)\b/i)
-          level = match[1].upcase if match
-          level = "WARN" if level == "WARNING"
-          level
+          match = line.match(SEVERITY_FIELD)
+          level = match&.captures&.compact&.first&.upcase
+          level == "WARNING" ? "WARN" : level
         end
       end
 
@@ -182,7 +194,7 @@ module RailsAiContext
         lines.each do |line|
           level = extract_level(line, format)
           if level
-            rank = LEVEL_HIERARCHY[level] || 0
+            rank = LEVEL_HIERARCHY.fetch(level, LEVEL_HIERARCHY["FATAL"])
             include_continuation = rank >= min_rank
           end
           # Lines without a level are continuations (stack traces)
