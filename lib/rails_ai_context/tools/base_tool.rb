@@ -636,12 +636,16 @@ module RailsAiContext
             return named if named
           end
 
-          fixture_file = File.join(rails_app.root, "test", "fixtures", "#{table}.yml")
+          real_root = File.realpath(rails_app.root.to_s)
+          fixture_file = File.join(real_root, "test", "fixtures", "#{table}.yml")
           return nil unless File.exist?(fixture_file)
 
-          content = RailsAiContext::SafeFile.read(fixture_file) or return nil
+          real = safe_glob_realpath(fixture_file, real_root, real_root) or return nil
+          content = RailsAiContext::SafeFile.read(real) or return nil
           labels = RailsAiContext::FixtureKeys.parse(content)&.keys || content.scan(/^([a-z_]\w*):/i).flatten
           labels.find { |key| RailsAiContext::FixtureKeys.name?(key) }
+        rescue SystemCallError => e
+          RailsAiContext.debug_fail(e, nil, label: "fixture_key_for")
         end
 
         # Fixture set from `set_fixture_class`, then the table name, then the pluralized class

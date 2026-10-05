@@ -256,6 +256,32 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
       expect(text).not_to include("sign_in @user")
     end
 
+    it "reads no users fixture through a fixture file symlinked out of the app" do
+      outside = Dir.mktmpdir
+      File.write(File.join(outside, "users.yml"), "secret_label:\n  email: a@example.com\n")
+      FileUtils.mkdir_p(File.join(tmpdir, "test", "fixtures"))
+      File.symlink(File.join(outside, "users.yml"), File.join(tmpdir, "test", "fixtures", "users.yml"))
+      File.write(File.join(tests_dir, "posts_controller_test.rb"), <<~RUBY)
+        class PostsControllerTest < ActionDispatch::IntegrationTest
+          setup do
+            @user = users(:admin)
+            sign_in @user
+          end
+
+          test "index" do
+            get posts_path
+            assert_response :success
+          end
+        end
+      RUBY
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).not_to include("secret_label")
+    ensure
+      FileUtils.rm_rf(outside) if outside
+    end
+
     it "keeps the helper the tests call when it signs in a variable" do
       File.write(File.join(tests_dir, "posts_controller_test.rb"), <<~RUBY)
         class PostsControllerTest < ActionDispatch::IntegrationTest
