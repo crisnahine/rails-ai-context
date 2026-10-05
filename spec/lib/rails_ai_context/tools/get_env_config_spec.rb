@@ -147,4 +147,27 @@ RSpec.describe RailsAiContext::Tools::GetEnvConfig do
       end
     end
   end
+
+  describe "config/application.rb" do
+    let(:application) do
+      { file: "config/application.rb", config_keys: %w[active_job.queue_name_prefix payment x.payments.provider],
+        config_for: [ { key: "payment", file: "config/payment.yml", keys: %w[currency key] },
+                      { key: "mail", file: "config/mail.yml", missing: true } ] }
+    end
+
+    before do
+      allow(described_class).to receive(:cached_context).and_return({ env_config: env_config_data.merge(application: application) })
+    end
+
+    it "lists what every environment runs, before the environment files, even for one environment" do
+      [ described_class.call, described_class.call(environment: "production") ].each do |response|
+        text = response.content.first[:text]
+        expect(text).to include("## Every environment\n_config/application.rb_")
+        expect(text).to include("**Config keys set (3):** `active_job.queue_name_prefix`, `payment`, `x.payments.provider`")
+        expect(text).to include("- `payment` = config_for(:payment), `config/payment.yml` keys for development: currency, key")
+        expect(text).to include("- `mail` = config_for(:mail), `config/mail.yml` does not exist")
+        expect(text.index("## Every environment")).to be < text.index("## production")
+      end
+    end
+  end
 end

@@ -2,8 +2,8 @@
 
 module RailsAiContext
   module Introspectors
-    # Parses config/environments/*.rb - the one config surface no other
-    # introspector covers. Captures, per environment file, which config keys
+    # Parses config/environments/*.rb and config/application.rb, which every
+    # environment runs. Captures, per environment file, which config keys
     # are assigned and the values of the toggles AI most often needs to
     # compare across environments (force_ssl, eager_load, caching, logging,
     # queue adapter, mailer delivery).
@@ -34,11 +34,48 @@ module RailsAiContext
         {
           current: current_environment,
           count: files.size,
-          environments: files
-        }
+          environments: files,
+          application: summarize_application
+        }.compact
       end
 
       private
+
+      APPLICATION = "config/application.rb"
+
+      def summarize_application
+        path = File.join(root, APPLICATION)
+        return nil unless File.file?(path)
+
+        entries = SourceIntrospector.walk(path, { config: Listeners::ConfigAssignmentListener })[:config]
+        assignments = config_assignments(entries)
+        {
+          file: APPLICATION,
+          config_keys: (assignments.keys + entries.filter_map { |entry| written_key(entry) }).uniq.sort,
+          config_for: config_for_files(assignments).presence
+        }.compact
+      rescue => e
+        RailsAiContext.debug_fail(e, nil, label: "summarize #{APPLICATION}")
+      end
+
+      CONFIG_FOR = /\A(?:(?:::)?Rails\.application\.)?config_for\(\s*:?["']?([\w\/]+)/
+
+      # The keys config_for gives this environment: `shared` deep-merged under the
+      # environment's section. Names only: a value is often a secret.
+      def config_for_files(assignments)
+        assignments.filter_map do |key, entries|
+          name = entries.last[:source].to_s[CONFIG_FOR, 1] or next
+          file = "config/#{name}.yml"
+          entry = { key: key, file: file }
+          next entry.merge(missing: true) unless File.file?(File.join(root, file))
+
+          data = RecurringSchedules.yaml(root, file)
+          next entry.merge(unreadable: true) unless data.is_a?(Hash)
+
+          sections = [ data["shared"], data[current_environment] ].select { |section| section.is_a?(Hash) }
+          entry.merge(keys: sections.flat_map(&:keys).uniq.sort)
+        end
+      end
 
       def summarize(path)
         relative = path.sub("#{root}/", "")

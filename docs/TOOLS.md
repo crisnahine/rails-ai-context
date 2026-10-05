@@ -521,7 +521,11 @@ ActiveSupport surface: concerns registry, deprecators, MessageVerifier/MessageEn
 
 ### `rails_get_env_config`
 
-Per-environment configuration from `config/environments/*.rb`: notable toggles (`force_ssl`, `eager_load`, caching, log level, queue adapter, mailer delivery) and every config key each environment sets. A key assigned in more than one branch reports every value with its condition; booted, the running environment reports the value the app resolved.
+Per-environment configuration from `config/environments/*.rb`: notable toggles (`force_ssl`, `eager_load`, caching, log level, queue adapter, mailer delivery) and every config key each environment sets. A key assigned in more than one branch reports every value with its condition; booted, the running environment reports the value the app resolved. An
+"Every environment" block above them lists the keys `config/application.rb`
+sets (`config.x` included) and, for each `config_for(:name)`, the keys
+`config/name.yml` gives the running environment, `shared` merged in, names
+only.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|

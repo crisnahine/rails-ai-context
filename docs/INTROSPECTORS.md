@@ -120,7 +120,7 @@ end
 | I18nIntrospector | `:i18n` | Locale files, translation keys |
 | MiddlewareIntrospector | `:middleware` | Rack middleware stack. The static tier declares an alternate source rather than an empty stack: without a booted app it answers only the file facts it can read |
 | EngineIntrospector | `:engines` | Mounted engines |
-| EnvConfigIntrospector | `:env_config` | Per-environment config files: notable toggles (`force_ssl`, `eager_load`, caching, queue adapter), assigned config keys |
+| EnvConfigIntrospector | `:env_config` | Per-environment config files: notable toggles (`force_ssl`, `eager_load`, caching, queue adapter), assigned config keys, plus the keys `config/application.rb` sets and each `config_for` file's keys |
 | DevopsIntrospector | `:devops` | Dockerfile, CI config, deployment |
 
 ### Jobs & Services
