@@ -329,6 +329,24 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       end
     end
 
+    # `rails plugin new shop --mountable`: the engine's table is the project's whole route surface.
+    it "reads a mountable engine's own table as the routes, from the engine's root" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "lib", "shop"))
+        File.write(File.join(dir, "lib", "shop", "engine.rb"), "module Shop\n  class Engine < ::Rails::Engine\n    isolate_namespace Shop\n  end\nend\n")
+        File.write(File.join(dir, "config", "routes.rb"), "Shop::Engine.routes.draw do\n  resources :widgets\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:total_routes]).to eq(7)
+        expect(result[:by_controller]["shop/widgets"].map { |r| [ r[:verb], r[:path], r[:name] ] }).to include(
+          [ "GET", "/widgets", "widgets" ], [ "GET", "/widgets/:id", "widget" ]
+        )
+        expect(result).not_to have_key(:engine_routes)
+      end
+    end
+
     it "keeps the condition a route is drawn under" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))

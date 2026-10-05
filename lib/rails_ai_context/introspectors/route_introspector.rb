@@ -58,7 +58,7 @@ module RailsAiContext
         mounts = (mounts + in_repo.values.flat_map(&:last)).uniq { |mount| [ mount[:engine], mount[:path] ] }
         # What an app draws into an engine's table is the engine's, which the
         # booted tier's Rails.application.routes holds only as the mount.
-        app_records, engine_records = records.partition { |r| r[:engine].nil? }
+        app_records, engine_records = records.partition { |r| r[:engine].nil? || project_engine?(r[:engine]) }
         entries = app_records.select { |r| r[:type] == :route }
         # A followed `draw` is no longer unexpanded - its routes are in the
         # list above. Counting it would overstate what is missing by exactly
@@ -88,6 +88,15 @@ module RailsAiContext
         unread = (in_repo_route_files - in_repo.keys).size
         result[:in_repo_route_files] = unread if unread.positive?
         result
+      end
+
+      # Run from a mountable engine's own root there is no app table: the
+      # engine's table, drawn in its config/routes.rb, is the project's routes.
+      def project_engine?(engine)
+        root = app.root.to_s
+        @engine_root = !File.exist?(File.join(root, "config", "application.rb")) &&
+                       !app_route_file?(File.join(root, "config", "routes.rb")) if @engine_root.nil?
+        @engine_root && File.file?(File.join(root, "lib", "#{engine.underscore}.rb"))
       end
 
       # Every routes.rb under an in-repo engine or plugin root. One the app does not mount has
