@@ -1020,6 +1020,33 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
         "/always" => nil
       )
     end
+
+    it "says which case branch a route is drawn under" do
+      records = route_records(<<~RUBY)
+        Rails.application.routes.draw do
+          case Rails.env
+          when "development", "test"
+            get "dev", to: "posts#index"
+          when "staging" then get "stage", to: "posts#index"
+          else
+            get "prod", to: "posts#index"
+          end
+          case
+          when ENV["BETA"]
+            get "beta", to: "posts#index"
+          end
+          get "always", to: "posts#index"
+        end
+      RUBY
+
+      expect(records.to_h { |r| [ r[:path], r[:condition] ] }).to eq(
+        "/dev" => 'when Rails.env is "development", "test"',
+        "/stage" => 'when Rails.env is "staging"',
+        "/prod" => 'when Rails.env is none of "development", "test", "staging"',
+        "/beta" => 'if ENV["BETA"]',
+        "/always" => nil
+      )
+    end
   end
 
   it "reads a constraint it cannot evaluate as written, and skips one that is not a hash" do

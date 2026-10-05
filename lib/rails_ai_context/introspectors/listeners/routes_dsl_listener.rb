@@ -49,6 +49,7 @@ module RailsAiContext
           @global_path_names = {}
           @methods = {}
           @conditions = []
+          @case_branches = {}.compare_by_identity
           @routing_calls = 0
         end
 
@@ -66,7 +67,7 @@ module RailsAiContext
           @stack.pop if @stack.last && @stack.last[:node].equal?(node)
         end
 
-        # A route under `if`/`unless` is drawn only when it holds, which source
+        # A route under `if`/`unless`/`case` is drawn only when it holds, which source
         # cannot tell; the route carries the condition instead.
         def on_if_node_enter(node)
           enter_condition(node, "if", node.subsequent)
@@ -79,6 +80,37 @@ module RailsAiContext
         def on_else_node_enter(node)
           current = @conditions.last
           current[:text] = current[:else] if current && current[:other].equal?(node)
+          on_when_node_enter(node)
+        end
+
+        def on_else_node_leave(node)
+          on_when_node_leave(node)
+        end
+
+        def on_case_node_enter(node)
+          return unless @statements.key?(node)
+
+          subject = node.predicate&.slice&.gsub(/\s+/, " ")
+          seen = []
+          node.conditions.each do |branch|
+            register_statements(branch.statements)
+            conditions = branch.conditions.map { |c| c.slice.gsub(/\s+/, " ") }
+            seen.concat(conditions)
+            @case_branches[branch] = subject ? "when #{subject} is #{conditions.join(', ')}" : "if #{conditions.join(' or ')}"
+          end
+          return unless node.else_clause
+
+          register_statements(node.else_clause.statements)
+          @case_branches[node.else_clause] = subject ? "when #{subject} is none of #{seen.join(', ')}" : "unless #{seen.join(' or ')}"
+        end
+
+        def on_when_node_enter(node)
+          text = @case_branches[node]
+          @conditions << { node: node, text: text } if text
+        end
+
+        def on_when_node_leave(node)
+          @conditions.pop if @conditions.last && @conditions.last[:node].equal?(node)
         end
 
         def on_if_node_leave(node)

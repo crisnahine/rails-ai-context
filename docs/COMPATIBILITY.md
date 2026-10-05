@@ -358,7 +358,7 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   another drawn file. `constraints do...end` and any other block that draws
   routes do not hide their children: they are read and resolved, and a
   literal hash constraint or `defaults:` is listed beside the route as
-  `bin/rails routes` prints it (an extra option Rails reads as a default is not). A route under `if`/`unless` is listed with
+  `bin/rails routes` prints it (an extra option Rails reads as a default is not). A route under `if`/`unless` or a `case` branch is listed with
   that condition, since source cannot tell whether it holds. Routes an initializer
   under `config/initializers` adds with `Rails.application.routes.prepend` or
   `.append` are read, before and after the draw as Rails orders them. Routes Rails' own
