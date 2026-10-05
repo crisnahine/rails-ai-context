@@ -197,7 +197,7 @@ module RailsAiContext
         entry = entry.merge(BASIC_AUTH) if entry[:macro] == :http_basic_authenticate_with
         macro = entry[:macro].to_s
         skipped = macro.start_with?("skip_")
-        names = Array(entry[:args]).map(&:to_s)
+        names = positional_names(entry)
         names += Array(entry[:proc_lines]).map { |line| "block (line #{line})" } unless skipped
         # An excluded name is framework noise only while it runs. A skip of it
         # is the app's own decision, which the per-action answer reports.
@@ -212,6 +212,21 @@ module RailsAiContext
         mark = skipped ? { skipped: true } : { declared: true }
         tail = constraints(entry)
         names.map { |name| { name: name, kind: kind, **mark, **tail } }
+      end
+
+      # Each name the call gives, in order. A class (`before_action Gatekeeper`) is named as
+      # written, an instance (`around_action TimingFilter.new`) by its class, as the booted tier names both.
+      def positional_names(entry)
+        literals = Array(entry[:args]).map(&:to_s)
+        return literals if Array(entry[:values]).empty?
+
+        entry[:values].filter_map do |value|
+          text = value.to_s
+          if value.is_a?(Symbol) || literals.include?(text) then text
+          elsif (const = text[/\A(?:::)?([A-Z]\w*(?:::[A-Z]\w*)*)\.new\b/, 1]) then "#{const} (object)"
+          elsif text.match?(/\A(?:::)?[A-Z]\w*(?:::[A-Z]\w*)*\z/) then text.delete_prefix("::")
+          end
+        end
       end
 
       def constraints(entry)
@@ -271,7 +286,7 @@ module RailsAiContext
       end
 
       private_class_method :walk, :class_level, :singleton_expansions, :declares_filters?, :base_expansions,
-                           :superclass_of, :base_source, :body_call?, :record, :constraints, :condition_text, :normalize, :action_condition, :lambda_body
+                           :superclass_of, :base_source, :body_call?, :record, :positional_names, :constraints, :condition_text, :normalize, :action_condition, :lambda_body
     end
   end
 end

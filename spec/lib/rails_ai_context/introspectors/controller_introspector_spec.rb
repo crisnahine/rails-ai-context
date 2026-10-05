@@ -683,6 +683,29 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
     end
 
+    it "names an object filter by its class, in both tiers, the same on every run" do
+      stub_const("TimingFilter", Class.new { def around(_controller) = yield })
+      stub_const("ClassFilter", Class.new { def self.before(_controller); end })
+      source = <<~RUBY
+        class WidgetsController < ApplicationController
+          around_action TimingFilter.new, only: :index
+          before_action ClassFilter, :plain_filter
+        end
+      RUBY
+      ctrl = Class.new(ActionController::Base) do
+        around_action TimingFilter.new, only: :index
+        before_action ClassFilter, :plain_filter
+      end
+      ctrl.define_singleton_method(:name) { "WidgetsController" }
+
+      booted = introspector.send(:extract_filters, ctrl, source).map { |f| [ f[:kind], f[:name], f[:only] ] }
+      static = introspector.send(:extract_filters_from_source, source).map { |f| [ f[:kind], f[:name], f[:only] ] }
+
+      expect(booted).to eq([ [ "around", "TimingFilter (object)", [ "index" ] ], [ "before", "ClassFilter", nil ],
+                             [ "before", "plain_filter", nil ] ])
+      expect(static).to eq(booted)
+    end
+
     # http_authentication.rb: `before_action(options) { http_basic_authenticate_or_request_with ... }`.
     it "names the filter http_basic_authenticate_with adds, in both tiers, password left out" do
       source = <<~RUBY

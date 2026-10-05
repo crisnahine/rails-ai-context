@@ -338,9 +338,12 @@ module RailsAiContext
       # http_basic_authenticate_with adds by that macro; any other framework's or gem's
       # block (`allow_browser`, `rate_limit`) is not a filter the app wrote.
       def callback_name(filter)
-        unless filter.is_a?(Proc)
-          name = filter.to_s
-          return name.start_with?("_") ? nil : name
+        case filter
+        when Symbol, String then return filter.to_s.start_with?("_") ? nil : filter.to_s
+        when Module then return filter.name
+        when Proc then nil
+        # An object's to_s is its inspect string, with an address that changes every run.
+        else return "#{filter.class.name || 'anonymous class'} (object)"
         end
 
         path, line = filter.source_location
