@@ -427,6 +427,16 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
       expect(text).not_to include("Mailer config:")
     end
 
+    it "names each CurrentAttributes class's attributes, defaults and reset hooks" do
+      config_data[:current_attribute_details] = {
+        "Current" => { attributes: [ { name: "user" }, { name: "session" }, { name: "locale", default: '"en"' } ], hooks: %w[resets] }
+      }
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("- `Current`: user, session, locale (default `\"en\"`); hooks: `resets`")
+    end
+
     it "handles empty current_attributes" do
       config_data[:current_attributes] = []
       result = described_class.call

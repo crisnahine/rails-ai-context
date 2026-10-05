@@ -73,11 +73,21 @@ module RailsAiContext
 
           if data[:current_attributes]&.any?
             lines << "" << "## CurrentAttributes"
-            data[:current_attributes].each { |c| lines << "- `#{c}`" }
+            data[:current_attributes].each { |c| lines << current_attributes_line(c, data.dig(:current_attribute_details, c)) }
           end
 
           text_response(lines.join("\n"))
         end
+      end
+
+      private_class_method def self.current_attributes_line(name, detail)
+        line = "- `#{name}`"
+        return line unless detail
+
+        attributes = Array(detail[:attributes]).map { |a| a[:default] ? "#{a[:name]} (default `#{a[:default]}`)" : a[:name] }
+        line += ": #{attributes.join(', ')}" if attributes.any?
+        line += "; hooks: #{detail[:hooks].map { |h| "`#{h}`" }.join(', ')}" if Array(detail[:hooks]).any?
+        line
       end
 
       # Middleware Rails or a development gem puts in every stack.

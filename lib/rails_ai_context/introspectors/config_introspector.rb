@@ -28,7 +28,8 @@ module RailsAiContext
           middleware_stack: extract_middleware,
           initializers: extract_initializers,
           credentials_configured: credentials_configured?,
-          current_attributes: detect_current_attributes,
+          current_attributes: current_attributes.keys,
+          current_attribute_details: current_attributes.presence,
           error_monitoring: detect_error_monitoring
         }
 
@@ -113,13 +114,26 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, false, label: "credentials_configured?")
       end
 
-      def detect_current_attributes
-        target_bases = %w[ActiveSupport::CurrentAttributes Rails::CurrentAttributes]
+      CURRENT_ATTRIBUTE_BASES = %w[ActiveSupport::CurrentAttributes Rails::CurrentAttributes].freeze
+      RESET_HOOKS = %i[resets after_reset before_reset].freeze
 
-        SourceScan.classes(root, kind: "app/models").filter_map do |name, record|
+      # class name => the attributes it declares and its reset hooks.
+      def current_attributes
+        @current_attributes ||= SourceScan.classes(root, kind: "app/models").filter_map do |name, record|
           declared = DeclaredConstant.declarations(record.source).first
-          name if declared && target_bases.include?(declared.superclass)
+          [ name, current_attribute_detail(record.source) ] if declared && CURRENT_ATTRIBUTE_BASES.include?(declared.superclass)
+        end.to_h
+      end
+
+      def current_attribute_detail(source)
+        calls = SourceIntrospector.walk_source(source, {
+          calls: -> { Listeners::GenericMacroListener.new(:attribute, *RESET_HOOKS) }
+        })[:calls]
+        attributes = calls.select { |call| call[:macro] == :attribute }.flat_map do |call|
+          default = call[:option_nodes][:default]&.slice
+          call[:args].map { |name| default ? { name: name.to_s, default: default } : { name: name.to_s } }
         end
+        { attributes: attributes, hooks: calls.map { |call| call[:macro].to_s }.reject { |m| m == "attribute" }.uniq }
       end
 
       def detect_error_monitoring

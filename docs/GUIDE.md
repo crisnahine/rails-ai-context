@@ -502,7 +502,7 @@ rails_get_controllers(detail: "full")
 
 Returns application configuration. No parameters.
 
-**Returns:** cache store, session store, timezone, queue adapter, mailer settings, the app's own middleware classes with their files and the rest of the stack as additions (framework defaults are filtered out), the `use` and `map` calls in `config.ru`, notable initializers, CurrentAttributes classes.
+**Returns:** cache store, session store, timezone, queue adapter, mailer settings, the app's own middleware classes with their files and the rest of the stack as additions (framework defaults are filtered out), the `use` and `map` calls in `config.ru`, notable initializers, CurrentAttributes classes with the attributes they declare, their defaults and reset hooks.
 
 ```
 rails_get_config()
