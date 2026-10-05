@@ -2,6 +2,8 @@
 
 require "spec_helper"
 require "tmpdir"
+require "open3"
+require "rbconfig"
 
 RSpec.describe RailsAiContext::BootManager do
   def app_with_environment(content)
@@ -99,6 +101,21 @@ RSpec.describe RailsAiContext::BootManager do
     expect(result.failure_summary).to include("did not finish within 1s")
     expect(result.failure_summary).not_to include("Timeout::Error")
     expect(result.failure_summary).not_to include("execution expired")
+  end
+
+  it "fails when config/environment.rb loads but defines no Rails application" do
+    dir = app_with_environment("X = 1\n")
+    lib = File.expand_path("../../../lib", __dir__)
+    script = <<~RUBY
+      require "rails_ai_context"
+      result = RailsAiContext::BootManager.boot!(app_root: #{dir.inspect})
+      print [ result.booted?, result.failure_summary ].inspect
+    RUBY
+
+    out, err, status = Open3.capture3(RbConfig.ruby, "-I", lib, "-e", script)
+
+    expect(status.success?).to be(true), err
+    expect(out).to include("[false, ").and include("defined no Rails application")
   end
 
   it "fails with a clear message when no Rails app exists" do
