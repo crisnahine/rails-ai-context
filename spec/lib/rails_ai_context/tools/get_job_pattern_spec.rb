@@ -472,6 +472,36 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text_for(job: "CleanupJob")).to include("**Queue:** `myapp_low`")
     end
 
+    it "reads an interpolated queue_name_prefix as computed, never as a made-up queue name" do
+      write("config/application.rb", "config.active_job.queue_name_prefix = \"myapp_\#{Rails.env}\"\n")
+      write("app/jobs/cleanup_job.rb", "class CleanupJob < ApplicationJob\n  queue_as :low\n  def perform; end\nend\n")
+      text = text_for(job: "CleanupJob")
+      expect(text).to include("**Queue:** `\"myapp_\#{Rails.env}\"`_low (computed)")
+      expect(text_for).not_to include("[INFERRED]")
+    end
+
+    it "reads a constant queue_name_prefix as its source, not as a literal name" do
+      write("config/application.rb", "config.active_job.queue_name_prefix = PREFIX\n")
+      write("app/jobs/cleanup_job.rb", "class CleanupJob < ApplicationJob\n  queue_as :low\n  def perform; end\nend\n")
+      expect(text_for(job: "CleanupJob")).to include("**Queue:** `PREFIX`_low (computed)")
+    end
+
+    it "names the condition a queue_name_prefix is set under" do
+      write("config/application.rb", "config.active_job.queue_name_prefix = \"myapp\" if ENV[\"PREFIXED\"]\n")
+      write("app/jobs/cleanup_job.rb", "class CleanupJob < ApplicationJob\n  queue_as :low\n  def perform; end\nend\n")
+      expect(text_for(job: "CleanupJob")).to include("**Queue:** myapp_low (queue_name_prefix set only when `ENV[\"PREFIXED\"]`)")
+    end
+
+    it "walks config/application.rb once for the queue settings and the GoodJob cron" do
+      write("config/application.rb", <<~RUBY)
+        config.active_job.queue_name_prefix = "myapp"
+        config.good_job.cron = { nightly: { cron: "0 3 * * *", class: "NightlyJob" } }
+      RUBY
+      allow(RailsAiContext::Introspectors::Listeners::ConfigAssignmentListener).to receive(:new).and_call_original
+      text_for(detail: "full")
+      expect(RailsAiContext::Introspectors::Listeners::ConfigAssignmentListener).to have_received(:new).once
+    end
+
     context "with a Solid Queue recurring.yml" do
       before do
         write("config/recurring.yml", <<~YAML)
@@ -551,6 +581,17 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
               every: "1h"
       YAML
       expect(text_for(job: "NightlyJob")).to include("**Schedule:** 1h (from config/sidekiq.yml)")
+    end
+
+    it "reads a computed GoodJob cron schedule as computed, not as a marker" do
+      write("config/initializers/good_job.rb", <<~RUBY)
+        Rails.application.configure do
+          config.good_job.cron = { nightly: { cron: ENV.fetch("NIGHTLY_CRON"), class: "NightlyJob" } }
+        end
+      RUBY
+      text = text_for(job: "NightlyJob")
+      expect(text).to include("**Schedule:** computed (from config/initializers/good_job.rb)")
+      expect(text).not_to include("[INFERRED]")
     end
 
     it "reads a GoodJob cron held in a constant as no schedule" do

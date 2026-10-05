@@ -224,35 +224,56 @@ module RailsAiContext
       end
 
       # ActiveJob's queue_name_from_part, with the queue settings the app's config assigns.
+      # A setting the static tier cannot evaluate reads as its source, with a note why.
       def queue_name_from_part(part)
         settings = active_job_queue_settings
-        name = part || settings.fetch(:default_queue_name, "default")
+        name = part || settings.dig(:default_queue_name, :text) || "default"
+        used = [ (settings[:default_queue_name] unless part) ]
         prefix = settings[:queue_name_prefix]
-        return name if prefix.nil? || prefix.empty?
+        if prefix && !prefix[:text].empty?
+          delimiter = settings[:queue_name_delimiter]
+          name = [ prefix[:text], name ].join(delimiter ? delimiter[:text] : "_")
+          used.push(prefix, delimiter)
+        end
 
-        [ prefix, name ].join(settings.fetch(:queue_name_delimiter, "_"))
+        notes = used.compact.filter_map { |setting| setting[:note] }.uniq
+        notes.empty? ? name : "#{name} (#{notes.join("; ")})"
       end
 
       QUEUE_SETTINGS = %i[queue_name_prefix queue_name_delimiter default_queue_name].freeze
 
-      # config/application.rb, then this environment's file over it. A computed value
-      # reads as its source, so the queue says what the static tier cannot evaluate.
+      # config/application.rb, then this environment's file over it.
       def active_job_queue_settings
         @active_job_queue_settings ||= [ "config/application.rb", "config/environments/#{RailsAiContext.environment_name}.rb" ]
           .each_with_object({}) do |file, settings|
-            resolution = SafePath.locate(file, under: app.root.to_s)
-            next unless resolution.ok?
-
-            Array(SourceIntrospector.walk(resolution.realpath, { config: Listeners::ConfigAssignmentListener })[:config]).each do |hit|
+            config_assignments(file).each do |hit|
               path = hit[:path]
               next unless hit[:assignment] && path.size == 2 && path.first == :active_job && QUEUE_SETTINGS.include?(path.last)
 
-              value = hit[:value]
-              settings[path.last] = value.is_a?(String) || value.is_a?(Symbol) ? value.to_s : "`#{hit[:source]}`"
+              settings[path.last] = queue_setting(path.last, hit)
             end
           end
       rescue StandardError, ScriptError => e
         @active_job_queue_settings = RailsAiContext.debug_fail(e, {}, label: "active_job_queue_settings")
+      end
+
+      # The listener turns a constant into its name and anything computed into a
+      # marker, so only a string or symbol written as one is the value Rails sees.
+      def queue_setting(key, hit)
+        value = hit[:value]
+        literal = value.is_a?(Symbol) ||
+          (value.is_a?(String) && value != RailsAiContext::Confidence::INFERRED && !hit[:source].to_s.match?(/\A(?:::)?[A-Z]/))
+        text = literal ? value.to_s : "`#{hit[:source]}`"
+        note = if hit[:condition] then "#{key} set only when `#{hit[:condition]}`"
+        elsif !literal then "computed"
+        end
+        { text: text, note: note }
+      end
+
+      # One walk of a config file per run, shared by the queue settings and the GoodJob cron.
+      def config_assignments(file)
+        @config_walks ||= {}
+        RecurringSchedules.config_assignments(app.root, file, @config_walks)
       end
 
       def sidekiq_options(macros)
@@ -512,7 +533,7 @@ module RailsAiContext
       end
 
       def recurring_jobs
-        RecurringSchedules.read(app.root)
+        RecurringSchedules.read(app.root, @config_walks ||= {})
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "recurring_jobs")
       end

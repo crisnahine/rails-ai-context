@@ -12,8 +12,16 @@ module RailsAiContext
     module RecurringSchedules
       module_function
 
-      def read(root)
-        solid_queue(root) + sidekiq_cron(root) + sidekiq_scheduler(root) + good_job(root) + whenever(root)
+      def read(root, walks = {})
+        solid_queue(root) + sidekiq_cron(root) + sidekiq_scheduler(root) + good_job(root, walks) + whenever(root)
+      end
+
+      # `walks` memoizes by file, so every reader of one config file in a run shares a walk.
+      def config_assignments(root, file, walks = {})
+        walks.fetch(file) do
+          source = read_file(root, file)
+          walks[file] = source ? Array(SourceIntrospector.walk_source(source, { config: Listeners::ConfigAssignmentListener })[:config]) : []
+        end
       end
 
       # Solid Queue takes the section named for the environment, else the whole file,
@@ -56,14 +64,12 @@ module RailsAiContext
 
       GOOD_JOB_FILES = %w[config/application.rb config/environments/*.rb config/initializers/*.rb].freeze
 
-      def good_job(root)
+      def good_job(root, walks = {})
         GOOD_JOB_FILES.flat_map { |pattern| Dir.glob(pattern, base: root.to_s).sort }.flat_map do |file|
-          source = read_file(root, file)
-          next [] unless source&.include?("good_job")
+          next [] unless walks.key?(file) || read_file(root, file)&.include?("good_job")
 
           env = File.basename(file, ".rb") if file.start_with?("config/environments/")
-          hits = SourceIntrospector.walk_source(source, { config: Listeners::ConfigAssignmentListener })[:config]
-          Array(hits).select { |hit| hit[:path] == %i[good_job cron] && hit[:value].is_a?(Hash) }.flat_map do |hit|
+          config_assignments(root, file, walks).select { |hit| hit[:path] == %i[good_job cron] && hit[:value].is_a?(Hash) }.flat_map do |hit|
             hit[:value].filter_map { |name, options| task(file, name, stringify(options), :cron, env: env) }
           end
         end
@@ -102,11 +108,14 @@ module RailsAiContext
       def task(file, name, options, kind, env: nil)
         return nil unless options.is_a?(Hash)
 
+        options = options.transform_values { |value| value == RailsAiContext::Confidence::INFERRED ? :computed : value }
         schedule = options[kind.to_s]
         return nil if schedule.nil?
 
         klass = options["class"] || options["klass"]
-        { name: name.to_s, class: klass&.to_s&.delete_prefix("::"), command: options["command"]&.to_s,
+        klass = nil if klass == :computed
+        command = options["command"] unless options["command"] == :computed
+        { name: name.to_s, class: klass&.to_s&.delete_prefix("::"), command: command&.to_s,
           schedule: schedule.to_s, env: env&.to_s, file: file }.compact
       end
 
