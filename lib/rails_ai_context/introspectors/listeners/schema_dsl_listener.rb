@@ -59,6 +59,8 @@ module RailsAiContext
             extract_index(node)
           elsif check_constraint_call?(node)
             extract_check_constraint(node)
+          elsif node.name == :unique_constraint && receiver_is_t?(node.receiver)
+            extract_unique_constraint(node)
           elsif receiver_is_t?(node.receiver) && !read_elsewhere?(node.name)
             unread_call(node)
           end
@@ -93,6 +95,9 @@ module RailsAiContext
             extract_top_level_add_index(node)
           when :add_check_constraint
             extract_top_level_check_constraint(node)
+          when :enable_extension
+            name = literal_string(node.arguments&.arguments&.first)
+            @results << { type: :extension, name: name, location: node.location.start_line } if name
           end
         end
 
@@ -127,6 +132,8 @@ module RailsAiContext
             # make a declared column indistinguishable from a guessed one.
             column:      SchemaConventions.primary_key_value(options[:column]),
             primary_key: SchemaConventions.primary_key_value(options[:primary_key]),
+            on_delete:   options[:on_delete],
+            on_update:   options[:on_update],
             location:    node.location.start_line
           }.compact
         end
@@ -197,6 +204,15 @@ module RailsAiContext
             type:       :check_constraint,
             expression: expr_arg.unescaped,
             location:   node.location.start_line
+          }
+        end
+
+        def extract_unique_constraint(node)
+          @results << {
+            type:     :unique_constraint,
+            columns:  literal_strings(node.arguments&.arguments&.first),
+            options:  extract_keyword_options(node),
+            location: node.location.start_line
           }
         end
 

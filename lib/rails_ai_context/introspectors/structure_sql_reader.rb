@@ -11,6 +11,7 @@ module RailsAiContext
       # @return [Hash] { dialect: Symbol, tables: { name => { columns:, indexes:, foreign_keys: } } }
       def parse(content)
         tables = {}
+        dialect = detect_sql_dialect(content)
 
         # Every table the file creates, by schema-qualified name, so a parent
         # outside the listed tables still resolves.
@@ -20,7 +21,7 @@ module RailsAiContext
           shown = shown_name(name)
           next if shown.start_with?("ar_internal_metadata", "schema_migrations") || (single_line && all.key?(name))
 
-          table, raw_types = parse_sql_table_body(body, shown)
+          table, raw_types = parse_sql_table_body(body, shown, dialect)
           all[name] = { table: table, raw_types: raw_types, parents: inherits && split_top_level(inherits).map { |parent| qualified_name(parent) } }
           tables[shown] = table if shown.match?(/\A\w+\z/)
         end
@@ -60,9 +61,9 @@ module RailsAiContext
         # [^;]*? keeps the match inside one statement: with .*? a pkey-only
         # ADD CONSTRAINT would swallow up to the FOREIGN KEY of a LATER
         # statement and attribute the FK to the wrong table.
-        content.scan(/ALTER TABLE\s+(?:ONLY\s+)?#{QUALIFIED_NAME}\s+ADD CONSTRAINT[^;]*?FOREIGN KEY\s*\(([^)]*)\)\s*REFERENCES\s+#{QUALIFIED_NAME}\s*\(([^)]*)\)/m) do |from, cols, to, pks|
+        content.scan(/ALTER TABLE\s+(?:ONLY\s+)?#{QUALIFIED_NAME}\s+ADD CONSTRAINT[^;]*?FOREIGN KEY\s*\(([^)]*)\)\s*REFERENCES\s+#{QUALIFIED_NAME}\s*\(([^)]*)\)([^;]*)/m) do |from, cols, to, pks, tail|
           from = qualified_name(from)
-          all.dig(from, :table, :foreign_keys)&.push(SchemaConventions.foreign_key_entry(shown_name(from), shown_name(qualified_name(to)), cols.scan(/\w+/), pks.scan(/\w+/)))
+          all.dig(from, :table, :foreign_keys)&.push(SchemaConventions.foreign_key_entry(shown_name(from), shown_name(qualified_name(to)), cols.scan(/\w+/), pks.scan(/\w+/), **foreign_key_actions(tail)))
         end
 
         alters = Hash.new { |h, k| h[k] = [] }
@@ -78,7 +79,16 @@ module RailsAiContext
           tables.delete(shown_name(name)) if name.start_with?("public.")
         end
 
-        { dialect: detect_sql_dialect(content), tables: tables }
+        { dialect: dialect, tables: tables }
+      end
+
+      # The actions Rails names (cascade, nullify, restrict); NO ACTION is its default.
+      FK_ACTIONS = { "CASCADE" => "cascade", "SET NULL" => "nullify", "RESTRICT" => "restrict" }.freeze
+
+      def foreign_key_actions(text)
+        { on_delete: :DELETE, on_update: :UPDATE }.to_h do |key, word|
+          [ key, FK_ACTIONS[text.to_s[/\bON\s+#{word}\s+(CASCADE|SET\s+NULL|RESTRICT)\b/i, 1]&.upcase&.squeeze(" ")] ]
+        end.compact
       end
 
       # A table name, optionally schema-qualified, each part bare or quoted.
@@ -162,13 +172,13 @@ module RailsAiContext
       # MySQL keeps indexes and foreign keys inside the CREATE TABLE body as
       # KEY / UNIQUE KEY / CONSTRAINT lines; the other dialects emit separate
       # statements, so those lines simply never match here.
-      def parse_sql_table_body(body, table_name)
+      def parse_sql_table_body(body, table_name, dialect = nil)
         # sqlite's .schema emits whole CREATE TABLE statements on one line;
         # the per-line parsers below would then see a single "line" and keep
         # only its first column. Split such bodies on top-level commas first.
         body = split_single_line_sql_body(body) unless body.include?("\n")
 
-        columns, raw_types = parse_sql_columns(body)
+        columns, raw_types = parse_sql_columns(body, dialect)
         table = { columns: columns, indexes: [], foreign_keys: [] }
         if (key = body[/^\s*PRIMARY KEY\s*\(([^)]*)\)/i, 1])
           table[:primary_key] = SchemaConventions.primary_key_value(key.scan(/\w+/))
@@ -177,9 +187,9 @@ module RailsAiContext
         body.each_line do |line|
           line = line.strip.chomp(",")
           case line
-          when /\ACONSTRAINT\s+[`"]?\w+[`"]?\s+FOREIGN KEY\s*\(([^)]*)\)\s*REFERENCES\s+[`"]?(\w+)[`"]?\s*\(([^)]*)\)/i
-            columns, to, keys = $1, $2, $3
-            table[:foreign_keys] << SchemaConventions.foreign_key_entry(table_name, to, columns.scan(/\w+/), keys.scan(/\w+/))
+          when /\ACONSTRAINT\s+[`"]?\w+[`"]?\s+FOREIGN KEY\s*\(([^)]*)\)\s*REFERENCES\s+[`"]?(\w+)[`"]?\s*\(([^)]*)\)(.*)/i
+            columns, to, keys, tail = $1, $2, $3, $4
+            table[:foreign_keys] << SchemaConventions.foreign_key_entry(table_name, to, columns.scan(/\w+/), keys.scan(/\w+/), **foreign_key_actions(tail))
           when /\A(UNIQUE\s+)?(?:KEY|INDEX)\s+[`"](\w+)[`"]\s*(\(.*)/i
             # Captured to locals first: the parsing below runs more regexes,
             # which would clobber $~ before the hash literal reads it.
@@ -257,7 +267,7 @@ module RailsAiContext
       end
 
       # Column definitions from a CREATE TABLE body, and each column's type as the dump spells it.
-      def parse_sql_columns(body)
+      def parse_sql_columns(body, dialect = nil)
         columns = []
         raw_types = {}
         body.each_line do |line|
@@ -290,6 +300,9 @@ module RailsAiContext
             default = sql_default(rest, type, col_type)
             column[:default] = default unless default.nil?
             column[:array] = true if col_type.end_with?("[]")
+            column.merge!(type_detail(col_type, type, dialect))
+            collation = rest[/\bCOLLATE\s+(?:pg_catalog\.)?"?([\w.-]+)"?/i, 1]
+            column[:collation] = collation if collation
             columns << column
           end
         end
@@ -337,6 +350,23 @@ module RailsAiContext
         items = split_top_level(inner).map { |item| item.strip.delete_prefix('"').delete_suffix('"') }
         numeric = raw_type.match?(/\A(?:integer|bigint|smallint|numeric|double precision|real|decimal)/)
         numeric ? items.map { |item| item.include?(".") ? item.to_f : item.to_i } : items
+      end
+
+      # The size a type was given, as schema.rb writes it: varchar(255) is
+      # MySQL's default string, 6 a datetime's default precision.
+      def type_detail(raw_type, type, dialect)
+        sizes = raw_type[/\((\d+(?:\s*,\s*\d+)?)\)/, 1]&.split(",")&.map(&:to_i)
+        return {} unless sizes
+
+        case type
+        when "string"
+          sizes.first == 255 && dialect == :mysql ? {} : { limit: sizes.first }
+        when "binary" then { limit: sizes.first }
+        when "decimal" then { precision: sizes.first, scale: sizes[1] || 0 }
+        when "datetime" then [ 0, 6 ].include?(sizes.first) ? {} : { precision: sizes.first }
+        when "time" then sizes.first.zero? ? {} : { precision: sizes.first }
+        else {}
+        end
       end
 
       def normalize_sql_type(type)

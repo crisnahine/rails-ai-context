@@ -74,6 +74,64 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
   # A composite unique index constrains the pair, not each column: a blog's
   # articles read series_id and position as unique on their own, and lost the
   # plain index on series_id.
+  # A migration or validation written from the table view needs what the dump declares.
+  describe "what the table view shows beyond name and type" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "postgresql", total_tables: 2, extensions: [ "citext" ], tables: {
+          "accounts" => {
+            comment: "Tenant accounts",
+            columns: [
+              { name: "name", type: "string", null: false, limit: 120, collation: "C" },
+              { name: "seats", type: "integer", unsigned: true },
+              { name: "total", type: "decimal", precision: 10, scale: 2 },
+              { name: "seen_at", type: "datetime", precision: 3 }
+            ],
+            indexes: [], foreign_keys: [],
+            unique_constraints: [ { name: "uniq_name", columns: [ "name" ], deferrable: "immediate" } ]
+          },
+          "users" => {
+            columns: [ { name: "data", type: "jsonb" }, { name: "account_id", type: "bigint" } ],
+            indexes: [
+              { name: "index_users_on_data", columns: [ "data" ], unique: false, using: "gin" },
+              { name: "idx_acct", columns: [ "account_id" ], unique: false, include: [ "data" ], order: { "account_id" => "desc" } }
+            ],
+            foreign_keys: [ { from_table: "users", to_table: "accounts", column: "account_id", primary_key: "id", on_delete: "cascade" } ]
+          }
+        } },
+        models: {}
+      })
+    end
+
+    it "shows a column's precision, scale, limit, unsigned flag and collation" do
+      text = described_class.call(table: "accounts").content.first[:text]
+
+      expect(text).to include("| name | string, limit: 120, collation: C | **NO** |")
+      expect(text).to include("| seats | integer, unsigned | yes |")
+      expect(text).to include("| total | decimal(10,2) | yes |")
+      expect(text).to include("| seen_at | datetime(3) | yes |")
+    end
+
+    it "shows the table comment and its unique constraints" do
+      text = described_class.call(table: "accounts").content.first[:text]
+
+      expect(text).to include("**Comment:** Tenant accounts")
+      expect(text).to include("### Unique constraints\n- `uniq_name` on (name), deferrable: immediate")
+    end
+
+    it "shows an index's options and a foreign key's actions" do
+      text = described_class.call(table: "users").content.first[:text]
+
+      expect(text).to include("- `index_users_on_data` on (data) - using: gin")
+      expect(text).to include("- `idx_acct` on (account_id) - include: data; order: account_id desc")
+      expect(text).to include("- `account_id` → `accounts.id` (on_delete: cascade)")
+    end
+
+    it "names the enabled extensions in the full listing" do
+      expect(described_class.call(detail: "full").content.first[:text]).to include("**Extensions:** citext")
+    end
+  end
+
   describe "column hints for a composite unique index" do
     before do
       allow(described_class).to receive(:cached_context).and_return({

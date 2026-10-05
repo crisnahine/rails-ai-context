@@ -32,6 +32,7 @@ module RailsAiContext
           check_constraints: check_constraints,
           enum_types: enum_types,
           generated_columns: generated_columns(schema_reader),
+          extensions: extensions,
           # What names the migration behind a declared table the connection lacks.
           pending_migrations: RailsAiContext::PendingMigrations.live(RailsAiContext::PendingMigrations.migrate_dir_for(app.root))
         }.compact)
@@ -90,9 +91,64 @@ module RailsAiContext
             columns: extract_columns(table),
             indexes: extract_indexes(table),
             foreign_keys: extract_foreign_keys(table),
-            primary_key: SchemaConventions.primary_key_value(connection.primary_key(table))
-          }
+            primary_key: SchemaConventions.primary_key_value(connection.primary_key(table)),
+            comment: table_comment(table),
+            unique_constraints: unique_constraints(table)
+          }.compact
         end
+      end
+
+      def table_comment(table)
+        comment = connection.table_comment(table) if connection.supports_comments?
+        comment unless comment.to_s.empty?
+      rescue => e
+        RailsAiContext.debug_fail(e, nil, label: "table_comment")
+      end
+
+      # Rails 7.1+ on PostgreSQL.
+      def unique_constraints(table)
+        return unless connection.respond_to?(:unique_constraints) && connection.supports_unique_constraints?
+
+        found = connection.unique_constraints(table).map do |constraint|
+          SchemaConventions.unique_constraint_entry(constraint.name, constraint.column, constraint.deferrable)
+        end
+        found if found.any?
+      rescue => e
+        RailsAiContext.debug_fail(e, nil, label: "unique_constraints")
+      end
+
+      def extensions
+        found = connection.extensions if connection.respond_to?(:extensions)
+        Array(found).map(&:to_s) if found.present?
+      rescue => e
+        RailsAiContext.debug_fail(e, nil, label: "extensions")
+      end
+
+      # What schema.rb writes for a column beyond its type: the connection's
+      # limit, precision and collation, less the defaults the dumper leaves out.
+      def column_detail(table, col, bigint)
+        native_limit = (connection.native_database_types[col.type] || {})[:limit]
+        limit = col.limit unless bigint || col.limit == native_limit || col.sql_type.to_s.match?(/\A(?:tiny|medium|long)?(?:text|blob)\b/i)
+        # A datetime's default precision is 6, and MySQL writes none as 0.
+        precision = col.precision unless col.type == :datetime && [ nil, 0, 6 ].include?(col.precision) ||
+                                         col.type == :time && col.precision.to_i.zero? && col.sql_type.to_s.start_with?("time")
+        {
+          limit: limit,
+          precision: precision,
+          scale: col.scale,
+          unsigned: (true if col.respond_to?(:unsigned?) && col.unsigned?),
+          collation: (col.collation unless col.collation.nil? || col.collation == table_collation(table))
+        }
+      end
+
+      # MySQL gives every text column the table's collation; the dump names only a different one.
+      def table_collation(table)
+        return unless connection.respond_to?(:mariadb?)
+
+        @table_collations ||= {}
+        return @table_collations[table] if @table_collations.key?(table)
+
+        @table_collations[table] = connection.select_all("SHOW TABLE STATUS LIKE #{connection.quote(table)}").first&.fetch("Collation", nil)
       end
 
       def extract_columns(table)
@@ -107,9 +163,7 @@ module RailsAiContext
             type: bigint ? "bigint" : col.type.to_s,
             null: col.null,
             default: col.default,
-            limit: (col.limit unless bigint),
-            precision: col.precision,
-            scale: col.scale,
+            **column_detail(table, col, bigint),
             comment: col.comment
           }
           # PostgreSQL gives an array's default as its literal ({}), which the
@@ -128,27 +182,21 @@ module RailsAiContext
 
       def extract_indexes(table)
         connection.indexes(table).map do |idx|
-          {
-            name: idx.name,
-            # An expression index's columns come as one String; split into keys as the dump readers do.
-            columns: idx.columns.is_a?(String) ? StructureSqlReader.index_keys(idx.columns) : idx.columns,
-            unique: idx.unique,
-            where: idx.where
-          }.compact
+          # An expression index's columns come as one String; split into keys as the dump readers do.
+          columns = idx.columns.is_a?(String) ? StructureSqlReader.index_keys(idx.columns) : idx.columns
+          detail = SchemaConventions.index_detail(
+            columns, using: idx.using, type: idx.type, order: idx.orders, opclass: idx.opclasses, length: idx.lengths,
+            include: (idx.include if idx.respond_to?(:include)),
+            nulls_not_distinct: (idx.nulls_not_distinct if idx.respond_to?(:nulls_not_distinct))
+          )
+          { name: idx.name, columns: columns, unique: idx.unique, where: idx.where }.compact.merge(detail)
         end
       end
 
       def extract_foreign_keys(table)
         # PostgreSQL clones a key that references a partitioned table once per partition.
         connection.foreign_keys(table).reject { |fk| @partitions.to_a.include?(fk.to_table) }.map do |fk|
-          {
-            from_table: fk.from_table,
-            to_table: fk.to_table,
-            column: fk.column,
-            primary_key: fk.primary_key,
-            on_delete: fk.on_delete,
-            on_update: fk.on_update
-          }.compact
+          SchemaConventions.foreign_key_entry(fk.from_table, fk.to_table, fk.column, fk.primary_key, on_delete: fk.on_delete, on_update: fk.on_update)
         end
       rescue => e
         # Some adapters don't support foreign_keys.
@@ -324,6 +372,9 @@ module RailsAiContext
         entry[:null] = false if options[:null] == false
         entry[:default] = column[:default] unless column[:default].nil?
         entry[:array] = true if options[:array] == true
+        %i[limit precision scale].each { |key| entry[key] = options[key] if options[key].is_a?(Integer) }
+        entry[:unsigned] = true if options[:unsigned] == true
+        entry[:collation] = options[:collation] if options[:collation].is_a?(String)
         entry[:comment] = options[:comment] if options[:comment].is_a?(String)
         entry[:primary_key] = true if column[:primary_key]
         entry
@@ -333,15 +384,18 @@ module RailsAiContext
         columns = index[:columns]
         return nil if columns.empty?
 
+        options = index[:options]
         entry = {
-          name:    index[:options][:name]&.to_s,
+          name:    options[:name]&.to_s,
           columns: columns,
-          unique:  index[:options][:unique] == true,
-          where:   (index[:options][:where] if index[:options][:where].is_a?(String))
+          unique:  options[:unique] == true,
+          where:   (options[:where] if options[:where].is_a?(String))
         }
         # An expression index (e.g. "lower(email)") names no plain column.
         entry[:expression] = true if columns.size == 1 && !columns.first.match?(/\A\w+\z/)
-        entry.compact
+        detail = options.slice(:using, :type, :include, :order, :opclass, :length, :nulls_not_distinct)
+                        .reject { |_, value| value == RailsAiContext::Confidence::INFERRED }
+        entry.compact.merge(SchemaConventions.index_detail(columns, **detail))
       end
 
       def parse_schema_rb(path)
@@ -354,10 +408,16 @@ module RailsAiContext
         schema.tables.each do |table_name, declared|
           next if table_name.start_with?("ar_internal_metadata", "schema_migrations")
 
+          comment = declared.dig(:options, :comment)
+          unique = Array(declared[:unique_constraints]).map do |constraint|
+            SchemaConventions.unique_constraint_entry(constraint.dig(:options, :name), constraint[:columns], constraint.dig(:options, :deferrable))
+          end
           tables[table_name] = {
             columns: declared[:columns].map { |c| static_column(c) },
             indexes: declared[:indexes].filter_map { |i| static_index(i) },
             foreign_keys: [],
+            comment: (comment if comment.is_a?(String)),
+            unique_constraints: (unique if unique.any?),
             unread_calls: declared[:unread_calls]
           }.compact
           key = declared.dig(:options, :primary_key)
@@ -366,7 +426,7 @@ module RailsAiContext
 
         schema.foreign_keys.each do |fk|
           tables[fk[:from]]&.dig(:foreign_keys)&.push(
-            SchemaConventions.foreign_key_entry(fk[:from], fk[:to], fk[:column], fk[:primary_key])
+            SchemaConventions.foreign_key_entry(fk[:from], fk[:to], fk[:column], fk[:primary_key], on_delete: fk[:on_delete], on_update: fk[:on_update])
           )
         end
 
@@ -385,6 +445,7 @@ module RailsAiContext
           generated_columns: generated_columns(schema),
           note: "Parsed from db/schema.rb (#{connection_state})"
         }
+        result[:extensions] = schema.extensions if schema.extensions.any?
         # schema.rb records only the max applied version, so pending here
         # means "migration files newer than the schema version" - exact for
         # linear histories, best-effort for out-of-order merges. With no

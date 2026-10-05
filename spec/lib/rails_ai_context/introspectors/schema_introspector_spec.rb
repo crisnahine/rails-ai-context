@@ -271,7 +271,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       it "reads a PostgreSQL array column as the static tier does" do
         metadata = double(sql_type: "character varying[]")
         column = double(name: "tags", type: :string, null: true, default: '{a,"b c"}', limit: nil, precision: nil,
-                        scale: nil, comment: nil, array?: true, sql_type_metadata: metadata)
+                        scale: nil, comment: nil, collation: nil, sql_type: "character varying[]", array?: true, sql_type_metadata: metadata)
         allow(ActiveRecord::Base.connection).to receive(:columns).with("pa_v_things").and_return([ column ])
 
         expect(introspector.send(:extract_columns, "pa_v_things"))
@@ -281,7 +281,8 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       # ActiveRecord gives an expression index's columns as one String; the
       # static readers split it into keys, and every consumer maps the list.
       it "reads an expression index's columns as the static readers do" do
-        index = double(name: "idx_lower_email", columns: "lower((email)::text), id", unique: true, where: nil)
+        index = double(name: "idx_lower_email", columns: "lower((email)::text), id", unique: true, where: nil,
+                       using: :btree, type: nil, orders: {}, opclasses: {}, lengths: {})
         allow(ActiveRecord::Base.connection).to receive(:indexes).with("pa_v_people").and_return([ index ])
 
         expect(introspector.send(:extract_indexes, "pa_v_people"))
@@ -1185,6 +1186,105 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
         expect(static_parse(dir)).not_to have_key(:pending_migrations)
       end
+    end
+  end
+
+  describe "what a column, index, key and table declare beyond name and type" do
+    def static_tables(schema)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "database.yml"), "test:\n  adapter: sqlite3\n")
+        File.write(File.join(dir, "db", "schema.rb"), schema)
+        described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+      end
+    end
+
+    let(:result) do
+      static_tables(<<~RUBY)
+        ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+          enable_extension "citext"
+          create_table "accounts", comment: "Tenant accounts", force: :cascade do |t|
+            t.string "name", limit: 120, null: false, collation: "C"
+            t.integer "seats", unsigned: true
+            t.decimal "total", precision: 10, scale: 2
+            t.unique_constraint ["name"], deferrable: :immediate, name: "uniq_name"
+          end
+          create_table "users", force: :cascade do |t|
+            t.jsonb "data"
+            t.bigint "account_id"
+            t.index ["data"], name: "index_users_on_data", using: :gin
+            t.index ["account_id"], name: "idx_acct", include: ["data"], order: { account_id: :desc }
+          end
+          add_foreign_key "users", "accounts", on_delete: :cascade
+        end
+      RUBY
+    end
+
+    it "keeps a column's limit, precision, scale, unsigned flag and collation" do
+      columns = result[:tables]["accounts"][:columns].to_h { |c| [ c[:name], c ] }
+
+      expect(columns["name"]).to include(limit: 120, collation: "C")
+      expect(columns["seats"]).to include(unsigned: true)
+      expect(columns["total"]).to include(precision: 10, scale: 2)
+    end
+
+    it "keeps the table comment and its unique constraints" do
+      accounts = result[:tables]["accounts"]
+
+      expect(accounts[:comment]).to eq("Tenant accounts")
+      expect(accounts[:unique_constraints]).to eq([ { name: "uniq_name", columns: [ "name" ], deferrable: "immediate" } ])
+    end
+
+    it "keeps an index's method, included columns and order" do
+      indexes = result[:tables]["users"][:indexes].to_h { |i| [ i[:name], i ] }
+
+      expect(indexes["index_users_on_data"]).to include(using: "gin")
+      expect(indexes["idx_acct"]).to include(include: [ "data" ], order: { "account_id" => "desc" })
+    end
+
+    it "keeps a foreign key's on_delete action" do
+      expect(result[:tables]["users"][:foreign_keys]).to eq([
+        { from_table: "users", to_table: "accounts", column: "account_id", primary_key: "id", on_delete: "cascade" }
+      ])
+    end
+
+    it "lists the extensions the dump enables" do
+      expect(result[:extensions]).to eq([ "citext" ])
+    end
+
+    # The booted tier reads the connection and the static tier reads what Rails
+    # dumps from that same connection, so a table must come out the same.
+    it "gives the booted answer the static tier reads from the dump of the same table" do
+      connection = ActiveRecord::Base.connection
+      connection.create_table(:pa_d_owners, force: true) { |t| t.string :label }
+      connection.create_table(:pa_d_items, force: true) do |t|
+        t.decimal :total, precision: 10, scale: 2
+        t.string :code, limit: 20
+        t.string :slug, collation: "NOCASE"
+        t.datetime :seen_at, precision: 3
+        t.datetime :made_at
+        t.integer :pa_d_owner_id
+        t.index [ :code, :total ], name: "idx_pa_d_code", order: { code: :desc }
+      end
+      connection.add_foreign_key :pa_d_items, :pa_d_owners, on_delete: :cascade
+
+      dump = StringIO.new
+      # Rails 7.2 dumps from a pool, earlier versions from a connection.
+      source = ActiveRecord.version >= Gem::Version.new("7.2") ? ActiveRecord::Base.connection_pool : connection
+      ActiveRecord::SchemaDumper.dump(source, dump)
+      # The static tier leaves out null: true, which the booted tier spells.
+      booted = introspector.call[:tables]["pa_d_items"]
+      booted = booted.merge(columns: booted[:columns].map { |c| c[:null] ? c.except(:null) : c })
+      static = static_tables(dump.string)[:tables]["pa_d_items"]
+      static = static.merge(columns: static[:columns].map { |c| c.except(:primary_key) })
+
+      %i[columns indexes foreign_keys].each do |key|
+        expect(booted[key]).to eq(static[key]), "#{key}: booted #{booted[key].inspect}, static #{static[key].inspect}"
+      end
+    ensure
+      connection.drop_table(:pa_d_items, if_exists: true)
+      connection.drop_table(:pa_d_owners, if_exists: true)
     end
   end
 end

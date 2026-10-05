@@ -355,7 +355,9 @@ module RailsAiContext
       # schema version recorded by the dump, and migration files it doesn't
       # cover - the static-tier stand-ins for a live connection's answers.
       private_class_method def self.note_lines(schema)
-        schema[:note].to_s.empty? ? [] : [ "_#{schema[:note]}_" ]
+        lines = schema[:note].to_s.empty? ? [] : [ "_#{schema[:note]}_" ]
+        lines << "**Extensions:** #{schema[:extensions].join(', ')}" if schema[:extensions]&.any?
+        lines
       end
 
       private_class_method def self.static_source_lines(schema)
@@ -446,6 +448,31 @@ module RailsAiContext
         "#{names.first(COVERAGE_CAP).join(', ')}, and #{names.size - COVERAGE_CAP} more"
       end
 
+      # The type as a migration declares it: `decimal(10,2)`, `string, limit: 20`.
+      private_class_method def self.column_type_label(col)
+        label = col[:type].to_s
+        sizes = [ col[:precision], col[:scale] ].compact
+        label += "(#{sizes.join(',')})" if col[:precision]
+        label += "[]" if col[:array]
+        label += ", limit: #{col[:limit]}" if col[:limit]
+        label += ", unsigned" if col[:unsigned]
+        label += ", collation: #{col[:collation]}" if col[:collation]
+        label
+      end
+
+      # Options are joined by semicolons because a value can list columns.
+      private_class_method def self.index_options_text(idx)
+        parts = []
+        parts << "using: #{idx[:using]}" if idx[:using]
+        parts << "type: #{idx[:type]}" if idx[:type]
+        parts << "include: #{idx[:include].join(', ')}" if idx[:include]
+        %i[order opclass length].each do |key|
+          parts << "#{key}: #{idx[key].map { |column, value| "#{column} #{value}" }.join(', ')}" if idx[key]
+        end
+        parts << "nulls not distinct" if idx[:nulls_not_distinct]
+        parts.any? ? " - #{parts.join('; ')}" : ""
+      end
+
       private_class_method def self.format_table_markdown(name, data, models)
         columns = data[:columns] || []
         # Always show Nullable and Default - agents need these for migrations and validations
@@ -454,6 +481,9 @@ module RailsAiContext
         model_refs = models_for_table(name, models)
         lines = [ "## Table: #{name}", "" ]
         lines << "**Models:** #{model_refs.join(', ')}" if model_refs.any?
+        lines << "**Comment:** #{data[:comment]}" if data[:comment]
+        # A table right after a paragraph line would read as part of it.
+        lines << "" if lines.size > 2
 
         header = "| Column | Type | Null"
         sep = "|--------|------|-----"
@@ -465,8 +495,7 @@ module RailsAiContext
 
         columns.each do |col|
           nullable = col.key?(:null) ? (col[:null] ? "yes" : "**NO**") : "yes"
-          col_type = col[:array] ? "#{col[:type]}[]" : col[:type].to_s
-          line = "| #{col[:name]} | #{col_type} | #{nullable}"
+          line = "| #{col[:name]} | #{column_type_label(col)} | #{nullable}"
           if has_defaults
             default_val = col[:default]
             display_default = default_val == "" ? '""' : default_val
@@ -484,15 +513,25 @@ module RailsAiContext
           lines << "" << "### Indexes"
           data[:indexes].each do |idx|
             unique = idx[:unique] ? " (unique)" : ""
-            lines << "- `#{idx[:name]}` on (#{Array(idx[:columns]).join(', ')})#{unique}#{RailsAiContext::Introspectors::SchemaConventions.where_clause(idx[:where])}"
+            lines << "- `#{idx[:name]}` on (#{Array(idx[:columns]).join(', ')})#{unique}#{RailsAiContext::Introspectors::SchemaConventions.where_clause(idx[:where])}#{index_options_text(idx)}"
+          end
+        end
+
+        if data[:unique_constraints]&.any?
+          lines << "" << "### Unique constraints"
+          data[:unique_constraints].each do |constraint|
+            deferrable = constraint[:deferrable] ? ", deferrable: #{constraint[:deferrable]}" : ""
+            lines << "- `#{constraint[:name]}` on (#{Array(constraint[:columns]).join(', ')})#{deferrable}"
           end
         end
 
         if data[:foreign_keys]&.any?
           lines << "" << "### Foreign keys"
           data[:foreign_keys].each do |fk|
+            actions = fk.slice(:on_delete, :on_update).map { |key, value| "#{key}: #{value}" }
             lines << "- `#{RailsAiContext::Introspectors::SchemaConventions.key_text(fk[:column])}` → " \
-                     "`#{fk[:to_table]}.#{RailsAiContext::Introspectors::SchemaConventions.key_text(fk[:primary_key])}`"
+                     "`#{fk[:to_table]}.#{RailsAiContext::Introspectors::SchemaConventions.key_text(fk[:primary_key])}`" \
+                     "#{" (#{actions.join(', ')})" if actions.any?}"
           end
         end
 

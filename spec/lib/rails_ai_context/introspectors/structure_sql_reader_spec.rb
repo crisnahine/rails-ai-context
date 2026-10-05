@@ -580,4 +580,60 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
       expect(audit[:foreign_keys].map { |fk| fk[:to_table] }).to eq(%w[audit.users])
     end
   end
+
+  # What schema.rb writes for the same column: a size the type was given, less
+  # the defaults the dumper leaves out.
+  describe "a column's size, collation and a foreign key's actions" do
+    def columns(sql, table)
+      described_class.parse(sql)[:tables][table][:columns].to_h { |c| [ c[:name], c.except(:name, :type, :null) ] }
+    end
+
+    it "reads them from pg_dump" do
+      sql = <<~SQL
+        SET search_path = '';
+        CREATE TABLE public.orders (
+            id bigint NOT NULL,
+            total numeric(10,2),
+            whole numeric(8),
+            code character varying(20),
+            label character varying COLLATE pg_catalog."C",
+            seen_at timestamp(3) without time zone,
+            made_at timestamp(6) without time zone,
+            account_id bigint
+        );
+
+        ALTER TABLE ONLY public.orders
+            ADD CONSTRAINT fk_rails_1 FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON UPDATE RESTRICT ON DELETE CASCADE;
+      SQL
+
+      expect(columns(sql, "orders")).to eq(
+        "id" => {}, "total" => { precision: 10, scale: 2 }, "whole" => { precision: 8, scale: 0 },
+        "code" => { limit: 20 }, "label" => { collation: "C" }, "seen_at" => { precision: 3 }, "made_at" => {}, "account_id" => {}
+      )
+      expect(described_class.parse(sql)[:tables]["orders"][:foreign_keys].first).to include(on_delete: "cascade", on_update: "restrict")
+    end
+
+    it "reads them from mysqldump, where varchar(255) and datetime(6) are the defaults" do
+      sql = <<~SQL
+        CREATE TABLE `orders` (
+          `id` bigint NOT NULL AUTO_INCREMENT,
+          `total` decimal(10,2) DEFAULT NULL,
+          `code` varchar(255) DEFAULT NULL,
+          `name` varchar(120) COLLATE utf8mb4_bin NOT NULL,
+          `made_at` datetime(6) NOT NULL,
+          `seen_at` datetime(3) DEFAULT NULL,
+          `views` int DEFAULT NULL,
+          `account_id` bigint DEFAULT NULL,
+          PRIMARY KEY (`id`),
+          CONSTRAINT `fk_rails_1` FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+      SQL
+
+      expect(columns(sql, "orders")).to eq(
+        "id" => {}, "total" => { precision: 10, scale: 2 }, "code" => {}, "name" => { limit: 120, collation: "utf8mb4_bin" },
+        "made_at" => {}, "seen_at" => { precision: 3 }, "views" => {}, "account_id" => {}
+      )
+      expect(described_class.parse(sql)[:tables]["orders"][:foreign_keys].first).to include(on_delete: "nullify")
+    end
+  end
 end

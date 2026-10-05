@@ -94,6 +94,11 @@ module RailsAiContext
         parse[:check_constraints]
       end
 
+      # @return [Array<String>] the extensions the dump enables
+      def extensions
+        parse[:extensions]
+      end
+
       # Declared defaults for one table, as source text. Callers report these
       # verbatim when the live database returns no default.
       def defaults_for(table)
@@ -123,10 +128,12 @@ module RailsAiContext
           # structure.sql and the replay keep from_table/to_table on the table;
           # every reader answers the schema.rb shape, so no consumer checks both.
           foreign_keys: tables.flat_map { |_name, t| t[:foreign_keys] || [] }.map do |fk|
-            { from: fk[:from_table], to: fk[:to_table], column: fk[:column], primary_key: fk[:primary_key] }.compact
+            { from: fk[:from_table], to: fk[:to_table], column: fk[:column], primary_key: fk[:primary_key],
+              on_delete: fk[:on_delete], on_update: fk[:on_update] }.compact
           end,
           enums: [],
-          check_constraints: []
+          check_constraints: [],
+          extensions: []
         }
       end
 
@@ -139,7 +146,7 @@ module RailsAiContext
       end
 
       def empty_schema
-        { tables: {}, foreign_keys: [], enums: [], check_constraints: [] }
+        { tables: {}, foreign_keys: [], enums: [], check_constraints: [], extensions: [] }
       end
 
       def build
@@ -215,10 +222,12 @@ module RailsAiContext
         when :add_index
           schema[:tables][event[:table]]&.dig(:indexes)&.push(index_entry(event))
         when :foreign_key
-          schema[:foreign_keys] << {
-            from: event[:from], to: event[:to],
-            column: event[:column], primary_key: event[:primary_key]
-          }.compact
+          schema[:foreign_keys] << event.slice(:from, :to, :column, :primary_key, :on_delete, :on_update)
+        when :unique_constraint
+          table = schema[:tables][current] if current
+          (table[:unique_constraints] ||= []) << event.slice(:columns, :options) if table
+        when :extension
+          schema[:extensions] << event[:name]
         when :enum
           schema[:enums] << { name: event[:name], values: event[:values] }
         when :check_constraint

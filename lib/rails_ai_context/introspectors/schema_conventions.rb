@@ -29,12 +29,43 @@ module RailsAiContext
 
       # Rails omits column:/primary_key: only where the convention holds, so
       # the fallback is what was declared rather than a guess.
-      def foreign_key_entry(from, to, column, primary_key)
+      def foreign_key_entry(from, to, column, primary_key, on_delete: nil, on_update: nil)
         {
           from_table: from, to_table: to,
           column: primary_key_value(column) || "#{to.to_s.singularize}_id",
-          primary_key: primary_key_value(primary_key) || "id"
-        }
+          primary_key: primary_key_value(primary_key) || "id",
+          on_delete: on_delete&.to_s, on_update: on_update&.to_s
+        }.compact
+      end
+
+      # An index's options past name, columns, unique and where, as schema.rb
+      # writes them; btree is every adapter's default, so the dump leaves it out.
+      def index_detail(columns, using: nil, type: nil, include: nil, order: nil, opclass: nil, length: nil, nulls_not_distinct: nil)
+        {
+          using: (using.to_s unless using.nil? || using.to_s == "btree"),
+          type: (type.to_s unless type.nil? || type.to_s.empty?),
+          include: (Array(include).map(&:to_s) unless Array(include).empty?),
+          order: per_key(order, columns),
+          opclass: per_key(opclass, columns),
+          length: per_key(length, columns),
+          nulls_not_distinct: (true if nulls_not_distinct == true)
+        }.compact
+      end
+
+      # An index option given per key, or once for every key (`order: :desc`).
+      def per_key(value, columns)
+        value = Array(columns).to_h { |column| [ column, value ] } unless value.is_a?(Hash)
+        value = value.reject { |_, v| v.nil? || v.to_s.empty? }
+        value.to_h { |key, v| [ key.to_s, v.is_a?(Integer) ? v : v.to_s ] } unless value.empty?
+      end
+
+      # deferrable: false is the default the dump leaves out.
+      def unique_constraint_entry(name, columns, deferrable)
+        {
+          name: name&.to_s,
+          columns: Array(columns).map(&:to_s),
+          deferrable: (deferrable.to_s if deferrable)
+        }.compact
       end
 
       # Rails' limit before it shortens an index name (max_index_name_size).
