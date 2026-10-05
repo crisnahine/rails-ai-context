@@ -93,8 +93,9 @@ module RailsAiContext
           methods = extract_symbol_args(node)
           options = declared_options(node)
 
+          # Rails registers the block as well as the methods, block first.
+          record(node, "custom", [], options, block: block_text(node.block)) if node.block.is_a?(Prism::BlockNode)
           methods.each { |method_name| record(node, "custom", [ method_name ], options) }
-          record(node, "custom", [], options, block: block_text(node.block)) if methods.empty? && node.block.is_a?(Prism::BlockNode)
         end
 
         # The block's first statement, which is usually the rule itself.
