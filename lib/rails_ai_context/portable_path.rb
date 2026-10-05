@@ -105,6 +105,26 @@ module RailsAiContext
         .map { |dir| File.join(dir, "gems") + File::SEPARATOR }
     end
 
+    # A file a loaded gem ships. A `path:` gem kept in the repo, or a gem the
+    # app sits inside (an engine's dummy app), is the app's own source; a
+    # bundle installed under the root (vendor/bundle, .bundle) is still the gems'.
+    def gem_file?(path, root)
+      path = path.to_s
+      root = "#{root.to_s.chomp(File::SEPARATOR)}#{File::SEPARATOR}"
+      Gem.loaded_specs.each_value.any? do |spec|
+        dir = "#{spec.full_gem_path}#{File::SEPARATOR}"
+        path.start_with?(dir) && !app_owned_gem?(spec, dir, root)
+      end
+    end
+
+    def app_owned_gem?(spec, dir, root)
+      return true if root.start_with?(dir)
+      return false unless dir.start_with?(root) && defined?(Bundler::Source::Path)
+
+      source = spec.respond_to?(:source) ? spec.source : nil
+      source.is_a?(Bundler::Source::Path) && !source.is_a?(Bundler::Source::Git)
+    end
+
     # A gem the Gemfile takes from path: or git: is never unpacked under a
     # gem root, so its own checkout is the only prefix that names it. Longest
     # first, because one checkout can sit inside another.

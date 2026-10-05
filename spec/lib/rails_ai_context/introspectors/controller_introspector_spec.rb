@@ -683,6 +683,20 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
     end
 
+    it "leaves out a gem's block when the bundle is installed under the app root" do
+      Dir.mktmpdir do |dir|
+        gem_dir = File.join(dir, ".bundle/ruby/3.4.0/gems/actionpack-8.1.0")
+        gem_block = eval("proc { }", binding, File.join(gem_dir, "lib/action_controller/metal/allow_browser.rb"), 58)
+        app_block = eval("proc { }", binding, File.join(dir, "app/controllers/users_controller.rb"), 3)
+        allow(Gem).to receive(:loaded_specs)
+          .and_return("actionpack" => double(full_gem_path: gem_dir, source: Bundler::Source::Rubygems.allocate))
+        in_dir = described_class.new(double("app", root: Pathname.new(dir)))
+
+        expect(in_dir.send(:callback_name, gem_block)).to be_nil
+        expect(in_dir.send(:callback_name, app_block)).to eq("block (line 3)")
+      end
+    end
+
     it "names an object filter by its class, in both tiers, the same on every run" do
       stub_const("TimingFilter", Class.new { def around(_controller) = yield })
       stub_const("ClassFilter", Class.new { def self.before(_controller); end })

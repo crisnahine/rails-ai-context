@@ -426,24 +426,9 @@ module RailsAiContext
         location = Object.const_source_location(model.name)&.first
         return false unless location
 
-        root = "#{app.root}#{File::SEPARATOR}"
-        Gem.loaded_specs.each_value.any? do |spec|
-          dir = "#{spec.full_gem_path}#{File::SEPARATOR}"
-          location.start_with?(dir) && !app_owned_gem?(spec, dir, root)
-        end
+        PortablePath.gem_file?(location, app.root)
       rescue NameError, ArgumentError, TypeError
         false
-      end
-
-      # A `path:` gem kept in the repo, or a gem the app sits inside (an
-      # engine's dummy app). A bundle installed under the root (vendor/bundle)
-      # is still the gems' own.
-      def app_owned_gem?(spec, dir, root)
-        return true if root.start_with?(dir)
-        return false unless dir.start_with?(root) && defined?(Bundler::Source::Path)
-
-        source = spec.respond_to?(:source) ? spec.source : nil
-        source.is_a?(Bundler::Source::Path) && !source.is_a?(Bundler::Source::Git)
       end
 
       def discover_models

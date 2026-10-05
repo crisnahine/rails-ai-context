@@ -352,7 +352,9 @@ module RailsAiContext
         return "http_basic_authenticate_with" if path&.end_with?("action_controller/metal/http_authentication.rb")
 
         root = "#{app.root.to_s.chomp("/")}/"
-        "block (line #{line})" if path&.start_with?(root) && !path.delete_prefix(root).start_with?("vendor/")
+        return unless path&.start_with?(root) && !path.delete_prefix(root).start_with?("vendor/")
+
+        "block (line #{line})" unless PortablePath.gem_file?(path, root)
       end
 
       # A compiled callback keeps only:/except: in private ivars, so the
