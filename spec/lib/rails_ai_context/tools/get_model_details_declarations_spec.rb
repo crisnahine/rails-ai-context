@@ -94,7 +94,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
             has_many :old_users, class_name: "User", deprecated: true
           end
         RUBY
-        "profile.rb" => "class Profile < ApplicationRecord\n  belongs_to :user, required: false\n  belongs_to :owner\nend\n",
+        "profile.rb" => "class Profile < ApplicationRecord\n  belongs_to :user, required: false\n  belongs_to :owner\n  belongs_to :team, optional: true, required: true\nend\n",
         "ticket.rb" => "class Ticket < ApplicationRecord\n  belongs_to :order, query_constraints: [:shop_id, :order_id], optional: true\nend\n"
       }
     end
@@ -120,6 +120,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
 
       expect(profile).to include("- `belongs_to` **user** [optional] (fk: user_id)")
       expect(profile).to include("- `belongs_to` **owner** (fk: owner_id)")
+      expect(profile).to include("- `belongs_to` **team** (fk: team_id)")
       expect(ticket).to include("- `belongs_to` **order** [optional] (fk: (shop_id, order_id))")
     end
   end

@@ -1462,7 +1462,7 @@ module RailsAiContext
       # as the foreign key (7.2 refuses the option).
       def with_rails_option_rules(assoc, options)
         required = literal_boolean(options[:required]) if options.key?(:required)
-        assoc = assoc.merge(optional: !required) if assoc[:type] == "belongs_to" && !required.nil? && !assoc.key?(:optional)
+        assoc = assoc.merge(optional: !required) if assoc[:type] == "belongs_to" && !required.nil?
         keys = options[:query_constraints]
         assoc = assoc.merge(foreign_key: keys.map(&:to_s)) if keys.is_a?(Array) && !assoc.key?(:foreign_key)
         assoc
