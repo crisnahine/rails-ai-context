@@ -15,7 +15,11 @@ module RailsAiContext
         prepend_before_action append_before_action
         prepend_after_action prepend_around_action append_after_action append_around_action
         skip_before_action skip_after_action skip_around_action skip_forgery_protection
+        http_basic_authenticate_with
       ].freeze
+
+      # The block filter http_authentication.rb adds, named for the macro: its keywords are credentials.
+      BASIC_AUTH = { macro: :before_action, args: [ :http_basic_authenticate_with ], proc_lines: [] }.freeze
 
       # actionpack's request_forgery_protection.rb defines it as this skip.
       FORGERY_SKIP = { macro: :skip_before_action, args: [ :verify_authenticity_token ] }.freeze
@@ -190,6 +194,7 @@ module RailsAiContext
       # One filter per callback the call adds: each name, then each block or lambda, named by its line.
       def record(entry)
         entry = entry.merge(FORGERY_SKIP) if entry[:macro] == :skip_forgery_protection
+        entry = entry.merge(BASIC_AUTH) if entry[:macro] == :http_basic_authenticate_with
         macro = entry[:macro].to_s
         skipped = macro.start_with?("skip_")
         names = Array(entry[:args]).map(&:to_s)

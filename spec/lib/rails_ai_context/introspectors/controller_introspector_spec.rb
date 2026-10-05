@@ -149,7 +149,12 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         # The introspector extracts rate_limit via source parsing, not reflection.
         File.write(fixture_ctrl, <<~RUBY)
           class RateLimitedController < ApplicationController
-            rate_limit to: 10, within: 1.minute
+            rate_limit to: 10, within: 1.minute, only: :index
+            rate_limit to: 100,
+                       within: 1.hour, # the long window
+                       by: -> { request.domain }, name: "long"
+
+            def self.throttle = rate_limit(to: 1, within: 1.second)
 
             def index
               render plain: "ok"
@@ -160,9 +165,12 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
 
       after { FileUtils.rm_f(fixture_ctrl) }
 
-      it "extracts rate_limit macro from source" do
-        rate_limit = result[:controllers]["RateLimitedController"][:rate_limit]
-        expect(rate_limit).to include("10")
+      # `name:` exists so one controller can declare several limits (rate_limiting.rb).
+      it "extracts every rate_limit the class body declares, a call split over lines whole" do
+        expect(result[:controllers]["RateLimitedController"][:rate_limits]).to eq([
+          { text: "to: 10, within: 1.minute, only: :index", to: 10, within: "1.minute", only: [ "index" ] },
+          { text: 'to: 100, within: 1.hour, by: -> { request.domain }, name: "long"', to: 100, within: "1.hour", name: "long" }
+        ])
       end
     end
 
@@ -663,6 +671,25 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         expect(booted).to eq([ [ "around", "par", nil ], [ "before", "block (line 3)", [ "index" ] ] ])
         expect(static).to eq(booted)
       end
+    end
+
+    # http_authentication.rb: `before_action(options) { http_basic_authenticate_or_request_with ... }`.
+    it "names the filter http_basic_authenticate_with adds, in both tiers, password left out" do
+      source = <<~RUBY
+        class ReportsController < ApplicationController
+          http_basic_authenticate_with name: "admin", password: "secret", except: :index
+        end
+      RUBY
+      ctrl = Class.new(ActionController::Base) { http_basic_authenticate_with name: "admin", password: "secret", except: :index }
+      ctrl.define_singleton_method(:name) { "ReportsController" }
+
+      booted = introspector.send(:extract_filters, ctrl, source)
+      static = introspector.send(:extract_filters_from_source, source)
+
+      expect(booted.map { |f| f.slice(:kind, :name, :except) })
+        .to eq([ { kind: "before", name: "http_basic_authenticate_with", except: [ "index" ] } ])
+      expect(static.map { |f| f.slice(:kind, :name, :except) }).to eq(booted.map { |f| f.slice(:kind, :name, :except) })
+      expect((booted + static).inspect).not_to include("secret")
     end
 
     def with_concern(body)

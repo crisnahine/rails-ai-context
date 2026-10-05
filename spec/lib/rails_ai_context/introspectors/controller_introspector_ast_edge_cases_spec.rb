@@ -669,23 +669,6 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
   # the AST version reconstructs from options hash)
   # ────────────────────────────────────────────────────────────
   describe "rate_limit output format" do
-    it "produces a string containing 'to:' and 'within:'" do
-      source = <<~RUBY
-        class RateController < ApplicationController
-          rate_limit to: 5, within: 1.minute, only: :create
-
-          def create
-            render plain: "ok"
-          end
-        end
-      RUBY
-      raw = introspector.send(:extract_rate_limit, source, introspector.send(:rate_limit_entry, source))
-      expect(raw).to include("to")
-      expect(raw).to include("within")
-      # The old regex would return: "to: 5, within: 1.minute, only: :create"
-      # The AST version returns options reconstructed as "to: 5, within: ..."
-    end
-
     it "reads the options from the macro's argument nodes" do
       source = <<~RUBY
         class RateController < ApplicationController
@@ -695,15 +678,14 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
         end
       RUBY
 
-      parsed = introspector.send(:parse_rate_limit, introspector.send(:rate_limit_entry, source))
-      expect(parsed).to eq(to: 5, within: "1.minute", only: %w[create update])
+      expect(introspector.send(:extract_rate_limits, source))
+        .to eq([ { text: "to: 5, within: 1.minute, only: [:create, :update]", to: 5, within: "1.minute", only: %w[create update] } ])
     end
 
     it "reads a single-symbol only: constraint" do
       source = "class C < ApplicationController; rate_limit to: 1, within: 1.hour, only: :create; end"
 
-      parsed = introspector.send(:parse_rate_limit, introspector.send(:rate_limit_entry, source))
-      expect(parsed[:only]).to eq([ "create" ])
+      expect(introspector.send(:extract_rate_limits, source).first[:only]).to eq([ "create" ])
     end
   end
 

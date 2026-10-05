@@ -338,6 +338,17 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(full).to include("- [UNAVAILABLE: unreadable]")
     end
 
+    it "prints every rate limit a controller declares" do
+      limits = [ { text: "to: 10, within: 3.minutes, only: :create" }, { text: 'to: 100, within: 1.hour, name: "long"' } ]
+      stub_controllers({ "SessionsController" => { actions: %w[create], filters: [], parent_class: "ApplicationController", rate_limits: limits } })
+
+      one = described_class.call(controller: "SessionsController").content.first[:text]
+      full = described_class.call(detail: "full").content.first[:text]
+
+      expect(one).to include("**Rate limits:**\n- to: 10, within: 3.minutes, only: :create\n- to: 100, within: 1.hour, name: \"long\"")
+      expect(full).to include('- Rate limit: to: 10, within: 3.minutes, only: :create; to: 100, within: 1.hour, name: "long"')
+    end
+
     it "names both strong params methods of a controller under an app parent" do
       stub_controllers({
         "Admin::AccountsController" => {

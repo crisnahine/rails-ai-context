@@ -151,7 +151,7 @@ module RailsAiContext
                     info, rescue_handlers: true,
                     ctx: ctx, name: name, root: rails_app&.root&.to_s
                   ))
-                  lines << "- Rate limit: #{info[:rate_limit]}" if info[:rate_limit]
+                  lines << "- Rate limit: #{info[:rate_limits].map { |limit| limit[:text] }.join('; ')}" if info[:rate_limits]&.any?
                   lines << "- Turbo Stream actions: #{info[:turbo_stream_actions].join(', ')}" if info[:turbo_stream_actions]&.any?
                   lines << ""
                 end
@@ -478,7 +478,13 @@ module RailsAiContext
         end
 
         # Rate limiting
-        lines << "" << "**Rate limit:** #{info[:rate_limit]}" if info[:rate_limit]
+        limits = Array(info[:rate_limits])
+        if limits.one?
+          lines << "" << "**Rate limit:** #{limits.first[:text]}"
+        elsif limits.any?
+          lines << "" << "**Rate limits:**"
+          limits.each { |limit| lines << "- #{limit[:text]}" }
+        end
 
         # Turbo Stream actions
         if info[:turbo_stream_actions]&.any?
