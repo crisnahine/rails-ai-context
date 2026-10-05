@@ -20,12 +20,13 @@ module RailsAiContext
       JOB_DIRS = %w[app/jobs app/workers app/sidekiq].freeze
       ACTIVE_JOB_BASES = %w[ActiveJob::Base ApplicationJob ActionMailer::MailDeliveryJob].freeze
       QUE_JOB_BASES = %w[Que::Job].freeze
-      JOB_MACROS = %i[
-        queue_as retry_on discard_on
-        sidekiq_options sidekiq_throttle include
-        before_enqueue after_enqueue before_perform after_perform
-        around_perform around_enqueue
+      JOB_CALLBACKS = %i[
+        before_enqueue after_enqueue around_enqueue before_perform after_perform around_perform after_discard
       ].freeze
+      JOB_MACROS = (%i[
+        queue_as queue_with_priority enqueue_after_transaction_commit= limits_concurrency include
+        sidekiq_throttle
+      ] + RetryPolicy::MACROS + JOB_CALLBACKS).freeze
 
       # @return [Hash] async workers, mailers, and channels
       def call
@@ -95,7 +96,8 @@ module RailsAiContext
             name: job.name,
             file: source_file_for(job),
             queue: queue.to_s,
-            priority: job.priority
+            # A block priority is a Proc here; the source names it instead.
+            priority: (job.priority unless job.priority.is_a?(Proc))
           }.compact
         end.sort_by { |j| j[:name] }
       rescue => e
@@ -124,10 +126,8 @@ module RailsAiContext
 
       # What a base declares beyond its queue, options and retries: the mixins, the
       # throttle and the callbacks every job below it runs with.
-      JOB_BASE_DECLARATIONS = %i[
-        include sidekiq_throttle before_enqueue after_enqueue before_perform after_perform
-        around_perform around_enqueue
-      ].freeze
+      JOB_BASE_DECLARATIONS = (%i[include sidekiq_throttle queue_with_priority enqueue_after_transaction_commit= limits_concurrency] +
+                               JOB_CALLBACKS).freeze
 
       # Sidekiq hands `sidekiq_options` to a subclass and ActiveJob hands it `queue_as`,
       # so both are read down the app's chain, the nearest class that sets a key winning.
@@ -195,7 +195,7 @@ module RailsAiContext
       PROC_LITERAL = /\A(?:->|(?:lambda|proc|Proc\.new)(?![\w.]))/
 
       QUEUE_AS_LISTENERS = {
-        macros: -> { Listeners::GenericMacroListener.new(*JOB_MACROS, block_source: [ :queue_as ]) },
+        macros: -> { Listeners::GenericMacroListener.new(*JOB_MACROS, block_source: [ :queue_as, :queue_with_priority, *RetryPolicy::BLOCK_MACROS ]) },
         procs:  Listeners::ProcLiteralListener,
         queue_assignments: Listeners::QueueAssignmentListener
       }.freeze
@@ -357,13 +357,6 @@ module RailsAiContext
           perform_method = ActionResolver.entry_point(ast[:methods], names: que ? ActionResolver::QUE_ENTRY_POINTS : ActionResolver::ENTRY_POINTS)
           perform_signature = ActionResolver.parameter_list(perform_method) if perform_method && perform_method[:params]&.any?
 
-          # Extract job callbacks
-          callback_names = %i[before_enqueue after_enqueue before_perform after_perform around_perform around_enqueue]
-          callbacks = ast[:macros]
-            .select { |m| callback_names.include?(m[:macro]) }
-            .map { |m| m[:macro].to_s }
-            .uniq
-
           retries = RetryPolicy.entries(ast[:macros])
 
           job = { name: name, file: candidate.file }
@@ -372,11 +365,38 @@ module RailsAiContext
           job[:retries] = retries if retries.any?
           job[:perform_signature] = perform_signature if perform_signature
           job[:entry_point] = perform_method[:name] if perform_method && perform_method[:name] != "perform"
-          job[:callbacks] = callbacks if callbacks.any?
+          job.merge!(run_settings(name))
           job
         end.sort_by { |j| j[:name] }
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "extract_jobs_from_source")
+      end
+
+      # What decides when a job runs, as its class (or the nearest base setting it) writes it.
+      def run_settings(name)
+        candidate = job_candidates[name]
+        macros = class_body(candidate.ast[:macros], candidate.source)
+        settings = {}
+        priority = nearest_macro(name, :queue_with_priority)
+        settings[:priority] = priority[:block] ? labelled(COMPUTED_PRIORITY, priority[:block]) : priority[:values].first if priority
+        commit = nearest_macro(name, :enqueue_after_transaction_commit=)
+        settings[:enqueue_after_transaction_commit] = commit[:values].first.then { |v| v.is_a?(Symbol) ? ":#{v}" : v.to_s } if commit
+        concurrency = nearest_macro(name, :limits_concurrency)
+        settings[:concurrency] = written(job_candidates[concurrency[:owner]].source, concurrency) if concurrency
+        callbacks = macros.select { |m| JOB_CALLBACKS.include?(m[:macro]) }.sort_by { |m| m[:offset] }
+        settings[:callbacks] = callbacks.map { |m| written(candidate.source, m) } if callbacks.any?
+        settings
+      end
+
+      COMPUTED_PRIORITY = "computed by a block"
+
+      def nearest_macro(name, macro)
+        chain_of(name).each do |link|
+          candidate = job_candidates[link]
+          hit = class_body(candidate.ast[:macros], candidate.source).reverse.find { |m| m[:macro] == macro }
+          return hit.merge(owner: link) if hit
+        end
+        nil
       end
 
       # Sidekiq workers, read from source in both tiers: the class is not an

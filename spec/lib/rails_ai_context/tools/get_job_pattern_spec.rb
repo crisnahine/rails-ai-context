@@ -67,6 +67,70 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text).to include("ExampleJob")
     end
 
+    context "with what decides when a job runs and what happens after its last retry" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app/jobs"))
+        FileUtils.mkdir_p(File.join(tmpdir, "app/sidekiq"))
+        File.write(File.join(tmpdir, "app/jobs/report_job.rb"), <<~RUBY)
+          class ReportJob < ApplicationJob
+            queue_as :reports
+            queue_with_priority 10
+            self.enqueue_after_transaction_commit = true
+            retry_on ActiveRecord::Deadlocked, wait: 5.seconds, attempts: 3, queue: :low, priority: 1, jitter: 0.1
+            after_discard { |job, error| Rails.logger.error(error) }
+            before_enqueue :b_enq
+            around_perform :timed
+            after_perform :done
+            def perform(user_id); end
+          end
+        RUBY
+        File.write(File.join(tmpdir, "app/jobs/nightly_job.rb"), <<~RUBY)
+          class NightlyJob < ApplicationJob
+            limits_concurrency to: 1, key: ->(id) { id }, duration: 5.minutes
+            def perform(id); end
+          end
+        RUBY
+        File.write(File.join(tmpdir, "app/sidekiq/hard_worker.rb"), <<~RUBY)
+          class HardWorker
+            include Sidekiq::Job
+            sidekiq_options retry: 5
+            sidekiq_retry_in { |count| 10 * count }
+            sidekiq_retries_exhausted { |msg, ex| Rails.logger.warn(msg) }
+            def perform; end
+          end
+        RUBY
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "shows the priority, the transaction setting, every retry option and the callbacks" do
+        text = described_class.call(job: "ReportJob").content.first[:text]
+
+        expect(text).to include("**Priority:** 10")
+        expect(text).to include("**Enqueue after transaction commit:** true")
+        expect(text).to include("- retry_on ActiveRecord::Deadlocked, attempts: 3, wait: 5.seconds, queue: :low, priority: 1, jitter: 0.1")
+        expect(text).to include("## Callbacks\n- `after_discard { |job, error| Rails.logger.error(error) }`\n" \
+                                "- `before_enqueue :b_enq`\n- `around_perform :timed`\n- `after_perform :done`")
+      end
+
+      it "shows a Solid Queue concurrency limit" do
+        expect(described_class.call(job: "NightlyJob").content.first[:text])
+          .to include("**Concurrency:** `limits_concurrency to: 1, key: ->(id) { id }, duration: 5.minutes`")
+      end
+
+      it "shows a Sidekiq worker's backoff block and exhausted handler under its retries" do
+        text = described_class.call(job: "HardWorker").content.first[:text]
+
+        expect(text).to include("- sidekiq_retry_in { |count| 10 * count }")
+        expect(text).to include("- sidekiq_retries_exhausted { |msg, ex| Rails.logger.warn(msg) }")
+      end
+    end
+
     context "with a rich job fixture" do
       let(:tmpdir) { Dir.mktmpdir }
       let(:jobs_dir) { File.join(tmpdir, "app", "jobs") }

@@ -448,7 +448,11 @@ job inherits from is not counted as a job; the listing names the ones it left
 out, in the sentence the service and mailer listings use, and `job:` answers
 for one of them with what every job below it inherits: its queue, options,
 retries, mixins, throttle and callbacks, and which jobs inherit it. `job:`
-answers a worker name as well as a job name.
+answers a worker name as well as a job name. A job's own page shows its
+`queue_with_priority`, `enqueue_after_transaction_commit` and Solid Queue
+`limits_concurrency` (its own or the nearest base's), every `retry_on` option,
+Sidekiq's `sidekiq_retry_in` and `sidekiq_retries_exhausted` blocks, and its
+enqueue, perform and discard callbacks as written.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|

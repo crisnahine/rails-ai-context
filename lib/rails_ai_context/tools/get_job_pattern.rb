@@ -264,6 +264,9 @@ module RailsAiContext
         queue = (record && (record[:queue] || (record[:options] || {})["queue"])) || extract_queue(source)
         lines << "**Queue:** #{queue_text(queue)}" if queue
         lines << "**Throttle:** #{worker[:throttle]}" if worker && worker[:throttle]
+        lines << "**Priority:** #{record[:priority]}" if record && !record[:priority].nil?
+        lines << "**Enqueue after transaction commit:** #{record[:enqueue_after_transaction_commit]}" if record&.key?(:enqueue_after_transaction_commit)
+        lines << "**Concurrency:** `#{record[:concurrency]}`" if record && record[:concurrency]
         if base && (declares = Array(base[:declares])).any?
           lines << "" << "## Declares (every job below inherits these)"
           declares.each { |line| lines << "- `#{line}`" }
@@ -273,6 +276,12 @@ module RailsAiContext
         if retry_config.any?
           lines << "" << "## Retry Configuration"
           retry_config.each { |r| lines << "- #{r}" }
+        end
+
+        callbacks = Array(record && record[:callbacks])
+        if callbacks.any?
+          lines << "" << "## Callbacks"
+          callbacks.each { |c| lines << "- `#{c}`" }
         end
 
         # Perform method signature
