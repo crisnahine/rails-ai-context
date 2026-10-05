@@ -20,6 +20,8 @@ module RailsAiContext
             extract_gem(node)
           when :source
             extract_source(node)
+          when :eval_gemfile
+            extract_eval_gemfile(node)
           when :group
             return unless node.block
 
@@ -74,6 +76,24 @@ module RailsAiContext
             version:  version,
             options:  options,
             groups:   groups,
+            location: node.location.start_line
+          }
+        end
+
+        # `eval_gemfile "Gemfile.local"`, or `File.expand_path("x", __dir__)`;
+        # Bundler reads the path from the evaluating file's directory.
+        def extract_eval_gemfile(node)
+          arg = node.arguments&.arguments&.first
+          if arg.is_a?(Prism::CallNode) && arg.name == :expand_path && arg.receiver&.slice == "File"
+            inner = arg.arguments&.arguments || []
+            arg = inner.first if inner.size == 2 && inner.last.slice == "__dir__"
+          end
+          return unless arg.is_a?(Prism::StringNode)
+
+          @results << {
+            type:     :eval_gemfile,
+            path:     arg.unescaped,
+            groups:   @current_groups.flatten.uniq,
             location: node.location.start_line
           }
         end
