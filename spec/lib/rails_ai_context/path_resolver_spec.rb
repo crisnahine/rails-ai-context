@@ -34,6 +34,22 @@ RSpec.describe RailsAiContext::PathResolver do
       allow(described_class).to receive(:enclosing_engine_roots).and_return([])
       expect(described_class.test_root(@root)).to eq(@root)
     end
+
+    it "is the engine's root without booting, from the gemspec bundle config/boot.rb names inside the repository" do
+      dummy = File.join(@root, "test", "dummy")
+      FileUtils.mkdir_p([ File.join(dummy, "config"), File.join(@root, ".git") ])
+      File.write(File.join(dummy, "config", "boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n))
+      File.write(File.join(@root, "Gemfile"), "gemspec\n")
+      File.write(File.join(@root, "Gemfile.lock"), "GEM\n  specs:\n")
+      allow(described_class).to receive(:enclosing_engine_roots).and_return([])
+      expect(described_class.test_root(dummy)).to eq(dummy)
+
+      File.write(File.join(@root, "shop.gemspec"), "")
+      expect(described_class.test_root(dummy)).to eq(@root)
+
+      FileUtils.rm_rf(File.join(@root, ".git"))
+      expect(described_class.test_root(dummy)).to eq(dummy)
+    end
   end
 
   describe ".app_initializer_files" do

@@ -784,4 +784,33 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       expect(text).to include("simplecov")
     end
   end
+
+  describe "an engine's test/dummy read without booting" do
+    it "reads the engine's suite when its bundle is inside the repository, and says it is not read otherwise" do
+      Dir.mktmpdir do |engine|
+        dummy = File.join(engine, "test", "dummy")
+        FileUtils.mkdir_p([ File.join(dummy, "config"), File.join(engine, "test", "models"), File.join(engine, ".git") ])
+        File.write(File.join(dummy, "config", "boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n))
+        File.write(File.join(engine, "shop.gemspec"), "")
+        File.write(File.join(engine, "Gemfile"), "gemspec\n")
+        File.write(File.join(engine, "Gemfile.lock"), "GEM\n  specs:\n    minitest (5.25.0)\n")
+        File.write(File.join(engine, "test", "test_helper.rb"), "")
+        File.write(File.join(engine, "test", "models", "widget_test.rb"), "")
+        allow(RailsAiContext::PathResolver).to receive(:enclosing_engine_roots).and_return([])
+        app = RailsAiContext::StaticApp.new(dummy)
+        allow(described_class).to receive(:rails_app).and_return(app)
+        tests = -> { RailsAiContext::Introspectors::TestIntrospector.new(app).call }
+
+        allow(described_class).to receive(:cached_context).and_return({ tests: tests.call })
+        text = described_class.call.content.first[:text]
+        expect(text).to include("**Framework:** minitest", "**Suite:** the engine's, at `../..`")
+
+        FileUtils.rm_rf(File.join(engine, ".git"))
+        described_class.reset_cache!
+        allow(described_class).to receive(:cached_context).and_return({ tests: tests.call })
+        text = described_class.call.content.first[:text]
+        expect(text).to include("**Suite:** not read: config/boot.rb points Bundler at ../../Gemfile, outside the app's git repository")
+      end
+    end
+  end
 end

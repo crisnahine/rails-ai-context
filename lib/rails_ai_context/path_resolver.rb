@@ -272,8 +272,21 @@ module RailsAiContext
       root = root.to_s
       return root if %w[test spec].any? { |dir| Dir.exist?(File.join(root, dir)) }
 
-      enclosing_engine_roots(root).first || root
+      RunCache.fetch([ :test_root, root ]) { enclosing_engine_roots(root).first || bundle_engine_root(root) || root }
     end
+
+    # Unbooted, the engine is the gemspec directory holding the bundle config/boot.rb
+    # names, which GemLock only resolves inside the app's git repository.
+    def bundle_engine_root(root)
+      dir = GemLock.bundle(root)[:dir]
+      real_root = root_key(root)
+      return nil if dir == root || !real_root.start_with?("#{dir}#{File::SEPARATOR}") || Dir.glob(File.join(dir, "*.gemspec")).empty?
+
+      # In the root's own spelling, which every caller strips from the paths it prints.
+      depth = real_root.delete_prefix("#{dir}#{File::SEPARATOR}").split(File::SEPARATOR).size
+      depth.times.reduce(File.expand_path(root)) { |path, _| File.dirname(path) }
+    end
+    private_class_method :bundle_engine_root
 
     # Inside the app root, or inside the engine its test/dummy runs in.
     def project_file?(path, root)

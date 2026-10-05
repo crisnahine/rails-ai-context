@@ -197,6 +197,9 @@ Booted from an engine's `test/dummy`, the engine whose root holds the app root (
 `app/views` layouts and templates, and, when the dummy keeps no `test/` or `spec/` of its
 own, its test suite are read. Paths into it are printed relative to the app root
 (`../../app/models/...`), and symlink containment applies relative to the engine root.
+Without booting, only the test suite is read this way, and only from the directory of the
+bundle `config/boot.rb` declares (read under the rule above) when it holds a `*.gemspec`
+and contains the app root.
 
 ### How a refusal is reported
 
