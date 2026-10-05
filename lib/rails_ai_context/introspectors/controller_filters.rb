@@ -182,7 +182,7 @@ module RailsAiContext
                                             .map { |entry| with_file(entry, placement.dig(entry[:from_concern], 2), root) }
           taken.merge(mixed.map { |entry| entry[:site].name })
           found.concat(own + mixed)
-          name, scope = superclass_of(base, label)
+          name, scope = RunCache.fetch([ :controller_base_superclass, path, label ]) { superclass_of(base, label) }
         end
         found
       end
@@ -204,11 +204,11 @@ module RailsAiContext
 
       # [constant, source, realpath, app-relative path] of the app controller base the name resolves to, as Ruby looks it up.
       def base_source(root, name, scope)
-        ConcernPaths.candidate_names(name, scope).each do |candidate|
-          found = RunCache.fetch([ :controller_base_source, root.to_s, candidate ]) { constant_source(root, candidate) }
-          return found if found
+        RunCache.fetch([ :controller_base, root.to_s, name, scope ]) do
+          ConcernPaths.candidate_names(name, scope).lazy.filter_map do |candidate|
+            RunCache.fetch([ :controller_base_source, root.to_s, candidate ]) { constant_source(root, candidate) }
+          end.first
         end
-        nil
       end
 
       def constant_source(root, candidate)
