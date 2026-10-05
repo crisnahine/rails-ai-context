@@ -207,6 +207,11 @@ module RailsAiContext
             end
           end
 
+          if data[:indexes]&.any?
+            lines << "" << "## Indexes"
+            data[:indexes].each { |index| lines << "- `#{index}`" }
+          end
+
           # embeds_many and embeds_one are listed under Associations too.
           listed = Array(data[:associations]).map { |a| a[:name].to_s }
           embeds = Array(data[:embeds]).reject { |e| listed.include?(e[:name].to_s) }

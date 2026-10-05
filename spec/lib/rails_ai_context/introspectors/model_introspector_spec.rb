@@ -1679,6 +1679,31 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    it "lists each declared index as written in both tiers" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "author.rb"), <<~RUBY)
+          class Author
+            include Mongoid::Document
+            field :email, type: String
+            index({ email: 1 }, { unique: true })
+            index({ account_id: 1, created_at: -1 }, # newest first
+                  background: true)
+          end
+        RUBY
+
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        [ introspector.static_call, introspector.call ].each do |result|
+          expect(result["Author"][:indexes]).to eq([
+            "index({ email: 1 }, { unique: true })",
+            "index({ account_id: 1, created_at: -1 }, background: true)"
+          ])
+        end
+      end
+    end
+
     it "keeps only the later declaration of a callback declared twice" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))

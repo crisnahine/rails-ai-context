@@ -345,6 +345,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
           mongoid: true,
           fields: [ { name: :name, type: "String" }, { name: :active, type: "Boolean" }, { name: :age, type: "Integer", default: "0" } ],
           embeds: [ { type: :embeds_many, name: :orders } ],
+          indexes: [ "index({ email: 1 }, { unique: true })" ],
           associations: [],
           validations: []
         }
@@ -362,6 +363,11 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).to include("name")
       expect(text).to include("String")
       expect(text).to include("- `age`: Integer, default: 0")
+    end
+
+    it "renders declared indexes" do
+      text = described_class.call(model: "Customer").content.first[:text]
+      expect(text).to include("## Indexes\n- `index({ email: 1 }, { unique: true })`")
     end
 
     it "renders embedded relations" do

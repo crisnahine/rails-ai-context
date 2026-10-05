@@ -2106,7 +2106,7 @@ module RailsAiContext
 
       def mongoid_model_details(source, class_name, path)
         data = SourceIntrospector.walk_source(source, {
-          mongoid: -> { Listeners::GenericMacroListener.new(%i[field embeds_many embeds_one embedded_in store_in]) },
+          mongoid: -> { Listeners::GenericMacroListener.new(%i[field embeds_many embeds_one embedded_in store_in index], call_source: %i[index]) },
           associations: Listeners::AssociationsListener,
           validations: Listeners::ValidationsListener,
           scopes: Listeners::ScopesListener,
@@ -2125,6 +2125,7 @@ module RailsAiContext
           fields: macros.select { |m| m[:macro] == :field }.map { |m| mongoid_field(m) },
           embeds: macros.select { |m| %i[embeds_many embeds_one embedded_in].include?(m[:macro]) }
                         .map { |m| { type: m[:macro], name: m[:args].first } },
+          indexes: macros.select { |m| m[:macro] == :index }.map { |m| m[:text] },
           # An embedded child is a relation like any other, so every count and the graph see it.
           associations: reject_excluded_associations(Array(data[:associations]) + embedded_associations(macros)),
           validations: data[:validations],
