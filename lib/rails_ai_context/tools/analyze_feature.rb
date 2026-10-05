@@ -151,7 +151,7 @@ module RailsAiContext
                 table_data = tables[table_name]
                 if table_data&.dig(:columns)&.any?
                   cols = table_data[:columns].reject { |c| %w[id created_at updated_at].include?(c[:name]) }
-                  col_strs = cols.map { |c| col_type = c[:array] ? "#{c[:type]}[]" : c[:type]; "#{c[:name]}:#{col_type}" }
+                  col_strs = cols.map { |c| col_type = c[:array] ? "#{c[:type]}[]" : c[:type]; [ c[:name], col_type ].compact.join(":") }
                   lines << "**Columns:** #{col_strs.join(', ')}" if cols.any?
                 end
               end

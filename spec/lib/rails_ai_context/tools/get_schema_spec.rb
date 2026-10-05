@@ -1125,7 +1125,20 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     it "names a virtual table's module" do
       text = described_class.call(table: "docs_fts").content.first[:text]
 
-      expect(text).to include("## Virtual table: docs_fts", "**Module:** fts5", "| title |")
+      expect(text).to include("## Virtual table: docs_fts", "**Module:** fts5", "| Column |\n|--------|\n| title |")
+      expect(text).not_to include("| Null")
+    end
+
+    it "lists a virtual table's columns without a type label" do
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("### docs_fts (fts5 virtual table)\ntitle\n")
+    end
+
+    it "leaves views and virtual tables out of the tables with no model file" do
+      text = described_class.call(detail: "summary").content.first[:text]
+
+      expect(text).to match(/Tables with no model file in this app\*\*: boxes, users$/)
     end
   end
 end

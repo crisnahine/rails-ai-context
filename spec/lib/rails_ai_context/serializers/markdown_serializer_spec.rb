@@ -273,6 +273,12 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
       expect(output).to include("## Database Schema")
     end
 
+    it "lists a virtual table's columns by name alone" do
+      ctx = { app_name: "App", schema: { total_tables: 1, tables: { "docs_fts" => { kind: "virtual_table", columns: [ { name: "title" }, { name: "body" } ] } } } }
+
+      expect(described_class.new(ctx).call).to include("`title`, `body`\n")
+    end
+
     it "includes routes section" do
       expect(output).to include("## Routes")
     end

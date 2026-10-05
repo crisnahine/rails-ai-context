@@ -94,7 +94,7 @@ module RailsAiContext
 
           col_sample = key_cols.map do |c|
             col_type = c[:array] ? "#{c[:type]}[]" : c[:type].to_s
-            entry = "#{c[:name]}:#{col_type}"
+            entry = c[:type] ? "#{c[:name]}:#{col_type}" : c[:name].to_s
             if c.key?(:default) && !c[:default].nil?
               default_display = c[:default] == "" ? '""' : c[:default]
               entry += "(=#{default_display})"

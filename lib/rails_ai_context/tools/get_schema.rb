@@ -205,7 +205,7 @@ module RailsAiContext
                   end
                   # A clause can hold a column list, so clauses part with a semicolon.
                   hint_str = hints.any? ? " [#{hints.join('; ')}]" : ""
-                  "#{c[:name]}:#{c[:type]}#{hint_str}"
+                  "#{[ c[:name], c[:type] ].compact.join(':')}#{hint_str}"
                 end.join(", ")
               # Inline model info so AI doesn't need a separate get_model_details call
               # Every model on the table, richest first: an STI child or a
@@ -423,7 +423,8 @@ module RailsAiContext
       # Over every table, not the page: which ones no model file claims, and
       # of those, which a gem the app bundles owns.
       private_class_method def self.model_coverage(tables, models)
-        unclaimed = tables.keys.sort.select { |name| models_for_table(name, models).empty? } - habtm_join_tables(models).to_a
+        # A view or virtual table often has no model and is still read, so only tables count.
+        unclaimed = tables.keys.sort.select { |name| !tables[name][:kind] && models_for_table(name, models).empty? } - habtm_join_tables(models).to_a
         unclaimed -= declared_join_tables(models).to_a if unclaimed.any?
         # A file the walk could not read claims no table, but it is still a model file.
         unclaimed -= models.filter_map { |_, d| d[:table_name] || Introspectors::TableName.stem(d[:file]) if d.is_a?(Hash) && d[:error] && d[:file] }
@@ -513,8 +514,10 @@ module RailsAiContext
         return lines.concat(definition).join("\n").rstrip if columns.empty? && (data[:sql] || data[:not_dumped])
 
         has_comments = columns.any? { |c| c[:comment] && !c[:comment].to_s.empty? }
-        header = "| Column | Type | Null"
-        sep = "|--------|------|-----"
+        # A virtual table's module, not a column type, decides what its columns hold.
+        typed = columns.any? { |c| c[:type] }
+        header = typed ? "| Column | Type | Null" : "| Column"
+        sep = typed ? "|--------|------|-----" : "|--------"
         header += " | Default" if has_defaults
         sep += "-|---------" if has_defaults
         header += " | Comment" if has_comments
@@ -523,7 +526,7 @@ module RailsAiContext
 
         columns.each do |col|
           nullable = col.key?(:null) ? (col[:null] ? "yes" : "**NO**") : "yes"
-          line = "| #{col[:name]} | #{column_type_label(col)} | #{nullable}"
+          line = typed ? "| #{col[:name]} | #{column_type_label(col)} | #{nullable}" : "| #{col[:name]}"
           if has_defaults
             default_val = col[:default]
             display_default = default_val == "" ? '""' : default_val

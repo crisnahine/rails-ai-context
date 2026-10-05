@@ -172,7 +172,7 @@ module RailsAiContext
             if cols.any?
               lines << "" << "## Columns"
               cols.each do |c|
-                parts = [ "**#{c[:name]}**", c[:type] ]
+                parts = [ "**#{c[:name]}**", c[:type] ].compact
                 parts << "primary key" if c[:primary_key]
                 parts << "NOT NULL" if c[:null] == false
                 parts << "default: #{c[:default]}" if c[:default] && !c[:default].to_s.empty?
