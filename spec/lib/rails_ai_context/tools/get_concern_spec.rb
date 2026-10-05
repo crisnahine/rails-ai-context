@@ -987,6 +987,35 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
     end
   end
 
+  # ActiveSupport::Concern supports prepend, with its own prepended block.
+  describe "a concern a model prepends" do
+    before do
+      File.write(File.join(model_concerns_dir, "archivable.rb"), <<~RUBY)
+        module Archivable
+          extend ActiveSupport::Concern
+
+          prepended do
+            scope :archived, -> { where(archived: true) }
+          end
+
+          def archive!; end
+        end
+      RUBY
+      File.write(File.join(models_dir, "part.rb"), "class Part < ApplicationRecord\n  prepend Archivable\nend\n")
+      File.write(File.join(models_dir, "badge.rb"), "class Badge < ApplicationRecord\n  extend Archivable\nend\n")
+      allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(tmpdir))
+      described_class.reset_cache!
+    end
+
+    it "names the model under Included By, and not one that extends the concern" do
+      text = described_class.call(name: "Archivable").content.first[:text]
+
+      expect(text).to include("## Included By (1)")
+      expect(text).to include("- Part")
+      expect(text).not_to include("- Badge")
+    end
+  end
+
   describe "a concern whose namespace the path does not camelize to" do
     before do
       FileUtils.mkdir_p(File.join(model_concerns_dir, "sdg"))

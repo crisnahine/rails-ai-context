@@ -507,7 +507,7 @@ module RailsAiContext
         sources = includer_dirs(root).flat_map { |dir| safe_glob(dir, "**/*.rb", real_root) }.uniq
           .reject { |file_path| file_path.include?("/concerns/") }
           .filter_map { |file_path| (source = RailsAiContext::SafeFile.read(file_path)) && [ file_path, source ] }
-        Introspectors::Includers.of(root, sources, [ concern_name ], macros: %i[include]).values.flatten.uniq.sort
+        Introspectors::Includers.of(root, sources, [ concern_name ], macros: %i[include prepend]).values.flatten.uniq.sort
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "find_includers")
       end
