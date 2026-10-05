@@ -96,6 +96,7 @@ module RailsAiContext
           return enter_route_set(node) if route_set_draw?(node)
           # `ActiveAdmin.routes(self)` hands the mapper to code this walk cannot see.
           return emit_dynamic(node) if node.receiver && statement && node.arguments&.arguments&.any?(Prism::SelfNode)
+          return push_frame(node, prepend: true) if node.receiver && node.name == :prepend && statement && route_body?(node)
           return unless node.receiver.nil?
 
           @routing_calls += 1 if ROUTE_METHODS.include?(node.name)
@@ -741,6 +742,7 @@ module RailsAiContext
           record[:engine] = engine if engine
           condition = current_condition
           record[:condition] = condition if condition
+          record[:prepend] = true if @stack.any? { |f| f[:prepend] }
           params = path.scan(/:(\w+)/).flatten
           record[:params] = params if params.any?
           record[:restful] = RESTFUL_ACTIONS.include?(record[:action])

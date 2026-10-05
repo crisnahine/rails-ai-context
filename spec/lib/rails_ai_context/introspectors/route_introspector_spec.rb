@@ -242,6 +242,52 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
   end
 
   describe "#static_call" do
+    # RouteSet evaluates prepend blocks before the draw and append blocks after it.
+    it "reads routes an initializer prepends or appends, in the order Rails draws them" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            get "main", to: "posts#index"
+          end
+        RUBY
+        File.write(File.join(dir, "config", "initializers", "more_routes.rb"), <<~RUBY)
+          Rails.application.routes.append do
+            get "appended", to: "posts#index"
+          end
+          Rails.application.routes.prepend do
+            get "prepended", to: "posts#index"
+          end
+        RUBY
+        File.write(File.join(dir, "config", "initializers", "plain.rb"), "Rails.application.config.x.y = 1\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:by_controller]["posts"].map { |r| [ r[:name], r[:path] ] })
+          .to eq([ %w[prepended /prepended], %w[main /main], %w[appended /appended] ])
+        expect(result[:total_routes]).to eq(3)
+        expect(result[:note]).to include("config/initializers/more_routes.rb")
+        expect(result[:note]).not_to include("plain.rb")
+      end
+    end
+
+    it "skips an initializer that cannot be parsed or links outside the app" do
+      Dir.mktmpdir do |dir|
+        app = File.join(dir, "app")
+        FileUtils.mkdir_p(File.join(app, "config", "initializers"))
+        File.write(File.join(app, "config", "routes.rb"), "Rails.application.routes.draw do\n  get \"main\", to: \"posts#index\"\nend\n")
+        File.binwrite(File.join(app, "config", "initializers", "broken.rb"), "Rails.application.routes.append do\n  get \"\xff\", to:\n")
+        File.write(File.join(dir, "outside.rb"), "Rails.application.routes.append do\n  get \"leak\", to: \"leak#index\"\nend\n")
+        File.symlink(File.join(dir, "outside.rb"), File.join(app, "config", "initializers", "outside.rb"))
+        File.symlink(File.join(app, "config", "initializers"), File.join(app, "config", "initializers", "loop"))
+
+        result = described_class.new(RailsAiContext::StaticApp.new(app)).static_call
+
+        expect(result[:by_controller].keys).not_to include("leak")
+        expect(result[:by_controller]["posts"].first[:path]).to eq("/main")
+      end
+    end
+
     it "keeps the condition a route is drawn under" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))

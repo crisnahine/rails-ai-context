@@ -78,6 +78,7 @@ module RailsAiContext
           unrouted_mounts: mounts.size,
           root_route: static_root_route(entries),
           note: "Parsed statically from #{static_sources_phrase(files, top_files)}" \
+                "#{initializers_phrase}" \
                 "#{computed ? ', plus route files config/application.rb computes (not read)' : ''} (app not booted)",
           confidence: Confidence::STATIC
         }
@@ -264,7 +265,31 @@ module RailsAiContext
           all_mounts.concat(sub_mounts)
           all_files.concat(sub_files)
         end
-        [ records, mounts.uniq { |mount| [ mount[:engine], mount[:path] ] }, files.uniq ]
+        added, added_mounts = walk_route_initializers(already_read)
+        prepended, appended = added.partition { |r| r[:prepend] }
+        records = (prepended + records + appended).map { |r| r.except(:prepend) }
+        mounts = (mounts + added_mounts).uniq { |mount| [ mount[:engine], mount[:path] ] }
+        [ records, mounts, files.uniq ]
+      end
+
+      # Initializers that add to the app's table with `routes.prepend` or
+      # `routes.append`, which Rails evaluates before and after the draw.
+      def route_initializers
+        @route_initializers ||= begin
+          root = app.root.to_s
+          listed = Dir.glob("config/initializers/**/*.rb", base: root).sort
+          contained_route_files(root, listed).select do |path|
+            SafeFile.read(path).to_s.match?(/\.routes\.(?:append|prepend)\b/) && app_route_file?(path)
+          end
+        end
+      end
+
+      def walk_route_initializers(already_read)
+        route_initializers.each_with_object([ [], [] ]) do |path, (records, mounts)|
+          sub_records, sub_mounts = walk_draw_target(path, already_read, 0, {})
+          records.concat(sub_records)
+          mounts.concat(sub_mounts)
+        end
       end
 
       private
@@ -405,6 +430,13 @@ module RailsAiContext
         return lead if drawn <= 0
 
         "#{lead} and #{CountPhrase.call(drawn, "file")} #{tops.size == 1 ? 'it draws' : 'they draw'}"
+      end
+
+      def initializers_phrase
+        return "" if route_initializers.empty?
+
+        root = "#{app.root}#{File::SEPARATOR}"
+        ", plus routes appended or prepended in #{route_initializers.map { |f| f.delete_prefix(root) }.join(', ')}"
       end
 
       def extract_routes

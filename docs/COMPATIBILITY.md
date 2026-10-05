@@ -358,7 +358,9 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   another drawn file. `constraints do...end` and any other block that draws
   routes do not hide their children: they are read and resolved, the
   constraint itself is ignored. A route under `if`/`unless` is listed with
-  that condition, since source cannot tell whether it holds. Routes Rails' own
+  that condition, since source cannot tell whether it holds. Routes an initializer
+  under `config/initializers` adds with `Rails.application.routes.prepend` or
+  `.append` are read, before and after the draw as Rails orders them. Routes Rails' own
   engines and gems draw into the app's table are read only with the app booted.
 
 <br>
