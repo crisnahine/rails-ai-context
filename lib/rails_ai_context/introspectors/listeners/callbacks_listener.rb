@@ -22,7 +22,6 @@ module RailsAiContext
         ].to_set.freeze
 
         INLINE_BLOCK = "[inline_block]"
-        NAME_SHAPED = /\A[A-Za-z_]\w*(::[A-Za-z_]\w*)*[?!]?\z/
 
         def on_call_node_enter(node)
           return record_skip(node) if node.name == :skip_callback && in_scope?(node)
@@ -94,11 +93,12 @@ module RailsAiContext
           end
         end
 
-        # `around_create Snowflake::Callbacks` names a real target;
-        # a lambda names nothing, so it reports as a block.
+        # `around_create Snowflake::Callbacks` and `before_validation
+        # Normalizer.new` name a callback object, kept as the source writes
+        # it; a lambda names nothing, so it reports as a block.
         def emit_without_symbol_args(node, callback_types, options)
-          positional = extract_arg_values(node).map(&:to_s)
-          targets = positional.grep(NAME_SHAPED)
+          positional = (node.arguments&.arguments || []).reject { |a| a.is_a?(Prism::KeywordHashNode) }
+          targets = positional.reject { |a| block_like?(a) }.map { |a| one_line_source(a) }
 
           if targets.any?
             emit(node, callback_types, targets, options, confidence_for(node))
@@ -107,6 +107,10 @@ module RailsAiContext
             # declares no block, so there is none to report.
             emit(node, callback_types, [ INLINE_BLOCK ], options, RailsAiContext::Confidence::INFERRED)
           end
+        end
+
+        def block_like?(arg)
+          arg.is_a?(Prism::LambdaNode) || (arg.is_a?(Prism::CallNode) && %i[lambda proc].include?(arg.name) && arg.receiver.nil?)
         end
 
         def emit(node, callback_types, methods, options, confidence)

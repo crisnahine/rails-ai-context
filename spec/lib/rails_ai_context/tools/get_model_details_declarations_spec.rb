@@ -147,4 +147,18 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(comment).to include("- `before_save`: :stamp_audit")
     end
   end
+
+  it "names a callback object as the object, not as a method or a block" do
+    text = details_for("Post", "post.rb" => <<~RUBY)
+      class Post < ApplicationRecord
+        after_commit AuditTrail
+        before_validation PostNormalizer.new
+        before_save -> { touch_later }
+      end
+    RUBY
+
+    expect(text).to include("- `after_commit`: AuditTrail\n")
+    expect(text).to include("- `before_validation`: PostNormalizer.new\n")
+    expect(text).to include("- `before_save`: [inline_block]")
+  end
 end

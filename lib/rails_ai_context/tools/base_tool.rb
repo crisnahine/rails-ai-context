@@ -700,8 +700,9 @@ module RailsAiContext
           method.to_s == RailsAiContext::Introspectors::Listeners::CallbacksListener::INLINE_BLOCK
         end
 
+        # A constant (`AuditTrail`) is a callback object, not a method.
         def method_name?(method)
-          method.to_s.match?(/\A\w+[?!=]?\z/)
+          method.to_s.match?(/\A[a-z_]\w*[?!=]?\z/)
         end
 
         # A callback type as a reader can write it. `after_commit_on_create`
