@@ -280,7 +280,8 @@ module RailsAiContext
       # (`extract_options!`), plus literals the leading statements push; a local changed elsewhere is unknown.
       def rest_bindings(bindings, definition, call)
         rest = definition.parameters&.rest
-        return bindings unless call && rest.respond_to?(:name) && rest.name && definition.body.is_a?(Prism::StatementsNode)
+        return bindings unless call && rest.is_a?(Prism::RestParameterNode) && definition.body.is_a?(Prism::StatementsNode)
+        return anonymous_rest(bindings, definition, call) unless rest.name
 
         given = rest_arguments(definition.parameters, call)
         taken = [ "#{rest.name}.extract_options!", "#{rest.name}.last.is_a?(Hash)?#{rest.name}.pop:{}" ]
@@ -311,6 +312,18 @@ module RailsAiContext
         bindings[rest.name] = list ? list_binding(list) : unknown
         bindings
       end
+
+      # A bare `*` holds what the call passes there, which the body can only pass on whole.
+      def anonymous_rest(bindings, definition, call)
+        given = rest_arguments(definition.parameters, call)
+        last = given&.last
+        options = symbol_keyed?(last) ? [ last ] : []
+        items = given && (given - options)
+        bindings[ANONYMOUS_REST] = items&.all? { |item| literal_source?(item) } ? list_binding(items + options) : unknown
+        bindings
+      end
+
+      ANONYMOUS_REST = :*
 
       # The call's arguments `*rest` takes, nil when they cannot be told (a splat, too few).
       def rest_arguments(parameters, call)
@@ -348,7 +361,12 @@ module RailsAiContext
       end
 
       def list_binding(items)
-        Binding.new(items.map { |item| value_of(item) }, "[#{items.map(&:slice).join(", ")}]", nil, nil, items.map(&:slice))
+        Binding.new(items.map { |item| value_of(item) }, "[#{items.map(&:slice).join(", ")}]", nil, nil, items.map { |item| item_source(item) })
+      end
+
+      # A trailing `key: value` hash passes on as the keywords it spells.
+      def item_source(item)
+        item.is_a?(Prism::HashNode) && symbol_keyed?(item) ? item.elements.map(&:slice).join(", ") : item.slice
       end
 
       # A hash with symbol keys binds by its pairs' own source, whatever
@@ -518,7 +536,9 @@ module RailsAiContext
 
       # `*names` over a bound list of literals is its items.
       def splatted_items(argument, bindings, depth)
-        return unless argument.is_a?(Prism::SplatNode) && argument.expression.is_a?(Prism::LocalVariableReadNode)
+        return unless argument.is_a?(Prism::SplatNode)
+        return bindings[ANONYMOUS_REST]&.items&.join(", ") if argument.expression.nil?
+        return unless argument.expression.is_a?(Prism::LocalVariableReadNode)
 
         bound(bindings, argument.expression, depth)&.items&.join(", ")
       end

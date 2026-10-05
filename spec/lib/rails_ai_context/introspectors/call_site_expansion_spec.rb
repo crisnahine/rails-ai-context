@@ -398,6 +398,23 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
     end
   end
 
+  describe "a controller filter a class method declares" do
+    def filters(method_source, call_source)
+      definition = Prism.parse(method_source).value.statements.body.first
+      call = Prism.parse(call_source).value.statements.body.first
+      described_class.entries(definition, call, RailsAiContext::Introspectors::ControllerFilters::LISTENERS)[:filters]
+                     .map { |f| [ f[:macro], f[:options] ] }
+    end
+
+    # Consul's has_orders: `def has_orders(valid_orders, *)` passes its rest on as `before_action(*)`.
+    it "passes an anonymous rest on, keywords included" do
+      method_source = "def has_orders(valid_orders, *)\n  before_action(*) do |c|\n    c.head(:ok)\n  end\nend\n"
+
+      expect(filters(method_source, "has_orders %w[new old], only: :show")).to eq([ [ :before_action, { only: :show } ] ])
+      expect(filters(method_source, "has_orders %w[new old]")).to eq([ [ :before_action, {} ] ])
+    end
+  end
+
   describe "a hash parameter the body changes in place" do
     it "is bound to nothing" do
       data = expand("def vl(name, options = {})\n  options[:allow_nil] = true\n  before_save :x if options[:allow_nil]\nend\n", "vl :a")
