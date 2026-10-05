@@ -18,6 +18,53 @@ RSpec.describe RailsAiContext::ViewFile do
     end
   end
 
+  describe ".each with a view path the app declares" do
+    before do
+      FileUtils.mkdir_p(File.join(@root, "config"))
+      File.write(File.join(@root, "config/application.rb"), <<~RUBY)
+        class Application < Rails::Application
+          config.paths["app/views"].unshift(Rails.root.join("app/views/custom").to_s)
+          config.paths["app/views"] << "enterprise/app/views"
+        end
+      RUBY
+      FileUtils.mkdir_p(File.join(@root, "app/views/custom/posts"))
+      File.write(File.join(@root, "app/views/custom/posts/show.html.erb"), "<h1>Post</h1>\n")
+      File.write(File.join(@root, "app/views/custom/posts/index.html.erb"), "<h1>Custom</h1>\n")
+      FileUtils.mkdir_p(File.join(@root, "enterprise/app/views/reports"))
+      File.write(File.join(@root, "enterprise/app/views/reports/index.html.erb"), "<h1>Reports</h1>\n")
+    end
+
+    it "names a template by the root Rails finds it under, the prepended root first" do
+      listed = described_class.each(@root).to_h { |path, relative| [ relative, path ] }
+
+      expect(listed["posts/show.html.erb"]).to eq(File.join(@root, "app/views/custom/posts/show.html.erb"))
+      expect(listed["posts/index.html.erb"]).to eq(File.join(@root, "app/views/custom/posts/index.html.erb"))
+      expect(listed["reports/index.html.erb"]).to eq(File.join(@root, "enterprise/app/views/reports/index.html.erb"))
+      expect(listed.keys.grep(%r{\Acustom/})).to be_empty
+    end
+
+    it "ignores a declared root outside the app" do
+      File.write(File.join(@root, "config/application.rb"), "config.paths[\"app/views\"] << \"\#{config.root}/../shared/views\"\n")
+
+      expect(RailsAiContext::PathResolver.view_dirs(@root)).to eq([ File.join(@root, "app/views") ])
+    end
+  end
+
+  describe ".fence" do
+    it "labels a template by the handler that renders it" do
+      fences = %w[
+        posts/index.html.erb pages/about.html reports/export.csv feed.atom posts/show.html.haml
+        posts/index.json.jbuilder sitemap.xml.builder pwa/service-worker.js notes/body.text
+      ].to_h { |name| [ name, described_class.fence(name) ] }
+
+      expect(fences).to eq(
+        "posts/index.html.erb" => "erb", "pages/about.html" => "html", "reports/export.csv" => "csv",
+        "feed.atom" => "atom", "posts/show.html.haml" => "haml", "posts/index.json.jbuilder" => "ruby",
+        "sitemap.xml.builder" => "ruby", "pwa/service-worker.js" => "js", "notes/body.text" => "text"
+      )
+    end
+  end
+
   describe ".locate" do
     it "resolves an app/views-relative path with its extension" do
       result = described_class.locate(@root, "posts/index.html.erb")
@@ -62,6 +109,18 @@ RSpec.describe RailsAiContext::ViewFile do
 
       expect(content).to eq("<h1>Posts</h1>\n")
       expect(result.relative).to eq("posts/index.html.erb")
+    end
+  end
+
+  describe ".template?" do
+    it "counts a file whose last extension is a format, which Rails renders with the raw handler" do
+      expect(described_class.template?("pwa/service-worker.js")).to be(true)
+      expect(described_class.template?("pages/about.text")).to be(true)
+    end
+
+    it "still leaves out binary assets and extension-less files" do
+      expect(described_class.template?("posts/_logo.png")).to be(false)
+      expect(described_class.template?("posts/README")).to be(false)
     end
   end
 end

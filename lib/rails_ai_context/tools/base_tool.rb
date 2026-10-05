@@ -440,6 +440,8 @@ module RailsAiContext
         # surface never reads as "not built yet".
         def api_only_note(section_label)
           return nil unless api_only_app?
+          # rails new --api keeps app/views when it keeps Action Mailer.
+          return nil if File.directory?(File.join(rails_app.root.to_s, section_label))
 
           "Not applicable: this is an API-only app (config.api_only), so #{section_label} does not exist."
         end

@@ -156,6 +156,34 @@ RSpec.describe RailsAiContext::Tools::GetStimulus do
       end
     end
 
+    context "when a view lives in a view path the app declares" do
+      around do |example|
+        Dir.mktmpdir("stimulus-views") do |dir|
+          @root = dir
+          FileUtils.mkdir_p(File.join(dir, "config"))
+          File.write(File.join(dir, "config/application.rb"),
+                     "config.paths[\"app/views\"] << \"app/views/themes\"\nconfig.paths[\"app/views\"] << \"enterprise/app/views\"\n")
+          FileUtils.mkdir_p(File.join(dir, "app/views/themes/posts"))
+          FileUtils.mkdir_p(File.join(dir, "enterprise/app/views/orders"))
+          File.write(File.join(dir, "app/views/themes/posts/show.html.erb"), "<div data-controller=\"hello\"></div>\n")
+          File.write(File.join(dir, "enterprise/app/views/orders/index.html.erb"), "<div data-controller=\"hello\"></div>\n")
+          example.run
+        end
+      end
+
+      before do
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      end
+
+      it "lists it by the name it renders under" do
+        text = described_class.call(controller: "hello").content.first[:text]
+
+        expect(text).to include("orders/index.html.erb")
+        expect(text).to include("posts/show.html.erb")
+        expect(text).not_to include("themes/posts/show.html.erb")
+      end
+    end
+
     context "when a view merely mentions the controller name" do
       around do |example|
         Dir.mktmpdir("stimulus-views") do |dir|

@@ -23,6 +23,27 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "importmap_pins")
       end
 
+      CSS_FRAMEWORK_LABELS = {
+        "tailwindcss" => "Tailwind CSS", "bootstrap" => "Bootstrap", "bulma" => "Bulma",
+        "foundation" => "Foundation", "postcss" => "PostCSS"
+      }.freeze
+
+      def self.css_framework(root)
+        lock = RailsAiContext::GemLock.for(root.to_s)
+        return nil if lock.missing?
+
+        has = ->(package) { RailsAiContext::PackageJson.present?(root, package) }
+        return "tailwindcss" if lock.present?("tailwindcss-rails") || has.("tailwindcss")
+        return "bootstrap" if lock.present?("bootstrap") || has.("bootstrap")
+        return "bulma" if has.("bulma")
+        return "foundation" if has.("foundation-sites")
+        "postcss" if has.("postcss")
+      end
+
+      def self.css_framework_label(root)
+        CSS_FRAMEWORK_LABELS[css_framework(root)]
+      end
+
       def call
         {
           pipeline: detect_pipeline,
@@ -43,25 +64,13 @@ module RailsAiContext
       end
 
       def detect_css_framework
-        lock = gem_lock
-        return nil if lock.missing?
-
-        return "tailwindcss" if lock.present?("tailwindcss-rails") || package_json_has?("tailwindcss")
-        return "bootstrap" if lock.present?("bootstrap") || package_json_has?("bootstrap")
-        return "bulma" if package_json_has?("bulma")
-        return "foundation" if package_json_has?("foundation-sites")
-        return "postcss" if package_json_has?("postcss") && !package_json_has?("tailwindcss")
-        nil
+        self.class.css_framework(root)
       end
 
       def detect_js_bundler
         return "importmap" if File.exist?(File.join(root, "config/importmap.rb"))
-        return "bun" if File.exist?(File.join(root, "bun.lockb")) || File.exist?(File.join(root, "bunfig.toml"))
-        return "esbuild" if package_json_has?("esbuild")
-        return "webpack" if File.exist?(File.join(root, "config/webpack")) || package_json_has?("webpack")
-        return "vite" if Dir.glob(File.join(root, "vite.config.*")).any?
-        return "rollup" if package_json_has?("rollup")
-        nil
+
+        FrontendFrameworkIntrospector.build_tool(root)
       end
 
       def detect_manifests
@@ -74,10 +83,6 @@ module RailsAiContext
 
       def gem_lock
         RailsAiContext::GemLock.for(root)
-      end
-
-      def package_json_has?(package)
-        RailsAiContext::PackageJson.present?(root, package)
       end
     end
   end

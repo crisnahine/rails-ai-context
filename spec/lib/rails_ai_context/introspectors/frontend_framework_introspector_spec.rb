@@ -456,6 +456,51 @@ RSpec.describe RailsAiContext::Introspectors::FrontendFrameworkIntrospector do
     end
   end
 
+  describe "a jsbundling-rails app" do
+    {
+      "webpack" => [ "webpack.config.js", { "webpack" => "^5.0.0", "webpack-cli" => "^5.0.0" } ],
+      "rollup" => [ "rollup.config.js", { "rollup" => "^4.0.0", "@rollup/plugin-node-resolve" => "^15.0.0" } ],
+      "bun" => [ "bun.config.js", {} ]
+    }.each do |tool, (config, dev_deps)|
+      it "names #{tool} as the build tool from the config jsbundling writes" do
+        Dir.mktmpdir do |tmp|
+          root = File.realpath(tmp)
+          File.write(File.join(root, config), "")
+          File.write(File.join(root, "package.json"), JSON.generate("devDependencies" => dev_deps))
+          result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+
+          expect(result[:build_tool]).to eq(tool)
+        end
+      end
+    end
+
+    it "names bun as the package manager from the text bun.lock" do
+      Dir.mktmpdir do |tmp|
+        root = File.realpath(tmp)
+        File.write(File.join(root, "bun.lock"), "{}")
+
+        expect(described_class.package_manager(root)).to eq("bun")
+      end
+    end
+  end
+
+  describe "a frontend_paths entry outside the app root" do
+    it "is not read, and is named as skipped" do
+      Dir.mktmpdir do |tmp|
+        base = File.realpath(tmp)
+        root = File.join(base, "backend")
+        FileUtils.mkdir_p([ root, File.join(base, "web-client/src") ])
+        File.write(File.join(base, "web-client/package.json"), JSON.generate("dependencies" => { "react" => "^19.0.0" }))
+        allow(RailsAiContext.configuration).to receive(:frontend_paths).and_return([ "../web-client" ])
+        result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+
+        expect(result[:frameworks]).to be_empty
+        expect(result[:frontend_roots]).to be_empty
+        expect(result[:skipped_frontend_paths]).to eq([ "../web-client" ])
+      end
+    end
+  end
+
   describe "frontend roots" do
     it "prefers the vite source dir over a shakapacker one" do
       require "tmpdir"

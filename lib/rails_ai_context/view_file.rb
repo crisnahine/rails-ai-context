@@ -22,6 +22,15 @@ module RailsAiContext
       rabl liquid arb md markdown prawn csv atom rss
     ].freeze
 
+    # A name with no handler extension still renders, through the raw
+    # handler, when its last extension is a format. Only the text formats
+    # Rails registers count: an image or font under app/views is an asset.
+    RAW_FORMAT_EXTENSIONS = %w[
+      html text js css xml json ics csv vcf vtt md svg rss atom yaml
+    ].freeze
+
+    RUBY_HANDLER_EXTENSIONS = %w[rb ruby builder jbuilder rabl prawn arb].freeze
+
     MARKUP_GLOB = "**/*.{erb,haml,slim}"
 
     module_function
@@ -31,13 +40,26 @@ module RailsAiContext
     def each(root, glob = "**/*")
       seen = {}
       PathResolver.view_dirs(root).each do |dir|
-        Dir.glob(File.join(dir, glob)).sort.each do |path|
+        glob(root, dir, glob).each do |path|
           next if File.directory?(path)
 
           seen[path.sub("#{dir}/", "")] ||= path
         end
       end
       seen.map { |relative, path| [ path, relative ] }
+    end
+
+    # The paths under one views root, less those of a root declared inside it:
+    # app/views/custom/posts/show is posts/show when app/views/custom is a root.
+    def glob(root, dir, pattern)
+      nested = PathResolver.view_dirs(root).select { |other| other.start_with?("#{dir}/") }
+      Dir.glob(File.join(dir, pattern)).sort.reject { |path| nested.any? { |other| path.start_with?("#{other}/") } }
+    end
+
+    # The innermost views root holding path: app/views/themes/posts/x renders as
+    # posts/x when app/views/themes is a root of its own.
+    def root_for(path, dirs)
+      dirs.select { |dir| path.start_with?("#{dir}/") }.max_by(&:length)
     end
 
     # @return [Array<String>] the template handler extensions this app has
@@ -54,12 +76,18 @@ module RailsAiContext
     end
 
     # @param path [String] any path under app/views
-    # @return [Boolean] whether its last extension names a template handler
+    # @return [Boolean] whether Rails renders it: a handler extension, or a text format the raw handler takes
     def template?(path)
       ext = File.extname(path.to_s).delete_prefix(".").downcase
       return false if ext.empty?
 
-      handler_extensions.include?(ext)
+      handler_extensions.include?(ext) || RAW_FORMAT_EXTENSIONS.include?(ext)
+    end
+
+    # Labelled by the handler: html, csv and the like render raw, so their tags print as written.
+    def fence(path)
+      ext = File.extname(path.to_s).delete_prefix(".").downcase
+      RUBY_HANDLER_EXTENSIONS.include?(ext) ? "ruby" : ext
     end
 
     # app/views/layouts also holds the partials those layouts render, and the

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "prism"
+
 module RailsAiContext
   module Tools
     class GetPartialInterface < BaseTool
@@ -83,11 +85,14 @@ module RailsAiContext
         return text_response("Could not read partial file.") unless source
 
         relative_path = located.relative
-        partial_name = relative_path.sub(%r{\A.*app/views/}, "")
+        partial_name = view_relative(File.join(root, relative_path), view_dirs)
 
         # Parse the partial's interface
         magic_locals = extract_magic_comment_locals(source)
-        render_sites = view_dirs.flat_map { |dir| find_render_sites(dir, partial, root) }
+        # The resolved file, not the caller's spelling: a bare name has no
+        # directory for a render site to be matched against.
+        prefixed = prefix_partial_paths?(root)
+        render_sites = view_dirs.flat_map { |dir| find_render_sites(dir, partial_name, root, prefixed) }
         method_calls = {}
 
         # Primary: locals from render call sites (ground truth)
@@ -98,8 +103,8 @@ module RailsAiContext
 
         # Combine: render-site locals first, then source-detected locals
         # Filter out noise: single chars, capitalized words, known helpers
-        all_locals = (magic_locals + render_locals + source_locals).uniq
-          .reject { |l| l.length <= 1 || l.match?(/\A[A-Z]/) || l.match?(/\Arender_/) }
+        all_locals = (Array(magic_locals) + render_locals + source_locals).uniq
+          .reject { |l| l.length <= 1 || l.match?(/\A[A-Z*]/) || l.match?(/\Arender_/) }
           .sort
 
         # Extract method calls only for confirmed locals
@@ -118,7 +123,7 @@ module RailsAiContext
         lines = [ "# Partial: #{partial_name}", "" ]
 
         if all_locals.any?
-          magic_note = magic_locals.any? ? " (#{magic_locals.size} declared via magic comment)" : ""
+          magic_note = magic_locals&.any? ? " (#{magic_locals.size} declared via magic comment)" : ""
           lines << "**Locals:** #{all_locals.join(', ')}#{magic_note}"
         else
           lines << "**Locals:** none detected"
@@ -135,8 +140,9 @@ module RailsAiContext
         lines = [ "# Partial: #{partial_name}", "" ]
         lines << "**File:** `#{relative_path}` (#{count_phrase(source.lines.size, "line")})"
 
-        if magic_locals.any?
-          lines << "**Declared locals** (Rails 7.1+ magic comment): #{magic_locals.join(', ')}"
+        if magic_locals
+          declared = magic_locals.any? ? magic_locals.join(", ") : "none, so passing any local raises"
+          lines << "**Declared locals** (Rails 7.1+ magic comment): #{declared}"
         end
 
         if all_locals.any?
@@ -151,7 +157,7 @@ module RailsAiContext
               lines << "- **#{local}**"
             end
           end
-        elsif !full
+        elsif !full && !magic_locals
           lines << "" << "_No local variables detected in this partial._"
         end
 
@@ -219,10 +225,10 @@ module RailsAiContext
         located.ok? || located.refusal == :too_large ? located : nil
       end
 
-      # A view file's name as the app renders it: its path under whichever
-      # views root holds it.
+      # A view file's name as the app renders it: its path under the innermost
+      # views root that holds it.
       private_class_method def self.view_relative(path, view_dirs)
-        dir = view_dirs.find { |d| path.start_with?(d + File::SEPARATOR) }
+        dir = RailsAiContext::ViewFile.root_for(path, view_dirs)
         dir ? path.delete_prefix(dir + File::SEPARATOR) : path
       end
 
@@ -233,26 +239,29 @@ module RailsAiContext
         return [] if name.include?("/")
 
         name = "_#{name}" unless name.start_with?("_")
-        Dir.glob(File.join(views_dir, "**", "#{name}.*")).sort.select { |c| File.file?(c) }
+        RailsAiContext::ViewFile.glob(rails_app.root.to_s, views_dir, File.join("**", "#{name}.*")).select { |c| File.file?(c) }
       end
 
-      # Extract locals declared via Rails 7.1+ magic comment: <%# locals: (name:, title: "default") %>
+      # ActionView::Template::STRICT_LOCALS_REGEX as of Rails 8.0, held here so
+      # the static tier reads the comment the same way.
+      STRICT_LOCALS = /\#\s+locals:\s+\((.*?)\)(?=\s*-?%>|\s*$)/m
+
+      # The names a strict locals comment declares; nil without one, [] for
+      # `()`, which allows no locals at all.
       private_class_method def self.extract_magic_comment_locals(source)
-        locals = []
+        list = source[STRICT_LOCALS, 1]
+        return nil unless list
 
-        source.each_line do |line|
-          if (match = line.match(/<%#\s*locals:\s*\(([^)]+)\)\s*%>/))
-            params_str = match[1]
-            # Parse Ruby-style keyword params: name:, title: "default", count: 0
-            params_str.scan(/([\w]+):/) do |param_match|
-              locals << param_match[0]
-            end
-          end
-        end
+        result = RailsAiContext::AstCache.parse_string("def _(#{list}); end")
+        return list.scan(/(\w+):/).flatten.uniq unless result.success?
 
-        locals.uniq
+        params = result.value.statements.body.first.parameters
+        return [] unless params
+
+        rest = params.keyword_rest
+        params.keywords.map { |p| p.name.to_s } + (rest.is_a?(Prism::KeywordRestParameterNode) ? [ "**#{rest.name}" ] : [])
       rescue => e
-        RailsAiContext.debug_fail(e, [], label: "extract_magic_comment_locals")
+        RailsAiContext.debug_fail(e, nil, label: "extract_magic_comment_locals")
       end
 
       # Extract local variable references from ERB source.
@@ -324,7 +333,7 @@ module RailsAiContext
       end
 
       # Find all views that render this partial and extract the locals they pass.
-      private_class_method def self.find_render_sites(views_dir, partial, root)
+      private_class_method def self.find_render_sites(views_dir, partial, root, prefixed)
         sites = []
         # Build search names: the partial can be referenced multiple ways
         # Normalize: strip underscore prefix from basename and extensions
@@ -346,22 +355,9 @@ module RailsAiContext
           basename                                                  # status_badge
         ].uniq
 
-        # Implicit object/collection rendering resolves to this partial via
-        # to_partial_path: `render @post`, `render post`, `render @posts`,
-        # `render posts` all hit posts/_post. These are extremely common and
-        # carry no quoted partial name, so the explicit-string match above
-        # misses them. Only treat the partial as a conventional resource
-        # partial (posts/_post) when its directory is the pluralized basename
-        # or it is top-level, to avoid matching unrelated variables.
-        plural = basename.pluralize
-        implicit_names =
-          if dir_prefix.empty? || dir_prefix.split("/").last == plural
-            [ basename, plural ].uniq
-          else
-            []
-          end
+        object_paths = {}
 
-        view_files = Dir.glob(File.join(views_dir, RailsAiContext::ViewFile::MARKUP_GLOB)).sort
+        view_files = RailsAiContext::ViewFile.glob(root, views_dir, RailsAiContext::ViewFile::MARKUP_GLOB)
 
         view_files.each do |file|
           content = safe_read(file)
@@ -411,27 +407,84 @@ module RailsAiContext
 
             next if matched_line
 
-            # Implicit object/collection render: `render @post`, `render post`,
-            # `render @posts`. The variable is a bareword or ivar (no quotes),
-            # and \b guards against prefixes like post_path / posts_controller.
-            implicit_names.each do |var|
-              next unless line.match?(/render\s+@?#{Regexp.escape(var)}\b/)
-              next if line.match?(/render\s.*["']/) # a quoted render is explicit, handled above
+            var = line[IMPLICIT_RENDER, 1]
+            next unless var && !line.include?("partial:")
 
-              sites << {
-                file: relative,
-                line: line_num,
-                locals: [],
-                snippet: snippet
-              }
-              break
-            end
+            view_dir = File.dirname(file.delete_prefix(views_dir + File::SEPARATOR))
+            next unless implicit_partial(var, view_dir, prefixed, root, object_paths) == canonical
+
+            sites << { file: relative, line: line_num, locals: [], snippet: snippet }
           end
         end
 
         sites
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "find_render_sites")
+      end
+
+      # `render @posts`, `render(post)`, `render @posts, cached: true`: a bare
+      # record or collection, which names no partial of its own.
+      IMPLICIT_RENDER = /\Arender\s*\(?\s*@?([a-z_]\w*)\s*(?:[,)]|-?\s*\z)/
+
+      # The partial Rails renders for a record named `var` from a view in
+      # view_dir, which stands in for the controller's path; nil when the
+      # model's to_partial_path cannot be read.
+      private_class_method def self.implicit_partial(var, view_dir, prefixed, root, memo)
+        singular = var.singularize
+        path = memo.fetch(singular) { memo[singular] = object_partial_path(singular, root) }
+        return path unless path && prefixed
+
+        merge_prefix_into_object_path(view_dir == "." ? "" : view_dir, path)
+      end
+
+      # ActionView::AbstractRenderer#merge_prefix_into_object_path.
+      private_class_method def self.merge_prefix_into_object_path(prefix, object_path)
+        return object_path unless prefix.include?("/") && object_path.include?("/")
+
+        prefixes = []
+        object_dirs = object_path.split("/")[0..-3]
+        File.dirname(prefix).split("/").each_with_index do |dir, index|
+          break if dir == object_dirs[index]
+
+          prefixes << dir
+        end
+        (prefixes << object_path).join("/")
+      end
+
+      # The model's own to_partial_path when it returns a literal, else the
+      # ActiveModel default. Only the conventional model file is read.
+      private_class_method def self.object_partial_path(singular, root)
+        relative = "app/models/#{singular}.rb"
+        default = "#{singular.pluralize}/#{singular}"
+        return default unless RailsAiContext::SafePath.locate(relative, under: root).ok?
+
+        tree = RailsAiContext::AstCache.parse(File.join(root, relative)).value
+        defn = tree.breadth_first_search { |n| n.is_a?(Prism::DefNode) && n.name == :to_partial_path && n.receiver.nil? }
+        return default unless defn
+
+        body = defn.body&.body
+        body&.size == 1 && body.first.is_a?(Prism::StringNode) ? body.first.unescaped : nil
+      rescue => e
+        RailsAiContext.debug_fail(e, nil, label: "object_partial_path")
+      end
+
+      # Rails prefixes a record's partial with the controller namespace unless
+      # config.action_view.prefix_partial_path_with_controller_namespace is false.
+      private_class_method def self.prefix_partial_paths?(root)
+        env = ENV["RAILS_ENV"] || "development"
+        files = [ "config/application.rb", "config/environments/#{env}.rb" ] +
+          Dir.glob("config/initializers/**/*.rb", base: root).sort
+        setting = [ :action_view, :prefix_partial_path_with_controller_namespace ]
+        last = nil
+        files.each do |relative|
+          next unless RailsAiContext::SafePath.locate(relative, under: root).ok?
+
+          walked = Introspectors::SourceIntrospector.walk(File.join(root, relative), { config: Introspectors::Listeners::ConfigAssignmentListener })
+          walked[:config].each { |entry| last = entry[:value] if entry[:assignment] && entry[:path] == setting }
+        end
+        last != false
+      rescue => e
+        RailsAiContext.debug_fail(e, true, label: "prefix_partial_paths?")
       end
 
       # Extract local variable names from a render call line.
@@ -492,7 +545,7 @@ module RailsAiContext
 
       # Find available partials for fuzzy matching in not_found_response.
       private_class_method def self.find_available_partials(views_dir, root)
-        Dir.glob(File.join(views_dir, "**", "_*")).select { |f| File.file?(f) && RailsAiContext::ViewFile.template?(f) }.map do |f|
+        RailsAiContext::ViewFile.glob(root, views_dir, File.join("**", "_*")).select { |f| File.file?(f) && RailsAiContext::ViewFile.template?(f) }.map do |f|
           relative = f.sub("#{views_dir}/", "")
           # Strip underscore prefix and extension for display
           parts = relative.split("/")

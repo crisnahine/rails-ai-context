@@ -177,6 +177,42 @@ RSpec.describe RailsAiContext::Introspectors::ComponentIntrospector do
     end
   end
 
+  describe "the layout phlex:install generates" do
+    it "types a component under the Components namespace root as Phlex" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p([ File.join(dir, "app", "components"), File.join(dir, "config", "initializers") ])
+        File.write(File.join(dir, "config", "initializers", "phlex.rb"), <<~RUBY)
+          module Components
+            extend Phlex::Kit
+          end
+
+          Rails.autoloaders.main.push_dir(
+            Rails.root.join("app/components"), namespace: Components
+          )
+        RUBY
+        File.write(File.join(dir, "app", "components", "base.rb"), "class Components::Base < Phlex::HTML\nend\n")
+        File.write(File.join(dir, "app", "components", "badge.rb"), <<~RUBY)
+          class Components::Badge < Components::Base
+            def initialize(text:, tone: :info)
+              @text = text
+              @tone = tone
+            end
+
+            def view_template
+              span(class: "badge \#{@tone}") { @text }
+            end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+        badge = result[:components].find { |c| c[:name] == "Badge" }
+
+        expect(badge[:type]).to eq(:phlex)
+        expect(result[:summary][:phlex]).to eq(1)
+      end
+    end
+  end
+
   describe "a compact component whose bare superclass names a top-level base" do
     it "names the top-level base, which Ruby resolves, and keeps the namespaced one" do
       Dir.mktmpdir do |dir|

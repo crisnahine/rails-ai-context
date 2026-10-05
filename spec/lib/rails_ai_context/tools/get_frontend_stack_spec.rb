@@ -374,6 +374,97 @@ RSpec.describe RailsAiContext::Tools::GetFrontendStack do
       end
     end
 
+    context "on an HTML app with an asset pipeline and no JavaScript build" do
+      let(:no_js_data) do
+        { frontend_roots: [], frameworks: {}, mounting_strategy: nil, build_tool: nil, state_management: [],
+          package_manager: nil, typescript: { enabled: false }, testing: [] }
+      end
+
+      around do |example|
+        Dir.mktmpdir("asset-pipeline") do |dir|
+          @root = dir
+          example.run
+        end
+      end
+
+      before do
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      end
+
+      it "names Propshaft and says there is no JavaScript build, without calling the app API-only" do
+        allow(described_class).to receive(:cached_context).and_return(
+          frontend_frameworks: no_js_data, gems: { notable_gems: [ { name: "propshaft" } ] }, stimulus: {}
+        )
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("- **Asset pipeline:** Propshaft, serving app/assets")
+        expect(text).to include("- **JavaScript build:** none (no app/javascript, no package.json)")
+        expect(text).not_to include("API-only")
+        expect(described_class.call(detail: "summary").content.first[:text]).to eq("Propshaft (no JavaScript build)")
+      end
+
+      it "names Sprockets and the manifest.js links on an importmap app" do
+        FileUtils.mkdir_p(File.join(@root, "app/assets/config"))
+        File.write(File.join(@root, "app/assets/config/manifest.js"),
+                   "//= link_tree ../images\n//= link_directory ../stylesheets .css\n//= link_tree ../../javascript .js\n")
+        allow(described_class).to receive(:cached_context).and_return(
+          frontend_frameworks: no_js_data, stimulus: {},
+          gems: { notable_gems: [ { name: "sprockets-rails" }, { name: "importmap-rails" }, { name: "turbo-rails" } ] }
+        )
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("- **Asset pipeline:** Sprockets, serving app/assets")
+        expect(text).to include("- **Sprockets manifest:** `link_tree ../images`, `link_directory ../stylesheets .css`, `link_tree ../../javascript .js`")
+      end
+      it "names Tailwind CSS from tailwindcss-rails at every detail level" do
+        File.write(File.join(@root, "Gemfile.lock"), "GEM\n  specs:\n    propshaft (1.1.0)\n    tailwindcss-rails (4.4.0)\n")
+        allow(described_class).to receive(:cached_context).and_return(
+          frontend_frameworks: no_js_data, stimulus: {},
+          gems: { notable_gems: [ { name: "propshaft" }, { name: "turbo-rails" }, { name: "tailwindcss-rails" } ] }
+        )
+
+        %w[standard full].each do |detail|
+          expect(described_class.call(detail: detail).content.first[:text]).to include("- **CSS framework:** Tailwind CSS")
+        end
+        expect(described_class.call(detail: "summary").content.first[:text]).to include("Tailwind CSS")
+      end
+
+      it "names Bootstrap from a cssbundling package.json, in the summary of a JavaScript framework app too" do
+        File.write(File.join(@root, "Gemfile.lock"), "GEM\n  specs:\n    cssbundling-rails (1.4.3)\n")
+        File.write(File.join(@root, "package.json"), JSON.generate("dependencies" => { "bootstrap" => "^5.3.8" }))
+        allow(described_class).to receive(:cached_context).and_return(
+          frontend_frameworks: no_js_data.merge(frameworks: { react: "^19.0.0" }), stimulus: {}, gems: { notable_gems: [] }
+        )
+
+        expect(described_class.call(detail: "standard").content.first[:text]).to include("- **CSS framework:** Bootstrap")
+        expect(described_class.call(detail: "summary").content.first[:text]).to eq("React 19.0.0 + Bootstrap")
+      end
+
+      it "says a frontend_paths entry outside the app root was not read" do
+        allow(described_class).to receive(:cached_context).and_return(
+          frontend_frameworks: no_js_data.merge(skipped_frontend_paths: [ "../web-client" ]), stimulus: {}, gems: { notable_gems: [] }
+        )
+
+        text = described_class.call(detail: "standard").content.first[:text]
+        expect(text).to include("`frontend_paths` entries outside the app root are not read: `../web-client`")
+        expect(text).not_to include("API-only")
+        expect(described_class.call(detail: "summary").content.first[:text])
+          .to end_with("; frontend_paths outside the app root not read: ../web-client")
+      end
+
+      it "reads a manifest.js with bytes that are not UTF-8" do
+        FileUtils.mkdir_p(File.join(@root, "app/assets/config"))
+        File.binwrite(File.join(@root, "app/assets/config/manifest.js"), "//= link_tree ../images\n\xFF\xFE\n".b)
+        allow(described_class).to receive(:cached_context).and_return(
+          frontend_frameworks: no_js_data, stimulus: {}, gems: { notable_gems: [ { name: "sprockets-rails" } ] }
+        )
+
+        expect(described_class.call(detail: "standard").content.first[:text]).to include("`link_tree ../images`")
+      end
+    end
+
     context "on a Hotwire app with TypeScript disabled and no frontend_roots" do
       let(:hotwire_only_data) do
         {

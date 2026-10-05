@@ -82,7 +82,13 @@ module RailsAiContext
             all_dirs = view_directories(templates, partials)
             suggestion = find_closest_match(ctrl_lower, all_dirs)
             hint = suggestion ? " Did you mean '#{suggestion}'?" : ""
-            dirs_note = all_dirs.any? ? " Directories with views: #{all_dirs.join(', ')}" : " No view directories found (API-only apps typically have none)."
+            dirs_note = if all_dirs.any?
+              " Directories with views: #{all_dirs.join(', ')}"
+            elsif layout_files.any?
+              " The app has only layouts, listed by `controller:\"layouts\"`."
+            else
+              " No view directories found (API-only apps typically have none)."
+            end
             return empty_response("No views for '#{controller}'.#{hint}#{dirs_note}")
           end
 
@@ -208,7 +214,7 @@ module RailsAiContext
               all_content << [ name, strip_svg(read_view_content(name)) ]
             end
             # Compress repeated Tailwind classes across all templates
-            combined = all_content.map { |name, c| "## #{name}\n```erb\n#{c}\n```\n" }.join("\n")
+            combined = all_content.map { |name, c| "## #{name}\n```#{RailsAiContext::ViewFile.fence(name)}\n#{c}\n```\n" }.join("\n")
             combined = compress_tailwind(combined)
             lines << combined
             text_response(lines.join("\n"))
@@ -299,7 +305,7 @@ module RailsAiContext
           real = located.realpath
           if RailsAiContext::DetailLevel.full?(detail)
             content = RailsAiContext::SafeFile.read(real) || "(error reading)"
-            lines << "## #{relative}" << "```erb" << strip_svg(content) << "```" << ""
+            lines << "## #{relative}" << "```#{RailsAiContext::ViewFile.fence(relative)}" << strip_svg(content) << "```" << ""
           else
             content = RailsAiContext::SafeFile.read(real) || ""
             lines << "- #{relative} (#{count_phrase(content.lines.size, "line")})"
@@ -331,7 +337,7 @@ module RailsAiContext
         end
 
         content = compress_tailwind(strip_svg(content))
-        text_response("# #{result.relative}\n\n```erb\n#{content}\n```")
+        text_response("# #{result.relative}\n\n```#{RailsAiContext::ViewFile.fence(result.relative)}\n#{content}\n```")
       end
 
       # Strip inline SVG blocks - they're visual noise that buries the signal AI needs.

@@ -309,7 +309,9 @@ module RailsAiContext
         # Every template or Ruby file an identifier can be written in: the one
         # file set that naming and the "used in" lookup both read.
         def template_files(root)
-          TEMPLATE_KINDS.flat_map { |kind| PathResolver.dirs_for(root, kind) }.uniq.flat_map { |dir|
+          dirs = TEMPLATE_KINDS.flat_map { |kind| PathResolver.dirs_for(root, kind) }.uniq
+          dirs += PathResolver.view_dirs(root).reject { |views| dirs.any? { |dir| views == dir || views.start_with?("#{dir}/") } }
+          dirs.flat_map { |dir|
             FileWalk.each_file(dir, skip: SKIP_DIRS).select { |path| path.match?(TEMPLATE_FILE) }.sort
           }.uniq
         end

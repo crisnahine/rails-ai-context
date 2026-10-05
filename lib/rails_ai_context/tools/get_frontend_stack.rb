@@ -43,6 +43,12 @@ module RailsAiContext
         private
 
         def build_summary(data)
+          skipped = Array(data[:skipped_frontend_paths])
+          summary = stack_summary(data)
+          skipped.any? ? "#{summary}; frontend_paths outside the app root not read: #{skipped.join(', ')}" : summary
+        end
+
+        def stack_summary(data)
           parts = []
           framework = framework_label(data)
           parts << framework if framework
@@ -63,12 +69,15 @@ module RailsAiContext
           parts << "(#{count_phrase(total, "component")})" if total > 0
 
           # If no JS framework data, try building a Hotwire summary from cached context
+          pipeline = asset_pipeline
+          css = css_framework
           if parts.empty?
             hotwire = build_hotwire_summary
-            return hotwire if hotwire
+            return [ hotwire, css, pipeline ].compact.join(", ") if hotwire
+            return [ "#{pipeline} (no JavaScript build)", css ].compact.join(", ") if pipeline
           end
 
-          return parts.join(" + ") if parts.any?
+          return [ *parts, css ].compact.join(" + ") if parts.any?
 
           api_only_note("a frontend") || "No frontend framework detected."
         end
@@ -79,7 +88,6 @@ module RailsAiContext
           has_turbo = notable.any? { |g| g[:name] == "turbo-rails" }
           has_stimulus = notable.any? { |g| g[:name] == "stimulus-rails" }
           has_importmap = notable.any? { |g| g[:name] == "importmap-rails" }
-          has_tailwind = notable.any? { |g| g[:name] == "tailwindcss-rails" }
 
           return nil unless has_turbo || has_stimulus
 
@@ -94,8 +102,6 @@ module RailsAiContext
             count = stimulus[:total_controllers] || stimulus[:controllers]&.size || 0
             parts << count_phrase(count, "Stimulus controller") if count > 0
           end
-
-          parts << "Tailwind CSS" if has_tailwind
 
           parts.join(", ")
         end
@@ -114,6 +120,11 @@ module RailsAiContext
           state_management = state_management.join(", ") if state_management.is_a?(Array)
           lines << "- **State management:** #{state_management}" if state_management.present?
           lines << "- **Package manager:** #{data[:package_manager]}" if data[:package_manager]
+          pipeline_lines = asset_pipeline_lines
+          pipeline_lines << "- **CSS framework:** #{css_framework}" if css_framework
+          skipped = Array(data[:skipped_frontend_paths])
+          skipped_note = "_`frontend_paths` entries outside the app root are not read: #{skipped.map { |p| "`#{p}`" }.join(', ')}._" if skipped.any?
+          lines.concat(pipeline_lines)
 
           # TypeScript
           ts_enabled = data[:typescript].is_a?(Hash) && data[:typescript][:enabled]
@@ -151,7 +162,13 @@ module RailsAiContext
             !has_testing && !has_hotwire && !has_frontend_roots
 
           if no_frontend_evidence
-            return "# Frontend Stack\n\nNo frontend stack detected (API-only app / no app/javascript, no package.json)."
+            if pipeline_lines.any?
+              return [ "# Frontend Stack", "", *pipeline_lines, "- **JavaScript build:** none (no app/javascript, no package.json)",
+                       *([ "", skipped_note ] if skipped_note) ].join("\n")
+            end
+
+            note = api_only_note("a frontend") || "No frontend stack detected (no app/javascript, no package.json, no asset pipeline)."
+            return [ "# Frontend Stack", "", note, *([ "", skipped_note ] if skipped_note) ].join("\n")
           end
 
           lines.concat(hotwire_lines)
@@ -174,6 +191,7 @@ module RailsAiContext
             end
           end
 
+          lines << "" << skipped_note if skipped_note
           lines.join("\n")
         end
 
@@ -216,6 +234,32 @@ module RailsAiContext
           end
 
           lines.join("\n")
+        end
+
+        # Read from the gems, as rails_get_config does: the :assets section is
+        # in the full preset only.
+        def asset_pipeline
+          return "Propshaft" if Payload.gem?(cached_context, "propshaft")
+
+          "Sprockets" if Payload.gem?(cached_context, "sprockets-rails") || Payload.gem?(cached_context, "sprockets")
+        end
+
+        def css_framework
+          Introspectors::AssetPipelineIntrospector.css_framework_label(rails_app.root) ||
+            ("Tailwind CSS" if Payload.gem?(cached_context, "tailwindcss-rails"))
+        end
+
+        def asset_pipeline_lines
+          pipeline = asset_pipeline
+          return [] unless pipeline
+
+          lines = [ "- **Asset pipeline:** #{pipeline}, serving app/assets" ]
+          return lines unless pipeline == "Sprockets"
+
+          content, = RailsAiContext::SafePath.read("app/assets/config/manifest.js", under: rails_app.root.to_s)
+          links = content.to_s.scrub.scan(%r{^\s*//=\s*(link\w*\s+\S.*?)\s*$}).flatten
+          lines << "- **Sprockets manifest:** #{links.map { |l| "`#{l}`" }.join(', ')}" if links.any?
+          lines
         end
 
         # The introspector emits frameworks as a hash of framework symbol =>

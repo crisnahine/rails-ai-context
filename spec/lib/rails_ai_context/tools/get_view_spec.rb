@@ -29,6 +29,34 @@ RSpec.describe RailsAiContext::Tools::GetView do
       expect(text).not_to include("layout)")
     end
 
+    context "with a template that has no handler extension" do
+      let(:worker) { Rails.root.join("app/views/gv_pwa/service-worker.js") }
+
+      before do
+        FileUtils.mkdir_p(File.dirname(worker))
+        File.write(worker, "self.addEventListener(\"push\", () => {})\n")
+        described_class.reset_cache!
+      end
+
+      after do
+        FileUtils.rm_rf(File.dirname(worker))
+        described_class.reset_cache!
+      end
+
+      it "lists it, since Rails renders it with the raw handler" do
+        text = described_class.call(controller: "gv_pwa", detail: "summary").content.first[:text]
+
+        expect(text).to include("gv_pwa/service-worker.js")
+      end
+
+      it "shows its content fenced as what it is" do
+        text = described_class.call(path: "gv_pwa/service-worker.js").content.first[:text]
+
+        expect(text).not_to include("No template handler renders this file")
+        expect(text).to include("```js\nself.addEventListener")
+      end
+    end
+
     # app/views/layouts holds the partials the layouts render, and the partial
     # listing already counts them; counting them again as layouts made the
     # heading claim more layouts than the app has.
@@ -340,7 +368,15 @@ RSpec.describe RailsAiContext::Tools::GetView do
     end
 
     context "when the app is API-only" do
+      around do |example|
+        Dir.mktmpdir("api-no-views") do |dir|
+          @root = dir
+          example.run
+        end
+      end
+
       before do
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
         allow(described_class).to receive(:cached_context).and_return(
           api: { api_only: true },
           view_templates: { templates: {}, partials: {} }
@@ -383,7 +419,15 @@ RSpec.describe RailsAiContext::Tools::GetView do
     end
 
     context "when the app is API-only with zero views anywhere and no controller filter" do
+      around do |example|
+        Dir.mktmpdir("api-no-views") do |dir|
+          @root = dir
+          example.run
+        end
+      end
+
       before do
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
         allow(described_class).to receive(:cached_context).and_return(
           api: { api_only: true },
           view_templates: { templates: {}, partials: {} }
@@ -395,6 +439,67 @@ RSpec.describe RailsAiContext::Tools::GetView do
         text = response.content.first[:text]
         expect(text).to include("Not applicable")
         expect(text).to include("API-only")
+      end
+    end
+
+    context "when the app is API-only and keeps the two mailer layouts rails new creates" do
+      around do |example|
+        Dir.mktmpdir("api-mailer-layouts") do |dir|
+          FileUtils.mkdir_p(File.join(dir, "config"))
+          File.write(File.join(dir, "config/application.rb"), "module Demo\n  class Application < Rails::Application\n    config.api_only = true\n  end\nend\n")
+          layouts = File.join(dir, "app/views/layouts")
+          FileUtils.mkdir_p(layouts)
+          File.write(File.join(layouts, "mailer.html.erb"), "<html><body><%= yield %></body></html>\n")
+          File.write(File.join(layouts, "mailer.text.erb"), "<%= yield %>\n")
+          @root = dir
+          example.run
+        end
+      end
+
+      before do
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+        allow(described_class).to receive(:cached_context).and_return(
+          api: { api_only: true },
+          view_templates: { templates: {}, partials: {} }
+        )
+      end
+
+      it "counts the layouts instead of saying app/views does not exist" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).not_to include("does not exist")
+        expect(text).to include("# Views (0 templates, 0 partials, 2 layouts)")
+      end
+
+      it "says a controller filter miss is a miss, not a missing directory" do
+        text = described_class.call(controller: "users").content.first[:text]
+
+        expect(text).not_to include("does not exist")
+        expect(text).to include("No views for 'users'. The app has only layouts, listed by `controller:\"layouts\"`.")
+      end
+    end
+
+    context "when the app puts a view path before app/views, inside it" do
+      around do |example|
+        Dir.mktmpdir("declared-view-path") do |dir|
+          FileUtils.mkdir_p(File.join(dir, "config"))
+          File.write(File.join(dir, "config/application.rb"), "config.paths[\"app/views\"].unshift(Rails.root.join(\"app/views/custom\").to_s)\n")
+          FileUtils.mkdir_p(File.join(dir, "app/views/custom/posts"))
+          File.write(File.join(dir, "app/views/custom/posts/show.html.erb"), "<h1>Post</h1>\n")
+          File.write(File.join(dir, "app/views/posts/index.html.erb").tap { |f| FileUtils.mkdir_p(File.dirname(f)) }, "<h1>Posts</h1>\n")
+          @root = dir
+          example.run
+        end
+      end
+
+      before do
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+        allow(described_class).to receive(:cached_context).and_return({})
+      end
+
+      it "files its template under the controller that renders it" do
+        expect(described_class.call(controller: "posts").content.first[:text]).to include("- posts/index.html.erb", "- posts/show.html.erb")
+        expect(described_class.call.content.first[:text]).not_to include("custom/")
       end
     end
 

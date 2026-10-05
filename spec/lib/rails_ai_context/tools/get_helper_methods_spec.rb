@@ -92,6 +92,47 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
       end
     end
 
+    context "when a template lives in a view path the app appends" do
+      around do |example|
+        Dir.mktmpdir("helper-overlay") do |dir|
+          @root = dir
+          FileUtils.mkdir_p(File.join(dir, "app/views"))
+          FileUtils.mkdir_p(File.join(dir, "enterprise/app/views/posts"))
+          FileUtils.mkdir_p(File.join(dir, "app/helpers"))
+          FileUtils.mkdir_p(File.join(dir, "config"))
+          File.write(File.join(dir, "config/application.rb"), "config.paths[\"app/views\"] << \"enterprise/app/views\"\n")
+          File.write(File.join(dir, "app/helpers/application_helper.rb"), "module ApplicationHelper\n  def page_title = \"t\"\nend\n")
+          File.write(File.join(dir, "Gemfile"), "gem \"devise\"\n")
+          File.write(File.join(dir, "enterprise/app/views/posts/index.html.erb"), "<%= page_title %> <%= current_user %>\n")
+          example.run
+        end
+      end
+
+      before do
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+        allow(described_class).to receive(:cached_context).and_return({})
+      end
+
+      it "reads it for view references and framework helpers" do
+        helper = described_class.call(helper: "ApplicationHelper", detail: "full").content.first[:text]
+        expect(helper).to include("`page_title` used in: posts/index.html.erb")
+        expect(described_class.call(detail: "full").content.first[:text]).to include("**Devise:** current_user")
+      end
+
+      it "skips a view in it that links out of the app or loops" do
+        Dir.mktmpdir("outside") do |outside|
+          File.write(File.join(outside, "leak.html.erb"), "<%= page_title %>\n")
+          File.symlink(File.join(outside, "leak.html.erb"), File.join(@root, "enterprise/app/views/posts/leak.html.erb"))
+          File.symlink("loop.html.erb", File.join(@root, "enterprise/app/views/posts/loop.html.erb"))
+
+          text = described_class.call(helper: "ApplicationHelper", detail: "full").content.first[:text]
+          expect(text).to include("`page_title` used in: posts/index.html.erb")
+          expect(text).not_to include("leak.html.erb")
+          expect(text).not_to include("loop.html.erb")
+        end
+      end
+    end
+
     # An app that registers an acronym keeps JsonLdHelper in jsonld_helper.rb;
     # underscoring the name here, knowing none of the app's acronyms, looked
     # for json_ld_helper.rb.

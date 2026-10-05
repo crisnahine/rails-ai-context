@@ -312,25 +312,16 @@ module RailsAiContext
       end
 
       private_class_method def self.find_view_references(method_names, real_root)
-        views_dir = File.join(real_root, "app", "views")
-        return {} unless Dir.exist?(views_dir)
-
-        real_views_dir = File.realpath(views_dir).to_s
         references = {}
-
-        view_files = Dir.glob(File.join(views_dir, RailsAiContext::ViewFile::MARKUP_GLOB))
-                        .filter_map { |f| safe_glob_realpath(f, real_views_dir, real_root) }
+        view_files = markup_views(real_root)
 
         method_names.each do |method_name|
           matching_views = []
 
-          view_files.each do |view_path|
-            content = RailsAiContext::SafeFile.read(view_path) or next
+          view_files.each do |real, relative|
+            content = RailsAiContext::SafeFile.read(real) or next
 
-            if content.include?(method_name)
-              relative = view_path.sub("#{real_views_dir}/", "")
-              matching_views << relative
-            end
+            matching_views << relative if content.include?(method_name)
           end
 
           references[method_name] = matching_views if matching_views.any?
@@ -339,6 +330,16 @@ module RailsAiContext
         references
       rescue => e
         RailsAiContext.debug_fail(e, {}, label: "find_view_references")
+      end
+
+      # Every markup view across the app's views roots, as [realpath, name it renders by].
+      private_class_method def self.markup_views(real_root)
+        dirs = PathResolver.view_dirs(real_root)
+        real_dirs = Hash.new { |cache, dir| cache[dir] = File.realpath(dir) }
+        RailsAiContext::ViewFile.each(real_root, RailsAiContext::ViewFile::MARKUP_GLOB).filter_map do |path, relative|
+          real = safe_glob_realpath(path, real_dirs[RailsAiContext::ViewFile.root_for(path, dirs)], real_root)
+          [ real, relative ] if real
+        end
       end
 
       private_class_method def self.detect_framework_helpers(real_root)
@@ -350,14 +351,9 @@ module RailsAiContext
         # Collect all view file content for scanning
         scan_content = ""
 
-        scan_dirs = PathResolver.dirs_for(real_root, "app/views").map { |d| [ d, RailsAiContext::ViewFile::MARKUP_GLOB ] } +
-                    PathResolver.dirs_for(real_root, "app/helpers").map { |d| [ d, "**/*.rb" ] }
-
-        scan_dirs.each do |dir, glob|
-          safe_glob(dir, glob, real_root).each do |real|
-            scan_content += (RailsAiContext::SafeFile.read(real) || "")
-          end
-        end
+        files = markup_views(real_root).map(&:first) +
+                PathResolver.dirs_for(real_root, "app/helpers").flat_map { |d| safe_glob(d, "**/*.rb", real_root) }
+        files.each { |real| scan_content += (RailsAiContext::SafeFile.read(real) || "") }
 
         FRAMEWORK_HELPERS.each do |lib, methods|
           gem_name = FRAMEWORK_GEMS.fetch(lib) { lib.downcase }

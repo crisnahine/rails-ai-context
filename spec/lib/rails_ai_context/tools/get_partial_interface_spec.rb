@@ -5,6 +5,134 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Tools::GetPartialInterface do
   before { described_class.reset_cache! }
 
+  describe "an implicit render of a collection or record" do
+    around do |example|
+      Dir.mktmpdir("implicit-render") do |dir|
+        @root = dir
+        views = File.join(dir, "app/views")
+        %w[admin/posts posts sessions shared].each { |d| FileUtils.mkdir_p(File.join(views, d)) }
+        FileUtils.mkdir_p(File.join(dir, "app/models"))
+        File.write(File.join(views, "admin/posts/index.html.erb"), "<%= render @posts %>\n")
+        File.write(File.join(views, "admin/posts/_post.html.erb"), "<%= post.title %>\n")
+        File.write(File.join(views, "posts/show.html.erb"), "<h1>Post</h1>\n\n<%= render @post %>\n")
+        File.write(File.join(views, "posts/_post.html.erb"), "<%= post.title %>\n")
+        File.write(File.join(views, "sessions/index.html.erb"), "<%= render @sessions %>\n")
+        File.write(File.join(views, "shared/_session_row.html.erb"), "<%= session_row.id %>\n")
+        File.write(File.join(dir, "app/models/session.rb"),
+                   "class Session < ApplicationRecord\n  def to_partial_path\n    \"shared/session_row\"\n  end\nend\n")
+        example.run
+      end
+    end
+
+    before do
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    def rendered_from(name)
+      described_class.call(partial: name).content.first[:text][/## Rendered From.*?(?=\n\n|\z)/m]
+    end
+
+    it "credits a namespaced view to the partial under its namespace" do
+      expect(rendered_from("admin/posts/post")).to eq("## Rendered From (1)\n- `app/views/admin/posts/index.html.erb:1`")
+      expect(rendered_from("posts/post")).to eq("## Rendered From (1)\n- `app/views/posts/show.html.erb:3`")
+    end
+
+    it "follows a to_partial_path the model defines" do
+      expect(rendered_from("shared/session_row")).to eq("## Rendered From (1)\n- `app/views/sessions/index.html.erb:1`")
+      expect(rendered_from("session_row")).to eq("## Rendered From (1)\n- `app/views/sessions/index.html.erb:1`")
+    end
+
+    it "drops the namespace when the app turns the prefix off" do
+      FileUtils.mkdir_p(File.join(@root, "config"))
+      File.write(File.join(@root, "config/application.rb"), <<~RUBY)
+        module Demo
+          class Application < Rails::Application
+            config.action_view.prefix_partial_path_with_controller_namespace = false
+          end
+        end
+      RUBY
+
+      expect(rendered_from("admin/posts/post")).to be_nil
+      expect(rendered_from("posts/post")).to include("app/views/admin/posts/index.html.erb:1", "app/views/posts/show.html.erb:3")
+    end
+
+    it "reads the prefix setting from a nested initializer, once per call however many view roots there are" do
+      FileUtils.mkdir_p(File.join(@root, "config/initializers/views"))
+      File.write(File.join(@root, "config/application.rb"), "config.paths[\"app/views\"] << \"app/views/extra\"\n")
+      FileUtils.mkdir_p(File.join(@root, "app/views/extra"))
+      File.write(File.join(@root, "config/initializers/views/partials.rb"),
+                 "Rails.application.config.action_view.prefix_partial_path_with_controller_namespace = false\n")
+      allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk).and_call_original
+
+      expect(rendered_from("posts/post")).to include("app/views/admin/posts/index.html.erb:1")
+      expect(RailsAiContext::Introspectors::SourceIntrospector).to have_received(:walk)
+        .with(File.join(@root, "config/application.rb"), { config: RailsAiContext::Introspectors::Listeners::ConfigAssignmentListener }).once
+    end
+
+    it "counts a partial under a view root declared inside app/views once" do
+      FileUtils.mkdir_p(File.join(@root, "config"))
+      File.write(File.join(@root, "config/application.rb"), "config.paths[\"app/views\"].unshift(\"app/views/custom\")\n")
+      FileUtils.mkdir_p(File.join(@root, "app/views/custom/notes"))
+      File.write(File.join(@root, "app/views/custom/notes/_badge.html.erb"), "<%= badge %>\n")
+      File.write(File.join(@root, "app/views/custom/notes/index.html.erb"), "<%= render \"notes/badge\", badge: 1 %>\n")
+
+      text = described_class.call(partial: "badge").content.first[:text]
+      expect(text).not_to include("matches 2 files")
+      expect(rendered_from("notes/badge")).to eq("## Rendered From (1)\n- `app/views/custom/notes/index.html.erb:1` - locals: badge")
+    end
+  end
+
+  describe "a strict locals comment in each form Rails accepts" do
+    around do |example|
+      Dir.mktmpdir("strict-locals") do |dir|
+        @root = dir
+        notes = File.join(dir, "app/views/notes")
+        FileUtils.mkdir_p(notes)
+        File.write(File.join(notes, "_dash.html.erb"), %(<%# locals: (title:, tone: "plain") -%>\n<p class="<%= tone %>"><%= title %></p>\n))
+        File.write(File.join(notes, "_paren.html.erb"), %(<%# locals: (title: t(".heading"), tone: "plain") %>\n<p class="<%= tone %>"><%= title %></p>\n))
+        File.write(File.join(notes, "_none.html.erb"), "<%# locals: () %>\n<p>static</p>\n")
+        example.run
+      end
+    end
+
+    before do
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    def interface(name)
+      described_class.call(partial: "notes/#{name}").content.first[:text]
+    end
+
+    it "reads a comment that ends in -%>" do
+      expect(interface("dash")).to include("**Declared locals** (Rails 7.1+ magic comment): title, tone")
+    end
+
+    it "reads a default that has parentheses" do
+      expect(interface("paren")).to include("**Declared locals** (Rails 7.1+ magic comment): title, tone")
+    end
+
+    it "names a keyword rest, which lets any other local through" do
+      File.write(File.join(@root, "app/views/notes/_rest.html.erb"), "<%# locals: (title:, **opts) %>\n<%= title %>\n")
+
+      expect(interface("rest")).to include("**Declared locals** (Rails 7.1+ magic comment): title, **opts")
+    end
+
+    it "degrades on a partial whose bytes are not valid UTF-8" do
+      File.binwrite(File.join(@root, "app/views/notes/_bad.html.erb"), "<%# locals: (title:) %>\n\xFF\xFE<%= title %>\n".b)
+
+      expect { interface("bad") }.not_to raise_error
+    end
+
+    it "says an empty list rejects every local" do
+      text = interface("none")
+
+      expect(text).to include("**Declared locals** (Rails 7.1+ magic comment): none, so passing any local raises")
+      expect(text).not_to include("No local variables detected")
+    end
+  end
+
   # Two of the app's three partials are `.text.erb`, and the resolver's fixed
   # extension list refused the name its own Available list had just printed.
   describe "a partial outside the html.erb extension list" do

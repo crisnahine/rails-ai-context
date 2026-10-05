@@ -217,7 +217,15 @@ RSpec.describe RailsAiContext::Tools::GetComponentCatalog do
     end
 
     context "when the app is API-only" do
+      around do |example|
+        Dir.mktmpdir("api-no-components") do |dir|
+          @root = dir
+          example.run
+        end
+      end
+
       before do
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
         allow(described_class).to receive(:cached_context).and_return(
           api: { api_only: true },
           components: { components: [] }
