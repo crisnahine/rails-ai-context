@@ -106,9 +106,9 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "extract_deprecators")
       end
 
-      # The class itself or Rails.application.message_verifier(s); a nested
+      # The class itself, Rails.application.message_verifier(s) or ActiveStorage.verifier; a nested
       # constant such as MessageVerifier::InvalidSignature is only a rescue.
-      VERIFIER_USE = /MessageVerifier(?!::)|\bmessage_verifiers?\b/
+      VERIFIER_USE = /MessageVerifier(?!::)|\bmessage_verifiers?\b|\bActiveStorage\.verifier\b/
       ENCRYPTOR_USE = /MessageEncryptor(?!::)/
 
       def extract_message_verifier_usage
