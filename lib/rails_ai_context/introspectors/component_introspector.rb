@@ -53,8 +53,9 @@ module RailsAiContext
       def split_bases(components)
         names = components.filter_map { |c| full_names[c[:file]] }.to_set
         inherited = components.filter_map do |c|
-          own = full_names[c[:file]]
-          superclasses[c[:file]] && SuperclassChain.resolve_in_scope(own, superclasses[c[:file]]) { |name| name if names.include?(name) }
+          declared = declared_classes[c[:file]]
+          declared&.superclass &&
+            SuperclassChain.resolve_in_scope(declared.name, declared.superclass, nesting: declared.nesting) { |name| name if names.include?(name) }
         end.to_set
         # Inherited, always: ApplicationRowComponent is a row, not a base.
         components.partition do |c|
@@ -63,8 +64,8 @@ module RailsAiContext
         end
       end
 
-      def superclasses
-        @superclasses ||= {}
+      def declared_classes
+        @declared_classes ||= {}
       end
 
       # A preview named for another namespace than its component is linked by what it
@@ -109,7 +110,7 @@ module RailsAiContext
         return nil unless declaration
         class_name = display_name(declaration.name)
         full_names[relative] = declaration.name
-        superclasses[relative] = declaration.superclass
+        declared_classes[relative] = declaration
 
         structure = extract_structure(content)
         type = detect_component_type(content, declaration)

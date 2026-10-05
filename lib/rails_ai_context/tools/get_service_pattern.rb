@@ -193,10 +193,10 @@ module RailsAiContext
         return { path: file } unless source
         return if Introspectors::ServiceClasses.concern?(nil, source)
 
-        class_name, superclass = name_and_superclass(source, file, service_dirs)
+        class_name, superclass, nesting = name_and_superclass(source, file, service_dirs)
         return if Introspectors::ServiceClasses.mailer?(source, class_name, superclass, lookup)
 
-        { path: file, source: source, class_name: class_name, superclass: superclass,
+        { path: file, source: source, class_name: class_name, superclass: superclass, nesting: nesting,
           entryless: Introspectors::ServiceClasses.entryless_module?(source, class_name) }
       end
 
@@ -221,6 +221,7 @@ module RailsAiContext
             file: file.sub("#{root}/", ""),
             class_name: record[:class_name],
             superclass: record[:superclass],
+            nesting: record[:nesting],
             line_count: source.lines.size,
             public_methods: extract_public_methods(owned),
             init_params: extract_initialize_params(owned),
@@ -308,7 +309,7 @@ module RailsAiContext
       # A base class is not a service a caller invokes: counted as one it
       # inflates the total and the pattern denominator beside it.
       private_class_method def self.base_class_names(service_data)
-        Introspectors::ServiceClasses.abstract_names(service_data.map { |s| [ s[:class_name], s[:superclass] ] })
+        Introspectors::ServiceClasses.abstract_names(service_data.map { |s| s.values_at(:class_name, :superclass, :nesting) })
       end
 
       # The class this file declares and the superclass it names, from the one
