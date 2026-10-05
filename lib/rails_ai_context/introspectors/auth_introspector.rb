@@ -28,7 +28,7 @@ module RailsAiContext
       # One walk per model and per controller answers every macro question below.
       def model_asts
         @model_asts ||= begin
-          SourceScan.classes(root, kind: "app/models").map do |model_name, record|
+          SourceScan.classes(root, kind: :models).map do |model_name, record|
             [ model_name, SourceIntrospector.walk_source(record.source, {
               devise: -> { Listeners::GenericMacroListener.new(:devise) },
               macros: Listeners::MacrosListener

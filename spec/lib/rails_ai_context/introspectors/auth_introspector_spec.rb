@@ -16,10 +16,10 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
     context "when the source walk raises" do
       before { allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source).and_raise(ArgumentError, "boom") }
 
-      it "scans app/models and app/controllers once each" do
+      it "scans the models and app/controllers once each" do
         scan = RailsAiContext::Introspectors::SourceScan
         allow(scan).to receive(:paths).and_call_original
-        expect(scan).to receive(:paths).with(anything, hash_including(kind: "app/models")).once.and_call_original
+        expect(scan).to receive(:model_paths).once.and_call_original
         expect(scan).to receive(:paths).with(anything, hash_including(kind: "app/controllers")).once.and_call_original
 
         expect(result[:devise_modules_per_model]).to eq({})

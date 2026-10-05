@@ -170,13 +170,17 @@ module RailsAiContext
 
       private_class_method :scan, :scan_dir, :ruby_files, :walk_dir, :within?, :extra_model_candidates, :extra_model_declarations, :class_declarations
 
-      def each(root, kind:, skip_concerns: true)
-        return enum_for(:each, root, kind: kind, skip_concerns: skip_concerns) unless block_given?
+      # `kind: :models` reads model_paths: what model_details lists, not only app/models.
+      def each(root, kind:, skip_concerns: true, &block)
+        return enum_for(:each, root, kind: kind, skip_concerns: skip_concerns) unless block
 
-        paths(root, kind: kind, skip_concerns: skip_concerns) do |record|
+        read = lambda do |record|
           source = SafeFile.read(record.path) or next
-          yield record.with(source: source)
+          block.call(record.with(source: source))
         end
+        return paths(root, kind: kind, skip_concerns: skip_concerns, &read) unless kind == :models
+
+        model_paths(root) { |record| read.call(record) unless skip_concerns && record.path_name.start_with?("Concerns::") }
       end
 
       # The eager form: reads and parses every file for its declared name.

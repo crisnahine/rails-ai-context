@@ -100,6 +100,24 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
     end
   end
 
+  it "reads the models model_details lists with kind :models, top-level concerns left out by default" do
+    Dir.mktmpdir do |dir|
+      {
+        "app/models/user.rb" => "class User < ApplicationRecord\nend\n",
+        "app/models/concerns/trackable.rb" => "module Trackable\nend\n",
+        "app/domain/invoice.rb" => "class Invoice < ApplicationRecord\nend\n",
+        "app/services/charge_card.rb" => "class ChargeCard < BaseService\nend\n"
+      }.each do |name, source|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+        File.write(File.join(dir, name), source)
+      end
+
+      expect(described_class.each(dir, kind: :models).map(&:file)).to contain_exactly("app/models/user.rb", "app/domain/invoice.rb")
+      expect(described_class.each(dir, kind: :models, skip_concerns: false).map(&:file)).to include("app/models/concerns/trackable.rb")
+      expect(described_class.classes(dir, kind: :models).map(&:first)).to contain_exactly("User", "Invoice")
+    end
+  end
+
   it "keeps a class outside app/models whose chain reaches a model base through another such class" do
     Dir.mktmpdir do |dir|
       {

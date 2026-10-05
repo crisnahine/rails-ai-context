@@ -59,7 +59,7 @@ module RailsAiContext
         result[:shard_names] = shard_names if shard_names.any?
 
         # Extract shard config from model source via AST
-        SourceScan.each(root, kind: "app/models").each do |record|
+        SourceScan.each(root, kind: :models).each do |record|
           ast = SourceIntrospector.walk_source(record.source, {
             connects: -> { Listeners::GenericMacroListener.new(:connects_to) }
           })
@@ -79,7 +79,7 @@ module RailsAiContext
 
       def detect_model_connections
         connections = []
-        SourceScan.classes(root, kind: "app/models").each do |model_name, record|
+        SourceScan.classes(root, kind: :models).each do |model_name, record|
           ast = SourceIntrospector.walk_source(record.source, {
             connects_to: -> { Listeners::GenericMacroListener.new(:connects_to) },
             connected_to: -> { Listeners::GenericMacroListener.new(:connected_to) }

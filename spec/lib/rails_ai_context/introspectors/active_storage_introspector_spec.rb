@@ -137,5 +137,15 @@ RSpec.describe RailsAiContext::Introspectors::ActiveStorageIntrospector do
         expect(attachments.map { |a| a[:model] }).to contain_exactly("Admin::Profile", "Invoice")
       end
     end
+
+    it "finds the attachment of a model outside app/models that model_details lists" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "domain"))
+        File.write(File.join(dir, "app", "domain", "receipt.rb"), "class Receipt < ApplicationRecord\n  has_one_attached :scan\nend\n")
+
+        attachments = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:attachments]
+        expect(attachments).to eq([ { model: "Receipt", name: "scan", type: "has_one_attached" } ])
+      end
+    end
   end
 end

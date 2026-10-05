@@ -9,7 +9,7 @@ module RailsAiContext
 
       MODEL_BROADCAST_MACROS = %w[broadcasts broadcasts_to broadcasts_refreshes broadcasts_refreshes_to].freeze
       BROADCAST_CALL = /\Abroadcast_\w+_to\z/
-      BROADCAST_KINDS = %w[app/controllers app/models app/services app/jobs app/workers app/channels].freeze
+      BROADCAST_KINDS = %w[app/controllers app/services app/jobs app/workers app/channels].freeze
 
       # A mention of these helpers anywhere in a controller is the signal,
       # whether called, referenced or guarded. Vocabulary, not structure, so
@@ -187,10 +187,14 @@ module RailsAiContext
       def scan_broadcasts
         models = []
         explicit = []
-        BROADCAST_KINDS.each do |kind|
+        seen = Set.new
+        # A model outside app/models also sits under another kind's directory.
+        [ :models, *BROADCAST_KINDS ].each do |kind|
           SourceScan.each(root, kind: kind, skip_concerns: false) do |record|
+            next unless seen.add?(record.path)
+
             walked = walk_broadcasts(record.source)
-            models.concat(model_entries(record, walked[:macros])) if kind == "app/models"
+            models.concat(model_entries(record, walked[:macros])) if kind == :models
             explicit.concat(explicit_entries(record, walked[:calls]))
           end
         end

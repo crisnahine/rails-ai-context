@@ -245,6 +245,19 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
     end
   end
 
+  it "reads a model outside app/models once, as a model, though it sits under app/services" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "app", "services"))
+      File.write(File.join(dir, "app", "services", "order.rb"),
+                 "class Order < ApplicationRecord\n  broadcasts_to :store\n  after_commit { broadcast_replace_to :orders }\nend\n")
+
+      result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+      expect(result[:model_broadcasts].map { |b| [ b[:model], b[:macro] ] }).to eq([ %w[Order broadcasts_to] ])
+      expect(result[:explicit_broadcasts].size).to eq(1)
+    end
+  end
+
   describe "a subscription whose argument carries its own commas" do
     def streams_for(view)
       Dir.mktmpdir do |dir|
