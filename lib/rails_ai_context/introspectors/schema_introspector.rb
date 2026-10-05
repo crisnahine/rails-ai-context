@@ -403,6 +403,10 @@ module RailsAiContext
           return { unavailable: "this app uses Mongoid; ActiveRecord schema introspection does not apply" }
         end
 
+        if secondary_database_dumps.any?
+          return { total_tables: 0, tables: {}, note: "The primary database has no tables yet: no db/schema.rb, db/structure.sql, or migrations found." }
+        end
+
         # An absent data source, not a failure: :unavailable keeps a fresh
         # greenfield app out of the "introspection failed" warnings banner.
         { unavailable: "No db/schema.rb, db/structure.sql, or migrations found" }
@@ -414,6 +418,10 @@ module RailsAiContext
       # dump keeps the top-level :tables shape; secondaries ride their own
       # key so single-database consumers are unaffected.
       def secondary_database_dumps
+        @secondary_database_dumps ||= read_secondary_database_dumps
+      end
+
+      def read_secondary_database_dumps
         dumps = {}
         primary = dump_candidates.map(&:last)
         Dir.glob(File.join(app.root.to_s, "db", "*_schema.rb")).sort.each do |path|

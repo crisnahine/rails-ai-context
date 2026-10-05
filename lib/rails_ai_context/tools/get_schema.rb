@@ -139,7 +139,7 @@ module RailsAiContext
             paginated = page[:items]
             return json_page_response(schema, tables, paginated, models_data) if format == "json"
 
-            if paginated.empty?
+            if paginated.empty? && total > 0
               return text_response("No tables at offset #{page[:offset]}. Total tables: #{total}. Use `offset:0` to start from the beginning.")
             end
 

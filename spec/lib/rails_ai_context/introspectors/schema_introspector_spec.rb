@@ -1076,6 +1076,26 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
+    it "lists the secondary dumps of a new app whose primary has no tables yet" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "queue_schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.0].define(version: 1) do
+            create_table "solid_queue_jobs" do |t|
+              t.string "queue_name", null: false
+            end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result).not_to have_key(:unavailable)
+        expect(result[:total_tables]).to eq(0)
+        expect(result[:secondary_databases].keys).to eq([ "queue" ])
+        expect(result[:secondary_databases]["queue"][:tables]).to have_key("solid_queue_jobs")
+      end
+    end
+
     it "reads each dump's own generated columns" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "db"))
