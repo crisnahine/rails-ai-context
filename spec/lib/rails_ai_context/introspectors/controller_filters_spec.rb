@@ -103,6 +103,31 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
       end
     end
 
+    # Decidim's NeedsOrganization: the hook hands its base to a method that class_evals the filter onto it.
+    it "reads a filter a mixin hook adds through a method it hands the including class to" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        File.write(File.join(dir, "app", "controllers", "concerns", "needs_organization.rb"), <<~RUBY)
+          module NeedsOrganization
+            def self.enhance_controller(instance_or_module)
+              instance_or_module.class_eval do
+                before_action :verify_organization
+              end
+            end
+
+            def self.included(base)
+              enhance_controller(base)
+            end
+          end
+        RUBY
+        source = "class PagesController < ApplicationController\n  include NeedsOrganization\nend\n"
+
+        filters, = described_class.with_concerns(source, root: dir, within: "PagesController")
+
+        expect(filters.map { |f| [ f[:name], f[:from_concern] ] }).to eq([ [ "verify_organization", "NeedsOrganization" ] ])
+      end
+    end
+
     it "reads a filter inside a method only where the class calls the method" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))

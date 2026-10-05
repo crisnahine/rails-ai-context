@@ -544,6 +544,7 @@ module RailsAiContext
         @hidden = []
         @included_calls = {}
         @block_sites = {}
+        @includer_reads = Set.new
         @skipped_methods = Set.new
         @consulted = Set.new
         @placement = {}
@@ -602,8 +603,9 @@ module RailsAiContext
           # A nested module's lines count from its own slice, so the ranges parse that.
           tree = nested ? AstCache.parse_string(nested.last.slice).value : AstCache.parse(path).value
           source_key = nested ? "#{source}##{nested.first}" : path
-          block_calls, hooked, blocks, evals, unrun = memo([ :included_calls, source_key, label, macro ]) { included_block_calls(tree, label, macro) }
+          block_calls, hooked, blocks, evals, unrun, bases = memo([ :included_calls, source_key, label, macro ]) { included_block_calls(tree, label, macro) }
           Run.merge_calls(@included_calls, block_calls)
+          @includer_reads.merge(bases)
           hooked = hooked.to_set
           block_calls.each_value { |sites| sites.each { |site| @block_sites[site.__id__] ||= [ label, hooked.include?(site.__id__) ] if site } }
           @mixins << [ label, macro, memo([ :module_defs, source_key, label, macro ]) { module_defs(tree, label, macro) }, @inside ]
@@ -779,7 +781,7 @@ module RailsAiContext
           end
           next unless definition
 
-          expansion, read = ConcernMacros.expand_calls(definition, call_sites.fetch(name), keys, @listeners) do |entry, call|
+          expansion, read = ConcernMacros.expand_calls(definition, call_sites.fetch(name), keys, @listeners, includer: @includer_reads) do |entry, call|
             [ at_call(entry, call, [ label, method[:location] ]) ]
           end
           expansion.each { |key, entries| found[key].concat(entries) }
@@ -825,7 +827,7 @@ module RailsAiContext
       # Receiverless calls in `included do` outside any method are the includer's;
       # the ids of a plain mixin hook's calls come back apart, as it reruns per include.
       # Also the lines of those blocks, of the `base.class_eval` blocks in hooks, and of the
-      # Concern blocks this way of mixing in does not run.
+      # Concern blocks this way of mixing in does not run, and the ids of a hook's reads of its base.
       def included_block_calls(tree, name, macro = :include)
         short = name.to_s.split("::").last.to_s
         block = ConcernMembership::CONCERN_BLOCKS[macro]
@@ -834,6 +836,7 @@ module RailsAiContext
         ranges = []
         evals = []
         unrun = []
+        bases = []
         visit = lambda do |node, owner|
           case node
           when Prism::ClassNode, Prism::ModuleNode
@@ -849,20 +852,20 @@ module RailsAiContext
               return
             end
           when Prism::DefNode
-            return hook_calls(node, hooked, evals) if SingletonLookup.hook?(node, macro) && owner.to_s.casecmp?(short)
+            return hook_calls(node, hooked, evals, bases) if SingletonLookup.hook?(node, macro) && owner.to_s.casecmp?(short)
           end
           node.child_nodes.compact.each { |child| visit.call(child, owner) }
         end
         visit.call(tree, nil)
-        [ Run.merge_calls(found, hooked), hooked.values.flatten.map(&:__id__), ranges, evals, unrun ]
+        [ Run.merge_calls(found, hooked), hooked.values.flatten.map(&:__id__), ranges, evals, unrun, bases ]
       rescue StandardError => e
-        RailsAiContext.debug_fail(e, [ {}, [], [], [], [] ], label: "included block calls of #{name}")
+        RailsAiContext.debug_fail(e, [ {}, [], [], [], [], [] ], label: "included block calls of #{name}")
       end
 
       # A hook runs in the includer: its receiverless calls (inside
       # `base.class_eval`) and its calls sent to the includer (`base.x`) are
       # calls the includer makes.
-      def hook_calls(node, found, evals)
+      def hook_calls(node, found, evals, bases = [])
         return unless node.body
 
         Introspectors::SourceIntrospector.calls_outside_methods(node.body, found)
@@ -870,6 +873,7 @@ module RailsAiContext
         return unless base
 
         Introspectors::AstWalk.each(node.body).each do |call|
+          bases << call.__id__ if base.call(call)
           next unless call.is_a?(Prism::CallNode) && base.call(call.receiver)
 
           (found[call.name.to_s] ||= []) << call
@@ -939,12 +943,12 @@ module RailsAiContext
 
     # What the method `definition` declares at each call in `sites`, by key, each entry placed by the block
     # ([entry, call] in, entries out), with the calls it read as `:expanded`; false second when a call was not.
-    def expand_calls(definition, sites, keys, listeners)
+    def expand_calls(definition, sites, keys, listeners, includer: nil)
       found = Hash.new { |hash, key| hash[key] = [] }
       read = true
       sites.each do |call|
         # `:conditional` and `:foreign` come back as keys too, when asked for.
-        Introspectors::CallSiteExpansion.entries(definition, call, listeners).each do |key, entries|
+        Introspectors::CallSiteExpansion.entries(definition, call, listeners, includer: includer).each do |key, entries|
           found[key].concat(Array(entries).flat_map { |entry| yield entry, call }) if keys.include?(key)
         end
         # The call now reads as what the method declares; a caller that read the call itself as a

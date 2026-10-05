@@ -383,7 +383,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     RUBY
     allow(RailsAiContext::Introspectors::CallSiteExpansion).to receive(:entries).and_call_original
     allow(RailsAiContext::Introspectors::CallSiteExpansion).to receive(:entries)
-      .with(having_attributes(name: :plugin_settings), anything, anything).and_raise(NoMethodError, "each_char for nil")
+      .with(having_attributes(name: :plugin_settings), anything, anything, includer: anything).and_raise(NoMethodError, "each_char for nil")
 
     collected, unresolved = described_class.collect(tmpdir, mixin("Settings"), keys: %i[associations],
                                                     calls: singleton_lookup(%w[plugin_settings owned]))

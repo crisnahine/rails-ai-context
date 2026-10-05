@@ -59,11 +59,13 @@ module RailsAiContext
       # @param definition [Prism::DefNode] the method called
       # @param call [Prism::CallNode, nil] the call site, nil when unknown
       # @param listeners [Hash] the listener map to read the body with
+      # @param includer [Set, nil] ids of the call's argument nodes that are the including class
       # @return [Hash{Symbol => Array<Hash>}]
-      def entries(definition, call, listeners)
+      def entries(definition, call, listeners, includer: nil)
         return {} unless definition.body
 
-        bindings = rest_bindings(unwritten(bind(definition.parameters, call), definition.body), definition, call)
+        bound = includer_bound(bind(definition.parameters, call), definition.parameters, call, includer)
+        bindings = rest_bindings(unwritten(bound, definition.body), definition, call)
         out = Output.new
         undecided = []
         emit(definition.body, bindings, out, undecided, 0, [])
@@ -96,11 +98,25 @@ module RailsAiContext
 
       EVALS = %i[instance_eval class_eval class_exec instance_exec module_eval module_exec].freeze
 
+      # The including class a mixin hook hands on (`enhance_controller(base)`), which a block evaluated on runs as the class.
+      INCLUDER = Object.new.freeze
+
       # `other.instance_eval { validates ... }` runs its block with `other` as
       # self, so what it declares is `other`'s, not the calling class's.
-      def foreign_eval?(node)
+      def foreign_eval?(node, bindings = {}, depth = 0)
         node.is_a?(Prism::CallNode) && EVALS.include?(node.name) && node.block.is_a?(Prism::BlockNode) &&
-          node.receiver && !node.receiver.is_a?(Prism::SelfNode)
+          node.receiver && !node.receiver.is_a?(Prism::SelfNode) &&
+          !(node.receiver.is_a?(Prism::LocalVariableReadNode) && bound(bindings, node.receiver, depth)&.value.equal?(INCLUDER))
+      end
+
+      # A required parameter the call passes the including class to stands for that class.
+      def includer_bound(bindings, parameters, call, includer)
+        return bindings unless parameters && call && includer&.any?
+
+        Array(call.arguments&.arguments).zip(parameters.requireds).each do |argument, param|
+          bindings[param.name] = Binding.new(INCLUDER, "self") if param.respond_to?(:name) && includer.include?(argument.__id__)
+        end
+        bindings
       end
 
       # What each block evaluated on another receiver declares, named with the
@@ -469,7 +485,7 @@ module RailsAiContext
         when Prism::BlockNode, Prism::LambdaNode
           depth += 1
         end
-        if foreign_eval?(node)
+        if foreign_eval?(node, bindings, depth)
           block_out = Output.new
           emit(node.block.body, bindings, block_out, [], depth + 1, conditions) if node.block.body
           out.foreign << [ node.receiver.slice, block_out, conditions ]
