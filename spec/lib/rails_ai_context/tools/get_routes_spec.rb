@@ -625,6 +625,21 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
     it "says how many it did not show" do
       expect(described_class.call.content.first[:text]).to include("+1 more")
     end
+
+    it "starts with the filter a prepend puts first" do
+      previous = RailsAiContext.tier
+      RailsAiContext.tier = :static
+      controllers = described_class.cached_context[:controllers][:controllers]
+      controllers["ApplicationController"] = { parent_class: "ActionController::Base",
+                                               filters: [ { kind: "before", name: "base_one", declared: true } ] }
+      # A static record carries `declared`; without it the class's own filters read as installed from outside.
+      controllers["PostsController"][:filters].each { |f| f[:declared] = true unless f[:skipped] }
+      controllers["PostsController"][:filters] << { kind: "before", name: "first_of_all", prepend: true, declared: true }
+
+      expect(described_class.call.content.first[:text]).to include("filters: first_of_all, base_one, authenticate!")
+    ensure
+      RailsAiContext.tier = previous
+    end
   end
 
   # Every read of the shared cache is a deep copy of the whole payload, so a

@@ -310,6 +310,47 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       })
     end
 
+    # Rails unshifts a prepended filter onto the chain the class inherited, so
+    # z runs first, then ApplicationController's prepended y.
+    describe "a prepended filter" do
+      around do |example|
+        previous = RailsAiContext.tier
+        RailsAiContext.tier = :static
+        example.run
+      ensure
+        RailsAiContext.tier = previous
+      end
+
+      before do
+        stub_controllers({
+          "ApplicationController" => { actions: [], parent_class: "ActionController::Base",
+                                       filters: [ { kind: "before", name: "x", declared: true },
+                                                  { kind: "before", name: "y", prepend: true, declared: true } ] },
+          "KidsController" => { actions: %w[index], parent_class: "ApplicationController",
+                                filters: [ { kind: "before", name: "k", declared: true },
+                                           { kind: "before", name: "z", prepend: true, declared: true } ] }
+        })
+      end
+
+      it "leads the controller's filter list" do
+        text = described_class.call(controller: "KidsController").content.first[:text]
+
+        expect(text.scan(/^- `before` \*\*(\w+)\*\*/).flatten).to eq(%w[z y x k])
+      end
+
+      it "leads an action's filter list" do
+        text = described_class.call(controller: "KidsController", action: "index").content.first[:text]
+
+        expect(text.scan(/^- `before` \*\*(\w+)\*\*/).flatten).to eq(%w[z y x k])
+      end
+
+      it "leads the full listing's filter line" do
+        text = described_class.call(detail: "full").content.first[:text]
+
+        expect(text).to include("- Filters: before z, before y, before x, before k")
+      end
+    end
+
     # A base controller with no public actions rendered as a name, a dash and
     # nothing, which reads as a truncated line rather than an answer.
     it "says so when a controller has no public actions" do
