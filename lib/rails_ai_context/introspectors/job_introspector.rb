@@ -415,7 +415,13 @@ module RailsAiContext
         macros = candidate_body(name)
         settings = {}
         priority = nearest_macro(name, :queue_with_priority)
-        settings[:priority] = priority[:block] ? labelled(COMPUTED_PRIORITY, priority[:block]) : priority[:values].first if priority
+        if priority
+          value = priority[:values].first
+          settings[:priority] = if priority[:block] then labelled(COMPUTED_PRIORITY, priority[:block])
+          elsif value.is_a?(String) && value.match?(PROC_LITERAL) then labelled(COMPUTED_PRIORITY, value)
+          else value
+          end
+        end
         commit = nearest_macro(name, :enqueue_after_transaction_commit=)
         settings[:enqueue_after_transaction_commit] = commit[:values].first.then { |v| v.is_a?(Symbol) ? ":#{v}" : v.to_s } if commit
         concurrency = nearest_macro(name, :limits_concurrency)

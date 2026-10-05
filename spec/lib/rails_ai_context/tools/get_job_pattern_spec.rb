@@ -222,6 +222,7 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
             def perform(user_id); end
           end
         RUBY
+        File.write(File.join(tmpdir, "app/jobs/lambda_job.rb"), "class LambdaJob < ApplicationJob\n  queue_with_priority -> { 1 }\n  def perform; end\nend\n")
         File.write(File.join(tmpdir, "app/jobs/nightly_job.rb"), <<~RUBY)
           class NightlyJob < ApplicationJob
             limits_concurrency to: 1, key: ->(id) { id }, duration: 5.minutes
@@ -251,7 +252,11 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
         expect(text).to include("**Enqueue after transaction commit:** true")
         expect(text).to include("- retry_on ActiveRecord::Deadlocked, attempts: 3, wait: 5.seconds, queue: :low, priority: 1, jitter: 0.1")
         expect(text).to include("## Callbacks\n- `after_discard { |job, error| Rails.logger.error(error) }`\n" \
-                                "- `before_enqueue :b_enq`\n- `around_perform :timed`\n- `after_perform :done`")
+                                "- `before_enqueue :b_enq`\n- `around_perform :timed`\n- `after_perform :done`\n\n**Perform:** `perform(user_id)`")
+      end
+
+      it "labels a priority given as a lambda as computed, the way a block's is" do
+        expect(described_class.call(job: "LambdaJob").content.first[:text]).to include("**Priority:** computed by a block: `-> { 1 }`")
       end
 
       it "shows a Solid Queue concurrency limit" do

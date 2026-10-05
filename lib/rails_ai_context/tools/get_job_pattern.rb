@@ -330,6 +330,7 @@ module RailsAiContext
           lines << "" << "## Callbacks"
           callbacks.each { |c| lines << "- `#{c}`" }
         end
+        lines << "" if lines.last.to_s.start_with?("- ")
 
         # Perform method signature
         perform_sig = extract_perform_signature(source, record)
