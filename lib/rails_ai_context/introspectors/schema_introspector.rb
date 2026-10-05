@@ -379,7 +379,7 @@ module RailsAiContext
         present = dump_candidates.select { |_, path| File.exist?(path) }
         present.each do |format, path|
           result = format == :ruby ? parse_schema_rb(path) : parse_structure_sql(path)
-          return result if result[:total_tables].to_i > 0
+          return result if result[:total_tables].to_i > 0 || result[:error]
         end
 
         return parse_migrations if migration_files.any?
@@ -487,7 +487,7 @@ module RailsAiContext
 
       def parse_schema_rb(path)
         content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
-        return { error: "schema.rb too large (#{File.size(path)} bytes)" } unless content
+        return { error: "#{relative_dump_path(path)} too large (#{File.size(path)} bytes, over max_schema_file_size)" } unless content
 
         schema = SchemaReader.new(path, pk_type: SchemaConventions.implicit_pk_type(app.root.to_s, secondary_dump(path)))
 
@@ -550,7 +550,7 @@ module RailsAiContext
 
       def parse_structure_sql(path)
         content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
-        return { error: "structure.sql too large (#{File.size(path)} bytes)" } unless content
+        return { error: "#{relative_dump_path(path)} too large (#{File.size(path)} bytes, over max_schema_file_size)" } unless content
 
         parsed = StructureSqlReader.parse(content)
         dialect = parsed[:dialect]

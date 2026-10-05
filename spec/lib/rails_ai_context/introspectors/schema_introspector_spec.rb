@@ -1679,6 +1679,18 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
+    it "says the configured dump is too large instead of answering from another file" do
+      allow(RailsAiContext.configuration).to receive(:max_schema_file_size).and_return(50)
+      files = { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  schema_dump: big.rb\n",
+                "db/big.rb" => one_table_rb.call("fresh_things"),
+                "db/structure.sql" => "CREATE TABLE \"stale\" (\"id\" integer);\n" }
+      static_with(files) do |result, dir|
+        expect(RailsAiContext::Introspectors::SchemaDumpPath.candidates(dir).first).to eq([ :ruby, File.join(dir, "db/big.rb") ])
+        expect(result[:error]).to start_with("db/big.rb too large")
+        expect(result[:tables]).to be_nil
+      end
+    end
+
     it "falls back to the usual files when the configured name is unusable" do
       files = { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  schema_dump: ../../outside.rb\n  bad: [\n",
                 "db/schema.rb" => one_table_rb.call("things") }

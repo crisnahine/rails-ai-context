@@ -40,6 +40,7 @@ module RailsAiContext
       end
 
       # schema_dump: false (or empty) means no dump; a name outside db/ or the app is not read.
+      # A file over the size limit is still the one Rails loads, so the reader can say so.
       def configured(root, config, format)
         return nil unless config.key?("schema_dump")
 
@@ -49,7 +50,7 @@ module RailsAiContext
         db_dir = File.join(root, "db")
         relative = File.dirname(name) == db_dir ? File.join("db", File.basename(name)) : File.join("db", name)
         resolved = RailsAiContext::SafePath.locate(relative, under: root, max_size: RailsAiContext.configuration.max_schema_file_size)
-        [ format, File.join(root, relative) ] if resolved.ok?
+        [ format, File.join(root, relative) ] if resolved.ok? || resolved.refusal == :too_large
       end
     end
   end
