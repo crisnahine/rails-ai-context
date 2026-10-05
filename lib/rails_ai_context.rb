@@ -26,11 +26,15 @@ require "date"
 # autoloaded. Defines a top-level constant, so it stays outside Zeitwerk.
 require_relative "rails_ai_context/polyfill/data"
 
-loader = Zeitwerk::Loader.for_gem(warn_on_extra_files: false)
+loader = Zeitwerk::Loader.for_gem
 loader.inflector.inflect("devops_introspector" => "DevOpsIntrospector", "cli" => "CLI", "vfs" => "VFS")
 loader.ignore("#{__dir__}/generators")
 loader.ignore("#{__dir__}/rails-ai-context.rb")
 loader.ignore("#{__dir__}/rails_ai_context/polyfill")
+# Zeitwerk 2.5, which an app's bundle may lock, names a module after a
+# directory with no Ruby in it, and RailsAiContext::Data would shadow ::Data.
+loader.ignore("#{__dir__}/rails_ai_context/data")
+loader.ignore("#{__dir__}/rails_ai_context/tasks")
 loader.setup
 
 module RailsAiContext
