@@ -24,6 +24,7 @@ module RailsAiContext
       context = {
         app_name: app_name,
         ruby_version: ruby_version,
+        ruby_engine: ruby_engine,
         rails_version: rails_version,
         environment: environment_name,
         tier: RailsAiContext.static_tier? ? "static" : "booted",
@@ -201,6 +202,14 @@ module RailsAiContext
       return RUBY_VERSION unless RailsAiContext.static_tier?
 
       GemLock.for(app.root).ruby_version || Confidence.unavailable("app declares none")
+    end
+
+    # Nil for CRuby, else the engine and its own version ("JRuby 9.4.8.0").
+    def ruby_engine
+      return GemLock.for(app.root).ruby_engine if RailsAiContext.static_tier?
+      return nil if RUBY_ENGINE == "ruby"
+
+      [ GemLock::ENGINE_NAMES.fetch(RUBY_ENGINE, RUBY_ENGINE), RUBY_ENGINE_VERSION ].join(" ")
     end
 
     def rails_version

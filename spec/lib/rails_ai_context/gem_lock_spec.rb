@@ -277,4 +277,74 @@ RSpec.describe RailsAiContext::GemLock do
       expect(described_class.lockfile_name(dir)).to eq("gems.locked")
     end
   end
+  describe "the Ruby engine" do
+    it "reads an engine-prefixed .ruby-version as that engine, with no Ruby version" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".ruby-version"), "jruby-9.4.8.0\n")
+
+        spec = described_class.for(dir)
+
+        expect(spec.ruby_engine).to eq("JRuby 9.4.8.0")
+        expect(spec.ruby_version).to be_nil
+      end
+    end
+
+    it "reads the engine Bundler writes into RUBY VERSION" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile.lock"), <<~LOCK)
+          GEM
+            remote: https://rubygems.org/
+            specs:
+              rails (8.1.4)
+
+          RUBY VERSION
+             ruby 3.1.4p0 (jruby 9.4.8.0)
+        LOCK
+
+        spec = described_class.for(dir)
+
+        expect(spec.ruby_version).to eq("3.1.4p0")
+        expect(spec.ruby_engine).to eq("JRuby 9.4.8.0")
+      end
+    end
+
+    it "reads engine: and engine_version: on the Gemfile's ruby line" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile"), %(ruby "3.1.4", engine: "jruby", engine_version: "9.4.8.0"\ngem "rails"\n))
+
+        spec = described_class.for(dir)
+
+        expect(spec.ruby_version).to eq("3.1.4")
+        expect(spec.ruby_engine).to eq("JRuby 9.4.8.0")
+      end
+    end
+
+    it "reads an engine in .tool-versions" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".tool-versions"), "ruby truffleruby-24.1.1\n")
+
+        expect(described_class.for(dir).ruby_engine).to eq("TruffleRuby 24.1.1")
+      end
+    end
+
+    it "names no engine for CRuby, however the version is written" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".ruby-version"), "ruby-3.4.9\n")
+
+        spec = described_class.for(dir)
+
+        expect(spec.ruby_engine).to be_nil
+        expect(spec.ruby_version).to eq("3.4.9")
+      end
+    end
+
+    it "takes the engine from the file that decides the version" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (8.1.4)\n\nRUBY VERSION\n   ruby 3.4.9p82\n")
+        File.write(File.join(dir, ".ruby-version"), "jruby-9.4.8.0\n")
+
+        expect(described_class.for(dir).ruby_engine).to be_nil
+      end
+    end
+  end
 end
