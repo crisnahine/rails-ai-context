@@ -150,7 +150,6 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
     end
   end
 
-  # Without a booted app, I18n.available_locales reports the library's own
   describe "#call on the locale files Rails loads" do
     it "counts a .rb locale's keys the way the static tier does" do
       Dir.mktmpdir do |dir|
@@ -166,6 +165,7 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
     end
   end
 
+  # Without a booted app, I18n.available_locales reports the library's own
   # default, so an app with en and es was described as having one locale - in
   # the same output that listed both files.
   describe "#static_call" do
@@ -352,8 +352,6 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       expect(result[:backend]).to be_nil
     end
 
-    # I18n.fallbacks belongs to whichever process asks, and no app booted in
-    # this one. Static Mastodon reported "en -> en" as the app's setting.
     it "reads the default locale from an initializer in a subdirectory of config/initializers" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config", "initializers", "i18n"))
@@ -364,6 +362,8 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       end
     end
 
+    # I18n.fallbacks belongs to whichever process asks, and no app booted in
+    # this one. Static Mastodon reported "en -> en" as the app's setting.
     it "does not report the library's own fallbacks as the app's" do
       result = static_result("en.yml" => "en:\n  hello: Hello\n")
       expect(result).to have_key(:fallbacks)
