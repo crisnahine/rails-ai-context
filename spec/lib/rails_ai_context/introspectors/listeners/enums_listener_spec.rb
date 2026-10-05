@@ -6,7 +6,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::EnumsListener do
   it "keeps a computed enum's values as their source" do
     expect(parse_and_dispatch("enum :status, Statuses.to_h").first[:values]).to eq("Statuses.to_h")
     expect(parse_and_dispatch("enum kind: KINDS").first[:values]).to eq("KINDS")
-    expect(parse_and_dispatch("enum priority: %i[low high].freeze").first[:values]).to eq(%i[low high])
+    expect(parse_and_dispatch("enum priority: %i[low high].freeze").first[:values]).to eq({ low: 0, high: 1 })
   end
 
   it "detects Rails 7+ enum syntax" do

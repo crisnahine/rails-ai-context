@@ -59,7 +59,7 @@ module RailsAiContext
 
             @results << {
               name:       key.to_s,
-              values:     enum_values(assoc.value),
+              values:     normalize_enum_values(enum_values(assoc.value)),
               options:    options,
               location:   node.location.start_line,
               confidence: confidence_for(node)

@@ -163,6 +163,18 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     expect(text).to include("- `state`: `STATES` (computed) default: draft")
   end
 
+  it "prints the prefixed methods of a legacy array enum" do
+    text = details_for("Ticket", "ticket.rb" => <<~RUBY)
+      class Ticket < ApplicationRecord
+        enum status: [:open, :closed], _prefix: true, _default: :open
+      end
+    RUBY
+
+    expect(text).to include("status_open?, status_closed?")
+    expect(text).to include("- `status`: open(0), closed(1) [integer]")
+    expect(text).not_to include("values are computed")
+  end
+
   it "lists a validate block as a custom validation" do
     text = details_for("User", "user.rb" => <<~RUBY)
       class User < ApplicationRecord
