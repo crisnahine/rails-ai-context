@@ -152,6 +152,17 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     expect(text).to include("- **Custom:** `set_id` (unless: :concrete?)")
   end
 
+  it "prints the default of an enum whose values are a constant" do
+    text = details_for("Amendment", "amendment.rb" => <<~RUBY)
+      class Amendment < ApplicationRecord
+        STATES = { draft: 0, accepted: 20 }.freeze
+        enum :state, STATES, default: "draft"
+      end
+    RUBY
+
+    expect(text).to include("- `state`: `STATES` (computed) default: draft")
+  end
+
   it "lists a validate block as a custom validation" do
     text = details_for("User", "user.rb" => <<~RUBY)
       class User < ApplicationRecord
