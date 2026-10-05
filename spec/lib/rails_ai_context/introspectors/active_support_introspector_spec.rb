@@ -226,12 +226,19 @@ RSpec.describe RailsAiContext::Introspectors::ActiveSupportIntrospector do
           end
           ArSubscriber.attach_to :active_record
         RUBY
-        "config/initializers/remote.rb" => "Audit::RemoteSubscriber.attach_to :action_mailer\n"
+        "config/initializers/remote.rb" => "Audit::RemoteSubscriber.attach_to :action_mailer\n",
+        "app/subscribers/self_subscriber.rb" => <<~RUBY
+          class SelfSubscriber < ActiveSupport::Subscriber
+            self.attach_to :x
+            def a(event); end
+          end
+        RUBY
       )
 
       expect(result).to eq([
         { event: "instantiation.active_record", via: "ArSubscriber.attach_to", file: "app/subscribers/ar_subscriber.rb", line: 5 },
         { event: "sql.active_record", via: "ArSubscriber.attach_to", file: "app/subscribers/ar_subscriber.rb", line: 5 },
+        { event: "a.x", via: "SelfSubscriber.attach_to", file: "app/subscribers/self_subscriber.rb", line: 2 },
         { event: "every public method of Audit::RemoteSubscriber, as <method>.action_mailer", via: "Audit::RemoteSubscriber.attach_to", file: "config/initializers/remote.rb", line: 1 }
       ])
     end

@@ -172,7 +172,8 @@ module RailsAiContext
         namespace = call[:arguments].first
         return [] unless namespace.is_a?(Symbol) || namespace.is_a?(String)
 
-        owner = call[:receiver]&.to_s || owner_at(methods, call)
+        receiver = call[:receiver]&.to_s
+        owner = receiver.nil? || receiver == "self" ? owner_at(methods, call) : receiver
         short = owner.to_s.split("::").last
         names = Array(methods).select { |m| m[:scope] == :instance && m[:visibility] == :public && m[:owner]&.last.to_s.split("::").last == short }.map { |m| m[:name] }
         via = [ owner, "attach_to" ].compact.join(".")
