@@ -22,6 +22,13 @@ module RailsAiContext
       rabl liquid arb md markdown prawn csv atom rss
     ].freeze
 
+    # A name with no handler extension still renders, through the raw
+    # handler, when its last extension is a format. Only the text formats
+    # Rails registers count: an image or font under app/views is an asset.
+    RAW_FORMAT_EXTENSIONS = %w[
+      html text js css xml json ics csv vcf vtt md svg rss atom yaml
+    ].freeze
+
     MARKUP_GLOB = "**/*.{erb,haml,slim}"
 
     module_function
@@ -54,12 +61,18 @@ module RailsAiContext
     end
 
     # @param path [String] any path under app/views
-    # @return [Boolean] whether its last extension names a template handler
+    # @return [Boolean] whether Rails renders it: a handler extension, or a text format the raw handler takes
     def template?(path)
       ext = File.extname(path.to_s).delete_prefix(".").downcase
       return false if ext.empty?
 
-      handler_extensions.include?(ext)
+      handler_extensions.include?(ext) || RAW_FORMAT_EXTENSIONS.include?(ext)
+    end
+
+    # A raw template is not ERB: its tags print as written.
+    def fence(path)
+      ext = File.extname(path.to_s).delete_prefix(".").downcase
+      handler_extensions.include?(ext) ? "erb" : ext
     end
 
     # app/views/layouts also holds the partials those layouts render, and the

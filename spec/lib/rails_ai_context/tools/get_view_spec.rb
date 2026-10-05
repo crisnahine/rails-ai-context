@@ -29,6 +29,34 @@ RSpec.describe RailsAiContext::Tools::GetView do
       expect(text).not_to include("layout)")
     end
 
+    context "with a template that has no handler extension" do
+      let(:worker) { Rails.root.join("app/views/gv_pwa/service-worker.js") }
+
+      before do
+        FileUtils.mkdir_p(File.dirname(worker))
+        File.write(worker, "self.addEventListener(\"push\", () => {})\n")
+        described_class.reset_cache!
+      end
+
+      after do
+        FileUtils.rm_rf(File.dirname(worker))
+        described_class.reset_cache!
+      end
+
+      it "lists it, since Rails renders it with the raw handler" do
+        text = described_class.call(controller: "gv_pwa", detail: "summary").content.first[:text]
+
+        expect(text).to include("gv_pwa/service-worker.js")
+      end
+
+      it "shows its content fenced as what it is" do
+        text = described_class.call(path: "gv_pwa/service-worker.js").content.first[:text]
+
+        expect(text).not_to include("No template handler renders this file")
+        expect(text).to include("```js\nself.addEventListener")
+      end
+    end
+
     # app/views/layouts holds the partials the layouts render, and the partial
     # listing already counts them; counting them again as layouts made the
     # heading claim more layouts than the app has.

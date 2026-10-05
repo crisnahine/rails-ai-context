@@ -64,4 +64,16 @@ RSpec.describe RailsAiContext::ViewFile do
       expect(result.relative).to eq("posts/index.html.erb")
     end
   end
+
+  describe ".template?" do
+    it "counts a file whose last extension is a format, which Rails renders with the raw handler" do
+      expect(described_class.template?("pwa/service-worker.js")).to be(true)
+      expect(described_class.template?("pages/about.text")).to be(true)
+    end
+
+    it "still leaves out binary assets and extension-less files" do
+      expect(described_class.template?("posts/_logo.png")).to be(false)
+      expect(described_class.template?("posts/README")).to be(false)
+    end
+  end
 end
