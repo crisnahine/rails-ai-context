@@ -190,14 +190,13 @@ module RailsAiContext
         nil
       end
 
-      # One filter per callback the call adds: each name, then each block or lambda, named by its line.
+      # One filter per callback the call adds, a block or lambda named by its line.
       def record(entry)
         entry = entry.merge(FORGERY_SKIP) if entry[:macro] == :skip_forgery_protection
         entry = entry.merge(BASIC_AUTH) if entry[:macro] == :http_basic_authenticate_with
         macro = entry[:macro].to_s
         skipped = macro.start_with?("skip_")
-        names = positional_names(entry)
-        names += Array(entry[:proc_lines]).map { |line| "block (line #{line})" } unless skipped
+        names = positional_names(entry, skipped ? [] : Array(entry[:proc_lines]).map { |line| "block (line #{line})" })
         # An excluded name is framework noise only while it runs. A skip of it
         # is the app's own decision, which the per-action answer reports.
         names -= RailsAiContext.configuration.excluded_filters.map(&:to_s) unless skipped
@@ -213,19 +212,22 @@ module RailsAiContext
         names.map { |name| { name: name, kind: kind, **mark, **tail } }
       end
 
-      # Each name the call gives, in order. A class (`before_action Gatekeeper`) is named as
-      # written, an instance (`around_action TimingFilter.new`) by its class, as the booted tier names both.
-      def positional_names(entry)
+      # Each callback the call gives, in the order Rails adds them: positional arguments as written,
+      # the block last. A class (`before_action Gatekeeper`) is named as written, an instance
+      # (`around_action TimingFilter.new`) by its class, as the booted tier names both.
+      def positional_names(entry, blocks)
         literals = Array(entry[:args]).map(&:to_s)
-        return literals if Array(entry[:values]).empty?
+        return literals + blocks if Array(entry[:values]).empty?
 
+        blocks = blocks.dup
         entry[:values].filter_map do |value|
           text = value.to_s
           if value.is_a?(Symbol) || literals.include?(text) then text
+          elsif text.start_with?("->") then blocks.shift
           elsif (const = text[/\A(?:::)?([A-Z]\w*(?:::[A-Z]\w*)*)\.new\b/, 1]) then "#{const} (object)"
           elsif text.match?(/\A(?:::)?[A-Z]\w*(?:::[A-Z]\w*)*\z/) then text.delete_prefix("::")
           end
-        end
+        end + blocks
       end
 
       def constraints(entry)

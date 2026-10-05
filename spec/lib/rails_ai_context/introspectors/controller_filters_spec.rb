@@ -83,6 +83,14 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
                  [ "before", "block (line 6)", [ "index" ] ], [ "after", "block (line 7)", [ "index" ] ] ])
     end
 
+    # callbacks.rb _insert_callbacks: the positional callbacks in order, then the block.
+    it "lists a call's callbacks in argument order, the block last" do
+      source = "class C < ApplicationController\n  before_action -> { x }, :a, -> { y }, :b do end\nend\n"
+
+      expect(described_class.from_source(source).map { |f| f[:name] })
+        .to eq([ "block (line 2)", "a", "block (line 2)", "b", "block (line 2)" ])
+    end
+
     it "keeps a filter that shares a line with a def or follows a delegation" do
       expect(described_class.from_source("class C < ApplicationController; def index; end; before_action :x; end").map { |f| f[:name] })
         .to eq([ "x" ])

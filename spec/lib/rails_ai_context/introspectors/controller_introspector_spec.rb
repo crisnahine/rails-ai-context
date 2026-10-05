@@ -683,6 +683,22 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
     end
 
+    it "lists a call's lambdas and names in argument order, in both tiers" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "app/controllers/users_controller.rb")
+        source = "class UsersController < ApplicationController\n  before_action -> { head :ok }, :a\nend\n"
+        ctrl = Class.new(ActionController::Base)
+        ctrl.define_singleton_method(:name) { "UsersController" }
+        ctrl.class_eval(source.lines[1], path, 2)
+        in_dir = described_class.new(double("app", root: Pathname.new(dir)))
+
+        booted = in_dir.send(:extract_filters, ctrl, source).map { |f| f[:name] }
+
+        expect(booted).to eq([ "block (line 2)", "a" ])
+        expect(in_dir.send(:extract_filters_from_source, source).map { |f| f[:name] }).to eq(booted)
+      end
+    end
+
     it "leaves out a gem's block when the bundle is installed under the app root" do
       Dir.mktmpdir do |dir|
         gem_dir = File.join(dir, ".bundle/ruby/3.4.0/gems/actionpack-8.1.0")
