@@ -130,6 +130,26 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
     end
   end
 
+  describe "#call with config.i18n.fallbacks = [:en]" do
+    let(:backend) { Class.new(I18n::Backend::Simple) { include I18n::Backend::Fallbacks }.new }
+
+    before do
+      allow(I18n).to receive_messages(backend: backend, available_locales: %i[en de],
+                                      fallbacks: I18n::Locale::Fallbacks.new([ :en ]))
+    end
+
+    it "lists the fallback chain of every available locale before any lookup filled it" do
+      expect(introspector.call[:fallbacks]).to eq("de" => %w[de en], "en" => %w[en])
+    end
+  end
+
+  describe "#call when the backend has no fallbacks" do
+    it "reports no fallbacks" do
+      allow(I18n).to receive_messages(backend: I18n::Backend::Simple.new, available_locales: %i[en de])
+      expect(introspector.call[:fallbacks]).to be_nil
+    end
+  end
+
   # Without a booted app, I18n.available_locales reports the library's own
   describe "#call on the locale files Rails loads" do
     it "counts a .rb locale's keys the way the static tier does" do

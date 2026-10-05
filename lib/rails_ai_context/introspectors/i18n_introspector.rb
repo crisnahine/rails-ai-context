@@ -248,9 +248,12 @@ module RailsAiContext
       end
 
       def detect_fallback_config
-        config = {}
-        config[:fallbacks] = I18n.fallbacks.to_h.transform_values { |v| v.map(&:to_s) } if I18n.respond_to?(:fallbacks) && I18n.fallbacks
-        config
+        return {} unless I18n.backend.class.include?(I18n::Backend::Fallbacks)
+
+        # Fallbacks fills its hash one locale at a time on first lookup, so ask for each.
+        fallbacks = I18n.fallbacks
+        locales = (I18n.available_locales.map(&:to_sym) + fallbacks.to_h.keys).uniq
+        { fallbacks: locales.to_h { |locale| [ locale.to_s, fallbacks[locale].map(&:to_s) ] } }
       rescue => e
         RailsAiContext.debug_fail(e, {}, label: "detect_fallback_config")
       end
