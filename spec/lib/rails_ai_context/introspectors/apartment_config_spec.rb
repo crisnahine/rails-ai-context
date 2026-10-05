@@ -37,9 +37,15 @@ RSpec.describe RailsAiContext::Introspectors::ApartmentConfig do
   end
 
   it "keeps a list with a computed name as written" do
+    found = read_with("config/initializers/apartment.rb" => "Apartment.configure do |config|\n  config.excluded_models = [plan_model, \"A\"]\nend\n")
+
+    expect(found).to eq(excluded_models_source: "[plan_model, \"A\"]", file: "config/initializers/apartment.rb")
+  end
+
+  it "reads Model.name as the model's own name" do
     found = read_with("config/initializers/apartment.rb" => "Apartment.configure do |config|\n  config.excluded_models = [Plan.name, \"A\"]\nend\n")
 
-    expect(found).to eq(excluded_models_source: "[Plan.name, \"A\"]", file: "config/initializers/apartment.rb")
+    expect(found).to eq(excluded_models: %w[Plan A], file: "config/initializers/apartment.rb")
   end
 
   it "reads the list through whatever name the block gives its parameter" do

@@ -248,12 +248,22 @@ module RailsAiContext
           when Prism::ArrayNode          then node.elements.map { |e| extract_value(e, source: source) }
           when Prism::HashNode           then hash_node_to_hash(node, source: source)
           when Prism::KeywordHashNode    then hash_node_to_hash(node, source: source)
+          when Prism::CallNode           then module_name(node)
           else RailsAiContext::Confidence::INFERRED
           end
 
           return value unless value == RailsAiContext::Confidence::INFERRED && source
 
           one_line_source(node)
+        end
+
+        # `Cron::CleanupJob.name` is the constant's own name.
+        def module_name(node)
+          receiver = node.receiver
+          constant = receiver.is_a?(Prism::ConstantReadNode) || receiver.is_a?(Prism::ConstantPathNode)
+          return RailsAiContext::Confidence::INFERRED unless constant && node.name == :name && node.arguments.nil? && node.block.nil?
+
+          constant_path_string(receiver)
         end
 
         # `"a" "b"` and its line-continued form parse as one interpolated node

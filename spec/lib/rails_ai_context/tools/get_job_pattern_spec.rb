@@ -827,6 +827,17 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text).not_to include("[INFERRED]")
     end
 
+    it "reads GoodJob cron merged in with merge!, a class given as X.name" do
+      write("config/initializers/cronjobs.rb", <<~RUBY)
+        Rails.application.config.after_initialize do
+          Rails.application.config.good_job.cron.merge!(
+            { "NightlyJob": { cron: "15 1 * * *", class: NightlyJob.name } }
+          )
+        end
+      RUBY
+      expect(text_for(job: "NightlyJob")).to include("**Schedule:** 15 1 * * * (from config/initializers/cronjobs.rb)")
+    end
+
     it "reads a GoodJob cron held in a constant as no schedule" do
       write("config/initializers/good_job.rb", "Rails.application.configure { config.good_job.cron = CRON }\n")
       expect(text_for(job: "NightlyJob")).not_to include("**Schedule:**")

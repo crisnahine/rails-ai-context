@@ -64,12 +64,15 @@ module RailsAiContext
 
       GOOD_JOB_FILES = %w[config/application.rb config/environments/*.rb config/initializers/*.rb].freeze
 
+      # `config.good_job.cron = {...}`, or entries merged into it (OpenProject does so in after_initialize).
+      GOOD_JOB_CRON = [ %i[good_job cron], %i[good_job cron merge!], %i[good_job cron update] ].freeze
+
       def good_job(root, walks = {})
         GOOD_JOB_FILES.flat_map { |pattern| Dir.glob(pattern, base: root.to_s).sort }.flat_map do |file|
           next [] unless walks.key?(file) || read_file(root, file)&.include?("good_job")
 
           env = File.basename(file, ".rb") if file.start_with?("config/environments/")
-          config_assignments(root, file, walks).select { |hit| hit[:path] == %i[good_job cron] && hit[:value].is_a?(Hash) }.flat_map do |hit|
+          config_assignments(root, file, walks).select { |hit| GOOD_JOB_CRON.include?(hit[:path]) && hit[:value].is_a?(Hash) }.flat_map do |hit|
             hit[:value].filter_map { |name, options| task(file, name, stringify(options), :cron, env: env) }
           end
         end

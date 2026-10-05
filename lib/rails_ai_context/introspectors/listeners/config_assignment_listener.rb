@@ -146,12 +146,16 @@ module RailsAiContext
           return unless prefix
 
           path = prefix + [ name ]
+          # A one-argument call (`<<`, `merge!`) carries what it adds; `[]=` and the like carry a key too.
+          args = kind == :call ? node.arguments&.arguments : nil
+          value = args&.size == 1 ? extract_value(args.first) : nil
+          redacted = RailsAiContext::Redaction.redact_assignment(path, value: value, source: NodeSource.text(node))
           @results << {
             path:       path,
             assignment: false,
             write:      kind,
-            value:      nil,
-            source:     RailsAiContext::Redaction.redact_assignment(path, value: nil, source: NodeSource.text(node))[:source],
+            value:      redacted[:value],
+            source:     redacted[:source],
             location:   node.location.start_line
           }
         end
