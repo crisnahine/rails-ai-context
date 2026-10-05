@@ -9,6 +9,8 @@ module RailsAiContext
       static_tier :files_only
 
       ERB_SENTINEL = RailsAiContext::DatabaseYml::ERB_SENTINEL
+      # ActiveRecord.protocol_adapters' defaults.
+      URL_SCHEME_ADAPTERS = { "postgres" => "postgresql", "mysql" => "mysql2", "sqlite" => "sqlite3" }.freeze
 
       # @return [Hash] multi-database configuration
       def call
@@ -129,7 +131,9 @@ module RailsAiContext
       # Read as YAML so anchors, merge keys and comments follow the file format itself.
       def file_databases
         config = database_yml_env
-        return [] unless config.is_a?(Hash) && config.any?
+        config = {} unless config.is_a?(Hash)
+        # Rails builds the primary from DATABASE_URL when the file has no entry for the env.
+        return ENV["DATABASE_URL"].to_s.empty? ? [] : [ database_entry("primary", {}) ] if config.empty?
 
         # Rails' own rule: an env whose values are all Hashes names one
         # database per key, anything else is a single primary config.
@@ -141,11 +145,21 @@ module RailsAiContext
       end
 
       def database_entry(name, entry)
-        adapter, from_default = adapter_value(entry["adapter"])
+        adapter, from_default = url_adapter(name.to_s, entry["url"]) || adapter_value(entry["adapter"])
         info = { name: name.to_s, adapter: adapter }
         info[:adapter_default] = true if from_default
         info[:replica] = true if entry["replica"] == true
         info
+      end
+
+      # Rails' DatabaseConfigurations: an entry's own url wins over its keys, and an entry
+      # without one takes <NAME>_DATABASE_URL, or DATABASE_URL for the primary.
+      def url_adapter(name, own_url)
+        url = own_url.nil? ? ENV["#{name.upcase}_DATABASE_URL"] || (ENV["DATABASE_URL"] if name == "primary") : own_url.to_s
+        return nil if url.to_s.empty? || RailsAiContext::DatabaseYml.computed?(url)
+
+        scheme = url[/\A([a-z][a-z0-9+.-]*):/i, 1]&.tr("-", "_")
+        scheme && [ URL_SCHEME_ADAPTERS.fetch(scheme, scheme), false ]
       end
 
       # An ERB-computed value is unknown, unless the whole value is one tag carrying its own
