@@ -62,4 +62,18 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RakeTaskDslListener do
     expect(results[0][:location]).to eq(1)
     expect(results[1][:location]).to eq(2)
   end
+
+  it "reads a string-named task and a multitask" do
+    results = parse_and_dispatch(%(task "string:named"\nmultitask parallel: %w[a b]\n))
+    tasks = results.select { |r| r[:type] == :task }
+    expect(tasks.map { |t| [ t[:name], t[:deps] ] }).to eq([ [ "string:named", [] ], [ "parallel", %w[a b] ] ])
+  end
+
+  it "gives a namespace the offsets its block spans" do
+    source = "namespace(:beta) { task :inside }; task :after\n"
+    ns, inside, after = parse_and_dispatch(source)
+    expect(ns[:end_offset]).to eq(source.index(";"))
+    expect(inside[:offset]).to be < ns[:end_offset]
+    expect(after[:offset]).to be >= ns[:end_offset]
+  end
 end
