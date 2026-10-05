@@ -140,18 +140,18 @@ module RailsAiContext
       # to a real path the root does not contain; the unresolved path is
       # still the one the app spells.
       def relative_file(path, real, root, real_root)
-        real_prefix = real_root + File::SEPARATOR
+        real_prefix = SafePath.dir_prefix(real_root)
         return real.delete_prefix(real_prefix) if real.start_with?(real_prefix)
 
-        path.delete_prefix(root + File::SEPARATOR)
+        path.delete_prefix(SafePath.dir_prefix(root))
       end
 
       # Either spelling may land inside the root (only one does for a symlinked
       # pack), but a spelled ".." can climb out through a symlink, so it needs the real one.
       def under_root?(path, real, root, real_root)
-        return true if real.start_with?(real_root + File::SEPARATOR)
+        return true if SafePath.contained?(real, real_root)
 
-        !path.split(File::SEPARATOR).include?("..") && File.expand_path(path).start_with?(root + File::SEPARATOR)
+        !path.split(File::SEPARATOR).include?("..") && File.expand_path(path).start_with?(SafePath.dir_prefix(root))
       end
     end
   end

@@ -30,7 +30,7 @@ module RailsAiContext
       return refuse(:outside) unless contained?(real, real_under)
 
       real_root = File.realpath(root.to_s)
-      root_relative = real == real_root ? "" : real.delete_prefix(real_root + File::SEPARATOR)
+      root_relative = real == real_root ? "" : real.delete_prefix(dir_prefix(real_root))
       return refuse(:sensitive) if sensitive?(root_relative)
       return refuse(:missing) unless File.file?(real)
 
@@ -78,7 +78,12 @@ module RailsAiContext
     end
 
     def contained?(real, real_dir)
-      real == real_dir || real.start_with?(real_dir + File::SEPARATOR)
+      real == real_dir || real.start_with?(dir_prefix(real_dir))
+    end
+
+    # The filesystem root already ends in the separator, so it is its own prefix.
+    def dir_prefix(dir)
+      dir.end_with?(File::SEPARATOR) ? dir : dir + File::SEPARATOR
     end
 
     # A too-large file was found, so its resolution keeps the path for the

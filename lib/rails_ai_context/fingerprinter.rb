@@ -120,7 +120,7 @@ module RailsAiContext
         base = File.expand_path(root.to_s)
         watched_dirs(base).select { |dir|
           Dir.glob(File.join(dir, WATCHED_EXTENSIONS)).any? { |path| newer?(path, time) }
-        }.map { |dir| dir.delete_prefix(base + File::SEPARATOR) }
+        }.map { |dir| dir.delete_prefix(SafePath.dir_prefix(base)) }
       end
 
       private

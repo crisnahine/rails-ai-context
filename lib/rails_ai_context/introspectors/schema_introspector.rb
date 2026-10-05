@@ -83,7 +83,7 @@ module RailsAiContext
       end
 
       def table_names
-        @table_names ||= (connection.tables - @partitions.to_a)
+        @table_names ||= (connection.tables - @partitions.to_a - sqlite_hidden_tables)
           .reject { |t| t.start_with?("ar_internal_metadata", "schema_migrations") }
       end
 
@@ -110,12 +110,18 @@ module RailsAiContext
           tables[view] = SchemaConventions.view_entry(schema_reader.views.dig(view, :sql), materialized: materialized.include?(view),
                                                       columns: extract_columns(view))
         end
-        return tables unless connection.respond_to?(:virtual_tables)
-
-        connection.virtual_tables.each do |name, (mod, arguments)|
+        sqlite_virtual_tables.each do |name, (mod, arguments)|
           tables[name] ||= SchemaConventions.virtual_table_entry(mod, arguments.to_s.split(", "))
         end
         tables
+      end
+
+      def sqlite_virtual_tables
+        adapter_name.to_s.match?(/sqlite/i) ? SqliteVirtualTables.of(connection) : {}
+      end
+
+      def sqlite_hidden_tables
+        adapter_name.to_s.match?(/sqlite/i) ? SqliteVirtualTables.hidden(connection) : []
       end
 
       PG_VIEWS = <<~SQL
