@@ -322,9 +322,9 @@ module RailsAiContext
           end
         end
 
-        def confidence_for(node)
-          RailsAiContext::Confidence.for_node(node)
-        end
+        def confidence_for(node) = self.class.confidence_for(node)
+
+        def self.confidence_for(node) = RailsAiContext::Confidence.for_node(node)
       end
     end
   end

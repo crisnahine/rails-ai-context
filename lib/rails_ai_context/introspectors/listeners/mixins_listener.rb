@@ -40,7 +40,7 @@ module RailsAiContext
         # The record of `node` mixing in `name`.
         def self.record(node, macro, name, ancestor:, owner: [])
           { macro: macro, name: name, ancestor: ancestor, owner: owner, location: node.location.start_line,
-            confidence: RailsAiContext::Confidence.for_node(node) }
+            confidence: confidence_for(node) }
         end
 
         # `Type.include(StatusPatch)` mixes into Type, not the class the line sits in, so the
