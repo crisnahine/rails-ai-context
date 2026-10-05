@@ -278,13 +278,17 @@ module RailsAiContext
         end
 
         # Custom validate methods (business rules) - show method body when possible
-        if data[:custom_validates]&.any?
+        if data[:custom_validates]&.any? || data[:custom_validate_blocks]&.any?
           lines << "" << "## Validations" unless data[:validations]&.any?
-          bodies = extract_custom_validate_bodies(name, data[:custom_validates])
+          custom = Array(data[:custom_validates])
+          bodies = custom.any? ? extract_custom_validate_bodies(name, custom) : {}
           conditions = data[:custom_validate_conditions] || {}
-          data[:custom_validates].each do |v|
+          custom.each do |v|
             tail = callback_condition_tail(conditions[v.to_s] || conditions[v.to_sym])
             lines << "- **Custom:** `#{v}`#{tail}#{" → #{bodies[v]}" if bodies[v]}"
+          end
+          Array(data[:custom_validate_blocks]).each do |b|
+            lines << "- **Custom:** block#{callback_condition_tail(b[:conditions])}#{" → #{b[:body]}" unless b[:body].to_s.empty?}"
           end
         end
 

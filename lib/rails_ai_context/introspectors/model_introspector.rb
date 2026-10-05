@@ -525,6 +525,7 @@ module RailsAiContext
           # AST-based (replaces regex source parsing)
           custom_validates: extract_custom_validates_from_ast(source_data),
           custom_validate_conditions: custom_validate_conditions(source_data),
+          custom_validate_blocks: custom_validate_blocks(source_data),
           scopes:           extract_scopes_from_ast(source_data),
           default_scopes:   default_scopes(source_data),
           class_methods:    class_methods.first(PAYLOAD_METHOD_CAP),
@@ -973,6 +974,14 @@ module RailsAiContext
           .flat_map { |v| v[:attributes] }
       end
 
+      # `validate do ... end` names no method, so it is listed by what it runs.
+      def custom_validate_blocks(source_data)
+        found = Array(source_data[:validations]).select { |v| v[:kind] == "custom" && v[:block] }.map do |v|
+          { body: v[:block], conditions: (v[:options] || {}).slice(*CONDITION_KEYS, :on).presence }.compact
+        end
+        found.presence
+      end
+
       # `validate :check, on: :create` runs only then; the method name alone
       # reads as a rule that always holds.
       def custom_validate_conditions(source_data)
@@ -1409,6 +1418,7 @@ module RailsAiContext
           validations: static_validations(data, [ path, *Array(inherited_from).map(&:last) ]),
           custom_validates: extract_custom_validates_from_ast(data),
           custom_validate_conditions: custom_validate_conditions(data),
+          custom_validate_blocks: custom_validate_blocks(data),
           scopes: Array(data[:scopes]).reject { |s| s[:default] },
           default_scopes: default_scopes(data),
           # The booted tier answers a Hash of attribute => value map, and

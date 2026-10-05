@@ -104,4 +104,17 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(ticket).to include("- `belongs_to` **order** [optional] (fk: (shop_id, order_id))")
     end
   end
+
+  it "lists a validate block as a custom validation" do
+    text = details_for("User", "user.rb" => <<~RUBY)
+      class User < ApplicationRecord
+        validate :not_reserved
+        validate on: :create do
+          errors.add(:name, "bad") if name == "bad"
+        end
+      end
+    RUBY
+
+    expect(text).to include("- **Custom:** `not_reserved`\n- **Custom:** block (on: :create) → errors.add(:name, \"bad\") if name == \"bad\"")
+  end
 end
