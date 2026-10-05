@@ -91,7 +91,7 @@ module RailsAiContext
             end
             return json_response(table_data.except(:unread_calls)) if format == "json"
 
-            output = format_table_markdown(table_key, table_data, models_data)
+            output = format_table_markdown(table_key, table_data, models_data, schema[:enum_types])
             # Cross-reference hint for AI: suggest next tool call
             model_refs = models_for_table(table_key, models_data)
             if model_refs.any?
@@ -245,7 +245,7 @@ module RailsAiContext
             lines = [ "# Schema Full Detail (#{paginated.size} of #{count_phrase(total, "table")})", "" ]
             lines.concat(note_lines(schema))
             paginated.each do |name|
-              lines << format_table_markdown(name, tables[name], models_data)
+              lines << format_table_markdown(name, tables[name], models_data, schema[:enum_types])
               lines << ""
             end
             coverage = model_coverage_lines(tables, models_data)
@@ -458,6 +458,7 @@ module RailsAiContext
         label += ", limit: #{col[:limit]}" if col[:limit]
         label += ", unsigned" if col[:unsigned]
         label += ", collation: #{col[:collation]}" if col[:collation]
+        label += ", enum_type: #{col[:enum_type]}" if col[:enum_type]
         label
       end
 
@@ -474,7 +475,7 @@ module RailsAiContext
         parts.any? ? " - #{parts.join('; ')}" : ""
       end
 
-      private_class_method def self.format_table_markdown(name, data, models)
+      private_class_method def self.format_table_markdown(name, data, models, enum_types = nil)
         columns = data[:columns] || []
         # Always show Nullable and Default - agents need these for migrations and validations
         has_defaults = columns.any? { |c| c.key?(:default) && !c[:default].nil? }
@@ -537,29 +538,26 @@ module RailsAiContext
           end
         end
 
-        # Check constraints (full detail)
         if data[:check_constraints]&.any?
-          lines << "" << "### Check Constraints"
-          data[:check_constraints].each do |cc|
-            label = cc[:name] ? "`#{cc[:name]}`" : ""
-            lines << "- #{label} #{cc[:expression]}"
+          lines << "" << "### Check constraints"
+          data[:check_constraints].each do |constraint|
+            lines << "- #{"`#{constraint[:name]}`: " if constraint[:name]}#{constraint[:expression]}"
           end
         end
 
-        # Enum types (full detail)
-        if data[:enum_types]&.any?
-          lines << "" << "### Enum Types"
-          data[:enum_types].each do |et|
-            values = et[:values]&.join(", ") || ""
-            lines << "- `#{et[:name]}`: #{values}"
-          end
+        used = columns.filter_map { |c| c[:enum_type] }
+        enums = Array(enum_types).select { |enum| used.include?(enum[:name]) }
+        if enums.any?
+          lines << "" << "### Enum types"
+          enums.each { |enum| lines << "- `#{enum[:name]}`: #{Array(enum[:values]).join(', ')}" }
         end
 
-        # Generated columns (full detail)
-        if data[:generated_columns]&.any?
-          lines << "" << "### Generated Columns"
-          data[:generated_columns].each do |gc|
-            lines << "- `#{gc[:name]}` - #{gc[:expression]}"
+        generated = columns.select { |c| c.key?(:generated) }
+        if generated.any?
+          lines << "" << "### Generated columns"
+          generated.each do |col|
+            expression = col[:generated].to_s.empty? ? "" : ": #{col[:generated]}"
+            lines << "- `#{col[:name]}`#{expression} (#{col[:stored] ? "stored" : "virtual"})"
           end
         end
 

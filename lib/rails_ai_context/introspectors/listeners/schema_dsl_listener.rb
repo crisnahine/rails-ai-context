@@ -187,8 +187,9 @@ module RailsAiContext
             type:       :add_check_constraint,
             table:      table_arg.unescaped,
             expression: expr_arg.unescaped,
+            name:       literal_string(keyword_hash(node) { |value| value }[:name]),
             location:   node.location.start_line
-          }
+          }.compact
         end
 
         def check_constraint_call?(node)
@@ -203,8 +204,9 @@ module RailsAiContext
           @results << {
             type:       :check_constraint,
             expression: expr_arg.unescaped,
+            name:       literal_string(keyword_hash(node) { |value| value }[:name]),
             location:   node.location.start_line
-          }
+          }.compact
         end
 
         def extract_unique_constraint(node)

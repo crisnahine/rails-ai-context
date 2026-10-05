@@ -636,4 +636,39 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
       expect(described_class.parse(sql)[:tables]["orders"][:foreign_keys].first).to include(on_delete: "nullify")
     end
   end
+
+  describe "check constraints and generated columns" do
+    it "reads pg_dump's inline CHECK and a stored generated column" do
+      sql = <<~SQL
+        CREATE TABLE public.users (
+            id bigint NOT NULL,
+            age integer,
+            age_next integer GENERATED ALWAYS AS ((age + 1)) STORED,
+            CONSTRAINT age_nonneg CHECK ((age >= 0))
+        );
+      SQL
+      users = described_class.parse(sql)[:tables]["users"]
+
+      expect(users[:columns].map { |c| c[:name] }).to eq(%w[id age age_next])
+      expect(users[:columns].last).to include(type: "integer", generated: "(age + 1)", stored: true)
+      expect(users[:check_constraints]).to eq([ { name: "age_nonneg", expression: "(age >= 0)" } ])
+    end
+
+    it "reads mysqldump's virtual column and an unnamed SQLite CHECK" do
+      mysql = <<~SQL
+        CREATE TABLE `users` (
+          `age` int DEFAULT NULL,
+          `age_next` int GENERATED ALWAYS AS ((`age` + 1)) VIRTUAL,
+          CONSTRAINT `users_chk_1` CHECK ((`age` >= 0))
+        ) ENGINE=InnoDB;
+      SQL
+      sqlite = <<~SQL
+        CREATE TABLE "posts" ("title" varchar, CHECK (length(title) > 0));
+      SQL
+
+      expect(described_class.parse(mysql)[:tables]["users"][:columns].last).to include(generated: "(`age` + 1)", stored: false)
+      expect(described_class.parse(mysql)[:tables]["users"][:check_constraints]).to eq([ { name: "users_chk_1", expression: "(`age` >= 0)" } ])
+      expect(described_class.parse(sqlite)[:tables]["posts"][:check_constraints]).to eq([ { expression: "length(title) > 0" } ])
+    end
+  end
 end

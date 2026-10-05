@@ -19,9 +19,10 @@ module RailsAiContext
           return attach_secondary_databases(static_schema_parse)
         end
 
+        tables = extract_tables
         attach_secondary_databases({
           adapter: adapter_name,
-          tables: extract_tables,
+          tables: tables,
           total_tables: table_names.size,
           schema_version: current_schema_version,
           # The version stamp is read off db/schema.rb and the tables off the
@@ -29,9 +30,9 @@ module RailsAiContext
           # dump declares are what lets a consumer say so rather than call a
           # declared table a typo.
           declared_tables: declared_table_names,
-          check_constraints: check_constraints,
+          check_constraints: SchemaConventions.check_constraints_of(tables),
           enum_types: enum_types,
-          generated_columns: generated_columns(schema_reader),
+          generated_columns: SchemaConventions.generated_columns_of(tables),
           extensions: extensions,
           # What names the migration behind a declared table the connection lacks.
           pending_migrations: RailsAiContext::PendingMigrations.live(RailsAiContext::PendingMigrations.migrate_dir_for(app.root))
@@ -93,7 +94,8 @@ module RailsAiContext
             foreign_keys: extract_foreign_keys(table),
             primary_key: SchemaConventions.primary_key_value(connection.primary_key(table)),
             comment: table_comment(table),
-            unique_constraints: unique_constraints(table)
+            unique_constraints: unique_constraints(table),
+            check_constraints: table_check_constraints(table)
           }.compact
           SchemaConventions.mark_primary_key(hash[table])
         end
@@ -116,6 +118,20 @@ module RailsAiContext
         found if found.any?
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "unique_constraints")
+      end
+
+      # The connection's, named as the dump names them: Rails leaves out a chk_rails_ name it made up.
+      def table_check_constraints(table)
+        found = if connection.supports_check_constraints?
+          connection.check_constraints(table).map do |constraint|
+            { name: (constraint.name if constraint.export_name_on_schema_dump?), expression: constraint.expression }.compact
+          end
+        else
+          schema_reader.check_constraints.select { |c| c[:table] == table }.map { |c| c.slice(:name, :expression) }
+        end
+        found if found.any?
+      rescue => e
+        RailsAiContext.debug_fail(e, nil, label: "table_check_constraints")
       end
 
       def extensions
@@ -167,6 +183,11 @@ module RailsAiContext
             **column_detail(table, col, bigint),
             comment: col.comment
           }
+          if col.respond_to?(:virtual?) && col.virtual?
+            entry[:generated] = (col.default_function || declared_generated(table, col.name)).to_s
+            entry[:stored] = stored_generated?(col)
+          end
+          entry[:enum_type] = col.sql_type.to_s if col.type == :enum
           # PostgreSQL gives an array's default as its literal ({}), which the
           # static tier reads the way Rails dumps it ([]).
           if col.respond_to?(:array?) && col.array?
@@ -215,14 +236,29 @@ module RailsAiContext
         @schema_reader ||= SchemaReader.new(schema_file_path, partitions: @partitions.to_a)
       end
 
-      # Constraints and enum types are declared in the dump, not reported by
-      # the adapter, so the live tier reads them from schema.rb too.
-      def check_constraints
-        schema_reader.check_constraints
+      # MySQL keeps a generated column's expression out of the column, so the dump says it.
+      def declared_generated(table, name)
+        column = schema_reader.tables.dig(table, :columns)&.find { |c| c[:name] == name }
+        column&.dig(:options, :as)
       end
 
+      # PostgreSQL before Rails 7.1 had only stored generated columns.
+      def stored_generated?(col)
+        return col.virtual_stored? if col.respond_to?(:virtual_stored?)
+        return col.extra.to_s.match?(/\b(?:STORED|PERSISTENT)\b/) if col.respond_to?(:extra)
+
+        true
+      end
+
+      # PostgreSQL's, from the connection: 7.0 gives the labels as one string, 7.1+ as an array.
       def enum_types
-        schema_reader.enums
+        return schema_reader.enums unless connection.respond_to?(:enum_types)
+
+        connection.enum_types.map do |name, values|
+          { name: name.to_s, values: values.is_a?(String) ? values.delete("{}").split(",") : Array(values).map(&:to_s) }
+        end
+      rescue => e
+        RailsAiContext.debug_fail(e, schema_reader.enums, label: "enum_types")
       end
 
       # The tables db/schema.rb declares, or nil when there is no dump to
@@ -370,6 +406,13 @@ module RailsAiContext
       def static_column(column)
         options = column[:options]
         entry = { name: column[:name], type: column[:type] }
+        # t.virtual names the generated column's own type in type:.
+        if column[:type] == "virtual"
+          entry[:type] = options[:type].to_s if options[:type].is_a?(Symbol) || options[:type].is_a?(String)
+          entry[:generated] = options[:as].is_a?(String) ? options[:as] : ""
+          entry[:stored] = options[:stored] == true
+        end
+        entry[:enum_type] = options[:enum_type].to_s if options[:enum_type].is_a?(Symbol) || options[:enum_type].is_a?(String)
         entry[:null] = false if options[:null] == false
         entry[:default] = column[:default] unless column[:default].nil?
         entry[:array] = true if options[:array] == true
@@ -432,8 +475,10 @@ module RailsAiContext
           )
         end
 
-        check_constraints = schema.check_constraints
-        enum_types = schema.enums
+        schema.check_constraints.each do |constraint|
+          table = tables[constraint[:table]] or next
+          (table[:check_constraints] ||= []) << constraint.slice(:name, :expression)
+        end
 
         version = schema_version_for(path)
 
@@ -442,9 +487,9 @@ module RailsAiContext
           tables: tables,
           total_tables: tables.size,
           schema_version: version,
-          check_constraints: check_constraints,
-          enum_types: enum_types,
-          generated_columns: generated_columns(schema),
+          check_constraints: SchemaConventions.check_constraints_of(tables),
+          enum_types: schema.enums,
+          generated_columns: SchemaConventions.generated_columns_of(tables),
           note: "Parsed from db/schema.rb (#{connection_state})"
         }
         result[:extensions] = schema.extensions if schema.extensions.any?
@@ -475,6 +520,8 @@ module RailsAiContext
           dialect: dialect.to_s,
           tables: tables,
           total_tables: tables.size,
+          check_constraints: SchemaConventions.check_constraints_of(tables),
+          generated_columns: SchemaConventions.generated_columns_of(tables),
           note: "Parsed from db/structure.sql (#{connection_state})"
         }
         if applied.any?
@@ -487,19 +534,6 @@ module RailsAiContext
 
       def connection_state
         @connection_state || "no DB connection"
-      end
-
-      def generated_columns(schema)
-        schema.tables.flat_map { |table, declared|
-          declared[:columns].filter_map { |column|
-            options = column[:options]
-            next unless options[:virtual] == true || options[:stored] == true
-
-            { table: table, column: column[:name], stored: options[:stored] == true }
-          }
-        }
-      rescue => e
-        RailsAiContext.debug_fail(e, [], label: "generated_columns")
       end
 
       # A table whose create_table names it through the class has no literal to read, so the

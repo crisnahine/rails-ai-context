@@ -222,6 +222,19 @@ module RailsAiContext
         table
       end
 
+      # Every table's check constraints in one list, each naming its table.
+      def check_constraints_of(tables)
+        tables.flat_map { |name, table| Array(table[:check_constraints]).map { |constraint| { table: name, **constraint } } }
+      end
+
+      def generated_columns_of(tables)
+        tables.flat_map do |name, table|
+          Array(table[:columns]).filter_map do |column|
+            { table: name, column: column[:name], expression: column[:generated], stored: column[:stored] }.compact if column.key?(:generated)
+          end
+        end
+      end
+
       # How a primary key reads to a person: `id`, or `tag_id, account_id`.
       def primary_key_label(key)
         Array(key || "id").join(", ")

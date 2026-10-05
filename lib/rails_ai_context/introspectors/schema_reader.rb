@@ -89,7 +89,7 @@ module RailsAiContext
         parse[:enums]
       end
 
-      # @return [Array<Hash>] { table:, expression: } per declared constraint
+      # @return [Array<Hash>] { table:, name:, expression: } per declared constraint, name when given
       def check_constraints
         parse[:check_constraints]
       end
@@ -231,9 +231,9 @@ module RailsAiContext
         when :enum
           schema[:enums] << { name: event[:name], values: event[:values] }
         when :check_constraint
-          schema[:check_constraints] << { table: current, expression: event[:expression] } if current
+          schema[:check_constraints] << { table: current, **event.slice(:name, :expression) } if current
         when :add_check_constraint
-          schema[:check_constraints] << { table: event[:table], expression: event[:expression] }
+          schema[:check_constraints] << event.slice(:table, :name, :expression)
         end
 
         current

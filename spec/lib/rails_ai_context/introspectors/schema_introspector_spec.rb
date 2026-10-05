@@ -507,6 +507,10 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
               t.check_constraint "quantity > 0", name: "quantity_positive"
             end
 
+            create_table "users" do |t|
+              t.integer "age"
+            end
+
             add_check_constraint "users", "age >= 18", name: "age_check"
           end
         RUBY
@@ -1266,6 +1270,8 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         t.datetime :made_at
         t.integer :pa_d_owner_id
         t.index [ :code, :total ], name: "idx_pa_d_code", order: { code: :desc }
+        t.check_constraint "total >= 0", name: "pa_d_total_nonneg"
+        t.virtual :doubled, type: :decimal, as: "total * 2", stored: true if connection.supports_virtual_columns?
       end
       connection.add_foreign_key :pa_d_items, :pa_d_owners, on_delete: :cascade
 
@@ -1278,7 +1284,8 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       booted = booted.merge(columns: booted[:columns].map { |c| c[:null] ? c.except(:null) : c })
       static = static_tables(dump.string)[:tables]["pa_d_items"]
 
-      %i[columns indexes foreign_keys primary_key].each do |key|
+      expect(booted[:check_constraints]).to eq([ { name: "pa_d_total_nonneg", expression: "total >= 0" } ])
+      %i[columns indexes foreign_keys primary_key check_constraints].each do |key|
         expect(booted[key]).to eq(static[key]), "#{key}: booted #{booted[key].inspect}, static #{static[key].inspect}"
       end
     ensure
@@ -1336,6 +1343,53 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(accounts[:primary_key]).to eq("id")
         expect(accounts[:columns].first).to include(name: "id", primary_key: true)
       end
+    end
+  end
+
+  describe "check constraints, enum types and generated columns" do
+    let(:result) do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+            create_enum "mood", ["happy", "sad"]
+            create_table "users", force: :cascade do |t|
+              t.integer "age"
+              t.enum "mood", enum_type: "mood"
+              t.virtual "age_next", type: :integer, as: "age + 1", stored: true
+              t.check_constraint "age >= 0", name: "age_nonneg"
+            end
+          end
+        RUBY
+        described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+      end
+    end
+
+    it "keeps a table's check constraints, with their names, on the table" do
+      expect(result[:tables]["users"][:check_constraints]).to eq([ { name: "age_nonneg", expression: "age >= 0" } ])
+      expect(result[:check_constraints]).to eq([ { table: "users", name: "age_nonneg", expression: "age >= 0" } ])
+    end
+
+    it "types a generated column by its type and keeps its expression" do
+      age_next = result[:tables]["users"][:columns].find { |c| c[:name] == "age_next" }
+
+      expect(age_next).to include(type: "integer", generated: "age + 1", stored: true)
+      expect(result[:generated_columns]).to eq([ { table: "users", column: "age_next", expression: "age + 1", stored: true } ])
+    end
+
+    it "names the enum type an enum column uses" do
+      expect(result[:tables]["users"][:columns].find { |c| c[:name] == "mood" }).to include(type: "enum", enum_type: "mood")
+    end
+
+    it "reads a booted table's check constraints from the connection" do
+      connection = ActiveRecord::Base.connection
+      connection.create_table(:pa_c_posts, force: true) { |t| t.string :title }
+      connection.add_check_constraint :pa_c_posts, "length(title) > 0", name: "pa_c_title_present"
+
+      expect(introspector.call[:tables]["pa_c_posts"][:check_constraints])
+        .to eq([ { name: "pa_c_title_present", expression: "length(title) > 0" } ])
+    ensure
+      connection.drop_table(:pa_c_posts, if_exists: true)
     end
   end
 end

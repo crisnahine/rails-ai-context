@@ -162,6 +162,35 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     end
   end
 
+  describe "check constraints, enum types and generated columns in the table view" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "postgresql", total_tables: 1,
+                  enum_types: [ { name: "mood", values: %w[happy sad] }, { name: "unused", values: %w[x] } ],
+                  tables: { "users" => {
+                    indexes: [], foreign_keys: [],
+                    columns: [
+                      { name: "age", type: "integer" },
+                      { name: "mood", type: "enum", enum_type: "mood" },
+                      { name: "age_next", type: "integer", generated: "age + 1", stored: true }
+                    ],
+                    check_constraints: [ { name: "age_nonneg", expression: "age >= 0" }, { expression: "age < 200" } ]
+                  } } },
+        models: {}
+      })
+    end
+
+    it "lists each for the table" do
+      text = described_class.call(table: "users").content.first[:text]
+
+      expect(text).to include("### Check constraints\n- `age_nonneg`: age >= 0\n- age < 200")
+      expect(text).to include("### Enum types\n- `mood`: happy, sad")
+      expect(text).not_to include("unused")
+      expect(text).to include("### Generated columns\n- `age_next`: age + 1 (stored)")
+      expect(text).to include("| mood | enum, enum_type: mood | yes |")
+    end
+  end
+
   describe "column hints for a composite unique index" do
     before do
       allow(described_class).to receive(:cached_context).and_return({

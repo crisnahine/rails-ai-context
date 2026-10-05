@@ -190,6 +190,10 @@ module RailsAiContext
           when /\ACONSTRAINT\s+[`"]?\w+[`"]?\s+FOREIGN KEY\s*\(([^)]*)\)\s*REFERENCES\s+[`"]?(\w+)[`"]?\s*\(([^)]*)\)(.*)/i
             columns, to, keys, tail = $1, $2, $3, $4
             table[:foreign_keys] << SchemaConventions.foreign_key_entry(table_name, to, columns.scan(/\w+/), keys.scan(/\w+/), **foreign_key_actions(tail))
+          when /\A(?:CONSTRAINT\s+[`"]?(\w+)[`"]?\s+)?CHECK\s*(\(.*)/i
+            name = $1
+            expression = first_paren_group($2)
+            (table[:check_constraints] ||= []) << { name: name, expression: expression.strip }.compact if expression
           when /\A(UNIQUE\s+)?(?:KEY|INDEX)\s+[`"](\w+)[`"]\s*(\(.*)/i
             # Captured to locals first: the parsing below runs more regexes,
             # which would clobber $~ before the hash literal reads it.
@@ -301,6 +305,10 @@ module RailsAiContext
             column[:default] = default unless default.nil?
             column[:array] = true if col_type.end_with?("[]")
             column[:primary_key] = true if rest.match?(/\bPRIMARY\s+KEY\b/i)
+            if (at = rest =~ /\bGENERATED\s+ALWAYS\s+AS\s*\(/i) && (expression = first_paren_group(rest[at..]))
+              column[:generated] = expression.strip
+              column[:stored] = rest.match?(/\)\s*(?:STORED|PERSISTENT)\b/i)
+            end
             column.merge!(type_detail(col_type, type, dialect))
             collation = rest[/\bCOLLATE\s+(?:pg_catalog\.)?"?([\w.-]+)"?/i, 1]
             column[:collation] = collation if collation
