@@ -351,6 +351,32 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
   end
 
   describe "#static_call" do
+    it "marks a mount drawn only under a condition, and not one both arms draw" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            if Rails.env.development?
+              mount LetterOpenerWeb::Engine, at: "/letter_opener"
+            end
+            if ENV["JOBS"]
+              mount GoodJob::Engine => "good_job"
+            else
+              mount GoodJob::Engine => "good_job"
+            end
+            mount Sidekiq::Web => "/sidekiq" unless Rails.env.test?
+          end
+        RUBY
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:mounted_engines]).to contain_exactly(
+          { engine: "LetterOpenerWeb::Engine", path: "/letter_opener", condition: "if Rails.env.development?" },
+          { engine: "GoodJob::Engine", path: "/good_job" },
+          { engine: "Sidekiq::Web", path: "/sidekiq", condition: "unless Rails.env.test?" }
+        )
+      end
+    end
+
     it "reads the endpoints of a Grape API the routes mount" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))

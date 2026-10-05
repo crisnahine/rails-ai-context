@@ -31,6 +31,7 @@ module RailsAiContext
           if mounted.any?
             mounted.each do |e|
               line = e[:path] ? "- **#{e[:engine]}** at `#{e[:path]}`" : "- **#{e[:engine]}**"
+              line += " (`#{e[:condition]}`)" if e[:condition]
               line += " (#{e[:category]})" if e[:category]
               line += " - #{e[:description]}" if e[:description]
               lines << line

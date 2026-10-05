@@ -62,7 +62,7 @@ module RailsAiContext
         records = records.map { |r| r.except(:engine) } if engine_root?
         in_repo = in_repo_routes(mounts)
         records += in_repo.values.flat_map(&:first)
-        mounts = (mounts + in_repo.values.flat_map(&:last)).uniq { |mount| [ mount[:engine], mount[:path] ] }
+        mounts = distinct_mounts(mounts + in_repo.values.flat_map(&:last))
         # What an app draws into an engine's table is the engine's, which the
         # booted tier's Rails.application.routes holds only as the mount.
         app_records, engine_records = records.partition { |r| r[:engine].nil? }
@@ -79,7 +79,7 @@ module RailsAiContext
           total_routes: RouteCoverage.dedupe_put_patch_routes(entries).size,
           by_controller: group_by_controller(entries),
           api_namespaces: api_namespaces(entries),
-          mounted_engines: mounts.map { |m| { engine: m[:engine], path: m[:path] } },
+          mounted_engines: mounts.map { |m| { engine: m[:engine], path: m[:path], condition: m[:condition] }.compact },
           # Every mount parsed from routes.rb is controller-less by
           # construction, so the booted tier's count has a static answer too.
           unrouted_mounts: mounts.size,
@@ -270,8 +270,6 @@ module RailsAiContext
         []
       end
 
-      # Both arms of an if/else can mount one app at one path; a mount is
-      # named once per app and path.
       def walk_route_files(top_files)
         already_read = []
         @route_names = Set.new
@@ -286,8 +284,16 @@ module RailsAiContext
         added, added_mounts = walk_route_initializers(already_read)
         prepended, appended = added.partition { |r| r[:prepend] }
         records = (prepended + records + appended).map { |r| r.except(:prepend) }
-        mounts = (mounts + added_mounts).uniq { |mount| [ mount[:engine], mount[:path] ] }
-        [ records, mounts, files.uniq ]
+        [ records, distinct_mounts(mounts + added_mounts), files.uniq ]
+      end
+
+      # Both arms of an if/else can mount one app at one path; a mount is
+      # named once per app and path, and under no condition when the arms differ.
+      # ponytail: an if/elsif with no else reads as unconditional too; join the conditions if that matters.
+      def distinct_mounts(mounts)
+        mounts.group_by { |mount| [ mount[:engine], mount[:path] ] }.map do |_, same|
+          same.map { |mount| mount[:condition] }.uniq.size == 1 ? same.first : same.first.except(:condition)
+        end
       end
 
       # Initializers that add to the app's table with `routes.prepend` or

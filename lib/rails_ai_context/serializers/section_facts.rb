@@ -184,6 +184,7 @@ module RailsAiContext
         own = +""
         own << " (if: #{option_text(filter[:if])})" if filter[:if]
         own << " (unless: #{option_text(filter[:unless])})" if filter[:unless]
+        own << " (`#{filter[:condition]}`)" if filter[:condition]
         own + skip_condition_tail(filter)
       end
 
