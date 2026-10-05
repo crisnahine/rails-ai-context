@@ -725,4 +725,72 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
       ])
     end
   end
+
+  # The same table gives the same types whichever schema_format the app dumps.
+  describe "column types as schema.rb names them" do
+    it "reads pg_dump's schema-qualified, zoned and sized types" do
+      sql = <<~SQL
+        SET search_path = '';
+        CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public;
+        CREATE EXTENSION IF NOT EXISTS hstore WITH SCHEMA public;
+        CREATE TYPE public.mood AS ENUM ('happy', 'sad');
+
+        CREATE TABLE public.things (
+            id bigint NOT NULL,
+            attrs public.hstore,
+            handle public.citext,
+            mood public.mood DEFAULT 'happy'::public.mood NOT NULL,
+            data jsonb,
+            at timestamp with time zone,
+            blob bytea,
+            alarm time without time zone,
+            age smallint,
+            code character(3),
+            ratio real
+        );
+        COMMENT ON TABLE public.things IS 'Everything';
+        COMMENT ON COLUMN public.things.data IS 'Raw payload';
+      SQL
+      parsed = described_class.parse(sql)
+      things = parsed[:tables]["things"]
+      columns = things[:columns].to_h { |c| [ c[:name], c ] }
+
+      expect(columns.transform_values { |c| c[:type] }).to eq(
+        "id" => "bigint", "attrs" => "hstore", "handle" => "citext", "mood" => "enum", "data" => "jsonb",
+        "at" => "timestamptz", "blob" => "binary", "alarm" => "time", "age" => "integer", "code" => "string", "ratio" => "float"
+      )
+      expect(columns["mood"]).to include(enum_type: "mood", default: "happy", null: false)
+      expect(columns["age"]).to include(limit: 2)
+      expect(columns["code"]).to include(limit: 3)
+      expect(columns["data"]).to include(comment: "Raw payload")
+      expect(things[:comment]).to eq("Everything")
+      expect(parsed[:enums]).to eq([ { name: "mood", values: %w[happy sad] } ])
+    end
+
+    it "reads mysqldump's unsigned, small and timestamp types and its comments" do
+      sql = <<~SQL
+        CREATE TABLE `things` (
+          `u` int unsigned DEFAULT NULL,
+          `big` bigint unsigned NOT NULL,
+          `tiny` tinyint DEFAULT NULL,
+          `flag` tinyint(1) DEFAULT NULL,
+          `medium` mediumint DEFAULT NULL,
+          `at` timestamp NULL DEFAULT NULL,
+          `made` datetime(6) NOT NULL,
+          `note` varchar(255) DEFAULT NULL COMMENT 'Shown, it''s fine',
+          `raw` varbinary(16) DEFAULT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Mixed bag';
+      SQL
+      things = described_class.parse(sql)[:tables]["things"]
+      columns = things[:columns].to_h { |c| [ c[:name], c.except(:name, :null) ] }
+
+      expect(columns).to eq(
+        "u" => { type: "integer", unsigned: true }, "big" => { type: "bigint", unsigned: true },
+        "tiny" => { type: "integer", limit: 1 }, "flag" => { type: "boolean" }, "medium" => { type: "integer", limit: 3 },
+        "at" => { type: "timestamp" }, "made" => { type: "datetime" },
+        "note" => { type: "string", comment: "Shown, it's fine" }, "raw" => { type: "binary", limit: 16 }
+      )
+      expect(things[:comment]).to eq("Mixed bag")
+    end
+  end
 end

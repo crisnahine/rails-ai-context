@@ -488,13 +488,14 @@ module RailsAiContext
         # A table right after a paragraph line would read as part of it.
         lines << "" if lines.size > 2
 
+        has_comments = columns.any? { |c| c[:comment] && !c[:comment].to_s.empty? }
         header = "| Column | Type | Null"
         sep = "|--------|------|-----"
         header += " | Default" if has_defaults
         sep += "-|---------" if has_defaults
+        header += " | Comment" if has_comments
+        sep += "-|---------" if has_comments
         lines << "#{header} |" << "#{sep}|"
-
-        has_comments = columns.any? { |c| c[:comment] && !c[:comment].to_s.empty? }
 
         columns.each do |col|
           nullable = col.key?(:null) ? (col[:null] ? "yes" : "**NO**") : "yes"
@@ -504,8 +505,8 @@ module RailsAiContext
             display_default = default_val == "" ? '""' : default_val
             line += " | #{display_default}"
           end
+          line += " | #{col[:comment].to_s.gsub('|', '\\|').gsub(/\s*\n\s*/, ' ')}" if has_comments
           lines << "#{line} |"
-          lines << "  _#{col[:comment]}_" if has_comments && col[:comment] && !col[:comment].to_s.empty?
         end
         if data[:inherits_unresolved]&.any?
           parents = data[:inherits_unresolved].map { |parent| "`#{parent}`" }.join(", ")

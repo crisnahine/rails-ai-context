@@ -14,18 +14,21 @@ module RailsAiContext
       def parse(content)
         tables = {}
         dialect = detect_sql_dialect(content)
+        enums = enum_types(content)
 
         # Every table the file creates, by schema-qualified name, so a parent
         # outside the listed tables still resolves.
         all = {}
-        each_create_table(content) do |qualified, body, inherits|
+        each_create_table(content) do |qualified, body, inherits, trailer|
           name = qualified_name(qualified)
           shown = shown_name(name)
           next if shown.start_with?("ar_internal_metadata", "schema_migrations")
           # SQLite's own tables; Rails' data_sources leaves them out.
           next if dialect == :sqlite && shown.start_with?("sqlite_")
 
-          table, raw_types = parse_sql_table_body(body, shown, dialect)
+          table, raw_types = parse_sql_table_body(body, shown, dialect, enums)
+          comment = trailer[/\bCOMMENT\s*=\s*'((?:[^']|'')*)'/i, 1]
+          table[:comment] = comment.gsub("''", "'") if comment
           all[name] = { table: table, raw_types: raw_types, parents: inherits && split_top_level(inherits).map { |parent| qualified_name(parent) } }
           tables[shown] = table if shown.match?(/\A\w+\z/)
         end
@@ -60,13 +63,30 @@ module RailsAiContext
         resolved = {}
         all.each_key { |name| resolve_columns(name, all, alters, resolved) }
 
+        content.scan(/^COMMENT ON TABLE #{QUALIFIED_NAME} IS '((?:[^']|'')*)';/) do |table, text|
+          table = all.dig(qualified_name(table), :table)
+          table[:comment] = text.gsub("''", "'") if table
+        end
+        content.scan(/^COMMENT ON COLUMN ((?:(?:"[^"]+"|\w+)\.)+)("[^"]+"|\w+) IS '((?:[^']|'')*)';/) do |table, column, text|
+          column = column.delete('"')
+          found = all.dig(qualified_name(table.chomp(".")), :table, :columns)&.find { |c| c[:name] == column }
+          found[:comment] = text.gsub("''", "'") if found
+        end
+
         # pg_dump writes each partition as a table, then attaches it in exactly this form.
         content.scan(/^ALTER TABLE ONLY .+? ATTACH PARTITION #{QUALIFIED_NAME} /) do |(partition)|
           name = qualified_name(partition)
           tables.delete(shown_name(name)) if name.start_with?("public.")
         end
 
-        { dialect: dialect, tables: tables }
+        { dialect: dialect, tables: tables, enums: enums.map { |name, values| { name: name, values: values } } }
+      end
+
+      # PostgreSQL's enum types, by the name schema.rb gives them, with their labels.
+      def enum_types(content)
+        content.scan(/CREATE TYPE\s+#{QUALIFIED_NAME}\s+AS\s+ENUM\s*\(([^;]*)\)\s*;/i).to_h do |name, labels|
+          [ shown_name(qualified_name(name)), split_top_level(labels).map { |label| label.delete_prefix("'").delete_suffix("'").gsub("''", "'") } ]
+        end
       end
 
       # The actions Rails names (cascade, nullify, restrict); NO ACTION is its default.
@@ -93,7 +113,7 @@ module RailsAiContext
           body = content.byteslice(scanner.pos + 1, close - scanner.pos - 1)
           scanner.pos = close + 1
           inherits = scanner[1] if scanner.scan(INHERITS)
-          yield qualified, body, inherits
+          yield qualified, body, inherits, scanner.check(/[^;\n]*/).to_s
         end
       end
 
@@ -203,12 +223,12 @@ module RailsAiContext
       # MySQL keeps indexes and foreign keys inside the CREATE TABLE body as
       # KEY / UNIQUE KEY / CONSTRAINT lines; the other dialects emit separate
       # statements, so those lines simply never match here.
-      def parse_sql_table_body(body, table_name, dialect = nil)
+      def parse_sql_table_body(body, table_name, dialect = nil, enums = {})
         # One definition per line whatever the dump's layout: SQLite writes a
         # table on one line and its foreign key clause across three.
         body = split_top_level(body).map { |definition| definition.gsub(/\s*\n\s*/, " ") }.join("\n")
 
-        columns, raw_types = parse_sql_columns(body, dialect)
+        columns, raw_types = parse_sql_columns(body, dialect, enums)
         table = { columns: columns, indexes: [], foreign_keys: [] }
         if (key = body[/^\s*PRIMARY KEY\s*\(([^)]*)\)/i, 1])
           table[:primary_key] = SchemaConventions.primary_key_value(key.scan(/\w+/))
@@ -295,7 +315,7 @@ module RailsAiContext
       end
 
       # Column definitions from a CREATE TABLE body, and each column's type as the dump spells it.
-      def parse_sql_columns(body, dialect = nil)
+      def parse_sql_columns(body, dialect = nil, enums = {})
         columns = []
         raw_types = {}
         body.each_line do |line|
@@ -322,7 +342,9 @@ module RailsAiContext
             # dump-visible nullability signals.
             nullable = !rest.match?(/\bNOT\s+NULL\b|\bPRIMARY\s+KEY\b/i)
             # An array is its element type with the flag, as schema.rb dumps it.
-            type = normalize_sql_type(col_type.delete_suffix("[]"))
+            type = normalize_sql_type(col_type.delete_suffix("[]"), dialect)
+            enum_type = shown_name(qualified_name(col_type.delete_suffix("[]"))) if col_type.match?(/\A(?:"[^"]+"|[\w.]+)(?:\[\])?\z/)
+            type = "enum" if enum_type && enums.key?(enum_type)
             raw_types[col_name] = col_type
             column = { name: col_name, type: type, null: nullable }
             default = sql_default(rest, type, col_type)
@@ -333,7 +355,10 @@ module RailsAiContext
               column[:generated] = expression.strip
               column[:stored] = rest.match?(/\)\s*(?:STORED|PERSISTENT)\b/i)
             end
+            column[:enum_type] = enum_type if type == "enum"
             column.merge!(type_detail(col_type, type, dialect))
+            comment = rest[/\bCOMMENT\s+'((?:[^']|'')*)'/i, 1]
+            column[:comment] = comment.gsub("''", "'") if comment
             collation = rest[/\bCOLLATE\s+(?:pg_catalog\.)?"?([\w.-]+)"?/i, 1]
             column[:collation] = collation if collation
             columns << column
@@ -388,9 +413,20 @@ module RailsAiContext
       # The size a type was given, as schema.rb writes it: varchar(255) is
       # MySQL's default string, 6 a datetime's default precision.
       def type_detail(raw_type, type, dialect)
+        detail = {}
+        detail[:unsigned] = true if raw_type.match?(/\bunsigned\b/i)
+        limit = INTEGER_LIMITS[raw_type[/\A\w+/]]
+        detail[:limit] = limit if type == "integer" && limit
         sizes = raw_type[/\((\d+(?:\s*,\s*\d+)?)\)/, 1]&.split(",")&.map(&:to_i)
-        return {} unless sizes
+        return detail unless sizes
 
+        detail.merge(sized(type, sizes, dialect))
+      end
+
+      # The integer limit Rails reads off a smaller integer type.
+      INTEGER_LIMITS = { "smallint" => 2, "int2" => 2, "tinyint" => 1, "mediumint" => 3 }.freeze
+
+      def sized(type, sizes, dialect)
         case type
         when "string"
           sizes.first == 255 && dialect == :mysql ? {} : { limit: sizes.first }
@@ -402,33 +438,34 @@ module RailsAiContext
         end
       end
 
-      def normalize_sql_type(type)
-        # MySQL's boolean columns are a sized tinyint. This has to run
-        # before the size-stripping below (and before the generic tinyint
-        # match) because bare tinyint is a real 1-byte integer column.
+      # The type schema.rb names: pg_dump qualifies an extension's type with its
+      # schema, MySQL appends unsigned, and a size never changes the name.
+      def normalize_sql_type(type, dialect = nil)
+        # MySQL's boolean columns are a sized tinyint; bare tinyint is a real 1-byte integer.
         return "boolean" if type.start_with?("tinyint(1)")
 
-        base = type.sub(/\(.+\z/m, "").strip
+        type = type.sub(/\A(?:"[^"]+"|\w+)\.(?=[\w"])/, "")
+        base = type.gsub(/\s*\([^)]*\)/, "").gsub(/\s+(?:unsigned|signed|zerofill)\b/i, "").strip
 
         case base
-        when /\Ainteger\z/i, /\Aint\z/i, /\Aint4\z/i, /\Atinyint\z/i, /\Amediumint\z/i then "integer"
-        when /\Abigint\z/i, /\Aint8\z/i then "bigint"
-        when /\Asmallint\z/i, /\Aint2\z/i then "smallint"
-        when /\Acharacter varying\z/i, /\Avarchar\z/i then "string"
-        when /\Atext\z/i, /\Alongtext\z/i, /\Amediumtext\z/i, /\Atinytext\z/i then "text"
-        when /\Aboolean\z/i, /\Abool\z/i then "boolean"
-        when /\Atimestamp/i, /\Adatetime\z/i then "datetime"
+        when /\A(?:integer|int|int4|smallint|int2|tinyint|mediumint)\z/i then "integer"
+        when /\A(?:bigint|int8)\z/i then "bigint"
+        when /\A(?:character varying|varchar|character|char|bpchar)\z/i then "string"
+        when /\A(?:text|longtext|mediumtext|tinytext)\z/i then "text"
+        when /\A(?:boolean|bool)\z/i then "boolean"
+        when /\A(?:timestamp with time zone|timestamptz)\z/i then "timestamptz"
+        # MySQL's dumper keeps a timestamp column a timestamp.
+        when /\Atimestamp(?: without time zone)?\z/i then dialect == :mysql ? "timestamp" : "datetime"
+        when /\Adatetime\z/i then "datetime"
         when /\Adate\z/i then "date"
-        when /\Atime\z/i then "time"
-        when /\Anumeric\z/i, /\Adecimal\z/i then "decimal"
-        when /\Afloat/i, /\Adouble/i then "float"
-        when /\Ajsonb?\z/i then "json"
-        when /\Auuid\z/i then "uuid"
-        when /\Ainet\z/i then "inet"
-        when /\Acitext\z/i then "citext"
+        when /\Atime(?: without time zone)?\z/i then "time"
+        when /\A(?:numeric|decimal)\z/i then "decimal"
+        when /\A(?:float|double|double precision|real|float4|float8)\z/i then "float"
+        when /\Ajsonb\z/i then "jsonb"
+        when /\Ajson\z/i then "json"
+        when /\A(?:bytea|longblob|mediumblob|tinyblob|blob|binary|varbinary)\z/i then "binary"
+        when /\A(?:uuid|inet|citext|hstore)\z/i then base.downcase
         when /\Aarray\z/i then "array"
-        when /\Ahstore\z/i then "hstore"
-        when /\Alongblob\z/i, /\Amediumblob\z/i, /\Ablob\z/i, /\Abinary\z/i, /\Avarbinary\z/i then "binary"
         else type
         end
       end

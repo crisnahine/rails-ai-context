@@ -127,6 +127,22 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(text).to include("- `account_id` → `accounts.id` (on_delete: cascade)")
     end
 
+    # A line inside a markdown table ends it, so a comment is a cell.
+    it "puts a column comment in its own cell and keeps the table whole" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "postgresql", total_tables: 1, tables: { "things" => { indexes: [], foreign_keys: [], columns: [
+          { name: "data", type: "jsonb", comment: "Raw | payload" }, { name: "at", type: "timestamptz" }
+        ] } } },
+        models: {}
+      })
+
+      text = described_class.call(table: "things").content.first[:text]
+
+      expect(text).to include("| Column | Type | Null | Comment |")
+      expect(text).to include("| data | jsonb | yes | Raw \\| payload |")
+      expect(text).to include("| at | timestamptz | yes |  |")
+    end
+
     it "names the enabled extensions in the full listing" do
       expect(described_class.call(detail: "full").content.first[:text]).to include("**Extensions:** citext")
     end

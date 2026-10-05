@@ -525,6 +525,7 @@ module RailsAiContext
           tables: tables,
           total_tables: tables.size,
           check_constraints: SchemaConventions.check_constraints_of(tables),
+          enum_types: parsed[:enums],
           generated_columns: SchemaConventions.generated_columns_of(tables),
           note: "Parsed from db/structure.sql (#{connection_state})"
         }
