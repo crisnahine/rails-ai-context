@@ -162,6 +162,60 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
     end
   end
 
+  def write_cable_app(dir)
+    FileUtils.mkdir_p(File.join(dir, "app", "channels", "application_cable"))
+    File.write(File.join(dir, "app", "channels", "application_cable", "connection.rb"), <<~RUBY)
+      module ApplicationCable
+        class Connection < ActionCable::Connection::Base
+          identified_by :current_user
+        end
+      end
+    RUBY
+    File.write(File.join(dir, "app", "channels", "chat_channel.rb"), <<~'RUBY')
+      class ChatChannel < ApplicationCable::Channel
+        periodically :ping, every: 30.seconds
+        periodically every: 10.seconds do
+          transmit({ t: Time.now })
+        end
+        def subscribed
+          stream_from "chat_#{params[:room]}"
+          stream_for current_user
+        end
+        def speak(data); end
+        private
+        def ping; end
+      end
+    RUBY
+  end
+
+  # The booted tier reads the same files the static tier does, so both give one answer.
+  describe "channels when booted" do
+    it "reads a block timer and the connection's identifiers" do
+      Dir.mktmpdir do |dir|
+        write_cable_app(dir)
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(dir))
+        base = Class.new
+        stub_const("ActionCable::Channel::Base", base)
+        channel = Class.new(base) do
+          def subscribed; end
+          def speak(data); end
+          private def ping; end
+        end
+        stub_const("ChatChannel", channel)
+        allow(base).to receive(:descendants).and_return([ channel ])
+        allow(Object).to receive(:const_source_location).and_call_original
+        allow(Object).to receive(:const_source_location).with("ChatChannel")
+          .and_return([ File.join(dir, "app", "channels", "chat_channel.rb"), 1 ])
+
+        result = described_class.new(Rails.application).call
+        booted = result[:channels].find { |c| c[:name] == "ChatChannel" }
+        expect(booted[:periodic]).to eq([ { method: "ping", every: "30.seconds" }, { block: true, every: "10.seconds" } ])
+        expect(booted[:actions]).to eq([ "speak" ])
+        expect(result[:connections].map { |c| c[:identified_by] }).to eq([ [ "current_user" ] ])
+      end
+    end
+  end
+
   describe "#extract_channel_actions" do
     let(:channel_class) do
       Class.new do
@@ -398,6 +452,18 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       # Asserting only that the base class is absent passed while the names
       # were unqualified: "Channel" and "Connection" were both counted.
       expect(result[:channels].map { |c| c[:name] }).to eq(%w[ChatChannel])
+    end
+
+    it "reads a channel's streams, timers and actions, and the connection's identifiers" do
+      result = static_result { |dir| write_cable_app(dir) }
+
+      channel = result[:channels].find { |c| c[:name] == "ChatChannel" }
+      expect(channel[:streams]).to eq(stream_from: [ "\"chat_\#{params[:room]}\"" ], stream_for: [ "current_user" ])
+      expect(channel[:periodic]).to eq([ { method: "ping", every: "30.seconds" }, { block: true, every: "10.seconds" } ])
+      expect(channel[:actions]).to eq([ "speak" ])
+      expect(result[:connections]).to eq([ { name: "ApplicationCable::Connection",
+                                             file: "app/channels/application_cable/connection.rb",
+                                             identified_by: [ "current_user" ] } ])
     end
 
     it "names namespaced classes the way the booted app does" do

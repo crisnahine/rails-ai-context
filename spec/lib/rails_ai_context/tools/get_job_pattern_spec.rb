@@ -285,6 +285,19 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
         expect(text).to include("speak")
       end
 
+      it "names a block timer and the connection's identifiers" do
+        payload = channel_payload.merge(
+          connections: [ { name: "ApplicationCable::Connection", file: "app/channels/application_cable/connection.rb",
+                           identified_by: %w[current_user] } ]
+        )
+        payload[:channels].first[:periodic] << { block: true, every: "10.seconds" }
+        allow(described_class).to receive(:cached_context).and_return(jobs: payload)
+
+        text = described_class.call.content.first[:text]
+        expect(text).to include("  - a block every `10.seconds`")
+        expect(text).to include("**Connection:** `ApplicationCable::Connection` identified by `current_user`")
+      end
+
       it "still works when no jobs exist but channels do" do
         result = described_class.call
         text = result.content.first[:text]

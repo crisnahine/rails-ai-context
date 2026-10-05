@@ -38,6 +38,7 @@ module RailsAiContext
           mailers: booted_mailers[:mailers],
           mailer_bases: booted_mailers[:bases],
           channels: extract_channels,
+          connections: extract_connections,
           recurring_jobs: extract_solid_queue_recurring,
           sidekiq_config: extract_sidekiq_config
         }
@@ -55,6 +56,7 @@ module RailsAiContext
           mailers: source_mailers[:mailers],
           mailer_bases: source_mailers[:bases],
           channels: extract_channels_from_source,
+          connections: extract_connections,
           recurring_jobs: extract_solid_queue_recurring,
           sidekiq_config: extract_sidekiq_config
         }
@@ -806,16 +808,36 @@ module RailsAiContext
       def extract_channels_from_source
         # ApplicationCable holds the base Channel and Connection, neither of
         # which is a channel of the app's own.
-        source_classes("app/channels").filter_map do |klass|
+        channel_sources.filter_map do |klass|
           next if klass.name.start_with?("ApplicationCable::")
 
-          stream_methods = ActionResolver.own_methods(klass.methods, klass.name)
-                                         .select { |m| m[:scope] == :instance }
-                                         .map { |m| m[:name] }
-                                         .select { |m| m.start_with?("stream_") || m == "subscribed" }
-          { name: klass.name, file: klass.file, stream_methods: stream_methods,
-            confidence: RailsAiContext::Confidence::STATIC }
+          own = ActionResolver.own_methods(klass.methods, klass.name).select { |m| m[:scope] == :instance }
+          names = own.map { |m| m[:name] }
+          actions = own.select { |m| m[:visibility] == :public }.map { |m| m[:name] }
+                       .reject { |m| CHANNEL_LIFECYCLE.include?(m) || m.start_with?("stream_") }
+          { name: klass.name, file: klass.file,
+            stream_methods: names.select { |m| m.start_with?("stream_") || m == "subscribed" },
+            streams: extract_channel_streams(klass.macros),
+            periodic: extract_channel_periodic(klass.macros),
+            actions: actions.empty? ? nil : actions.uniq.sort,
+            confidence: RailsAiContext::Confidence::STATIC }.compact
         end.sort_by { |c| c[:name] }
+      end
+
+      CHANNEL_LIFECYCLE = %w[subscribed unsubscribed].freeze
+
+      # `identified_by` is a Connection macro: what every channel reads as its own
+      # `current_user`. Read from source in both tiers, so both give one answer.
+      def extract_connections
+        channel_sources.filter_map do |klass|
+          ids = extract_identified_by(klass.macros) or next
+          { name: klass.name, file: klass.file, identified_by: ids }
+        end.sort_by { |c| c[:name] }
+      end
+
+      # One walk of app/channels, shared by channels, connections and the booted tier.
+      def channel_sources
+        @channel_sources ||= source_classes("app/channels", macros: CHANNEL_MACROS)
       end
 
       # Class name, method list and file for every .rb of a kind, read from
@@ -885,11 +907,13 @@ module RailsAiContext
         ActionCable::Channel::Base.descendants.filter_map do |channel|
           next if channel.name.nil? || channel.name == "ApplicationCable::Channel"
 
-          macros = channel_macros(channel_source(channel))
+          file = source_file_for(channel)
+          macros = channel_sources.find { |klass| klass.file == file }&.macros ||
+                   channel_macros(channel_source(channel))
 
           {
             name:           channel.name,
-            file:           source_file_for(channel),
+            file:           file,
             stream_methods: channel.instance_methods(false)
               .select { |m| m.to_s.start_with?("stream_") || m == :subscribed }
               .map(&:to_s),
@@ -945,22 +969,22 @@ module RailsAiContext
         result.empty? ? nil : result
       end
 
-      # `periodically :method_name, every: 3.seconds`. The interval keeps its
-      # source form so lambdas like `-> { current_user.interval }` survive whole.
+      # `periodically :method_name, every: 3.seconds` or `periodically every: 3.seconds do`.
+      # The interval keeps its source form so lambdas like `-> { current_user.interval }`
+      # survive whole.
       def extract_channel_periodic(macros)
-        timers = macros.select { |hit| hit[:macro] == :periodically }.filter_map do |hit|
+        timers = macros.select { |hit| hit[:macro] == :periodically }.map do |hit|
           method_name = hit[:args].first
-          next unless method_name
-          { method: method_name.to_s, every: hit[:option_values][:every].to_s }
+          timer = method_name ? { method: method_name.to_s } : { block: true }
+          timer.merge(every: hit[:option_values][:every].to_s)
         end
         timers.any? ? timers : nil
       end
 
       # RPC actions = public instance methods that aren't lifecycle hooks or stream helpers.
       def extract_channel_actions(channel)
-        ignored = %i[subscribed unsubscribed]
         actions = channel.instance_methods(false).reject do |m|
-          ignored.include?(m) || m.to_s.start_with?("stream_")
+          CHANNEL_LIFECYCLE.include?(m.to_s) || m.to_s.start_with?("stream_")
         end
         actions.empty? ? nil : actions.map(&:to_s).sort
       end

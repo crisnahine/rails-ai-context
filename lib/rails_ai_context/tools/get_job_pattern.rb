@@ -71,7 +71,7 @@ module RailsAiContext
         end
         if channels.any?
           lines << "" if lines.any?
-          lines.concat(format_channels_section(channels))
+          lines.concat(format_channels_section(channels, jobs_data[:connections]))
         end
         bases = bases_note("jobs", job_bases(jobs_data).map { |base| base[:name] })
         if bases
@@ -414,8 +414,12 @@ module RailsAiContext
       # Renders the v5.8.0 enriched Action Cable channel detail produced by
       # JobIntrospector#extract_channels (identified_by, streams, periodic, actions).
       # Returns lines, not a Response - caller composes.
-      private_class_method def self.format_channels_section(channels)
+      private_class_method def self.format_channels_section(channels, connections = nil)
         lines = [ "# Action Cable Channels (#{channels.size})", "" ]
+        Array(connections).each do |c|
+          lines << "**Connection:** `#{c[:name]}` identified by #{Array(c[:identified_by]).map { |i| "`#{i}`" }.join(', ')}"
+        end
+        lines << "" if Array(connections).any?
 
         channels.each do |c|
           lines << "## `#{c[:name]}`"
@@ -436,7 +440,7 @@ module RailsAiContext
           if (periodic = c[:periodic]) && periodic.any?
             lines << "- **Periodic timers:**"
             periodic.each do |t|
-              lines << "  - `#{t[:method]}` every `#{t[:every]}`"
+              lines << "  - #{t[:method] ? "`#{t[:method]}`" : "a block"} every `#{t[:every]}`"
             end
           end
 
