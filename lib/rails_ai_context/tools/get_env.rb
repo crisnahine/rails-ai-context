@@ -6,7 +6,7 @@ module RailsAiContext
       tool_name "rails_get_env"
       description "Discover environment variables, external service dependencies, and credentials keys used by the app. " \
         "Use when: setting up a development environment, debugging missing config, or auditing external dependencies. " \
-        "Scans .rb, .rake, ERB views and config YAML for ENV[], plus .env.example, Dockerfile, the env Kamal's config/deploy.yml sets, external HTTP calls, and credentials keys (never values)."
+        "Scans .rb, .rake, ERB views and config YAML for ENV[], plus .env.example, Dockerfile, the env Kamal's config/deploy.yml sets, config gem settings and Anyway::Config keys, external HTTP calls, and credentials keys (never values)."
 
       input_schema(
         properties: {
@@ -36,6 +36,8 @@ module RailsAiContext
         env_example = scan_env_example(root)
         dockerfile_vars = scan_dockerfile(root)
         kamal_env = scan_kamal_env(root)
+        settings = scan_settings(root)
+        anyway_configs = scan_anyway_configs(root)
         external_services = detect_external_services(root, env_vars.values.flatten.map { |v| v[:name] }.uniq)
         credentials_keys = detect_credentials_keys
         encrypted_columns = detect_encrypted_columns
@@ -47,7 +49,10 @@ module RailsAiContext
         dockerfile_vars.each { |v| all_var_names << v[:name] if v[:type] == "ENV" }
         kamal_env.each { |v| all_var_names << v[:name] }
 
-        if all_var_names.empty? && external_services.empty? && credentials_keys.empty?
+        anyway_configs.each { |c| c[:attributes].each { |a| all_var_names << a[:env] if a[:env] } }
+        deploy_and_settings = kamal_lines(kamal_env) + settings_lines(settings) + anyway_lines(anyway_configs)
+
+        if all_var_names.empty? && external_services.empty? && credentials_keys.empty? && deploy_and_settings.empty?
           return text_response("No environment variables, external services, or credentials keys detected.")
         end
 
@@ -55,9 +60,9 @@ module RailsAiContext
         when "summary"
           format_summary(all_var_names, external_services, credentials_keys)
         when "standard"
-          format_standard(env_vars, env_example, kamal_env, external_services, credentials_keys, encrypted_columns)
+          format_standard(env_vars, env_example, deploy_and_settings, external_services, credentials_keys, encrypted_columns)
         when "full"
-          format_full(env_vars, env_example, kamal_env, dockerfile_vars, external_services, credentials_keys, encrypted_columns, root)
+          format_full(env_vars, env_example, deploy_and_settings, dockerfile_vars, external_services, credentials_keys, encrypted_columns, root)
         end
       end
 
@@ -86,7 +91,7 @@ module RailsAiContext
         "Config YAML on `sensitive_patterns` (config/database.yml) is read for the ENV names in its ERB tags only; " \
         "credentials, keys and the rest are never read._"
 
-      private_class_method def self.format_standard(env_vars, env_example, kamal_env, external_services, credentials_keys, encrypted_columns)
+      private_class_method def self.format_standard(env_vars, env_example, deploy_and_settings, external_services, credentials_keys, encrypted_columns)
         lines = [ "# Environment Configuration", "" ]
 
         # ENV vars from code, grouped by purpose
@@ -134,7 +139,7 @@ module RailsAiContext
           end
         end
 
-        lines.concat(kamal_lines(kamal_env))
+        lines.concat(deploy_and_settings)
 
         # External services
         if external_services.any?
@@ -184,7 +189,7 @@ module RailsAiContext
         lines
       end
 
-      private_class_method def self.format_full(env_vars, env_example, kamal_env, dockerfile_vars, external_services, credentials_keys, encrypted_columns, root)
+      private_class_method def self.format_full(env_vars, env_example, deploy_and_settings, dockerfile_vars, external_services, credentials_keys, encrypted_columns, root)
         lines = [ "# Environment Configuration (Full Detail)", "" ]
 
         # ENV vars grouped by category with file annotations
@@ -256,7 +261,7 @@ module RailsAiContext
           lines << ""
         end
 
-        lines.concat(kamal_lines(kamal_env))
+        lines.concat(deploy_and_settings)
 
         # Dockerfile ENV/ARG
         if dockerfile_vars.any?
@@ -323,6 +328,77 @@ module RailsAiContext
           { name: name, secret: aliased || name } unless name.to_s.empty?
         end
         secrets + clear.map { |name, value| { name: name.to_s, value: RailsAiContext::Redaction.value(name, value.to_s) } }
+      end
+
+      # The config gem merges config/settings.yml, then config/settings/<env>.yml
+      # and config/environments/<env>.yml over it; *.local.yml is on sensitive_patterns.
+      private_class_method def self.scan_settings(root)
+        files = [ "config/settings.yml" ] +
+          %w[settings environments].flat_map { |dir| Dir.glob(File.join(root, "config", dir, "*.yml")).sort.map { |path| path.delete_prefix("#{root}/") } }
+        files.filter_map do |file|
+          data = Introspectors::RecurringSchedules.yaml(root, file)
+          next unless data.is_a?(Hash) && data.any?
+
+          { file: file, keys: setting_keys(data) }
+        end
+      end
+
+      private_class_method def self.setting_keys(hash, prefix = nil)
+        hash.flat_map do |key, value|
+          path = [ prefix, key ].compact.join(".")
+          value.is_a?(Hash) && value.any? ? setting_keys(value, path) : [ path ]
+        end
+      end
+
+      private_class_method def self.settings_lines(settings)
+        return [] if settings.empty?
+
+        [ "## Settings (config gem, read as `Settings.<key>`; values hidden)" ] +
+          settings.map { |s| "- `#{s[:file]}`: #{s[:keys].map { |k| "`#{k}`" }.join(', ')}" } + [ "" ]
+      end
+
+      ANYWAY_CONFIG_DIRS = %w[config/configs app/configs].freeze
+      ANYWAY_BASES = %w[Anyway::Config ApplicationConfig].freeze
+
+      # Each Anyway::Config class's attributes, with the env name anyway_config
+      # reads: "#{env_prefix}_#{ATTR}", the prefix defaulting to the class name
+      # before `Config`, downcased (PaymentConfig reads PAYMENT_*).
+      private_class_method def self.scan_anyway_configs(root)
+        ANYWAY_CONFIG_DIRS.flat_map { |dir| Dir.glob(File.join(root, dir, "**", "*.rb")).sort }.filter_map do |path|
+          file = path.delete_prefix("#{root}/")
+          source = SafePath.read(file, under: root).first or next
+          declared = Introspectors::DeclaredConstant.declarations(source).find { |d| ANYWAY_BASES.include?(d.superclass.to_s.delete_prefix("::")) } or next
+          calls = Introspectors::SourceIntrospector.walk_source(source, {
+            calls: -> { Introspectors::Listeners::GenericMacroListener.new(:attr_config, :required, :config_name, :env_prefix) }
+          })[:calls]
+          by_macro = calls.group_by { |c| c[:macro] }
+          names = Array(by_macro[:attr_config]).flat_map { |c| c[:args].map(&:to_s) + c[:options].keys.map(&:to_s) }.uniq
+          next if names.empty?
+
+          required = Array(by_macro[:required]).flat_map { |c| c[:args].map(&:to_s) }
+          prefix = anyway_env_prefix(declared.name, by_macro)
+          attributes = names.map { |name| { name: name, env: ("#{prefix}_#{name.upcase}" if prefix), required: required.include?(name) } }
+          { name: declared.name, file: file, attributes: attributes }
+        end
+      end
+
+      private_class_method def self.anyway_env_prefix(class_name, by_macro)
+        explicit = Array(by_macro[:env_prefix]).last&.dig(:args, 0) || Array(by_macro[:config_name]).last&.dig(:args, 0)
+        return explicit.to_s.upcase if explicit
+
+        class_name[/\A(\w+)(?:::)?Config\z/, 1]&.upcase
+      end
+
+      private_class_method def self.anyway_lines(configs)
+        return [] if configs.empty?
+
+        [ "## Anyway::Config classes (values hidden)" ] + configs.map do |config|
+          attributes = config[:attributes].map do |a|
+            notes = [ ("`#{a[:env]}`" if a[:env]), ("required" if a[:required]) ].compact
+            notes.any? ? "`#{a[:name]}` (#{notes.join(', ')})" : "`#{a[:name]}`"
+          end
+          "- `#{config[:name]}` (`#{config[:file]}`): #{attributes.join(', ')}"
+        end + [ "" ]
       end
 
       private_class_method def self.scan_env_example(root)
