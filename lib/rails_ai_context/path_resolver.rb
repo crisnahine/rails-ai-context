@@ -114,15 +114,17 @@ module RailsAiContext
       PATH_GEM_LIBS.compute_if_absent(key) { read_path_gem_libs(key) }
     end
 
+    # Remotes are relative to the lockfile, which for a test/dummy is the engine's.
     def read_path_gem_libs(root)
-      lock = SafeFile.read(File.join(root, GemLock.lockfile_name(root)))
+      bundle = GemLock.bundle(root)
+      lock = bundle[:lockfile] && SafeFile.read(bundle[:lockfile])
       return [] unless lock
 
-      real_root = File.realpath(root)
+      trusted = File.realpath(bundle[:trusted])
       remotes = lock.scan(/^PATH\r?\n  remote: (.+?)\r?$/).flatten.map(&:strip)
       remotes.flat_map do |remote|
-        base = File.expand_path(remote, root)
-        next [] unless Dir.exist?(base) && SafePath.contained?(File.realpath(base), real_root)
+        base = File.expand_path(remote, bundle[:dir])
+        next [] unless Dir.exist?(base) && SafePath.contained?(File.realpath(base), trusted)
 
         # Bundler's own glob for the gemspecs a path source holds.
         Dir.glob(File.join(base, "{,*,*/*}.gemspec")).map { |spec| File.join(File.dirname(spec), "lib") }

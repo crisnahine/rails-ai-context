@@ -310,6 +310,18 @@ RSpec.describe RailsAiContext::PathResolver do
         expect(described_class.path_gem_libs(dir)).to eq([ File.join(dir, "gems", "broadcast_policy", "lib") ])
       end
     end
+
+    it "reads the engine's own path gem from the bundle an engine's test/dummy boots with" do
+      dummy = File.join(@root, "test", "dummy")
+      FileUtils.mkdir_p([ File.join(dummy, "config"), File.join(@root, ".git"), File.join(@root, "lib") ])
+      File.write(File.join(dummy, "config", "boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n))
+      File.write(File.join(@root, "shop.gemspec"), "")
+      File.write(File.join(@root, "Gemfile"), "gemspec\n")
+      File.write(File.join(@root, "Gemfile.lock"), "PATH\n  remote: .\n  specs:\n    shop (0.1.0)\n\nGEM\n  specs:\n")
+      described_class.clear_code_roots
+
+      expect(described_class.path_gem_libs(dummy)).to eq([ File.join(File.realpath(@root), "lib") ])
+    end
   end
 
   describe "a root an initializer pushes under a namespace" do

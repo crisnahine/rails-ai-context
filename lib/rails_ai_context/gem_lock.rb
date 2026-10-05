@@ -147,15 +147,16 @@ module RailsAiContext
     end
 
     # The app's own Gemfile and lockfile, or, with no lockfile of its own, the
-    # bundle config/boot.rb points Bundler at (an engine's test/dummy).
+    # bundle config/boot.rb points Bundler at (an engine's test/dummy). `dir`
+    # holds them; `trusted` is the tree a path gem of theirs must stay inside.
     def bundle(root)
+      root = root.to_s
       own = { lockfile: File.join(root, lockfile_name(root)), gemfile: File.join(root, gemfile_name(root)),
-              lock_label: lockfile_name(root), gemfile_label: gemfile_name(root) }
+              lock_label: lockfile_name(root), gemfile_label: gemfile_name(root), dir: root, trusted: root }
       return own if File.file?(own[:lockfile])
 
       boot_bundle(root, own) || own
     end
-    private_class_method :bundle
 
     # Read only inside the app's git repository: that bundle is the app's
     # declared one, the same trust as its own Gemfile.lock. Anything else is
@@ -174,7 +175,8 @@ module RailsAiContext
         return own.merge(lockfile: nil, outside: label.(gemfile))
       end
 
-      { lockfile: inside_file(dir, lockfile), gemfile: inside_file(dir, gemfile), lock_label: label.(lockfile), gemfile_label: label.(gemfile) }
+      { lockfile: inside_file(dir, lockfile), gemfile: inside_file(dir, gemfile), lock_label: label.(lockfile), gemfile_label: label.(gemfile),
+        dir: File.realpath(dir), trusted: repo }
     rescue SystemCallError
       nil
     end

@@ -185,8 +185,10 @@ An app with no lockfile of its own (an engine's `test/dummy`) has its gems in th
 Gemfile its `config/boot.rb` sets as `BUNDLE_GEMFILE` (`../../Gemfile`). That
 Gemfile and its lockfile (`gems.rb` and `gems.locked` alike) are read with the same
 trust as the app's own `Gemfile.lock`, only when their directory is inside the app's
-git repository, never above its root and never outside a repository. Nothing else in
-that directory is read, and a file there that links out of it is refused.
+git repository, never above its root and never outside a repository. Besides those two,
+only a file that Gemfile names with `eval_gemfile` inside that directory, and the `lib/`
+of a path gem the lockfile names inside the repository (the engine's own `remote: .`),
+are read. A file there that links out of the directory is refused.
 
 ### The engine an app's test/dummy runs in
 
