@@ -38,7 +38,7 @@ module RailsAiContext
       FORGERY_SKIP = { macro: :skip_before_action, args: [ :verify_authenticity_token ] }.freeze
 
       LISTENERS = {
-        filters: -> { Listeners::GenericMacroListener.new(*MACROS) },
+        filters: -> { Listeners::ConditionalMacroListener.new(*MACROS) },
         mixins: Listeners::MixinsListener,
         # A macro inside a `def` runs when the method is called, so ConcernMacros holds it back by these.
         methods: Listeners::MethodsListener
@@ -257,6 +257,7 @@ module RailsAiContext
         out[:only] = only if only&.any?
         out[:except] = except if except&.any?
         out[:unless] = condition_text(opts[:unless], sources[:unless]) if opts[:unless]
+        out[:condition] = entry[:condition] if entry[:condition]
         if opts[:if]
           # When the condition compares action_name the AST can say which
           # action it names; that is worth more than the line itself.

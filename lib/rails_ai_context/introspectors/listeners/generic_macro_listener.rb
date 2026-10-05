@@ -38,6 +38,8 @@ module RailsAiContext
             confidence:    confidence_for(node)
           }
           @results.last[:text] = one_line_source(node) if @call_source.include?(node.name)
+          condition = macro_condition
+          @results.last[:condition] = condition if condition
 
           # A target macro that takes a block encloses whatever the block
           # declares: `string :title` inside `hash :order_params do ... end`
@@ -50,6 +52,8 @@ module RailsAiContext
         end
 
         private
+
+        def macro_condition; end
 
         def proc_lines(node)
           procs = Array(node.arguments&.arguments).grep(Prism::LambdaNode)

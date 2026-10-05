@@ -78,7 +78,7 @@ module RailsAiContext
 
         RouteIntrospector.new(app).static_mounts.each do |mount|
           engine_name = mount[:engine]
-          info = { engine: engine_name, path: mount[:path] }
+          info = { engine: engine_name, path: mount[:path], condition: mount[:condition] }.compact
           known = KNOWN_ENGINES[engine_name]
           if known
             info[:category] = known[:category].to_s

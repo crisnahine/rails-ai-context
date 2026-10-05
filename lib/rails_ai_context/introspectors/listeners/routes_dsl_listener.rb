@@ -13,6 +13,8 @@ module RailsAiContext
       # :dynamic markers rather than guessed at. Leading-slash paths anchor
       # at the accumulated prefix.
       class RoutesDslListener < BaseListener
+        include BranchConditions
+
         VERB_METHODS = %i[get post put patch delete options].freeze
         PLURAL_ACTIONS = %i[index create new edit show update destroy].freeze
         # Rails' drawing order: the first route asking for a name gets it.
@@ -48,8 +50,6 @@ module RailsAiContext
           @statements = {}.compare_by_identity
           @global_path_names = {}
           @methods = {}
-          @conditions = []
-          @case_branches = {}.compare_by_identity
           @routing_calls = 0
         end
 
@@ -65,60 +65,6 @@ module RailsAiContext
 
         def on_def_node_leave(node)
           @stack.pop if @stack.last && @stack.last[:node].equal?(node)
-        end
-
-        # A route under `if`/`unless`/`case` is drawn only when it holds, which source
-        # cannot tell; the route carries the condition instead.
-        def on_if_node_enter(node)
-          enter_condition(node, "if", node.subsequent)
-        end
-
-        def on_unless_node_enter(node)
-          enter_condition(node, "unless", node.else_clause)
-        end
-
-        def on_else_node_enter(node)
-          current = @conditions.last
-          current[:text] = current[:else] if current && current[:other].equal?(node)
-          on_when_node_enter(node)
-        end
-
-        def on_else_node_leave(node)
-          on_when_node_leave(node)
-        end
-
-        def on_case_node_enter(node)
-          return unless @statements.key?(node)
-
-          subject = node.predicate&.slice&.gsub(/\s+/, " ")
-          seen = []
-          node.conditions.each do |branch|
-            register_statements(branch.statements)
-            conditions = branch.conditions.map { |c| c.slice.gsub(/\s+/, " ") }
-            seen.concat(conditions)
-            @case_branches[branch] = subject ? "when #{subject} is #{conditions.join(', ')}" : "if #{conditions.join(' or ')}"
-          end
-          return unless node.else_clause
-
-          register_statements(node.else_clause.statements)
-          @case_branches[node.else_clause] = subject ? "when #{subject} is none of #{seen.join(', ')}" : "unless #{seen.join(' or ')}"
-        end
-
-        def on_when_node_enter(node)
-          text = @case_branches[node]
-          @conditions << { node: node, text: text } if text
-        end
-
-        def on_when_node_leave(node)
-          @conditions.pop if @conditions.last && @conditions.last[:node].equal?(node)
-        end
-
-        def on_if_node_leave(node)
-          @conditions.pop if @conditions.last && @conditions.last[:node].equal?(node)
-        end
-
-        def on_unless_node_leave(node)
-          on_if_node_leave(node)
         end
 
         def on_call_node_enter(node)
@@ -223,28 +169,6 @@ module RailsAiContext
           !params.nil? && (params.requireds.any? || params.posts.any? || params.keywords.any? { |k| k.is_a?(Prism::RequiredKeywordParameterNode) })
         end
 
-        def enter_condition(node, keyword, other)
-          return unless @statements.key?(node)
-
-          register_statements(node.statements)
-          @statements[other] = true if other.is_a?(Prism::IfNode)
-          register_statements(other.statements) if other.is_a?(Prism::ElseNode)
-          # An elsif runs only when the condition before it failed.
-          outer = @conditions.last
-          outer[:text] = outer[:else] if outer && outer[:other].equal?(node)
-          predicate = node.predicate.slice.gsub(/\s+/, " ")
-          negated = keyword == "if" ? "unless" : "if"
-          @conditions << { node: node, other: other, text: "#{keyword} #{predicate}", else: "#{negated} #{predicate}" }
-        end
-
-        def current_condition
-          @conditions.map { |c| c[:text] }.join(" and ").then { |text| text unless text.empty? }
-        end
-
-        def register_statements(statements)
-          Array(statements&.body).each { |statement| @statements[statement] = true } if statements.is_a?(Prism::StatementsNode)
-        end
-
         # `controller :pages do` is `scope(controller: :pages)`.
         def enter_controller(node)
           return unless node.block
@@ -340,6 +264,10 @@ module RailsAiContext
         # Mapper's URL options, which a hash constraint turns into route defaults.
         URL_OPTIONS = %w[protocol subdomain domain host port].freeze
         ROUTE_LEVEL = (VERB_METHODS + %i[match root]).freeze
+        # Calls whose options Rails passes on to the mapping, where one it does not know becomes a default.
+        OPTION_CARRIERS = (ROUTE_LEVEL + %i[scope namespace resources resource with_options]).freeze
+        MAPPER_OPTIONS = %w[as via to controller action on defaults constraints anchor format path internal shallow_path
+                            shallow_prefix module path_names shallow blocks options only except param concerns].freeze
 
         # What `bin/rails routes` prints beside a route: its defaults, then the
         # constraints on its path segments. Scope URL options win over the
@@ -351,8 +279,9 @@ module RailsAiContext
           scopes << own unless route_level || own.empty?
           own = {} unless route_level
           defaults = (own[:url] || {}).merge(scopes.map { |c| c[:url].merge(c[:defaults]) }.reduce({}, :merge)).merge(own[:defaults] || {})
+          defaults = defaults.merge(scopes.map { |c| c[:options] }.reduce({}, :merge)).merge(own[:options] || {})
           params = path.scan(/[:*](\w+)/).flatten << "format"
-          segments = scopes.map { |c| c[:segment] }.reduce({}, :merge).merge(own[:segment] || {}).slice(*params)
+          segments = scopes.map { |c| c[:segment] }.reduce({}, :merge).merge(own[:segment] || {}).select { |key, _| params.include?(key) }
           all = defaults.merge(segments)
           "{#{all.map { |key, value| "#{key}: #{value}" }.join(', ')}}" if all.any?
         end
@@ -362,7 +291,8 @@ module RailsAiContext
           hash = hash_arg(node)
           return unless hash
 
-          found = { url: {}, defaults: {}, segment: {} }
+          # `scoped` is what Rails keeps in the scope's constraints, which nested resources read.
+          found = { url: {}, defaults: {}, segment: {}, scoped: {}, options: {} }
           if node.name == :constraints && node.receiver.nil?
             read_constraint_hash(hash, found)
           else
@@ -373,7 +303,15 @@ module RailsAiContext
               case key
               when "constraints" then read_constraint_hash(assoc.value, found)
               when "defaults" then each_literal(assoc.value) { |k, v| found[:defaults][k] = constraint_value(v) }
-              else found[:segment][key] = constraint_value(assoc.value) if assoc.value.is_a?(Prism::RegularExpressionNode)
+              else
+                unless assoc.value.is_a?(Prism::RegularExpressionNode)
+                  found[:options][key] = constraint_value(assoc.value) if OPTION_CARRIERS.include?(node.name) && !MAPPER_OPTIONS.include?(key)
+                  next
+                end
+
+                found[:segment][key] = constraint_value(assoc.value)
+                # A resource moves its regexp options into its constraints.
+                found[:scoped][key] = assoc.value if %i[resources resource].include?(node.name)
               end
             end
           end
@@ -386,6 +324,7 @@ module RailsAiContext
               found[:url][key] = constraint_value(value) if value.is_a?(Prism::StringNode) || value.is_a?(Prism::IntegerNode)
             else
               found[:segment][key] = constraint_value(value)
+              found[:scoped][key] = value
             end
           end
         end
@@ -607,6 +546,21 @@ module RailsAiContext
           }
           frame[:shallow] = opts[:shallow] == true if opts.key?(:shallow)
           push_frame(node, **frame)
+          nest_param_constraint(layout, opts)
+        end
+
+        # Rails' nested_options: a regexp constraint on the resource's param
+        # also constrains the param its nested routes name it by.
+        def nest_param_constraint(layout, opts)
+          param = resource_param(opts)
+          value = @stack.filter_map { |f| f[:route_constraints]&.dig(:scoped) }.reduce({}, :merge)[param]
+          return unless value.is_a?(Prism::RegularExpressionNode)
+
+          key = "#{layout[:key]}_#{param}"
+          frame = @stack.last
+          own = frame[:route_constraints] || { url: {}, defaults: {}, segment: {}, scoped: {}, options: {} }
+          frame[:route_constraints] = own.merge(segment: own[:segment].merge(key => constraint_value(value)),
+                                                scoped: own[:scoped].merge(key => value))
         end
 
         def emit_resource_routes(node, name, opts, singular:)

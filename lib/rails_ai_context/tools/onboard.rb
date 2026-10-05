@@ -615,7 +615,11 @@ module RailsAiContext
           mounted.each do |e|
             name = e[:engine]
             path = e[:path]
-            lines << (path ? "- **#{name}** at `#{path}`" : "- **#{name}**") if name
+            next unless name
+
+            line = path ? "- **#{name}** at `#{path}`" : "- **#{name}**"
+            line += " (`#{e[:condition]}`)" if e[:condition]
+            lines << line
           end
           lines << ""
           lines

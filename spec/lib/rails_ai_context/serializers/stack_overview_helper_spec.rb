@@ -365,6 +365,7 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
             skip_before_action :verify_authenticity_token
             before_action :store_referrer, except: [ :create ], if: :devise_controller?
             before_action :require_functional!, if: :user_signed_in?
+            before_action :clear_js_env if Rails.env.test?
           end
         RUBY
 

@@ -14,6 +14,8 @@ module RailsAiContext
       # unanchored mount at /metrics also answers /metrics-admin - and that
       # form was invisible here, which left the endpoint out of every tool.
       class MountListener < BaseListener
+        include BranchConditions
+
         VERB_MACROS = %i[match get post put patch delete].freeze
 
         # The blocks that prefix every path drawn inside them.
@@ -42,6 +44,12 @@ module RailsAiContext
           return unless engine
 
           record = { engine: engine, path: prefixed_path(path), location: node.location.start_line }
+          condition = current_condition
+          if condition
+            record[:condition] = condition
+            arm = chain_arm
+            record[:arm] = arm if arm
+          end
           # The mount's route name, which names an engine's route proxy.
           if node.name == :mount
             as = extract_keyword_nodes(node)[:as]

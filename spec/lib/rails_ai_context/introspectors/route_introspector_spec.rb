@@ -291,9 +291,113 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
         expect(constraints_of(static)).to eq(constraints_of(booted))
       end
     end
+
+    # Rows sorted: the static tier lists a resource's block routes after its own, Rails before.
+    def both_tiers(source)
+      set = ActionDispatch::Routing::RouteSet.new.tap { |s| s.draw { instance_eval(source) } }
+      booted = described_class.new(double("app", routes: set, routes_reloader: nil, root: Rails.root)).call
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), "Rails.application.routes.draw do\n#{source}end\n")
+        [ booted, described_class.new(RailsAiContext::StaticApp.new(dir)).static_call ].map do |result|
+          constraints_of(result).transform_values(&:sort)
+        end
+      end
+    end
+
+    it "gives a nested resource's parent param the parent's own param constraint, as Rails does" do
+      booted, static = both_tiers(<<~'RUBY')
+        resources :accounts, only: :show, constraints: { id: /-?\d+/ } do
+          resources :statuses, only: :show do
+            resources :likes, only: :index
+          end
+          member { get :foo }
+        end
+        resources :users, only: [], param: :name, name: /[a-z]+/ do
+          resources :posts, only: :index
+        end
+        scope "/p", id: /[a-z]+/ do
+          resources :boards, only: :show do
+            resources :cards, only: :index
+          end
+        end
+      RUBY
+
+      expect(booted["statuses"]).to eq([ [ "/accounts/:account_id/statuses/:id", '{id: /-?\d+/, account_id: /-?\d+/}' ] ])
+      expect(static).to eq(booted)
+    end
+
+    it "lists an option Rails does not know as the route's default, as Rails does" do
+      booted, static = both_tiers(<<~'RUBY')
+        resources :boards, only: :show do
+          member do
+            get "details/:work_package_id(/:tab)", action: :split_view, defaults: { tab: :overview }, as: :details,
+                work_package_split_view: true
+          end
+        end
+        get "x/:wp", to: "x#show", flag: true, constraints: { wp: /\d+/ }, defaults: { tab: :o }
+        scope "/s", foo: :bar do
+          get "y", to: "y#show", baz: 1, foo: "own"
+        end
+        resources :things, only: :index, mode: "ro"
+        namespace :admin, level: 2 do
+          get "z", to: "z#show"
+        end
+      RUBY
+
+      expect(booted["boards"]).to include([ "/boards/:id/details/:work_package_id(/:tab)", "{tab: :overview, work_package_split_view: true}" ])
+      expect(static).to eq(booted)
+    end
   end
 
   describe "#static_call" do
+    it "marks a mount drawn only under a condition, and not one both arms draw" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            if Rails.env.development?
+              mount LetterOpenerWeb::Engine, at: "/letter_opener"
+            end
+            if ENV["JOBS"]
+              mount GoodJob::Engine => "good_job"
+            else
+              mount GoodJob::Engine => "good_job"
+            end
+            mount Sidekiq::Web => "/sidekiq" unless Rails.env.test?
+            if Rails.env.test?
+              mount Flipper::UI.app => "/flipper"
+            elsif ENV["FLIPPER"]
+              mount Flipper::UI.app => "/flipper"
+            end
+            unless ENV["A"]
+              mount PgHero::Engine => "/pghero"
+            else
+              mount PgHero::Engine => "/pghero"
+            end
+            if ENV["B"]
+              mount Blazer::Engine => "/blazer"
+            elsif ENV["C"]
+              mount Blazer::Engine => "/blazer"
+            else
+              mount Blazer::Engine => "/blazer"
+            end
+          end
+        RUBY
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:mounted_engines]).to contain_exactly(
+          { engine: "LetterOpenerWeb::Engine", path: "/letter_opener", condition: "if Rails.env.development?" },
+          { engine: "GoodJob::Engine", path: "/good_job" },
+          { engine: "Sidekiq::Web", path: "/sidekiq", condition: "unless Rails.env.test?" },
+          { engine: "Flipper::UI.app", path: "/flipper",
+            condition: "if Rails.env.test? or unless Rails.env.test? and if ENV[\"FLIPPER\"]" },
+          { engine: "PgHero::Engine", path: "/pghero" },
+          { engine: "Blazer::Engine", path: "/blazer" }
+        )
+      end
+    end
+
     it "reads the endpoints of a Grape API the routes mount" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))

@@ -323,6 +323,7 @@ module RailsAiContext
               f[:except] = sc[:except] if sc[:except]&.any?
               f[:unless] = sc[:unless] if sc[:unless]
               f[:if] = sc[:if] if sc[:if]
+              f[:condition] = sc[:condition] if sc[:condition]
             end
           end
 

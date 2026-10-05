@@ -63,6 +63,22 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
     end
   end
   describe ".from_source" do
+    it "marks a filter declared only under a condition with it" do
+      filters = described_class.from_source(<<~RUBY)
+        class ApplicationController < ActionController::Base
+          before_action :clear_js_env if Rails.env.test?
+          if Rails.env.development?
+            before_action :dev_banner, if: :html?
+          end
+          before_action :require_user
+        end
+      RUBY
+
+      expect(filters.map { |f| [ f[:name], f[:condition], f[:if] ] }).to eq(
+        [ [ "clear_js_env", "if Rails.env.test?", nil ], [ "dev_banner", "if Rails.env.development?", :html? ], [ "require_user", nil, nil ] ]
+      )
+    end
+
     # actionpack's callbacks.rb defines every one of these, and a block or a
     # lambda becomes a callback of its own beside the names the call gives.
     it "reads every filter macro Rails defines, each name a call gives, and a block filter" do

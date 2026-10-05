@@ -71,6 +71,7 @@ module RailsAiContext
           lines << "" << "## Mounted Apps (#{mounted_apps.size})"
           mounted_apps.each do |app|
             row = app[:path] ? "- **#{app[:engine]}** at `#{app[:path]}`" : "- **#{app[:engine]}**"
+            row += " (`#{app[:condition]}`)" if app[:condition]
             endpoints = Array(grape&.dig(app[:engine]))
             if endpoints.any? && !list_grape
               row += " (#{count_phrase(endpoints.size, "Grape endpoint")}, listed at detail:\"standard\")"
