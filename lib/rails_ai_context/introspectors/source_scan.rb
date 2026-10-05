@@ -39,17 +39,13 @@ module RailsAiContext
 
       def scan_dir(dir, root, real_root, skip_concerns)
         real_dir = File.realpath(dir)
-        ruby_files(dir, [ real_dir, real_root ], Set.new).sort.each do |path|
+        ruby_files(dir, real_dir, [ real_dir, real_root ], Set.new).sort_by(&:first).each do |path, real|
           relative_to_dir = path.delete_prefix(dir + File::SEPARATOR)
           next if skip_concerns && relative_to_dir.start_with?("concerns/")
-
-          real = File.realpath(path)
           next unless within?(real, real_dir, real_root)
 
           path_name = relative_to_dir.sub(/\.rb\z/, "").split("/").map(&:camelize).join("::")
           yield Record.new(path: real, file: relative_file(path, real, root, real_root), path_name: path_name, source: nil)
-        rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
-          next
         end
       rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
         nil
@@ -59,29 +55,35 @@ module RailsAiContext
       # own tree; a directory reached twice (a link back up) is walked once.
       # Linked directories wait until the real tree is done, so a directory
       # both spell is named by its real path whatever order the disk lists.
-      def ruby_files(dir, bounds, visited)
-        pending = [ dir ]
+      # Each entry is [path as spelled, real path].
+      def ruby_files(dir, real_dir, bounds, visited)
+        pending = [ [ dir, real_dir ] ]
         found = []
-        found.concat(walk_dir(pending.shift, bounds, visited, pending)) while pending.any?
+        found.concat(walk_dir(*pending.shift, bounds, visited, pending)) while pending.any?
         found
       end
 
-      def walk_dir(dir, bounds, visited, links)
-        return [] unless visited.add?(File.realpath(dir))
+      # One lstat per entry: below a real directory only a link needs a realpath.
+      def walk_dir(dir, real_dir, bounds, visited, links)
+        return [] unless visited.add?(real_dir)
 
         Dir.children(dir).sort.flat_map do |name|
           next [] if name.start_with?(".")
 
           path = File.join(dir, name)
-          if !File.directory?(path)
-            name.end_with?(".rb") ? [ path ] : []
-          elsif !within?(File.realpath(path), *bounds)
-            []
-          elsif File.symlink?(path)
-            links << path
-            []
+          stat = File.lstat(path)
+          if stat.symlink?
+            real = File.realpath(path)
+            if !File.directory?(real)
+              name.end_with?(".rb") ? [ [ path, real ] ] : []
+            else
+              links << [ path, real ] if within?(real, *bounds)
+              []
+            end
+          elsif stat.directory?
+            walk_dir(path, File.join(real_dir, name), bounds, visited, links)
           else
-            walk_dir(path, bounds, visited, links)
+            name.end_with?(".rb") ? [ [ path, File.join(real_dir, name) ] ] : []
           end
         rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
           []
