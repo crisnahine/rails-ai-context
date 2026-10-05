@@ -134,6 +134,21 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  describe "a model on a secondary database" do
+    it "lists the columns its database's dump declares" do
+      allow(described_class).to receive(:cached_context).and_return({
+        models: { "PageView" => { table_name: "page_views" } },
+        schema: { tables: { "users" => { columns: [] } }, secondary_databases: {
+          "analytics" => { tables: { "page_views" => { columns: [ { name: "path", type: "string", null: false } ] } } }
+        } }
+      })
+
+      text = described_class.call(model: "PageView").content.first[:text]
+
+      expect(text).to include("## Columns", "- **path** | string | NOT NULL")
+    end
+  end
+
   describe ".call with specific model" do
     it "returns full detail including associations section" do
       result = described_class.call(model: "User")

@@ -80,6 +80,24 @@ module RailsAiContext
       count.nil? ? " - model count unavailable" : " - #{CountPhrase.call(count, 'model')}"
     end
 
+    # Every table the schema section holds, as [database, name, data]: the primary's
+    # (database nil) first, then each secondary dump's.
+    def schema_tables(schema)
+      return [] unless schema.is_a?(Hash)
+
+      primary = (schema[:tables].is_a?(Hash) ? schema[:tables] : {}).map { |name, data| [ nil, name, data ] }
+      secondary = (schema[:secondary_databases].is_a?(Hash) ? schema[:secondary_databases] : {}).flat_map do |db, info|
+        tables = info.is_a?(Hash) && info[:tables].is_a?(Hash) ? info[:tables] : {}
+        tables.map { |name, data| [ db.to_s, name, data ] }
+      end
+      primary + secondary
+    end
+
+    # ponytail: a name in two databases answers the primary's; route by the model's connection if that bites.
+    def schema_table(schema, name)
+      schema_tables(schema).find { |_, table, _| table.to_s == name.to_s }&.last
+    end
+
     def models(ctx)
       value = ctx.is_a?(Hash) ? ctx[:models] : nil
       value.is_a?(Hash) && !value[:error] ? value : {}

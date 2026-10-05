@@ -1034,6 +1034,34 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     end
   end
 
+  describe "a table in a secondary database" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: {
+          tables: { "users" => { columns: [] } }, total_tables: 1,
+          secondary_databases: {
+            "analytics" => { tables: { "page_views" => { columns: [ { name: "path", type: "string", null: false } ] } },
+                             total_tables: 1, note: "Parsed from db/analytics_schema.rb" }
+          }
+        },
+        models: { "PageView" => { table_name: "page_views" } }
+      })
+    end
+
+    it "answers its columns and names the database" do
+      text = described_class.call(table: "page_views").content.first[:text]
+      expect(text).to include("## Table: page_views", "**Database:** analytics", "path")
+    end
+
+    it "finds it by model name too" do
+      expect(described_class.call(table: "PageView").content.first[:text]).to include("## Table: page_views")
+    end
+
+    it "lists it among the tables a miss names" do
+      expect(described_class.call(table: "nope").content.first[:text]).to include("page_views")
+    end
+  end
+
   describe "singular pluralization with exactly one table" do
     before do
       allow(described_class).to receive(:cached_context).and_return({

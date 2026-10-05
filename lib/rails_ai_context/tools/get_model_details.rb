@@ -162,9 +162,8 @@ module RailsAiContext
 
         # Schema columns - inline from schema introspection
         if data[:table_name]
-          schema = Payload.section(cached_context, :schema)
-          if schema && schema[:tables]&.key?(data[:table_name])
-            table_data = schema[:tables][data[:table_name]]
+          table_data = Payload.schema_table(Payload.section(cached_context, :schema), data[:table_name])
+          if table_data
             cols = table_data[:columns] || []
             if table_data[:primary_key]
               lines << "**Primary key:** `#{Introspectors::SchemaConventions.primary_key_label(table_data[:primary_key])}`"
