@@ -1087,6 +1087,35 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
     end
   end
 
+  describe "a dump that holds only views" do
+    view_sql = "CREATE VIEW public.daily_totals AS SELECT 1 AS n;\n"
+
+    it "lists the view of a views-only primary structure.sql" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db/structure.sql"), view_sql)
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:tables].keys).to eq([ "daily_totals" ])
+        expect(result[:total_tables]).to eq(0)
+      end
+    end
+
+    it "keeps a secondary database whose dump holds only views" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db/structure.sql"), "CREATE TABLE public.users (\n    id bigint NOT NULL\n);\n")
+        File.write(File.join(dir, "db/reporting_structure.sql"), view_sql)
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:secondary_databases].keys).to eq([ "reporting" ])
+        expect(result[:secondary_databases]["reporting"][:tables].keys).to eq([ "daily_totals" ])
+      end
+    end
+  end
+
   describe "migrations_paths in database.yml" do
     def write_app(dir, files)
       files.each do |path, body|

@@ -395,7 +395,7 @@ module RailsAiContext
         present = dump_candidates.select { |_, path| File.exist?(path) }
         present.each do |format, path|
           result = format == :ruby ? parse_schema_rb(path) : parse_structure_sql(path)
-          return result if result[:total_tables].to_i > 0 || result[:error]
+          return result if result[:tables].present? || result[:error]
         end
 
         return parse_migrations if migration_files.any?
@@ -443,7 +443,7 @@ module RailsAiContext
 
           name = File.basename(path, ".rb").sub(/_schema\z/, "")
           parsed = parse_schema_rb(path)
-          next unless parsed[:total_tables].to_i.positive?
+          next if parsed[:tables].blank?
 
           parsed[:note] = "Parsed from db/#{File.basename(path)} (from committed dump, not a live connection)"
           dumps[name] = parsed
@@ -453,7 +453,7 @@ module RailsAiContext
           next if dumps.key?(name) || primary.include?(path)
 
           parsed = parse_structure_sql(path)
-          next unless parsed[:total_tables].to_i.positive?
+          next if parsed[:tables].blank?
 
           parsed[:note] = "Parsed from db/#{File.basename(path)} (from committed dump, not a live connection)"
           dumps[name] = parsed
