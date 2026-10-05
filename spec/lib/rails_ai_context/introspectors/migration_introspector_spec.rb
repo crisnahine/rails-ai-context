@@ -178,4 +178,14 @@ RSpec.describe RailsAiContext::Introspectors::MigrationIntrospector do
       end
     end
   end
+
+  it "lists the migrations in the migrations_paths database.yml names" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(%w[config db/main_migrate].map { |path| File.join(dir, path) })
+      File.write(File.join(dir, "config/database.yml"), "#{Rails.env}:\n  adapter: sqlite3\n  migrations_paths: db/main_migrate\n")
+      File.write(File.join(dir, "db/main_migrate/20240101000000_create_notes.rb"), "class CreateNotes < ActiveRecord::Migration[7.1]\n  def change\n    create_table :notes\n  end\nend\n")
+      result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+      expect(result[:total]).to eq(1)
+    end
+  end
 end

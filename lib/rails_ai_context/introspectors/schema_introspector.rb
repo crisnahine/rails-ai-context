@@ -36,7 +36,7 @@ module RailsAiContext
           generated_columns: SchemaConventions.generated_columns_of(tables),
           extensions: extensions,
           # What names the migration behind a declared table the connection lacks.
-          pending_migrations: RailsAiContext::PendingMigrations.live(RailsAiContext::PendingMigrations.migrate_dir_for(app.root))
+          pending_migrations: RailsAiContext::PendingMigrations.live(RailsAiContext::PendingMigrations.migrate_dirs_for(app.root))
         }.compact)
       end
 
@@ -343,7 +343,7 @@ module RailsAiContext
       end
 
       def migrate_dir_for_dump(path)
-        RailsAiContext::PendingMigrations.migrate_dir_for(app.root, secondary_dump(path))
+        RailsAiContext::PendingMigrations.migrate_dirs_for(app.root, secondary_dump(path))
       end
 
       def relative_dump_path(path)

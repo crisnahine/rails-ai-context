@@ -203,7 +203,7 @@ module RailsAiContext
         end
 
         def gather_pending_migrations
-          RailsAiContext::PendingMigrations.live(File.join(rails_app.root, "db/migrate"))
+          RailsAiContext::PendingMigrations.live(RailsAiContext::PendingMigrations.migrate_dirs_for(rails_app.root))
         end
 
         def gather_index_usage(conn, adapter)

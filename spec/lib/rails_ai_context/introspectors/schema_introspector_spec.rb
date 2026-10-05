@@ -901,7 +901,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       it "carries the connection's pending migrations, which name what adds the table" do
         pending = [ { version: "20260921000000", name: "CreateOrderComments" } ]
         allow(RailsAiContext::PendingMigrations).to receive(:live)
-          .with(File.join(fixture_path, "db", "migrate")).and_return(pending)
+          .with([ File.join(fixture_path, "db", "migrate") ]).and_return(pending)
 
         expect(introspector.call[:pending_migrations]).to eq(pending)
       end
