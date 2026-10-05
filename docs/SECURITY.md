@@ -179,6 +179,15 @@ lockfiles and the presence of a bundler config (`vite.config.*` and similar) are
 read there. Sensitive patterns and symlink containment apply relative to that
 directory, and frontend_stack names it in its answer.
 
+### The bundle config/boot.rb declares
+
+An app with no lockfile of its own (an engine's `test/dummy`) has its gems in the
+Gemfile its `config/boot.rb` sets as `BUNDLE_GEMFILE` (`../../Gemfile`). That
+Gemfile and its lockfile (`gems.rb` and `gems.locked` alike) are read with the same
+trust as the app's own `Gemfile.lock`, only when their directory is inside the app's
+git repository, never above its root and never outside a repository. Nothing else in
+that directory is read, and a file there that links out of it is refused.
+
 ### How a refusal is reported
 
 A path refused on policy - outside the app, a traversal, a sensitive file - comes back as an

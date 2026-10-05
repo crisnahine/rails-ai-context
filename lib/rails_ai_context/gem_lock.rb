@@ -43,7 +43,8 @@ module RailsAiContext
     class Spec
       # `remote:` of each PATH section, as the lockfile writes it.
       # `ruby_engine` names a non-CRuby engine and its own version ("JRuby 9.4.8.0"), else nil.
-      # The Gemfile config/boot.rb names outside the app root, relative to it; never read.
+      # The Gemfile config/boot.rb names outside the app root and its git repository,
+      # relative to the root; never read.
       attr_reader :ruby_versions, :ruby_engine, :reason, :path_remotes, :outside_gemfile
 
       def initialize(versions, ruby_versions: {}, ruby_engine: nil, reason: nil, absent: false, direct: nil, path_remotes: [],
@@ -124,52 +125,102 @@ module RailsAiContext
 
     def for(root)
       root = root.to_s
-      path = File.join(root, lockfile_name(root))
-      gemfile = File.join(root, gemfile_name(root))
-      stamp = [ path, gemfile, File.join(root, "config/boot.rb"), *VERSION_FILES.map { |name| File.join(root, name) } ].map { |file| mtime(file) }
+      bundle = bundle(root)
+      stamp = [ bundle[:lockfile], bundle[:gemfile], File.join(root, "config/boot.rb"),
+                *VERSION_FILES.map { |name| File.join(root, name) } ].map { |file| file && mtime(file) }
 
       MUTEX.synchronize do
-        cached = CACHE[path]
+        cached = CACHE[root]
         return cached[:spec] if cached && cached[:stamp] == stamp
 
         # Which gems resolved and which Ruby the app declares are two facts,
         # and the Gemfile answers the second whether or not a lockfile answers
         # the first.
         spec = if stamp.first
-          parse(path, gemfile, root)
+          parse(bundle, root)
         else
-          absent_spec(root, path)
+          absent_spec(root, bundle)
         end
-        CACHE[path] = { stamp: stamp, spec: spec }
+        CACHE[root] = { stamp: stamp, spec: spec }
         spec
       end
     end
 
-    # An engine's test/dummy has no lockfile of its own: its boot.rb points
-    # Bundler at the engine's Gemfile, which is outside the app and not read.
-    def absent_spec(root, path)
-      outside = outside_boot_gemfile(root)
-      reason = if outside
-        "No #{File.basename(path)} in the app; config/boot.rb points Bundler at #{outside}, outside the app root, which is not read"
-      else
-        "No #{File.basename(path)} found"
-      end
-      Spec.new({}, **declared_ruby(nil, root), reason: reason, absent: true, outside_gemfile: outside)
-    end
-    private_class_method :absent_spec
+    # The app's own Gemfile and lockfile, or, with no lockfile of its own, the
+    # bundle config/boot.rb points Bundler at (an engine's test/dummy).
+    def bundle(root)
+      own = { lockfile: File.join(root, lockfile_name(root)), gemfile: File.join(root, gemfile_name(root)),
+              lock_label: lockfile_name(root), gemfile_label: gemfile_name(root) }
+      return own if File.file?(own[:lockfile])
 
-    def outside_boot_gemfile(root)
-      content = read_inside(root, "config/boot.rb")
-      literal = content&.[](BOOT_GEMFILE, 1)
+      boot_bundle(root, own) || own
+    end
+    private_class_method :bundle
+
+    # Read only inside the app's git repository: that bundle is the app's
+    # declared one, the same trust as its own Gemfile.lock. Anything else is
+    # named as outside and left unread.
+    def boot_bundle(root, own)
+      target = boot_gemfile(root)
+      return nil unless target
+
+      real_root = File.realpath(root)
+      dir = File.dirname(target)
+      label = ->(file) { Pathname.new(File.join(dir, file)).relative_path_from(Pathname.new(real_root)).to_s }
+      gemfile = File.basename(target)
+      lockfile = gemfile == "gems.rb" ? "gems.locked" : "#{gemfile}.lock"
+      repo = git_root(real_root)
+      unless repo && File.directory?(dir) && SafePath.contained?(File.realpath(dir), repo)
+        return own.merge(lockfile: nil, outside: label.(gemfile))
+      end
+
+      { lockfile: inside_file(dir, lockfile), gemfile: inside_file(dir, gemfile), lock_label: label.(lockfile), gemfile_label: label.(gemfile) }
+    rescue SystemCallError
+      nil
+    end
+    private_class_method :boot_bundle
+
+    # The BUNDLE_GEMFILE config/boot.rb sets, when it is outside the app root.
+    def boot_gemfile(root)
+      literal = read_inside(root, "config/boot.rb")&.[](BOOT_GEMFILE, 1)
       return nil unless literal
 
-      real_root = File.expand_path(root)
+      real_root = File.realpath(root)
       target = File.expand_path(literal, File.join(real_root, "config"))
-      return nil if target.start_with?(real_root + File::SEPARATOR)
-
-      Pathname.new(target).relative_path_from(Pathname.new(real_root)).to_s
+      target unless target.start_with?(real_root + File::SEPARATOR)
     end
-    private_class_method :outside_boot_gemfile
+    private_class_method :boot_gemfile
+
+    def git_root(dir)
+      until File.exist?(File.join(dir, ".git"))
+        parent = File.dirname(dir)
+        return nil if parent == dir
+
+        dir = parent
+      end
+      dir
+    end
+    private_class_method :git_root
+
+    # The file's real path when it exists and does not link out of its directory.
+    def inside_file(dir, name)
+      real = File.realpath(File.join(dir, name))
+      real if SafePath.contained?(real, File.realpath(dir))
+    rescue SystemCallError
+      nil
+    end
+    private_class_method :inside_file
+
+    def absent_spec(root, bundle)
+      outside = bundle[:outside]
+      reason = if outside
+        "No #{lockfile_name(root)} in the app; config/boot.rb points Bundler at #{outside}, outside the app's git repository, which is not read"
+      else
+        "No #{bundle[:lock_label]} found"
+      end
+      Spec.new({}, **declared_ruby(nil, root, bundle), reason: reason, absent: true, outside_gemfile: outside)
+    end
+    private_class_method :absent_spec
 
     def mtime(path)
       File.mtime(path)
@@ -178,7 +229,8 @@ module RailsAiContext
     end
     private_class_method :mtime
 
-    def parse(path, gemfile, root)
+    def parse(bundle, root)
+      path = bundle[:lockfile]
       content = SafeFile.read(path, max_size: MAX_SIZE)
       return Spec.new({}, reason: "#{File.basename(path)} could not be read") unless content
 
@@ -216,7 +268,7 @@ module RailsAiContext
       # and answering it as an app with no gems denies every gem it holds.
       return Spec.new({}, reason: "#{File.basename(path)} has no specs section") unless specs_section
 
-      Spec.new(versions, **declared_ruby(ruby_version, root), direct: direct, path_remotes: path_remotes)
+      Spec.new(versions, **declared_ruby(ruby_version, root, bundle), direct: direct, path_remotes: path_remotes)
     end
     private_class_method :parse
 
@@ -234,10 +286,10 @@ module RailsAiContext
     # Each source answers [version, engine], in Bundler's order: what the lockfile
     # resolved, what the Gemfile asked for, then the version-manager files, mise's last.
     # The engine comes from the first source that declares anything.
-    def declared_ruby(locked, root)
+    def declared_ruby(locked, root, bundle)
       declared = {
-        lockfile_name(root) => locked,
-        gemfile_name(root) => gemfile_ruby(File.join(root, gemfile_name(root))),
+        bundle[:lock_label] => locked,
+        bundle[:gemfile_label] => bundle[:gemfile] && gemfile_ruby(bundle[:gemfile]),
         ".ruby-version" => version_string(SafeFile.read(File.join(root, ".ruby-version"), max_size: MAX_SIZE)&.strip),
         ".tool-versions" => version_string(SafeFile.read(File.join(root, ".tool-versions"), max_size: MAX_SIZE)&.[](TOOL_VERSIONS_RUBY, 1)),
         **mise_ruby(root)

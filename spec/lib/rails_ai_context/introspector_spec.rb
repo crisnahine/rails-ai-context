@@ -325,7 +325,7 @@ RSpec.describe RailsAiContext::Introspector do
         File.write(File.join(dummy, "config/boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n))
         result = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(dummy)).call
 
-        expect(result[:rails_version]).to include("config/boot.rb points Bundler at ../../Gemfile, outside the app root")
+        expect(result[:rails_version]).to include("config/boot.rb points Bundler at ../../Gemfile, outside the app's git repository")
       end
     end
 

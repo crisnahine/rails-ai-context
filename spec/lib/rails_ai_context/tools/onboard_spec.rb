@@ -428,7 +428,7 @@ RSpec.describe RailsAiContext::Tools::Onboard do
 
       text = described_class.call(detail: "standard").content.first[:text]
 
-      expect(text).to include("Its gems and Rails version are not read: config/boot.rb points Bundler at `../../Gemfile`, outside the app root.")
+      expect(text).to include("Its gems and Rails version are not read: config/boot.rb points Bundler at `../../Gemfile`, outside the app's git repository.")
     end
 
     it "says a booted run is running that ruby" do
