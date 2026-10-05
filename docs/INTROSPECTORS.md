@@ -224,7 +224,8 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 | MethodCallListener | Call sites by name or pattern anywhere in a file, inside a `def`, a lambda or a block included, with arguments, options, receiver, line and offset. Used by the Turbo introspector for broadcast calls and by `ActionFilters` for the skip macros |
 
 `GenericMacroListener.new(*names, block_source: [:name])` adds `block`, the
-one-line source of the block those macros are given. ProcLiteralListener is
+one-line source of the block those macros are given. `call_source: [:name]`
+adds `text`, the one-line source of the whole call (the Mongoid `index` reader). ProcLiteralListener is
 what the job introspector reads a `queue_as` Proc with.
 
 ### Adding a listener
