@@ -20,6 +20,7 @@ module RailsAiContext
           @scoped_blocks = {}.compare_by_identity
           @open_blocks = []
           @def_depth = 0
+          @builders = []
         end
 
         # One visibility scope: a class or module body, a `class << self`
@@ -32,7 +33,7 @@ module RailsAiContext
         # `concern` builds a module the class does not include: a def in
         # one is no method of the class.
         BLOCK_FRAMES = {
-          class_methods: :class_methods, included: :body, concerning: :body,
+          class_methods: :class_methods, included: :included, concerning: :body,
           scope: :extension, has_many: :extension, has_and_belongs_to_many: :extension,
           has_one: :extension, belongs_to: :extension, concern: :extension
         }.freeze
@@ -81,7 +82,7 @@ module RailsAiContext
         # Bare `private` affects every later def in this frame; `private :x`
         # and `private def x` mark the one name, retroactively for :x.
         def on_call_node_enter(node)
-          @scoped_blocks[node.block] = :extension if new_class_body?(node)
+          @scoped_blocks[node.block] = :extension if new_class_body?(node) && !@scoped_blocks.key?(node.block)
           return unless node.receiver.nil?
 
           case node.name
@@ -106,6 +107,31 @@ module RailsAiContext
           when *ATTR_DEFINERS.keys, :define_method, :alias_method, *CLASS_ACCESSORS.keys
             record_defined(node) if @def_depth.zero? && @frames.last.kind != :extension
           end
+        end
+
+        # `Name = Struct.new do ... end` is Name's body.
+        def on_constant_write_node_enter(node)
+          open_builder(node, node.name.to_s)
+        end
+
+        def on_constant_write_node_leave(node)
+          close_builder(node)
+        end
+
+        def on_constant_path_write_node_enter(node)
+          open_builder(node, constant_path_string(node.target))
+        end
+
+        def on_constant_path_write_node_leave(node)
+          close_builder(node)
+        end
+
+        # ponytail: a Module.new held in a local is read as the enclosing class's, which is where it is
+        # nearly always included; follow the local to its `include` if another use turns up.
+        def on_local_variable_write_node_enter(node)
+          value = node.value
+          @scoped_blocks[value.block] = :body if value.is_a?(Prism::CallNode) && new_class_body?(value) && value.name == :new &&
+                                                 value.receiver.name == :Module
         end
 
         def on_alias_method_node_enter(node)
@@ -165,6 +191,31 @@ module RailsAiContext
           return false unless receiver.is_a?(Prism::ConstantReadNode) || (receiver.is_a?(Prism::ConstantPathNode) && receiver.parent.nil?)
 
           CLASS_BUILDERS[receiver.name] == node.name
+        end
+
+        def open_builder(node, name)
+          value = node.value
+          return unless value.is_a?(Prism::CallNode) && new_class_body?(value)
+
+          @scoped_blocks[value.block] = :body
+          @owner_stack.push(name)
+          @builders.push(node)
+        end
+
+        def close_builder(node)
+          return unless @builders.last.equal?(node)
+
+          @builders.pop
+          @owner_stack.pop
+        end
+
+        # What an includer gains: a `class_methods` def, or a class method written in `included do`.
+        def includer_gains?(scope)
+          @frames.reverse_each do |frame|
+            return true if frame.kind == :class_methods || (frame.kind == :included && scope == :class)
+            return false unless frame.kind == :singleton
+          end
+          false
         end
 
         def open_frame(kind)
@@ -246,8 +297,8 @@ module RailsAiContext
             end_offset:   node.location.end_offset,
             confidence:   RailsAiContext::Confidence::VERIFIED
           }
-          # The includer gains these; a `def self.x` or `class << self` method stays on the module.
-          entry[:class_methods_block] = true if @frames.last.kind == :class_methods
+          # Outside `included do`, a `def self.x` or `class << self` method stays on the module.
+          entry[:class_methods_block] = true if includer_gains?(scope)
           @results << entry
         end
 
@@ -305,7 +356,7 @@ module RailsAiContext
             location:     node.location.start_line,
             confidence:   node.is_a?(Prism::CallNode) ? confidence_for(node) : RailsAiContext::Confidence::VERIFIED
           }
-          entry[:class_methods_block] = true if @frames.last.kind == :class_methods
+          entry[:class_methods_block] = true if includer_gains?(scope)
           @results << entry
         end
 

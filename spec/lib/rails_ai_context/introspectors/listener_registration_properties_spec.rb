@@ -43,6 +43,7 @@ RSpec.describe "Listener registration properties" do
 
           def run
             @state = 1
+            mixin = Module.new { }
             scope.where(id: 1).order(:id)
             config.autoload_paths += %w[lib_static]
             config.log_tags ||= [ :request_id ]

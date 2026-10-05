@@ -512,7 +512,57 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener, "visib
         def real_m; end
       end
     RUBY
-    expect(rows(source)).to eq([ [ "built", :instance, :public ], [ "real_m", :instance, :public ] ])
+    own = parse_and_dispatch(source).select { |m| m[:owner] == [ "PointHolder" ] }.map { |m| [ m[:name], m[:scope], m[:visibility] ] }
+    expect(own).to eq([ [ "built", :instance, :public ], [ "real_m", :instance, :public ] ])
+  end
+
+  it "reads a builder block assigned to a constant as that constant's body" do
+    source = <<~RUBY
+      module ServiceListeners
+        EditorialRemarker = Struct.new(:edition, :author) do
+          def save_remark!; end
+        end
+        Outer::Mixin = Module.new { def mixed; end }
+      end
+    RUBY
+    expect(parse_and_dispatch(source).map { |m| [ m[:owner], m[:name] ] })
+      .to eq([ [ %w[ServiceListeners EditorialRemarker], "save_remark!" ], [ %w[ServiceListeners Outer::Mixin], "mixed" ] ])
+  end
+
+  it "keeps a Module.new block held in a local with the class that includes it" do
+    source = <<~RUBY
+      module ContentItem
+        def stored
+          methods = Module.new do
+            def __remove_items; end
+          end
+          include methods
+        end
+      end
+    RUBY
+    expect(parse_and_dispatch(source).map { |m| [ m[:owner], m[:name] ] })
+      .to eq([ [ [ "ContentItem" ], "stored" ], [ [ "ContentItem" ], "__remove_items" ] ])
+  end
+
+  it "marks a def self.x in an included block as a class method the includer gains" do
+    source = <<~RUBY
+      module Sluggable
+        extend ActiveSupport::Concern
+        included do
+          def self.find_by_slug_or_id(slug); end
+          class << self
+            def by_slug; end
+          end
+          def to_param; end
+        end
+        def self.own; end
+      end
+    RUBY
+    rows = parse_and_dispatch(source).map { |m| [ m[:name], m[:scope], !!m[:class_methods_block] ] }
+    expect(rows).to eq([
+      [ "find_by_slug_or_id", :class, true ], [ "by_slug", :class, true ],
+      [ "to_param", :instance, false ], [ "own", :class, false ]
+    ])
   end
 end
 
