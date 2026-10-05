@@ -10,9 +10,8 @@ module RailsAiContext
       # records so "does this route exist and which controller serves it" can
       # be answered without booting the app. Constructs whose routes depend on
       # runtime state (devise_for, draw, computed names) are recorded as
-      # :dynamic markers rather than guessed at. Leading-slash paths and
-      # constraints are simplified: paths anchor at the accumulated prefix,
-      # constraints are ignored.
+      # :dynamic markers rather than guessed at. Leading-slash paths anchor
+      # at the accumulated prefix.
       class RoutesDslListener < BaseListener
         VERB_METHODS = %i[get post put patch delete options].freeze
         PLURAL_ACTIONS = %i[index create new edit show update destroy].freeze
@@ -276,7 +275,92 @@ module RailsAiContext
         end
 
         def push_frame(node, **attrs)
-          @stack << { node: node }.merge(attrs)
+          frame = { node: node }
+          constraints = node_constraints(node) if node.is_a?(Prism::CallNode)
+          frame[:route_constraints] = constraints if constraints
+          @stack << frame.merge(attrs)
+        end
+
+        # Mapper's URL options, which a hash constraint turns into route defaults.
+        URL_OPTIONS = %w[protocol subdomain domain host port].freeze
+        ROUTE_LEVEL = (VERB_METHODS + %i[match root]).freeze
+
+        # What `bin/rails routes` prints beside a route: its defaults, then the
+        # constraints on its path segments. Scope URL options win over the
+        # route's own, as Mapping merges them.
+        def route_constraints(node, path)
+          route_level = ROUTE_LEVEL.include?(node.name)
+          scopes = @stack.reject { |f| f[:node].equal?(node) }.filter_map { |f| f[:route_constraints] }
+          own = node_constraints(node) || {}
+          scopes << own unless route_level || own.empty?
+          own = {} unless route_level
+          defaults = (own[:url] || {}).merge(scopes.map { |c| c[:url].merge(c[:defaults]) }.reduce({}, :merge)).merge(own[:defaults] || {})
+          params = path.scan(/[:*](\w+)/).flatten << "format"
+          segments = scopes.map { |c| c[:segment] }.reduce({}, :merge).merge(own[:segment] || {}).slice(*params)
+          all = defaults.merge(segments)
+          "{#{all.map { |key, value| "#{key}: #{value}" }.join(', ')}}" if all.any?
+        end
+
+        # Literal constraints and defaults a call carries, rendered as Ruby inspects them.
+        def node_constraints(node)
+          hash = hash_arg(node)
+          return unless hash
+
+          found = { url: {}, defaults: {}, segment: {} }
+          if node.name == :constraints && node.receiver.nil?
+            read_constraint_hash(hash, found)
+          else
+            hash.elements.each do |assoc|
+              key = assoc_key(assoc)
+              next unless key
+
+              case key
+              when "constraints" then read_constraint_hash(assoc.value, found)
+              when "defaults" then each_literal(assoc.value) { |k, v| found[:defaults][k] = constraint_value(v) }
+              else found[:segment][key] = constraint_value(assoc.value) if assoc.value.is_a?(Prism::RegularExpressionNode)
+              end
+            end
+          end
+          found if found.values.any?(&:any?)
+        end
+
+        def read_constraint_hash(hash, found)
+          each_literal(hash) do |key, value|
+            if URL_OPTIONS.include?(key)
+              found[:url][key] = constraint_value(value) if value.is_a?(Prism::StringNode) || value.is_a?(Prism::IntegerNode)
+            else
+              found[:segment][key] = constraint_value(value)
+            end
+          end
+        end
+
+        def hash_arg(node)
+          (node.arguments&.arguments || []).find { |a| a.is_a?(Prism::KeywordHashNode) || a.is_a?(Prism::HashNode) }
+        end
+
+        def each_literal(hash)
+          return unless hash.is_a?(Prism::KeywordHashNode) || hash.is_a?(Prism::HashNode)
+
+          hash.elements.each do |assoc|
+            key = assoc_key(assoc)
+            yield key, assoc.value if key
+          end
+        end
+
+        def assoc_key(assoc)
+          assoc.key.unescaped if assoc.is_a?(Prism::AssocNode) && assoc.key.is_a?(Prism::SymbolNode)
+        end
+
+        def constraint_value(node)
+          case node
+          when Prism::StringNode, Prism::SymbolNode then (node.is_a?(Prism::SymbolNode) ? node.unescaped.to_sym : node.unescaped).inspect
+          when Prism::RegularExpressionNode
+            flags = (node.ignore_case? ? Regexp::IGNORECASE : 0) | (node.extended? ? Regexp::EXTENDED : 0) | (node.multi_line? ? Regexp::MULTILINE : 0)
+            Regexp.new(node.unescaped, flags).inspect
+          else node.slice
+          end
+        rescue RegexpError
+          node.slice
         end
 
         def suppressed?
@@ -743,6 +827,8 @@ module RailsAiContext
           condition = current_condition
           record[:condition] = condition if condition
           record[:prepend] = true if @stack.any? { |f| f[:prepend] }
+          constraints = route_constraints(node, path)
+          record[:constraints] = constraints if constraints
           params = path.scan(/:(\w+)/).flatten
           record[:params] = params if params.any?
           record[:restful] = RESTFUL_ACTIONS.include?(record[:action])

@@ -369,6 +369,23 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
     end
   end
 
+  describe "a route with constraints" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({ routes: { total_routes: 2, api_namespaces: [], by_controller: {
+        "status" => [ { verb: "GET", path: "/status", action: "show", name: "status", constraints: '{subdomain: "api"}' } ],
+        "photos" => [ { verb: "GET", path: "/photos/:id", action: "show", constraints: '{id: /[A-Z]\d{5}|x/}' } ]
+      } } })
+    end
+
+    it "prints them beside the path at full detail only" do
+      full = described_class.call(detail: "full").content.first[:text]
+
+      expect(full).to include('| GET | `/status` `{subdomain: "api"}` | status#show | status |')
+      expect(full).to include('| GET | `/photos/:id` `{id: /[A-Z]\d{5}\|x/}` | photos#show | - |')
+      expect(described_class.call.content.first[:text]).not_to include("subdomain")
+    end
+  end
+
   describe "PUT/PATCH deduplication" do
     it "combines PUT and PATCH into a single entry" do
       result = described_class.call(controller: "posts", detail: "full")

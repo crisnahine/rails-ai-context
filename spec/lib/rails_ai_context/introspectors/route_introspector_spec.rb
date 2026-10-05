@@ -241,6 +241,47 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
     end
   end
 
+  describe "route constraints on both tiers" do
+    let(:routes_source) do
+      <<~'RUBY'
+        constraints subdomain: "api" do
+          get "/status", to: "status#show"
+        end
+        get "/photos/:id", to: "photos#show", constraints: { id: /[A-Z]\d{5}/ }
+        resources :items, only: [:index, :show], constraints: { id: /\d+/ }
+        scope defaults: { format: :json } do
+          get "/feed", to: "feed#index", constraints: { flavor: "x", protocol: "https" }
+        end
+        get "/loose", to: "loose#show", constraints: ->(req) { true }
+      RUBY
+    end
+
+    def constraints_of(result)
+      result[:by_controller].transform_values { |rows| rows.map { |r| [ r[:path], r[:constraints] ] } }
+    end
+
+    it "lists what bin/rails routes prints beside each route, the same booted and static" do
+      source = routes_source
+      set = ActionDispatch::Routing::RouteSet.new.tap { |s| s.draw { instance_eval(source) } }
+      booted = described_class.new(double("app", routes: set, routes_reloader: nil, root: Rails.root)).call
+
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), "Rails.application.routes.draw do\n#{source}end\n")
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(constraints_of(booted)).to eq(
+          "status" => [ [ "/status", '{subdomain: "api"}' ] ],
+          "photos" => [ [ "/photos/:id", '{id: /[A-Z]\d{5}/}' ] ],
+          "items" => [ [ "/items", nil ], [ "/items/:id", '{id: /\d+/}' ] ],
+          "feed" => [ [ "/feed", '{protocol: "https", format: :json}' ] ],
+          "loose" => [ [ "/loose", nil ] ]
+        )
+        expect(constraints_of(static)).to eq(constraints_of(booted))
+      end
+    end
+  end
+
   describe "#static_call" do
     # RouteSet evaluates prepend blocks before the draw and append blocks after it.
     it "reads routes an initializer prepends or appends, in the order Rails draws them" do

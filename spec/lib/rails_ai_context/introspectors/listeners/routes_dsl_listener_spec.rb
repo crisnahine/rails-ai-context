@@ -990,4 +990,24 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
       )
     end
   end
+
+  it "reads a constraint it cannot evaluate as written, and skips one that is not a hash" do
+    records = route_records(<<~'RUBY')
+      Rails.application.routes.draw do
+        get "/a/:id", to: "a#show", constraints: { id: /[/ }
+        get "/b/:id", to: "b#show", constraints: { id: ID_FORMAT, subdomain: SUB }
+        get "/c", to: "c#show", constraints: nil
+        constraints AdminConstraint.new do
+          get "/d", to: "d#show"
+        end
+        constraints "x" do
+          get "/e", to: "e#show"
+        end
+      end
+    RUBY
+
+    expect(records.to_h { |r| [ r[:path], r[:constraints] ] }).to eq(
+      "/a/:id" => "{id: /[/}", "/b/:id" => "{id: ID_FORMAT}", "/c" => nil, "/d" => nil, "/e" => nil
+    )
+  end
 end

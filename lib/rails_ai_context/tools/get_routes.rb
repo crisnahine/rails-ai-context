@@ -303,7 +303,9 @@ module RailsAiContext
             lines << "| Verb | Path | Controller#Action | Name |"
             lines << "|------|------|-------------------|------|"
             page[:items].each do |r|
-              path = r[:condition] ? "`#{r[:path]}` (`#{r[:condition]}`)" : "`#{r[:path]}`"
+              path = "`#{r[:path]}`"
+              path += " `#{r[:constraints]}`" if r[:constraints]
+              path += " (`#{r[:condition]}`)" if r[:condition]
               cells = [ r[:verb], path, "#{r[:_ctrl]}##{r[:action]}", r[:name] || "-" ]
               # A merged verb is `PATCH|PUT`, and a bare pipe splits the row.
               lines << "| #{cells.map { |cell| cell.to_s.gsub("|", "\\|") }.join(' | ')} |"

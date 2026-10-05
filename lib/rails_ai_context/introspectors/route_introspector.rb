@@ -502,9 +502,10 @@ module RailsAiContext
         end
       end
 
+      # What `bin/rails routes` prints beside the route, written alike on every Ruby.
       def extract_constraints(route)
-        constraints = route.constraints.to_s
-        constraints.empty? ? nil : constraints
+        shown = route.requirements.except(:controller, :action)
+        "{#{shown.map { |key, value| "#{key}: #{value.inspect}" }.join(', ')}}" if shown.any?
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "extract_constraints")
       end
@@ -516,6 +517,7 @@ module RailsAiContext
             entry[:params] = r[:params] if r[:params]
             entry[:restful] = r[:restful] unless r[:restful].nil?
             entry[:condition] = r[:condition] if r[:condition]
+            entry[:constraints] = r[:constraints] if r[:constraints]
             entry.compact
           end
         end
