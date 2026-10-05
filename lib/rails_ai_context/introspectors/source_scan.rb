@@ -87,9 +87,11 @@ module RailsAiContext
       # ponytail: the app/* kinds Rails generates for other code are skipped by name.
       def scan_extra_model_roots(root, real_root)
         seen = Set.new
+        ignored = PathResolver.ignored_dirs(root).map { |dir| PathResolver.root_key(dir) }
         PathResolver.extra_model_roots(root).each do |dir|
           scan_dir(dir, root, real_root, true) do |record|
             next unless seen.add?(record.path)
+            next if ignored.any? { |ignored_dir| SafePath.contained?(record.path, ignored_dir) }
 
             source = SafeFile.read(record.path)
             yield record if source&.match?(SUPERCLASS_DECLARATION)

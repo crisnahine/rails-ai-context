@@ -110,6 +110,25 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
     end
   end
 
+  it "skips the lib subdirectories autoload_lib ignores, as Zeitwerk does" do
+    Dir.mktmpdir do |dir|
+      files = {
+        "config/application.rb" => "class Application < Rails::Application\n  config.autoload_lib(ignore: %w[assets tasks generators])\nend\n",
+        "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\nend\n",
+        "lib/generators/widget/widget_generator.rb" => "class WidgetGenerator < Rails::Generators::NamedBase\nend\n",
+        "lib/tasks_helper/thing.rb" => "class TasksHelper::Thing < ApplicationRecord\nend\n",
+        "lib/lib_record.rb" => "class LibRecord < ApplicationRecord\nend\n"
+      }
+      files.each do |name, source|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+        File.write(File.join(dir, name), source)
+      end
+
+      files = described_class.paths(dir, kind: "app/models").map(&:file)
+      expect(files).to contain_exactly("app/models/application_record.rb", "lib/lib_record.rb", "lib/tasks_helper/thing.rb")
+    end
+  end
+
   it "answers nothing for a root that does not exist" do
     expect(described_class.each("/nonexistent/rails-ai-context-root", kind: "app/models").to_a).to eq([])
   end

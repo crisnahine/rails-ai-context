@@ -114,21 +114,32 @@ module RailsAiContext
 
     # The roots config/application.rb adds by hand, such as lib_static.
     def declared_roots(root)
+      declared_config(root)[:roots]
+    end
+
+    # The lib subdirectories `autoload_lib(ignore:)` keeps out of autoloading.
+    def ignored_dirs(root)
+      declared_config(root)[:ignored]
+    end
+
+    def declared_config(root)
       key = File.expand_path(root.to_s)
       DECLARED_ROOTS.compute_if_absent(key) { read_declared_roots(key) }
     end
 
     def read_declared_roots(root)
       path = File.join(root, "config", "application.rb")
-      return [] unless File.file?(path)
+      return { roots: [], ignored: [] } unless File.file?(path)
 
       declared = Introspectors::SourceIntrospector.walk(
-        path, { autoload: Introspectors::Listeners::AutoloadPathsListener }
-      )[:autoload]
+        path, { autoload: Introspectors::Listeners::AutoloadPathsListener,
+                ignored: Introspectors::Listeners::AutoloadIgnoreListener }
+      )
       real_root = File.realpath(root)
-      declared.uniq.map { |relative| File.join(root, relative) }.select { |dir| contained_dir?(dir, real_root) }
+      dirs = ->(key) { declared[key].uniq.map { |relative| File.join(root, relative) }.select { |dir| contained_dir?(dir, real_root) } }
+      { roots: dirs.call(:autoload), ignored: dirs.call(:ignored) }
     rescue StandardError => e
-      RailsAiContext.debug_fail(e, [], label: "PathResolver.declared_roots")
+      RailsAiContext.debug_fail(e, { roots: [], ignored: [] }, label: "PathResolver.declared_roots")
     end
 
     # A declared root is still a path the file wrote: `#{config.root}/../shared`

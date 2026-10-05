@@ -2201,6 +2201,35 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  # A root outside app/models holds generators and gem subclasses too; one of
+  # them that will not load is not a model, and static leaves it out.
+  describe "a class outside the model directories that cannot load" do
+    let(:domain) { Rails.root.join("app", "zz_domain") }
+
+    around do |example|
+      FileUtils.mkdir_p(domain)
+      File.write(domain.join("zz_widget_generator.rb"), "class ZzWidgetGenerator < Rails::Generators::NamedBase\nend\n")
+      File.write(domain.join("zz_unknown_base.rb"), "class ZzUnknownBase < SomeGem::Base\nend\n")
+      File.write(domain.join("zz_lost_record.rb"), "class ZzLostRecord < ApplicationRecord\nend\n")
+      example.run
+    ensure
+      FileUtils.rm_rf(domain)
+    end
+
+    it "is left out of the booted answer unless its chain reaches a model base, as in static" do
+      allow(RailsAiContext::PathResolver).to receive(:extra_model_roots).and_return([ domain.to_s ])
+
+      booted = described_class.new(Rails.application).call
+      static = described_class.new(RailsAiContext::StaticApp.new(Rails.root.to_s)).static_call
+
+      expect(booted.keys).not_to include("ZzWidgetGenerator", "ZzUnknownBase")
+      expect(static.keys).not_to include("ZzWidgetGenerator", "ZzUnknownBase")
+      expect(booted["ZzLostRecord"]).to include(file: "app/zz_domain/zz_lost_record.rb")
+      expect(booted["ZzLostRecord"][:error]).to be_a(String)
+      expect(static.keys).to include("ZzLostRecord")
+    end
+  end
+
   # Rebuilding app/models/<underscored>.rb from the name is wrong for a model
   # in a pack or an engine, and wrong wherever the app registers an inflection,
   # so the file travels with the model the way it does with a controller.

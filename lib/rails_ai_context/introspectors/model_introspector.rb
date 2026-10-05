@@ -155,6 +155,9 @@ module RailsAiContext
         candidates = static_candidates
         @unloadable.each_with_object({}) do |(class_name, error), entries|
           candidate = candidates[class_name]
+          # Other roots hold generators and gem subclasses too; static lists one only as a model.
+          next if @outside_model_dirs&.include?(class_name) && !static_model?(class_name, candidates)
+
           entries[class_name] = {
             error: error,
             file: candidate&.dig(:file),
@@ -243,6 +246,10 @@ module RailsAiContext
           resolved = resolve_superclass(parent, name, candidates)
           found << resolved if resolved
         end
+      end
+
+      def static_model?(class_name, candidates)
+        candidates.key?(class_name) && !candidates.dig(class_name, :abstract) && model_class?(class_name, candidates)
       end
 
       def model_class?(class_name, candidates, seen = [])
@@ -433,6 +440,10 @@ module RailsAiContext
         false
       end
 
+      def model_dir_file?(path)
+        PathResolver.model_dirs(app.root).any? { |dir| SafePath.contained?(path, PathResolver.root_key(dir)) }
+      end
+
       def discover_models
         return [] unless defined?(ActiveRecord::Base)
 
@@ -445,6 +456,7 @@ module RailsAiContext
         end
 
         known = models.map(&:name).to_set
+        @outside_model_dirs = Set.new
         # Concerns stay in: a nested concerns directory is a namespace, so a
         # class declared under one is a model and constantize sorts the mixins
         # out. A top-level `app/models/concerns` is an autoload root instead,
@@ -474,6 +486,7 @@ module RailsAiContext
             # its name is recorded: a file that exists for a class reflection
             # lacks is not the same answer as no such model.
             @unloadable[class_name] = e.message.to_s.lines.first.to_s.strip
+            @outside_model_dirs << class_name unless model_dir_file?(record.path)
           end
         end
 
