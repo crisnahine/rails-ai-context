@@ -331,7 +331,7 @@ module RailsAiContext
       end
 
       DEFAULT_PREVIEW_DIRS = %w[test/components/previews spec/components/previews app/components/previews].freeze
-      PREVIEW_CONFIG_GLOBS = %w[config/application.rb config/environments/*.rb config/initializers/*.rb].freeze
+      PREVIEW_CONFIG_GLOBS = %w[config/application.rb config/environments/*.rb].freeze
 
       # Previewed path (without `_preview.rb`) -> the preview file, read once
       # from the default directories and the ones the app configures.
@@ -344,7 +344,8 @@ module RailsAiContext
       end
 
       def preview_dirs
-        configured = PREVIEW_CONFIG_GLOBS.flat_map { |glob| Dir.glob(File.join(root, glob)).sort }.flat_map do |file|
+        files = PREVIEW_CONFIG_GLOBS.flat_map { |glob| Dir.glob(File.join(root, glob)).sort } + PathResolver.initializer_paths(root)
+        configured = files.flat_map do |file|
           SourceIntrospector.walk(file, { previews: Listeners::PreviewPathsListener })[:previews]
         end
         (DEFAULT_PREVIEW_DIRS + configured).map { |relative| File.join(root, relative) }.uniq.select { |dir| Dir.exist?(dir) }

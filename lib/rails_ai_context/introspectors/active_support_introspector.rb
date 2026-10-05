@@ -137,7 +137,7 @@ module RailsAiContext
         end
 
         # Initializer pattern: Rails.logger = ActiveSupport::TaggedLogging.new(…)
-        Dir.glob(File.join(root, "config/initializers/*.rb")).each do |path|
+        PathResolver.initializer_paths(root).each do |path|
           content = RailsAiContext::SafeFile.read(path) or next
           if content.include?("ActiveSupport::TaggedLogging")
             result[:configured] = true

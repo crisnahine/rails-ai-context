@@ -35,12 +35,25 @@ module RailsAiContext
 
     def view_dirs(root) = dirs_for(root, "app/views")
 
+    # Every initializer Rails loads: railties globs config/initializers with **/*.rb, in path order.
+    # A symlink that resolves outside the app root, or nowhere, is left out.
+    def initializer_paths(root)
+      real_root = File.realpath(root.to_s)
+      Dir.glob(File.join(root.to_s, "config", "initializers", "**", "*.rb")).sort.select do |path|
+        SafePath.contained?(File.realpath(path), real_root)
+      rescue SystemCallError
+        false
+      end
+    rescue SystemCallError
+      []
+    end
+
     # The initializers an app spells for `name`, however it spells them: a
     # load-order prefix (`009-omniauth.rb`), a hyphen where the gem uses an
     # underscore (`rack-attack.rb`), or a compound name (`custom_devise.rb`).
     def initializer_files(root, name)
       target = normalize_initializer_name(name)
-      Dir.glob(File.join(root.to_s, "config", "initializers", "*.rb")).sort.select do |path|
+      initializer_paths(root).select do |path|
         base = normalize_initializer_name(File.basename(path, ".rb"))
         base == target || base.end_with?("_#{target}")
       end

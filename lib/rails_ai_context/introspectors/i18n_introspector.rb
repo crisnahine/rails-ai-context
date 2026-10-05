@@ -146,7 +146,7 @@ module RailsAiContext
                                     : all_environments.map { |path| [ path, true ] }
 
         ([ [ File.join(root, "config", "application.rb"), false ] ] + environments +
-          Dir.glob(File.join(root, "config", "initializers", "*.rb")).sort.map { |path| [ path, false ] })
+          PathResolver.initializer_paths(root).map { |path| [ path, false ] })
           .select { |path, _ambiguous| File.exist?(path) }
       end
 

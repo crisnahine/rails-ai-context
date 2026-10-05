@@ -35,8 +35,42 @@ RSpec.describe RailsAiContext::PathResolver do
         .to eq([ "config/initializers/custom_devise.rb" ])
     end
 
+    it "finds an initializer in a subdirectory" do
+      mkdirs("config/initializers/security")
+      File.write(File.join(@root, "config/initializers/security/cors.rb"), "# x\n")
+
+      expect(described_class.app_initializer_files(@root, "cors")).to eq([ "config/initializers/security/cors.rb" ])
+    end
+
     it "answers nothing when the app has none" do
       expect(described_class.app_initializer_files(@root, "rack_attack")).to eq([])
+    end
+  end
+
+  describe ".initializer_paths" do
+    it "lists initializers at any depth, in path order, without following a symlink loop" do
+      mkdirs("config/initializers/i18n")
+      File.write(File.join(@root, "config/initializers/z.rb"), "# x\n")
+      File.write(File.join(@root, "config/initializers/i18n/locale.rb"), "# x\n")
+      File.symlink(File.join(@root, "config/initializers"), File.join(@root, "config/initializers/i18n/loop"))
+
+      expect(described_class.initializer_paths(@root).map { |path| path.delete_prefix("#{@root}/") })
+        .to eq(%w[config/initializers/i18n/locale.rb config/initializers/z.rb])
+    end
+
+    it "leaves out an initializer that links outside the app root or to nothing" do
+      mkdirs("config/initializers")
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "secret.rb"), "# x\n")
+        File.symlink(File.join(outside, "secret.rb"), File.join(@root, "config/initializers/secret.rb"))
+        File.symlink(File.join(@root, "missing.rb"), File.join(@root, "config/initializers/dangling.rb"))
+
+        expect(described_class.initializer_paths(@root)).to eq([])
+      end
+    end
+
+    it "answers nothing when the app has no initializers directory" do
+      expect(described_class.initializer_paths(@root)).to eq([])
     end
   end
 

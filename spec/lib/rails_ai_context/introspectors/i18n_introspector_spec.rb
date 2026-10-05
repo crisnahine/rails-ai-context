@@ -346,6 +346,16 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
 
     # I18n.fallbacks belongs to whichever process asks, and no app booted in
     # this one. Static Mastodon reported "en -> en" as the app's setting.
+    it "reads the default locale from an initializer in a subdirectory of config/initializers" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers", "i18n"))
+        File.write(File.join(dir, "config", "initializers", "i18n", "locale.rb"),
+                   "Rails.application.config.i18n.default_locale = :fr\n")
+
+        expect(described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:default_locale]).to eq("fr")
+      end
+    end
+
     it "does not report the library's own fallbacks as the app's" do
       result = static_result("en.yml" => "en:\n  hello: Hello\n")
       expect(result).to have_key(:fallbacks)
