@@ -8,6 +8,8 @@ module RailsAiContext
       # Per-pattern Regexp timeout (a ReDoS guard) is Ruby 3.2+. Ruby 3.1 has
       # no per-match timeout, so the pattern is built without one there.
       REGEXP_TIMEOUT_SUPPORTED = Regexp.respond_to?(:timeout)
+      # Named once so a rescue clause does not raise NameError on 3.1, where no match can time out.
+      REGEXP_TIMEOUT_ERROR = defined?(Regexp::TimeoutError) ? Regexp::TimeoutError : Class.new(StandardError)
 
       # ripgrep's own field separators, so the parse is exact rather than two
       # ambiguous regexes tried in order: a match line whose content reads
@@ -494,7 +496,7 @@ module RailsAiContext
             hidden = match_row?(row) && raw[:content].to_s.chomp.match?(regex) && !row[:content].match?(regex)
             hidden ? row.merge(match: false) : row
           end
-        rescue Regexp::TimeoutError
+        rescue REGEXP_TIMEOUT_ERROR
           redacted_rows
         end
         hits = kept.select { |r| match_row?(r) }.group_by { |r| r[:file] }
@@ -526,7 +528,7 @@ module RailsAiContext
       private_class_method def self.endless_body(line)
         node = first_def(RailsAiContext::AstCache.parse_string(line.strip).value)
         node&.equal_loc && node.body ? node.body.slice : ""
-      rescue StandardError, Regexp::TimeoutError
+      rescue StandardError
         ""
       end
 

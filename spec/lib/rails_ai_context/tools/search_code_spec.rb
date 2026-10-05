@@ -883,6 +883,26 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
     end
   end
 
+  # Ruby 3.1 has no Regexp::TimeoutError; a rescue naming it raises NameError there.
+  describe "a Ruby with no Regexp::TimeoutError" do
+    before { hide_const("Regexp::TimeoutError") }
+
+    it "lets an unrelated error out of row confirmation as itself" do
+      with_search_app("app/a.rb" => "one\n") do |dir|
+        rows = [ { file: "app/a.rb", line_number: 1, content: "one", match: true } ]
+        allow(described_class).to receive(:match_row?).and_raise(ArgumentError, "boom")
+
+        expect { described_class.send(:confirmed_rows, rows, dir, /one/, 0) }.to raise_error(ArgumentError, "boom")
+      end
+    end
+
+    it "reads an endless body that fails to parse as empty" do
+      allow(RailsAiContext::AstCache).to receive(:parse_string).and_raise(ArgumentError)
+
+      expect(described_class.send(:endless_body, "def x = y")).to eq("")
+    end
+  end
+
   describe "trace mode call sites" do
     let(:saver_source) do
       <<~RB
