@@ -165,6 +165,23 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
         end
       end
 
+      it "names an engine's test from its test/dummy relative to the dummy, as analyze_feature does" do
+        Dir.mktmpdir do |engine|
+          dummy = File.join(engine, "test", "dummy")
+          FileUtils.mkdir_p(dummy)
+          app_with_tests(engine, %w[test/models/widget_test.rb])
+          allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dummy)))
+          allow(RailsAiContext::PathResolver).to receive(:enclosing_engine_roots).and_return([ engine ])
+          allow(described_class).to receive(:cached_context).and_return({
+            tests: { framework: "minitest", fixtures: nil },
+            models: { "Widget" => model, "Gadget" => model }
+          })
+
+          expect(described_class.call(model: "Widget").content.first[:text]).to include("../models/widget_test.rb already exists")
+          expect(described_class.call(model: "Gadget").content.first[:text]).to include("# ../models/gadget_test.rb")
+        end
+      end
+
       it "says a model's test already exists rather than writing a second one" do
         Dir.mktmpdir do |root|
           app_with_tests(root, %w[spec/models/invoice_model_spec.rb spec/models/order_model_spec.rb])

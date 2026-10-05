@@ -186,8 +186,7 @@ module RailsAiContext
         app_root = rails_app.root.to_s
         return unread_suite_lines(app_root) if suite_root == app_root
 
-        relative = Pathname.new(File.realpath(suite_root)).relative_path_from(Pathname.new(File.realpath(app_root)))
-        [ "- **Suite:** the engine's, at `#{relative}`; the paths below are under it" ]
+        [ "- **Suite:** the engine's, at `#{RailsAiContext::PathResolver.suite_relative(app_root, ".")}`; the paths below are under it" ]
       end
 
       # A dummy with no suite of its own whose engine bundle is not read: the engine's suite is not either.

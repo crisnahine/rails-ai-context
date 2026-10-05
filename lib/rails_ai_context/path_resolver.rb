@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "concurrent"
+require "pathname"
 
 module RailsAiContext
   # Resolves where a kind of Rails app code can live for a given app root.
@@ -287,6 +288,14 @@ module RailsAiContext
       depth.times.reduce(File.expand_path(root)) { |path, _| File.dirname(path) }
     end
     private_class_method :bundle_engine_root
+
+    # A path under the suite root as the app root reads it: `../models/x_test.rb` from a test/dummy.
+    def suite_relative(root, relative)
+      suite = test_root(root)
+      return relative if suite == root.to_s
+
+      Pathname.new(File.join(root_key(suite), relative)).relative_path_from(Pathname.new(root_key(root))).to_s
+    end
 
     # Inside the app root, or inside the engine its test/dummy runs in.
     def project_file?(path, root)
