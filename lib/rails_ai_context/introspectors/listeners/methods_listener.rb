@@ -169,7 +169,7 @@ module RailsAiContext
         end
 
         def record(node, method_name, scope, visibility, prefixed:)
-          @results << {
+          entry = {
             name:         method_name,
             scope:        scope,
             visibility:   visibility,
@@ -185,6 +185,9 @@ module RailsAiContext
             end_location: node.location.end_line,
             confidence:   RailsAiContext::Confidence::VERIFIED
           }
+          # The includer gains these; a `def self.x` or `class << self` method stays on the module.
+          entry[:class_methods_block] = true if @frames.last.kind == :class_methods
+          @results << entry
         end
 
         # `class << self` members carry no receiver of their own, so they read
