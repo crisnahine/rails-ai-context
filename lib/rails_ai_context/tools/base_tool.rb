@@ -726,6 +726,11 @@ module RailsAiContext
         # declared macro, not the resolved type: `after_commit_on_create` is
         # a key this gem synthesizes, not something the source says.
         def callback_declaration(callback)
+          if callback[:skip]
+            kind, event = callback[:type].to_s.split("_", 2)
+            return "skip_callback :#{event}, :#{kind}, :#{callback[:method]}#{callback_options_tail(callback[:options])}"
+          end
+
           name = callback[:name] || callback[:type]
           method = callback[:method].to_s
           target = inline_block_callback?(method) ? "do" : callback_target(method)

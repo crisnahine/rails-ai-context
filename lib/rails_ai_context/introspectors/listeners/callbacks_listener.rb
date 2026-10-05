@@ -25,6 +25,7 @@ module RailsAiContext
         NAME_SHAPED = /\A[A-Za-z_]\w*(::[A-Za-z_]\w*)*[?!]?\z/
 
         def on_call_node_enter(node)
+          return record_skip(node) if node.name == :skip_callback && in_scope?(node)
           return unless CALLBACK_METHODS.include?(node.name) && in_scope?(node)
 
           # Sources, not literals: a lambda condition reads as the line the
@@ -66,6 +67,32 @@ module RailsAiContext
         end
 
         private
+
+        KINDS = %w[before after around].freeze
+
+        # `skip_callback :save, :before, :stamp_audit` takes a callback the
+        # class inherited (or declared above) out of its chain; the model
+        # tier applies it where the chain is assembled. The kind defaults to
+        # :before, as Rails' normalize_callback_params does.
+        def record_skip(node)
+          event, *rest = extract_symbol_args(node).map(&:to_s)
+          return unless event
+
+          kind = KINDS.include?(rest.first) ? rest.shift : "before"
+          options = scope_options(receiver_name(node)).merge(extract_keyword_sources(node))
+          rest.each do |method_name|
+            @results << {
+              name:       "skip_callback",
+              type:       "#{kind}_#{event}",
+              method:     method_name,
+              skip:       true,
+              options:    options,
+              owner:      @owner_stack.dup,
+              location:   node.location.start_line,
+              confidence: confidence_for(node)
+            }
+          end
+        end
 
         # `around_create Snowflake::Callbacks` names a real target;
         # a lambda names nothing, so it reports as a block.

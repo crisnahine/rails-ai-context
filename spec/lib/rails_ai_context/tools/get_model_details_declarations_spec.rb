@@ -117,4 +117,34 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
 
     expect(text).to include("- **Custom:** `not_reserved`\n- **Custom:** block (on: :create) → errors.add(:name, \"bad\") if name == \"bad\"")
   end
+
+  describe "skip_callback" do
+    let(:files) do
+      {
+        "application_record.rb" => <<~RUBY,
+          class ApplicationRecord < ActiveRecord::Base
+            primary_abstract_class
+            before_save :stamp_audit
+            after_commit :notify
+          end
+        RUBY
+        "post.rb" => <<~RUBY,
+          class Post < ApplicationRecord
+            skip_callback :save, :before, :stamp_audit
+            skip_callback :commit, :after, :notify, if: :draft?
+          end
+        RUBY
+        "comment.rb" => "class Comment < ApplicationRecord\nend\n"
+      }
+    end
+
+    it "drops a callback the model skips, and keeps a conditional skip as unless" do
+      post = details_for("Post", files)
+      comment = described_class.call(model: "Comment").content.first[:text]
+
+      expect(post).not_to include("stamp_audit")
+      expect(post).to include("- `after_commit`: :notify (unless: :draft?)")
+      expect(comment).to include("- `before_save`: :stamp_audit")
+    end
+  end
 end

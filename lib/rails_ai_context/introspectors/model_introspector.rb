@@ -1604,7 +1604,29 @@ module RailsAiContext
         sorted = Array(callbacks).each_with_index.sort_by do |cb, index|
           [ -cb[:rank].to_i, cb[:chain_at] || [ cb[:location].to_i, -1 ], index ]
         end
-        run_order(callback_chain(sorted.map(&:first)), commits_in_order).map { |cb| cb.except(*CHAIN_KEYS) }
+        run_order(callback_chain(without_skipped(sorted.map(&:first))), commits_in_order).map { |cb| cb.except(*CHAIN_KEYS) }
+      end
+
+      # A `skip_callback` removes the matching callback already in the chain;
+      # with `if:`/`unless:` Rails keeps it under the negated condition.
+      def without_skipped(callbacks)
+        callbacks.each_with_object([]) do |cb, kept|
+          next kept << cb unless cb[:skip]
+
+          key = Listeners::CallbacksListener.chain_key(cb[:type])
+          matching = ->(k) { Listeners::CallbacksListener.chain_key(k[:type]) == key && k[:method].to_s == cb[:method].to_s }
+          conditions = (cb[:options] || {}).slice(:if, :unless)
+          if conditions.empty?
+            kept.reject!(&matching)
+          else
+            kept.map! { |k| matching.call(k) ? k.merge(options: negated_conditions(k[:options] || {}, conditions)) : k }
+          end
+        end
+      end
+
+      def negated_conditions(options, skip)
+        flipped = { unless: skip[:if], if: skip[:unless] }.compact
+        options.merge(flipped) { |_key, ours, theirs| [ *Array(ours), theirs ] }
       end
 
       # A prepended callback goes to the front and after callbacks run from the
