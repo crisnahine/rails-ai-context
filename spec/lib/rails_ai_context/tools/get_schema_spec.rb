@@ -1071,7 +1071,7 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
   describe "views, virtual tables and a table the dumper could not write" do
     before do
       allow(described_class).to receive(:cached_context).and_return({
-        schema: { adapter: "static_parse", total_tables: 4, tables: {
+        schema: { adapter: "SQLite", adapter_source: "static_parse", total_tables: 4, tables: {
           "users" => { columns: [ { name: "email", type: "string" } ], indexes: [], foreign_keys: [] },
           "active_users" => { kind: "view", sql: "SELECT id FROM users", columns: [], indexes: [], foreign_keys: [] },
           "docs_fts" => { kind: "virtual_table", module: "fts5", columns: [ { name: "title" } ], indexes: [], foreign_keys: [] },
@@ -1099,6 +1099,12 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       text = described_class.call(table: "boxes").content.first[:text]
 
       expect(text).to include("The schema dumper could not describe this table (StandardError: Unknown type 'virtual')")
+    end
+
+    it "says, without a connection, that a view the dump does not record cannot be listed" do
+      text = described_class.call(table: "missing_view").content.first[:text]
+
+      expect(text).to include("a view is listed only when the dump records it")
     end
 
     it "names a virtual table's module" do

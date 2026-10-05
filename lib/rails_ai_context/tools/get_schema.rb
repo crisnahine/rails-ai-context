@@ -86,8 +86,12 @@ module RailsAiContext
                 )
               end
 
-              return not_found_response("Table", table, tables.keys.sort,
-                recovery_tool: "Call rails_get_schema(detail:\"summary\") to see all tables")
+              recovery = "Call rails_get_schema(detail:\"summary\") to see all tables"
+              # Rails' own schema.rb dumper writes no view; only a gem such as scenic adds them.
+              if [ schema[:adapter], schema[:adapter_source] ].include?("static_parse")
+                recovery += ". Without a connection a view is listed only when the dump records it: structure.sql does, schema.rb only through a gem such as scenic"
+              end
+              return not_found_response("Table", table, tables.keys.sort, recovery_tool: recovery)
             end
             return json_response(table_data.except(:unread_calls)) if format == "json"
 
