@@ -338,6 +338,27 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  describe ".call in an Apartment app" do
+    let(:apartment_models) do
+      file = "config/initializers/apartment.rb"
+      {
+        "Organization" => { table_name: "organizations", tenancy: { gem: "apartment", scope: "shared", declared_in: file } },
+        "Ticket" => { table_name: "tickets", tenancy: { gem: "apartment", scope: "per_tenant", declared_in: file } },
+        "Plan" => { table_name: "plans", tenancy: { gem: "apartment", scope: "unknown", declared_in: file, excluded_models: "SHARED.map(&:name)" } }
+      }
+    end
+
+    before { allow(described_class).to receive(:cached_context).and_return({ models: apartment_models }) }
+
+    it "says which schema holds the model's table" do
+      text = ->(name) { described_class.call(model: name).content.first[:text] }
+
+      expect(text.("Organization")).to include("**Tenancy:** shared schema: Apartment's `excluded_models` lists it (`config/initializers/apartment.rb`)")
+      expect(text.("Ticket")).to include("**Tenancy:** one table in each tenant's schema: Apartment's `excluded_models` does not list it (`config/initializers/apartment.rb`)")
+      expect(text.("Plan")).to include("**Tenancy:** [INFERRED] Apartment computes `excluded_models` (`SHARED.map(&:name)` in `config/initializers/apartment.rb`), so whether this table is per tenant is not read")
+    end
+  end
+
   describe ".call with a Mongoid model" do
     let(:mongoid_models) do
       {
@@ -345,6 +366,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
           mongoid: true,
           fields: [ { name: :name, type: "String" }, { name: :active, type: "Boolean" }, { name: :age, type: "Integer", default: "0" } ],
           embeds: [ { type: :embeds_many, name: :orders } ],
+          indexes: [ "index({ email: 1 }, { unique: true })" ],
           associations: [],
           validations: []
         }
@@ -362,6 +384,11 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).to include("name")
       expect(text).to include("String")
       expect(text).to include("- `age`: Integer, default: 0")
+    end
+
+    it "renders declared indexes" do
+      text = described_class.call(model: "Customer").content.first[:text]
+      expect(text).to include("## Indexes\n- `index({ email: 1 }, { unique: true })`")
     end
 
     it "renders embedded relations" do
@@ -497,6 +524,137 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).to include("- `overdue`")
       expect(text).not_to include("example_usage")
       expect(text).not_to include("- `internal`")
+    end
+  end
+
+  describe "methods a model defines without def" do
+    around do |example|
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "app", "models", "gadget.rb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, <<~RUBY)
+          class Gadget < ApplicationRecord
+            attr_accessor :draft_note
+            attr_reader :cached_total
+            class_attribute :default_color
+            cattr_accessor :registry
+            define_method(:dyn_inst) { 1 }
+
+            def summary
+              name.to_s
+            end
+            alias full_title summary
+            alias_method :headline, :summary
+          end
+        RUBY
+        @root = dir
+        example.run
+      end
+    end
+
+    it "lists aliases, accessors and define_method names with the def ones" do
+      described_class.reset_cache!
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Gadget" => { table_name: "gadgets", file: "app/models/gadget.rb" } }
+      )
+
+      text = described_class.call(model: "Gadget").content.first[:text]
+      instance = text[/## Key instance methods\n(.*?)\n\n/m, 1]
+      klass = text[/## Class methods\n(.*?)\n\n/m, 1]
+
+      %w[summary full_title headline draft_note draft_note=(value) cached_total dyn_inst].each do |m|
+        expect(instance).to include("- `#{m}`")
+      end
+      %w[default_color default_color=(value) registry registry=(value)].each do |m|
+        expect(klass).to include("- `#{m}`")
+      end
+    end
+  end
+
+  describe "model gem macros" do
+    it "prints a line per gem macro and the aasm states, events and transitions" do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Order" => {
+          table_name: "orders",
+          gem_macros: [ { text: "friendly_id :name, use: :slugged" }, { text: "monetize :price_cents", adds: %w[price] } ],
+          state_machines: [ { column: "aasm_state", initial: "pending", states: %w[pending paid shipped],
+                              events: [ { name: "pay", transitions: [ { from: %w[pending], to: "paid" } ] },
+                                        { name: "reset", transitions: [ { from: [], to: "pending" } ] } ] } ]
+        } }
+      )
+
+      text = described_class.call(model: "Order").content.first[:text]
+
+      expect(text).to include("## Macros\n- `friendly_id :name, use: :slugged`\n- `monetize :price_cents` (adds `price`)")
+      expect(text).to include("## State machine (aasm, column `aasm_state`)\n- states: `pending` (initial), `paid`, `shipped`\n" \
+                              "- event `pay`: pending -> paid\n- event `reset`: any -> pending")
+    end
+  end
+
+  describe "class settings and STI" do
+    it "names the STI parent and type column and prints each setting as written" do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Car" => { table_name: "vehicles", sti: { sti_base: false, sti_parent: "Vehicle", type_column: "kind" } },
+          "Vehicle" => { table_name: "vehicles", sti: { sti_base: true, sti_children: %w[Car], type_column: "kind" } },
+          "Post" => { table_name: "posts",
+                      model_settings: { "strict_loading_by_default" => "true", "implicit_order_column" => "\"published_at\"" },
+                      attr_readonly: %w[email_address], query_constraints: %w[order_shop_id id] }
+        }
+      )
+
+      car = described_class.call(model: "Car").content.first[:text]
+      vehicle = described_class.call(model: "Vehicle").content.first[:text]
+      post = described_class.call(model: "Post").content.first[:text]
+
+      expect(car).to include("**STI:** subclass of `Vehicle`, type column `kind`")
+      expect(vehicle).to include("**STI:** base of `Car`, type column `kind`")
+      expect(post).to include("- `self.strict_loading_by_default = true`")
+      expect(post).to include("- `self.implicit_order_column = \"published_at\"`")
+      expect(post).to include("- `attr_readonly` :email_address")
+      expect(post).to include("- `query_constraints` :order_shop_id, :id")
+    end
+  end
+
+  describe "macro options" do
+    it "prints each password attribute and the options of serialize, normalizes and generates_token_for" do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "User" => {
+          table_name: "users", has_secure_password: true,
+          secure_passwords: [ { attribute: "password", options: {} }, { attribute: "recovery_password", options: { validations: "false" } } ],
+          serialize: %w[tags_cache], serialize_options: { "tags_cache" => { coder: "JSON", type: "Array" } },
+          normalizes_details: [ { field: "phone", transformation: "->(p) { p }", options: { apply_to_nil: "true" } } ],
+          encryption_details: [ { field: "phone", options: { deterministic: "true", previous: "{ deterministic: false }" } } ],
+          token_generation: [ { purpose: "email_confirmation", expires_in: "2.days" } ]
+        } }
+      )
+
+      text = described_class.call(model: "User").content.first[:text]
+
+      expect(text).to include("- `has_secure_password` :password\n- `has_secure_password` :recovery_password (validations: false)")
+      expect(text).to include("- `serialize` :tags_cache (coder: JSON, type: Array)")
+      expect(text).to include("- **phone** - ->(p) { p } (apply_to_nil: true)")
+      expect(text).to include("- **phone** (deterministic: true, previous: { deterministic: false })")
+      expect(text).to include("- **email_confirmation** (expires_in: 2.days)")
+    end
+  end
+
+  describe "a model whose base connects to another database" do
+    it "names the connects_to call and the class that declares it" do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "PageView" => { table_name: "page_views",
+                                  database: { connects_to: "connects_to database: { writing: :analytics, reading: :analytics }",
+                                              declared_in: "AnalyticsRecord" } } }
+      )
+
+      text = described_class.call(model: "PageView").content.first[:text]
+
+      expect(text).to include("**Database:** `connects_to database: { writing: :analytics, reading: :analytics }`, inherited from `AnalyticsRecord`")
     end
   end
 

@@ -223,3 +223,21 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::AssociationsListener do
     expect(results.map { |r| r[:name] }).to eq([ :a ])
   end
 end
+
+RSpec.describe RailsAiContext::Introspectors::Listeners::AssociationsListener, "acts_as_tenant" do
+  # acts_as_tenant calls `belongs_to tenant, scope, **valid_options`, the tenant defaulting to :account.
+  it "reads the belongs_to acts_as_tenant declares" do
+    results = parse_and_dispatch(<<~RUBY)
+      class Ticket < ApplicationRecord
+        acts_as_tenant :organization, optional: true, has_global_records: true
+      end
+      class Note < ApplicationRecord
+        acts_as_tenant
+      end
+    RUBY
+    expect(results.map { |r| r.slice(:type, :name, :options) }).to eq([
+      { type: "belongs_to", name: :organization, options: { optional: true } },
+      { type: "belongs_to", name: :account, options: {} }
+    ])
+  end
+end

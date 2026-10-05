@@ -257,6 +257,8 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
           class Employee < ApplicationRecord
             STATUSES = %w[pending active suspended].freeze
             ROLES = %i[admin editor viewer]
+            LEVELS = Ractor.make_shareable(%w[gold silver])
+            TIERS = ::Ractor.make_shareable(%w[basic pro].freeze)
           end
         RUBY
       end
@@ -272,6 +274,42 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         statuses = result[:constants].find { |c| c[:name] == "STATUSES" }
         expect(statuses).not_to be_nil
         expect(statuses[:values]).to contain_exactly("pending", "active", "suspended")
+      end
+
+      it "reads an array Ractor.make_shareable wraps, as it returns its argument" do
+        expect(result[:constants]).to include({ name: "LEVELS", values: %w[gold silver] }, { name: "TIERS", values: %w[basic pro] })
+      end
+    end
+
+    context "with model gem macros" do
+      before do
+        File.write(fixture_model, <<~RUBY)
+          class Employee < ApplicationRecord
+            include AASM
+            has_paper_trail
+            monetize :salary_cents
+            aasm do
+              state :pending, initial: true
+              state :active
+              event :activate do
+                transitions from: :pending, to: :active
+              end
+            end
+          end
+        RUBY
+      end
+
+      subject(:result) do
+        data = RailsAiContext::Introspectors::SourceIntrospector.from_source(File.read(fixture_model))
+        introspector.send(:extract_macros_from_ast, data, fixture_model)
+      end
+
+      it "carries each gem macro as written and the aasm states and events" do
+        expect(result[:gem_macros]).to eq([ { text: "has_paper_trail" }, { text: "monetize :salary_cents", adds: %w[salary] } ])
+        expect(result[:state_machines]).to eq([ {
+          column: "aasm_state", initial: "pending", states: %w[pending active],
+          events: [ { name: "activate", transitions: [ { from: %w[pending], to: "active" } ] } ]
+        } ])
       end
     end
 
@@ -319,6 +357,31 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    context "with options the details used to drop" do
+      before do
+        File.write(fixture_model, <<~RUBY)
+          class User < ApplicationRecord
+            has_secure_password
+            has_secure_password :recovery_password, validations: false
+            normalizes :phone, with: ->(p) { p&.delete("^0-9") }, apply_to_nil: true
+            encrypts :phone, deterministic: true, ignore_case: true, previous: { deterministic: false }
+            serialize :tags_cache, coder: JSON, type: Array
+          end
+        RUBY
+      end
+
+      it "carries each password attribute and every option as written" do
+        data = RailsAiContext::Introspectors::SourceIntrospector.from_source(File.read(fixture_model))
+        result = introspector.send(:extract_macros_from_ast, data, fixture_model).merge(introspector.send(:extract_detailed_macros_from_ast, data))
+
+        expect(result[:secure_passwords]).to eq([ { attribute: "password", options: {} },
+                                                  { attribute: "recovery_password", options: { validations: "false" } } ])
+        expect(result[:normalizes_details]).to eq([ { field: "phone", transformation: "->(p) { p&.delete(\"^0-9\") }", options: { apply_to_nil: "true" } } ])
+        expect(result[:encryption_details]).to eq([ { field: "phone", options: { deterministic: "true", ignore_case: "true", previous: "{ deterministic: false }" } } ])
+        expect(result[:serialize_options]).to eq("tags_cache" => { coder: "JSON", type: "Array" })
+      end
+    end
+
     context "when source file does not exist" do
       subject(:result) do
         data = { associations: [], validations: [], scopes: [], enums: [], callbacks: [], macros: [], methods: [] }
@@ -356,8 +419,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(result[:encryption_details]).to be_an(Array)
         ssn_entry = result[:encryption_details].find { |e| e[:field] == "ssn" }
         expect(ssn_entry).not_to be_nil
-        expect(ssn_entry[:options][:deterministic]).to be true
-        expect(ssn_entry[:options][:downcase]).to be true
+        expect(ssn_entry[:options]).to eq(deterministic: "true", downcase: "true")
       end
 
       it "extracts encrypted attributes without options" do
@@ -386,7 +448,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(result[:normalizes_details]).to be_an(Array)
         email_entry = result[:normalizes_details].find { |e| e[:field] == "email" }
         expect(email_entry).not_to be_nil
-        expect(email_entry[:transformation]).to eq("[INFERRED]")
+        expect(email_entry[:transformation]).to eq("->(e) { e.strip.downcase }")
       end
     end
 
@@ -410,7 +472,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(result[:token_generation]).to be_an(Array)
         email_token = result[:token_generation].find { |t| t[:purpose] == "email_verification" }
         expect(email_token).not_to be_nil
-        expect(email_token[:expires_in]).to eq("[INFERRED]")
+        expect(email_token[:expires_in]).to eq("2.hours")
       end
 
       it "handles token generation without expires_in" do
@@ -455,6 +517,107 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(models.keys).to contain_exactly("Invoice", "SpecialInvoice", "EnterpriseThing")
         expect(models["Invoice"]).to include(file: "app/domain/invoice.rb", table_name: "notes")
         expect(models["EnterpriseThing"][:file]).to eq("enterprise/app/models/enterprise_thing.rb")
+      end
+    end
+
+    it "finds a model assigned Class.new of a record base, with what its block declares" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/note.rb" => "class Note < ApplicationRecord\nend\n",
+          "app/models/admin_note.rb" => "AdminNote = Class.new(ApplicationRecord) do\n  belongs_to :note\nend\n",
+          "app/models/admin/flag.rb" => "module Admin\n  Flag = Class.new(::ApplicationRecord)\nend\n",
+          "app/models/plain.rb" => "Plain = Class.new\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models.keys).to contain_exactly("Note", "AdminNote", "Admin::Flag")
+        expect(models["AdminNote"]).to include(table_name: "admin_notes")
+        expect(models["AdminNote"][:associations].map { |a| [ a[:type], a[:name] ] }).to eq([ %w[belongs_to note] ])
+        expect(models["Admin::Flag"]).to include(table_name: "flags")
+      end
+    end
+
+    it "credits a nested class's settings and gem macros to the nested class, not the model around it" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/gadget.rb" => <<~RUBY
+            class Gadget < ApplicationRecord
+              encrypts :serial
+              def self.with_lock
+                self.locking_column = :temp_lock
+              end
+              class Part < ApplicationRecord
+                self.implicit_order_column = "made_at"
+                has_paper_trail
+              end
+            end
+          RUBY
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        gadget = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Gadget"]
+
+        expect(gadget[:model_settings]).to be_nil
+        expect(gadget[:macros].map { |m| m[:macro] }).to eq([ :encrypts ])
+      end
+    end
+
+    it "says which models Apartment keeps in the shared schema and which per tenant" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "config/initializers/apartment.rb" => "Apartment.configure do |config|\n  config.excluded_models = %w[Organization]\nend\n",
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/organization.rb" => "class Organization < ApplicationRecord\nend\n",
+          "app/models/partner.rb" => "class Partner < Organization\nend\n",
+          "app/models/ticket.rb" => "class Ticket < ApplicationRecord\nend\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        shared = { gem: "apartment", scope: "shared", declared_in: "config/initializers/apartment.rb" }
+
+        expect(models["Organization"][:tenancy]).to eq(shared)
+        expect(models["Partner"][:tenancy]).to eq(shared)
+        expect(models["Ticket"][:tenancy]).to eq(shared.merge(scope: "per_tenant"))
+      end
+    end
+
+    it "merges an edition module GitLab's prepend_mod_with names, and a prepend written after the class" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "config/application.rb" => "module X\n  class Application < Rails::Application\n    config.autoload_paths << Rails.root.join(\"ee/app/models\")\n  end\nend\n",
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "ee/app/models/ee/note.rb" => "module EE\n  module Note\n    extend ActiveSupport::Concern\n    prepended do\n      has_many :epics\n      validates :body, presence: true\n    end\n  end\nend\n",
+          "app/models/note.rb" => "class Note < ApplicationRecord\n  validates :title, presence: true\nend\n\nNote.prepend_mod_with(\"Note\")\n",
+          "app/models/concerns/flaggable.rb" => "module Flaggable\n  extend ActiveSupport::Concern\n  prepended do\n    has_many :flags\n  end\nend\n",
+          "app/models/post.rb" => "class Post < ApplicationRecord\nend\nPost.prepend(Flaggable)\nPost.prepend_mod\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["Note"][:associations].map { |a| a[:name] }).to eq([ "epics" ])
+        expect(models["Note"][:validations].map { |v| [ v[:kind], v[:attributes] ] }).to include([ "presence", [ "body" ] ], [ "presence", [ "title" ] ])
+        expect(models["Note"][:concerns]).to eq([ "EE::Note" ])
+        expect(models["Post"][:associations].map { |a| a[:name] }).to eq([ "flags" ])
+        expect(models["Post"][:concerns]).to eq([ "Flaggable" ])
+        expect(models["Post"]).not_to have_key(:concerns_unread)
       end
     end
 
@@ -1168,7 +1331,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(data[:generates_token_for]).to eq([ "password_reset" ])
         expect(data[:delegations]).to eq([ { methods: [ "name" ], to: "account" } ])
         expect(data[:constants]).to include(a_hash_including(name: "ROLES"))
-        expect(data[:encryption_details]).to eq([ { field: "private_key", options: { deterministic: true } } ])
+        expect(data[:encryption_details]).to eq([ { field: "private_key", options: { deterministic: "true" } } ])
         expect(data[:token_generation]).to include(a_hash_including(purpose: "password_reset"))
         expect(data[:custom_validates]).to eq([ "key_is_sane" ])
         expect(data[:enums]).to eq({ "kind" => { "rsa" => 0, "ed25519" => 1 } })
@@ -1619,6 +1782,31 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
           expect(customer[:embeds]).to include(type: :embeds_many, name: :orders)
           expect(customer[:associations].map { |a| a[:name] }).to include("tickets")
           expect(customer).not_to have_key(:table_name)
+        end
+      end
+    end
+
+    it "lists each declared index as written in both tiers" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "author.rb"), <<~RUBY)
+          class Author
+            include Mongoid::Document
+            field :email, type: String
+            index({ email: 1 }, { unique: true })
+            index({ account_id: 1, created_at: -1 }, # newest first
+                  background: true)
+          end
+        RUBY
+
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        [ introspector.static_call, introspector.call ].each do |result|
+          expect(result["Author"][:indexes]).to eq([
+            "index({ email: 1 }, { unique: true })",
+            "index({ account_id: 1, created_at: -1 }, background: true)"
+          ])
         end
       end
     end
@@ -5615,6 +5803,40 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  describe "a database a base class connects to" do
+    it "names it on the model that inherits it, with the class that declares it" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "analytics_record.rb"), <<~RUBY)
+          class AnalyticsRecord < ApplicationRecord
+            self.abstract_class = true
+            connects_to database: { writing: :analytics, reading: :analytics }
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "page_view.rb"), "class PageView < AnalyticsRecord\nend\n")
+        File.write(File.join(dir, "app", "models", "post.rb"), "class Post < ApplicationRecord\nend\n")
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["PageView"][:database]).to eq(connects_to: "connects_to database: { writing: :analytics, reading: :analytics }",
+                                                    declared_in: "AnalyticsRecord")
+        expect(models["Post"]).not_to have_key(:database)
+      end
+    end
+  end
+
+  describe "STI on the booted tier" do
+    it "reads the type column the model names, not a fixed one" do
+      parent = Class.new { def self.name = "Vehicle" }
+      model = double("Car", inheritance_column: "kind", connected?: true, table_exists?: true,
+                     columns_hash: { "kind" => double }, descendants: [], superclass: parent)
+
+      sti = described_class.new(Rails.application).send(:extract_sti_info, model)
+
+      expect(sti).to eq(sti_base: false, sti_parent: "Vehicle", type_column: "kind")
+    end
+  end
+
   describe "STI on the static tier" do
     # The booted tier reports the hierarchy under :sti and the graph tool
     # renders it from there. The static tier resolves the same chain to share
@@ -5631,8 +5853,29 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
         models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
-        expect(models["Post"][:sti]).to eq(sti_base: true, sti_children: [ "Article" ])
-        expect(models["Article"][:sti]).to eq(sti_base: false, sti_parent: "Post")
+        expect(models["Post"][:sti]).to eq(sti_base: true, sti_children: [ "Article" ], type_column: "type")
+        expect(models["Article"][:sti]).to eq(sti_base: false, sti_parent: "Post", type_column: "type")
+      end
+    end
+
+    it "takes the type column from an inheritance_column a base sets" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "vehicle.rb"), <<~RUBY)
+          class Vehicle < ApplicationRecord
+            self.inheritance_column = :kind
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "car.rb"), "class Car < Vehicle\nend\n")
+        File.write(File.join(dir, "app", "models", "boat.rb"), "class Boat < ApplicationRecord\n  self.inheritance_column = KIND\nend\n")
+        File.write(File.join(dir, "app", "models", "dinghy.rb"), "class Dinghy < Boat\nend\n")
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["Car"][:sti]).to include(sti_parent: "Vehicle", type_column: "kind")
+        expect(models["Car"][:model_settings]).to eq("inheritance_column" => ":kind")
+        expect(models["Vehicle"][:sti]).to include(type_column: "kind")
+        expect(models["Boat"][:sti]).to include(type_column: RailsAiContext::Confidence::INFERRED)
       end
     end
 

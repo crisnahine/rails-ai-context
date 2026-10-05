@@ -89,3 +89,187 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener do
     expect(results.first[:confidence]).to eq("[VERIFIED]")
   end
 end
+
+RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "gem macros" do
+  it "reads an aasm block's states, initial state, events and transitions" do
+    results = parse_and_dispatch(<<~RUBY)
+      class Order < ApplicationRecord
+        include AASM
+        aasm column: :status do
+          state :pending, initial: true
+          state :paid, :shipped
+          event :pay do
+            transitions from: :pending, to: :paid
+          end
+          event :ship do
+            transitions from: [ :paid, :pending ], to: :shipped
+          end
+        end
+      end
+    RUBY
+    aasm = results.find { |r| r[:macro] == :aasm }
+    expect(aasm).to include(column: "status", initial: "pending", states: %w[pending paid shipped])
+    expect(aasm[:events]).to eq([
+      { name: "pay", transitions: [ { from: %w[pending], to: "paid" } ] },
+      { name: "ship", transitions: [ { from: %w[paid pending], to: "shipped" } ] }
+    ])
+    expect(results.map { |r| r[:macro] }).to eq([ :aasm ])
+  end
+
+  it "takes a named machine's column from its name and the first state as initial" do
+    results = parse_and_dispatch(<<~RUBY)
+      class Job < ApplicationRecord
+        aasm :work do
+          state :sleeping
+          state :running
+          event { transitions to: :running }
+          transitions to: :sleeping
+        end
+      end
+    RUBY
+    expect(results.first).to include(column: "work", initial: "sleeping", states: %w[sleeping running], events: [])
+  end
+
+  it "opens a machine only for the class-level aasm DSL, not the aasm reader a method calls" do
+    results = parse_and_dispatch(<<~RUBY)
+      class Order < ApplicationRecord
+        aasm do
+          state :pending
+        end
+        aasm
+        def state_label
+          aasm.current_state.to_s
+        end
+      end
+    RUBY
+    expect(results.map { |r| [ r[:macro], r[:states] ] }).to eq([ [ :aasm, %w[pending] ] ])
+  end
+
+  it "records each known gem macro as written, without its block" do
+    results = parse_and_dispatch(<<~RUBY)
+      class User < ApplicationRecord
+        has_paper_trail
+        friendly_id :name, use: :slugged
+        mount_uploader :avatar, AvatarUploader
+        pg_search_scope :search_by_title, against: :title
+        monetize :price_cents
+        monetize :fee_pence, as: :fee
+        acts_as_list scope: :category
+        acts_as_tenant :organization
+        state_machine :state, initial: :parked do
+          event(:ignite) { transition parked: :idling }
+        end
+      end
+    RUBY
+    texts = results.select { |r| r[:macro] == :gem_macro }.map { |r| r[:text] }
+    expect(texts).to eq([
+      "has_paper_trail", "friendly_id :name, use: :slugged", "mount_uploader :avatar, AvatarUploader",
+      "pg_search_scope :search_by_title, against: :title", "monetize :price_cents",
+      "monetize :fee_pence, as: :fee", "acts_as_list scope: :category",
+      "acts_as_tenant :organization", "state_machine :state, initial: :parked"
+    ])
+    expect(results.find { |r| r[:text] == "has_paper_trail" }[:name]).to eq(:has_paper_trail)
+    expect(results.filter_map { |r| r[:adds] }).to eq([ %w[price], %w[fee] ])
+  end
+end
+
+RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "model settings" do
+  it "reads the class settings that change how the model behaves, as written" do
+    results = parse_and_dispatch(<<~RUBY)
+      class Post < ApplicationRecord
+        self.inheritance_column = :kind
+        self.store_full_sti_class = false
+        self.strict_loading_by_default = true
+        self.implicit_order_column = "published_at"
+        self.locking_column = :row_version
+        attr_readonly :email_address, :slug
+        query_constraints :order_shop_id, :id
+      end
+    RUBY
+    settings = results.select { |r| r[:macro] == :model_setting }.map { |r| [ r[:setting], r[:value] ] }
+    expect(settings).to eq([
+      [ "inheritance_column", ":kind" ], [ "store_full_sti_class", "false" ], [ "strict_loading_by_default", "true" ],
+      [ "implicit_order_column", "\"published_at\"" ], [ "locking_column", ":row_version" ]
+    ])
+    expect(results.select { |r| r[:macro] == :attr_readonly }.map { |r| r[:attribute] }).to eq(%w[email_address slug])
+    expect(results.select { |r| r[:macro] == :query_constraints }.map { |r| r[:attribute] }).to eq(%w[order_shop_id id])
+  end
+end
+
+RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "options as written" do
+  it "keeps every option of encrypts, normalizes, serialize, generates_token_for and has_secure_password" do
+    results = parse_and_dispatch(<<~RUBY)
+      class User < ApplicationRecord
+        has_secure_password
+        has_secure_password :recovery_password, validations: false
+        generates_token_for :email_confirmation, expires_in: 2.days do
+          email_address
+        end
+        normalizes :phone, with: ->(p) { p&.delete("^0-9") }, apply_to_nil: true
+        encrypts :phone, deterministic: true, ignore_case: true, previous: { deterministic: false }, support_unencrypted_data: true
+        serialize :tags_cache, coder: JSON, type: Array
+      end
+    RUBY
+    written = results.map { |r| [ r[:macro], r[:attribute], r[:written] ] }
+    expect(written).to eq([
+      [ :has_secure_password, "password", {} ],
+      [ :has_secure_password, "recovery_password", { validations: "false" } ],
+      [ :generates_token_for, "email_confirmation", { expires_in: "2.days" } ],
+      [ :normalizes, "phone", { with: "->(p) { p&.delete(\"^0-9\") }", apply_to_nil: "true" } ],
+      [ :encrypts, "phone", { deterministic: "true", ignore_case: "true", previous: "{ deterministic: false }", support_unencrypted_data: "true" } ],
+      [ :serialize, "tags_cache", { coder: "JSON", type: "Array" } ]
+    ])
+  end
+end
+
+RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "connects_to" do
+  it "records the call as written" do
+    results = parse_and_dispatch(<<~RUBY)
+      class ShardRecord < ApplicationRecord
+        self.abstract_class = true
+        connects_to shards: {
+          shard_one: { writing: :shard_one }
+        }
+      end
+    RUBY
+    expect(results.map { |r| r.slice(:macro, :text) }).to eq([ { macro: :connects_to, text: "connects_to shards: { shard_one: { writing: :shard_one } }" } ])
+  end
+end
+
+RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "scope" do
+  it "leaves out a macro or setting a method body runs, and keeps one a mixin hook sends to the includer" do
+    results = parse_and_dispatch(<<~RUBY)
+      class Gadget < ApplicationRecord
+        def self.with_lock
+          self.locking_column = :temp_lock
+          self.ignored_columns += %w[a]
+          has_paper_trail
+        end
+        def touch_all
+          encrypts :token
+        end
+      end
+      module Trackable
+        def self.included(base)
+          base.encrypts :ssn
+        end
+      end
+    RUBY
+    expect(results.map { |r| [ r[:macro], r[:attribute] ] }).to eq([ [ :encrypts, "ssn" ] ])
+  end
+
+  it "names the class each record is written in, so a nested class keeps its own" do
+    results = parse_and_dispatch(<<~RUBY)
+      class Gadget < ApplicationRecord
+        self.locking_column = :lock_version
+        class Part < ApplicationRecord
+          self.implicit_order_column = "made_at"
+          has_paper_trail
+        end
+      end
+    RUBY
+    expect(results.map { |r| [ r[:macro], r[:owner] ] }).to eq([
+      [ :model_setting, %w[Gadget] ], [ :model_setting, %w[Gadget Part] ], [ :gem_macro, %w[Gadget Part] ]
+    ])
+  end
+end

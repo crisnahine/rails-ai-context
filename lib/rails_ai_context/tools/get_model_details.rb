@@ -134,6 +134,20 @@ module RailsAiContext
         lines
       end
 
+      private_class_method def self.sti_line(sti)
+        place = sti[:sti_parent] ? "subclass of `#{sti[:sti_parent]}`" : "base of #{sti[:sti_children].map { |c| "`#{c}`" }.join(', ')}"
+        "**STI:** #{place}#{", type column `#{sti[:type_column]}`" if sti[:type_column]}"
+      end
+
+      private_class_method def self.tenancy_line(tenancy)
+        file = tenancy[:declared_in]
+        case tenancy[:scope]
+        when "shared" then "**Tenancy:** shared schema: Apartment's `excluded_models` lists it (`#{file}`)"
+        when "per_tenant" then "**Tenancy:** one table in each tenant's schema: Apartment's `excluded_models` does not list it (`#{file}`)"
+        else "**Tenancy:** [INFERRED] Apartment computes `excluded_models` (`#{tenancy[:excluded_models]}` in `#{file}`), so whether this table is per tenant is not read"
+        end
+      end
+
       private_class_method def self.unavailable_row(name, data)
         Serializers::SectionFacts.unread_row("- **#{name}**", data)
       end
@@ -150,6 +164,11 @@ module RailsAiContext
         end
         lines = [ "# #{name}#{header_tag}", "" ]
         lines << "**Table:** `#{data[:table_name]}`" if data[:table_name]
+        if (database = data[:database])
+          lines << "**Database:** `#{database[:connects_to]}`#{", inherited from `#{database[:declared_in]}`" if database[:declared_in]}"
+        end
+        lines << tenancy_line(data[:tenancy]) if data[:tenancy].is_a?(Hash)
+        lines << sti_line(data[:sti]) if data[:sti].is_a?(Hash) && (data[:sti][:sti_parent] || data[:sti][:sti_children])
         # A base class is not a concern, and the child may have no concerns at
         # all, so this stands outside that section.
         bases_unread = data[:bases_unread]
@@ -196,6 +215,11 @@ module RailsAiContext
               type_str = f[:type] ? ": #{f[:type]}" : ""
               lines << "- `#{f[:name]}`#{type_str}#{", default: #{f[:default]}" if f.key?(:default)}"
             end
+          end
+
+          if data[:indexes]&.any?
+            lines << "" << "## Indexes"
+            data[:indexes].each { |index| lines << "- `#{index}`" }
           end
 
           # embeds_many and embeds_one are listed under Associations too.
@@ -348,7 +372,11 @@ module RailsAiContext
 
         # Macros - surface hidden introspector data
         macro_lines = []
-        macro_lines << "- `has_secure_password`" if data[:has_secure_password]
+        if data[:secure_passwords]&.any?
+          data[:secure_passwords].each { |pw| macro_lines << "- `has_secure_password` :#{pw[:attribute]}#{option_pairs(pw[:options])}" }
+        elsif data[:has_secure_password]
+          macro_lines << "- `has_secure_password`"
+        end
         macro_lines << "- `has_secure_token` #{data[:has_secure_token].map { |f| ":#{f}" }.join(', ')}" if data[:has_secure_token]&.any?
         Array(data[:nested_attributes]).each do |nested|
           options = nested[:options]&.any? ? " (#{nested[:options].map { |k, v| "#{k}: #{v}" }.join(', ')})" : ""
@@ -357,7 +385,10 @@ module RailsAiContext
         macro_lines << "- `encrypts` #{data[:encrypts].map { |f| ":#{f}" }.join(', ')}" if data[:encrypts]&.any?
         macro_lines << "- `normalizes` #{data[:normalizes].map { |f| ":#{f}" }.join(', ')}" if data[:normalizes]&.any?
         macro_lines << "- `generates_token_for` #{data[:generates_token_for].map { |f| ":#{f}" }.join(', ')}" if data[:generates_token_for]&.any?
-        macro_lines << "- `serialize` #{data[:serialize].map { |f| ":#{f}" }.join(', ')}" if data[:serialize]&.any?
+        if data[:serialize]&.any?
+          serialized = data[:serialize].map { |f| ":#{f}#{option_pairs(data[:serialize_options]&.dig(f))}" }
+          macro_lines << "- `serialize` #{serialized.join(', ')}"
+        end
         macro_lines << "- `store` #{data[:store].map { |f| store_column_text(f, data[:store_accessors]) }.join(', ')}" if data[:store]&.any?
         macro_lines << "- `broadcasts` #{data[:broadcasts].join(', ')}" if data[:broadcasts]&.any?
         if data[:has_one_attached]&.any?
@@ -373,9 +404,26 @@ module RailsAiContext
         if data[:alias_attributes]&.any?
           macro_lines << "- `alias_attribute` #{data[:alias_attributes].map { |a| ":#{a[:name]} → :#{a[:target]}" }.join(', ')}"
         end
+        (data[:model_settings] || {}).each { |setting, value| macro_lines << "- `self.#{setting} = #{value}`" }
+        macro_lines << "- `attr_readonly` #{data[:attr_readonly].map { |f| ":#{f}" }.join(', ')}" if data[:attr_readonly]&.any?
+        macro_lines << "- `query_constraints` #{data[:query_constraints].map { |f| ":#{f}" }.join(', ')}" if data[:query_constraints]&.any?
+        Array(data[:gem_macros]).each do |gem_macro|
+          adds = Array(gem_macro[:adds]).map { |name| "`#{name}`" }
+          macro_lines << "- `#{gem_macro[:text]}`#{" (adds #{adds.join(', ')})" if adds.any?}"
+        end
         if macro_lines.any?
           lines << "" << "## Macros"
           lines.concat(macro_lines)
+        end
+
+        Array(data[:state_machines]).each do |machine|
+          lines << "" << "## State machine (aasm, column `#{machine[:column]}`)"
+          states = machine[:states].map { |state| "`#{state}`#{" (initial)" if state == machine[:initial]}" }
+          lines << "- states: #{states.join(', ')}" if states.any?
+          machine[:events].each do |event|
+            moves = event[:transitions].map { |t| "#{t[:from].any? ? t[:from].join(' | ') : 'any'} -> #{t[:to]}" }
+            lines << "- event `#{event[:name]}`#{": #{moves.join(', ')}" if moves.any?}"
+          end
         end
 
         # Encryption details (expanded from encrypts)
@@ -398,7 +446,7 @@ module RailsAiContext
         if data[:token_generation]&.any?
           lines << "" << "## Token Generation"
           data[:token_generation].each do |tg|
-            detail_str = tg.is_a?(Hash) ? "**#{tg[:purpose]}** (expires_in: #{tg[:expires_in] || 'default'})" : tg.to_s
+            detail_str = tg.is_a?(Hash) ? "**#{tg[:purpose]}** (expires_in: #{tg[:expires_in] || 'never'})" : tg.to_s
             lines << "- #{detail_str}"
           end
         end
@@ -576,7 +624,11 @@ module RailsAiContext
         return "**#{nd[:field]}** #{RailsAiContext::Confidence::INFERRED}" if transformation.nil? ||
           transformation == RailsAiContext::Confidence::INFERRED
 
-        "**#{nd[:field]}** - #{transformation}"
+        "**#{nd[:field]}** - #{transformation}#{option_pairs(nd[:options])}"
+      end
+
+      private_class_method def self.option_pairs(options)
+        options&.any? ? " (#{options.map { |k, v| "#{k}: #{option_text(v)}" }.join(', ')})" : ""
       end
 
       # Extract bodies of custom validate methods (single-line or first meaningful line)

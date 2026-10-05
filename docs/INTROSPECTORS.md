@@ -179,14 +179,14 @@ It runs a single-pass Dispatcher that walks the AST once and feeds events to all
 
 | Listener | What it detects |
 |:---------|:---------------|
-| AssociationsListener | `belongs_to`, `has_many`, `has_one`, `has_and_belongs_to_many`, the polymorphic `belongs_to` of `delegated_type`, under the options of an enclosing `with_options` block |
+| AssociationsListener | `belongs_to`, `has_many`, `has_one`, `has_and_belongs_to_many`, the polymorphic `belongs_to` of `delegated_type`, the `belongs_to` of `acts_as_tenant` (tenant defaults to `:account`), under the options of an enclosing `with_options` block |
 | ValidationsListener | `validates`, `validates_*_of`, custom `validate :method`, under the options of an enclosing `with_options` block |
 | ScopesListener | `scope :name, -> { ... }`, `lambda { ... }` and the block form |
 | EnumsListener | Rails 7+ and legacy enum syntax, prefix/suffix options |
 | CallbacksListener | All AR callback types including `around_*`, `after_touch`, `after_initialize` and `after_find`; `after_commit` with `on:` resolution; a callback object by its constant, a block as `[inline_block]`; `if:`/`unless:` kept as the source wrote them, and the options of an enclosing `with_options` block |
-| MacrosListener | `encrypts`, `normalizes`, `delegate`, `has_secure_password`, `serialize`, `store`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `generates_token_for`, `attribute`, `alias_attribute`, `store_accessor`, `self.ignored_columns`, `has_secure_token`, `accepts_nested_attributes_for` |
-| MethodsListener | `def`/`def self.`, visibility tracking, parameter extraction, `class << self`, the methods `delegate` and Forwardable's `def_delegators`/`def_delegator` define (public unless `private: true`, and with no `end_location`, since a delegation has no body); each `def` carries `offset`/`end_offset`, which `SourceIntrospector.outside_defs` pairs against a call's `offset` to tell a call on the same line as a def from one inside it; `include_initialize: true` adds the constructor a caller reports on its own |
-| MixinsListener | `include`, `prepend`, `extend`, `singleton_class.include` and `singleton_class.prepend` (`singleton_class.extend` is not read), flagging the ones that reach the ancestor chain, as reflection reports them |
+| MacrosListener | (each attribute macro and `has_secure_password` with its keyword options as written, under `written`) `encrypts`, `normalizes`, `delegate`, `has_secure_password`, `serialize`, `store`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `generates_token_for`, `attribute`, `alias_attribute`, `store_accessor`, `self.ignored_columns`, `has_secure_token`, `accepts_nested_attributes_for`, `attr_readonly`, `query_constraints`, `connects_to` as written (a child carries its base's, with the base's name under `declared_in`), the class settings `self.inheritance_column`/`store_full_sti_class`/`strict_loading_by_default`/`implicit_order_column`/`locking_column =` as written, an `aasm` block's states, initial state, events and transitions, and model gems' class macros (`GEM_MACROS`: `has_paper_trail`, `friendly_id`, `mount_uploader`, `monetize`, `pg_search_scope`, `acts_as_list` and others) as written, without their block |
+| MethodsListener | `def`/`def self.`, visibility tracking, parameter extraction, `class << self`, the methods `delegate` and Forwardable's `def_delegators`/`def_delegator` define (public unless `private: true`, and with no `end_location`, since a delegation has no body), and the methods `alias`, `alias_method`, `attr_*`, `define_method` with a literal name, `class_attribute` and `cattr_*`/`mattr_*` define (an alias keeps its original's visibility and parameters; Active Support's accessors are public on the class and, unless an option turns them off, on instances); each `def` carries `offset`/`end_offset`, which `SourceIntrospector.outside_defs` pairs against a call's `offset` to tell a call on the same line as a def from one inside it; `include_initialize: true` adds the constructor a caller reports on its own |
+| MixinsListener | `include`, `prepend`, `extend`, `singleton_class.include` and `singleton_class.prepend` (`singleton_class.extend` is not read), flagging the ones that reach the ancestor chain, as reflection reports them. GitLab's `prepend_mod_with("Note")`, `include_mod_with`, `extend_mod_with` and their `_mod` forms record `EE::Note` and `JH::Note` flagged `edition`; `ConcernMembership.owned_by` keeps one only where the app has its file, and credits `Note.prepend X` to Note |
 
 ### The targeted-walk listeners
 
@@ -224,7 +224,8 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 | MethodCallListener | Call sites by name or pattern anywhere in a file, inside a `def`, a lambda or a block included, with arguments, options, receiver, line and offset. Used by the Turbo introspector for broadcast calls and by `ActionFilters` for the skip macros |
 
 `GenericMacroListener.new(*names, block_source: [:name])` adds `block`, the
-one-line source of the block those macros are given. ProcLiteralListener is
+one-line source of the block those macros are given. `call_source: [:name]`
+adds `text`, the one-line source of the whole call (the Mongoid `index` reader). ProcLiteralListener is
 what the job introspector reads a `queue_as` Proc with.
 
 ### Adding a listener

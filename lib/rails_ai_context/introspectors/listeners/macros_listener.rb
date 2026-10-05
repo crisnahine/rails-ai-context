@@ -9,6 +9,7 @@ module RailsAiContext
       # broadcasts, generates_token_for, attribute, etc.
       class MacrosListener < BaseListener
         include WithOptionsScope
+        include OwnerScope
 
         SIMPLE_MACROS = %i[
           has_secure_password
@@ -16,7 +17,13 @@ module RailsAiContext
 
         ATTRIBUTE_MACROS = %i[
           encrypts normalizes has_one_attached has_many_attached
-          has_rich_text generates_token_for serialize
+          has_rich_text generates_token_for serialize attr_readonly query_constraints
+        ].to_set.freeze
+
+        # Class settings each change how the model reads, writes or loads; kept as written.
+        SETTINGS = %i[
+          inheritance_column= store_full_sti_class= strict_loading_by_default=
+          implicit_order_column= locking_column=
         ].to_set.freeze
 
         STORE_MACROS = %i[store store_accessor].to_set.freeze
@@ -25,13 +32,76 @@ module RailsAiContext
           broadcasts broadcasts_to broadcasts_refreshes_to
         ].to_set.freeze
 
-        def on_call_node_enter(node)
-          return record_ignored_columns(node, :assign) if node.name == :ignored_columns= && node.receiver.is_a?(Prism::SelfNode)
-          return unless in_scope?(node)
+        # Model gems' class macros, each listed as written; aasm's block is read in full.
+        GEM_MACROS = %i[
+          has_paper_trail audited acts_as_paranoid friendly_id
+          mount_uploader mount_uploaders monetize
+          pg_search_scope multisearchable searchkick
+          acts_as_list acts_as_tenant multi_tenant acts_as_taggable acts_as_taggable_on
+          has_ancestry acts_as_nested_set has_closure_tree acts_as_tree
+          state_machine workflow
+        ].to_set.freeze
 
-          if SIMPLE_MACROS.include?(node.name)
+        def initialize
+          super
+          @def_depth = 0
+        end
+
+        def on_def_node_enter(_node)
+          @def_depth += 1
+        end
+
+        def on_def_node_leave(_node)
+          @def_depth -= 1
+        end
+
+        # A method body runs only when called, so only a call sent to a mixin hook's
+        # includer counts there. Each record names the class it is written in.
+        def on_call_node_enter(node)
+          return if @def_depth.positive? && !(node.receiver && in_scope?(node))
+
+          owned { record_call(node) }
+        end
+
+        def on_call_node_leave(node)
+          @aasm = nil if @aasm && @aasm[:node].equal?(node)
+          @event = nil if @event && @event[:node].equal?(node)
+        end
+
+        # self.ignored_columns += [...] and -= [...]
+        def on_call_operator_write_node_enter(node)
+          return unless @def_depth.zero? && node.read_name == :ignored_columns && node.receiver.is_a?(Prism::SelfNode)
+
+          op = { :+ => :add, :- => :remove }[node.binary_operator]
+          owned { record_ignored_columns(node, op) } if op
+        end
+
+        private
+
+        def owned
+          count = @results.size
+          yield
+          @results.drop(count).each { |result| result[:owner] = @owner_stack.dup }
+        end
+
+        def record_call(node)
+          return record_ignored_columns(node, :assign) if node.name == :ignored_columns= && node.receiver.is_a?(Prism::SelfNode)
+          return record_setting(node) if SETTINGS.include?(node.name) && node.receiver.is_a?(Prism::SelfNode)
+          return unless in_scope?(node)
+          return read_aasm(node) if @aasm
+
+          if node.name == :aasm
+            open_aasm(node) if node.block || node.arguments
+          elsif GEM_MACROS.include?(node.name)
+            record_gem_macro(node)
+          elsif node.name == :connects_to
+            @results << { macro: :connects_to, text: one_line_source(node), location: node.location.start_line, confidence: confidence_for(node) }
+          elsif SIMPLE_MACROS.include?(node.name)
+            # Rails defaults the attribute to :password.
             @results << {
               macro:      node.name,
+              attribute:  (extract_symbol_args(node).first || :password).to_s,
+              written:    written_options(node),
               location:   node.location.start_line,
               confidence: confidence_for(node)
             }
@@ -56,15 +126,63 @@ module RailsAiContext
           end
         end
 
-        # self.ignored_columns += [...] and -= [...]
-        def on_call_operator_write_node_enter(node)
-          return unless node.read_name == :ignored_columns && node.receiver.is_a?(Prism::SelfNode)
-
-          op = { :+ => :add, :- => :remove }[node.binary_operator]
-          record_ignored_columns(node, op) if op
+        # Every keyword option as the file writes it: a lambda, `2.days` or a nested hash
+        # reads the same on every Ruby, where a value's inspect does not.
+        def written_options(node)
+          keyword_hash(node) { |value| one_line_source(value) }
         end
 
-        private
+        def record_setting(node)
+          value = node.arguments&.arguments&.first or return
+          @results << { macro: :model_setting, setting: node.name.to_s.delete_suffix("="), value: value.slice,
+                        location: node.location.start_line, confidence: confidence_for(node) }
+        end
+
+        def record_gem_macro(node)
+          text = node.block ? node.slice[0, node.block.location.start_offset - node.location.start_offset] : node.slice
+          text = text.gsub(/\s+/, " ").strip
+          adds = monetized_names(node) if node.name == :monetize
+          @results << { macro: :gem_macro, name: node.name, text: text, adds: adds.presence,
+                        location: node.location.start_line, confidence: confidence_for(node) }.compact
+        end
+
+        # money-rails names the attribute `as:`, or the column minus its `_cents` postfix.
+        def monetized_names(node)
+          as = extract_keyword_options(node)[:as]
+          return [ as.to_s ] if as.is_a?(Symbol) || as.is_a?(String)
+
+          extract_symbol_args(node).map(&:to_s).filter_map { |column| column.delete_suffix("_cents") if column.end_with?("_cents") }
+        end
+
+        # A named machine's column defaults to its name (AASM::Base#default_column).
+        def open_aasm(node)
+          name = extract_symbol_args(node).first
+          column = extract_keyword_options(node)[:column] || (name && name != :default ? name : "aasm_state")
+          entry = { macro: :aasm, column: column.to_s, initial: nil, states: [], events: [],
+                    location: node.location.start_line, confidence: confidence_for(node) }
+          @results << entry
+          @aasm = { node: node, entry: entry } if node.block.is_a?(Prism::BlockNode)
+        end
+
+        def read_aasm(node)
+          entry = @aasm[:entry]
+          case node.name
+          when :state
+            names = extract_symbol_args(node).map(&:to_s)
+            entry[:states].concat(names)
+            # The first state is the initial one until a state says `initial: true`.
+            entry[:initial] = names.first if names.any? && (entry[:initial].nil? || extract_keyword_options(node)[:initial] == true)
+          when :event
+            name = extract_symbol_args(node).first or return
+            event = { name: name.to_s, transitions: [] }
+            entry[:events] << event
+            @event = { node: node, event: event } if node.block
+          when :transitions
+            options = extract_keyword_nodes(node)
+            from = options[:from] ? literal_strings(options[:from]) : []
+            @event[:event][:transitions] << { from: from, to: options[:to] && literal_string(options[:to]) } if @event
+          end
+        end
 
         def record_ignored_columns(node, op)
           value = node.is_a?(Prism::CallNode) ? node.arguments&.arguments&.first : node.value
@@ -87,6 +205,7 @@ module RailsAiContext
               macro:      node.name,
               attribute:  attr_name.to_s,
               options:    options,
+              written:    written_options(node),
               location:   node.location.start_line,
               confidence: confidence_for(node)
             }

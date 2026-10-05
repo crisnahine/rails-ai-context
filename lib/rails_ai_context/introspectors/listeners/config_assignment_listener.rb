@@ -145,12 +145,13 @@ module RailsAiContext
           prefix = chain_path(receiver)
           return unless prefix
 
+          path = prefix + [ name ]
           @results << {
-            path:       prefix + [ name ],
+            path:       path,
             assignment: false,
             write:      kind,
             value:      nil,
-            source:     nil,
+            source:     RailsAiContext::Redaction.redact_assignment(path, value: nil, source: NodeSource.text(node))[:source],
             location:   node.location.start_line
           }
         end

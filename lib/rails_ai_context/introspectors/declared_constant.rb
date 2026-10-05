@@ -147,11 +147,18 @@ module RailsAiContext
 
         # Keyed by the cached tree, so the entry lives as long as the parse:
         # one run asks the same file three or four times.
-        (DECLARATIONS[root] ||= constants(root).filter_map do |name, node, nesting|
-          next unless node.is_a?(Prism::ClassNode)
+        (DECLARATIONS[root] ||= constants(root, assignments: true).filter_map do |name, node, nesting|
+          if node.is_a?(Prism::ClassNode)
+            parent = node.superclass
+            nesting = nesting.drop(1)
+          elsif node.respond_to?(:value) && class_new?(node.value)
+            # The block body opens no scope: the superclass reads in the assignment's nesting.
+            parent = node.value.arguments&.arguments&.first
+          else
+            next
+          end
 
-          rooted = node.superclass&.slice&.start_with?("::")
-          Declaration.new(name: name, superclass: superclass_name(node.superclass), nesting: rooted ? [] : nesting.drop(1))
+          Declaration.new(name: name, superclass: superclass_name(parent), nesting: parent&.slice&.start_with?("::") ? [] : nesting)
         end.freeze).dup
       rescue StandardError, ScriptError => e
         RailsAiContext.debug_fail(e, [], label: "DeclaredConstant")
@@ -190,8 +197,9 @@ module RailsAiContext
       # innermost first. A class is part of the name of anything inside it;
       # `class ::Foo` inside `module A` is the top-level Foo, and `class A::B`
       # nests only A::B where `module A; class B` nests both.
-      def constants(root)
-        return enum_for(:constants, root) unless block_given?
+      # `assignments: true` also yields each `X = ...` and `A::X = ...` write, nesting unchanged.
+      def constants(root, assignments: false)
+        return enum_for(:constants, root, assignments: assignments) unless block_given?
 
         stack = [ [ root, [], [] ] ]
         until stack.empty?
@@ -200,6 +208,9 @@ module RailsAiContext
             scope = scoped(scope, node)
             nesting = [ scope.join("::") ] + nesting
             yield scope.join("::"), node, nesting
+          elsif assignments && (node.is_a?(Prism::ConstantWriteNode) || node.is_a?(Prism::ConstantPathWriteNode))
+            written = node.is_a?(Prism::ConstantWriteNode) ? node.name.to_s : node.target.slice
+            yield (written.start_with?("::") ? [ written.delete_prefix("::") ] : scope + [ written ]).join("::"), node, nesting
           end
           stack.concat(node.compact_child_nodes.reverse.map { |child| [ child, scope, nesting ] })
         end
@@ -215,6 +226,12 @@ module RailsAiContext
         node.constant_path.slice.delete_prefix("::")
       end
 
+      # `Class.new(Base)` or `Class.new(Base) do ... end`: a class the assignment names.
+      def class_new?(node)
+        node.is_a?(Prism::CallNode) && node.name == :new &&
+          node.receiver.respond_to?(:slice) && node.receiver.slice.delete_prefix("::") == "Class"
+      end
+
       # nil for an anonymous or computed superclass (`< Struct.new(:a)`).
       def superclass_name(node)
         return nil unless node.is_a?(Prism::ConstantReadNode) || node.is_a?(Prism::ConstantPathNode)
@@ -222,7 +239,7 @@ module RailsAiContext
         node.slice.delete_prefix("::")
       end
 
-      private_class_method :only_own_class, :scoped, :segment, :superclass_name
+      private_class_method :only_own_class, :scoped, :segment, :superclass_name, :class_new?
     end
   end
 end

@@ -62,12 +62,30 @@ module RailsAiContext
 
     # Matched on the last segment: `module Edition; module Featurable` and
     # `module Edition::Featurable` both write one constant.
-    def owned_by(records, name)
+    # An edition module (`prepend_mod_with`) counts only where `root` holds its file.
+    def owned_by(records, name, root: nil)
       return Array(records) if Array(records).none? { |record| record.key?(:owner) }
 
       own = own_owner(records, name)
-      # `Other.include X` written in the body mixes into Other.
-      Array(records).select { |record| own && !record[:receiver] && Array(record[:owner]).join("::") == own }
+      Array(records).filter_map do |record|
+        next if record[:edition] && !(root && ConcernPaths.find_file(root.to_s, record[:name]))
+
+        if record[:receiver]
+          mixed_into(record, name)
+        elsif own && Array(record[:owner]).join("::") == own
+          record
+        end
+      end
+    end
+
+    # `Note.prepend X` mixes into Note as `prepend X` in its body would; `Other.include X` is Other's.
+    def mixed_into(record, name)
+      receiver = record[:receiver].to_s
+      target = receiver.start_with?("::") ? receiver.delete_prefix("::") : [ *Array(record[:owner]), receiver ].join("::")
+      return unless target == name.to_s
+
+      own = record.except(:receiver)
+      record.key?(:ancestor) ? own.merge(ancestor: CONCERN_BLOCKS.key?(record[:macro])) : own
     end
 
     def own_owner(records, name)

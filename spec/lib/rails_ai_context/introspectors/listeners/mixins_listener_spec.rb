@@ -87,4 +87,25 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MixinsListener do
     expect(results.map { |r| [ r[:macro], r[:name], r[:ancestor] ] })
       .to eq([ [ :include, "Trackable", true ], [ :extend, "Finder", false ] ])
   end
+
+  it "reads GitLab's prepend_mod_with and its siblings as mixing in each edition's module" do
+    results = parse_and_dispatch(<<~RUBY)
+      class Note
+        include_mod_with "Noteable"
+        prepend_mod
+      end
+      Note.prepend_mod_with("Note")
+      Note.extend_mod_with(name)
+      Note.prepend_mod_with("Note", namespace: Foo)
+    RUBY
+
+    expect(results.map { |r| r.slice(:macro, :name, :ancestor, :receiver, :edition) }).to eq([
+      { macro: :include, name: "EE::Noteable", ancestor: true, edition: true },
+      { macro: :include, name: "JH::Noteable", ancestor: true, edition: true },
+      { macro: :prepend, name: "EE::Note", ancestor: true, edition: true },
+      { macro: :prepend, name: "JH::Note", ancestor: true, edition: true },
+      { macro: :prepend, name: "EE::Note", ancestor: false, receiver: "Note", edition: true },
+      { macro: :prepend, name: "JH::Note", ancestor: false, receiver: "Note", edition: true }
+    ])
+  end
 end

@@ -4,11 +4,12 @@ module RailsAiContext
   module Introspectors
     module Listeners
       class GenericMacroListener < BaseListener
-        def initialize(*target_methods, block_source: [])
+        def initialize(*target_methods, block_source: [], call_source: [])
           super()
           @target_methods = target_methods.flatten.map(&:to_sym).to_set
           @enclosing = []
           @block_source = block_source.to_set
+          @call_source = call_source.to_set
         end
 
         def on_call_node_enter(node)
@@ -34,6 +35,7 @@ module RailsAiContext
             location:      node.location.start_line,
             confidence:    confidence_for(node)
           }
+          @results.last[:text] = one_line_source(node) if @call_source.include?(node.name)
 
           # A target macro that takes a block encloses whatever the block
           # declares: `string :title` inside `hash :order_params do ... end`

@@ -52,7 +52,7 @@ module RailsAiContext
 
         unloadable_models.each { |class_name, details| result[class_name] ||= details }
 
-        result
+        tag_tenancy(result)
       end
 
       # Models the static scan finds, abstract bases left out. excluded_models is the app's
@@ -80,7 +80,7 @@ module RailsAiContext
         candidates = static_candidates
         sti_parents = candidates.keys.to_h { |name| [ name, sti_parent(name, candidates, []) ] }
         bases = declared_bases(candidates)
-        candidates.each_with_object({}) do |(class_name, candidate), result|
+        models = candidates.each_with_object({}) do |(class_name, candidate), result|
           # Hidden from the listing, kept in the walk: its children still
           # inherit its table and its declarations.
           next if config.excluded_models.include?(class_name)
@@ -123,9 +123,34 @@ module RailsAiContext
           # not have.
           result[class_name] = { error: e.message, file: candidate[:file], table_name: table }.compact
         end
+        tag_tenancy(models)
       end
 
       private
+
+      # Apartment keeps an excluded model, and an STI subclass sharing its table, in the
+      # shared schema; every other ActiveRecord model has a table in each tenant's schema.
+      def tag_tenancy(models)
+        config = ApartmentConfig.read(app.root) or return models
+        excluded = config[:excluded_models]
+        models.each do |name, data|
+          next if data[:error] || data[:mongoid]
+
+          scope = if excluded.nil? then "unknown"
+          elsif apartment_shared?(name, models, excluded) then "shared"
+          else "per_tenant"
+          end
+          data[:tenancy] = { gem: "apartment", scope: scope, declared_in: config[:file], excluded_models: config[:excluded_models_source] }.compact
+        end
+      end
+
+      def apartment_shared?(name, models, excluded, seen = [])
+        return true if excluded.include?(name)
+        return false if seen.include?(name)
+
+        parent = models.dig(name, :sti, :sti_parent)
+        parent ? apartment_shared?(parent, models, excluded, seen + [ name ]) : false
+      end
 
       # The same shape the booted tier reports under :sti, off the chain the
       # static tier already resolves to share the base's table. A model that
@@ -142,6 +167,12 @@ module RailsAiContext
           sti_parent: parent,
           sti_children: (children unless children.empty?)
         }.compact
+      end
+
+      # The value as written, read the way Rails reads it: a symbol or a string names the column.
+      def static_type_column(settings)
+        written = settings&.dig("inheritance_column") or return "type"
+        written[/\A:"?(\w+)"?\z/, 1] || written[/\A["'](\w+)["']\z/, 1] || RailsAiContext::Confidence::INFERRED
       end
 
       # A model file the app cannot load leaves its class out of reflection,
@@ -961,10 +992,11 @@ module RailsAiContext
       end
 
       def extract_sti_info(model)
+        type_column = model.inheritance_column.to_s
         has_type_column = if model.connected? && model.table_exists?
-          model.columns_hash.key?("type")
+          model.columns_hash.key?(type_column)
         else
-          SchemaReader.for(app.root).column?(model.table_name, "type")
+          SchemaReader.for(app.root).column?(model.table_name, type_column)
         end
 
         return nil unless has_type_column
@@ -986,7 +1018,8 @@ module RailsAiContext
         {
           sti_base: sti_parent.nil? && children.any?,
           sti_parent: sti_parent,
-          sti_children: children.empty? ? nil : children
+          sti_children: children.empty? ? nil : children,
+          type_column: type_column
         }.compact
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "extract_sti_info")
@@ -1145,7 +1178,9 @@ module RailsAiContext
         has_rich_text: :has_rich_text,
         generates_token_for: :generates_token_for,
         serialize: :serialize,
-        has_secure_token: :has_secure_token
+        has_secure_token: :has_secure_token,
+        attr_readonly: :attr_readonly,
+        query_constraints: :query_constraints
       }.freeze
 
       STORE_MACROS = %i[store store_accessor].to_set.freeze
@@ -1159,8 +1194,10 @@ module RailsAiContext
 
           if macro == :has_secure_password
             macros[:has_secure_password] = true
+            (macros[:secure_passwords] ||= []) << { attribute: m[:attribute], options: m[:written] || {} }
           elsif (key = ATTRIBUTE_MACRO_MAP[macro])
             (macros[key] ||= []) << m[:attribute]
+            (macros[:serialize_options] ||= {})[m[:attribute]] = m[:written] if macro == :serialize && m[:written]&.any?
           elsif STORE_MACROS.include?(macro)
             add_store_accessors(macros, m)
           elsif macro == :accepts_nested_attributes_for
@@ -1175,6 +1212,15 @@ module RailsAiContext
             (macros[:attributes] ||= []) << { name: m[:attribute], type: m[:type], default: m.dig(:options, :default) }.compact
           elsif macro == :alias_attribute
             (macros[:alias_attributes] ||= []) << { name: m[:attribute], target: m[:target] }
+          elsif macro == :model_setting
+            # Bases arrive first, so the class's own assignment wins.
+            (macros[:model_settings] ||= {})[m[:setting]] = m[:value]
+          elsif macro == :connects_to
+            macros[:database] = { connects_to: m[:text], declared_in: m[:declared_in] }.compact
+          elsif macro == :gem_macro
+            (macros[:gem_macros] ||= []) << m.slice(:text, :adds)
+          elsif macro == :aasm
+            (macros[:state_machines] ||= []) << m.slice(:column, :initial, :states, :events)
           end
 
           if BROADCAST_MACROS.include?(macro)
@@ -1262,9 +1308,7 @@ module RailsAiContext
           name = node.name.to_s
           # Only capture UPPER_CASE constants (matching the old regex behavior)
           if name.match?(/\A[A-Z][A-Z_]+\z/)
-            # Unwrap .freeze if present: STATUSES = %w[...].freeze
-            value_node = node.value
-            value_node = value_node.receiver if value_node.is_a?(Prism::CallNode) && value_node.name == :freeze
+            value_node = unwrap_frozen(node.value)
 
             if value_node.is_a?(Prism::ArrayNode)
               values = value_node.elements.filter_map { |el|
@@ -1281,25 +1325,37 @@ module RailsAiContext
         node.child_nodes.compact.each { |child| find_constant_arrays(child, constants) }
       end
 
+      # `%w[...].freeze` and `Ractor.make_shareable(%w[...])` are the array itself, frozen.
+      def unwrap_frozen(node)
+        loop do
+          break node unless node.is_a?(Prism::CallNode)
+
+          if node.name == :freeze && node.arguments.nil?
+            node = node.receiver
+          elsif node.name == :make_shareable && node.receiver&.slice&.delete_prefix("::") == "Ractor" && node.arguments&.arguments&.size == 1
+            node = node.arguments.arguments.first
+          else
+            break node
+          end
+        end
+      end
+
       def extract_detailed_macros_from_ast(source_data)
         encryption = []
         normalizations = []
         tokens = []
 
         source_data[:macros].each do |m|
+          written = m[:written] || {}
           case m[:macro]
           when :encrypts
-            opts = {}
-            opts[:deterministic] = true if m[:options][:deterministic] == true
-            opts[:downcase] = true if m[:options][:downcase] == true
-            encryption << { field: m[:attribute], options: opts }
+            encryption << { field: m[:attribute], options: written }
           when :normalizes
-            entry = { field: m[:attribute] }
-            entry[:transformation] = m[:options][:with].to_s if m[:options][:with]
+            entry = { field: m[:attribute], transformation: written[:with], options: written.except(:with).presence }
             normalizations << entry.compact
           when :generates_token_for
             entry = { purpose: m[:attribute] }
-            entry[:expires_in] = m[:options][:expires_in].to_s if m[:options][:expires_in]
+            entry[:expires_in] = written[:expires_in] if written[:expires_in]
             tokens << entry.compact
           end
         end
@@ -1567,6 +1623,7 @@ module RailsAiContext
         }
         details.merge!(extract_macros_from_ast(data, path))
         details.merge!(extract_detailed_macros_from_ast(data))
+        details[:sti] = sti.merge(type_column: static_type_column(details[:model_settings])) if sti
         downgrade_records(details.compact)
       end
 
@@ -1811,7 +1868,9 @@ module RailsAiContext
             next
           end
 
-          data = merge_inherited(data, base.slice(*WALKED_KEYS))
+          # A connection is declared on an abstract base, so the child says which one.
+          macros = Array(base[:macros]).map { |m| m[:macro] == :connects_to ? m.merge(declared_in: name) : m }
+          data = merge_inherited(data, base.slice(*WALKED_KEYS).merge(macros: macros))
           # A base's concerns are the child's too: the child's record already
           # carries what they declared, and its callbacks credit them by name.
           data[:mixins] = Array(data[:mixins]) | Array(own[:mixins])
@@ -1871,7 +1930,7 @@ module RailsAiContext
         # declaration: the line it was read at differs between two files, and
         # the concern tag differs between two ways of reaching one file.
         # Bases first, the order Rails runs them: a child's `ignored_columns +=` adds to its base's list.
-        merged[:macros] = dedup(Array(inherited[:macros]) + Array(mine[:macros])) { |m| m.except(:from_concern, :location) }
+        merged[:macros] = dedup(Array(inherited[:macros]) + Array(mine[:macros])) { |m| m.except(:from_concern, :location, :owner) }
         merged[:callbacks] = Array(inherited[:callbacks]) + Array(mine[:callbacks])
         # One source line read twice is still one declaration: a concern the
         # model and one of its bases both include is walked once per class, and
@@ -2019,8 +2078,9 @@ module RailsAiContext
       # A path the read could not answer falls through to the path walk, which raises. A class
       # nested in the model's file includes for itself, not for the model.
       def own_body(data, class_name)
-        data.merge(mixins: ConcernMembership.owned_by(data[:mixins], class_name),
-                   callbacks: ConcernMembership.owned_by(data[:callbacks], class_name))
+        data.merge(mixins: ConcernMembership.owned_by(data[:mixins], class_name, root: app.root),
+                   callbacks: ConcernMembership.owned_by(data[:callbacks], class_name),
+                   macros: ConcernMembership.owned_by(data[:macros], class_name))
       end
 
       def source_walk(path)
@@ -2085,7 +2145,7 @@ module RailsAiContext
 
       def mongoid_model_details(source, class_name, path)
         data = SourceIntrospector.walk_source(source, {
-          mongoid: -> { Listeners::GenericMacroListener.new(%i[field embeds_many embeds_one embedded_in store_in]) },
+          mongoid: -> { Listeners::GenericMacroListener.new(%i[field embeds_many embeds_one embedded_in store_in index], call_source: %i[index]) },
           associations: Listeners::AssociationsListener,
           validations: Listeners::ValidationsListener,
           scopes: Listeners::ScopesListener,
@@ -2104,6 +2164,7 @@ module RailsAiContext
           fields: macros.select { |m| m[:macro] == :field }.map { |m| mongoid_field(m) },
           embeds: macros.select { |m| %i[embeds_many embeds_one embedded_in].include?(m[:macro]) }
                         .map { |m| { type: m[:macro], name: m[:args].first } },
+          indexes: macros.select { |m| m[:macro] == :index }.map { |m| m[:text] },
           # An embedded child is a relation like any other, so every count and the graph see it.
           associations: reject_excluded_associations(Array(data[:associations]) + embedded_associations(macros)),
           validations: data[:validations],

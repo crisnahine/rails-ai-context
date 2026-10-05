@@ -84,7 +84,7 @@ module RailsAiContext
       # one only hides class methods.
       def read_modules(source, owner, root, names, unread, depth)
         mixins = ConcernMembership.owned_by(
-          SourceIntrospector.walk_source(source, { mixins: Listeners::MixinsListener })[:mixins], owner
+          SourceIntrospector.walk_source(source, { mixins: Listeners::MixinsListener })[:mixins], owner, root: root
         )
         mixins.select { |m| m[:ancestor] || (m[:macro] == :extend && !m[:receiver]) }.uniq { |m| m[:name] }.each do |mixin|
           mod = mixin[:name]
