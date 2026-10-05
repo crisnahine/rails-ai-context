@@ -57,6 +57,13 @@ module RailsAiContext
         end
       end
 
+      # The body's calls and the calls its concerns' blocks make, all run with the class as self.
+      Sites = Struct.new(:body, :blocks) do
+        def sites_by_name
+          @sites_by_name ||= ConcernMacros::Run.merge_calls(ConcernMacros::Run.merge_calls({}, body.sites_by_name), blocks)
+        end
+      end
+
       module_function
 
       # @param source [String] one controller's Ruby source
@@ -81,7 +88,7 @@ module RailsAiContext
         mixins = Array(walked[:mixins])
         calls = CallSites.new(source)
         # One walk, so a concern two includes reach is added once, as Ruby does.
-        collected, unread, _hidden, _calls, placement = ConcernMacros.collect(
+        collected, unread, _hidden, block_calls, placement, _skipped, block_sites = ConcernMacros.collect(
           root, mixins, keys: [ :filters ], prefer: "controller", within: within, cache: cache, calls: calls, listeners: LISTENERS
         )
         line_of = mixins.reverse.to_h { |mixin| [ mixin[:name], mixin[:location].to_i ] }
@@ -92,14 +99,18 @@ module RailsAiContext
         by_body, by_concern = filed.partition { |entry| body_call?(entry, calls) }
         called = by_body.reject { |entry| defined.include?(entry[:site].name) }
         defined.merge(called.map { |entry| entry[:site].name })
-        inherited = base_expansions(source, within, root, calls, defined, cache)
-        placed = class_level(walked).map { |entry| [ entry[:location].to_i, -1, entry ] } +
-                 (own_defs + called + inherited).map { |entry| [ entry[:site].location.start_line, -1, entry.except(:site, :definer, :from_concern) ] } +
+        defined.merge(by_concern.filter_map { |entry| entry[:site]&.name })
+        inherited = base_expansions(source, within, root, Sites.new(calls, block_calls), defined, cache)
+        # A base's method a concern's block calls declares where that concern is included.
+        from_blocks, inherited = inherited.partition { |entry| block_sites.key?(entry[:site].__id__) }
+        by_concern += from_blocks.map { |entry| entry.merge(from_concern: block_sites[entry[:site].__id__].first) }
+        placed = class_level(walked).map { |entry| [ entry[:location].to_i, -1, 0, entry ] } +
+                 (own_defs + called + inherited).map { |entry| [ entry[:site].location.start_line, -1, 0, entry.except(:site, :definer, :from_concern) ] } +
                  by_concern.map do |entry|
                    top, order = placement[entry[:from_concern]]
-                   [ line_of[top].to_i, order.to_i, entry ]
+                   [ line_of[top].to_i, order.to_i, entry[:site] ? entry[:site].location.start_line : entry[:location].to_i, entry ]
                  end
-        entries = placed.each_with_index.sort_by { |(line, order, _), index| [ line, order, index ] }.map { |(_, _, entry), _| entry }
+        entries = placed.each_with_index.sort_by { |(line, order, at, _), index| [ line, order, at, index ] }.map { |(_, _, _, entry), _| entry }
         filters = entries.flat_map do |entry|
           record(entry).map { |filter| entry[:from_concern] ? filter.merge(from_concern: entry[:from_concern]) : filter }
         end

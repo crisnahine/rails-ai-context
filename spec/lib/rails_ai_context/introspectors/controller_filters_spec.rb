@@ -73,6 +73,36 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
       end
     end
 
+    # Mastodon: WebAppControllerConcern's included block calls vary_by, which CacheConcern gives ApplicationController.
+    it "reads a base's class method an included concern's block calls, where that concern is included" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        concern(dir, "CacheConcern", <<~BODY.strip)
+          class_methods do
+              def vary_by(value, **kwargs)
+                before_action(**kwargs) { response.headers["Vary"] = value }
+              end
+            end
+        BODY
+        concern(dir, "WebApp", "included do\n    vary_by \"Accept\"\n    before_action :set_referer\n  end")
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"),
+                   "class ApplicationController < ActionController::Base\n  include CacheConcern\nend\n")
+        source = <<~RUBY
+          class PostsController < ApplicationController
+            before_action :authenticate!
+            include WebApp
+            vary_by "Cookie", only: :show
+          end
+        RUBY
+
+        filters, = described_class.with_concerns(source, root: dir, within: "PostsController")
+
+        block = "block (line 5 of app/controllers/concerns/cache_concern.rb)"
+        expect(filters.map { |f| [ f[:name], f[:from_concern], f[:only] ] })
+          .to eq([ [ "authenticate!", nil, nil ], [ block, "WebApp", nil ], [ "set_referer", "WebApp", nil ], [ block, nil, [ "show" ] ] ])
+      end
+    end
+
     it "reads a filter inside a method only where the class calls the method" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
