@@ -677,21 +677,51 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
     it "marks it in the listing" do
       text = described_class.call.content.first[:text]
 
-      expect(text).to include("**Archive** [unknown base]")
+      expect(text).to include("**Archive** [file_serve] [unknown base]")
       expect(text).to include("**SendEmailJob** [default]")
     end
 
     it "counts it under its own heading in the queue summary" do
       text = described_class.call(detail: "summary").content.first[:text]
 
-      expect(text).to include("- Archive [unknown base]")
-      expect(text).to include("**Queues:** unknown(1), default(1)")
+      expect(text).to include("- Archive [file_serve] [unknown base]")
+      expect(text).to include("**Queues:** file_serve(1), default(1)")
     end
 
     it "says so on the job's own page" do
       text = described_class.call(job: "Archive").content.first[:text]
 
       expect(text).to include("no ActiveJob or Sidekiq ancestry")
+      expect(text).to include("**Queue:** `file_serve`")
+    end
+  end
+
+  describe "a Que job" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    before do
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "jobs"))
+      File.write(File.join(tmpdir, "app", "jobs", "mail_job.rb"), <<~RUBY)
+        class MailJob < Que::Job
+          self.queue = "mail"
+          def run(account_id)
+            Account.find(account_id)
+          end
+        end
+      RUBY
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "is listed on its queue, and answers by name with its run signature" do
+      expect(described_class.call(detail: "full").content.first[:text]).to include("**Queues:** mail(1)", "## MailJob")
+
+      text = described_class.call(job: "MailJob").content.first[:text]
+      expect(text).to include("**Queue:** `mail`", "**Perform:** `run(account_id)`")
+      expect(text).not_to include("not found")
     end
   end
 

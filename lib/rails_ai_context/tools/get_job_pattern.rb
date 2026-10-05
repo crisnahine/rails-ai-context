@@ -415,9 +415,7 @@ module RailsAiContext
       end
 
       private_class_method def self.queue_label(job)
-        return " [#{job[:queue]}]" if job[:queue]
-
-        job[:unknown_base] ? " [unknown base]" : ""
+        [ (" [#{job[:queue]}]" if job[:queue]), (" [unknown base]" if job[:unknown_base]) ].join
       end
 
       # Renders the v5.8.0 enriched Action Cable channel detail produced by

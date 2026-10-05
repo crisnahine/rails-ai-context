@@ -1319,6 +1319,34 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
           .to eq([ true, true, nil ])
       end
 
+      it "reads a Resque job's @queue and lists a Que job, which defines run, with its queue" do
+        result = static_result do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "jobs"))
+          File.write(File.join(dir, "app", "jobs", "archive_job.rb"), <<~RUBY)
+            class ArchiveJob
+              @queue = :archive
+              def self.perform(id)
+                @queue = :other
+              end
+            end
+          RUBY
+          File.write(File.join(dir, "app", "jobs", "mail_job.rb"), <<~RUBY)
+            class MailJob < Que::Job
+              self.queue = "mail"
+              def run(account_id); end
+            end
+          RUBY
+          File.write(File.join(dir, "app", "jobs", "digest_job.rb"), <<~RUBY)
+            class DigestJob < MailJob
+              def run; end
+            end
+          RUBY
+        end
+
+        expect(result[:jobs].map { |j| [ j[:name], j[:queue], j[:unknown_base] ] })
+          .to eq([ [ "ArchiveJob", "archive", true ], [ "DigestJob", "mail", nil ], [ "MailJob", "mail", nil ] ])
+      end
+
       # The walk already read every file; reading each one again to render it
       # made a job disappear if anything touched the tree in between, and the
       # listing said nothing about the one it lost.

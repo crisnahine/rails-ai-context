@@ -19,6 +19,7 @@ module RailsAiContext
       # the class, never from the directory.
       JOB_DIRS = %w[app/jobs app/workers app/sidekiq].freeze
       ACTIVE_JOB_BASES = %w[ActiveJob::Base ApplicationJob ActionMailer::MailDeliveryJob].freeze
+      QUE_JOB_BASES = %w[Que::Job].freeze
       JOB_MACROS = %i[
         queue_as retry_on discard_on
         sidekiq_options sidekiq_throttle include
@@ -144,7 +145,7 @@ module RailsAiContext
       end
 
       def inherited_queue(name)
-        chain_of(name).lazy.filter_map { |link| queue_as(job_candidates[link].ast) }.first
+        chain_of(name).each_with_index.lazy.filter_map { |link, depth| queue_as(job_candidates[link].ast, own: depth.zero?) }.first
       end
 
       def labelled(label, source)
@@ -195,13 +196,14 @@ module RailsAiContext
 
       QUEUE_AS_LISTENERS = {
         macros: -> { Listeners::GenericMacroListener.new(*JOB_MACROS, block_source: [ :queue_as ]) },
-        procs:  Listeners::ProcLiteralListener
+        procs:  Listeners::ProcLiteralListener,
+        queue_assignments: Listeners::QueueAssignmentListener
       }.freeze
 
       # A literal queue by name; one picked at enqueue time by the source that
       # picks it, the way other computed values read.
-      def queue_as(ast)
-        hit = ast[:macros].find { |m| m[:macro] == :queue_as } or return nil
+      def queue_as(ast, own: true)
+        hit = ast[:macros].find { |m| m[:macro] == :queue_as } or return assigned_queue(ast, own)
         return queue_name_from_part(hit[:args].first.to_s) if hit[:args].any?
         return labelled(COMPUTED_QUEUE, hit[:block]) if hit[:block]
 
@@ -212,6 +214,13 @@ module RailsAiContext
         return labelled(PROC_QUEUE, assigned[:source]) if assigned
 
         source.match?(PROC_LITERAL) ? labelled(PROC_QUEUE, source) : "`#{source}` (computed)"
+      end
+
+      # Resque reads @queue off the class itself, so a subclass does not inherit it;
+      # Que resolves self.queue up the superclass chain.
+      def assigned_queue(ast, own)
+        hit = Array(ast[:queue_assignments]).reverse.find { |a| own || a[:form] == :self } or return nil
+        hit[:queue] || "`#{hit[:source]}` (computed)"
       end
 
       # ActiveJob's queue_name_from_part, with the queue settings the app's config assigns.
@@ -255,7 +264,7 @@ module RailsAiContext
       # that reaches neither ActiveJob nor a Sidekiq mixin is no job and no job base.
       def base?(name)
         SuperclassChain.abstract_base?(name, inherited: inherited_names.include?(name)) &&
-          (worker?(name) || active_job?(name))
+          (worker?(name) || active_job?(name) || que_job?(name))
       end
 
       def reflected_bases
@@ -317,12 +326,13 @@ module RailsAiContext
           next if name == "ApplicationJob" || worker?(name) || base?(name)
 
           ast = candidate.ast
-          unknown_base = !active_job?(name)
+          active = active_job?(name)
+          unknown_base = !active && !que_job?(name)
           next if unknown_base && !performs?(ActionResolver.own_methods(ast[:methods], candidate.declared))
 
-          queue = inherited_queue(name) || (queue_name_from_part(nil) unless unknown_base)
+          queue = inherited_queue(name) || (queue_name_from_part(nil) if active)
 
-          perform_method = ast[:methods].find { |m| m[:name] == "perform" && m[:scope] == :instance }
+          perform_method = ActionResolver.entry_point(ast[:methods])
           perform_signature = ActionResolver.parameter_list(perform_method) if perform_method && perform_method[:params]&.any?
 
           # Extract job callbacks
@@ -370,7 +380,7 @@ module RailsAiContext
             options: inherited_options(name),
             inherited_from: option_sources(name).presence,
             throttle: throttle && throttle_summary(throttle),
-            entry_point: entry && entry[:name] == "execute" ? "execute" : nil,
+            entry_point: entry && entry[:name] != "perform" ? entry[:name] : nil,
             perform_signature: entry && entry[:params]&.any? ? ActionResolver.parameter_list(entry) : nil,
             retries: retries.any? ? retries : nil,
             calls: calls.any? ? calls : nil
@@ -439,18 +449,27 @@ module RailsAiContext
 
       # Whether the chain reaches ActiveJob. The job directories answer first, since a base
       # there is often namespace-relative; anything else goes through the autoload roots.
-      def active_job?(name, seen = [])
+      def active_job?(name)
+        reaches?(name, ACTIVE_JOB_BASES)
+      end
+
+      # Que jobs subclass Que::Job and define run rather than perform.
+      def que_job?(name)
+        reaches?(name, QUE_JOB_BASES)
+      end
+
+      def reaches?(name, bases, seen = [])
         return false if seen.include?(name)
 
         candidate = job_candidates[name] or return false
         parent = candidate.superclass or return false
-        return true if ACTIVE_JOB_BASES.include?(parent)
+        return true if bases.include?(parent)
 
         resolved = superclass_of(name)
-        return active_job?(resolved, seen + [ name ]) if resolved
+        return reaches?(resolved, bases, seen + [ name ]) if resolved
 
         @superclass_lookup ||= SuperclassChain.lookup_for(app.root)
-        SuperclassChain.to(candidate.source, bases: ACTIVE_JOB_BASES,
+        SuperclassChain.to(candidate.source, bases: bases,
                            lookup: @superclass_lookup, only: candidate.declared).any?
       end
 
