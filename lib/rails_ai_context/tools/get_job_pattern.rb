@@ -152,9 +152,13 @@ module RailsAiContext
         parts.any? ? " [#{parts.join('; ')}]" : ""
       end
 
-      # `retry:` shows in the worker's bracket, so this line carries only its own retry_on.
+      # `retry:` shows in the worker's bracket, so this line carries only its own retry_on;
+      # a retry block is named by its macro, its body stays on the worker's page.
       private_class_method def self.own_retries(worker)
-        Array(worker[:retries]).reject { |entry| entry.start_with?("sidekiq retry:") }
+        Array(worker[:retries]).reject { |entry| entry.start_with?("sidekiq retry:") }.map do |entry|
+          macro = RailsAiContext::Introspectors::RetryPolicy::BLOCK_MACROS.find { |name| entry.start_with?("#{name} ") || entry == name.to_s }
+          macro ? "#{macro} (block)" : entry
+        end
       end
 
       # An empty answer still names the bases it left out, as every listing
