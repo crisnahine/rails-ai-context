@@ -16,6 +16,8 @@ module RailsAiContext
         "omniauth"        => { category: :auth, note: "OAuth integration via OmniAuth." },
         "pundit"          => { category: :auth, note: "Authorization via Pundit policies in app/policies/." },
         "cancancan"       => { category: :auth, note: "Authorization via CanCanCan abilities." },
+        "action_policy"   => { category: :auth, note: "Authorization via Action Policy policies in app/policies/." },
+        "rolify"          => { category: :auth, note: "Role management via Rolify." },
         "rodauth-rails"   => { category: :auth, note: "Authentication via Rodauth." },
         "authentication-zero" => { category: :auth, note: "Zero-dependency authentication generator for Rails." },
         "doorkeeper"      => { category: :auth, note: "OAuth 2 provider via Doorkeeper." },

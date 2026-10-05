@@ -105,6 +105,12 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
             LOCK
           end
 
+          it "names action_policy and rolify as auth gems, so onboard can fall back to them" do
+            File.write(File.join(tmpdir, "Gemfile.lock"), lockfile_content.sub(/^(\s*)pundit \(2\.4\.0\)/, "\\1action_policy (0.7.3)\n\\1rolify (6.0.1)"))
+            auth = introspector.call[:notable_gems].select { |gem| gem[:category] == "auth" }.map { |gem| gem[:name] }
+            expect(auth).to include("action_policy", "rolify")
+          end
+
           it "drops the path clause and keeps what the gem is" do
             expect(note_for("pundit")).to eq("Authorization via Pundit policies.")
             expect(note_for("stimulus-rails")).to eq("Stimulus.js controllers.")
