@@ -247,6 +247,22 @@ module RailsAiContext
       end
     end
 
+    # Booted from an engine's test/dummy, the engine whose root holds the app
+    # root: its classes, views and tests are the project's own. Never this gem.
+    def enclosing_engine_roots(root)
+      return [] unless defined?(::Rails::Engine)
+
+      inside = "#{root_key(root.to_s)}#{File::SEPARATOR}"
+      ::Rails::Engine.subclasses.filter_map do |engine|
+        next if engine.root.nil? || (defined?(RailsAiContext::Engine) && engine.equal?(RailsAiContext::Engine))
+
+        dir = engine.root.to_s
+        dir if inside.start_with?("#{root_key(dir)}#{File::SEPARATOR}")
+      rescue StandardError
+        nil
+      end
+    end
+
     def root_key(root)
       File.realpath(root)
     rescue SystemCallError
