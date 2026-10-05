@@ -37,5 +37,76 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
         expect(unread).to eq([])
       end
     end
+
+    # A macro inside a `def` runs when the method runs: never for a method nobody
+    # calls, and with the call's options where the body calls it.
+    it "reads a filter inside a method only where the class calls the method" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        source = <<~RUBY
+          class PostsController < ApplicationController
+            def self.public_actions(*names) = skip_before_action(:authenticate!, only: names)
+            def self.unused = skip_before_action(:audit)
+            def helper = before_action(:never)
+
+            before_action :authenticate!
+            public_actions :index, :show
+          end
+        RUBY
+
+        filters, = described_class.with_concerns(source, root: dir, within: "PostsController")
+
+        expect(filters.map { |f| [ f[:name], f[:skipped], f[:only] ] })
+          .to eq([ [ "authenticate!", nil, nil ], [ "authenticate!", true, %w[index show] ] ])
+        expect(described_class.from_source(source).map { |f| f[:name] }).to eq([ "authenticate!" ])
+      end
+    end
+  end
+  describe ".from_source" do
+    # actionpack's callbacks.rb defines every one of these, and a block or a
+    # lambda becomes a callback of its own beside the names the call gives.
+    it "reads every filter macro Rails defines, each name a call gives, and a block filter" do
+      source = <<~RUBY
+        class UsersController < ApplicationController
+          prepend_after_action :pa
+          prepend_around_action :par
+          append_around_action :aar
+          before_action :load_user, :audit
+          before_action(only: :index) { |c| c.head(:forbidden) unless c.request.local? }
+          after_action -> { log }, except: :index
+        end
+      RUBY
+
+      expect(described_class.from_source(source).map { |f| [ f[:kind], f[:name], f[:only] || f[:except] ] })
+        .to eq([ [ "after", "pa", nil ], [ "around", "par", nil ], [ "around", "aar", nil ],
+                 [ "before", "load_user", nil ], [ "before", "audit", nil ],
+                 [ "before", "block (line 6)", [ "index" ] ], [ "after", "block (line 7)", [ "index" ] ] ])
+    end
+
+    # callbacks.rb _insert_callbacks: the positional callbacks in order, then the block.
+    it "lists a call's callbacks in argument order, the block last" do
+      source = "class C < ApplicationController\n  before_action -> { x }, :a, -> { y }, :b do end\nend\n"
+
+      expect(described_class.from_source(source).map { |f| f[:name] })
+        .to eq([ "block (line 2)", "a", "block (line 2)", "b", "block (line 2)" ])
+    end
+
+    it "keeps a filter that shares a line with a def or follows a delegation" do
+      expect(described_class.from_source("class C < ApplicationController; def index; end; before_action :x; end").map { |f| f[:name] })
+        .to eq([ "x" ])
+      expect(described_class.from_source("class C < ApplicationController\n  before_action :a; def index = head(:ok)\nend\n").map { |f| f[:name] })
+        .to eq([ "a" ])
+      expect(described_class.from_source("class C < ApplicationController\n  delegate :x, to: :y; before_action :b\nend\n").map { |f| f[:name] })
+        .to eq([ "b" ])
+      expect(described_class.from_source("class C < ApplicationController; def index; before_action :c; end; end")).to eq([])
+    end
+
+    # request_forgery_protection.rb: `skip_before_action :verify_authenticity_token, options.reverse_merge(raise: false)`.
+    it "reads skip_forgery_protection as the skip of verify_authenticity_token it is" do
+      source = "class WebhooksController < ApplicationController\n  skip_forgery_protection only: :create\nend\n"
+
+      expect(described_class.from_source(source))
+        .to eq([ { name: "verify_authenticity_token", kind: "before", skipped: true, only: [ "create" ] } ])
+    end
   end
 end

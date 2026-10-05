@@ -201,7 +201,6 @@ module RailsAiContext
         relative_file = record.file
         declaration = parent_declaration(source, class_name)
         parent = declaration&.superclass || "Unknown"
-        rate_limit = rate_limit_entry(source)
         filters, unread = ControllerFilters.with_concerns(source, root: app.root.to_s, within: class_name,
                                                                   cache: (@concern_cache ||= {}))
         concerns = extract_concerns_from_source(source)
@@ -219,9 +218,9 @@ module RailsAiContext
           strong_params: extract_strong_params(source),
           respond_to_formats: extract_respond_to(source),
           rescue_from: extract_rescue_from(source),
-          rate_limit: extract_rate_limit(source, rate_limit),
-          rate_limit_parsed: parse_rate_limit(rate_limit),
+          rate_limits: extract_rate_limits(source).presence,
           turbo_stream_actions: extract_turbo_stream_actions(source),
+          **ControllerSettings.from_source(source),
           file: relative_file
         }.compact
         details
@@ -236,7 +235,6 @@ module RailsAiContext
 
       def extract_controller_details(ctrl)
         source = read_source(ctrl)
-        rate_limit = rate_limit_entry(source)
         filters = extract_filters(ctrl, source)
         concerns = extract_concerns(ctrl)
         actions = extract_actions(ctrl, source, filters) | concern_actions(concerns, ctrl.name, filters)
@@ -255,9 +253,9 @@ module RailsAiContext
           strong_params: extract_strong_params(source),
           respond_to_formats: extract_respond_to(source),
           rescue_from: extract_rescue_from(source),
-          rate_limit: extract_rate_limit(source, rate_limit),
-          rate_limit_parsed: parse_rate_limit(rate_limit),
+          rate_limits: extract_rate_limits(source).presence,
           turbo_stream_actions: extract_turbo_stream_actions(source),
+          **ControllerSettings.from_source(source),
           file: relative_source_path(ctrl)
         }.compact
       end
@@ -312,39 +310,54 @@ module RailsAiContext
       def extract_filters(ctrl, source = nil)
         if ctrl.respond_to?(:_process_action_callbacks)
           reflection_filters = ctrl._process_action_callbacks.filter_map do |cb|
-            next if cb.filter.is_a?(Proc) || cb.filter.to_s.start_with?("_")
-            next if excluded_filters.include?(cb.filter.to_s)
-            { name: cb.filter.to_s, kind: cb.kind.to_s }
+            name = callback_name(cb.filter)
+            next if name.nil? || excluded_filters.include?(name)
+            { name: name, kind: cb.kind.to_s }
           end
 
-          if reflection_filters.any?
-            # Collect only/except constraints from source files in the inheritance chain
-            source_constraints = collect_source_constraints(ctrl, source)
-            reflection_filters.each do |f|
-              if (sc = source_constraints[[ f[:kind], f[:name] ]])
-                f[:only] = sc[:only] if sc[:only]&.any?
-                f[:except] = sc[:except] if sc[:except]&.any?
-                f[:unless] = sc[:unless] if sc[:unless]
-                f[:if] = sc[:if] if sc[:if]
-              end
+          # Collect only/except constraints from source files in the inheritance chain
+          source_constraints = reflection_filters.any? ? collect_source_constraints(ctrl, source) : {}
+          reflection_filters.each do |f|
+            if (sc = source_constraints[[ f[:kind], f[:name] ]])
+              f[:only] = sc[:only] if sc[:only]&.any?
+              f[:except] = sc[:except] if sc[:except]&.any?
+              f[:unless] = sc[:unless] if sc[:unless]
+              f[:if] = sc[:if] if sc[:if]
             end
-
-            # Evaluate known runtime conditions to remove inapplicable filters
-            reflection_filters.reject! { |f| filter_excluded_by_condition?(ctrl, f) }
-
-            return merge_own_source(reflection_filters, source || read_source(ctrl), ctrl)
           end
+
+          # Evaluate known runtime conditions to remove inapplicable filters
+          reflection_filters.reject! { |f| filter_excluded_by_condition?(ctrl, f) }
+
+          # An empty chain still has the body's skips to show: what took the filters out.
+          return merge_own_source(reflection_filters, source || read_source(ctrl), ctrl)
         end
 
         # Fallback to source parsing when reflection is unavailable
-        if source
-          filters = extract_filters_from_source(source)
-          return filters if filters.any?
-        end
-
-        []
+        source ? extract_filters_from_source(source) : []
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "extract_filters")
+      end
+
+      # A block the app wrote is named by its line, as the static tier names it, and the one
+      # http_basic_authenticate_with adds by that macro; any other framework's or gem's
+      # block (`allow_browser`, `rate_limit`) is not a filter the app wrote.
+      def callback_name(filter)
+        case filter
+        when Symbol, String then return filter.to_s.start_with?("_") ? nil : filter.to_s
+        when Module then return filter.name
+        when Proc then nil
+        # An object's to_s is its inspect string, with an address that changes every run.
+        else return "#{filter.class.name || 'anonymous class'} (object)"
+        end
+
+        path, line = filter.source_location
+        return "http_basic_authenticate_with" if path&.end_with?("action_controller/metal/http_authentication.rb")
+
+        root = "#{app.root.to_s.chomp("/")}/"
+        return unless path&.start_with?(root) && !path.delete_prefix(root).start_with?("vendor/")
+
+        "block (line #{line})" unless PortablePath.gem_file?(path, root)
       end
 
       # A compiled callback keeps only:/except: in private ivars, so the
@@ -589,6 +602,7 @@ module RailsAiContext
         result = {}
         permits = []
         nested = {}
+        arrays = []
 
         args = expect_call.arguments&.arguments || []
         args.each do |arg|
@@ -601,7 +615,7 @@ module RailsAiContext
               key = extract_ast_value(assoc.key).to_s
               if assoc.value.is_a?(Prism::ArrayNode)
                 result[:requires] ||= key
-                collect_expect_array(assoc.value, key, permits, nested)
+                collect_expect_array(assoc.value, key, permits, nested, arrays)
               else
                 permits << key
               end
@@ -611,10 +625,11 @@ module RailsAiContext
 
         result[:permits] = permits if permits.any?
         result[:nested] = nested if nested.any?
+        result[:arrays] = arrays if arrays.any?
         result
       end
 
-      def collect_expect_array(array_node, key, permits, nested)
+      def collect_expect_array(array_node, key, permits, nested, arrays)
         array_node.elements.each do |el|
           case el
           when Prism::SymbolNode
@@ -626,7 +641,9 @@ module RailsAiContext
             el.elements.each do |inner|
               next unless inner.is_a?(Prism::AssocNode)
               inner_key = extract_ast_value(inner.key).to_s
-              if inner.value.is_a?(Prism::ArrayNode)
+              if inner.value.is_a?(Prism::ArrayNode) && inner.value.elements.empty?
+                arrays << inner_key
+              elsif inner.value.is_a?(Prism::ArrayNode)
                 nested[inner_key] = expect_symbol_values(inner.value)
               else
                 permits << inner_key
@@ -713,44 +730,36 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "extract_rescue_from AST")
       end
 
-      def rate_limit_entry(source)
-        return nil if source.nil?
+      # Each `rate_limit` the class body declares (`name:` lets one controller declare
+      # several), as its options read and the literals among them.
+      def extract_rate_limits(source)
+        return [] if source.nil?
 
-        ast_result = SourceIntrospector.walk_source(source, {
-          rate_limit: -> { Listeners::GenericMacroListener.new(:rate_limit) }
+        walked = SourceIntrospector.walk_source(source, {
+          rate_limit: -> { Listeners::GenericMacroListener.new(:rate_limit) },
+          methods: Listeners::MethodsListener
         })
-        (ast_result[:rate_limit] || []).first
+        SourceIntrospector.outside_defs(walked[:rate_limit], walked[:methods]).map do |entry|
+          options = entry[:options] || {}
+          sources = entry[:option_values] || {}
+          text = options.map { |key, value| "#{key}: #{inferred?(value) ? sources[key] : value.inspect}" }.join(", ")
+          { text: text, to: options[:to], within: sources[:within]&.to_s, only: options.key?(:only) ? Array(options[:only]).map(&:to_s) : nil,
+            name: options[:name] }.select { |key, value| key == :text || literal?(value) }
+        end
       rescue => e
-        RailsAiContext.debug_fail(e, nil, label: "rate_limit_entry")
+        RailsAiContext.debug_fail(e, [], label: "extract_rate_limits")
       end
 
-      def extract_rate_limit(source, entry)
-        return nil unless entry
-
-        line_num = entry[:location]
-        lines = source.lines
-        return nil unless line_num && line_num > 0 && line_num <= lines.size
-
-        raw_line = lines[line_num - 1].strip
-        raw_line.sub(/\Arate_limit\s+/, "")
-      rescue => e
-        RailsAiContext.debug_fail(e, nil, label: "extract_rate_limit AST")
+      def inferred?(value)
+        case value
+        when Array then value.any? { |item| inferred?(item) }
+        when Hash then value.values.any? { |item| inferred?(item) }
+        else value == Confidence::INFERRED
+        end
       end
 
-      def parse_rate_limit(entry)
-        return nil unless entry
-
-        options = entry[:options] || {}
-        sources = entry[:option_values] || {}
-
-        parsed = {}
-        parsed[:to] = options[:to] if options[:to].is_a?(Integer)
-        parsed[:within] = sources[:within].to_s if sources.key?(:within)
-        parsed[:only] = Array(options[:only]).map(&:to_s) if options.key?(:only)
-
-        parsed.empty? ? nil : parsed
-      rescue => e
-        RailsAiContext.debug_fail(e, nil, label: "parse_rate_limit")
+      def literal?(value)
+        !value.nil? && !inferred?(value)
       end
 
       def extract_turbo_stream_actions(source)

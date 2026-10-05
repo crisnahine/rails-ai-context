@@ -20,6 +20,7 @@ module RailsAiContext
             name: name.to_s,
             receiver: node.receiver&.slice,
             line: node.location.start_line,
+            offset: node.location.start_offset,
             arguments: extract_arg_values(node),
             options: extract_keyword_sources(node),
             snippet: node.slice.lines.first.to_s.strip

@@ -338,6 +338,46 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(full).to include("- [UNAVAILABLE: unreadable]")
     end
 
+    it "prints every rate limit a controller declares" do
+      limits = [ { text: "to: 10, within: 3.minutes, only: :create" }, { text: 'to: 100, within: 1.hour, name: "long"' } ]
+      stub_controllers({ "SessionsController" => { actions: %w[create], filters: [], parent_class: "ApplicationController", rate_limits: limits } })
+
+      one = described_class.call(controller: "SessionsController").content.first[:text]
+      full = described_class.call(detail: "full").content.first[:text]
+
+      expect(one).to include("**Rate limits:**\n- to: 10, within: 3.minutes, only: :create\n- to: 100, within: 1.hour, name: \"long\"")
+      expect(full).to include('- Rate limit: to: 10, within: 3.minutes, only: :create; to: 100, within: 1.hour, name: "long"')
+    end
+
+    it "names the layout a controller renders in and the settings it and ApplicationController declare" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/controllers"))
+        FileUtils.mkdir_p(File.join(root, "app/views/layouts"))
+        File.write(File.join(root, "app/views/layouts/admin.html.erb"), "")
+        File.write(File.join(root, "app/controllers/application_controller.rb"),
+                   "class ApplicationController < ActionController::Base\n  allow_browser versions: :modern\n  add_flash_types :warning, :info\nend\n")
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+        stub_controllers({ "UsersController" => { actions: %w[index], filters: [], parent_class: "ApplicationController",
+                                                  layout: { name: "admin" }, settings: [ "wrap_parameters :user, include: [:name, :email_address]" ] } })
+
+        text = described_class.call(controller: "UsersController", detail: "full").content.first[:text]
+
+        expect(text).to include("**Layout:** `admin` (declared in UsersController)")
+        expect(text).to include("## Settings\n- `allow_browser versions: :modern` _(from ApplicationController)_\n" \
+                                "- `add_flash_types :warning, :info` _(from ApplicationController)_\n" \
+                                "- `wrap_parameters :user, include: [:name, :email_address]`")
+      end
+    end
+
+    it "summarizes a strong params method's nested keys and arrays beside its permits" do
+      params = [ { name: "user_params", requires: "user", permits: [ "name" ], nested: { "preferences" => [ "color" ] }, arrays: [ "tags" ] } ]
+      stub_controllers({ "UsersController" => { actions: %w[update], filters: [], parent_class: "ApplicationController", strong_params: params } })
+
+      text = described_class.call(controller: "UsersController").content.first[:text]
+
+      expect(text).to include("- `user_params` (requires: :user) permits: :name, preferences: [:color], tags: []")
+    end
+
     it "names both strong params methods of a controller under an app parent" do
       stub_controllers({
         "Admin::AccountsController" => {

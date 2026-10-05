@@ -323,6 +323,14 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   is a gem-owned parent such as `OAuth::AuthorizationsController <
   Doorkeeper::AuthorizationsController`, which the payload cannot hold. A
   booted run answers that one.
+- **The static tier lists `prepend_*` filters where they are written.** Rails
+  puts each `prepend_before_action`, `prepend_after_action` and
+  `prepend_around_action` callback at the front of the chain, ahead of what the
+  class inherits and of earlier prepends, and the booted tier shows that order.
+  The static tier keeps a body's declarations in source order, because the
+  later declaration of a name is the one that holds, so `prepend_after_action
+  :pa` then `prepend_around_action :par` reads `pa, par` there and `par, pa`
+  booted. Which filters run, and with which `only:`/`except:`, is the same.
 - **`ApplicationController` is not in the listing, but its filters are in the
   chain.** Every app has one and it would sit in every listing row, so the
   controller listing leaves it out. The chain walk reads its file anyway, by

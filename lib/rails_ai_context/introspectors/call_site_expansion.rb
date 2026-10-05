@@ -212,7 +212,20 @@ module RailsAiContext
             else unknown
             end
         end
+        rest = parameters.keyword_rest
+        bindings[rest.name] = keyword_rest_binding(parameters, arguments, keywords) if rest.respond_to?(:name) && rest.name
         bindings
+      end
+
+      # `**options` holds the call's keywords the named ones leave.
+      def keyword_rest_binding(parameters, arguments, keywords)
+        return unknown if arguments.nil?
+        return hash_binding({}, {}) unless keywords
+        return unknown unless symbol_keyed?(keywords)
+
+        named = parameters.keywords.map(&:name)
+        kept = keywords.elements.reject { |pair| named.include?(key_of(pair)) }
+        hash_binding(kept.to_h { |pair| [ key_of(pair), value_of(pair.value) ] }, kept.to_h { |pair| [ key_of(pair), pair.value.slice ] })
       end
 
       def unknown
@@ -524,8 +537,19 @@ module RailsAiContext
       # it holds: `validates method, options` is `validates :title, presence: true`.
       def keyword_argument(node, child, bindings, depth)
         return unless node.is_a?(Prism::ArgumentsNode) && child.equal?(node.arguments.last)
+        return splatted_keywords(child, bindings, depth) if child.is_a?(Prism::KeywordHashNode)
 
         hash_expression(child, bindings, depth)&.pairs
+      end
+
+      # `key: v, **options` with `options` a bound hash, as the pairs it spells out.
+      def splatted_keywords(node, bindings, depth)
+        parts = node.elements.map do |element|
+          next emit(element, bindings, Output.new, [], depth, []).text unless element.is_a?(Prism::AssocSplatNode)
+
+          hash_expression(element.value, bindings, depth)&.pairs or return nil
+        end
+        parts.reject(&:empty?).join(", ") if node.elements.any?(Prism::AssocSplatNode)
       end
 
       # The bound hash an expression names: the parameter itself, or `merge`,

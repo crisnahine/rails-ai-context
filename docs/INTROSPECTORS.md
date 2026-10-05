@@ -185,7 +185,7 @@ It runs a single-pass Dispatcher that walks the AST once and feeds events to all
 | EnumsListener | Rails 7+ and legacy enum syntax, prefix/suffix options |
 | CallbacksListener | All AR callback types including `around_*`, `after_touch`, `after_initialize` and `after_find`; `after_commit` with `on:` resolution; a callback object by its constant, a block as `[inline_block]`; `if:`/`unless:` kept as the source wrote them, and the options of an enclosing `with_options` block |
 | MacrosListener | `encrypts`, `normalizes`, `delegate`, `has_secure_password`, `serialize`, `store`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `generates_token_for`, `attribute` |
-| MethodsListener | `def`/`def self.`, visibility tracking, parameter extraction, `class << self`; `include_initialize: true` adds the constructor a caller reports on its own |
+| MethodsListener | `def`/`def self.`, visibility tracking, parameter extraction, `class << self`, the methods `delegate` and Forwardable's `def_delegators`/`def_delegator` define (public unless `private: true`, and with no `end_location`, since a delegation has no body); each `def` carries `offset`/`end_offset`, which `SourceIntrospector.outside_defs` pairs against a call's `offset` to tell a call on the same line as a def from one inside it; `include_initialize: true` adds the constructor a caller reports on its own |
 | MixinsListener | `include`, `prepend`, `extend`, `singleton_class.include` and `singleton_class.prepend` (`singleton_class.extend` is not read), flagging the ones that reach the ancestor chain, as reflection reports them |
 
 ### The targeted-walk listeners
@@ -194,7 +194,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 
 | Listener | What it detects |
 |:---------|:---------------|
-| GenericMacroListener | Any receiver-less macro you name: `GenericMacroListener.new(:devise, :rate_limit)`. Returns args, values (with a source-slice fallback), options, option values and option nodes, plus the nesting: `parent_offset` is the offset of the target macro call whose block this one sits in, paired against each call's own `offset` rather than its line |
+| GenericMacroListener | Any receiver-less macro you name: `GenericMacroListener.new(:devise, :rate_limit)`. Returns args, values (with a source-slice fallback), options, option values and option nodes, `proc_lines` (the line each block or lambda argument opens on, as `Proc#source_location` gives it), plus the nesting: `parent_offset` is the offset of the target macro call whose block this one sits in, paired against each call's own `offset` rather than its line |
 | ChainedCallListener | Calls on a receiver: `ChainedCallListener.new(:includes)`, or `receiver: :inflect` to pin the receiver. Reports the receiver name |
 | ConfigAssignmentListener | `config.key = value` and `config.a.b = value` in initializers and `config/environments/*.rb`, plus bare `config.jwt do ... end` section references. Takes a root name (`:config` by default, e.g. `:DatabaseCleaner`) |
 | ClassDefinitionListener | Class definitions with their superclass and the nesting a bare superclass is read in |
@@ -215,7 +215,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 | ModelReferenceListener | Model constants used in controllers: `Post.find`, `params.require(:post)`, ivar writes |
 | VariantCallListener | `variant` calls (ChainedCallListener with `:variant` preset) |
 | ProcLiteralListener | Proc literals: line, source, assigned constant |
-| MethodCallListener | Call sites by name or pattern anywhere in a file, inside a `def`, a lambda or a block included, with arguments, options, receiver and line. Used by the Turbo introspector for broadcast calls and by `ActionFilters` for the skip macros |
+| MethodCallListener | Call sites by name or pattern anywhere in a file, inside a `def`, a lambda or a block included, with arguments, options, receiver, line and offset. Used by the Turbo introspector for broadcast calls and by `ActionFilters` for the skip macros |
 
 `GenericMacroListener.new(*names, block_source: [:name])` adds `block`, the
 one-line source of the block those macros are given. ProcLiteralListener is
@@ -253,6 +253,7 @@ same wherever it is asked. Those live as their own modules under
 |:-------|:---------------|
 | `DeclaredConstant` | The constant a source file calls its own class, against the one its path camelizes to |
 | `ActionPresence` | Whether a controller has an action: the public methods and `define_method` names of the controller, its ancestors up to Rails' base and the modules they include, the templates at each ancestor's view prefix, and the ancestors or modules no app source holds, which leave a missing action unverified. `rails_validate` and `rails_generate_test` both ask it |
+| `ControllerSettings` | The layout a controller renders in (declared on it or an ancestor, else the `layouts/<controller_path>` file Rails finds by name, walking up the chain) and the `allow_browser`, `protect_from_forgery`, `add_flash_types`, `default_form_builder` and `wrap_parameters` calls it and its ancestors make. `rails_get_controllers` and `rails_get_view` both ask it |
 | `TableName` | The table a model reads, from its own declarations |
 | `HabtmJoinTables` | The join tables every `has_and_belongs_to_many` under the app's code and lib names, lib patches and engines included, for the schema's model-less table warning |
 | `SuperclassChain` | What a class inherits from, followed through the app's own sources: the chain from a file's class up to a named base, and the constant-to-source lookup over the app's autoload roots that walks it |

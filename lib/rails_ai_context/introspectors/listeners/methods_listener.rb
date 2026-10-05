@@ -19,6 +19,7 @@ module RailsAiContext
           # the block's own enter/leave can open and close the frame.
           @scoped_blocks = {}.compare_by_identity
           @open_blocks = []
+          @def_depth = 0
         end
 
         # One visibility scope: a class or module body, a `class << self`
@@ -35,6 +36,10 @@ module RailsAiContext
           scope: :extension, has_many: :extension, has_and_belongs_to_many: :extension,
           has_one: :extension, belongs_to: :extension, concern: :extension
         }.freeze
+
+        # Each defines a public method whatever `private` section it sits in;
+        # only Rails' `private: true` makes one private.
+        DELEGATORS = %i[delegate def_delegators def_instance_delegators def_delegator def_instance_delegator instance_delegate].freeze
 
         def on_class_node_enter(node)
           open_frame(:body)
@@ -88,6 +93,8 @@ module RailsAiContext
             end
           when *BLOCK_FRAMES.keys
             @scoped_blocks[node.block] = BLOCK_FRAMES[node.name] if node.block.is_a?(Prism::BlockNode)
+          when *DELEGATORS
+            record_delegated(node) if @def_depth.zero?
           end
         end
 
@@ -106,7 +113,12 @@ module RailsAiContext
           @frames.pop
         end
 
+        def on_def_node_leave(node)
+          @def_depth -= 1
+        end
+
         def on_def_node_enter(node)
+          @def_depth += 1
           scope = def_scope(node)
           method_name = node.name.to_s
           return unless scope
@@ -195,9 +207,65 @@ module RailsAiContext
             signature:    signature_source(node, prefixed),
             location:     node.location.start_line,
             end_location: node.location.end_line,
+            # Offsets, unlike lines, tell a call that shares a line with a def from one inside it.
+            offset:       node.location.start_offset,
+            end_offset:   node.location.end_offset,
             confidence:   RailsAiContext::Confidence::VERIFIED
           }
           # The includer gains these; a `def self.x` or `class << self` method stays on the module.
+          entry[:class_methods_block] = true if @frames.last.kind == :class_methods
+          @results << entry
+        end
+
+        def record_delegated(node)
+          return if @frames.last.kind == :extension
+
+          args = node.arguments&.arguments || []
+          positional = args.reject { |a| a.is_a?(Prism::KeywordHashNode) }
+          options = extract_keyword_options(node)
+          visibility = :public
+          names = case node.name
+          when :def_delegators, :def_instance_delegators
+            positional.drop(1).filter_map { |a| literal_string(a) } - %w[__send__ __id__]
+          when :def_delegator, :def_instance_delegator
+            Array(literal_string(positional[2] || positional[1]))
+          else
+            if options.key?(:to)
+              visibility = :private if options[:private] == true
+              prefix = delegation_prefix(options)
+              return unless prefix
+
+              positional.filter_map { |a| literal_string(a) }.map { |name| "#{prefix}#{name}" }
+            else
+              # Forwardable's `delegate [:a, :b] => :@x`.
+              args.grep(Prism::KeywordHashNode).flat_map(&:elements).grep(Prism::AssocNode).flat_map { |assoc| literal_strings(assoc.key) }
+            end
+          end
+          names.each { |name| record_delegated_name(node, name, visibility) }
+        end
+
+        def delegation_prefix(options)
+          case options[:prefix]
+          # Rails raises on `prefix: true` with an ivar target, so nothing is defined.
+          when true then options[:to].to_s.start_with?("@") ? nil : "#{options[:to]}_"
+          when Symbol, String then "#{options[:prefix]}_"
+          else ""
+          end
+        end
+
+        def record_delegated_name(node, name, visibility)
+          scope = frame_scope
+          entry = {
+            name:         name,
+            scope:        scope,
+            visibility:   @frames.last.marks[[ scope, name ]] || visibility,
+            params:       [],
+            owner:        @owner_stack.dup,
+            signature:    name,
+            # No end: a delegation has no body for a call to sit inside.
+            location:     node.location.start_line,
+            confidence:   confidence_for(node)
+          }
           entry[:class_methods_block] = true if @frames.last.kind == :class_methods
           @results << entry
         end

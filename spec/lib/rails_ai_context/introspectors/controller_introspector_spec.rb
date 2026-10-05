@@ -149,7 +149,12 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         # The introspector extracts rate_limit via source parsing, not reflection.
         File.write(fixture_ctrl, <<~RUBY)
           class RateLimitedController < ApplicationController
-            rate_limit to: 10, within: 1.minute
+            rate_limit to: 10, within: 1.minute, only: :index
+            rate_limit to: 100,
+                       within: 1.hour, # the long window
+                       by: -> { request.domain }, name: "long"
+
+            def self.throttle = rate_limit(to: 1, within: 1.second)
 
             def index
               render plain: "ok"
@@ -160,9 +165,12 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
 
       after { FileUtils.rm_f(fixture_ctrl) }
 
-      it "extracts rate_limit macro from source" do
-        rate_limit = result[:controllers]["RateLimitedController"][:rate_limit]
-        expect(rate_limit).to include("10")
+      # `name:` exists so one controller can declare several limits (rate_limiting.rb).
+      it "extracts every rate_limit the class body declares, a call split over lines whole" do
+        expect(result[:controllers]["RateLimitedController"][:rate_limits]).to eq([
+          { text: "to: 10, within: 1.minute, only: :index", to: 10, within: "1.minute", only: [ "index" ] },
+          { text: 'to: 100, within: 1.hour, by: -> { request.domain }, name: "long"', to: 100, within: "1.hour", name: "long" }
+        ])
       end
     end
 
@@ -296,6 +304,16 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(result[:requires]).to eq("post")
       expect(result[:permits]).to eq([ "title" ])
       expect(result[:nested]).to eq({ "comments" => [ "body" ] })
+    end
+
+    # `tags: []` permits an array of scalars, in expect as in permit.
+    it "reads an empty list inside params.expect as an array of scalars" do
+      source = "def user_params = params.expect(user: [:name, { preferences: [:color] }, tags: []])\n"
+
+      result = introspector.send(:extract_strong_params, source).first
+
+      expect(result).to eq(name: "user_params", requires: "user", permits: [ "name" ],
+                           nested: { "preferences" => [ "color" ] }, arrays: [ "tags" ])
     end
 
     it "returns name only when method has no permit call" do
@@ -604,6 +622,137 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
 
         expect(record).to include(declared: true, from_concern: "HelpTracked")
       end
+    end
+
+    # `bin/rails generate authentication`: reflection takes the filter out of the chain, and the
+    # body's call of the concern's class method is the only thing that says what did.
+    it "shows the skip a class method the body calls makes, when nothing else is left in the chain" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/controllers/concerns"))
+        File.write(File.join(dir, "app/controllers/concerns/authentication.rb"), <<~RUBY)
+          module Authentication
+            extend ActiveSupport::Concern
+            included { before_action :require_authentication }
+            class_methods do
+              def allow_unauthenticated_access(**options)
+                skip_before_action :require_authentication, **options
+              end
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app/controllers/application_controller.rb"),
+                   "class ApplicationController < ActionController::Base\n  include Authentication\nend\n")
+        base = Class.new(ActionController::Base) do
+          before_action :require_authentication
+          def self.allow_unauthenticated_access(**options) = skip_before_action(:require_authentication, **options)
+        end
+        child = Class.new(base) { allow_unauthenticated_access }
+        base.define_singleton_method(:name) { "ApplicationController" }
+        child.define_singleton_method(:name) { "PasswordsController" }
+        source = "class PasswordsController < ApplicationController\n  allow_unauthenticated_access\nend\n"
+
+        records = described_class.new(double("app", root: Pathname.new(dir))).send(:extract_filters, child, source)
+
+        expect(child._process_action_callbacks.map(&:filter)).not_to include(:require_authentication)
+        expect(records.map { |f| [ f[:name], f[:skipped] ] }).to eq([ [ "require_authentication", true ] ])
+      end
+    end
+
+    # actionpack turns a block into a callback of its own; the static tier names it by its line.
+    it "names a block filter the app wrote by its line, and leaves a framework block out" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "app/controllers/users_controller.rb")
+        FileUtils.mkdir_p(File.dirname(path))
+        source = <<~RUBY
+          class UsersController < ApplicationController
+            prepend_around_action :par
+            before_action(only: :index) { |c| c.head(:forbidden) }
+          end
+        RUBY
+        File.write(path, source)
+        ctrl = Class.new(ActionController::Base) { before_action { head :ok } }
+        ctrl.define_singleton_method(:name) { "UsersController" }
+        ctrl.class_eval(source.lines[1..2].join, path, 2)
+        in_dir = described_class.new(double("app", root: Pathname.new(dir)))
+
+        booted = in_dir.send(:extract_filters, ctrl, source).map { |f| [ f[:kind], f[:name], f[:only] ] }
+        static = in_dir.send(:extract_filters_from_source, source).map { |f| [ f[:kind], f[:name], f[:only] ] }
+
+        expect(booted).to eq([ [ "around", "par", nil ], [ "before", "block (line 3)", [ "index" ] ] ])
+        expect(static).to eq(booted)
+      end
+    end
+
+    it "lists a call's lambdas and names in argument order, in both tiers" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "app/controllers/users_controller.rb")
+        source = "class UsersController < ApplicationController\n  before_action -> { head :ok }, :a\nend\n"
+        ctrl = Class.new(ActionController::Base)
+        ctrl.define_singleton_method(:name) { "UsersController" }
+        ctrl.class_eval(source.lines[1], path, 2)
+        in_dir = described_class.new(double("app", root: Pathname.new(dir)))
+
+        booted = in_dir.send(:extract_filters, ctrl, source).map { |f| f[:name] }
+
+        expect(booted).to eq([ "block (line 2)", "a" ])
+        expect(in_dir.send(:extract_filters_from_source, source).map { |f| f[:name] }).to eq(booted)
+      end
+    end
+
+    it "leaves out a gem's block when the bundle is installed under the app root" do
+      Dir.mktmpdir do |dir|
+        gem_dir = File.join(dir, ".bundle/ruby/3.4.0/gems/actionpack-8.1.0")
+        gem_block = eval("proc { }", binding, File.join(gem_dir, "lib/action_controller/metal/allow_browser.rb"), 58)
+        app_block = eval("proc { }", binding, File.join(dir, "app/controllers/users_controller.rb"), 3)
+        allow(Gem).to receive(:loaded_specs)
+          .and_return("actionpack" => double(full_gem_path: gem_dir, source: Bundler::Source::Rubygems.allocate))
+        in_dir = described_class.new(double("app", root: Pathname.new(dir)))
+
+        expect(in_dir.send(:callback_name, gem_block)).to be_nil
+        expect(in_dir.send(:callback_name, app_block)).to eq("block (line 3)")
+      end
+    end
+
+    it "names an object filter by its class, in both tiers, the same on every run" do
+      stub_const("TimingFilter", Class.new { def around(_controller) = yield })
+      stub_const("ClassFilter", Class.new { def self.before(_controller); end })
+      source = <<~RUBY
+        class WidgetsController < ApplicationController
+          around_action TimingFilter.new, only: :index
+          before_action ClassFilter, :plain_filter
+        end
+      RUBY
+      ctrl = Class.new(ActionController::Base) do
+        around_action TimingFilter.new, only: :index
+        before_action ClassFilter, :plain_filter
+      end
+      ctrl.define_singleton_method(:name) { "WidgetsController" }
+
+      booted = introspector.send(:extract_filters, ctrl, source).map { |f| [ f[:kind], f[:name], f[:only] ] }
+      static = introspector.send(:extract_filters_from_source, source).map { |f| [ f[:kind], f[:name], f[:only] ] }
+
+      expect(booted).to eq([ [ "around", "TimingFilter (object)", [ "index" ] ], [ "before", "ClassFilter", nil ],
+                             [ "before", "plain_filter", nil ] ])
+      expect(static).to eq(booted)
+    end
+
+    # http_authentication.rb: `before_action(options) { http_basic_authenticate_or_request_with ... }`.
+    it "names the filter http_basic_authenticate_with adds, in both tiers, password left out" do
+      source = <<~RUBY
+        class ReportsController < ApplicationController
+          http_basic_authenticate_with name: "admin", password: "secret", except: :index
+        end
+      RUBY
+      ctrl = Class.new(ActionController::Base) { http_basic_authenticate_with name: "admin", password: "secret", except: :index }
+      ctrl.define_singleton_method(:name) { "ReportsController" }
+
+      booted = introspector.send(:extract_filters, ctrl, source)
+      static = introspector.send(:extract_filters_from_source, source)
+
+      expect(booted.map { |f| f.slice(:kind, :name, :except) })
+        .to eq([ { kind: "before", name: "http_basic_authenticate_with", except: [ "index" ] } ])
+      expect(static.map { |f| f.slice(:kind, :name, :except) }).to eq(booted.map { |f| f.slice(:kind, :name, :except) })
+      expect((booted + static).inspect).not_to include("secret")
     end
 
     def with_concern(body)

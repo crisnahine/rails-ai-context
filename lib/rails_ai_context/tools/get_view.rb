@@ -103,7 +103,7 @@ module RailsAiContext
         case detail
         when "summary"
           all_dirs = view_groups(templates, partials)
-          lines = views_header_lines(templates, partials, layouts)
+          lines = views_header_lines(templates, partials, layouts, controller: controller)
           all_dirs.each do |ctrl|
             ctrl_templates = views_in_group(templates, ctrl)
             ctrl_partials = views_in_group(partials, ctrl)
@@ -129,7 +129,7 @@ module RailsAiContext
           # want the same file's metadata.
           metadata = Hash.new { |h, name| h[name] = extract_view_metadata(name) }
           all_dirs = view_groups(templates, partials)
-          lines = views_header_lines(templates, partials, layouts)
+          lines = views_header_lines(templates, partials, layouts, controller: controller)
 
           # Form builders and component usage from views introspector
           form_builders = data[:form_builders_detected]
@@ -198,7 +198,7 @@ module RailsAiContext
 
         when "full"
           if controller
-            lines = [ "# Views: #{controller}/", "" ]
+            lines = [ "# Views: #{controller}/", "", *layout_lines(controller) ]
             # Combine all content first for cross-template Tailwind compression
             all_content = []
             templates.sort.each do |name, _meta|
@@ -263,13 +263,19 @@ module RailsAiContext
 
       # Layouts sit outside the template and partial maps, so a heading naming
       # only those two numbers never added up to the files under app/views.
-      private_class_method def self.views_header_lines(templates, partials, layouts)
+      private_class_method def self.views_header_lines(templates, partials, layouts, controller: nil)
         parts = [ count_phrase(templates.size, "template"), count_phrase(partials.size, "partial") ]
         parts << count_phrase(layouts.size, "layout") if layouts.any?
 
         lines = [ "# Views (#{parts.join(', ')})", "" ]
         lines << "_Layouts are listed by `controller:\"layouts\"`._" << "" if layouts.any?
-        lines
+        lines + layout_lines(controller)
+      end
+
+      private_class_method def self.layout_lines(controller)
+        name = controller && RailsAiContext::Payload.find_controller(cached_context, controller)
+        layout = name && Introspectors::ControllerSettings.resolve(cached_context, name, root: rails_app.root.to_s)[:layout]
+        layout ? [ "**Layout:** #{Introspectors::ControllerSettings.layout_phrase(layout)}", "" ] : []
       end
 
       # The template map excludes app/views/layouts, so the directory is the
@@ -457,7 +463,7 @@ module RailsAiContext
         end
 
         templates, partials = files.partition { |f| !File.basename(f).start_with?("_") }
-        lines = views_header_lines(templates, partials, controller ? [] : layout_files)
+        lines = views_header_lines(templates, partials, controller ? [] : layout_files, controller: controller)
         files.each { |f| lines << "- #{f}" }
         text_response(lines.join("\n"))
       end

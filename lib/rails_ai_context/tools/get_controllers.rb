@@ -151,7 +151,7 @@ module RailsAiContext
                     info, rescue_handlers: true,
                     ctx: ctx, name: name, root: rails_app&.root&.to_s
                   ))
-                  lines << "- Rate limit: #{info[:rate_limit]}" if info[:rate_limit]
+                  lines << "- Rate limit: #{info[:rate_limits].map { |limit| limit[:text] }.join('; ')}" if info[:rate_limits]&.any?
                   lines << "- Turbo Stream actions: #{info[:turbo_stream_actions].join(', ')}" if info[:turbo_stream_actions]&.any?
                   lines << ""
                 end
@@ -438,6 +438,8 @@ module RailsAiContext
         lines << "**Parent:** `#{resolved_parent(name, info, ctx)}`" if info[:parent_class]
         lines << "**API controller:** yes" if info[:api_controller]
         lines << "**Formats:** #{info[:respond_to_formats].join(', ')}" if info[:respond_to_formats]&.any?
+        declared = RailsAiContext::Introspectors::ControllerSettings.resolve(ctx, name, root: rails_app.root.to_s)
+        lines << "**Layout:** #{RailsAiContext::Introspectors::ControllerSettings.layout_phrase(declared[:layout])}" if declared[:layout]
 
         lines << "" << "## Actions"
         lines << if info[:actions]&.any?
@@ -463,12 +465,19 @@ module RailsAiContext
           lines << "" << "## Strong Params"
           info[:strong_params].each do |sp|
             if sp.is_a?(Hash)
-              permits_summary = sp[:permits]&.map { |p| ":#{p}" }&.join(", ") || ""
+              permits_summary = (Array(sp[:permits]).map { |p| ":#{p}" } +
+                                 Array(sp[:nested]).map { |key, fields| "#{key}: [#{fields.map { |f| ":#{f}" }.join(', ')}]" } +
+                                 Array(sp[:arrays]).map { |key| "#{key}: []" }).join(", ")
               lines << "- `#{sp[:name]}`#{sp[:requires] ? " (requires: :#{sp[:requires]})" : ""}#{permits_summary.empty? ? "" : " permits: #{permits_summary}"}"
             else
               lines << "- `#{sp}`"
             end
           end
+        end
+
+        if declared[:settings].any?
+          lines << "" << "## Settings"
+          declared[:settings].each { |setting| lines << "- `#{setting[:text]}`#{" _(from #{setting[:from]})_" unless setting[:from] == name}" }
         end
 
         # Rescue handlers
@@ -478,7 +487,13 @@ module RailsAiContext
         end
 
         # Rate limiting
-        lines << "" << "**Rate limit:** #{info[:rate_limit]}" if info[:rate_limit]
+        limits = Array(info[:rate_limits])
+        if limits.one?
+          lines << "" << "**Rate limit:** #{limits.first[:text]}"
+        elsif limits.any?
+          lines << "" << "**Rate limits:**"
+          limits.each { |limit| lines << "- #{limit[:text]}" }
+        end
 
         # Turbo Stream actions
         if info[:turbo_stream_actions]&.any?

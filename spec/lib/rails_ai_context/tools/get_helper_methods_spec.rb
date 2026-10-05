@@ -374,5 +374,64 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
         end
       end
     end
+
+    context "with view helpers a controller declares with helper_method" do
+      around do |example|
+        Dir.mktmpdir("helper-method") do |dir|
+          @root = dir
+          FileUtils.mkdir_p(File.join(dir, "app/helpers"))
+          FileUtils.mkdir_p(File.join(dir, "app/controllers/concerns"))
+          File.write(File.join(dir, "app/helpers/application_helper.rb"), "module ApplicationHelper\nend\n")
+          File.write(File.join(dir, "app/controllers/application_controller.rb"), <<~RUBY)
+            class ApplicationController < ActionController::Base
+              helper_method :current_user, :authenticated?
+              private
+              def current_user; end
+              def authenticated? = current_user.present?
+            end
+          RUBY
+          File.write(File.join(dir, "app/controllers/concerns/authentication.rb"), <<~RUBY)
+            module Authentication
+              extend ActiveSupport::Concern
+              included do
+                helper_method def signed_in_as = Current.user
+              end
+            end
+          RUBY
+          File.write(File.join(dir, "app/controllers/posts_controller.rb"), "class PostsController < ApplicationController\nend\n")
+          example.run
+        end
+      end
+
+      before do
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(@root))
+        allow(described_class).to receive(:cached_context).and_return({})
+      end
+
+      it "lists each one with the controller or concern that declares it" do
+        text = described_class.call(detail: "full").content.first[:text]
+
+        expect(text).to include("## Declared in controllers with helper_method (3)")
+        expect(text).to include("- `current_user` (ApplicationController, `app/controllers/application_controller.rb`)")
+        expect(text).to include("- `authenticated?` (ApplicationController, `app/controllers/application_controller.rb`)")
+        expect(text).to include("- `signed_in_as` (Authentication, `app/controllers/concerns/authentication.rb`)")
+      end
+
+      it "reads past a controller it cannot parse or decode" do
+        File.write(File.join(@root, "app/controllers/broken_controller.rb"), "class BrokenController\n  helper_method :x,\n")
+        File.binwrite(File.join(@root, "app/controllers/odd_controller.rb"), "class OddController\n  # \xFF\n  helper_method :odd\nend\n")
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("- `current_user` (ApplicationController")
+        expect(text).to include("- `odd` (OddController")
+      end
+
+      it "counts them in the summary" do
+        text = described_class.call(detail: "summary").content.first[:text]
+
+        expect(text).to include("- **helper_method in controllers** - 3 methods")
+      end
+    end
   end
 end

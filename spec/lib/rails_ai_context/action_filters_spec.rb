@@ -41,6 +41,14 @@ RSpec.describe RailsAiContext::ActionFilters do
   # every chain - so the walk ended on the first hop for most of an app's
   # controllers, while the generated files read the same file directly and
   # printed its filters. One run, two answers.
+  describe "a skip on a line a def shares" do
+    it "is the class body's, while one inside the def is not" do
+      calls = described_class.send(:skip_calls, "class C < ApplicationController; def index; end; skip_before_action :x; def a; skip_before_action :y; end; end")
+
+      expect(calls.map { |call| call[:arguments] }).to eq([ [ :x ] ])
+    end
+  end
+
   describe "the base controller the listing leaves out" do
     def app_with_base(dir)
       FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
@@ -197,6 +205,73 @@ RSpec.describe RailsAiContext::ActionFilters do
 
         chain = described_class.for_controller(static_context(dir), "PostsController", root: dir)
         expect(chain[:own].map { |f| f[:name] }).to include("set_locale")
+      end
+    end
+
+    # `bin/rails generate authentication`: the skip sits in a class method, so it runs
+    # only for a controller that calls that method, with the options it passes.
+    describe "a filter macro inside a class method a concern defines" do
+      def app_with_authentication(dir)
+        app_with_base(dir)
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        File.write(File.join(dir, "app", "controllers", "concerns", "authentication.rb"), <<~RUBY)
+          module Authentication
+            extend ActiveSupport::Concern
+
+            included do
+              before_action :require_authentication
+            end
+
+            class_methods do
+              def allow_unauthenticated_access(**options)
+                skip_before_action :require_authentication, **options
+              end
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"),
+                   "class ApplicationController < ActionController::Base\n  include Authentication\nend\n")
+        File.write(File.join(dir, "app", "controllers", "posts_controller.rb"),
+                   "class PostsController < ApplicationController\n  def index; end\nend\n")
+        File.write(File.join(dir, "app", "controllers", "sessions_controller.rb"), <<~RUBY)
+          class SessionsController < ApplicationController
+            allow_unauthenticated_access only: %i[ new create ]
+            def new; end
+            def create; end
+            def destroy; end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "passwords_controller.rb"), <<~RUBY)
+          class PasswordsController < ApplicationController
+            allow_unauthenticated_access
+            def new; end
+          end
+        RUBY
+      end
+
+      it "runs the included filter for a controller that never calls the method" do
+        Dir.mktmpdir do |dir|
+          app_with_authentication(dir)
+          ctx = static_context(dir)
+
+          chain = described_class.for(ctx, "PostsController", "index", root: dir)
+          expect(chain[:inherited].map { |f| [ f[:name], f[:from], f[:from_concern] ] })
+            .to include([ "require_authentication", "ApplicationController", "Authentication" ])
+          expect(chain[:skipped]).to eq([])
+        end
+      end
+
+      it "skips it where a controller calls the method, on the actions the call names" do
+        Dir.mktmpdir do |dir|
+          app_with_authentication(dir)
+          ctx = static_context(dir)
+
+          expect(described_class.for(ctx, "SessionsController", "create", root: dir)[:skipped]).to eq([ "require_authentication" ])
+          destroy = described_class.for(ctx, "SessionsController", "destroy", root: dir)
+          expect(destroy[:skipped]).to eq([])
+          expect(destroy[:inherited].map { |f| f[:name] }).to include("require_authentication")
+          expect(described_class.for(ctx, "PasswordsController", "new", root: dir)[:skipped]).to eq([ "require_authentication" ])
+        end
       end
     end
 
