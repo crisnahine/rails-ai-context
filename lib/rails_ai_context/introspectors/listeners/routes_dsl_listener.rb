@@ -352,7 +352,7 @@ module RailsAiContext
           own = {} unless route_level
           defaults = (own[:url] || {}).merge(scopes.map { |c| c[:url].merge(c[:defaults]) }.reduce({}, :merge)).merge(own[:defaults] || {})
           params = path.scan(/[:*](\w+)/).flatten << "format"
-          segments = scopes.map { |c| c[:segment] }.reduce({}, :merge).merge(own[:segment] || {}).slice(*params)
+          segments = scopes.map { |c| c[:segment] }.reduce({}, :merge).merge(own[:segment] || {}).select { |key, _| params.include?(key) }
           all = defaults.merge(segments)
           "{#{all.map { |key, value| "#{key}: #{value}" }.join(', ')}}" if all.any?
         end
@@ -362,7 +362,8 @@ module RailsAiContext
           hash = hash_arg(node)
           return unless hash
 
-          found = { url: {}, defaults: {}, segment: {} }
+          # `scoped` is what Rails keeps in the scope's constraints, which nested resources read.
+          found = { url: {}, defaults: {}, segment: {}, scoped: {} }
           if node.name == :constraints && node.receiver.nil?
             read_constraint_hash(hash, found)
           else
@@ -373,7 +374,12 @@ module RailsAiContext
               case key
               when "constraints" then read_constraint_hash(assoc.value, found)
               when "defaults" then each_literal(assoc.value) { |k, v| found[:defaults][k] = constraint_value(v) }
-              else found[:segment][key] = constraint_value(assoc.value) if assoc.value.is_a?(Prism::RegularExpressionNode)
+              else
+                next unless assoc.value.is_a?(Prism::RegularExpressionNode)
+
+                found[:segment][key] = constraint_value(assoc.value)
+                # A resource moves its regexp options into its constraints.
+                found[:scoped][key] = assoc.value if %i[resources resource].include?(node.name)
               end
             end
           end
@@ -386,6 +392,7 @@ module RailsAiContext
               found[:url][key] = constraint_value(value) if value.is_a?(Prism::StringNode) || value.is_a?(Prism::IntegerNode)
             else
               found[:segment][key] = constraint_value(value)
+              found[:scoped][key] = value
             end
           end
         end
@@ -607,6 +614,21 @@ module RailsAiContext
           }
           frame[:shallow] = opts[:shallow] == true if opts.key?(:shallow)
           push_frame(node, **frame)
+          nest_param_constraint(layout, opts)
+        end
+
+        # Rails' nested_options: a regexp constraint on the resource's param
+        # also constrains the param its nested routes name it by.
+        def nest_param_constraint(layout, opts)
+          param = resource_param(opts)
+          value = @stack.filter_map { |f| f[:route_constraints]&.dig(:scoped) }.reduce({}, :merge)[param]
+          return unless value.is_a?(Prism::RegularExpressionNode)
+
+          key = "#{layout[:key]}_#{param}"
+          frame = @stack.last
+          own = frame[:route_constraints] || { url: {}, defaults: {}, segment: {}, scoped: {} }
+          frame[:route_constraints] = own.merge(segment: own[:segment].merge(key => constraint_value(value)),
+                                                scoped: own[:scoped].merge(key => value))
         end
 
         def emit_resource_routes(node, name, opts, singular:)

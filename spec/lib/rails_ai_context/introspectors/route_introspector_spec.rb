@@ -291,6 +291,41 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
         expect(constraints_of(static)).to eq(constraints_of(booted))
       end
     end
+
+    # Rows sorted: the static tier lists a resource's block routes after its own, Rails before.
+    def both_tiers(source)
+      set = ActionDispatch::Routing::RouteSet.new.tap { |s| s.draw { instance_eval(source) } }
+      booted = described_class.new(double("app", routes: set, routes_reloader: nil, root: Rails.root)).call
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), "Rails.application.routes.draw do\n#{source}end\n")
+        [ booted, described_class.new(RailsAiContext::StaticApp.new(dir)).static_call ].map do |result|
+          constraints_of(result).transform_values(&:sort)
+        end
+      end
+    end
+
+    it "gives a nested resource's parent param the parent's own param constraint, as Rails does" do
+      booted, static = both_tiers(<<~'RUBY')
+        resources :accounts, only: :show, constraints: { id: /-?\d+/ } do
+          resources :statuses, only: :show do
+            resources :likes, only: :index
+          end
+          member { get :foo }
+        end
+        resources :users, only: [], param: :name, name: /[a-z]+/ do
+          resources :posts, only: :index
+        end
+        scope "/p", id: /[a-z]+/ do
+          resources :boards, only: :show do
+            resources :cards, only: :index
+          end
+        end
+      RUBY
+
+      expect(booted["statuses"]).to eq([ [ "/accounts/:account_id/statuses/:id", '{id: /-?\d+/, account_id: /-?\d+/}' ] ])
+      expect(static).to eq(booted)
+    end
   end
 
   describe "#static_call" do
