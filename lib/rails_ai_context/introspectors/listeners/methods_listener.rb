@@ -68,6 +68,7 @@ module RailsAiContext
         # Bare `private` affects every later def in this frame; `private :x`
         # and `private def x` mark the one name, retroactively for :x.
         def on_call_node_enter(node)
+          @scoped_blocks[node.block] = :extension if new_class_body?(node)
           return unless node.receiver.nil?
 
           case node.name
@@ -124,6 +125,17 @@ module RailsAiContext
         end
 
         private
+
+        # These evaluate their block as a new class or module body.
+        CLASS_BUILDERS = { Struct: :new, Class: :new, Module: :new, Data: :define }.freeze
+
+        def new_class_body?(node)
+          receiver = node.receiver
+          return false unless node.block.is_a?(Prism::BlockNode)
+          return false unless receiver.is_a?(Prism::ConstantReadNode) || (receiver.is_a?(Prism::ConstantPathNode) && receiver.parent.nil?)
+
+          CLASS_BUILDERS[receiver.name] == node.name
+        end
 
         def open_frame(kind)
           @frames.push(Frame.new(kind, :public, {}))

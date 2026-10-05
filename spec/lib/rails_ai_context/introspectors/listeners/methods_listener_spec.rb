@@ -449,4 +449,26 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener, "visib
     RUBY
     expect(rows(source)).to eq([ [ "kept", :instance, :public ] ])
   end
+
+  it "leaves methods in a Struct.new, Data.define, Class.new or Module.new block out of the class" do
+    source = <<~RUBY
+      class PointHolder < ApplicationRecord
+        Point = Struct.new(:x) do
+          def dist; end
+        end
+        Coord = ::Data.define(:lat) do
+          def to_s = lat.to_s
+        end
+        Anon = Class.new(Base) do
+          def anon_m; end
+        end
+        Mixin = Module.new { def mixed; end }
+        Other = Builder.new do
+          def built; end
+        end
+        def real_m; end
+      end
+    RUBY
+    expect(rows(source)).to eq([ [ "built", :instance, :public ], [ "real_m", :instance, :public ] ])
+  end
 end
