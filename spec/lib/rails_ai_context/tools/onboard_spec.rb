@@ -170,6 +170,14 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       expect(text).to include("has_secure_password on User.")
     end
 
+    it "still names the authentication gem when the introspector found only policy classes" do
+      text = onboard_with(auth: { authentication: {}, authorization: { policies: %w[APolicy BPolicy] } },
+                          gems: { notable_gems: [ { name: "omniauth", version: "1.9.2", category: "auth" } ] })
+
+      expect(text).to include("Authentication via omniauth (1.9.2).")
+      expect(text).to include("2 policy classes in app/policies.")
+    end
+
     it "names the Devise model and its modules" do
       text = onboard_with(auth: { authentication: { devise: [ { model: "User", matches: [ ":database_authenticatable, :lockable" ] } ] },
                                   authorization: {},
@@ -181,7 +189,17 @@ RSpec.describe RailsAiContext::Tools::Onboard do
     it "counts serializer classes, not the keys of the serializers hash" do
       text = onboard_with(api: { serializers: { serializer_classes: %w[ASerializer BSerializer CSerializer] } })
 
-      expect(text).to include("Serializers: 3.")
+      expect(text).to include("Serialization: 3 serializer classes (ASerializer, BSerializer, CSerializer).")
+    end
+
+    it "names jbuilder templates and an own serializer layer the way the api tool does" do
+      expect(onboard_with(api: { serializers: { jbuilder: 6 } })).to include("## API\n\nSerialization: Jbuilder (6 templates).")
+      own = onboard_with(api: { serializers: { serializer_dirs: [ { path: "app/services/serializers", files: 93 } ] } })
+      expect(own).to include("app/services/serializers (93 files)")
+    end
+
+    it "leaves the API section out when there is no API layer to name" do
+      expect(onboard_with(api: { serializers: {}, graphql: nil, api_only: false })).not_to include("## API")
     end
   end
 
@@ -726,7 +744,7 @@ RSpec.describe RailsAiContext::Tools::Onboard do
     it "renders the full walkthrough in FULL_SECTIONS order" do
       expect(headings("full")).to eq(
         [ "Stack", "Data Model", "Key Flows", "Background Jobs & Async", "Frontend", "Real-Time Features",
-          "API", "Deployment & DevOps", "Testing", "Getting Started", "Rake Tasks" ]
+          "Deployment & DevOps", "Testing", "Getting Started", "Rake Tasks" ]
       )
     end
   end

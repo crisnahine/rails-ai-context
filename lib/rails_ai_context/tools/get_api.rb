@@ -52,6 +52,17 @@ module RailsAiContext
         end
       end
 
+      # What serializes responses, or nil when the app has no serializer layer.
+      def self.serialization_found(data)
+        return serialization_label(data[:serializers]) if serializers?(data)
+
+        dirs = Array(data.dig(:serializers, :serializer_dirs))
+        return if dirs.empty?
+
+        "no serializer framework detected; the app has its own layer in " +
+          dirs.map { |dir| "#{dir[:path]} (#{count_phrase(dir[:files], "file")})" }.join(", ")
+      end
+
       class << self
         private
 
@@ -200,15 +211,8 @@ module RailsAiContext
         end
 
         def serialization_line(data)
-          return serialization_label(data[:serializers]) if serializers?(data)
-
-          dirs = Array(data.dig(:serializers, :serializer_dirs))
-          if dirs.any?
-            return "no serializer framework detected; the app has its own layer in " +
-                   dirs.map { |dir| "#{dir[:path]} (#{count_phrase(dir[:files], "file")})" }.join(", ")
-          end
-
-          "none detected (no .jbuilder or .rabl templates, no serializer classes in app/serializers, app/blueprints or app/resources)"
+          serialization_found(data) ||
+            "none detected (no .jbuilder or .rabl templates, no serializer classes in app/serializers, app/blueprints or app/resources)"
         end
 
         def graphql_label(graphql)

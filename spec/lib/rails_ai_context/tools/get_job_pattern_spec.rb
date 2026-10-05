@@ -96,6 +96,11 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
         expect(text).to include("config/queue.yml workers poll 2 queues: default, mailers. No worker polls maintenance (CleanupJob).")
       end
 
+      it "never names the ERB marker as a queue" do
+        text = answer("workers:\n  - queues: <%= ENV.fetch(\"QUEUES\", \"default\") %>\n")
+        expect(text).not_to include("RAC_ERB_OUTPUT")
+      end
+
       it "says so on the page of a job whose queue no worker polls" do
         expect(answer(queue_yml, job: "CleanupJob")).to include("**Queue:** `maintenance` (no worker in config/queue.yml polls it)")
         expect(answer(queue_yml, job: "MailJob")).to include("**Queue:** `mailers`\n")
@@ -747,6 +752,14 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
                                 "every hour at minute 12 (production, from config/recurring.yml)")
         expect(text).to include("- `nightly_cleanup`: `CleanupJob` every day at 3am (production, from config/recurring.yml)")
       end
+
+      it "lists the recurring tasks of an app with no job classes" do
+        FileUtils.rm_rf(File.join(tmpdir, "app/jobs"))
+        text = text_for(detail: "full")
+        expect(text).to include("No jobs found")
+        expect(text).to include("## Recurring Tasks")
+        expect(text).to include("- `clear_solid_queue_finished_jobs`: ")
+      end
     end
 
     it "reads GoodJob cron from config/application.rb" do
@@ -795,6 +808,38 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text_for(job: "NightlyJob")).to include("**Schedule:** 1h (from config/sidekiq.yml)")
     end
 
+    it "reads a schedule an ERB tag builds as computed, and every: with options as written" do
+      write("config/sidekiq.yml", <<~YAML)
+        :scheduler:
+          :schedule:
+            NightlyJob:
+              cron: '<%= Random.rand(0..59) %> <%= Random.rand(3..5) %> * * *'
+            CleanupJob:
+              every: ['5m', first_in: '4m']
+      YAML
+      expect(text_for(job: "NightlyJob")).to include("**Schedule:** computed (from config/sidekiq.yml)")
+      expect(text_for(job: "CleanupJob")).to include("**Schedule:** 5m, first_in: 4m (from config/sidekiq.yml)")
+    end
+
+    it "never prints the ERB marker in a task name, environment or every: option" do
+      write("config/recurring.yml", <<~YAML)
+        <%= Rails.env %>:
+          <%= Rails.env %>_cleanup:
+            class: CleanupJob
+            schedule: every hour
+      YAML
+      write("config/sidekiq.yml", <<~YAML)
+        :scheduler:
+          :schedule:
+            NightlyJob:
+              every: ['5m', first_in: <%= 4 %>]
+      YAML
+      text = text_for(detail: "full")
+      expect(text).to include("- `computed`: `CleanupJob` every hour (computed, from config/recurring.yml)")
+      expect(text_for(job: "NightlyJob")).to include("**Schedule:** computed (from config/sidekiq.yml)")
+      expect(text).not_to include("RAC_ERB_OUTPUT")
+    end
+
     it "reads a computed GoodJob cron schedule as computed, not as a marker" do
       write("config/initializers/good_job.rb", <<~RUBY)
         Rails.application.configure do
@@ -804,6 +849,17 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       text = text_for(job: "NightlyJob")
       expect(text).to include("**Schedule:** computed (from config/initializers/good_job.rb)")
       expect(text).not_to include("[INFERRED]")
+    end
+
+    it "reads GoodJob cron merged in with merge!, a class given as X.name" do
+      write("config/initializers/cronjobs.rb", <<~RUBY)
+        Rails.application.config.after_initialize do
+          Rails.application.config.good_job.cron.merge!(
+            { "NightlyJob": { cron: "15 1 * * *", class: NightlyJob.name } }
+          )
+        end
+      RUBY
+      expect(text_for(job: "NightlyJob")).to include("**Schedule:** 15 1 * * * (from config/initializers/cronjobs.rb)")
     end
 
     it "reads a GoodJob cron held in a constant as no schedule" do

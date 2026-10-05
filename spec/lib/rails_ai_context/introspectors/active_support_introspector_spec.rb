@@ -169,9 +169,11 @@ RSpec.describe RailsAiContext::Introspectors::ActiveSupportIntrospector do
           end
         RUBY
         File.write(File.join(dir, "lib/crypto/box.rb"), "BOX = ActiveSupport::MessageEncryptor.new(KEY)\n")
+        File.write(File.join(dir, "lib/crypto/blob_key.rb"), "def blob(key) = ActiveStorage.verifier.verified(key, purpose: :blob_key)\n")
         allow(introspector).to receive(:root).and_return(dir)
 
         expect(introspector.send(:extract_message_verifier_usage)).to eq([
+          { file: "lib/crypto/blob_key.rb", encryptor: false, verifier: true },
           { file: "lib/crypto/box.rb", encryptor: true, verifier: false },
           { file: "app/models/user.rb", encryptor: false, verifier: true }
         ])

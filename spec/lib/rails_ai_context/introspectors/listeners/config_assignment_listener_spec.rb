@@ -27,6 +27,12 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
     expect(results.first[:source]).to eq("<<~TXT.squish\n  Scheduled maintenance tonight\nTXT\n")
   end
 
+  it "reads Klass.name as the class name, and a value constant's .name as unknown" do
+    results = assignments("config.job_class = Cron::CleanupJob.name\nconfig.prefix = APP_SETTINGS.name\nconfig.other = Config::APP.name")
+
+    expect(results.map { |r| r[:value] }).to eq([ "Cron::CleanupJob", RailsAiContext::Confidence::INFERRED, RailsAiContext::Confidence::INFERRED ])
+  end
+
   it "reads a nested config assignment" do
     results = assignments("config.action_mailer.delivery_method = :smtp")
 
@@ -97,6 +103,17 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
     results = assignments("Rails.application.config.assets.paths = paths")
 
     expect(results.first[:path]).to eq([ :assets, :paths ])
+  end
+
+  it "matches the app's own config under any name, and no other library's" do
+    results = parse_and_dispatch(<<~RUBY)
+      MyApp::Application.config.time_zone = "UTC"
+      app.config.eager_load = true
+      OmniAuth.config.test_mode = true
+      OmniAuth.config.mock_auth[:github] = { uid: "1" }
+    RUBY
+
+    expect(results.map { |r| r[:path] }).to eq([ [ :time_zone ], [ :eager_load ] ])
   end
 
   it "records a bare config reference so block sections are visible" do

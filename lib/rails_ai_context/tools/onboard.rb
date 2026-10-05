@@ -194,18 +194,20 @@ module RailsAiContext
         end
 
         def section_auth(ctx)
-          auth = Payload.section(ctx, :auth)
-          found = auth ? auth_lines(auth) : []
-          found = auth_gem_lines(ctx) if found.empty?
+          auth = Payload.section(ctx, :auth) || {}
+          gem_authn, gem_authz = auth_gem_lines(ctx)
+          # Each half falls back to the gems on its own: a policy directory says nothing about login.
+          authn = authentication_lines(auth).presence || gem_authn
+          authz = authorization_lines(auth).presence || gem_authz
+          found = authn + authz
           return [] if found.empty?
 
           [ "## Authentication & Authorization", "", *found, "" ]
         end
 
         # What the auth introspector writes, one sentence per finding.
-        def auth_lines(auth)
+        def authentication_lines(auth)
           authn = auth[:authentication] || {}
-          authz = auth[:authorization] || {}
           modules = auth[:devise_modules_per_model] || {}
           lines = Array(authn[:devise]).map do |entry|
             used = Array(modules[entry[:model]])
@@ -218,6 +220,12 @@ module RailsAiContext
           end
           lines << "has_secure_password on #{authn[:has_secure_password].join(', ')}." if Array(authn[:has_secure_password]).any?
           lines << "OmniAuth providers: #{authn[:omniauth_providers].join(', ')}." if Array(authn[:omniauth_providers]).any?
+          lines
+        end
+
+        def authorization_lines(auth)
+          authz = auth[:authorization] || {}
+          lines = []
           { pundit: "Pundit", action_policy: "Action Policy" }.each do |key, label|
             lines << "Authorization via #{label} (#{count_phrase(authz[key].size, "policy")})." if Array(authz[key]).any?
           end
@@ -230,15 +238,15 @@ module RailsAiContext
         AUTH_GEMS = %w[devise omniauth rodauth-rails sorcery clearance authlogic].freeze
         AUTHZ_GEMS = %w[pundit cancancan action_policy rolify].freeze
 
-        # With no auth section to read, the notable gems still name the framework.
+        # [authentication lines, authorization lines] named from the notable gems alone.
         def auth_gem_lines(ctx)
           notable = Payload.notable_gems(ctx).select { |g| g.is_a?(Hash) }
           authn = notable.select { |g| AUTH_GEMS.include?(g[:name].to_s) }
           authz = notable.select { |g| AUTHZ_GEMS.include?(g[:name].to_s) }
-          lines = []
-          lines << "Authentication via #{authn.map { |g| "#{g[:name]}#{" (#{g[:version]})" if g[:version]}" }.join(', ')}." if authn.any?
-          lines << "Authorization via #{authz.map { |g| g[:name] }.join(', ')}." if authz.any?
-          lines
+          [
+            authn.any? ? [ "Authentication via #{authn.map { |g| "#{g[:name]}#{" (#{g[:version]})" if g[:version]}" }.join(', ')}." ] : [],
+            authz.any? ? [ "Authorization via #{authz.map { |g| g[:name] }.join(', ')}." ] : []
+          ]
         end
 
         def section_key_flows(ctx)
@@ -546,19 +554,14 @@ module RailsAiContext
         def section_api(ctx)
           api = Payload.section(ctx, :api)
           return [] unless api
-          return [] if api.empty? || (api[:endpoints]&.empty? && api[:graphql].nil?)
 
-          lines = [ "## API", "" ]
-          if api[:graphql]
-            lines << "GraphQL API detected."
-          end
-          if api[:endpoints]&.any?
-            lines << "#{count_phrase(api[:endpoints].size, "API endpoint")}."
-          end
-          classes = Array(api.dig(:serializers, :serializer_classes))
-          lines << "Serializers: #{classes.size}." if classes.any?
-          lines << ""
-          lines
+          lines = []
+          lines << "GraphQL API detected." if api[:graphql]
+          serialization = GetApi.serialization_found(api)
+          lines << "Serialization: #{serialization}." if serialization
+          return [] if lines.empty?
+
+          [ "## API", "", *lines, "" ]
         end
 
         def section_devops(ctx)

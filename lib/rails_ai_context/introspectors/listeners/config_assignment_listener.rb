@@ -146,12 +146,16 @@ module RailsAiContext
           return unless prefix
 
           path = prefix + [ name ]
+          # A one-argument call (`<<`, `merge!`) carries what it adds; `[]=` and the like carry a key too.
+          args = kind == :call ? node.arguments&.arguments : nil
+          value = args&.size == 1 ? extract_value(args.first) : nil
+          redacted = RailsAiContext::Redaction.redact_assignment(path, value: value, source: NodeSource.text(node))
           @results << {
             path:       path,
             assignment: false,
             write:      kind,
-            value:      nil,
-            source:     RailsAiContext::Redaction.redact_assignment(path, value: nil, source: NodeSource.text(node))[:source],
+            value:      redacted[:value],
+            source:     redacted[:source],
             location:   node.location.start_line
           }
         end
@@ -180,9 +184,17 @@ module RailsAiContext
           end
 
           root_index = parts.rindex { |part| @roots.include?(part.to_s) }
-          return nil unless root_index
+          return nil unless root_index && app_owned?(parts.first(root_index))
 
           parts[(root_index + 1)..] || []
+        end
+
+        # What the root hangs off: nothing, a local (`app`), `Rails.application` or
+        # the app's Application class. `OmniAuth.config` is another library's config.
+        def app_owned?(prefix)
+          first = prefix.first.to_s
+          prefix.empty? || !first.match?(/\A[A-Z]/) || prefix.first(2) == %i[Rails application] ||
+            first == "Application" || first.end_with?("::Application")
         end
       end
     end
