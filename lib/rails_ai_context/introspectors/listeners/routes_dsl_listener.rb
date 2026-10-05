@@ -128,6 +128,7 @@ module RailsAiContext
           return enter_route_set(node) if route_set_draw?(node)
           # `ActiveAdmin.routes(self)` hands the mapper to code this walk cannot see.
           return emit_dynamic(node) if node.receiver && statement && node.arguments&.arguments&.any?(Prism::SelfNode)
+          return enter_late_table_change(node) if late_table_change?(node, statement)
           return push_frame(node, prepend: true) if node.receiver && node.name == :prepend && statement && route_body?(node)
           return unless node.receiver.nil?
 
@@ -199,6 +200,18 @@ module RailsAiContext
           ensure
             @replaying.pop
           end
+        end
+
+        # A `routes.prepend` inside `after_initialize` or `on_load` registers after
+        # the draw, and Rails evaluates it only on the next reload.
+        def late_table_change?(node, statement)
+          !statement && %i[append prepend].include?(node.name) && node.block &&
+            node.receiver.is_a?(Prism::CallNode) && node.receiver.name == :routes
+        end
+
+        def enter_late_table_change(node)
+          emit_dynamic(node)
+          push_frame(node, suppress: true)
         end
 
         def open_unknown_block

@@ -312,6 +312,26 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       end
     end
 
+    # A prepend registered after the draw reaches the table only on the next reload.
+    it "counts a prepend nested in an initializer block as not expanded" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "routes.rb"), "Rails.application.routes.draw do\n  get \"main\", to: \"posts#index\"\nend\n")
+        File.write(File.join(dir, "config", "initializers", "late.rb"), <<~RUBY)
+          Rails.application.config.after_initialize do
+            Rails.application.routes.prepend do
+              get "late", to: "posts#index"
+            end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:by_controller]["posts"].map { |r| r[:path] }).to eq([ "/main" ])
+        expect(result[:dynamic_routes]).to eq(1)
+      end
+    end
+
     it "skips an initializer that cannot be parsed or links outside the app" do
       Dir.mktmpdir do |dir|
         app = File.join(dir, "app")
