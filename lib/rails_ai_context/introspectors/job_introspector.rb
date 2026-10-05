@@ -276,10 +276,25 @@ module RailsAiContext
         { text: text, note: note }
       end
 
-      # One walk of a config file per run, shared by the queue settings and the GoodJob cron.
       def config_assignments(file)
-        @config_walks ||= {}
-        RecurringSchedules.config_assignments(app.root, file, @config_walks)
+        Array(config_walk(file)[:config])
+      end
+
+      CONFIG_FILE_LISTENERS = {
+        config: Listeners::ConfigAssignmentListener,
+        calls: -> { Listeners::MethodCallListener.new(names: REGISTER_CALLS.keys + %w[load_defaults]) },
+        previews: -> { Listeners::PreviewPathsListener.new(framework: :action_mailer) }
+      }.freeze
+
+      # One walk of a config file per run, shared by the queue settings, the GoodJob cron and the mailer settings.
+      def config_walk(relative)
+        @config_file_walks ||= {}
+        @config_file_walks.fetch(relative) do
+          source = RecurringSchedules.read_file(app.root, relative)
+          walked = source ? SourceIntrospector.walk_source(source, CONFIG_FILE_LISTENERS) : {}
+          (@config_walks ||= {})[relative] = Array(walked[:config])
+          @config_file_walks[relative] = walked
+        end
       end
 
       def sidekiq_options(macros)
@@ -603,6 +618,8 @@ module RailsAiContext
       end
 
       def recurring_jobs
+        MAILER_CONFIG_GLOBS.flat_map { |glob| Dir.glob(File.join(app.root.to_s, glob)).sort }
+                           .each { |path| config_walk(path.delete_prefix("#{app.root}/")) }
         RecurringSchedules.read(app.root, @config_walks ||= {})
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "recurring_jobs")
@@ -879,9 +896,7 @@ module RailsAiContext
       # Rails adds test/mailers/previews and rspec-rails spec/mailers/previews; the app adds the rest.
       def mailer_preview_dirs
         @mailer_preview_dirs ||= begin
-          configured = mailer_config_files.flat_map do |file|
-            SourceIntrospector.walk(file, { previews: -> { Listeners::PreviewPathsListener.new(framework: :action_mailer) } })[:previews]
-          end
+          configured = mailer_config_walks.flat_map { |_relative, walked| Array(walked[:previews]) }
           (DEFAULT_MAILER_PREVIEW_DIRS + configured).uniq.select { |dir| Dir.exist?(File.join(app.root.to_s, dir)) }
         end
       end
@@ -889,6 +904,18 @@ module RailsAiContext
       def mailer_config_files
         @mailer_config_files ||= MAILER_CONFIG_GLOBS.flat_map { |glob| Dir.glob(File.join(app.root.to_s, glob)).sort } +
                                  PathResolver.initializer_paths(app.root)
+      end
+
+      # Only a file that mentions mail settings is walked; one walked already for another reader is reused.
+      def mailer_config_walks
+        @mailer_config_walks ||= mailer_config_files.filter_map do |path|
+          relative = path.delete_prefix("#{app.root}/")
+          unless @config_file_walks&.key?(relative)
+            source = SafeFile.read(path)
+            next unless source&.match?(/action_mailer|register_(?:interceptor|observer)|load_defaults/)
+          end
+          [ relative, config_walk(relative) ]
+        end
       end
 
       # Mailer name => its preview class, file and the emails it previews.
@@ -919,15 +946,7 @@ module RailsAiContext
         queue = nil
         queue_set = false
         version = nil
-        mailer_config_files.each do |path|
-          relative = path.delete_prefix("#{app.root}/")
-          source = SafeFile.read(path) or next
-          next unless source.match?(/action_mailer|register_(?:interceptor|observer)|load_defaults/)
-
-          walked = SourceIntrospector.walk_source(source, {
-            config: Listeners::ConfigAssignmentListener,
-            calls: -> { Listeners::MethodCallListener.new(names: REGISTER_CALLS.keys + %w[load_defaults]) }
-          })
+        mailer_config_walks.each do |relative, walked|
           Array(walked[:config]).each do |hit|
             next unless hit[:assignment] && hit[:path].first == :action_mailer && hit[:path].size == 2
 

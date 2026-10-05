@@ -79,6 +79,15 @@ RSpec.describe RailsAiContext::Tools::GetMailers do
       expect(text).to include("**Preview paths:** `test/mailers/previews`, `lib/mailer_previews`")
     end
 
+    it "walks each config file once for both the preview paths and the mailer settings" do
+      walks = []
+      allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk).and_wrap_original { |m, path, *rest| walks << File.read(path) if path.to_s.include?("/config/"); m.call(path, *rest) }
+      allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source).and_wrap_original { |m, source, *rest| walks << source; m.call(source, *rest) }
+      RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+
+      expect(walks.count { |source| source.include?("preview_paths <<") }).to eq(1)
+    end
+
     it "never reads a preview linked from outside the app, and survives one it cannot parse" do
       Dir.mktmpdir do |outside|
         File.write(File.join(outside, "secret_preview.rb"), "class UserMailerPreview < ActionMailer::Preview\n  def leaked; end\nend\n")
