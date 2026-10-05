@@ -1582,6 +1582,16 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       expect(sql.keys).to eq(%w[docs plain])
     end
 
+    it "tells PostgreSQL's materialized views apart and leaves out an extension's views" do
+      connection = double("pg", views: %w[user_stats geometry_columns], columns: [], native_database_types: {})
+      allow(connection).to receive(:select_rows).and_return([ [ "user_stats", "m", false ], [ "geometry_columns", "v", true ] ])
+      allow(introspector).to receive_messages(connection: connection, adapter_name: "PostgreSQL")
+
+      tables = introspector.send(:add_live_relations, {})
+      expect(tables.keys).to eq(%w[user_stats])
+      expect(tables["user_stats"]).to include(kind: "materialized_view")
+    end
+
     it "lists a booted view with the connection's columns and the dump's SQL" do
       connection = ActiveRecord::Base.connection
       connection.create_table(:pa_v_users, force: true) { |t| t.string :email }

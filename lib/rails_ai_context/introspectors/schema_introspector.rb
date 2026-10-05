@@ -104,8 +104,8 @@ module RailsAiContext
 
       # connection.tables leaves out views and SQLite's virtual tables; a view's SQL is the dump's.
       def add_live_relations(tables)
-        materialized = materialized_view_names
-        (connection.views - tables.keys).each do |view|
+        materialized, extension_owned = pg_view_names
+        (connection.views - tables.keys - extension_owned).each do |view|
           tables[view] = SchemaConventions.view_entry(schema_reader.views.dig(view, :sql), materialized: materialized.include?(view),
                                                       columns: extract_columns(view))
         end
@@ -117,13 +117,21 @@ module RailsAiContext
         tables
       end
 
-      # PostgreSQL lists a materialized view among the views; pg_matviews tells them apart.
-      def materialized_view_names
-        return [] unless adapter_name.to_s.match?(/postg/i)
+      PG_VIEWS = <<~SQL
+        SELECT c.relname, c.relkind, EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = c.oid AND d.deptype = 'e')
+        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relkind IN ('v', 'm') AND n.nspname = ANY (current_schemas(false))
+      SQL
 
-        connection.select_values("SELECT matviewname FROM pg_matviews WHERE schemaname = ANY (current_schemas(false))")
+      # PostgreSQL lists materialized views among the views, and an extension's own
+      # (PostGIS geometry_columns, pg_stat_statements) beside the app's.
+      def pg_view_names
+        return [ [], [] ] unless adapter_name.to_s.match?(/postg/i)
+
+        rows = connection.select_rows(PG_VIEWS)
+        [ rows.select { |_, kind, _| kind == "m" }.map(&:first), rows.select { |*, owned| owned == true || owned == "t" }.map(&:first) ]
       rescue => e
-        RailsAiContext.debug_fail(e, [], label: "materialized_view_names")
+        RailsAiContext.debug_fail(e, [ [], [] ], label: "pg_view_names")
       end
 
       def table_comment(table)
