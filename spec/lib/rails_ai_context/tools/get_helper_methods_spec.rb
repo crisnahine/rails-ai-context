@@ -510,6 +510,31 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
         expect(text).to include("- `spree_current_user` (Spree::AuthenticationHelpers, `lib/spree/authentication_helpers.rb`)")
         expect(text).not_to include("never")
       end
+
+      it "lists the ones a module kept in its outer constant's lib file declares" do
+        FileUtils.mkdir_p(File.join(@root, "lib"))
+        File.write(File.join(@root, "lib/canonical.rb"), <<~RUBY)
+          module Canonical
+            helper_method :outside_the_module
+
+            module ControllerExtensions
+              def self.included(base)
+                base.helper_method :default_canonical
+              end
+            end
+          end
+        RUBY
+        File.write(File.join(@root, "app/controllers/base_controller.rb"), <<~RUBY)
+          class BaseController < ApplicationController
+            include Canonical::ControllerExtensions
+          end
+        RUBY
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("- `default_canonical` (Canonical::ControllerExtensions, `lib/canonical.rb`)")
+        expect(text).not_to include("outside_the_module")
+      end
     end
 
     # module_function leaves a private instance copy, which a view calls like any helper.
