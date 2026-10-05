@@ -1242,6 +1242,71 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
     end
   end
 
+
+  # active_interaction recommends app/interactions and interactor-rails
+  # generates into app/interactors; both are service roots.
+  describe "interactions and interactors outside app/services" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    before do
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "interactions"))
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "interactors", "orders"))
+      File.write(File.join(tmpdir, "app", "interactions", "create_account.rb"), <<~RUBY)
+        class CreateAccount < ActiveInteraction::Base
+          string :subdomain
+          record :user
+          def execute
+            Account.create!(subdomain: subdomain)
+          end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "interactors", "place_order.rb"), <<~RUBY)
+        class PlaceOrder
+          include Interactor::Organizer
+          organize ChargeCard, SendReceipt
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "interactors", "orders", "charge_card.rb"), <<~RUBY)
+        module Orders
+          class ChargeCard
+            include Interactor
+            def call; end
+          end
+        end
+      RUBY
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      described_class.reset_cache!
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "reads an interaction in app/interactions with its filters" do
+      text = described_class.call(service: "CreateAccount").content.first[:text]
+
+      expect(text).to include("**File:** `app/interactions/create_account.rb`")
+      expect(text).to include("## Inputs (ActiveInteraction)")
+      expect(text).to include("- `string :subdomain`")
+      expect(text).to include("- `record :user`")
+    end
+
+    it "reads an organizer in app/interactors with its steps" do
+      text = described_class.call(service: "PlaceOrder").content.first[:text]
+
+      expect(text).to include("## Organizes")
+      expect(text).to include("1. `ChargeCard`\n2. `SendReceipt`")
+    end
+
+    it "names an interactor by its path under app/interactors" do
+      expect(described_class.call(service: "Orders::ChargeCard").content.first[:text]).to include("# Orders::ChargeCard")
+    end
+
+    it "lists them all" do
+      text = described_class.call(detail: "summary").content.first[:text]
+
+      expect(text).to include("- CreateAccount", "- PlaceOrder", "- Orders::ChargeCard")
+    end
+  end
+
   # A scheduled enqueue and the app's own helper enqueue as surely as
   # perform_later does, and a comment naming one does not.
   describe "the job enqueue side effect" do

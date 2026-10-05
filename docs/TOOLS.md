@@ -418,7 +418,9 @@ Application and framework helpers with view cross-references.
 
 ### `rails_get_service_pattern`
 
-Service object interface, dependencies, side effects, callers. An
+Service object interface, dependencies, side effects, callers, read from
+`app/services/`, `app/interactions/` and `app/interactors/`. An interactor
+organizer lists the steps it runs, in order. An
 ActiveInteraction's inputs include the ones it inherits, with the filters
 nested inside a `hash` filter shown under it. Callers are read from every
 `app/` and `lib/` tree, and on a booted app from any other directory it
