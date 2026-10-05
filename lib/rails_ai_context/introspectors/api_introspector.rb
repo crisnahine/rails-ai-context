@@ -48,17 +48,14 @@ module RailsAiContext
       def detect_serializers
         result = {}
 
-        # Jbuilder templates
-        jbuilder = PathResolver.view_dirs(root).sum { |dir| Dir.glob(File.join(dir, "**/*.jbuilder")).size }
-        result[:jbuilder] = jbuilder if jbuilder > 0
+        PathResolver.view_dirs(root).each do |dir|
+          { jbuilder: "**/*.jbuilder", rabl: "**/*.rabl" }.each do |key, pattern|
+            count = Dir.glob(File.join(dir, pattern)).size
+            result[key] = result.fetch(key, 0) + count if count > 0
+          end
+        end
 
-        # Serializer classes (Alba, Blueprinter, JSONAPI, etc.). Named by the
-        # class each file declares: camelizing the path asks the global
-        # inflector, which the static tier never loaded the app's acronyms into.
-        # A file that declares no class (a mixin, or one that did not parse) is
-        # still a serializer file, so it keeps the name its path spells.
-        names = SourceScan.each(root, kind: "app/serializers")
-          .map { |record| DeclaredConstant.resolve(record.source, record.path_name) }.uniq.sort
+        names = serializer_class_names
         result[:serializer_classes] = names if names.any?
 
         # An app that keeps its own serializer layer somewhere else still has
@@ -68,6 +65,59 @@ module RailsAiContext
         result[:serializer_dirs] = other if other.any?
 
         result
+      end
+
+      # Where Blueprinter's generator and Alba's README put their classes; jsonapi-resources
+      # uses app/resources too. A class there counts by what it is, since app/resources
+      # is also a common home for unrelated code.
+      SERIALIZER_KINDS = %w[app/serializers app/blueprints app/resources].freeze
+      SERIALIZER_BASES = %w[
+        Blueprinter::Base ActiveModel::Serializer Panko::Serializer JSONAPI::Resource
+        JSONAPI::Serializable::Resource
+      ].freeze
+      SERIALIZER_MIXINS = %w[Alba::Resource JSONAPI::Serializer FastJsonapi::ObjectSerializer].freeze
+      # Active Job's argument serializers live in app/serializers by the guide's own advice.
+      JOB_ARGUMENT_SERIALIZER = "ActiveJob::Serializers::"
+
+      # Named by the class each file declares: camelizing the path asks the global
+      # inflector, which the static tier never loaded the app's acronyms into. A file
+      # that declares no class (a mixin, or one that did not parse) is still a
+      # serializer file in app/serializers, so it keeps the name its path spells.
+      def serializer_class_names
+        classes = SERIALIZER_KINDS.flat_map do |kind|
+          SourceScan.each(root, kind: kind).map { |record| serializer_candidate(kind, record) }
+        end
+        framework = descendants_of(classes) do |c|
+          SERIALIZER_BASES.include?(c[:superclass]) || (c[:includes] & SERIALIZER_MIXINS).any?
+        end
+        job_arguments = descendants_of(classes) { |c| c[:superclass].to_s.start_with?(JOB_ARGUMENT_SERIALIZER) }
+
+        classes.filter_map { |c|
+          next if job_arguments.include?(c[:name])
+
+          c[:name] if c[:kind] == "app/serializers" || framework.include?(c[:name])
+        }.uniq.sort
+      end
+
+      def serializer_candidate(kind, record)
+        name = DeclaredConstant.resolve(record.source, record.path_name)
+        own = DeclaredConstant.declarations(record.source).find { |d| d.name == name }
+        includes = SourceIntrospector.walk_source(record.source, {
+          includes: -> { Listeners::GenericMacroListener.new(:include) }
+        })[:includes].flat_map { |hit| hit[:values].map { |v| v.to_s.delete_prefix("::") } }
+        { kind: kind, name: name, superclass: own&.superclass&.delete_prefix("::"), includes: includes }
+      end
+
+      # The names the block picks, and every class that inherits one of them.
+      def descendants_of(classes, &picks)
+        found = classes.select(&picks).map { |c| c[:name] }.to_set
+        loop do
+          added = classes.select { |c| !found.include?(c[:name]) && found.include?(c[:superclass]) }
+          break if added.empty?
+
+          added.each { |c| found << c[:name] }
+        end
+        found
       end
 
       # Any `serializers` directory in any app tree the app has, other than

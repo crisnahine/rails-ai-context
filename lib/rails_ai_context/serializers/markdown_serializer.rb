@@ -315,6 +315,7 @@ module RailsAiContext
         end
         if data[:serializers]&.any?
           lines << "- Jbuilder templates: #{data[:serializers][:jbuilder]}" if data[:serializers][:jbuilder]
+          lines << "- RABL templates: #{data[:serializers][:rabl]}" if data[:serializers][:rabl]
           if data[:serializers][:serializer_classes]&.any?
             lines << "- Serializers: #{data[:serializers][:serializer_classes].join(', ')}"
           end

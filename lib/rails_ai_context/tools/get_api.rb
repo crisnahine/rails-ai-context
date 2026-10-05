@@ -171,7 +171,7 @@ module RailsAiContext
         def serializers?(data)
           serializers = data[:serializers]
           return false unless serializers.is_a?(Hash)
-          serializers[:jbuilder].to_i > 0 || (serializers[:serializer_classes].is_a?(Array) && serializers[:serializer_classes].any?)
+          serializers[:jbuilder].to_i > 0 || serializers[:rabl].to_i > 0 || (serializers[:serializer_classes].is_a?(Array) && serializers[:serializer_classes].any?)
         end
 
         def versioning?(data)
@@ -186,6 +186,8 @@ module RailsAiContext
           parts = []
           jbuilder = serializers[:jbuilder].to_i
           parts << "Jbuilder (#{count_phrase(jbuilder, "template")})" if jbuilder > 0
+          rabl = serializers[:rabl].to_i
+          parts << "RABL (#{count_phrase(rabl, "template")})" if rabl > 0
 
           classes = serializers[:serializer_classes]
           if classes.is_a?(Array) && classes.any?
@@ -206,7 +208,7 @@ module RailsAiContext
                    dirs.map { |dir| "#{dir[:path]} (#{count_phrase(dir[:files], "file")})" }.join(", ")
           end
 
-          "none detected (no .jbuilder templates, no app/serializers classes)"
+          "none detected (no .jbuilder or .rabl templates, no serializer classes in app/serializers, app/blueprints or app/resources)"
         end
 
         def graphql_label(graphql)

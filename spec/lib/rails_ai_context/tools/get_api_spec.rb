@@ -299,7 +299,15 @@ RSpec.describe RailsAiContext::Tools::GetApi do
         result = described_class.call(detail: "standard")
         text = result.content.first[:text]
 
-        expect(text).to include("**Serialization:** none detected (no .jbuilder templates, no app/serializers classes)")
+        expect(text).to include("**Serialization:** none detected (no .jbuilder or .rabl templates, " \
+                                "no serializer classes in app/serializers, app/blueprints or app/resources)")
+      end
+
+      it "names RABL templates beside the serializer classes" do
+        html_app_data[:serializers] = { rabl: 1, serializer_classes: %w[AccountBlueprint AccountResource] }
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("**Serialization:** RABL (1 template) + 2 serializer classes (AccountBlueprint, AccountResource)")
       end
     end
 

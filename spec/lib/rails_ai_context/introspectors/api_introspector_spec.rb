@@ -702,6 +702,44 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
       end
     end
 
+    def static_serializers(files)
+      Dir.mktmpdir do |root|
+        files.each do |relative, content|
+          FileUtils.mkdir_p(File.dirname(File.join(root, relative)))
+          File.write(File.join(root, relative), content)
+        end
+        return described_class.new(RailsAiContext::StaticApp.new(root)).static_call[:serializers]
+      end
+    end
+
+    it "reads Blueprinter blueprints, Alba resources and RABL templates as the serialization layer" do
+      serializers = static_serializers(
+        "app/blueprints/account_blueprint.rb" => "class AccountBlueprint < Blueprinter::Base\n  identifier :id\n  fields :email\nend\n",
+        "app/resources/account_resource.rb" => "class AccountResource\n  include Alba::Resource\n  attributes :id, :email\nend\n",
+        "app/resources/admin_resource.rb" => "class AdminResource < AccountResource\nend\n",
+        "app/resources/plain.rb" => "class Plain\nend\n",
+        "app/views/accounts/show.json.rabl" => "object @account\nattributes :id, :email\n"
+      )
+
+      expect(serializers[:serializer_classes]).to eq(%w[AccountBlueprint AccountResource AdminResource])
+      expect(serializers[:rabl]).to eq(1)
+    end
+
+    it "does not count an Active Job argument serializer as a response serializer" do
+      serializers = static_serializers(
+        "app/serializers/money_serializer.rb" => <<~RUBY,
+          class MoneySerializer < ActiveJob::Serializers::ObjectSerializer
+            def serialize(money) = super("cents" => money.cents)
+            def deserialize(hash) = hash["cents"]
+            def klass = Integer
+          end
+        RUBY
+        "app/serializers/post_serializer.rb" => "class PostSerializer < ActiveModel::Serializer\nend\n"
+      )
+
+      expect(serializers[:serializer_classes]).to eq(%w[PostSerializer])
+    end
+
     it "answers every key the booted tier answers, since only the mode needs a runtime" do
       static = described_class.new(RailsAiContext::StaticApp.new(Rails.root.to_s)).static_call
       booted = described_class.new(Rails.application).call
