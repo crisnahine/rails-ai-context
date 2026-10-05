@@ -30,6 +30,51 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
     end
   end
 
+  # Sinatra MVC trees keep config/environment.rb and app/ too.
+  describe "a tree whose bundle resolved no Rails" do
+    def sinatra_tree(dir, lock_gems: %w[sinatra activerecord])
+      FileUtils.mkdir_p(File.join(dir, "config"))
+      FileUtils.mkdir_p(File.join(dir, "app/controllers"))
+      File.write(File.join(dir, "config/environment.rb"), "require 'sinatra/activerecord'\n")
+      File.write(File.join(dir, "app/controllers/songs_controller.rb"), "class SongsController; end\n")
+      specs = lock_gems.map { |name| "    #{name} (1.0.0)\n" }.join
+      File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n#{specs}\n")
+    end
+
+    it "is no app in either tier" do
+      Dir.mktmpdir do |dir|
+        sinatra_tree(dir)
+        expect(described_class.app_present?(dir)).to be false
+        expect(described_class.app_present?(dir, allow_source_only: true)).to be false
+      end
+    end
+
+    it "answers No Rails app found, booted and with --no-boot" do
+      Dir.mktmpdir do |dir|
+        sinatra_tree(dir)
+        [ { no_boot: false }, { no_boot: true } ].each do |flags|
+          outcome = described_class.call(root: dir, allow_static: true, **flags)
+          expect([ outcome.tier, outcome.messages.first ]).to eq([ :absent, "Error: No Rails app found in #{dir}" ])
+        end
+      end
+    end
+
+    it "is an app when the lockfile resolves railties, as an engine's does" do
+      Dir.mktmpdir do |dir|
+        sinatra_tree(dir, lock_gems: %w[railties activerecord])
+        expect(described_class.app_present?(dir)).to be true
+      end
+    end
+
+    it "is an app when config/application.rb is there, whatever the lockfile says" do
+      Dir.mktmpdir do |dir|
+        sinatra_tree(dir)
+        File.write(File.join(dir, "config/application.rb"), "")
+        expect(described_class.app_present?(dir)).to be true
+      end
+    end
+  end
+
   # The binstub activates the gem's whole dependency tree before the app's
   # Bundler.setup runs, and Bundler adds its own paths behind the ones already
   # in $LOAD_PATH. A gem left there keeps winning over the version the app

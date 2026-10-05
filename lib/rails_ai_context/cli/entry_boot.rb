@@ -40,12 +40,26 @@ module RailsAiContext
       # source: an engine keeps its dummy app under spec/dummy, so its root
       # has app/ and no config/, and it is a real target.
       def self.app_present?(root, allow_source_only: false)
+        return false if other_framework?(root)
         return true if File.exist?(File.join(root, "config", "environment.rb"))
         return false unless allow_source_only
 
         File.exist?(File.join(root, "config", "application.rb")) ||
           Dir.glob(File.join(root, "app", "**", "*.rb")).any?
       end
+
+      # A Sinatra MVC tree keeps config/environment.rb and app/ too, so
+      # without config/application.rb a lockfile that resolved no Rails decides.
+      # GemLock loads only on that path, keeping the stdlib it pulls in out of
+      # every Rails app's pre-boot window.
+      def self.other_framework?(root)
+        return false if File.exist?(File.join(root, "config", "application.rb"))
+
+        require_relative "../gem_lock"
+        lock = GemLock.for(root)
+        !lock.missing? && !lock.any?("rails", "railties")
+      end
+      private_class_method :other_framework?
 
       def self.call(root:, allow_static:, no_boot: false, allow_source_only: false, command: nil)
         messages = []
