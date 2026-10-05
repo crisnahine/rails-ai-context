@@ -354,7 +354,11 @@ module RailsAiContext
 
         # Macros - surface hidden introspector data
         macro_lines = []
-        macro_lines << "- `has_secure_password`" if data[:has_secure_password]
+        if data[:secure_passwords]&.any?
+          data[:secure_passwords].each { |pw| macro_lines << "- `has_secure_password` :#{pw[:attribute]}#{option_pairs(pw[:options])}" }
+        elsif data[:has_secure_password]
+          macro_lines << "- `has_secure_password`"
+        end
         macro_lines << "- `has_secure_token` #{data[:has_secure_token].map { |f| ":#{f}" }.join(', ')}" if data[:has_secure_token]&.any?
         Array(data[:nested_attributes]).each do |nested|
           options = nested[:options]&.any? ? " (#{nested[:options].map { |k, v| "#{k}: #{v}" }.join(', ')})" : ""
@@ -363,7 +367,10 @@ module RailsAiContext
         macro_lines << "- `encrypts` #{data[:encrypts].map { |f| ":#{f}" }.join(', ')}" if data[:encrypts]&.any?
         macro_lines << "- `normalizes` #{data[:normalizes].map { |f| ":#{f}" }.join(', ')}" if data[:normalizes]&.any?
         macro_lines << "- `generates_token_for` #{data[:generates_token_for].map { |f| ":#{f}" }.join(', ')}" if data[:generates_token_for]&.any?
-        macro_lines << "- `serialize` #{data[:serialize].map { |f| ":#{f}" }.join(', ')}" if data[:serialize]&.any?
+        if data[:serialize]&.any?
+          serialized = data[:serialize].map { |f| ":#{f}#{option_pairs(data[:serialize_options]&.dig(f))}" }
+          macro_lines << "- `serialize` #{serialized.join(', ')}"
+        end
         macro_lines << "- `store` #{data[:store].map { |f| store_column_text(f, data[:store_accessors]) }.join(', ')}" if data[:store]&.any?
         macro_lines << "- `broadcasts` #{data[:broadcasts].join(', ')}" if data[:broadcasts]&.any?
         if data[:has_one_attached]&.any?
@@ -421,7 +428,7 @@ module RailsAiContext
         if data[:token_generation]&.any?
           lines << "" << "## Token Generation"
           data[:token_generation].each do |tg|
-            detail_str = tg.is_a?(Hash) ? "**#{tg[:purpose]}** (expires_in: #{tg[:expires_in] || 'default'})" : tg.to_s
+            detail_str = tg.is_a?(Hash) ? "**#{tg[:purpose]}** (expires_in: #{tg[:expires_in] || 'never'})" : tg.to_s
             lines << "- #{detail_str}"
           end
         end
@@ -599,7 +606,11 @@ module RailsAiContext
         return "**#{nd[:field]}** #{RailsAiContext::Confidence::INFERRED}" if transformation.nil? ||
           transformation == RailsAiContext::Confidence::INFERRED
 
-        "**#{nd[:field]}** - #{transformation}"
+        "**#{nd[:field]}** - #{transformation}#{option_pairs(nd[:options])}"
+      end
+
+      private_class_method def self.option_pairs(options)
+        options&.any? ? " (#{options.map { |k, v| "#{k}: #{option_text(v)}" }.join(', ')})" : ""
       end
 
       # Extract bodies of custom validate methods (single-line or first meaningful line)

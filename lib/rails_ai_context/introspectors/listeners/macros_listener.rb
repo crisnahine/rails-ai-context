@@ -52,8 +52,11 @@ module RailsAiContext
           elsif GEM_MACROS.include?(node.name)
             record_gem_macro(node)
           elsif SIMPLE_MACROS.include?(node.name)
+            # Rails defaults the attribute to :password.
             @results << {
               macro:      node.name,
+              attribute:  (extract_symbol_args(node).first || :password).to_s,
+              written:    written_options(node),
               location:   node.location.start_line,
               confidence: confidence_for(node)
             }
@@ -92,6 +95,12 @@ module RailsAiContext
         end
 
         private
+
+        # Every keyword option as the file writes it: a lambda, `2.days` or a nested hash
+        # reads the same on every Ruby, where a value's inspect does not.
+        def written_options(node)
+          keyword_hash(node) { |value| one_line_source(value) }
+        end
 
         def record_setting(node)
           value = node.arguments&.arguments&.first or return
@@ -166,6 +175,7 @@ module RailsAiContext
               macro:      node.name,
               attribute:  attr_name.to_s,
               options:    options,
+              written:    written_options(node),
               location:   node.location.start_line,
               confidence: confidence_for(node)
             }

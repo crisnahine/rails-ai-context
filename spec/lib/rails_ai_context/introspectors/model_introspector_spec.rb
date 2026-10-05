@@ -351,6 +351,31 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    context "with options the details used to drop" do
+      before do
+        File.write(fixture_model, <<~RUBY)
+          class User < ApplicationRecord
+            has_secure_password
+            has_secure_password :recovery_password, validations: false
+            normalizes :phone, with: ->(p) { p&.delete("^0-9") }, apply_to_nil: true
+            encrypts :phone, deterministic: true, ignore_case: true, previous: { deterministic: false }
+            serialize :tags_cache, coder: JSON, type: Array
+          end
+        RUBY
+      end
+
+      it "carries each password attribute and every option as written" do
+        data = RailsAiContext::Introspectors::SourceIntrospector.from_source(File.read(fixture_model))
+        result = introspector.send(:extract_macros_from_ast, data, fixture_model).merge(introspector.send(:extract_detailed_macros_from_ast, data))
+
+        expect(result[:secure_passwords]).to eq([ { attribute: "password", options: {} },
+                                                  { attribute: "recovery_password", options: { validations: "false" } } ])
+        expect(result[:normalizes_details]).to eq([ { field: "phone", transformation: "->(p) { p&.delete(\"^0-9\") }", options: { apply_to_nil: "true" } } ])
+        expect(result[:encryption_details]).to eq([ { field: "phone", options: { deterministic: "true", ignore_case: "true", previous: "{ deterministic: false }" } } ])
+        expect(result[:serialize_options]).to eq("tags_cache" => { coder: "JSON", type: "Array" })
+      end
+    end
+
     context "when source file does not exist" do
       subject(:result) do
         data = { associations: [], validations: [], scopes: [], enums: [], callbacks: [], macros: [], methods: [] }
@@ -388,8 +413,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(result[:encryption_details]).to be_an(Array)
         ssn_entry = result[:encryption_details].find { |e| e[:field] == "ssn" }
         expect(ssn_entry).not_to be_nil
-        expect(ssn_entry[:options][:deterministic]).to be true
-        expect(ssn_entry[:options][:downcase]).to be true
+        expect(ssn_entry[:options]).to eq(deterministic: "true", downcase: "true")
       end
 
       it "extracts encrypted attributes without options" do
@@ -418,7 +442,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(result[:normalizes_details]).to be_an(Array)
         email_entry = result[:normalizes_details].find { |e| e[:field] == "email" }
         expect(email_entry).not_to be_nil
-        expect(email_entry[:transformation]).to eq("[INFERRED]")
+        expect(email_entry[:transformation]).to eq("->(e) { e.strip.downcase }")
       end
     end
 
@@ -442,7 +466,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(result[:token_generation]).to be_an(Array)
         email_token = result[:token_generation].find { |t| t[:purpose] == "email_verification" }
         expect(email_token).not_to be_nil
-        expect(email_token[:expires_in]).to eq("[INFERRED]")
+        expect(email_token[:expires_in]).to eq("2.hours")
       end
 
       it "handles token generation without expires_in" do
@@ -1200,7 +1224,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(data[:generates_token_for]).to eq([ "password_reset" ])
         expect(data[:delegations]).to eq([ { methods: [ "name" ], to: "account" } ])
         expect(data[:constants]).to include(a_hash_including(name: "ROLES"))
-        expect(data[:encryption_details]).to eq([ { field: "private_key", options: { deterministic: true } } ])
+        expect(data[:encryption_details]).to eq([ { field: "private_key", options: { deterministic: "true" } } ])
         expect(data[:token_generation]).to include(a_hash_including(purpose: "password_reset"))
         expect(data[:custom_validates]).to eq([ "key_is_sane" ])
         expect(data[:enums]).to eq({ "kind" => { "rsa" => 0, "ed25519" => 1 } })

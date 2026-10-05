@@ -592,6 +592,30 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  describe "macro options" do
+    it "prints each password attribute and the options of serialize, normalizes and generates_token_for" do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "User" => {
+          table_name: "users", has_secure_password: true,
+          secure_passwords: [ { attribute: "password", options: {} }, { attribute: "recovery_password", options: { validations: "false" } } ],
+          serialize: %w[tags_cache], serialize_options: { "tags_cache" => { coder: "JSON", type: "Array" } },
+          normalizes_details: [ { field: "phone", transformation: "->(p) { p }", options: { apply_to_nil: "true" } } ],
+          encryption_details: [ { field: "phone", options: { deterministic: "true", previous: "{ deterministic: false }" } } ],
+          token_generation: [ { purpose: "email_confirmation", expires_in: "2.days" } ]
+        } }
+      )
+
+      text = described_class.call(model: "User").content.first[:text]
+
+      expect(text).to include("- `has_secure_password` :password\n- `has_secure_password` :recovery_password (validations: false)")
+      expect(text).to include("- `serialize` :tags_cache (coder: JSON, type: Array)")
+      expect(text).to include("- **phone** - ->(p) { p } (apply_to_nil: true)")
+      expect(text).to include("- **phone** (deterministic: true, previous: { deterministic: false })")
+      expect(text).to include("- **email_confirmation** (expires_in: 2.days)")
+    end
+  end
+
   describe "callbacks" do
     before do
       described_class.reset_cache!

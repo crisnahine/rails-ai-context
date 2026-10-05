@@ -1169,8 +1169,10 @@ module RailsAiContext
 
           if macro == :has_secure_password
             macros[:has_secure_password] = true
+            (macros[:secure_passwords] ||= []) << { attribute: m[:attribute], options: m[:written] || {} }
           elsif (key = ATTRIBUTE_MACRO_MAP[macro])
             (macros[key] ||= []) << m[:attribute]
+            (macros[:serialize_options] ||= {})[m[:attribute]] = m[:written] if macro == :serialize && m[:written]&.any?
           elsif STORE_MACROS.include?(macro)
             add_store_accessors(macros, m)
           elsif macro == :accepts_nested_attributes_for
@@ -1304,19 +1306,16 @@ module RailsAiContext
         tokens = []
 
         source_data[:macros].each do |m|
+          written = m[:written] || {}
           case m[:macro]
           when :encrypts
-            opts = {}
-            opts[:deterministic] = true if m[:options][:deterministic] == true
-            opts[:downcase] = true if m[:options][:downcase] == true
-            encryption << { field: m[:attribute], options: opts }
+            encryption << { field: m[:attribute], options: written }
           when :normalizes
-            entry = { field: m[:attribute] }
-            entry[:transformation] = m[:options][:with].to_s if m[:options][:with]
+            entry = { field: m[:attribute], transformation: written[:with], options: written.except(:with).presence }
             normalizations << entry.compact
           when :generates_token_for
             entry = { purpose: m[:attribute] }
-            entry[:expires_in] = m[:options][:expires_in].to_s if m[:options][:expires_in]
+            entry[:expires_in] = written[:expires_in] if written[:expires_in]
             tokens << entry.compact
           end
         end

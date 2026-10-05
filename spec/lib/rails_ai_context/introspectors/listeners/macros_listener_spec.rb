@@ -180,3 +180,29 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "model 
     expect(results.select { |r| r[:macro] == :query_constraints }.map { |r| r[:attribute] }).to eq(%w[order_shop_id id])
   end
 end
+
+RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "options as written" do
+  it "keeps every option of encrypts, normalizes, serialize, generates_token_for and has_secure_password" do
+    results = parse_and_dispatch(<<~RUBY)
+      class User < ApplicationRecord
+        has_secure_password
+        has_secure_password :recovery_password, validations: false
+        generates_token_for :email_confirmation, expires_in: 2.days do
+          email_address
+        end
+        normalizes :phone, with: ->(p) { p&.delete("^0-9") }, apply_to_nil: true
+        encrypts :phone, deterministic: true, ignore_case: true, previous: { deterministic: false }, support_unencrypted_data: true
+        serialize :tags_cache, coder: JSON, type: Array
+      end
+    RUBY
+    written = results.map { |r| [ r[:macro], r[:attribute], r[:written] ] }
+    expect(written).to eq([
+      [ :has_secure_password, "password", {} ],
+      [ :has_secure_password, "recovery_password", { validations: "false" } ],
+      [ :generates_token_for, "email_confirmation", { expires_in: "2.days" } ],
+      [ :normalizes, "phone", { with: "->(p) { p&.delete(\"^0-9\") }", apply_to_nil: "true" } ],
+      [ :encrypts, "phone", { deterministic: "true", ignore_case: "true", previous: "{ deterministic: false }", support_unencrypted_data: "true" } ],
+      [ :serialize, "tags_cache", { coder: "JSON", type: "Array" } ]
+    ])
+  end
+end
