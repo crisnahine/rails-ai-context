@@ -22,6 +22,44 @@ RSpec.describe RailsAiContext::Tools::Onboard do
     end
   end
 
+  describe "the auth section" do
+    def onboard_with(ctx)
+      allow(described_class).to receive(:cached_context).and_return({ app_name: "App", models: {} }.merge(ctx))
+      described_class.call(detail: "full").content.first[:text]
+    end
+
+    it "names what the auth introspector found: Rodauth and Action Policy" do
+      text = onboard_with(auth: { authentication: { rodauth: { classes: [ "RodauthMain" ] } },
+                                  authorization: { action_policy: [ "ApplicationPolicy" ] } })
+
+      expect(text).to include("## Authentication & Authorization")
+      expect(text).to include("Authentication via Rodauth (RodauthMain).")
+      expect(text).to include("Authorization via Action Policy (1 policy).")
+    end
+
+    it "names Rails' generated authentication" do
+      text = onboard_with(auth: { authentication: { rails_auth: { detected: true }, has_secure_password: [ "User" ] },
+                                  authorization: {} })
+
+      expect(text).to include("Authentication via the Rails authentication generator (Session and Current models).")
+      expect(text).to include("has_secure_password on User.")
+    end
+
+    it "names the Devise model and its modules" do
+      text = onboard_with(auth: { authentication: { devise: [ { model: "User", matches: [ ":database_authenticatable, :lockable" ] } ] },
+                                  authorization: {},
+                                  devise_modules_per_model: { "User" => %w[database_authenticatable lockable] } })
+
+      expect(text).to include("Authentication via Devise on User (database_authenticatable, lockable).")
+    end
+
+    it "counts serializer classes, not the keys of the serializers hash" do
+      text = onboard_with(api: { serializers: { serializer_classes: %w[ASerializer BSerializer CSerializer] } })
+
+      expect(text).to include("Serializers: 3.")
+    end
+  end
+
   describe ".call" do
     it "returns an MCP::Tool::Response" do
       result = described_class.call

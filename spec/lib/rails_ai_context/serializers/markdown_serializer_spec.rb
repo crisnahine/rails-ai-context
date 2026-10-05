@@ -135,6 +135,18 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
       expect(output).not_to include("Pundit")
       expect(output).not_to include("CanCanCan")
     end
+
+    it "names Rodauth and the Action Policy policies" do
+      context = {
+        auth: { authentication: { rodauth: { classes: %w[RodauthMain] } }, authorization: { action_policy: %w[ApplicationPolicy] } }
+      }
+
+      output = described_class.new(context).call
+
+      expect(output).to include("- Rodauth: RodauthMain")
+      expect(output).to include("### Action Policy Policies")
+      expect(output).to include("- `ApplicationPolicy`")
+    end
   end
 
   describe "the Controllers section" do
