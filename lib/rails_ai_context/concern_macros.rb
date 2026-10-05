@@ -633,7 +633,7 @@ module RailsAiContext
           end
           # ActiveSupport::Concern runs a concern's dependencies before it, so
           # the walk's post-order is the order the class receives them.
-          @placement[label] = [ @top, @placement.size ]
+          @placement[label] = [ @top, @placement.size, path ]
         end
       end
 
@@ -985,8 +985,8 @@ module RailsAiContext
     #   the collected entries per key, the names whose file could not be read,
     #   the names `excluded_concerns` hid that the walk would otherwise have
     #   read, the methods `included` blocks call with their call sites, and for
-    #   each concern read the top-level mixin that reached it and its place in
-    #   the order Ruby adds them, the methods whose declarations the walk held
+    #   each concern read the top-level mixin that reached it, its place in
+    #   the order Ruby adds them and its file, the methods whose declarations the walk held
     #   back because nothing it knew of calls them, the concern each `included`
     #   block call site belongs to and whether it is a plain hook, by the site's
     #   object id, and for each module read [label, macro, the class methods it gives

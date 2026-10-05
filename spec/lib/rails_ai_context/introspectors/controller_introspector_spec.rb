@@ -683,6 +683,79 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
     end
 
+    # Mastodon: CacheConcern's vary_by block and the controller's own lambda both open on line 8.
+    it "names a block outside the controller's file by that file, and pairs each block with its own options" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/controllers/concerns"))
+        cache_path = File.join(dir, "app/controllers/concerns/cache_concern.rb")
+        File.write(cache_path, <<~RUBY)
+          module CacheConcern
+            extend ActiveSupport::Concern
+            class_methods do
+              def vary_by(value, **kwargs)
+                before_action(**kwargs) { response.headers["Vary"] = value }
+              end
+            end
+          end
+        RUBY
+        limit_path = File.join(dir, "app/controllers/concerns/rate_limited.rb")
+        File.write(limit_path, <<~RUBY)
+          module RateLimited
+            extend ActiveSupport::Concern
+            class_methods do
+              def limit_rate(method_name)
+                around_action(only: method_name) { |_controller, block| block.call }
+              end
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app/controllers/application_controller.rb"), <<~RUBY)
+          class ApplicationController < ActionController::Base
+            include CacheConcern
+            vary_by "Authorization"
+          end
+        RUBY
+        source = <<~RUBY
+          class PostsController < ApplicationController
+            include RateLimited
+
+            before_action -> { head :ok }, except: :create
+            before_action -> { head :ok }, only: :create
+            limit_rate :create
+            limit_rate :update
+          end
+        RUBY
+        File.write(File.join(dir, "app/controllers/posts_controller.rb"), source)
+        base = Class.new(ActionController::Base)
+        base.singleton_class.class_eval(<<~RUBY, cache_path, 4)
+          def vary_by(value, **kwargs)
+            before_action(**kwargs) { response.headers["Vary"] = value }
+          end
+        RUBY
+        base.singleton_class.class_eval(<<~RUBY, limit_path, 4)
+          def limit_rate(method_name)
+            around_action(only: method_name) { |_controller, block| block.call }
+          end
+        RUBY
+        base.vary_by("Authorization")
+        base.define_singleton_method(:name) { "ApplicationController" }
+        ctrl = Class.new(base)
+        ctrl.class_eval(source.lines[3..6].join, File.join(dir, "app/controllers/posts_controller.rb"), 4)
+        ctrl.define_singleton_method(:name) { "PostsController" }
+        in_dir = described_class.new(double("app", root: Pathname.new(dir)))
+
+        booted = in_dir.send(:extract_filters, ctrl, source).map { |f| [ f[:kind], f[:name], f[:only] || f[:except] ] }
+
+        expect(booted).to eq([
+          [ "before", "block (line 5 of app/controllers/concerns/cache_concern.rb)", nil ],
+          [ "before", "block (line 4)", [ "create" ] ],
+          [ "before", "block (line 5)", [ "create" ] ],
+          [ "around", "block (line 5 of app/controllers/concerns/rate_limited.rb)", [ "create" ] ],
+          [ "around", "block (line 5 of app/controllers/concerns/rate_limited.rb)", [ "update" ] ]
+        ])
+      end
+    end
+
     it "lists a call's lambdas and names in argument order, in both tiers" do
       Dir.mktmpdir do |dir|
         path = File.join(dir, "app/controllers/users_controller.rb")

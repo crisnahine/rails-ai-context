@@ -40,6 +40,39 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
 
     # A macro inside a `def` runs when the method runs: never for a method nobody
     # calls, and with the call's options where the body calls it.
+    # The block opens in the method's file; the expansion re-reads the method's body on its own.
+    it "names a block a class method declares by its line in the file that defines the method, and that file when it is not the class's" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        concern(dir, "CacheConcern", <<~BODY.strip)
+          class_methods do
+              def vary_by(value, **kwargs)
+                before_action(**kwargs) do
+                  response.headers["Vary"] = value
+                end
+              end
+            end
+        BODY
+        source = <<~RUBY
+          class PostsController < ApplicationController
+            include CacheConcern
+            def self.timed(**options)
+              around_action(**options) do |_controller, action|
+                action.call
+              end
+            end
+            vary_by "Accept"
+            timed only: :index
+          end
+        RUBY
+
+        filters, = described_class.with_concerns(source, root: dir, within: "PostsController")
+
+        expect(filters.map { |f| [ f[:kind], f[:name], f[:only] ] })
+          .to eq([ [ "before", "block (line 5 of app/controllers/concerns/cache_concern.rb)", nil ], [ "around", "block (line 4)", [ "index" ] ] ])
+      end
+    end
+
     it "reads a filter inside a method only where the class calls the method" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))

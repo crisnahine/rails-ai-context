@@ -88,7 +88,8 @@ module RailsAiContext
         own_defs = singleton_expansions(source, walked, calls, Set.new)
         defined = own_defs.map { |entry| entry[:site].name }.to_set
         # A concern method the body calls declares for the body; one a concern's own block calls stays the concern's.
-        by_body, by_concern = Array(collected[:filters]).partition { |entry| body_call?(entry, calls) }
+        filed = Array(collected[:filters]).map { |entry| with_file(entry, placement.dig(entry[:from_concern], 2), root) }
+        by_body, by_concern = filed.partition { |entry| body_call?(entry, calls) }
         called = by_body.reject { |entry| defined.include?(entry[:site].name) }
         defined.merge(called.map { |entry| entry[:site].name })
         inherited = base_expansions(source, within, root, calls, defined, cache)
@@ -156,17 +157,18 @@ module RailsAiContext
         MAX_BASES.times do
           break unless name && root
 
-          label, base, path = base_source(root, name, scope)
+          label, base, path, file = base_source(root, name, scope)
           break unless base && seen.add?(path)
 
           # Every controller reaches ApplicationController, so its walk is read once per run.
           key = [ :controller_base_walk, path, base ]
           walked = cache ? (cache[key] ||= SourceIntrospector.walk_source(base, LISTENERS)) : RunCache.fetch(key) { SourceIntrospector.walk_source(base, LISTENERS) }
-          own = singleton_expansions(base, walked, calls, taken)
+          own = singleton_expansions(base, walked, calls, taken).map { |entry| entry.merge(file: file) }
           taken.merge(own.map { |entry| entry[:site].name })
-          collected, = ConcernMacros.collect(root, Array(walked[:mixins]), keys: [ :filters ], prefer: "controller",
-                                             within: label, cache: cache, calls: calls, listeners: LISTENERS)
+          collected, _, _, _, placement = ConcernMacros.collect(root, Array(walked[:mixins]), keys: [ :filters ], prefer: "controller",
+                                                                within: label, cache: cache, calls: calls, listeners: LISTENERS)
           mixed = Array(collected[:filters]).select { |entry| body_call?(entry, calls) && !taken.include?(entry[:site].name) }
+                                            .map { |entry| with_file(entry, placement.dig(entry[:from_concern], 2), root) }
           taken.merge(mixed.map { |entry| entry[:site].name })
           found.concat(own + mixed)
           name, scope = superclass_of(base, label)
@@ -189,7 +191,7 @@ module RailsAiContext
         written.start_with?("::") ? [ written.delete_prefix("::"), nil ] : [ written, within ]
       end
 
-      # [constant, source, realpath] of the app controller base the name resolves to, as Ruby looks it up.
+      # [constant, source, realpath, app-relative path] of the app controller base the name resolves to, as Ruby looks it up.
       def base_source(root, name, scope)
         ConcernPaths.candidate_names(name, scope).each do |candidate|
           found = RunCache.fetch([ :controller_base_source, root.to_s, candidate ]) { constant_source(root, candidate) }
@@ -204,10 +206,34 @@ module RailsAiContext
         PathResolver.controller_dirs(root.to_s).each do |dir|
           next unless dir.start_with?(prefix) && ConcernPaths.file_exist?(dir, file)
 
-          source, resolution = SafePath.read(File.join(dir.delete_prefix(prefix), file), under: root.to_s)
-          return [ candidate, source, resolution.realpath ] if source
+          relative = File.join(dir.delete_prefix(prefix), file)
+          source, resolution = SafePath.read(relative, under: root.to_s)
+          return [ candidate, source, resolution.realpath, relative ] if source
         end
         nil
+      end
+
+      # The file a block the entry declares sits in, when that is not the class's own.
+      def with_file(entry, path, root)
+        path ? entry.merge(file: PortablePath.relativize(path, root.to_s)) : entry
+      end
+
+      BARE_BLOCK = /\Ablock \(line \d+\)\z/
+
+      # A block outside the class's own file names that file: two blocks on one line number are two callbacks.
+      def block_name(line, file = nil)
+        file ? "block (line #{line} of #{file})" : "block (line #{line})"
+      end
+
+      # A class body's filters as a class elsewhere names them: its own blocks by the file it is in.
+      def in_file(filters, file)
+        return filters unless file
+
+        filters.map { |filter| filter[:name].to_s.match?(BARE_BLOCK) ? filter.merge(name: "#{filter[:name].to_s.chomp(")")} of #{file})") : filter }
+      end
+
+      def block?(name)
+        name.to_s.start_with?("block (line ")
       end
 
       # One filter per callback the call adds, a block or lambda named by its line.
@@ -219,7 +245,7 @@ module RailsAiContext
         end
         macro = entry[:macro].to_s
         skipped = macro.start_with?("skip_")
-        names = positional_names(entry, skipped ? [] : Array(entry[:proc_lines]).map { |line| "block (line #{line})" })
+        names = positional_names(entry, skipped ? [] : Array(entry[:proc_lines]).map { |line| block_name(line, entry[:file]) })
         # An excluded name is framework noise only while it runs. A skip of it
         # is the app's own decision, which the per-action answer reports.
         names -= RailsAiContext.configuration.excluded_filters.map(&:to_s) unless skipped
@@ -310,7 +336,7 @@ module RailsAiContext
       end
 
       private_class_method :walk, :class_level, :singleton_expansions, :declares_filters?, :base_expansions,
-                           :superclass_of, :base_source, :constant_source, :body_call?, :record, :positional_names, :constraints, :condition_text, :normalize, :action_condition, :lambda_body
+                           :superclass_of, :base_source, :constant_source, :with_file, :body_call?, :record, :positional_names, :constraints, :condition_text, :normalize, :action_condition, :lambda_body
     end
   end
 end

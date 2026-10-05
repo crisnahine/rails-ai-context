@@ -91,6 +91,31 @@ RSpec.describe RailsAiContext::ActionFilters do
       end
     end
 
+    # The booted chain names an ancestor's block by its file, and a child's block on the same line is another one.
+    it "names an ancestor's block by the ancestor's file, apart from the child's own block on that line" do
+      Dir.mktmpdir do |dir|
+        app_with_base(dir)
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"), <<~RUBY)
+          class ApplicationController < ActionController::Base
+            before_action { head :forbidden }
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "pages_controller.rb"), <<~RUBY)
+          class PagesController < ApplicationController
+            before_action(only: :show) { head :ok }
+            def index; end
+            def show; end
+          end
+        RUBY
+
+        chain = described_class.for_controller(static_context(dir), "PagesController", root: dir)
+
+        expect(chain[:inherited].map { |f| [ f[:name], f[:from] ] })
+          .to eq([ [ "block (line 2 of app/controllers/application_controller.rb)", "ApplicationController" ] ])
+        expect(chain[:own].map { |f| [ f[:name], f[:only] ] }).to eq([ [ "block (line 2)", [ "show" ] ] ])
+      end
+    end
+
     # Mastodon's AboutController runs four filters from WebAppControllerConcern
     # and set_locale from the Localized its parent includes; the static walk
     # read only the two class bodies and listed none of them.

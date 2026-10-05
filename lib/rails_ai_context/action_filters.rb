@@ -200,8 +200,9 @@ module RailsAiContext
         seen << name
         depth += 1
         info = controllers[name]
-        source = info.is_a?(Hash) ? nil : base_controller_source(name, root)
-        info ||= { filters: base_filters(source, name, root) } if source
+        path = info.is_a?(Hash) ? nil : base_controller_path(name, root)
+        source = path && SafeFile.read(path)
+        info ||= { filters: base_filters(source, name, root), file: PortablePath.relativize(path, (root || default_root).to_s) } if source
         unless info.is_a?(Hash)
           name = gem_controller_base(name, root)
           next
@@ -215,7 +216,8 @@ module RailsAiContext
         # The walk runs closest ancestor first, so a nearer class's condition
         # is the one the child inherits.
         conditions = merge_conditions(conditions_by_name(skips, action), conditions)
-        carried = Array(info[:filters]).grep(Hash).reject { |f| f[:skipped] }
+        # The child's chain names this class's own blocks by the file they are in.
+        carried = Introspectors::ControllerFilters.in_file(Array(info[:filters]).grep(Hash).reject { |f| f[:skipped] }, info[:file])
         # Counted before the rejects below, so a conditional skip of a name
         # the walk did see is never mistaken for a skip of a declaration it
         # could not. A skip record is not a sighting, hence the reject above.
@@ -365,13 +367,16 @@ module RailsAiContext
     # printed it. Only a name the app has a file for is read,
     # so a gem-owned parent, or one an inflection renames, still ends the walk.
     def base_controller_source(name, root)
+      path = base_controller_path(name, root)
+      path && SafeFile.read(path)
+    end
+
+    def base_controller_path(name, root)
       root ||= default_root
       return nil unless root
 
       relative = "#{name.to_s.underscore}.rb"
-      path = PathResolver.controller_dirs(root.to_s).map { |dir| File.join(dir, relative) }
-                         .find { |candidate| File.exist?(candidate) }
-      path && SafeFile.read(path)
+      PathResolver.controller_dirs(root.to_s).map { |dir| File.join(dir, relative) }.find { |candidate| File.exist?(candidate) }
     end
 
     # Gem controllers whose base class is set in the app's initializers:
@@ -457,6 +462,6 @@ module RailsAiContext
                          :skip_calls, :base_filters, :skip_flag_records, :redeclared_names, :last_records, :own_skips,
                          :record_attribution, :conditional?, :partial?, :absolute_names, :conditions_by_name,
                          :merge_conditions, :mark_conditional_skips, :skip_tail, :action_names, :condition_text,
-                         :unplaced_conditional_skips, :evidence_skips, :configured_base, :runs_once?
+                         :unplaced_conditional_skips, :evidence_skips, :configured_base, :runs_once?, :base_controller_path
   end
 end
