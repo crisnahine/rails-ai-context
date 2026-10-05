@@ -190,16 +190,16 @@ module RailsAiContext
           macros.each { |m| lines << "- #{m}" }
         end
 
-        public_methods = Introspectors::ActionResolver.public_methods_from_source(source, owner: name)
+        public_methods = unique(Introspectors::ActionResolver.public_methods_in(source, owner: name))
         class_methods = concern_class_methods(source, name)
         own_module_methods = module_methods(source, name)
         render_methods(lines, source, detail, "Public Methods", public_methods)
-        render_methods(lines, source, detail, "Class Methods", class_methods, self_prefix: true)
-        render_methods(lines, source, detail, "Module Methods", own_module_methods, self_prefix: true)
+        render_methods(lines, source, detail, "Class Methods", class_methods)
+        render_methods(lines, source, detail, "Module Methods", own_module_methods)
         # A module of private helpers is not an empty one.
         if public_methods.empty? && class_methods.empty? && own_module_methods.empty?
           render_methods(lines, source, detail, "Private Methods",
-            Introspectors::ActionResolver.private_methods_from_source(source, owner: name))
+            unique(Introspectors::ActionResolver.private_methods_in(source, owner: name)))
         end
 
         # Parse callbacks defined in the concern
@@ -248,21 +248,20 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
-      # A class method is written `def self.x` but listed as `x`, so its body
-      # is only found under the prefixed name.
-      private_class_method def self.render_methods(lines, source, detail, title, methods, self_prefix: false)
+      # Each method's body is cut from its own walked def: looking it up by name
+      # found a same-named private twin or a delegate instead.
+      private_class_method def self.render_methods(lines, source, detail, title, methods)
         return if methods.empty?
 
         lines << "" << "## #{title}"
         full = RailsAiContext::DetailLevel.full?(detail)
         methods.each do |m|
-          method_name = m.to_s.split("(").first
-          body = full && (extract_method_source_from_string(source, method_name) ||
-            (self_prefix ? extract_method_source_from_string(source, "self.#{method_name}") : nil))
+          signature = Introspectors::ActionResolver.signature(m)
+          body = full && Introspectors::ActionResolver.body_of(source, m)
           if body
-            lines << "### #{m}" << "```ruby" << body[:code] << "```" << ""
+            lines << "### #{signature}" << "```ruby" << body[:code] << "```" << ""
           else
-            lines << "- `#{m}`"
+            lines << "- `#{signature}`"
           end
         end
       end
@@ -270,15 +269,16 @@ module RailsAiContext
       # `module ClassMethods` defs count too: ActiveSupport::Concern extends the includer with it.
       private_class_method def self.concern_class_methods(source, name)
         gained = own_class_methods(source, name).select { |m| m[:class_methods_block] }
-        (gained.map { |m| Introspectors::ActionResolver.signature(m) } +
-          Introspectors::ActionResolver.public_methods_from_source(source, owner: "#{name}::ClassMethods")).uniq
+        unique(gained + Introspectors::ActionResolver.public_methods_in(source, owner: "#{name}::ClassMethods"))
       end
 
       # `def self.x` and `class << self` methods live on the module; no includer gains them, nor a mixin hook.
       private_class_method def self.module_methods(source, name)
-        own_class_methods(source, name)
-          .reject { |m| m[:class_methods_block] || ConcernMembership::MIXIN_HOOKS.include?(m[:name]) }
-          .map { |m| Introspectors::ActionResolver.signature(m) }.uniq
+        unique(own_class_methods(source, name).reject { |m| m[:class_methods_block] || ConcernMembership::MIXIN_HOOKS.include?(m[:name]) })
+      end
+
+      private_class_method def self.unique(methods)
+        methods.uniq { |m| Introspectors::ActionResolver.signature(m) }
       end
 
       private_class_method def self.own_class_methods(source, name)

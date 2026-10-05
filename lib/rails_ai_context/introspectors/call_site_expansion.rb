@@ -63,7 +63,7 @@ module RailsAiContext
       def entries(definition, call, listeners)
         return {} unless definition.body
 
-        bindings = rest_bindings(unwritten(bind(definition.parameters, call), definition.body), definition, call)
+        bindings = derived_bindings(rest_bindings(unwritten(bind(definition.parameters, call), definition.body), definition, call), definition.body)
         out = Output.new
         undecided = []
         emit(definition.body, bindings, out, undecided, 0, [])
@@ -81,13 +81,11 @@ module RailsAiContext
           end
         end
         unbound = bindings.filter_map { |name, binding| name if name.is_a?(Symbol) && binding.source.nil? }
-        if unbound.any?
-          data = data.transform_values do |found|
-            Array(found).reject do |entry|
-              held = names_unbound?(entry, out, unbound)
-              conditional << declaration(entry, out, []) if held
-              held
-            end
+        data = data.transform_values do |found|
+          Array(found).reject do |entry|
+            held = names_unbound?(entry, out, unbound)
+            conditional << declaration(entry, out, []) if held
+            held
           end
         end
         data = data.transform_values { |found| Array(found).map { |entry| relocated(entry, out) } }
@@ -151,13 +149,16 @@ module RailsAiContext
         end
       end
 
-      # A parameter the expansion cannot bind is written as its bare name, which a
-      # listener would read as what the call declares.
+      # A parameter the expansion cannot bind is written as its bare name, and a name it
+      # could not fold keeps its `#{...}`; a listener would read either as what the call declares.
       def names_unbound?(entry, out, names)
         return false unless entry.is_a?(Hash) && entry[:location]
 
         Array(call_at(out, entry[:location])&.arguments&.arguments).any? do |argument|
           argument = argument.expression if argument.is_a?(Prism::SplatNode)
+          next true if (argument.is_a?(Prism::InterpolatedSymbolNode) || argument.is_a?(Prism::InterpolatedStringNode)) &&
+                       argument.parts.any?(Prism::EmbeddedStatementsNode)
+
           (argument.is_a?(Prism::LocalVariableReadNode) || (argument.is_a?(Prism::CallNode) && argument.variable_call?)) &&
             names.include?(argument.name)
         end
@@ -307,6 +308,21 @@ module RailsAiContext
         kept.each { |node| bindings[node.name] = unknown if node.is_a?(Prism::LocalVariableWriteNode) && changed_names.include?(node.name) }
         list = nil if !list || changed_names.include?(rest.name) || list.any? { |item| !literal_source?(item) }
         bindings[rest.name] = list ? list_binding(list) : unknown
+        bindings
+      end
+
+      # A local the body's own statements set once from what the call binds
+      # (`plural_name = list_type.to_s`) stands for that value wherever it is read.
+      def derived_bindings(bindings, body)
+        return bindings unless body.is_a?(Prism::StatementsNode)
+
+        body.body.each do |node|
+          next unless node.is_a?(Prism::LocalVariableWriteNode) && !bindings.key?(node.name)
+          next if changed(body, [ node ]).include?(node.name)
+
+          value = evaluate(node.value, bindings, 0)
+          bindings[node.name] = Binding.new(value, value.inspect) if value.is_a?(String) || value.is_a?(Symbol)
+        end
         bindings
       end
 
@@ -709,6 +725,10 @@ module RailsAiContext
           return UNKNOWN unless (receiver.is_a?(Hash) || receiver.is_a?(Array)) && arguments.empty? && !node.block
 
           node.name == :many? ? receiver.size > 1 : receiver.public_send(node.name)
+        when :to_s, :to_sym, :singularize, :pluralize
+          return UNKNOWN unless (receiver.is_a?(String) || receiver.is_a?(Symbol)) && arguments.empty? && !node.block
+
+          node.name == :to_sym ? receiver.to_sym : receiver.to_s.public_send(node.name)
         when :fetch
           return UNKNOWN unless receiver.is_a?(Hash)
 

@@ -62,6 +62,36 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
 
   # Canvas's plugin_settings runs `module_eval <<~RUBY` with interpolation;
   # a heredoc's body sits past its node's slice, and reading it crashed.
+  describe "a local the method derives from a parameter" do
+    it "binds a name built from it, and holds back one it cannot build" do
+      data = expand(<<~'RUBY', "has_home_page_list_of :contacts")
+        def has_home_page_list_of(list_type)
+          plural_name = list_type.to_s
+          single_name = plural_name.singularize
+          after_destroy :"__remove_home_page_#{plural_name}_list"
+          after_save :"touch_#{single_name}"
+          after_commit :"sync_#{list_type.table}"
+        end
+      RUBY
+
+      expect(data[:callbacks].map { |c| [ c[:type], c[:method] ] })
+        .to eq([ [ "after_destroy", "__remove_home_page_contacts_list" ], [ "after_save", "touch_contact" ] ])
+      expect(data[:conditional].map { |c| c[:declaration] }).to eq([ 'after_commit :"sync_#{:contacts.table}"' ])
+    end
+
+    it "stays unbound when the method writes it again" do
+      data = expand(<<~'RUBY', "listed :contacts")
+        def listed(list_type)
+          name = list_type.to_s
+          name = "other" if rand > 1
+          after_destroy :"drop_#{name}"
+        end
+      RUBY
+
+      expect(data[:callbacks]).to be_empty
+    end
+  end
+
   it "reads a method whose heredoc interpolates, keeping what follows it" do
     data = expand(<<~'RUBY', "recent_by :created_at")
       def recent_by(column)

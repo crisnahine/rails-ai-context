@@ -117,15 +117,21 @@ module RailsAiContext
       # its class methods, each as written (`full_name(sep = ' ')`). The owner
       # defaults to the constant the file declares.
       def public_methods_from_source(source, owner: nil, skip_underscored: true)
-        methods = own_methods_in(source, owner).select { |m| m[:scope] == :instance && m[:visibility] == :public }
-        methods = methods.reject { |m| m[:name].start_with?("_") } if skip_underscored
-        methods.map { |m| signature(m) }.uniq
+        public_methods_in(source, owner: owner, skip_underscored: skip_underscored).map { |m| signature(m) }.uniq
       end
 
       def private_methods_from_source(source, owner: nil)
-        own_methods_in(source, owner)
-          .select { |m| m[:scope] == :instance && m[:visibility] != :public }
-          .map { |m| signature(m) }.uniq
+        private_methods_in(source, owner: owner).map { |m| signature(m) }.uniq
+      end
+
+      # The walked methods behind those signatures, for a caller that prints each one's own body.
+      def public_methods_in(source, owner: nil, skip_underscored: true)
+        methods = own_methods_in(source, owner).select { |m| m[:scope] == :instance && m[:visibility] == :public }
+        skip_underscored ? methods.reject { |m| m[:name].start_with?("_") } : methods
+      end
+
+      def private_methods_in(source, owner: nil)
+        own_methods_in(source, owner).select { |m| m[:scope] == :instance && m[:visibility] != :public }
       end
 
       # A bare `private` never reaches `def self.x`; it does reach a def

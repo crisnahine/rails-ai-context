@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "set"
+
 module RailsAiContext
   module Tools
     class GetHelperMethods < BaseTool
@@ -164,7 +166,7 @@ module RailsAiContext
         end
 
         # Parse method signatures
-        methods = Introspectors::ActionResolver.public_methods_from_source(source)
+        methods = view_callable(source)
         if methods.any?
           lines << "" << "## Methods (#{methods.size})"
           methods.each { |m| lines << "- `#{m}`" }
@@ -214,7 +216,7 @@ module RailsAiContext
           module_name = module_name_for(file_path, helper_dirs)
 
           source = RailsAiContext::SafeFile.read(file_path)
-          methods = source ? Introspectors::ActionResolver.public_methods_from_source(source) : []
+          methods = source ? view_callable(source) : []
 
           {
             name: module_name,
@@ -289,27 +291,107 @@ module RailsAiContext
         lines << ""
       end
 
-      # What `helper_method` in a controller or controller concern hands the views that
-      # controller renders. Only a file that names the macro is parsed.
-      private_class_method def self.controller_helper_methods(real_root)
-        PathResolver.dirs_for(real_root, "app/controllers").flat_map do |dir|
-          real_dir = File.realpath(dir).to_s
-          safe_glob(dir, "**/*.rb", real_root).sort.flat_map do |path|
-            source = RailsAiContext::SafeFile.read(path)
-            next [] unless source&.include?("helper_method")
+      # A module_function method's instance copy is private, but a view calls it like any helper.
+      private_class_method def self.view_callable(source)
+        Introspectors::ActionResolver.own_methods_in(source, nil)
+          .select { |m| m[:scope] == :instance && (m[:visibility] == :public || m[:module_function]) && !m[:name].start_with?("_") }
+          .map { |m| Introspectors::ActionResolver.signature(m) }.uniq
+      end
 
-            calls = Introspectors::SourceIntrospector.walk(path, { calls: -> { Introspectors::Listeners::GenericMacroListener.new(:helper_method) } })[:calls]
-            names = Array(calls).flat_map do |call|
-              Array(call[:args]).map(&:to_s) + Array(call[:values]).grep(String).filter_map { |v| v[/\Adef\s+([\w?!]+)/, 1] }
-            end.uniq
+      # What `helper_method` in a controller, or in a lib module a controller includes, hands
+      # the views that controller renders. Only a file that names the macro is walked, once.
+      private_class_method def self.controller_helper_methods(real_root)
+        controllers = PathResolver.dirs_for(real_root, "app/controllers").flat_map do |dir|
+          real_dir = File.realpath(dir).to_s
+          safe_glob(dir, "**/*.rb", real_root).sort.map do |path|
             relative = path.delete_prefix("#{real_dir}/").delete_prefix("concerns/").delete_suffix(".rb")
-            owner = Introspectors::DeclaredConstant.named(source, relative.camelize)
-            names.map { |name| { name: name, owner: owner, path: path.delete_prefix("#{real_root}/") } }
+            [ path, relative.camelize, nil ]
           end
         end
+        lib = LibModules.new(real_root)
+        declared = controllers.flat_map { |entry| declared_helpers(real_root, entry, lib) }
+        declared + lib.found.flat_map { |entry| declared_helpers(real_root, entry, nil) }
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "controller_helper_methods")
       end
+
+      # The helper_method names one file declares; with `lib`, also notes the lib modules it includes.
+      # A module kept in its outer constant's file comes with its node's range, and only calls inside it count.
+      private_class_method def self.declared_helpers(real_root, (path, name, range), lib)
+        source = RailsAiContext::SafeFile.read(path) or return []
+        listeners = {}
+        listeners[:calls] = -> { Introspectors::Listeners::GenericMacroListener.new(:helper_method, any_receiver: true) } if source.include?("helper_method")
+        listeners[:mixins] = Introspectors::Listeners::MixinsListener if lib&.may_include?(source)
+        return [] if listeners.empty?
+
+        result = Introspectors::SourceIntrospector.walk(path, listeners)
+        lib&.note(result[:mixins])
+        calls = Array(result[:calls])
+        calls = calls.select { |call| call[:offset] && range.cover?(call[:offset]) } if range
+        names = calls.flat_map do |call|
+          Array(call[:args]).map(&:to_s) + Array(call[:values]).grep(String).filter_map { |v| v[/\Adef\s+([\w?!]+)/, 1] }
+        end.uniq
+        owner = range ? name : Introspectors::DeclaredConstant.named(source, name)
+        names.map { |helper| { name: helper, owner: owner, path: path.delete_prefix("#{real_root}/") } }
+      end
+
+      # The modules in lib the controllers include, as [path, constant, range]: a controller
+      # helper module there is required rather than autoloaded, and app/controllers/concerns
+      # is read as a controller already.
+      # ponytail: one level, lib only; a module those modules include is not followed.
+      class LibModules
+        attr_reader :found
+
+        def initialize(real_root)
+          @real_root = real_root
+          @dirs = PathResolver.dirs_for(real_root, "lib")
+          @basenames = @dirs.flat_map { |dir| Dir.glob("**/*.rb", base: dir) }.to_set { |file| File.basename(file, ".rb") }
+          @lookups = {}
+          @found = []
+        end
+
+        # Whether a written include names a constant some lib file could hold, as its own file or its outer one's.
+        def may_include?(source)
+          return false if @basenames.empty?
+
+          source.scan(/\b(?:include|prepend)\s+:*([A-Z][\w:]*)/).flatten.any? do |written|
+            written.split("::").any? { |segment| @basenames.include?(segment.underscore) }
+          end
+        end
+
+        def note(mixins)
+          Array(mixins).each do |mixin|
+            next unless %i[include prepend].include?(mixin[:macro])
+
+            within = Array(mixin[:owner]).join("::")
+            # Controllers share most candidates, so each is looked up once.
+            hit = ConcernPaths.candidate_names(mixin[:name], within.empty? ? nil : within).lazy.filter_map do |candidate|
+              @lookups.fetch(candidate) { @lookups[candidate] = lookup(candidate) || false }
+            end.first
+            @found << hit if hit && !@found.include?(hit)
+          end
+        end
+
+        private
+
+        def lookup(constant)
+          own = path_for(constant)
+          return [ own, constant, nil ] if own
+
+          outer = constant.rpartition("::").first
+          path = !outer.empty? && path_for(outer)
+          node = path && Introspectors::DeclaredConstant.module_node(AstCache.parse(path).value, constant)
+          node && [ path, constant, node.location.start_offset...node.location.end_offset ]
+        end
+
+        def path_for(constant)
+          relative = "#{constant.underscore}.rb"
+          dir = @dirs.find { |d| File.file?(File.join(d, relative)) }
+          path = dir && File.realpath(File.join(dir, relative))
+          path if path && RailsAiContext::SafePath.contained?(path, @real_root)
+        end
+      end
+      private_constant :LibModules
 
       private_class_method def self.find_view_references(method_names, real_root)
         references = {}

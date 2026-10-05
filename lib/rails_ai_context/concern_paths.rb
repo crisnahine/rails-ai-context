@@ -161,20 +161,20 @@ module RailsAiContext
 
     # [the constant the reference resolves to, its file] for `find_file`'s file, or nil.
     def find_named(root, concern_name, prefer: nil, within: nil, dirs: nil)
-      # Wherever Zeitwerk would look, plus an in-repo path gem's lib. A lib the app does
-      # not add to its autoload paths holds nothing it autoloads, so it is skipped.
-      dirs = ordered_dirs(root, prefer, dirs) + PathResolver.app_roots(root) + PathResolver.declared_roots(root) +
-             PathResolver.path_gem_libs(root)
+      # Every model asks for the same few names, each across hundreds of directories.
+      RunCache.fetch([ :find_named, root, concern_name, prefer, within, dirs ]) do
+        # Wherever Zeitwerk would look, plus an in-repo path gem's lib. A lib the app does
+        # not add to its autoload paths holds nothing it autoloads, so it is skipped.
+        searched = ordered_dirs(root, prefer, dirs) + PathResolver.app_roots(root) + PathResolver.declared_roots(root) +
+                   PathResolver.path_gem_libs(root)
+        candidate_names(concern_name, within).lazy.filter_map do |name|
+          underscore = name.underscore
+          next if underscore.empty? || underscore.include?("..")
 
-      candidate_names(concern_name, within).each do |name|
-        underscore = name.underscore
-        next if underscore.empty? || underscore.include?("..")
-
-        found = dirs.find { |dir| file_exist?(dir, "#{underscore}.rb") }
-        return [ name, File.join(found, "#{underscore}.rb") ] if found
+          found = searched.find { |dir| file_exist?(dir, "#{underscore}.rb") }
+          [ name, File.join(found, "#{underscore}.rb") ] if found
+        end.first
       end
-
-      nil
     end
 
     # Each directory is listed once per run and a candidate is walked down
@@ -227,10 +227,12 @@ module RailsAiContext
     # The enclosing namespaces from the innermost outward, then the reference
     # itself - Ruby's own constant lookup order, which reaches the top level
     # last. Bare-name-first would bind Fasp::Provider's `include DebugConcern`
-    # to a top-level DebugConcern the runtime never sees.
+    # to a top-level DebugConcern the runtime never sees. A qualified name's
+    # first segment is looked up the same way; only a leading `::` skips it.
     def candidate_names(concern_name, within)
       name = concern_name.to_s
-      return [ name ] if within.nil? || name.include?("::")
+      return [ name.delete_prefix("::") ] if name.start_with?("::")
+      return [ name ] if within.nil?
 
       scopes = within.to_s.split("::")
       scopes.size.downto(1).map { |n| "#{scopes.first(n).join('::')}::#{name}" } + [ name ]
