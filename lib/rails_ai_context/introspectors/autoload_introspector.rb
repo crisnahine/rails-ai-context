@@ -13,19 +13,31 @@ module RailsAiContext
 
       # @return [Hash] autoloader configuration
       def call
+        once = config_paths(:autoload_once_paths)
+        eager = config_paths(:eager_load_paths)
         {
           mode: detect_mode,
           zeitwerk_available: zeitwerk_available?,
           autoloaders: extract_autoloaders,
-          autoload_paths: relativize(app.config.autoload_paths),
-          autoload_once_paths: relativize(app.config.autoload_once_paths),
-          eager_load_paths: relativize(app.config.eager_load_paths),
+          # Rails' own formula (Engine#_all_autoload_paths): eager-load paths
+          # autoload too, and an autoload-once path is the once loader's.
+          autoload_paths: relativize(config_paths(:autoload_paths) + eager - once),
+          autoload_once_paths: relativize(once),
+          eager_load_paths: relativize(eager),
           eager_load: !!app.config.eager_load,
           custom_inflections: extract_custom_inflections
         }
       end
 
       private
+
+      # 7.1+ keeps config.paths entries (app/models, ...) out of
+      # config.autoload_paths and adds them in config.all_autoload_paths.
+      def config_paths(name)
+        config = app.config
+        all = :"all_#{name}"
+        Array(config.respond_to?(all) ? config.public_send(all) : config.public_send(name)).map(&:to_s)
+      end
 
       def zeitwerk_available?
         defined?(Zeitwerk) && defined?(Rails) && Rails.respond_to?(:autoloaders) && Rails.autoloaders.respond_to?(:main)
@@ -51,6 +63,7 @@ module RailsAiContext
           entry[:collapsed] = relativize(extract_collapsed(loader))
           entry[:ignored]   = relativize(extract_ignored(loader))
           entry[:root_dirs] = relativize(extract_root_dirs(loader))
+          entry[:not_eager_loaded] = relativize(loader_set(loader, :@eager_load_exclusions))
           entry
         rescue => e
           RailsAiContext.debug_fail(e, { name: kind.to_s, error: e.message }, label: "extract autoloader #{kind}")
@@ -73,6 +86,11 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "extract_ignored")
       end
 
+      def loader_set(loader, ivar)
+        set = loader.instance_variable_get(ivar) if loader.instance_variable_defined?(ivar)
+        set.respond_to?(:to_a) ? set.to_a.map(&:to_s) : []
+      end
+
       def extract_root_dirs(loader)
         return loader.dirs.to_a if loader.respond_to?(:dirs) && loader.dirs.respond_to?(:to_a)
         roots = loader.instance_variable_get(:@roots)
@@ -83,13 +101,10 @@ module RailsAiContext
       end
 
       # Collect `inflect` blocks and `Zeitwerk::Inflector` customizations
-      # declared in config/initializers/*.rb.
+      # declared in the app's initializers.
       def extract_custom_inflections
-        dir = File.join(root, "config/initializers")
-        return [] unless Dir.exist?(dir)
-
         inflections = []
-        Dir.glob(File.join(dir, "*.rb")).sort.each do |path|
+        PathResolver.initializer_paths(root).each do |path|
           rel = path.sub("#{root}/", "")
           ast = SourceIntrospector.walk(path, {
             directives: -> { Listeners::ChainedCallListener.new(INFLECTION_DIRECTIVES, receiver: :inflect) },

@@ -44,6 +44,8 @@ RSpec.describe "Listener registration properties" do
             @state = 1
             scope.where(id: 1).order(:id)
             config.autoload_paths += %w[lib_static]
+            config.log_tags ||= [ :request_id ]
+            config.force_ssl &&= false
 
             if @state == 1
               config.cache_store = :memory_store

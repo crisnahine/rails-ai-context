@@ -110,6 +110,25 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
     expect(jwt[:assignment]).to be false
   end
 
+  it "records a setting written with <<, a call with arguments, an operator or a block" do
+    writes = parse_and_dispatch(<<~RUBY).select { |r| r[:write] }.map { |r| [ r[:path], r[:write] ] }
+      config.hosts << "x"
+      config.action_dispatch.default_headers["X-Frame-Options"] = "DENY"
+      config.session_store :cookie_store
+      config.filter_parameters += [:pin]
+      config.generators do |g|
+        g.test_framework :rspec
+      end
+      config.x == 1
+      config.hosts.include?("y")
+    RUBY
+
+    expect(writes).to eq([
+      [ [ :hosts, :<< ], :call ], [ [ :action_dispatch, :default_headers, :[]= ], :call ], [ [ :session_store ], :call ], [ [ :filter_parameters ], :operator ],
+      [ [ :generators ], :block ]
+    ])
+  end
+
   it "ignores assignments on other receivers" do
     expect(assignments("settings.timeout_in = 5")).to be_empty
   end

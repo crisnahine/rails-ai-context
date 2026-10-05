@@ -250,7 +250,7 @@ module RailsAiContext
         providers = []
 
         # Scan initializers for config.omniauth and provider calls
-        initializers = Dir.glob(File.join(app.root, "config", "initializers", "*.rb"))
+        initializers = PathResolver.initializer_paths(app.root)
         initializers.each do |path|
           ast = SourceIntrospector.walk(path, {
             omniauth: -> { Listeners::ChainedCallListener.new(:omniauth) },

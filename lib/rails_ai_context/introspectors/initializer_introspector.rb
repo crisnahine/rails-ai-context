@@ -48,14 +48,11 @@ module RailsAiContext
         end
       end
 
-      # Initializers defined in config/application.rb or config/initializers/*.rb
+      # Initializers defined in config/application.rb or config/initializers
       # are the ones the user wrote. Return file + count of initializer blocks
       # declared inside each file so AI can jump straight to user-owned code.
       def extract_application_initializers
-        dir = File.join(root, "config/initializers")
-        return [] unless Dir.exist?(dir)
-
-        Dir.glob(File.join(dir, "*.rb")).sort.filter_map do |path|
+        PathResolver.initializer_paths(root).filter_map do |path|
           next unless RailsAiContext::SafeFile.read(path)
 
           ast = SourceIntrospector.walk(path, {

@@ -42,12 +42,13 @@ module RailsAiContext
 
       def summarize(path)
         relative = path.sub("#{root}/", "")
-        assignments = config_assignments(path)
+        entries = SourceIntrospector.walk(path, { config: Listeners::ConfigAssignmentListener })[:config]
+        assignments = config_assignments(entries)
         name = File.basename(path, ".rb")
         {
           name: name,
           file: relative,
-          config_keys: assignments.keys.sort,
+          config_keys: (assignments.keys + entries.filter_map { |entry| written_key(entry) }).uniq.sort,
           notable: extract_notable(assignments, environment: name)
         }
       rescue => e
@@ -62,12 +63,21 @@ module RailsAiContext
       # Every assignment of a path, not the first: Rails' own development
       # template assigns `perform_caching` in both halves of one `if`, and
       # the first one is the branch that is not running.
-      def config_assignments(path)
-        walked = SourceIntrospector.walk(path, { config: Listeners::ConfigAssignmentListener })
-        walked[:config].each_with_object({}) do |entry, acc|
+      def config_assignments(entries)
+        entries.each_with_object({}) do |entry, acc|
           next unless entry[:assignment]
 
           (acc[entry[:path].join(".")] ||= []) << entry
+        end
+      end
+
+      # `config.hosts << x` and `config.middleware.use X` change the receiver's
+      # setting; `config.session_store :cookie_store` names its own.
+      def written_key(entry)
+        path = entry[:path]
+        case entry[:write]
+        when :call then (path.size > 1 ? path[0..-2] : path).join(".")
+        when :operator, :block then path.join(".")
         end
       end
 

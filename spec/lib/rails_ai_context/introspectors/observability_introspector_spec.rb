@@ -31,6 +31,22 @@ RSpec.describe RailsAiContext::Introspectors::ObservabilityIntrospector do
       expect(result[:event_reporter][:available]).to eq(true).or(eq(false))
     end
 
+    context "when Rails exposes the 8.1 event reporter as Rails.event" do
+      around do |example|
+        reporter = Struct.new(:subscribers).new([ Object.new ])
+        defined_before = Rails.respond_to?(:event)
+        Rails.define_singleton_method(:event) { reporter } unless defined_before
+        example.run
+      ensure
+        Rails.singleton_class.send(:remove_method, :event) unless defined_before
+      end
+
+      it "reports it available, though the application object has no event_reporter" do
+        expect(Rails.application).not_to respond_to(:event_reporter)
+        expect(result[:event_reporter]).to eq(available: true, subscriber_count: Rails.event.subscribers.size)
+      end
+    end
+
     it "returns log_level as non-empty string" do
       expect(result[:log_level]).to be_a(String)
       expect(result[:log_level]).not_to be_empty

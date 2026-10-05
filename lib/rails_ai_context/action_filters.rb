@@ -412,7 +412,7 @@ module RailsAiContext
 
     # The last value the initializers set; :computed when it is not a string literal.
     def configured_base(root, setting)
-      Dir.glob(File.join(root.to_s, "config", "initializers", "**", "*.rb")).sort.filter_map do |path|
+      PathResolver.initializer_paths(root).filter_map do |path|
         source = SafeFile.read(path)
         next unless source&.include?(setting.delete_suffix("="))
 

@@ -130,6 +130,41 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
     end
   end
 
+  describe "#call with config.i18n.fallbacks = [:en]" do
+    let(:backend) { Class.new(I18n::Backend::Simple) { include I18n::Backend::Fallbacks }.new }
+
+    before do
+      allow(I18n).to receive_messages(backend: backend, available_locales: %i[en de],
+                                      fallbacks: I18n::Locale::Fallbacks.new([ :en ]))
+    end
+
+    it "lists the fallback chain of every available locale before any lookup filled it" do
+      expect(introspector.call[:fallbacks]).to eq("de" => %w[de en], "en" => %w[en])
+    end
+  end
+
+  describe "#call when the backend has no fallbacks" do
+    it "reports no fallbacks" do
+      allow(I18n).to receive_messages(backend: I18n::Backend::Simple.new, available_locales: %i[en de])
+      expect(introspector.call[:fallbacks]).to be_nil
+    end
+  end
+
+  describe "#call on the locale files Rails loads" do
+    it "counts a .rb locale's keys the way the static tier does" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "locales"))
+        File.write(File.join(dir, "config", "locales", "en.yml"), "en:\n  hello: Hello\n")
+        File.write(File.join(dir, "config", "locales", "pl.rb"), "{ pl: { hello: \"Czesc\" } }\n")
+        allow(I18n).to receive(:available_locales).and_return(%i[en pl])
+
+        result = described_class.new(double(root: Pathname.new(dir))).call
+
+        expect(result[:locale_coverage]["pl"]).to include(keys: 1, missing: 0, coverage_pct: 100.0)
+      end
+    end
+  end
+
   # Without a booted app, I18n.available_locales reports the library's own
   # default, so an app with en and es was described as having one locale - in
   # the same output that listed both files.
@@ -191,6 +226,65 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       )
 
       expect(result[:locale_coverage]["es"][:coverage_pct]).to eq(100.0)
+    end
+
+    describe "the locale files Rails loads" do
+      it "reads a .rb locale file, as I18n evals it" do
+        result = static_result(
+          "en.yml" => "en:\n  hello: Hello\n",
+          "pl.rb" => "{ pl: { hello: \"Czesc\", i18n: { plural: { rule: lambda { |n| n == 1 ? :one : :other } } } } }\n"
+        )
+
+        expect(result[:available_locales]).to eq(%w[en pl])
+        expect(result[:locale_coverage]["pl"]).to include(keys: 2, missing: 0)
+        expect(result[:locale_files]).to include(file: "pl.rb", key_count: 2, locales: %w[pl])
+      end
+
+      it "marks a .rb locale file it cannot parse and carries on" do
+        result = static_result("en.yml" => "en:\n  hello: Hello\n", "pl.rb" => "{ pl: { hello: \"\xFF\" \n")
+        broken = result[:locale_files].find { |f| f[:file] == "pl.rb" }
+
+        expect(broken[:parse_error]).to be true
+        expect(result[:available_locales]).to eq(%w[en])
+      end
+
+      it "leaves out a .yaml file under config/locales, which Rails' glob does not load" do
+        result = static_result("en.yml" => "en:\n  hello: Hello\n", "extra.yaml" => "en:\n  extra_yaml_key: x\n")
+
+        expect(result[:total_locale_files]).to eq(1)
+        expect(result[:locale_files].map { |f| f[:file] }).to eq(%w[en.yml])
+      end
+
+      it "reads the files config.i18n.load_path adds" do
+        result = static_result("en.yml" => "en:\n  users:\n    form:\n      title: Form\n") do |dir|
+          FileUtils.mkdir_p(File.join(dir, "my", "locales"))
+          File.write(File.join(dir, "my", "locales", "de.yml"), "de:\n  users:\n    form:\n      title: Formular\n")
+          File.write(File.join(dir, "config", "application.rb"), <<~RUBY)
+            module App
+              class Application < Rails::Application
+                config.i18n.load_path += Dir[Rails.root.join("my/locales/*.{rb,yml}")]
+                config.i18n.available_locales = [:en, :de]
+              end
+            end
+          RUBY
+        end
+
+        expect(result[:total_locale_files]).to eq(2)
+        expect(result[:locale_files]).to include(file: "my/locales/de.yml", key_count: 1, locales: %w[de])
+        expect(result[:locale_coverage]["de"]).to include(keys: 1, missing: 0, coverage_pct: 100.0)
+      end
+
+      it "never reads a load path entry that resolves outside the app" do
+        Dir.mktmpdir do |outside|
+          File.write(File.join(outside, "de.yml"), "de:\n  secret: x\n")
+          result = static_result("en.yml" => "en:\n  hello: Hello\n") do |dir|
+            File.symlink(outside, File.join(dir, "linked"))
+            File.write(File.join(dir, "config", "application.rb"), "config.i18n.load_path += Dir[Rails.root.join(\"linked/*.yml\")]\n")
+          end
+
+          expect(result[:total_locale_files]).to eq(1)
+        end
+      end
     end
 
     it "reads the available locales from the files on disk" do
@@ -256,6 +350,16 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
     it "does not claim a backend it cannot see" do
       result = static_result("en.yml" => "en:\n  hello: Hello\n")
       expect(result[:backend]).to be_nil
+    end
+
+    it "reads the default locale from an initializer in a subdirectory of config/initializers" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers", "i18n"))
+        File.write(File.join(dir, "config", "initializers", "i18n", "locale.rb"),
+                   "Rails.application.config.i18n.default_locale = :fr\n")
+
+        expect(described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:default_locale]).to eq("fr")
+      end
     end
 
     # I18n.fallbacks belongs to whichever process asks, and no app booted in

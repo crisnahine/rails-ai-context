@@ -84,6 +84,18 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
       expect(text).to include("test.log")
     end
 
+    it "reads a rotated log and names it under the available files" do
+      File.write(File.join(log_dir, "test.log.0"), "I, [2026-03-28T09:00:00 #1] INFO -- : Started GET \"/rotated\"\n")
+
+      text = described_class.call(file: "test.log.0").content.first[:text]
+
+      expect(text).to include("# Log: test.log.0")
+      expect(text).to include('Started GET "/rotated"')
+      expect(text).to include("Available log files: test.log, test.log.0")
+    ensure
+      FileUtils.rm_f(File.join(log_dir, "test.log.0"))
+    end
+
     it "filters by ERROR level and includes stack traces" do
       result = described_class.call(level: "ERROR")
       text = result.content.first[:text]
@@ -202,6 +214,106 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
       text = result.content.first[:text]
       expect(text).to include("NoMethodError")
       expect(text).not_to include("Started GET")
+    end
+
+    context "when the log is written by Rails' default formatter, which writes no severity" do
+      before do
+        File.write(File.join(log_dir, "test.log"), <<~LOG)
+          Started GET "/ok" for ::1 at 2026-10-05 10:00:00 +0000
+          Processing by ProbeController#ok as */*
+          Completed 200 OK in 0ms
+          Started GET "/warn" for ::1 at 2026-10-05 10:00:01 +0000
+          Processing by ProbeController#warn_me as */*
+          disk almost full
+          Completed 200 OK in 0ms
+          Started GET "/boom" for ::1 at 2026-10-05 10:00:02 +0000
+          Completed 500 Internal Server Error in 0ms
+          RuntimeError (kaboom):
+        LOG
+      end
+
+      it "says it cannot filter by level instead of picking lines by words in the message" do
+        text = described_class.call(level: "ERROR").content.first[:text]
+        expect(text).to include("no severity field")
+        expect(text).to include('Started GET "/ok"')
+        expect(text).to include("Level: all levels")
+      end
+    end
+
+    context "when one message in a severity-less log starts with a severity word" do
+      before do
+        File.write(File.join(log_dir, "test.log"), <<~LOG)
+          Started GET "/ok" for ::1 at 2026-10-05 10:00:00 +0000
+          Processing by ProbeController#ok as */*
+          WARN: disk almost full
+          Completed 200 OK in 0ms
+          Started GET "/boom" for ::1 at 2026-10-05 10:00:02 +0000
+          Completed 500 Internal Server Error in 0ms
+        LOG
+      end
+
+      it "does not filter on that one line" do
+        text = described_class.call(level: "ERROR").content.first[:text]
+        expect(text).to include("no severity field")
+        expect(text).to include('Started GET "/boom"')
+        expect(text).to include("Level: all levels")
+      end
+    end
+
+    it "filters a Logger::Formatter log whose tail is mostly one long backtrace" do
+      frames = Array.new(20) { |i| "[req-1] app/models/user.rb:#{i}:in 'save'" }
+      File.write(File.join(log_dir, "test.log"), <<~LOG)
+        I, [2026-03-29T10:00:00 #1]  INFO -- : Started GET "/users"
+        F, [2026-03-29T10:00:01 #1] FATAL -- : [req-1]#{'  '}
+        [req-1] RuntimeError (boom):
+        #{frames.join("\n")}
+        I, [2026-03-29T10:00:02 #1]  INFO -- : Started GET "/ok"
+      LOG
+      text = described_class.call(level: "ERROR").content.first[:text]
+      expect(text).to include("RuntimeError (boom)", "app/models/user.rb:19")
+      expect(text).not_to include("Started GET")
+    end
+
+    {
+      "Sidekiq 6 and 7" => <<~LOG,
+        2026-10-05T10:00:00.000Z pid=1 tid=abc class=HardJob jid=f00 INFO: start
+        2026-10-05T10:00:01.000Z pid=1 tid=abc class=HardJob jid=f00 elapsed=0.5 ERROR: kaboom
+        2026-10-05T10:00:02.000Z pid=1 tid=abc INFO: done
+      LOG
+      "Sidekiq 8" => <<~LOG,
+        \e[1;34mINFO \e[0m 2026-10-05T10:00:00.000Z pid=1 tid=abc class=HardJob jid=f00: start
+        \e[1;31mERROR\e[0m 2026-10-05T10:00:01.000Z pid=1 tid=abc class=HardJob jid=f00: kaboom
+        \e[1;34mINFO \e[0m 2026-10-05T10:00:02.000Z pid=1 tid=abc: done
+      LOG
+      "Sidekiq JSON" => <<~LOG
+        {"ts":"2026-10-05T10:00:00.000Z","pid":1,"tid":"abc","lvl":"INFO","msg":"start"}
+        {"ts":"2026-10-05T10:00:01.000Z","pid":1,"tid":"abc","lvl":"ERROR","msg":"kaboom"}
+        {"ts":"2026-10-05T10:00:02.000Z","pid":1,"tid":"abc","lvl":"INFO","msg":"done"}
+      LOG
+    }.each do |format, log|
+      it "filters a #{format} log by level" do
+        File.write(File.join(log_dir, "sidekiq.log"), log)
+        text = described_class.call(file: "sidekiq", level: "ERROR").content.first[:text]
+        expect(text).to include("kaboom", "Level: ERROR+")
+        expect(text).not_to include("start", "done")
+      ensure
+        FileUtils.rm_f(File.join(log_dir, "sidekiq.log"))
+      end
+    end
+
+    it "reads the severity field, never a severity word inside the message" do
+      File.write(File.join(log_dir, "test.log"), <<~LOG)
+        I, [2026-03-29T10:00:00 #1]  INFO -- : Started GET "/warn"
+        I, [2026-03-29T10:00:00 #1]  INFO -- : Rendered error page
+        E, [2026-03-29T10:00:01 #1] ERROR -- : kaboom
+          app/services/info.rb:3:in 'run'
+        I, [2026-03-29T10:00:02 #1]  INFO -- : Started GET "/ok"
+      LOG
+      text = described_class.call(level: "ERROR").content.first[:text]
+      expect(text).to include("kaboom")
+      expect(text).to include("app/services/info.rb:3")
+      expect(text).not_to include("Started GET")
+      expect(text).not_to include("Rendered error page")
     end
 
     it "shows available log files in output" do

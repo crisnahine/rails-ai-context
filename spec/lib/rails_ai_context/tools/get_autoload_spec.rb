@@ -42,6 +42,12 @@ RSpec.describe RailsAiContext::Tools::GetAutoload do
       expect(text).to include("collapsed: app/models/concerns")
     end
 
+    it "names a directory kept out of eager loading" do
+      autoload_data[:autoloaders][0][:not_eager_loaded] = [ "app/lib" ]
+      text = described_class.call.content.first[:text]
+      expect(text).to include("  - not eager loaded: app/lib")
+    end
+
     it "surfaces per-loader extraction errors instead of hiding them" do
       autoload_data[:autoloaders] = [ { name: "main", error: "loader exploded" } ]
       text = described_class.call.content.first[:text]

@@ -24,6 +24,11 @@ module RailsAiContext
       CONFIG_AVAILABLE_LOCALES = [ [ :i18n, :available_locales ] ].freeze
       I18N_AVAILABLE_LOCALES = [ [ :available_locales ], [ :config, :available_locales ] ].freeze
 
+      # Railties' `paths.add "config/locales", glob: "**/*.{rb,yml}"`, the same from 7.0 to 8.1.
+      RAILS_LOCALE_GLOB = "**/*.{rb,yml}"
+      # I18n loads these from an explicit load_path entry (load_rb, load_yml, load_yaml).
+      LOAD_PATH_EXTENSIONS = %w[.rb .yml .yaml].freeze
+
       REFUSED_LOCALE_FILE = {
         parse_error: true, locales: [], key_count: 0, key_paths: []
       }.freeze
@@ -77,7 +82,7 @@ module RailsAiContext
         dirs = PathResolver.locale_roots(root).map { |dir| File.join(dir, "config", "locales") }
         return {} if dirs.empty?
 
-        files = dirs.sum { |dir| Dir.glob(File.join(dir, "**/*.{yml,yaml,rb}")).size }
+        files = dirs.sum { |dir| Dir.glob(File.join(dir, RAILS_LOCALE_GLOB)).size }
         { in_repo_locale_dirs: dirs.size, in_repo_locale_files: files }
       end
 
@@ -141,7 +146,7 @@ module RailsAiContext
                                     : all_environments.map { |path| [ path, true ] }
 
         ([ [ File.join(root, "config", "application.rb"), false ] ] + environments +
-          Dir.glob(File.join(root, "config", "initializers", "*.rb")).sort.map { |path| [ path, false ] })
+          PathResolver.initializer_paths(root).map { |path| [ path, false ] })
           .select { |path, _ambiguous| File.exist?(path) }
       end
 
@@ -150,10 +155,6 @@ module RailsAiContext
       # last assignment within a spelling.
       def configured_available_locales
         entries = config_candidate_files.flat_map do |path, ambiguous|
-          # Reading first also keeps an unreadable file away from the parser.
-          source = RailsAiContext::SafeFile.read(path)
-          next [] unless source&.include?("available_locales")
-
           # Every assignment, not only the readable ones: a literal a later
           # computed assignment overwrites is not the list Rails hands I18n,
           # so it falls through to the locale files and says so.
@@ -166,20 +167,49 @@ module RailsAiContext
       end
 
       def available_locales_assignments(path)
-        walked = SourceIntrospector.walk(path, {
-          config: -> { Listeners::ConfigAssignmentListener.new("config") },
-          i18n:   -> { Listeners::ConfigAssignmentListener.new("I18n") }
-        })
+        walked = config_walk(path)
+        return [] unless walked
 
         entries = walked[:config].select { |entry| CONFIG_AVAILABLE_LOCALES.include?(entry[:path]) }
                                  .map { |entry| entry.merge(spelling: :config) } +
                   walked[:i18n].select { |entry| I18N_AVAILABLE_LOCALES.include?(entry[:path]) }
                                .map { |entry| entry.merge(spelling: :i18n) }
         entries.select { |entry| entry[:assignment] }.sort_by { |entry| entry[:location] }
+      end
+
+      # One walk per config file for every i18n setting read from it, and none for
+      # a file that never mentions one.
+      def config_walk(path)
+        @config_walks ||= {}
+        return @config_walks[path] if @config_walks.key?(path)
+
+        # Reading first also keeps an unreadable file away from the parser.
+        source = RailsAiContext::SafeFile.read(path)
+        @config_walks[path] = if source&.match?(/available_locales|load_path/)
+          SourceIntrospector.walk(path, {
+            config:    -> { Listeners::ConfigAssignmentListener.new("config") },
+            i18n:      -> { Listeners::ConfigAssignmentListener.new("I18n") },
+            load_path: Listeners::I18nLoadPathListener
+          })
+        end
       # One initializer this introspector cannot parse must not take the whole
       # I18n answer down through static_call's rescue.
       rescue StandardError => e
-        RailsAiContext.debug_fail(e, [], label: "i18n available_locales walk of #{path}")
+        @config_walks[path] = RailsAiContext.debug_fail(e, nil, label: "i18n config walk of #{path}")
+      end
+
+      # Files config.i18n.load_path adds, from literal paths and globs under the app root.
+      def load_path_files
+        real_root = File.realpath(root)
+        patterns = config_candidate_files.flat_map { |path, _| config_walk(path)&.dig(:load_path) || [] }
+        patterns.reject { |pattern| SafePath.traversal?(pattern) }.flat_map do |pattern|
+          Dir.glob(File.join(root, pattern)).select do |file|
+            LOAD_PATH_EXTENSIONS.include?(File.extname(file)) && File.file?(file) &&
+              File.realpath(file).start_with?("#{real_root}/")
+          end
+        end
+      rescue SystemCallError
+        []
       end
 
       # Only a literal list of names answers the question. `+= [...]`, a method
@@ -192,39 +222,38 @@ module RailsAiContext
       end
 
       def extract_locale_files
-        dir = File.join(root, "config/locales")
-        return [] unless Dir.exist?(dir)
-
-        Dir.glob(File.join(dir, "**/*.{yml,yaml,rb}")).filter_map do |path|
-          relative = path.sub("#{dir}/", "")
-          info = { file: relative }
-
-          if path.end_with?(".yml", ".yaml")
-            entry = locale_index[path]
-            if entry && !entry[:parse_error]
-              info[:key_count] = entry[:key_count]
-              # Which locales this file actually serves. The filename is only a
-              # convention, and a gem-provided file is named for the gem.
-              info[:locales] = entry[:locales]
-            else
-              info[:parse_error] = true
-            end
+        locale_file_paths.map do |path|
+          info = { file: display_path(path) }
+          entry = locale_index[path]
+          if entry && !entry[:parse_error]
+            info[:key_count] = entry[:key_count]
+            # Which locales this file actually serves. The filename is only a
+            # convention, and a gem-provided file is named for the gem.
+            info[:locales] = entry[:locales]
+          else
+            info[:parse_error] = true
           end
-
           info
         end.sort_by { |f| f[:file] }
       end
 
+      # config/locales files keep their names relative to it; a load_path file is named from the app root.
+      def display_path(path)
+        base = locales_dir
+        base && path.start_with?("#{base}/") ? path.delete_prefix("#{base}/") : path.delete_prefix("#{root}/")
+      end
+
       def count_locale_files
-        dir = File.join(root, "config/locales")
-        return 0 unless Dir.exist?(dir)
-        Dir.glob(File.join(dir, "**/*.{yml,yaml,rb}")).size
+        locale_file_paths.size
       end
 
       def detect_fallback_config
-        config = {}
-        config[:fallbacks] = I18n.fallbacks.to_h.transform_values { |v| v.map(&:to_s) } if I18n.respond_to?(:fallbacks) && I18n.fallbacks
-        config
+        return {} unless I18n.backend.class.include?(I18n::Backend::Fallbacks)
+
+        # Fallbacks fills its hash one locale at a time on first lookup, so ask for each.
+        fallbacks = I18n.fallbacks
+        locales = (I18n.available_locales.map(&:to_sym) + fallbacks.to_h.keys).uniq
+        { fallbacks: locales.to_h { |locale| [ locale.to_s, fallbacks[locale].map(&:to_s) ] } }
       rescue => e
         RailsAiContext.debug_fail(e, {}, label: "detect_fallback_config")
       end
@@ -304,13 +333,10 @@ module RailsAiContext
       #   config/locales/en/users.yml
       #   config/locales/admin/en.yml
       def find_locale_paths(locale)
-        base = locales_dir
-        return [] unless base
-
         loc = locale.to_s
         named = locale_file_paths.select do |p|
           name = File.basename(p, ".*")
-          rel = p.sub("#{base}/", "")
+          rel = display_path(p)
           name == loc || name.end_with?(".#{loc}") || rel.start_with?("#{loc}/") || rel.include?("/#{loc}/")
         end
 
@@ -329,8 +355,12 @@ module RailsAiContext
         @locales_dir = Dir.exist?(dir) ? dir : nil
       end
 
+      # The files Rails loads: config/locales by its glob, then what config.i18n.load_path adds.
       def locale_file_paths
-        @locale_file_paths ||= locales_dir ? Dir.glob(File.join(locales_dir, "**/*.{yml,yaml}")).sort : []
+        @locale_file_paths ||= begin
+          defaults = locales_dir ? Dir.glob(File.join(locales_dir, RAILS_LOCALE_GLOB)) : []
+          (defaults + load_path_files).uniq.sort
+        end
       end
 
       # locale => the files declaring it, built in ONE pass. Asking every file
@@ -354,11 +384,7 @@ module RailsAiContext
         content = RailsAiContext::SafeFile.read(path)
         return REFUSED_LOCALE_FILE unless content
 
-        # aliases: true - sharing formats through a YAML anchor is ordinary,
-        # and without the flag Psych raises and every locale in that file
-        # disappears while the Locale Files section still lists it.
-        data = YAML.safe_load(content, permitted_classes: [ Symbol ], aliases: true)
-        data = {} unless data.is_a?(Hash)
+        data = path.end_with?(".rb") ? ruby_locale_data(content) : yaml_locale_data(content)
         key_paths = nested_key_paths(data)
 
         # Only the locale-rooted paths are kept. The per-locale lists are the
@@ -373,6 +399,33 @@ module RailsAiContext
         }
       rescue StandardError => e
         RailsAiContext.debug_fail(e, REFUSED_LOCALE_FILE, label: "i18n parse of #{path}")
+      end
+
+      def yaml_locale_data(content)
+        # aliases: true - sharing formats through a YAML anchor is ordinary,
+        # and without the flag Psych raises and every locale in that file
+        # disappears while the Locale Files section still lists it.
+        data = YAML.safe_load(content, permitted_classes: [ Symbol ], aliases: true)
+        data.is_a?(Hash) ? data : {}
+      end
+
+      # I18n evals a .rb locale file for the Hash it returns. Its literal keys are read
+      # from the AST instead, so neither tier runs app code; a non-literal value is a leaf.
+      def ruby_locale_data(content)
+        result = AstCache.parse_string(content)
+        raise ArgumentError, "unparseable Ruby locale file" if result.failure?
+
+        hash = result.value.statements.body.last
+        hash.is_a?(Prism::HashNode) ? literal_hash(hash) : {}
+      end
+
+      def literal_hash(node)
+        node.elements.each_with_object({}) do |element, hash|
+          next unless element.is_a?(Prism::AssocNode) && element.key.respond_to?(:unescaped)
+
+          value = element.value
+          hash[element.key.unescaped] = value.is_a?(Prism::HashNode) ? literal_hash(value) : true
+        end
       end
 
       def nested_key_paths(hash, prefix = nil, paths = [])

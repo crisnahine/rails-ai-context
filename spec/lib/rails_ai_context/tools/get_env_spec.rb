@@ -793,6 +793,35 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     end
   end
 
+  describe "HTTP clients in the forms their docs use" do
+    it "detects URI(...), Faraday.get and a client kept in lib/" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/clients"))
+        FileUtils.mkdir_p(File.join(dir, "lib/clients"))
+        File.write(File.join(dir, "app/clients/probe_client.rb"), <<~RUBY)
+          class ProbeClient
+            def a = Faraday.new(url: "https://api.alpha.example")
+            def b = Net::HTTP.get(URI.parse("https://api.beta.example/x"))
+            def c = Net::HTTP.get(URI("https://api.gamma.example/x"))
+            def d = Faraday.get("https://api.delta.example/x")
+            def e = HTTParty.get("https://api.epsilon.example/x")
+          end
+        RUBY
+        File.write(File.join(dir, "lib/clients/zeta_client.rb"), <<~RUBY)
+          class ZetaClient
+            def a = Faraday.new(url: "https://api.zeta.example")
+          end
+        RUBY
+        allow(described_class).to receive(:detect_external_services).and_call_original
+
+        services = described_class.send(:detect_external_services, dir, [])
+
+        expect(services.map { |s| s[:name] }).to contain_exactly(*%w[Alpha Beta Gamma Delta Epsilon Zeta])
+        expect(services.find { |s| s[:name] == "Zeta" }[:file]).to eq("lib/clients/zeta_client.rb")
+      end
+    end
+  end
+
   describe "a service the Gemfile only names in a comment" do
     it "is not detected" do
       Dir.mktmpdir do |dir|
@@ -804,6 +833,46 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
 
         expect(names).to include("Stripe")
         expect(names).not_to include("Twilio")
+      end
+    end
+  end
+
+  describe "credentials the booted app decrypts" do
+    def credentials_in(dir, content = nil)
+      key_path = File.join(dir, "development.key")
+      File.write(key_path, ActiveSupport::EncryptedConfiguration.generate_key) if content
+      config = ActiveSupport::EncryptedConfiguration.new(
+        config_path: File.join(dir, "development.yml.enc"), key_path: key_path, env_key: "RAC_SPEC_NO_KEY", raise_if_missing_key: false
+      )
+      config.write(content) if content
+      config
+    end
+
+    before do
+      allow(described_class).to receive(:detect_credentials_keys).and_call_original
+      allow(described_class).to receive(:credentials_file_present?).and_return(true)
+    end
+
+    it "says the file holds no keys when it decrypts to nothing" do
+      Dir.mktmpdir do |dir|
+        allow(Rails.application).to receive(:credentials).and_return(credentials_in(dir, ""))
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("## Credentials Keys (values hidden)", "decrypts and holds no keys")
+        expect(text).not_to include("needs a booted app")
+      end
+    end
+
+    it "still says it cannot read them when the key is missing" do
+      Dir.mktmpdir do |dir|
+        credentials_in(dir, "a: 1\n")
+        File.delete(File.join(dir, "development.key"))
+        allow(Rails.application).to receive(:credentials).and_return(credentials_in(dir))
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("needs a booted app with its master key")
       end
     end
   end

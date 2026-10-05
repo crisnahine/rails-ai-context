@@ -36,6 +36,7 @@ module RailsAiContext
               lines << "  - [error: #{l[:error]}]" if l[:error]
               lines << "  - collapsed: #{l[:collapsed].join(', ')}" if l[:collapsed]&.any?
               lines << "  - ignored: #{l[:ignored].join(', ')}" if l[:ignored]&.any?
+              lines << "  - not eager loaded: #{l[:not_eager_loaded].join(', ')}" if l[:not_eager_loaded]&.any?
             end
           end
 

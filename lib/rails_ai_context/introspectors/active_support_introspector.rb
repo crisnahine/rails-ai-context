@@ -104,6 +104,11 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "extract_deprecators")
       end
 
+      # The class itself or Rails.application.message_verifier(s); a nested
+      # constant such as MessageVerifier::InvalidSignature is only a rescue.
+      VERIFIER_USE = /MessageVerifier(?!::)|\bmessage_verifiers?\b/
+      ENCRYPTOR_USE = /MessageEncryptor(?!::)/
+
       # Scan `lib/` + `app/` for calls into ActiveSupport::MessageEncryptor and
       # ActiveSupport::MessageVerifier. Used for tokens, signed IDs, etc.
       def extract_message_verifier_usage
@@ -116,11 +121,11 @@ module RailsAiContext
           # and would produce non-deterministic output on large monorepos.
           Dir.glob(File.join(dir, "**/*.rb")).sort.first(2000).each do |path|
             content = RailsAiContext::SafeFile.read(path) or next
-            # Mention of the class anywhere counts, so a text scan over 2000
-            # files beats parsing each one. Regex stays.
-            next unless content.match?(/MessageEncryptor|MessageVerifier/)
+            encryptor = content.match?(ENCRYPTOR_USE)
+            verifier = content.match?(VERIFIER_USE)
+            next unless encryptor || verifier
             relative = path.sub("#{root}/", "")
-            hits << { file: relative, encryptor: content.include?("MessageEncryptor"), verifier: content.include?("MessageVerifier") }
+            hits << { file: relative, encryptor: encryptor, verifier: verifier }
           end
         end
         hits
@@ -137,7 +142,7 @@ module RailsAiContext
         end
 
         # Initializer pattern: Rails.logger = ActiveSupport::TaggedLogging.new(…)
-        Dir.glob(File.join(root, "config/initializers/*.rb")).each do |path|
+        PathResolver.initializer_paths(root).each do |path|
           content = RailsAiContext::SafeFile.read(path) or next
           if content.include?("ActiveSupport::TaggedLogging")
             result[:configured] = true

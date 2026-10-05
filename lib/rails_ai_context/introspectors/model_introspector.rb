@@ -768,7 +768,7 @@ module RailsAiContext
           root = app.root.to_s
           application = File.join(root, "config", "application.rb")
           setting = FrameworkSetting.new(assigned: false, read: false)
-          [ application, *Dir.glob(File.join(root, "config", "initializers", "**", "*.rb")).sort ].each do |path|
+          [ application, *PathResolver.initializer_paths(root) ].each do |path|
             source = SafeFile.read(path) or next
             setting.read ||= path == application
             AstWalk.each(AstCache.parse_string(source).value) do |node|

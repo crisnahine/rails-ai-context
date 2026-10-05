@@ -61,6 +61,21 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
     end
   end
 
+  describe "a default Rails 8 production config" do
+    it "reads the cable config Action Cable loaded for this environment and the primary database's adapter" do
+      server = double(config: double(cable: { "adapter" => "solid_cable", "connects_to" => { "database" => { "writing" => "cable" } } }))
+      stub_const("ActionCable", Module.new { define_singleton_method(:server) { server } })
+      allow(Rails.configuration).to receive(:database_configuration).and_return(
+        Rails.env => { "primary" => { "adapter" => "sqlite3" }, "cable" => { "adapter" => "sqlite3" } }
+      )
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("- **Action Cable:** solid_cable")
+      expect(text).to include("- **Database:** sqlite3")
+    end
+  end
+
   describe ".call" do
     it "returns application configuration" do
       result = described_class.call
@@ -408,9 +423,11 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
       File.write(File.join(tmpdir, "config", "initializers", "assets.rb"), "")
       File.write(File.join(tmpdir, "config", "initializers", "view_annotations.rb"),
                  "# Be sure to restart your server when you modify this file.\n#\n# config.x = true\n")
+      FileUtils.mkdir_p(File.join(tmpdir, "config", "initializers", "i18n"))
+      File.write(File.join(tmpdir, "config", "initializers", "i18n", "locale.rb"), "# config.i18n.default_locale = :de\n")
       allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
       allow(described_class).to receive(:cached_context).and_return(
-        config: { initializers: %w[assets.rb view_annotations.rb] }
+        config: { initializers: %w[assets.rb i18n/locale.rb view_annotations.rb] }
       )
     end
 
@@ -426,6 +443,12 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
       text = described_class.call.content.first[:text]
 
       expect(text).to include("- `view_annotations.rb` - all commented out")
+    end
+
+    it "reads a nested initializer at its path under config/initializers" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("- `i18n/locale.rb` - all commented out")
     end
   end
 end

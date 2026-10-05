@@ -159,6 +159,10 @@ module RailsAiContext
           lines << "## Credentials Keys (values hidden)"
           credentials_keys.each { |k| lines << "- `#{k}`" }
           lines << ""
+        elsif (empty = empty_credentials_file)
+          lines << "## Credentials Keys (values hidden)"
+          lines << "_`#{empty}` decrypts and holds no keys._"
+          lines << ""
         elsif credentials_file_present?
           lines << "## Credentials Keys (values hidden)"
           lines << RailsAiContext::Confidence.unavailable("credentials are encrypted; reading the key names needs a booted app with its master key")
@@ -444,37 +448,34 @@ module RailsAiContext
         services.uniq { |s| s[:name] }
       end
 
+      # The same quoted URL, bare or wrapped in URI(...)/URI.parse(...).
+      HTTP_URL_ARG = /\s*\(?\s*(?:url:\s*)?(?:URI(?:\.parse)?\s*\(?\s*)?["']([^"']+)["']/
+      HTTP_CLIENT_CALLS = {
+        "Faraday" => /Faraday\.\w+#{HTTP_URL_ARG.source}/,
+        "Net::HTTP" => /Net::HTTP\.\w+#{HTTP_URL_ARG.source}/,
+        "HTTParty" => /HTTParty\.\w+#{HTTP_URL_ARG.source}/
+      }.freeze
+      HTTP_CLIENT_NAME = Regexp.union(HTTP_CLIENT_CALLS.keys)
+
       private_class_method def self.detect_http_clients(root)
         services = []
-        app_dir = File.join(root, "app")
-        return services unless Dir.exist?(app_dir)
-
         real_root = File.realpath(root).to_s
-        safe_glob(app_dir, "**/*.rb", real_root).each do |file|
-          source = safe_read(file)
-          next unless source
 
-          relative = file.sub("#{real_root}/", "")
+        %w[app config lib].each do |dir|
+          scan_dir = File.join(root, dir)
+          next unless Dir.exist?(scan_dir)
 
-          # Faraday connections
-          source.scan(/Faraday\.new\s*\(?\s*(?:url:\s*)?["']([^"']+)["']/).each do |match|
-            url = match[0]
-            name = extract_service_name_from_url(url)
-            services << { name: name, detection: "Faraday.new", file: relative } if name
-          end
+          safe_glob(scan_dir, "**/*.rb", real_root).each do |file|
+            source = safe_read(file)
+            next unless source&.match?(HTTP_CLIENT_NAME)
 
-          # Net::HTTP
-          source.scan(/Net::HTTP\.\w+\s*\(?\s*(?:URI\.parse\s*\(?\s*)?["']([^"']+)["']/).each do |match|
-            url = match[0]
-            name = extract_service_name_from_url(url)
-            services << { name: name, detection: "Net::HTTP", file: relative } if name
-          end
-
-          # HTTParty
-          source.scan(/HTTParty\.\w+\s*\(?\s*["']([^"']+)["']/).each do |match|
-            url = match[0]
-            name = extract_service_name_from_url(url)
-            services << { name: name, detection: "HTTParty", file: relative } if name
+            relative = file.sub("#{real_root}/", "")
+            HTTP_CLIENT_CALLS.each do |detection, pattern|
+              source.scan(pattern).each do |(url)|
+                name = extract_service_name_from_url(url)
+                services << { name: name, detection: detection, file: relative } if name
+              end
+            end
           end
         end
 
@@ -511,6 +512,20 @@ module RailsAiContext
           Dir.glob(File.join(root, "config", "credentials", "*.yml.enc")).any?
       rescue StandardError
         false
+      end
+
+      # Rails answers {} both for a file it decrypted and found empty and for
+      # one it had no key to open, so only a key plus the file tells them apart.
+      private_class_method def self.empty_credentials_file
+        return nil if RailsAiContext.static_tier?
+
+        creds = Rails.application&.credentials
+        return nil unless creds.respond_to?(:key) && creds.respond_to?(:content_path) && creds.respond_to?(:config)
+        return nil unless creds.key && creds.content_path.exist? && creds.config.empty?
+
+        creds.content_path.to_s.delete_prefix("#{rails_app.root}/")
+      rescue StandardError
+        nil
       end
 
       private_class_method def self.detect_credentials_keys

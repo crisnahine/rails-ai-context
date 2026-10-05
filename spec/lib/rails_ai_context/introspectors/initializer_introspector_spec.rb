@@ -66,6 +66,18 @@ RSpec.describe RailsAiContext::Introspectors::InitializerIntrospector do
       expect(result[:application_initializers]).to be_an(Array)
     end
 
+    it "lists an initializer in a subdirectory of config/initializers" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers", "i18n"))
+        File.write(File.join(dir, "config", "initializers", "i18n", "locale.rb"), "Rails.application.config.i18n.default_locale = :fr\n")
+        app = double(root: Pathname.new(dir), initializers: [])
+
+        files = described_class.new(app).call[:application_initializers].map { |entry| entry[:file] }
+
+        expect(files).to eq([ "config/initializers/i18n/locale.rb" ])
+      end
+    end
+
     it "does not raise on a fresh Rails app" do
       expect(result).not_to have_key(:error)
     end

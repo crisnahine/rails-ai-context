@@ -154,7 +154,7 @@ module RailsAiContext
       # config/application.rb and the environment files change the stack as
       # often as an initializer does.
       def middleware_config_files
-        Dir.glob(File.join(root, "config/initializers/*.rb")).sort +
+        PathResolver.initializer_paths(root) +
           Dir.glob(File.join(root, "config/environments/*.rb")).sort +
           [ File.join(root, "config/application.rb") ].select { |path| File.file?(path) }
       end
