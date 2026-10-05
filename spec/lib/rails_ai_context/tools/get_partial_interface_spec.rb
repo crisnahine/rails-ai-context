@@ -57,6 +57,19 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       expect(rendered_from("posts/post")).to include("app/views/admin/posts/index.html.erb:1", "app/views/posts/show.html.erb:3")
     end
 
+    it "reads the prefix setting from a nested initializer, once per call however many view roots there are" do
+      FileUtils.mkdir_p(File.join(@root, "config/initializers/views"))
+      File.write(File.join(@root, "config/application.rb"), "config.paths[\"app/views\"] << \"app/views/extra\"\n")
+      FileUtils.mkdir_p(File.join(@root, "app/views/extra"))
+      File.write(File.join(@root, "config/initializers/views/partials.rb"),
+                 "Rails.application.config.action_view.prefix_partial_path_with_controller_namespace = false\n")
+      allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk).and_call_original
+
+      expect(rendered_from("posts/post")).to include("app/views/admin/posts/index.html.erb:1")
+      expect(RailsAiContext::Introspectors::SourceIntrospector).to have_received(:walk)
+        .with(File.join(@root, "config/application.rb"), { config: RailsAiContext::Introspectors::Listeners::ConfigAssignmentListener }).once
+    end
+
     it "counts a partial under a view root declared inside app/views once" do
       FileUtils.mkdir_p(File.join(@root, "config"))
       File.write(File.join(@root, "config/application.rb"), "config.paths[\"app/views\"].unshift(\"app/views/custom\")\n")

@@ -91,7 +91,8 @@ module RailsAiContext
         magic_locals = extract_magic_comment_locals(source)
         # The resolved file, not the caller's spelling: a bare name has no
         # directory for a render site to be matched against.
-        render_sites = view_dirs.flat_map { |dir| find_render_sites(dir, partial_name, root) }
+        prefixed = prefix_partial_paths?(root)
+        render_sites = view_dirs.flat_map { |dir| find_render_sites(dir, partial_name, root, prefixed) }
         method_calls = {}
 
         # Primary: locals from render call sites (ground truth)
@@ -332,7 +333,7 @@ module RailsAiContext
       end
 
       # Find all views that render this partial and extract the locals they pass.
-      private_class_method def self.find_render_sites(views_dir, partial, root)
+      private_class_method def self.find_render_sites(views_dir, partial, root, prefixed)
         sites = []
         # Build search names: the partial can be referenced multiple ways
         # Normalize: strip underscore prefix from basename and extensions
@@ -354,7 +355,6 @@ module RailsAiContext
           basename                                                  # status_badge
         ].uniq
 
-        prefixed = prefix_partial_paths?(root)
         object_paths = {}
 
         view_files = RailsAiContext::ViewFile.glob(root, views_dir, RailsAiContext::ViewFile::MARKUP_GLOB)
@@ -473,7 +473,7 @@ module RailsAiContext
       private_class_method def self.prefix_partial_paths?(root)
         env = ENV["RAILS_ENV"] || "development"
         files = [ "config/application.rb", "config/environments/#{env}.rb" ] +
-          Dir.glob(File.join(root, "config/initializers/*.rb")).sort.map { |f| f.delete_prefix("#{root}/") }
+          Dir.glob("config/initializers/**/*.rb", base: root).sort
         setting = [ :action_view, :prefix_partial_path_with_controller_namespace ]
         last = nil
         files.each do |relative|
