@@ -602,14 +602,14 @@ module RailsAiContext
           # A nested module's lines count from its own slice, so the ranges parse that.
           tree = nested ? AstCache.parse_string(nested.last.slice).value : AstCache.parse(path).value
           source_key = nested ? "#{source}##{nested.first}" : path
-          block_calls, hooked, blocks, evals = memo([ :included_calls, source_key, label, macro ]) { included_block_calls(tree, label, macro) }
+          block_calls, hooked, blocks, evals, unrun = memo([ :included_calls, source_key, label, macro ]) { included_block_calls(tree, label, macro) }
           Run.merge_calls(@included_calls, block_calls)
           hooked = hooked.to_set
           block_calls.each_value { |sites| sites.each { |site| @block_sites[site.__id__] ||= [ label, hooked.include?(site.__id__) ] if site } }
           @mixins << [ label, macro, memo([ :module_defs, source_key, label, macro ]) { module_defs(tree, label, macro) }, @inside ]
           bodies, hooks = method_bodies(data, macro)
-          own_lines, inner = memo([ :ranges, source_key, label ]) { own_and_nested_ranges(tree, label) }
-          scope = [ singleton, inner, own_lines, hooks ]
+          own_lines, inner, concern = memo([ :ranges, source_key, label ]) { own_and_nested_ranges(tree, label) }
+          scope = [ singleton, inner + unrun, own_lines, hooks ]
           # The class's own file was read with the class; only its callbacks go by owner.
           keys = nested && source == @own_file ? @keys & [ :callbacks ] : @keys
           keys.each do |key|
@@ -628,7 +628,7 @@ module RailsAiContext
           joined.sort_by.with_index { |(mixin, _), index| [ mixin[:location].to_i, index ] }.each do |mixin, added|
             outer = @inside
             @inside = [ added, mixin[:location] ] if added
-            walk([ mixin ], label, depth - 1, path)
+            walk([ dependency(mixin, macro, concern && !added) ], label, depth - 1, path)
             @inside = outer
           end
           # ActiveSupport::Concern runs a concern's dependencies before it, so
@@ -795,13 +795,22 @@ module RailsAiContext
 
       def own_and_nested_ranges(tree, name)
         own = own_node(tree, name)
-        return [ nil, [] ] unless own
+        return [ nil, [], false ] unless own
 
         # A class nested deeper sits inside one of these ranges already.
         ranges = Introspectors::AstWalk.each(own).filter_map do |node|
           node.location.start_line..node.location.end_line if !node.equal?(own) && constant_node?(node)
         end
-        [ own.location.start_line..own.location.end_line, ranges ]
+        [ own.location.start_line..own.location.end_line, ranges, own.body && SingletonLookup.concern?(own) ]
+      end
+
+      # A Concern keeps an include or prepend written in its body as a dependency, and mixes it into
+      # the class the way the class mixes in the Concern.
+      def dependency(mixin, macro, in_concern_body)
+        mixable = %i[include prepend]
+        return mixin unless in_concern_body && mixable.include?(macro) && mixable.include?(mixin[:macro] || :include)
+
+        mixin.merge(macro: macro)
       end
 
       def constant_node?(node)
@@ -810,7 +819,8 @@ module RailsAiContext
 
       # Receiverless calls in `included do` outside any method are the includer's;
       # the ids of a plain mixin hook's calls come back apart, as it reruns per include.
-      # Also the lines of those blocks, and of the `base.class_eval` blocks in hooks.
+      # Also the lines of those blocks, of the `base.class_eval` blocks in hooks, and of the
+      # Concern blocks this way of mixing in does not run.
       def included_block_calls(tree, name, macro = :include)
         short = name.to_s.split("::").last.to_s
         block = ConcernMembership::CONCERN_BLOCKS[macro]
@@ -818,6 +828,7 @@ module RailsAiContext
         hooked = {}
         ranges = []
         evals = []
+        unrun = []
         visit = lambda do |node, owner|
           case node
           when Prism::ClassNode, Prism::ModuleNode
@@ -828,15 +839,19 @@ module RailsAiContext
               ranges << (node.location.start_line..node.location.end_line)
               return
             end
+            if node.receiver.nil? && node.block && ConcernMembership::CONCERN_BLOCKS.value?(node.name) && owner.to_s.casecmp?(short)
+              unrun << (node.location.start_line..node.location.end_line)
+              return
+            end
           when Prism::DefNode
             return hook_calls(node, hooked, evals) if SingletonLookup.hook?(node, macro) && owner.to_s.casecmp?(short)
           end
           node.child_nodes.compact.each { |child| visit.call(child, owner) }
         end
         visit.call(tree, nil)
-        [ Run.merge_calls(found, hooked), hooked.values.flatten.map(&:__id__), ranges, evals ]
+        [ Run.merge_calls(found, hooked), hooked.values.flatten.map(&:__id__), ranges, evals, unrun ]
       rescue StandardError => e
-        RailsAiContext.debug_fail(e, [ {}, [], [], [] ], label: "included block calls of #{name}")
+        RailsAiContext.debug_fail(e, [ {}, [], [], [], [] ], label: "included block calls of #{name}")
       end
 
       # A hook runs in the includer: its receiverless calls (inside

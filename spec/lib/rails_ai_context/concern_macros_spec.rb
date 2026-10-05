@@ -78,7 +78,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
         module Wrapper
           extend ActiveSupport::Concern
 
-          included do
+          prepended do
             has_many :dry_runs
           end
         end
@@ -495,6 +495,60 @@ RSpec.describe RailsAiContext::ConcernMacros do
       collected, = described_class.collect(tmpdir, mixin("Dual"), keys: %i[associations], extra: extra, within: "Admin")
 
       expect(collected[:associations].map { |a| a[:name] }).to contain_exactly(:admin_items, :extended_items)
+    end
+  end
+
+  # ActiveSupport::Concern runs the included block on include and the prepended block on prepend.
+  describe "a concern with an included block and a prepended block" do
+    before do
+      File.write(File.join(concern_dir, "stamped.rb"), <<~RUBY)
+        module Stamped
+          extend ActiveSupport::Concern
+
+          included do
+            has_many :included_items
+          end
+
+          prepended do
+            before_save :stamp
+            scope :stamped, -> { where.not(title: nil) }
+            include Tagged
+          end
+
+          def stamp = nil
+        end
+      RUBY
+      File.write(File.join(concern_dir, "tagged.rb"), "module Tagged\n  has_many :tags\nend\n")
+    end
+
+    it "applies only the included block to a class that includes it" do
+      collected, = described_class.collect(tmpdir, mixin("Stamped"), keys: %i[associations scopes callbacks])
+
+      expect(collected[:associations].map { |a| a[:name] }).to eq([ :included_items ])
+      expect(collected[:scopes]).to be_nil
+      expect(collected[:callbacks]).to be_nil
+    end
+
+    it "mixes in a dependency written in the concern's body the way the class mixes in the concern" do
+      File.write(File.join(concern_dir, "outer.rb"), <<~RUBY)
+        module Outer
+          extend ActiveSupport::Concern
+          prepend Stamped
+        end
+      RUBY
+      collected, = described_class.collect(tmpdir, mixin("Outer"), keys: %i[associations callbacks])
+
+      expect(collected[:associations].map { |a| a[:name] }).to eq([ :included_items ])
+      expect(collected[:callbacks]).to be_nil
+    end
+
+    it "applies only the prepended block to a class that prepends it" do
+      prepended = [ { name: "Stamped", macro: :prepend, ancestor: true } ]
+      collected, = described_class.collect(tmpdir, prepended, keys: %i[associations scopes callbacks])
+
+      expect(collected[:associations].map { |a| a[:name] }).to eq([ :tags ])
+      expect(collected[:scopes].map { |s| s[:name] }).to eq([ "stamped" ])
+      expect(collected[:callbacks].map { |c| c[:method] }).to eq([ "stamp" ])
     end
   end
 
