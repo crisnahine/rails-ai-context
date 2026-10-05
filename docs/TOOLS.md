@@ -502,7 +502,7 @@ Autoloading setup: Zeitwerk vs Classic mode, autoloaders with collapsed/ignored 
 
 ### `rails_get_active_support`
 
-ActiveSupport surface: concerns registry, deprecators, MessageVerifier/MessageEncryptor usage, tagged logging, subscribed `on_load` hooks, cache store. Validator classes living among the concerns are counted and listed apart from them, as `rails_get_concern` does.
+ActiveSupport surface: concerns registry, deprecators, MessageVerifier/MessageEncryptor usage, the `ActiveSupport::Notifications` events the app subscribes to (`subscribe`, `monotonic_subscribe`, and a Subscriber's `attach_to`) with file and line, read from source in both tiers, tagged logging, subscribed `on_load` hooks, cache store. Validator classes living among the concerns are counted and listed apart from them, as `rails_get_concern` does.
 
 *No parameters.*
 

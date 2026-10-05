@@ -15,6 +15,7 @@ module RailsAiContext
           concerns: extract_concerns,
           deprecators: extract_deprecators,
           message_verifier_usage: extract_message_verifier_usage,
+          notification_subscriptions: scan_sources[:notification_subscriptions],
           tagged_logging: detect_tagged_logging,
           on_load_hooks: common_on_load_hooks,
           cache_usage: detect_cache_usage
@@ -31,6 +32,7 @@ module RailsAiContext
           concerns: extract_concerns,
           deprecators: unavailable,
           message_verifier_usage: extract_message_verifier_usage,
+          notification_subscriptions: scan_sources[:notification_subscriptions],
           tagged_logging: detect_tagged_logging,
           on_load_hooks: unavailable,
           cache_usage: unavailable
@@ -109,28 +111,78 @@ module RailsAiContext
       VERIFIER_USE = /MessageVerifier(?!::)|\bmessage_verifiers?\b/
       ENCRYPTOR_USE = /MessageEncryptor(?!::)/
 
-      # Scan `lib/` + `app/` for calls into ActiveSupport::MessageEncryptor and
-      # ActiveSupport::MessageVerifier. Used for tokens, signed IDs, etc.
       def extract_message_verifier_usage
-        hits = []
-        %w[lib app].each do |rel|
-          dir = File.join(root, rel)
-          next unless Dir.exist?(dir)
+        scan_sources[:message_verifier_usage]
+      end
 
-          # Sort before slicing - Dir.glob ordering is filesystem-dependent
-          # and would produce non-deterministic output on large monorepos.
-          Dir.glob(File.join(dir, "**/*.rb")).sort.first(2000).each do |path|
+      SUBSCRIBE_CALLS = %w[subscribe monotonic_subscribe].freeze
+
+      # One read of lib/, app/ and the initializers serves both lists; only a file
+      # that mentions a subscription is parsed.
+      def scan_sources
+        @scan_sources ||= begin
+          verifier = []
+          subscriptions = []
+          source_paths.each do |path|
             content = RailsAiContext::SafeFile.read(path) or next
-            encryptor = content.match?(ENCRYPTOR_USE)
-            verifier = content.match?(VERIFIER_USE)
-            next unless encryptor || verifier
             relative = path.sub("#{root}/", "")
-            hits << { file: relative, encryptor: encryptor, verifier: verifier }
+            encryptor = content.match?(ENCRYPTOR_USE)
+            verifies = content.match?(VERIFIER_USE)
+            verifier << { file: relative, encryptor: encryptor, verifier: verifies } if (encryptor || verifies) && !relative.start_with?("config/")
+            subscriptions.concat(subscriptions_in(content, relative)) if content.match?(/subscribe|attach_to/)
+          end
+          { message_verifier_usage: verifier, notification_subscriptions: subscriptions.sort_by { |s| [ s[:file], s[:line], s[:event] ] } }
+        end
+      rescue => e
+        RailsAiContext.debug_fail(e, { message_verifier_usage: [], notification_subscriptions: [] }, label: "scan_sources")
+      end
+
+      # Sort before slicing - Dir.glob ordering is filesystem-dependent and
+      # would produce non-deterministic output on large monorepos.
+      def source_paths
+        paths = %w[lib app].flat_map do |rel|
+          dir = File.join(root, rel)
+          Dir.exist?(dir) ? Dir.glob(File.join(dir, "**/*.rb")).sort.first(2000) : []
+        end
+        paths + PathResolver.initializer_paths(root)
+      end
+
+      # A Subscriber's attach_to listens for "<public method>.<namespace>", one event per method.
+      def subscriptions_in(content, relative)
+        walked = SourceIntrospector.walk_source(content, {
+          calls: -> { Listeners::MethodCallListener.new(names: SUBSCRIBE_CALLS + %w[attach_to]) },
+          methods: Listeners::MethodsListener
+        })
+        Array(walked[:calls]).flat_map do |call|
+          if call[:name] == "attach_to"
+            attach_to_events(call, walked[:methods], relative)
+          elsif call[:receiver].to_s.match?(/(\A|::)Notifications\z/)
+            pattern = call[:arguments].first
+            event = pattern.nil? ? "every event" : pattern.to_s
+            [ { event: event, via: call[:name], file: relative, line: call[:line] } ]
+          else
+            []
           end
         end
-        hits
-      rescue => e
-        RailsAiContext.debug_fail(e, [], label: "extract_message_verifier_usage")
+      rescue StandardError, ScriptError => e
+        RailsAiContext.debug_fail(e, [], label: "subscriptions_in")
+      end
+
+      def attach_to_events(call, methods, relative)
+        namespace = call[:arguments].first
+        return [] unless namespace.is_a?(Symbol) || namespace.is_a?(String)
+
+        owner = call[:receiver] || owner_at(methods, call)
+        names = Array(methods).select { |m| m[:scope] == :instance && m[:visibility] == :public && m[:owner]&.last == owner }.map { |m| m[:name] }
+        names = [ "*" ] if names.empty? || call[:receiver]
+        via = [ owner, "attach_to" ].compact.join(".")
+        names.map { |name| { event: "#{name}.#{namespace}", via: via, file: relative, line: call[:line] } }
+      end
+
+      # attach_to sits in the class body above the defs it attaches, so the next def names the class.
+      def owner_at(methods, call)
+        defs = Array(methods).select { |m| m[:offset] && m[:owner]&.any? }.sort_by { |m| m[:offset] }
+        (defs.find { |m| m[:offset] > call[:offset] } || defs.last)&.dig(:owner)&.last
       end
 
       def detect_tagged_logging

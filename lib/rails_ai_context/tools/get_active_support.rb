@@ -4,7 +4,7 @@ module RailsAiContext
   module Tools
     class GetActiveSupport < BaseTool
       tool_name "rails_get_active_support"
-      description "Get ActiveSupport surface: concern modules across app/**/concerns, registered deprecators, MessageVerifier/MessageEncryptor usage, tagged logging, subscribed on_load hooks, and cache store. " \
+      description "Get ActiveSupport surface: concern modules across app/**/concerns, registered deprecators, MessageVerifier/MessageEncryptor usage, the ActiveSupport::Notifications events the app subscribes to and where, tagged logging, subscribed on_load hooks, and cache store. " \
         "Use when: checking framework-level wiring, finding where crypto helpers are used, or understanding boot-time hooks."
 
       input_schema(properties: {})
@@ -12,7 +12,7 @@ module RailsAiContext
       guide_row(
         order: 44,
         mcp: "rails_get_active_support",
-        summary: "Concerns registry, deprecators, MessageVerifier usage, on_load hooks, cache store"
+        summary: "Concerns registry, deprecators, MessageVerifier usage, notification subscriptions, on_load hooks, cache store"
       )
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
@@ -24,6 +24,7 @@ module RailsAiContext
           render_concerns(lines, active_support[:concerns])
           render_simple_list(lines, "Deprecators", active_support[:deprecators])
           render_verifier_usage(lines, active_support[:message_verifier_usage])
+          render_subscriptions(lines, active_support[:notification_subscriptions])
           render_tagged_logging(lines, active_support[:tagged_logging])
           render_on_load_hooks(lines, active_support[:on_load_hooks])
           render_cache(lines, active_support[:cache_usage])
@@ -107,6 +108,14 @@ module RailsAiContext
             kinds << "verifier" if u[:verifier]
             lines << "- `#{u[:file]}` (#{kinds.join(', ')})"
           end
+        end
+
+        def render_subscriptions(lines, subscriptions)
+          subscriptions = Array(subscriptions)
+          return if subscriptions.empty?
+
+          lines << "" << "## Notification Subscriptions (#{subscriptions.size})"
+          subscriptions.each { |s| lines << "- `#{s[:event]}` - #{s[:via]} (`#{s[:file]}:#{s[:line]}`)" }
         end
 
         def render_tagged_logging(lines, tagged)
