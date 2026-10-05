@@ -992,12 +992,14 @@ module RailsAiContext
         found.presence
       end
 
+      # The options that decide the value a new record holds and the names of
+      # the methods the enum defines.
       def extract_enum_options_from_ast(source_data)
-        source_data[:enums].each_with_object({}) do |enum, opts|
-          entry = {}
-          entry[:prefix] = enum[:options][:prefix] || enum[:options][:_prefix] if enum[:options][:prefix] || enum[:options][:_prefix]
-          entry[:suffix] = enum[:options][:suffix] || enum[:options][:_suffix] if enum[:options][:suffix] || enum[:options][:_suffix]
-          opts[enum[:name]] = entry if entry.any?
+        Array(source_data[:enums]).each_with_object({}) do |enum, opts|
+          options = enum[:options] || {}
+          entry = %i[prefix suffix default].to_h { |key| [ key, options.fetch(key) { options[:"_#{key}"] } ] }
+          entry.reject! { |_, value| value.nil? || value == false }
+          opts[enum[:name].to_s] = entry if entry.any?
         end
       end
 
@@ -1425,6 +1427,7 @@ module RailsAiContext
           # every renderer destructures one; the listener's records are a
           # different shape under the same key.
           enums: static_enums(data[:enums]),
+          enum_options: extract_enum_options_from_ast(data).presence,
           # Same shape as the booted tier: a Hash keyed by callback type. The
           # listener hands back a flat Array, and every consumer filters on
           # `callbacks.is_a?(Hash)` - so passing it through rendered "No models

@@ -161,4 +161,20 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     expect(text).to include("- `before_validation`: PostNormalizer.new\n")
     expect(text).to include("- `before_save`: [inline_block]")
   end
+
+  it "prints an enum's default and the method names its prefix or suffix gives" do
+    text = details_for("Post", "post.rb" => <<~RUBY)
+      class Post < ApplicationRecord
+        enum :status, { active: 0, archived: 1 }, default: :active
+        enum :kind, { lead: 0, customer: 1 }, prefix: true
+        enum :tone, { warm: 0, cold: 1 }, suffix: :tone
+        enum source: { web: 0, "in store": 1 }, _prefix: :from
+      end
+    RUBY
+
+    expect(text).to include("- `status`: active(0), archived(1) [integer] default: active\n")
+    expect(text).to include("- `kind`: lead(0), customer(1) [integer] methods: kind_lead?, kind_customer?\n")
+    expect(text).to include("- `tone`: warm(0), cold(1) [integer] methods: warm_tone?, cold_tone?\n")
+    expect(text).to include("- `source`: web(0), in store(1) [integer] methods: from_web?, from_in_store?")
+  end
 end

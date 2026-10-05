@@ -295,11 +295,13 @@ module RailsAiContext
         # Enums
         if data[:enums]&.any?
           lines << "" << "## Enums"
+          enum_options = data[:enum_options] || {}
           data[:enums].each do |attr, values|
             if values.is_a?(Hash)
               backing = values.values.first.is_a?(Integer) ? "integer" : "string"
               entries = values.map { |k, v| "#{k}(#{v})" }.join(", ")
-              lines << "- `#{attr}`: #{entries} [#{backing}]"
+              options = enum_options[attr.to_s] || enum_options[attr.to_sym] || {}
+              lines << "- `#{attr}`: #{entries} [#{backing}]#{enum_options_text(attr, values.keys, options)}"
             else
               lines << "- `#{attr}`: #{Serializers::SectionFacts.enum_values(values)}"
             end
@@ -512,6 +514,19 @@ module RailsAiContext
         end
 
         pairs.any? ? "**#{ed[:field]}** (#{pairs.join(', ')})" : "**#{ed[:field]}**"
+      end
+
+      # Rails names each value's methods "#{prefix}#{label}#{suffix}", so the
+      # bare label is wrong once either is set.
+      private_class_method def self.enum_options_text(attr, labels, options)
+        text = options[:default].nil? ? "" : " default: #{options[:default]}"
+        prefix, suffix = options.values_at(:prefix, :suffix)
+        return text unless prefix || suffix
+
+        prefix = "#{prefix == true ? attr : prefix}_" if prefix
+        suffix = "_#{suffix == true ? attr : suffix}" if suffix
+        methods = labels.map { |label| "#{prefix}#{label.to_s.gsub(/[\W&&[:ascii:]]+/, '_')}#{suffix}?" }
+        "#{text} methods: #{methods.join(', ')}"
       end
 
       private_class_method def self.attribute_api_text(attribute)
