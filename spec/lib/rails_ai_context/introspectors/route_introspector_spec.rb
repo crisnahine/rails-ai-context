@@ -10,6 +10,17 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
   describe "#call" do
     subject(:result) { introspector.call }
 
+    it "reads the endpoints of a mounted Grape API from its source, as the static tier does" do
+      api = File.join(Rails.root, "app/api/booted_grape.rb")
+      FileUtils.mkdir_p(File.dirname(api))
+      File.write(api, "class BootedGrape < Grape::API\n  prefix :api\n  get(:ping) { }\nend\n")
+      allow(introspector).to receive(:detect_mounted_engines).and_return([ { engine: "BootedGrape", path: "/g" } ])
+
+      expect(result[:grape_endpoints]).to eq("BootedGrape" => [ { verb: "GET", path: "/g/api/ping", params: [], file: "app/api/booted_grape.rb" } ])
+    ensure
+      FileUtils.rm_rf(File.join(Rails.root, "app/api"))
+    end
+
     it "counts total routes" do
       expect(result[:total_routes]).to be > 0
     end
@@ -283,6 +294,26 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
   end
 
   describe "#static_call" do
+    it "reads the endpoints of a Grape API the routes mount" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "api", "v1"))
+        File.write(File.join(dir, "config", "routes.rb"), "Rails.application.routes.draw do\n  mount V1::Users => \"/api\"\nend\n")
+        File.write(File.join(dir, "app", "api", "v1", "users.rb"), <<~RUBY)
+          module V1
+            class Users < Grape::API
+              version "v1", using: :path
+              resource(:users) { post { {} } }
+            end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:grape_endpoints]).to eq("V1::Users" => [ { verb: "POST", path: "/api/v1/users", params: [], file: "app/api/v1/users.rb" } ])
+      end
+    end
+
     # RouteSet evaluates prepend blocks before the draw and append blocks after it.
     it "reads routes an initializer prepends or appends, in the order Rails draws them" do
       Dir.mktmpdir do |dir|

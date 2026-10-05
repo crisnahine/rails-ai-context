@@ -60,15 +60,26 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
+      GRAPE_LIMIT = 100
+
       # A mounted app answers on a path and has no controller#action, so
       # no controller group can hold it. Counting it and then dropping it left
       # the one endpoint a reader was looking for named nowhere.
-      private_class_method def self.mounted_apps_lines(mounted_apps, engine_routes = [])
+      private_class_method def self.mounted_apps_lines(mounted_apps, engine_routes = [], grape = {}, list_grape: true)
         lines = []
         unless mounted_apps.empty?
           lines << "" << "## Mounted Apps (#{mounted_apps.size})"
           mounted_apps.each do |app|
-            lines << (app[:path] ? "- **#{app[:engine]}** at `#{app[:path]}`" : "- **#{app[:engine]}**")
+            row = app[:path] ? "- **#{app[:engine]}** at `#{app[:path]}`" : "- **#{app[:engine]}**"
+            endpoints = Array(grape&.dig(app[:engine]))
+            if endpoints.any? && !list_grape
+              row += " (#{count_phrase(endpoints.size, "Grape endpoint")}, listed at detail:\"standard\")"
+            end
+            lines << row
+            if list_grape
+              endpoints.first(GRAPE_LIMIT).each { |endpoint| lines << "  - #{RailsAiContext::Introspectors::GrapeEndpoints.line(endpoint)}" }
+              lines << "  - _#{endpoints.size - GRAPE_LIMIT} more, in #{endpoints.map { |e| e[:file] }.uniq.first(3).join(', ')}_" if endpoints.size > GRAPE_LIMIT
+            end
           end
           lines << "_A mounted app's own routes are in its table, not in the count above._"
         end
@@ -224,7 +235,7 @@ module RailsAiContext
               lines << "- _#{fw_names} framework routes: #{total_fw} total_"
             end
 
-            lines.concat(mounted_apps_lines(mounted_apps, controller ? [] : routes[:engine_routes]))
+            lines.concat(mounted_apps_lines(mounted_apps, controller ? [] : routes[:engine_routes], routes[:grape_endpoints], list_grape: false))
             lines << "" << GEM_DRAWN_NOTE if from_source
 
             if routes[:api_namespaces]&.any?
@@ -284,7 +295,7 @@ module RailsAiContext
               lines << "- `#{r[:verb]}` `#{r[:path]}` → #{r[:action]}#{helper_part}#{params_part}#{condition}"
             end
 
-            lines.concat(mounted_apps_lines(mounted_apps, controller ? [] : routes[:engine_routes]))
+            lines.concat(mounted_apps_lines(mounted_apps, controller ? [] : routes[:engine_routes], routes[:grape_endpoints]))
 
             if excluded_framework_count > 0 && controller.nil?
               lines << "" << "_#{count_phrase(excluded_framework_count, "framework route")} hidden. " \
@@ -310,7 +321,7 @@ module RailsAiContext
               # A merged verb is `PATCH|PUT`, and a bare pipe splits the row.
               lines << "| #{cells.map { |cell| cell.to_s.gsub("|", "\\|") }.join(' | ')} |"
             end
-            lines.concat(mounted_apps_lines(mounted_apps, controller ? [] : routes[:engine_routes]))
+            lines.concat(mounted_apps_lines(mounted_apps, controller ? [] : routes[:engine_routes], routes[:grape_endpoints]))
             lines << "" << GEM_DRAWN_NOTE if from_source
 
             if routes[:api_namespaces]&.any?

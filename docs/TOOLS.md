@@ -235,7 +235,9 @@ fully qualified controller key answers with its own routes only; a short name
 reaches the controller whose trailing segments it spells, and not the ones that
 merely start with it. Rack apps attached with `mount`
 or `match ... to:` are named with the path they answer on, when the source
-spells one out.
+spells one out. A mounted Grape API lists its endpoints under the mount (verb,
+full path, declared params), read from its classes in `app/api` and `lib/api`;
+the summary counts them.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
