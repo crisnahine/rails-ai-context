@@ -31,6 +31,17 @@ RSpec.describe RailsAiContext::Introspectors::Includers do
     expect(result).to eq("Admin::Helper" => [ "Admin::Report" ], "Helper" => [ "Report" ])
   end
 
+  # A qualified name's first segment resolves from the namespace outward too.
+  it "credits a relative qualified include to the module it names from the includer's namespace" do
+    result = of(%w[Wiki::Concerns::Request], {
+      "app/services/wiki/concerns/request.rb" => "module Wiki\n  module Concerns\n    module Request\n    end\n  end\nend\n",
+      "app/services/wiki/queries/search.rb" => "module Wiki\n  module Queries\n    class Search\n      include Concerns::Request\n    end\n  end\nend\n",
+      "app/services/other.rb" => "class Other\n  include ::Concerns::Request\nend\n"
+    })
+
+    expect(result).to eq("Wiki::Concerns::Request" => [ "Wiki::Queries::Search" ])
+  end
+
   it "credits `Target.include X` and `Target.send(:include, X)` to the target" do
     result = of(%w[StatusPatch], {
       "lib/patch.rb" => "module StatusPatch\nend\nType.include(StatusPatch)\nStatus.send(:include, StatusPatch)\n"

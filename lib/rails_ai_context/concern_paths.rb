@@ -227,10 +227,12 @@ module RailsAiContext
     # The enclosing namespaces from the innermost outward, then the reference
     # itself - Ruby's own constant lookup order, which reaches the top level
     # last. Bare-name-first would bind Fasp::Provider's `include DebugConcern`
-    # to a top-level DebugConcern the runtime never sees.
+    # to a top-level DebugConcern the runtime never sees. A qualified name's
+    # first segment is looked up the same way; only a leading `::` skips it.
     def candidate_names(concern_name, within)
       name = concern_name.to_s
-      return [ name ] if within.nil? || name.include?("::")
+      return [ name.delete_prefix("::") ] if name.start_with?("::")
+      return [ name ] if within.nil?
 
       scopes = within.to_s.split("::")
       scopes.size.downto(1).map { |n| "#{scopes.first(n).join('::')}::#{name}" } + [ name ]
