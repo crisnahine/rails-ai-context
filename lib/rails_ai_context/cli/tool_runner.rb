@@ -191,7 +191,7 @@ module RailsAiContext
       def build_kwargs
         kwargs = case raw_args
         when Hash
-                   raw_args.transform_keys(&:to_sym).except(:server_context)
+                   raw_args.transform_keys(&:to_sym).except(:server_context).transform_values { |value| utf8(value) }
         when Array
                    return with_environment(parse_cli_args(raw_args).except(:server_context))
         else
@@ -219,6 +219,7 @@ module RailsAiContext
 
       # Parse ["--table", "users", "--detail", "full", "--app-only"] into { table: "users", ... }
       def parse_cli_args(args)
+        args = args.map { |arg| utf8(arg) }
         result = {}
         i = 0
         properties = (tool_schema[:properties] || {})
@@ -310,6 +311,19 @@ module RailsAiContext
 
       # The flag a stray word was most likely meant for: a required param
       # first, since that is the one a caller must supply.
+      # ARGV (here and in the rake task) carries the locale's encoding, BINARY
+      # under LANG=C; MCP values are always UTF-8.
+      def utf8(arg)
+        return arg unless arg.is_a?(String)
+        return arg if arg.encoding == Encoding::UTF_8 && arg.valid_encoding?
+
+        if [ Encoding::UTF_8, Encoding::BINARY, Encoding::US_ASCII ].include?(arg.encoding)
+          arg.dup.force_encoding(Encoding::UTF_8).scrub
+        else
+          arg.encode(Encoding::UTF_8, invalid: :replace, undef: :replace)
+        end
+      end
+
       def suggested_flag
         schema = tool_schema
         properties = (schema[:properties] || {})
