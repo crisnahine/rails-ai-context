@@ -293,6 +293,20 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       expect(text).to include("- **users:**\n  - `bob`: name: B")
       expect(text).to include("- **broken:** one _(not parsed as YAML; labels only)_")
     end
+
+    it "prints no label from a fixture file that links out of the app" do
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "leak.yml"), "secret_label:\n  key: x\n")
+        write("test/fixtures/users.yml", "bob:\n  name: B\n")
+        File.symlink(File.join(outside, "leak.yml"), File.join(@root, "test", "fixtures", "leak.yml"))
+
+        text = full_text
+
+        expect(text).to include("- **users:**\n  - `bob`: name: B")
+        expect(text).not_to include("secret_label")
+        expect(text).not_to include("not parsed as YAML")
+      end
+    end
   end
 
   describe "fabricators and a Cucumber tree" do

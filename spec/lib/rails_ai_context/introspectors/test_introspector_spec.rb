@@ -172,7 +172,7 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
         File.write(File.join(Rails.root, "spec/fixtures/users.yml"), "one:\n  name: Alice\n")
         File.write(File.join(Rails.root, "test/fixtures/orders.yml"), "one:\n  ref: A\n")
 
-        expect(result[:fixtures]).to eq(location: "spec/fixtures", count: 1)
+        expect(result[:fixtures]).to eq(location: "spec/fixtures", locations: %w[spec/fixtures], count: 1)
       end
 
       it "walks past a cassette directory that exists but holds nothing" do
@@ -427,7 +427,7 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
 
       fixtures = described_class.new(double("app", root: @root)).call[:fixtures]
 
-      expect(fixtures).to eq(location: "spec/fixtures", count: 1, other_files: 3)
+      expect(fixtures).to eq(location: "spec/fixtures", locations: %w[spec/fixtures], count: 1, other_files: 3)
     end
   end
 
@@ -581,7 +581,7 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
 
       result = payload
       expect(result[:fixture_names]).to eq("users" => %w[bob], "plans" => %w[free])
-      expect(result[:fixtures]).to eq(location: "test/fixtures, test/shared_fixtures", count: 2)
+      expect(result[:fixtures]).to eq(location: "test/fixtures, test/shared_fixtures", locations: %w[test/fixtures test/shared_fixtures], count: 2)
     end
 
     it "does not follow a fixture path out of the app or into a missing directory" do
@@ -593,6 +593,20 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
         write("test/fixtures/users.yml", "bob:\n  name: B\n")
 
         expect(payload[:fixture_names]).to eq("users" => %w[bob])
+      end
+    end
+
+    it "reads no fixture file that links out of the app or to a sensitive file" do
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "leak.yml"), "secret_label:\n  key: x\n")
+        write("config/database.yml", "production:\n  password: x\n")
+        write("test/fixtures/users.yml", "bob:\n  name: B\n")
+        File.symlink(File.join(outside, "leak.yml"), File.join(@root, "test", "fixtures", "leak.yml"))
+        File.symlink(File.join(@root, "config", "database.yml"), File.join(@root, "test", "fixtures", "db.yml"))
+
+        result = payload
+        expect(result[:fixture_names]).to eq("users" => %w[bob])
+        expect(result[:fixtures]).to eq(location: "test/fixtures", locations: %w[test/fixtures], count: 1)
       end
     end
   end

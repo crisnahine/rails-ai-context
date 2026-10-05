@@ -126,11 +126,13 @@ module RailsAiContext
       end
 
       # The files a glob under the root matches, sorted, leaving out any whose
-      # real path leaves the app.
+      # real path leaves the app or names a sensitive file.
       def app_files(pattern)
         real_root = (@real_root ||= File.realpath(root))
         Dir.glob(File.join(root, pattern)).sort.select do |path|
-          File.file?(path) && RailsAiContext::SafePath.contained?(File.realpath(path), real_root)
+          real = File.realpath(path)
+          File.file?(real) && RailsAiContext::SafePath.contained?(real, real_root) &&
+            !RailsAiContext::SafePath.sensitive?(real.delete_prefix("#{real_root}/"))
         rescue SystemCallError
           false
         end
@@ -140,12 +142,13 @@ module RailsAiContext
       # a fixtures directory holds for file_fixture: an app can keep one YAML file
       # beside hundreds of JSON, XML and binary ones.
       def detect_fixtures
-        rows = fixture_dirs.map { |rel| [ rel, Dir.glob(File.join(root, rel, "**", "*")).select { |path| File.file?(path) } ] }
+        rows = fixture_dirs.map { |rel| [ rel, app_files(File.join(rel, "**", "*")) ] }
         return nil if rows.empty?
 
         sets = rows.sum { |_, files| files.count { |path| File.extname(path) == ".yml" } }
         others = rows.sum { |_, files| files.count { |path| File.extname(path) != ".yml" } }
-        found = { location: rows.map(&:first).join(", "), count: sets }
+        locations = rows.map(&:first)
+        found = { location: locations.join(", "), locations: locations, count: sets }
         others.positive? ? found.merge(other_files: others) : found
       end
 
@@ -232,7 +235,7 @@ module RailsAiContext
         names = {}
         fixture_dirs.each do |rel|
           dir = File.join(root, rel)
-          Dir.glob(File.join(dir, "**/*.yml")).sort.each do |path|
+          app_files(File.join(rel, "**", "*.yml")).each do |path|
             set = path.delete_prefix("#{dir}/").delete_suffix(".yml")
             next if names.key?(set)
 

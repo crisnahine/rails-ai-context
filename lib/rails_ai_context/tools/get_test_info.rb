@@ -507,14 +507,14 @@ module RailsAiContext
         root = rails_app.root.to_s
         real_root = File.realpath(root)
         results = {}
-        fixtures[:location].to_s.split(", ").each do |rel|
+        Array(fixtures[:locations]).each do |rel|
           dir = File.join(root, rel)
-          next unless File.directory?(dir)
+          Dir.glob(File.join(dir, "**", "*.yml")).sort.each do |path|
+            set = path.delete_prefix("#{dir}/").delete_suffix(".yml")
+            next if results.key?(set)
 
-          real_dir = File.realpath(dir)
-          safe_glob(dir, "**/*.yml", real_root).sort.each do |path|
-            set = path.delete_prefix("#{real_dir}/").delete_suffix(".yml")
-            results[set] = parse_fixture_contents(path) unless results.key?(set)
+            real = safe_glob_realpath(path, real_root, real_root) or next
+            results[set] = parse_fixture_contents(real)
           end
         end
         results
