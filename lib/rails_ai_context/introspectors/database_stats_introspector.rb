@@ -65,7 +65,7 @@ module RailsAiContext
       def collect_sqlite_stats
         conn = ActiveRecord::Base.connection
         # Use conn.tables as authoritative list - never interpolate user input
-        table_names = conn.tables.reject { |t| t.start_with?("ar_internal_metadata", "schema_migrations") }
+        table_names = (conn.tables - SqliteVirtualTables.hidden(conn)).reject { |t| t.start_with?("ar_internal_metadata", "schema_migrations") }
 
         tables = table_names.map do |table|
           count = conn.select_value("SELECT COUNT(*) FROM #{conn.quote_table_name(table)}").to_i

@@ -1726,6 +1726,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       expect(tables["pa_v_active"]).to include(kind: "view")
       expect(tables["pa_v_active"][:columns].map { |c| c[:name] }).to eq(%w[id email])
       expect(tables["pa_v_fts"]).to include(kind: "virtual_table", module: "fts5", columns: [ { name: "title" }, { name: "body" } ])
+      expect(tables.keys.grep(/\Apa_v_fts_/)).to eq([])
     ensure
       connection.execute("DROP VIEW IF EXISTS pa_v_active")
       connection.execute("DROP TABLE IF EXISTS pa_v_fts")

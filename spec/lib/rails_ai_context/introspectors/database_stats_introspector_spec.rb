@@ -14,6 +14,15 @@ RSpec.describe RailsAiContext::Introspectors::DatabaseStatsIntrospector do
       expect(result[:total_tables]).to be_a(Integer)
     end
 
+    it "counts no SQLite virtual table or its shadow tables" do
+      connection = ActiveRecord::Base.connection
+      connection.execute("CREATE VIRTUAL TABLE ds_fts USING fts5 (title)")
+
+      expect(introspector.call[:tables].map { |t| t[:table] }.grep(/\Ads_fts/)).to eq([])
+    ensure
+      connection.execute("DROP TABLE IF EXISTS ds_fts")
+    end
+
     it "collects MySQL-family stats for the Trilogy adapter (Rails 8's default MySQL adapter)" do
       allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("Trilogy")
       allow(ActiveRecord::Base.connection).to receive(:select_all)
