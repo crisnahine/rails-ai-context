@@ -473,6 +473,43 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
 
         expect(text).to include("- **helper_method in controllers** - 3 methods")
       end
+
+      it "lists the ones a module outside app/controllers declares when a controller includes it" do
+        FileUtils.mkdir_p(File.join(@root, "lib/spree/core/controller_helpers"))
+        File.write(File.join(@root, "lib/spree/core/controller_helpers/order.rb"), <<~RUBY)
+          module Spree
+            module Core
+              module ControllerHelpers
+                module Order
+                  def self.included(base)
+                    base.class_eval { helper_method :current_order }
+                  end
+                end
+              end
+            end
+          end
+        RUBY
+        File.write(File.join(@root, "lib/spree/authentication_helpers.rb"), <<~RUBY)
+          module Spree::AuthenticationHelpers
+            def self.included(receiver)
+              receiver.helper_method :spree_current_user
+            end
+          end
+        RUBY
+        File.write(File.join(@root, "lib/unused_helpers.rb"), "module UnusedHelpers\n  helper_method :never\nend\n")
+        File.write(File.join(@root, "app/controllers/base_controller.rb"), <<~RUBY)
+          class BaseController < ApplicationController
+            include Spree::Core::ControllerHelpers::Order
+            include Spree::AuthenticationHelpers
+          end
+        RUBY
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("- `current_order` (Spree::Core::ControllerHelpers::Order, `lib/spree/core/controller_helpers/order.rb`)")
+        expect(text).to include("- `spree_current_user` (Spree::AuthenticationHelpers, `lib/spree/authentication_helpers.rb`)")
+        expect(text).not_to include("never")
+      end
     end
   end
 end

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "set"
+
 module RailsAiContext
   module Tools
     class GetHelperMethods < BaseTool
@@ -289,26 +291,62 @@ module RailsAiContext
         lines << ""
       end
 
-      # What `helper_method` in a controller or controller concern hands the views that
-      # controller renders. Only a file that names the macro is parsed.
+      # What `helper_method` in a controller, or in a module a controller includes, hands the
+      # views that controller renders. Only a file that names the macro is parsed.
       private_class_method def self.controller_helper_methods(real_root)
-        PathResolver.dirs_for(real_root, "app/controllers").flat_map do |dir|
+        controllers = PathResolver.dirs_for(real_root, "app/controllers").flat_map do |dir|
           real_dir = File.realpath(dir).to_s
-          safe_glob(dir, "**/*.rb", real_root).sort.flat_map do |path|
-            source = RailsAiContext::SafeFile.read(path)
-            next [] unless source&.include?("helper_method")
-
-            calls = Introspectors::SourceIntrospector.walk(path, { calls: -> { Introspectors::Listeners::GenericMacroListener.new(:helper_method) } })[:calls]
-            names = Array(calls).flat_map do |call|
-              Array(call[:args]).map(&:to_s) + Array(call[:values]).grep(String).filter_map { |v| v[/\Adef\s+([\w?!]+)/, 1] }
-            end.uniq
+          safe_glob(dir, "**/*.rb", real_root).sort.map do |path|
             relative = path.delete_prefix("#{real_dir}/").delete_prefix("concerns/").delete_suffix(".rb")
-            owner = Introspectors::DeclaredConstant.named(source, relative.camelize)
-            names.map { |name| { name: name, owner: owner, path: path.delete_prefix("#{real_root}/") } }
+            [ path, relative.camelize ]
           end
+        end
+        (controllers + included_modules(real_root, controllers)).uniq(&:first).flat_map do |path, name|
+          source = RailsAiContext::SafeFile.read(path)
+          next [] unless source&.include?("helper_method")
+
+          calls = Introspectors::SourceIntrospector.walk(path, { calls: -> { Introspectors::Listeners::GenericMacroListener.new(:helper_method, any_receiver: true) } })[:calls]
+          names = Array(calls).flat_map do |call|
+            Array(call[:args]).map(&:to_s) + Array(call[:values]).grep(String).filter_map { |v| v[/\Adef\s+([\w?!]+)/, 1] }
+          end.uniq
+          owner = Introspectors::DeclaredConstant.named(source, name)
+          names.map { |helper| { name: helper, owner: owner, path: path.delete_prefix("#{real_root}/") } }
         end
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "controller_helper_methods")
+      end
+
+      # The modules in lib a controller includes, as [path, constant]: a controller helper
+      # module there is required rather than autoloaded, and app/controllers/concerns is
+      # read as a controller already.
+      # ponytail: one level, lib only; a module those modules include is not followed.
+      private_class_method def self.included_modules(real_root, controllers)
+        dirs = PathResolver.dirs_for(real_root, "lib")
+        return [] if dirs.empty?
+
+        basenames = dirs.flat_map { |dir| Dir.glob("**/*.rb", base: dir) }.to_set { |file| File.basename(file, ".rb") }
+        found = {}
+        controllers.flat_map do |path, _name|
+          # Only a controller naming a module some lib file could hold is parsed.
+          written = RailsAiContext::SafeFile.read(path).to_s.scan(/\b(?:include|prepend)\s+:*([A-Z][\w:]*)/).flatten
+          next [] unless written.any? { |name| basenames.include?(name.split("::").last.underscore) }
+
+          Introspectors::SourceIntrospector.walk(path, { mixins: Introspectors::Listeners::MixinsListener })[:mixins].filter_map do |mixin|
+            next unless %i[include prepend].include?(mixin[:macro])
+
+            within = Array(mixin[:owner]).join("::")
+            # Controllers share most candidates, so each is looked up once.
+            ConcernPaths.candidate_names(mixin[:name], within.empty? ? nil : within).lazy.filter_map do |candidate|
+              found.fetch(candidate) { found[candidate] = lib_file(dirs, candidate) || false }
+            end.first
+          end
+        end.select { |path, _name| RailsAiContext::SafePath.contained?(path, real_root) }
+      end
+
+      private_class_method def self.lib_file(dirs, constant)
+        relative = "#{constant.underscore}.rb"
+        dir = dirs.find { |d| File.file?(File.join(d, relative)) }
+        dir && [ File.realpath(File.join(dir, relative)), constant ]
       end
 
       private_class_method def self.find_view_references(method_names, real_root)

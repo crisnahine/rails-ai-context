@@ -4,8 +4,10 @@ module RailsAiContext
   module Introspectors
     module Listeners
       class GenericMacroListener < BaseListener
-        def initialize(*target_methods, block_source: [], call_source: [])
+        # `any_receiver` also counts `base.macro`, the shape a mixin's `self.included(base)` hook writes.
+        def initialize(*target_methods, block_source: [], call_source: [], any_receiver: false)
           super()
+          @any_receiver = any_receiver
           @target_methods = target_methods.flatten.map(&:to_sym).to_set
           @enclosing = []
           @block_source = block_source.to_set
@@ -13,7 +15,7 @@ module RailsAiContext
         end
 
         def on_call_node_enter(node)
-          return unless node.receiver.nil? || node.receiver.is_a?(Prism::SelfNode)
+          return unless @any_receiver || node.receiver.nil? || node.receiver.is_a?(Prism::SelfNode)
           return unless @target_methods.include?(node.name)
 
           @results << {
