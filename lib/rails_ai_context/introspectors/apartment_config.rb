@@ -17,16 +17,26 @@ module RailsAiContext
           next if AstCache.parse_string(source).errors.any?
 
           file = path.delete_prefix("#{root}/")
-          hit = SourceIntrospector.walk_source(source, { config: Listeners::ConfigAssignmentListener })[:config]
-                                  .reverse.find { |h| h[:assignment] && h[:path] == [ :excluded_models ] }
+          listener = -> { Listeners::ConfigAssignmentListener.new(block_param(source)) }
+          # `+=`, `<<` or `concat` builds on a list the source does not show whole.
+          hit = SourceIntrospector.walk_source(source, { config: listener })[:config]
+                                  .reverse.find { |h| h[:path].first == :excluded_models && (h[:assignment] || h[:write]) }
           return { excluded_models: [], file: file } unless hit
-          return { excluded_models_source: hit[:source], file: file } unless hit[:value].is_a?(Array) && hit[:value].all?(String) && !hit[:value].include?(Confidence::INFERRED)
+          return { excluded_models_source: hit[:source], file: file } unless hit[:assignment] && literal_names?(hit[:value])
 
           return { excluded_models: hit[:value].map { |name| name.delete_prefix("::") }, file: file }
         end
         nil
       rescue StandardError => e
         RailsAiContext.debug_fail(e, nil, label: "ApartmentConfig")
+      end
+
+      def block_param(source)
+        source[/Apartment\.configure\s*(?:do|\{)\s*\|\s*([a-z_]\w*)\s*\|/, 1] || "config"
+      end
+
+      def literal_names?(value)
+        value.is_a?(Array) && value.all?(String) && !value.include?(Confidence::INFERRED)
       end
     end
   end

@@ -42,6 +42,20 @@ RSpec.describe RailsAiContext::Introspectors::ApartmentConfig do
     expect(found).to eq(excluded_models_source: "[Plan.name, \"A\"]", file: "config/initializers/apartment.rb")
   end
 
+  it "reads the list through whatever name the block gives its parameter" do
+    found = read_with("config/initializers/apartment.rb" => "Apartment.configure do |c|\n  c.excluded_models = %w[Organization]\nend\n")
+
+    expect(found).to eq(excluded_models: %w[Organization], file: "config/initializers/apartment.rb")
+  end
+
+  it "keeps a list the block adds to with += or << as written" do
+    plus = read_with("config/initializers/apartment.rb" => "Apartment.configure do |config|\n  config.excluded_models += %w[Organization]\nend\n")
+    push = read_with("config/initializers/apartment.rb" => "Apartment.configure { |c| c.excluded_models << \"Organization\" }\n")
+
+    expect(plus).to eq(excluded_models_source: "config.excluded_models += %w[Organization]", file: "config/initializers/apartment.rb")
+    expect(push).to eq(excluded_models_source: "c.excluded_models << \"Organization\"", file: "config/initializers/apartment.rb")
+  end
+
   it "answers nil without an Apartment.configure, and for a file that does not parse" do
     expect(read_with("config/initializers/other.rb" => "config.excluded_models = %w[A]\n")).to be_nil
     expect(read_with("config/initializers/apartment.rb" => "Apartment.configure do |config|\n  config.excluded_models = %w[\n")).to be_nil
