@@ -183,6 +183,24 @@ RSpec.describe RailsAiContext::Introspectors::RakeTaskIntrospector do
       ])
     end
 
+    it "never lists a template linked from outside the app, and survives a symlink loop" do
+      write("lib/templates/active_record/model/model.rb.tt", "class <%= class_name %>; end\n")
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "hosts"), "127.0.0.1 localhost\n")
+        FileUtils.mkdir_p(File.join(outside, "erb"))
+        File.write(File.join(outside, "erb", "index.html.erb.tt"), "x")
+        dir = File.join(@root, "lib/templates/active_record/model")
+        File.symlink(File.join(outside, "hosts"), File.join(dir, "evil.rb.tt"))
+        File.symlink(File.join(dir, "loop_b.rb.tt"), File.join(dir, "loop_a.rb.tt"))
+        File.symlink(File.join(dir, "loop_a.rb.tt"), File.join(dir, "loop_b.rb.tt"))
+        File.symlink(File.join(outside, "erb"), File.join(@root, "lib/templates/erb"))
+
+        expect(result[:generator_templates]).to eq([
+          { file: "lib/templates/active_record/model/model.rb.tt", generator: "active_record:model" }
+        ])
+      end
+    end
+
     it "leaves the keys out for an app with none, and survives a generator file that does not parse" do
       expect(result).not_to include(:generators, :generator_templates, :railties)
 
