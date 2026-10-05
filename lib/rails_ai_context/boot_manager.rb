@@ -113,7 +113,11 @@ module RailsAiContext
         )
       end
 
-      guard(timeout: timeout, announce_exit: false) { require environment_rb }
+      result = guard(timeout: timeout, announce_exit: false) { require environment_rb }
+      return result unless result.booted?
+      return result if defined?(::Rails) && ::Rails.respond_to?(:application) && ::Rails.application
+
+      Result.new(status: :failed, error: BootError.new("config/environment.rb loaded but defined no Rails application"))
     rescue SystemExit => e
       Result.new(status: :failed, error: BootExitError.new("App called exit(#{e.status}) during boot"))
     end

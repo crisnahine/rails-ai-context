@@ -670,4 +670,37 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       expect(json).not_to include('\\u200b')
     end
   end
+
+  # Under LANG=C, ARGV arrives tagged BINARY, and MCP clients always send UTF-8.
+  describe "arguments from a shell whose locale is not UTF-8" do
+    it "reads a non-ASCII value as UTF-8" do
+      kwargs = described_class.new("search_code", [ "--pattern", "naïve".b, "--path=app/ñ".b ]).send(:build_kwargs)
+
+      expect(kwargs.values_at(:pattern, :path)).to eq([ "naïve", "app/ñ" ])
+      expect(kwargs.values_at(:pattern, :path).map(&:encoding)).to all(eq(Encoding::UTF_8))
+    end
+
+    it "reads the rake task's key=value pairs as UTF-8 too" do
+      expect(described_class.new("search_code", { pattern: "naïve".b }).send(:build_kwargs)[:pattern]).to eq("naïve")
+    end
+
+    it "transcodes a value tagged with a non-UTF-8 locale encoding" do
+      latin1 = "naïve".encode(Encoding::ISO_8859_1)
+
+      expect(described_class.new("search_code", [ "--pattern", latin1 ]).send(:build_kwargs)[:pattern]).to eq("naïve")
+    end
+
+    it "replaces bytes that are not UTF-8 instead of failing" do
+      [ "na\xFFve".b, (+"na\xFFve").force_encoding(Encoding::UTF_8) ].each do |raw|
+        expect(described_class.new("search_code", [ "--pattern", raw ]).send(:build_kwargs)[:pattern]).to be_valid_encoding
+      end
+    end
+
+    it "answers search_code with the pattern" do
+      output = described_class.new("search_code", [ "--pattern", "naïve".b ]).run
+
+      expect(output).to include("naïve")
+      expect(output).not_to include("CompatibilityError")
+    end
+  end
 end

@@ -64,7 +64,7 @@ Gem::Specification.new do |spec|
   spec.add_dependency "mcp", ">= 0.13", "< 2.0"   # Official MCP Ruby SDK; schemas read via Tool#to_h (stable 0.13 to 1.x)
   spec.add_dependency "railties", ">= 7.0", "< 9.0"
   spec.add_dependency "thor", ">= 1.2", "< 3.0"   # 1.0 and 1.1 reference DidYouMean::SPELL_CHECKERS, gone in Ruby 3.1
-  spec.add_dependency "zeitwerk", "~> 2.6"         # Autoloading
+  spec.add_dependency "zeitwerk", "~> 2.5"         # 2.5 is what railties 7.0 allows
 
   # AST foundation (Phase 1: Ground Truth Engine)
   spec.add_dependency "prism", ">= 1.4", "< 2.0"            # Ruby parser - stdlib in 3.3+, gem for 3.1-3.2

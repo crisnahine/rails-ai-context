@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "open3"
+require "tmpdir"
 
 RSpec.describe RailsAiContext::Tools::BaseTool do
   describe ".abstract?" do
@@ -220,6 +222,24 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
       RB
 
       expect(described_class.extract_method_source_from_string(source, "touch")[:start_line]).to eq(14)
+    end
+  end
+
+  # The stub stands in for Rails 7.0's activesupport, left on the load path by a failed boot.
+  describe "loading on an activesupport that does not require logger itself" do
+    it "loads the tool classes, and any later full require of activesupport" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "active_support.rb"), <<~RUBY)
+          Logger::Severity
+          load File.join(Gem.loaded_specs["activesupport"].full_gem_path, "lib", "active_support.rb")
+        RUBY
+        lib = File.expand_path("../../../../lib", __dir__)
+        script = 'require "rails_ai_context"; require "active_support"; RailsAiContext::Tools::BaseTool; print "loaded"'
+
+        out, err, status = Open3.capture3(RbConfig.ruby, "-I", dir, "-I", lib, "-e", script)
+
+        expect([ out, status.success? ]).to eq([ "loaded", true ]), err
+      end
     end
   end
 end
