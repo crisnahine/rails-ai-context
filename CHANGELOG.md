@@ -33,9 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`rails_get_callbacks` lists callbacks in the order Rails runs them**: base
   classes first, a concern's callbacks where its `include` line stands, then
   the model's own, and a `before_` or `around_` callback with `prepend: true`
-  first. `after_commit` and `after_rollback` list last declared first, as Rails
-  runs them, unless `run_after_transaction_callbacks_in_order_defined` is on
-  (`load_defaults 7.1` or later). The static tier reads that from
+  first. `after_commit` and `after_rollback` list last declared first, as
+  Rails runs them, unless `run_after_transaction_callbacks_in_order_defined`
+  is on (`load_defaults 7.1` or later). The static tier reads that from
   `config/application.rb` and the initializers, the last line that sets it
   winning, and when the config does not tell, `rails_get_callbacks` and
   `rails_get_model_details` say so. A method declared twice under one callback
@@ -52,40 +52,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Ruby's lookup finds as of the call: a module the class prepends to its
   singleton class, the class's own class methods, then the modules it extends
   and its concerns' class methods, the last added first, then the same for
-  each base, then what every model has: class methods an initializer writes
-  in `ActiveRecord::Base.class_eval` or a reopened base, the file Rails loads
+  each base, then what every model has: class methods an initializer writes in
+  `ActiveRecord::Base.class_eval` or a reopened base, the file Rails loads
   later winning (Canvas's `validates_locale` adds its `before_validation` to
   Account, User and Course), then the modules mixed into the base. One an
   initializer writes on `ApplicationRecord` replaces ApplicationRecord's own.
-  A class's own class methods
-  are its `def self.`, an `alias_method` in `class << self` (it runs what its
-  original name ran at the alias), and those a Concern's `included` block or a
-  hook writes on the class (`def self.x` or `class << self`, in the block, in
-  `base.class_eval` or in `class << base`), each from its line where that code
-  runs. A module counts from the line adding it, where that line runs: an
-  `extend`, `singleton_class.include` or `singleton_class.prepend` (which
-  counts as prepended) in the class, in a hook or in a Concern's `included`
-  block, and an `extend` in a class method a call reaches (an `acts_as_x`
-  that extends its methods, whose `self.extended` hook then runs);
-  a plain module's nested `ClassMethods` counts only when something extends
-  it. A module a hook includes runs its own hooks. Two concerns' modules of
-  one name (each concern's `ClassMethods`) stay two: each name is the
-  constant it resolves to where it is written, and one that resolves to
-  nothing no longer hides the other. A `super` runs the next definition, at
-  the `super`. An instance method or a nested class's method of the same
-  name never runs. A module a class
-  method includes joins only when a call reaches that method, and only calls
-  after it see its methods. A nested class's callbacks are its own, and a
-  module nested in the model's file reads like any concern: `include` runs its
-  `included` block, `extend` its methods and `self.extended` only. A module a
-  plugin's lib loads by a glob `require` is read from beside the file naming
-  it, and from its definition rather than an empty namespace stub above it,
-  so OpenProject's journalized models list `save_journals`. A Mongoid
-  document's own callbacks list in the same run order, one in a class method
-  where the document calls it. Neither tier evaluates `send`,
-  `define_singleton_method` or a module included in `class << self` for this,
-  so the list can miss what they register or show the definition they
-  replace. (#253)
+  A class's own class methods are its `def self.`, an `alias_method` in
+  `class << self` (it runs what its original name ran at the alias), and those
+  a Concern's `included` block or a hook writes on the class (`def self.x` or
+  `class << self`, in the block, in `base.class_eval` or in `class << base`),
+  each from its line where that code runs. A module counts from the line
+  adding it, where that line runs: an `extend`, `singleton_class.include` or
+  `singleton_class.prepend` (which counts as prepended) in the class, in a
+  hook or in a Concern's `included` block, and an `extend` in a class method a
+  call reaches (an `acts_as_x` that extends its methods, whose `self.extended`
+  hook then runs); a plain module's nested `ClassMethods` counts only when
+  something extends it. A module a hook includes runs its own hooks. Two
+  concerns' modules of one name (each concern's `ClassMethods`) stay two: each
+  name is the constant it resolves to where it is written, and one that
+  resolves to nothing no longer hides the other. A `super` runs the next
+  definition, at the `super`. An instance method or a nested class's method of
+  the same name never runs. A module a class method includes joins only when a
+  call reaches that method, and only calls after it see its methods. A nested
+  class's callbacks are its own, and a module nested in the model's file reads
+  like any concern: `include` runs its `included` block, `extend` its methods
+  and `self.extended` only. A module a plugin's lib loads by a glob `require`
+  is read from beside the file naming it, and from its definition rather than
+  an empty namespace stub above it, so OpenProject's journalized models list
+  `save_journals`. A Mongoid document's own callbacks list in the same run
+  order, one in a class method where the document calls it. Neither tier
+  evaluates `send`, `define_singleton_method` or a module included in
+  `class << self` for this, so the list can miss what they register or show
+  the definition they replace. (#253)
 - **A lambda or Proc given to `queue_as` reads as what ActiveJob does with
   it.** ActiveJob never calls it; it names the queue after the Proc's text.
   Both tiers now say so, with the source, where the booted tier printed the
@@ -105,14 +103,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **A concern's declarations name the module the include resolves to.**
-  `include Validations` in WorkPackage lists its validations from
-  `WorkPackage::Validations`, the constant Ruby includes, where it said
-  `Validations`.
+  `rails_get_callbacks` on OpenProject's WorkPackage lists
+  `after_save :save_journals` from `Acts::Journalized::SaveHooks`, where it
+  said `SaveHooks`.
 - **A module declared in its outer module's file is read from there.**
   Canvas's `Role::AssociationHelper` lives in role.rb, and its `included`
   hook adds `before_save :resolve_cross_account_role` to Enrollment and its
   subclasses, AccountUser and RoleOverride; the static tier called the
-  module unread and missed the callback.
+  module unread and missed the callback. Every tool that looks a concern up
+  by name finds it there, and reads that module alone, not the outer class.
+- **`rails_get_callbacks` lists models of one callback count by name**, so a
+  model gaining a callback no longer moves the sections around it.
 - **A model macro written over `*args` reads each call's own arguments.**
   The list binds to the call's positionals past the method's other
   parameters, less the options hash the body takes off the end
