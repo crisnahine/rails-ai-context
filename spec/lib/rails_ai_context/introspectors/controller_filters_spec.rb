@@ -37,5 +37,29 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
         expect(unread).to eq([])
       end
     end
+
+    # A macro inside a `def` runs when the method runs: never for a method nobody
+    # calls, and with the call's options where the body calls it.
+    it "reads a filter inside a method only where the class calls the method" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        source = <<~RUBY
+          class PostsController < ApplicationController
+            def self.public_actions(*names) = skip_before_action(:authenticate!, only: names)
+            def self.unused = skip_before_action(:audit)
+            def helper = before_action(:never)
+
+            before_action :authenticate!
+            public_actions :index, :show
+          end
+        RUBY
+
+        filters, = described_class.with_concerns(source, root: dir, within: "PostsController")
+
+        expect(filters.map { |f| [ f[:name], f[:skipped], f[:only] ] })
+          .to eq([ [ "authenticate!", nil, nil ], [ "authenticate!", true, %w[index show] ] ])
+        expect(described_class.from_source(source).map { |f| f[:name] }).to eq([ "authenticate!" ])
+      end
+    end
   end
 end

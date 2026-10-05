@@ -606,6 +606,40 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
     end
 
+    # `bin/rails generate authentication`: reflection takes the filter out of the chain, and the
+    # body's call of the concern's class method is the only thing that says what did.
+    it "shows the skip a class method the body calls makes, when nothing else is left in the chain" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/controllers/concerns"))
+        File.write(File.join(dir, "app/controllers/concerns/authentication.rb"), <<~RUBY)
+          module Authentication
+            extend ActiveSupport::Concern
+            included { before_action :require_authentication }
+            class_methods do
+              def allow_unauthenticated_access(**options)
+                skip_before_action :require_authentication, **options
+              end
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app/controllers/application_controller.rb"),
+                   "class ApplicationController < ActionController::Base\n  include Authentication\nend\n")
+        base = Class.new(ActionController::Base) do
+          before_action :require_authentication
+          def self.allow_unauthenticated_access(**options) = skip_before_action(:require_authentication, **options)
+        end
+        child = Class.new(base) { allow_unauthenticated_access }
+        base.define_singleton_method(:name) { "ApplicationController" }
+        child.define_singleton_method(:name) { "PasswordsController" }
+        source = "class PasswordsController < ApplicationController\n  allow_unauthenticated_access\nend\n"
+
+        records = described_class.new(double("app", root: Pathname.new(dir))).send(:extract_filters, child, source)
+
+        expect(child._process_action_callbacks.map(&:filter)).not_to include(:require_authentication)
+        expect(records.map { |f| [ f[:name], f[:skipped] ] }).to eq([ [ "require_authentication", true ] ])
+      end
+    end
+
     def with_concern(body)
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app/controllers/concerns"))

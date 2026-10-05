@@ -192,6 +192,33 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
 
   # An options hash the call leaves at its empty default wrote `has_one :picture, `
   # with a dangling comma, and the next line became that call's argument.
+  describe "a `**options` parameter passed on" do
+    def filters(call_source)
+      definition = Prism.parse(<<~RUBY).value.statements.body.first
+        def allow_unauthenticated_access(scope = nil, **options)
+          skip_before_action :require_authentication, **options
+          before_action :log_guest
+        end
+      RUBY
+      call = Prism.parse(call_source).value.statements.body.first
+      described_class.entries(definition, call, RailsAiContext::Introspectors::ControllerFilters::LISTENERS)[:filters]
+    end
+
+    it "reads as the keywords the call passed" do
+      skip, log = filters("allow_unauthenticated_access only: %i[ new create ], if: :guest?")
+
+      expect(skip).to include(args: [ :require_authentication ], options: { only: %i[new create], if: :guest? })
+      expect(log).to include(args: [ :log_guest ])
+    end
+
+    it "reads as no keywords when the call passed none" do
+      skip, log = filters("allow_unauthenticated_access")
+
+      expect(skip).to include(args: [ :require_authentication ], options: {})
+      expect(log).to include(args: [ :log_guest ])
+    end
+  end
+
   it "drops an empty options argument whole, keeping the next declaration" do
     data = expand(<<~RUBY, "attachable :picture")
       def attachable(name, options = {})

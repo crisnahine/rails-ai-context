@@ -135,6 +135,8 @@ Which filters a controller runs, and which of them a given action runs. `ActionF
 
 **Order is the run order, and a class's own body wins.** The chain keeps the order reflection or the source gives it, so a `prepend_before_action` does not fall behind everything the class inherits. A filter the body declares survives an ancestor's skip of the same name, because Rails re-adds it. Attribution names the ancestor whose body declared the filter, not the nearest one that merely carries it inherited.
 
+**A macro inside a method runs when the method is called.** A `skip_before_action` in a concern's `class_methods` (the Rails 8 `allow_unauthenticated_access`) declares nothing until a controller calls the method; at that call it declares what the method body does, with the call's options, wherever on the chain the method is defined. `ControllerFilters` reads it so for both tiers.
+
 **What it cannot see is stated rather than guessed.** The walk reads `ApplicationController`'s file by the one name Rails fixes, so its filters are in the chain; a parent the listing does not hold and the app has no file for - a gem-owned base, or one an inflection renames - still ends the walk. `docs/COMPATIBILITY.md` says both halves.
 
 ## Payload

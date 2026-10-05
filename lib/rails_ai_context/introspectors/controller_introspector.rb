@@ -314,32 +314,26 @@ module RailsAiContext
             { name: cb.filter.to_s, kind: cb.kind.to_s }
           end
 
-          if reflection_filters.any?
-            # Collect only/except constraints from source files in the inheritance chain
-            source_constraints = collect_source_constraints(ctrl, source)
-            reflection_filters.each do |f|
-              if (sc = source_constraints[[ f[:kind], f[:name] ]])
-                f[:only] = sc[:only] if sc[:only]&.any?
-                f[:except] = sc[:except] if sc[:except]&.any?
-                f[:unless] = sc[:unless] if sc[:unless]
-                f[:if] = sc[:if] if sc[:if]
-              end
+          # Collect only/except constraints from source files in the inheritance chain
+          source_constraints = reflection_filters.any? ? collect_source_constraints(ctrl, source) : {}
+          reflection_filters.each do |f|
+            if (sc = source_constraints[[ f[:kind], f[:name] ]])
+              f[:only] = sc[:only] if sc[:only]&.any?
+              f[:except] = sc[:except] if sc[:except]&.any?
+              f[:unless] = sc[:unless] if sc[:unless]
+              f[:if] = sc[:if] if sc[:if]
             end
-
-            # Evaluate known runtime conditions to remove inapplicable filters
-            reflection_filters.reject! { |f| filter_excluded_by_condition?(ctrl, f) }
-
-            return merge_own_source(reflection_filters, source || read_source(ctrl), ctrl)
           end
+
+          # Evaluate known runtime conditions to remove inapplicable filters
+          reflection_filters.reject! { |f| filter_excluded_by_condition?(ctrl, f) }
+
+          # An empty chain still has the body's skips to show: what took the filters out.
+          return merge_own_source(reflection_filters, source || read_source(ctrl), ctrl)
         end
 
         # Fallback to source parsing when reflection is unavailable
-        if source
-          filters = extract_filters_from_source(source)
-          return filters if filters.any?
-        end
-
-        []
+        source ? extract_filters_from_source(source) : []
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "extract_filters")
       end
