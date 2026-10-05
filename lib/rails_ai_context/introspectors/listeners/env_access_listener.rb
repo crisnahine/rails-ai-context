@@ -7,6 +7,7 @@ module RailsAiContext
       # ENV["KEY"], ENV.fetch("KEY"), ENV.fetch("KEY", "default")
       class EnvAccessListener < BaseListener
         def on_call_node_enter(node)
+          return extract_creds(node) if creds_receiver?(node.receiver)
           return unless env_receiver?(node.receiver)
 
           case node.name
@@ -18,6 +19,37 @@ module RailsAiContext
         end
 
         private
+
+        # Rails 8.2's `Rails.app.creds` checks ENV before the encrypted
+        # credentials, and `Rails.app.envs` reads only ENV.
+        def creds_receiver?(receiver)
+          return false unless receiver.is_a?(Prism::CallNode) && %i[creds envs].include?(receiver.name)
+
+          app = receiver.receiver
+          app.is_a?(Prism::CallNode) && %i[app application].include?(app.name) &&
+            app.receiver.is_a?(Prism::ConstantReadNode) && app.receiver.name == :Rails
+        end
+
+        # `require(:database, :host)` reads ENV["DATABASE__HOST"].
+        def extract_creds(node)
+          return unless %i[require option].include?(node.name)
+
+          args = node.arguments&.arguments || []
+          parts = args.reject { |arg| arg.is_a?(Prism::KeywordHashNode) }
+          keys = parts.map { |arg| literal_string(arg) }
+          return if keys.empty? || keys.any?(&:nil?)
+
+          default = args.grep(Prism::KeywordHashNode).flat_map(&:elements).grep(Prism::AssocNode)
+                        .find { |assoc| extract_key(assoc.key) == :default }&.value
+          optional = node.name == :option
+          @results << {
+            method:      optional && default.nil? ? "[]" : "fetch",
+            key:         keys.map(&:upcase).join("__"),
+            has_default: !default.nil?,
+            default:     literal_value(default),
+            location:    node.location.start_line
+          }
+        end
 
         def env_receiver?(receiver)
           receiver.is_a?(Prism::ConstantReadNode) && receiver.name == :ENV

@@ -47,4 +47,22 @@ RSpec.describe RailsAiContext::Introspectors::EnvReferences do
 
     expect(described_class.scan(@root)).to be_empty
   end
+
+  it "reads the ENV names Rails.app.creds and Rails.app.envs look up, nested keys joined by __" do
+    write("config/initializers/keys.rb", <<~RUBY)
+      STRIPE_KEY = Rails.app.creds.require(:stripe_api_key)
+      OTHER = ENV.fetch("OTHER_KEY", nil)
+      HOST = Rails.application.creds.option(:database, :host, default: "localhost")
+      DEBUG = Rails.app.envs.option(:debug)
+      SECRET = Rails.app.credentials.require(:only_encrypted)
+      DYN = Rails.app.creds.require(name)
+    RUBY
+
+    refs = described_class.scan(@root)[File.join(@root, "config/initializers/keys.rb")]
+
+    expect(refs.map { |ref| ref[:name] }).to eq(%w[STRIPE_API_KEY OTHER_KEY DATABASE__HOST DEBUG])
+    expect(refs).to include(a_hash_including(name: "DATABASE__HOST", default: "localhost"))
+    expect(refs).to include(a_hash_including(name: "DEBUG", bracket: true))
+    expect(refs.find { |ref| ref[:name] == "STRIPE_API_KEY" }).not_to include(:bracket, :default)
+  end
 end

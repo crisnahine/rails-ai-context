@@ -217,7 +217,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 | MountListener | `mount Sidekiq::Web, at: "/sidekiq"`, the hash form, and a Rack app attached with `match "/metrics", to: MetricsApp` - `mount` is that call with a name derived. Paths carry the enclosing `namespace`/`scope` prefix; a scope whose own name is an expression yields no path rather than an unprefixed one, and `scope path: nil` adds no segment. A mounted app built by a call on a constant (`Flipper::UI.app(Flipper)`) is named by that call, arguments off |
 | GemfileDslListener | `gem "name", "version"` and `group :development do ... end` |
 | RakeTaskDslListener | `namespace` (with the span its block covers), `desc`, `task`, `multitask` in `.rake` files |
-| EnvAccessListener | `ENV["KEY"]`, `ENV.fetch("KEY")`, `ENV.fetch("KEY", default)` |
+| EnvAccessListener | `ENV["KEY"]`, `ENV.fetch("KEY")`, `ENV.fetch("KEY", default)`, and the ENV name Rails 8.2's `Rails.app.creds` or `Rails.app.envs` `require`/`option` reads (`option(:database, :host)` is `DATABASE__HOST`) |
 | MailboxRoutingListener | Action Mailbox `routing` and processing callbacks |
 | ModelReferenceListener | Model constants used in controllers: `Post.find`, `params.require(:post)`, ivar writes |
 | VariantCallListener | `variant` calls (ChainedCallListener with `:variant` preset) |

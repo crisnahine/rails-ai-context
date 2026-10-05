@@ -23,7 +23,7 @@ module RailsAiContext
         real_root = File.realpath(root.to_s)
         files(root.to_s, real_root).each_with_object({}) do |(path, names_only), found|
           source = RailsAiContext::SafeFile.read(path)
-          next unless source&.include?("ENV")
+          next unless source&.include?("ENV") || source&.match?(/\.(?:creds|envs)\b/)
           # A YAML or ERB file reads ENV only inside a tag.
           next if !path.end_with?(".rb", ".rake") && !source.include?("<%")
 
