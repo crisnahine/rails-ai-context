@@ -484,6 +484,75 @@ RSpec.describe RailsAiContext::Introspectors::FrontendFrameworkIntrospector do
     end
   end
 
+  describe "a lockfile at the JS workspace root above the app" do
+    def workspace(lockfile: "yarn.lock", git: true, workspaces: [ "backend" ])
+      Dir.mktmpdir do |tmp|
+        repo = File.realpath(tmp)
+        root = File.join(repo, "backend")
+        FileUtils.mkdir_p(root)
+        FileUtils.mkdir_p(File.join(repo, ".git")) if git
+        File.write(File.join(repo, "package.json"), JSON.generate("private" => true, "workspaces" => workspaces))
+        File.write(File.join(repo, lockfile), "") if lockfile
+        File.write(File.join(root, "package.json"), "{}")
+        yield repo, root
+      end
+    end
+
+    it "names the workspace's package manager and the directory its lockfile is in" do
+      workspace do |_repo, root|
+        result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+
+        expect(result[:package_manager]).to eq("yarn")
+        expect(result[:package_manager_dir]).to eq("..")
+        expect(described_class.package_manager(root)).to eq("yarn")
+      end
+    end
+
+    it "prefers a lockfile in the app root" do
+      workspace do |_repo, root|
+        File.write(File.join(root, "package-lock.json"), "{}")
+        result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+
+        expect(result[:package_manager]).to eq("npm")
+        expect(result[:package_manager_dir]).to be_nil
+      end
+    end
+
+    it "never looks above the git root" do
+      workspace do |repo, root|
+        FileUtils.rm_rf(File.join(repo, ".git"))
+        FileUtils.mkdir_p(File.join(root, ".git"))
+
+        expect(described_class.package_manager(root)).to be_nil
+      end
+    end
+
+    it "does not walk up at all outside a git repository" do
+      workspace(git: false) do |_repo, root|
+        expect(described_class.package_manager(root)).to be_nil
+      end
+    end
+
+    it "refuses a lockfile symlinked out of the workspace root" do
+      workspace(lockfile: nil) do |repo, root|
+        Dir.mktmpdir do |elsewhere|
+          File.write(File.join(elsewhere, "yarn.lock"), "")
+          File.symlink(File.join(elsewhere, "yarn.lock"), File.join(repo, "yarn.lock"))
+
+          expect(described_class.package_manager(root)).to be_nil
+        end
+      end
+    end
+
+    it "survives a workspace package.json that is not JSON" do
+      workspace(lockfile: nil) do |repo, root|
+        File.write(File.join(repo, "package.json"), "{ not json")
+
+        expect(described_class.package_manager(root)).to be_nil
+      end
+    end
+  end
+
   describe "a frontend_paths entry outside the app root" do
     it "is not read, and is named as skipped" do
       Dir.mktmpdir do |tmp|

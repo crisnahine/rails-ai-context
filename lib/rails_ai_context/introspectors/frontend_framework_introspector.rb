@@ -70,7 +70,7 @@ module RailsAiContext
         mounting = detect_mounting_strategy(all_deps)
         state = labels_for(STATE_MARKERS, all_deps)
         testing = labels_for(TEST_MARKERS, all_deps)
-        pkg_mgr = detect_package_manager
+        pkg_mgr, pkg_mgr_dir = RailsAiContext::PackageJson.package_manager(root)
         mono = detect_monorepo
         build = detect_build_tool
         vite_fw = detect_vite_config_frameworks
@@ -103,6 +103,7 @@ module RailsAiContext
           state_management: state,
           testing: testing,
           package_manager: pkg_mgr,
+          package_manager_dir: pkg_mgr_dir,
           typescript: ts,
           monorepo: mono,
           build_tool: build,
@@ -194,19 +195,8 @@ module RailsAiContext
 
       # ---- Package manager ----
 
-      def detect_package_manager
-        self.class.package_manager(root)
-      end
-
-      # Bun 1.2 writes a text bun.lock, older bun the binary bun.lockb.
       def self.package_manager(root)
-        root = root.to_s
-        return "bun" if File.exist?(File.join(root, "bun.lock")) || File.exist?(File.join(root, "bun.lockb"))
-        return "pnpm" if File.exist?(File.join(root, "pnpm-lock.yaml"))
-        return "yarn" if File.exist?(File.join(root, "yarn.lock"))
-        return "npm" if File.exist?(File.join(root, "package-lock.json"))
-
-        nil
+        RailsAiContext::PackageJson.package_manager(root)&.first
       end
 
       # ---- TypeScript ----

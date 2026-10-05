@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "json"
+require "pathname"
 
 module RailsAiContext
   # Which npm packages an app depends on, read once per package.json, and the
@@ -13,10 +14,20 @@ module RailsAiContext
   # package.json for importmap and a whole Vue app under frontend/, so every
   # manifest is read and merged, the root one winning a version disagreement.
   # Callers ask what the app depends on, never which directory holds the file.
+  #
+  # The JS workspace root a lockfile sits in, above the app root, is read for
+  # frontend manifests only, with the sensitive-file and symlink rules
+  # applied relative to that directory.
   module PackageJson
     # Where a frontend app lives when it has not been declared through
     # `frontend_paths`. Same list the frontend introspector falls back to.
     FRONTEND_DIRS = %w[app/frontend app/javascript frontend client].freeze
+
+    # In the order a package manager is named when several lockfiles exist.
+    LOCKFILES = {
+      "bun.lock" => "bun", "bun.lockb" => "bun", "pnpm-lock.yaml" => "pnpm",
+      "yarn.lock" => "yarn", "package-lock.json" => "npm"
+    }.freeze
 
     MUTEX = Mutex.new
     CACHE = {}
@@ -28,6 +39,54 @@ module RailsAiContext
       manifest_dirs(root).reduce({}) do |merged, dir|
         merged.merge(read(File.join(dir, "package.json")))
       end
+    end
+
+    # The first lockfile found in the app root, then in each directory outside
+    # it, with that directory's label (nil for the app root).
+    def package_manager(root)
+      root = root.to_s
+      name = LOCKFILES.find { |file, _| File.exist?(File.join(root, file)) }&.last
+      return [ name, nil ] if name
+
+      outside_roots(root).each do |outside|
+        name = LOCKFILES.find { |file, _| outside_file(outside[:dir], file) }&.last
+        return [ name, outside[:label] ] if name
+      end
+      nil
+    end
+
+    def outside_roots(root)
+      [ workspace_root(root) ].compact
+    end
+
+    # The nearest ancestor that holds a lockfile or declares workspaces,
+    # never above the git root, and never outside a git repository: package
+    # managers write one lockfile at the workspace root.
+    def workspace_root(root)
+      real_root = File.realpath(root.to_s)
+      candidates = []
+      dir = real_root
+      until File.exist?(File.join(dir, ".git"))
+        parent = File.dirname(dir)
+        return nil if parent == dir
+
+        dir = parent
+        candidates << dir
+      end
+      found = candidates.find { |candidate| workspace?(candidate) }
+      return nil unless found
+
+      { dir: found, label: Pathname.new(found).relative_path_from(Pathname.new(real_root)).to_s, source: "workspace" }
+    rescue SystemCallError
+      nil
+    end
+
+    # The realpath of a file in a directory outside the app root, or nil when
+    # it is missing, sensitive or a symlink out of that directory. A lockfile
+    # past max_file_size still exists.
+    def outside_file(dir, name)
+      found = SafePath.locate(name, under: dir)
+      found.realpath if found.ok? || found.refusal == :too_large
     end
 
     def present?(root, name)
@@ -51,6 +110,17 @@ module RailsAiContext
       declared.map { |dir| File.join(root, dir.to_s) }
     end
     private_class_method :frontend_dirs
+
+    def workspace?(dir)
+      return true if LOCKFILES.keys.any? { |file| outside_file(dir, file) }
+
+      content, = SafePath.read("package.json", under: dir)
+      data = content && JSON.parse(content)
+      data.is_a?(Hash) && data.key?("workspaces")
+    rescue JSON::ParserError
+      false
+    end
+    private_class_method :workspace?
 
     def contained?(dir, root)
       SafePath.contained?(File.realpath(dir), File.realpath(root))

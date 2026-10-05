@@ -119,7 +119,10 @@ module RailsAiContext
           state_management = data[:state_management]
           state_management = state_management.join(", ") if state_management.is_a?(Array)
           lines << "- **State management:** #{state_management}" if state_management.present?
-          lines << "- **Package manager:** #{data[:package_manager]}" if data[:package_manager]
+          if data[:package_manager]
+            where = " (lockfile in `#{data[:package_manager_dir]}`)" if data[:package_manager_dir]
+            lines << "- **Package manager:** #{data[:package_manager]}#{where}"
+          end
           pipeline_lines = asset_pipeline_lines
           pipeline_lines << "- **CSS framework:** #{css_framework}" if css_framework
           skipped = Array(data[:skipped_frontend_paths])

@@ -442,6 +442,14 @@ RSpec.describe RailsAiContext::Tools::GetFrontendStack do
         expect(described_class.call(detail: "summary").content.first[:text]).to eq("React 19.0.0 + Bootstrap")
       end
 
+      it "names the directory outside the app a workspace lockfile was found in" do
+        allow(described_class).to receive(:cached_context).and_return(
+          frontend_frameworks: no_js_data.merge(package_manager: "yarn", package_manager_dir: ".."), stimulus: {}, gems: { notable_gems: [] }
+        )
+
+        expect(described_class.call(detail: "standard").content.first[:text]).to include("- **Package manager:** yarn (lockfile in `..`)")
+      end
+
       it "says a frontend_paths entry outside the app root was not read" do
         allow(described_class).to receive(:cached_context).and_return(
           frontend_frameworks: no_js_data.merge(skipped_frontend_paths: [ "../web-client" ]), stimulus: {}, gems: { notable_gems: [] }
