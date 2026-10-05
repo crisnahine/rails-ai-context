@@ -4,7 +4,8 @@ module RailsAiContext
   module Tools
     class GetHelperMethods < BaseTool
       tool_name "rails_get_helper_methods"
-      description "Get Rails helper modules: method signatures, framework helpers in use, and which views call each helper. " \
+      description "Get Rails helper modules: method signatures, the view helpers controllers declare with helper_method, " \
+        "framework helpers in use, and which views call each helper. " \
         "Use when: finding available view helpers, checking what helper methods exist, or understanding shared view logic. " \
         "Specify helper:\"ApplicationHelper\" for full detail, or omit to list all helpers with method counts."
 
@@ -225,6 +226,7 @@ module RailsAiContext
 
         sorted = helpers_data.sort_by { |h| -h[:method_count] }
         page = paginate(sorted, offset: offset, limit: limit, default_limit: 50)
+        declared = controller_helper_methods(root)
 
         lines = [ "# Helpers (#{helpers_data.size})", "" ]
 
@@ -233,6 +235,7 @@ module RailsAiContext
           page[:items].each do |h|
             lines << "- **#{h[:name]}** - #{count_phrase(h[:method_count], "method")}"
           end
+          lines << "- **helper_method in controllers** - #{count_phrase(declared.size, "method")}" if declared.any?
           lines << "" << "_Use `helper:\"Name\"` for method signatures._"
 
         when "standard"
@@ -245,6 +248,7 @@ module RailsAiContext
             end
             lines << ""
           end
+          append_declared(lines, declared)
 
         when "full"
           # Include framework helpers detection
@@ -259,6 +263,7 @@ module RailsAiContext
             end
             lines << ""
           end
+          append_declared(lines, declared)
 
           if framework.any?
             lines << "## Framework Helpers Detected"
@@ -274,6 +279,36 @@ module RailsAiContext
 
         lines << "" << page[:hint] unless page[:hint].empty?
         text_response(lines.join("\n"))
+      end
+
+      private_class_method def self.append_declared(lines, declared)
+        return if declared.empty?
+
+        lines << "## Declared in controllers with helper_method (#{declared.size})"
+        declared.each { |d| lines << "- `#{d[:name]}` (#{d[:owner]}, `#{d[:path]}`)" }
+        lines << ""
+      end
+
+      # What `helper_method` in a controller or controller concern hands the views that
+      # controller renders. Only a file that names the macro is parsed.
+      private_class_method def self.controller_helper_methods(real_root)
+        PathResolver.dirs_for(real_root, "app/controllers").flat_map do |dir|
+          real_dir = File.realpath(dir).to_s
+          safe_glob(dir, "**/*.rb", real_root).sort.flat_map do |path|
+            source = RailsAiContext::SafeFile.read(path)
+            next [] unless source&.include?("helper_method")
+
+            calls = Introspectors::SourceIntrospector.walk(path, { calls: -> { Introspectors::Listeners::GenericMacroListener.new(:helper_method) } })[:calls]
+            names = Array(calls).flat_map do |call|
+              Array(call[:args]).map(&:to_s) + Array(call[:values]).grep(String).filter_map { |v| v[/\Adef\s+([\w?!]+)/, 1] }
+            end.uniq
+            relative = path.delete_prefix("#{real_dir}/").delete_prefix("concerns/").delete_suffix(".rb")
+            owner = Introspectors::DeclaredConstant.named(source, relative.camelize)
+            names.map { |name| { name: name, owner: owner, path: path.delete_prefix("#{real_root}/") } }
+          end
+        end
+      rescue => e
+        RailsAiContext.debug_fail(e, [], label: "controller_helper_methods")
       end
 
       private_class_method def self.find_view_references(method_names, real_root)
