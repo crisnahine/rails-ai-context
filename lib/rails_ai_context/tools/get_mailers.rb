@@ -4,7 +4,8 @@ module RailsAiContext
   module Tools
     class GetMailers < BaseTool
       tool_name "rails_get_mailers"
-      description "Get ActionMailer mailers: every mailer class with its delivery actions and delivery method. " \
+      description "Get ActionMailer mailers: every mailer class with its delivery actions and delivery method, " \
+        "and the Action Mailbox mailboxes with the routing that sends inbound mail to each. " \
         "Use when: adding an email, checking which mailer sends what, or finding the action to preview/test. " \
         "Filter with mailer:\"UserMailer\". Omit for all mailers."
 
@@ -29,7 +30,7 @@ module RailsAiContext
         order: 41,
         mcp: "rails_get_mailers(mailer:\"UserMailer\")",
         cli_args: "mailer=UserMailer",
-        summary: "Mailer classes with delivery actions and delivery method"
+        summary: "Mailer classes with delivery actions and delivery method, mailboxes and their routing"
       )
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
@@ -75,12 +76,39 @@ module RailsAiContext
             lines << "_No mailers found#{" matching '#{mailer}'" if mailer}._"
           end
 
+          lines.concat(mailbox_lines(Payload.section(cached_context, :action_mailbox))) if mailer.nil? && page[:offset].zero?
           lines << "" << page[:hint] unless page[:hint].empty?
           text_response(lines.join("\n"))
         end
       end
 
       HEIRS_SHOWN = 12
+
+      private_class_method def self.mailbox_lines(data)
+        routes = Array(data&.dig(:routes))
+        mailboxes = Array(data&.dig(:mailboxes))
+        return [] if routes.empty? && mailboxes.empty?
+
+        lines = [ "", "## Mailboxes (Action Mailbox)" ]
+        if routes.any?
+          defined = mailboxes.map { |m| m[:name] }
+          files = routes.map { |r| r[:file] }.uniq.map { |f| "`#{f}`" }.join(", ")
+          lines << "" << "Routing, first match wins (#{files}):"
+          routes.each_with_index do |r, i|
+            missing = " (not defined in app/mailboxes)" unless defined.include?(r[:mailbox])
+            lines << "#{i + 1}. `#{r[:pattern]}` -> #{r[:mailbox]}#{missing}"
+          end
+        end
+        lines << "" if mailboxes.any?
+        mailboxes.each do |m|
+          callbacks = Array(m[:callbacks]).map { |c| "#{c[:type]} :#{c[:method]}" }
+          line = "- **#{m[:name]}** (`#{m[:file]}`)"
+          line += ": #{callbacks.join(', ')}" if callbacks.any?
+          line += " - no route sends mail here" if routes.any? && Array(m[:routed_from]).empty?
+          lines << line
+        end
+        lines
+      end
 
       private_class_method def self.base_page(base)
         lines = [ "# #{base[:name]}", "",

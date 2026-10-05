@@ -18,6 +18,37 @@ RSpec.describe RailsAiContext::Tools::GetMailers do
     allow(described_class).to receive(:cached_context).and_return({ jobs: jobs_data })
   end
 
+  describe "Action Mailbox mailboxes" do
+    let(:mailbox_data) do
+      {
+        mailboxes: [ { name: "SupportMailbox", file: "app/mailboxes/support_mailbox.rb", routed_from: [ "/^support@/i" ],
+                       callbacks: [ { type: "before_processing", method: "require_user" } ] } ],
+        routes: [
+          { pattern: "/^support@/i", mailbox: "SupportMailbox", file: "app/mailboxes/application_mailbox.rb" },
+          { pattern: ":all", mailbox: "CatchallMailbox", file: "app/mailboxes/application_mailbox.rb" }
+        ]
+      }
+    end
+
+    before do
+      allow(described_class).to receive(:cached_context).and_return({ jobs: jobs_data, action_mailbox: mailbox_data })
+    end
+
+    it "lists the routing in order and each mailbox with its callbacks" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("## Mailboxes (Action Mailbox)")
+      expect(text).to include("Routing, first match wins (`app/mailboxes/application_mailbox.rb`):")
+      expect(text).to include("1. `/^support@/i` -> SupportMailbox")
+      expect(text).to include("2. `:all` -> CatchallMailbox (not defined in app/mailboxes)")
+      expect(text).to include("- **SupportMailbox** (`app/mailboxes/support_mailbox.rb`): before_processing :require_user")
+    end
+
+    it "leaves mailboxes out of a single mailer's answer" do
+      expect(described_class.call(mailer: "UserMailer").content.first[:text]).not_to include("Mailboxes")
+    end
+  end
+
   describe ".call" do
     # A page past the end is not an empty app. "No mailers found." above
     # "No items at offset 9999. Total: 2." contradicts itself, and the first

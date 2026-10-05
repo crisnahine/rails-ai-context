@@ -478,6 +478,10 @@ I18n setup: default/available locales, backend, locale files with key counts, pe
 
 ActionMailer mailers: every mailer class with its delivery actions and delivery method. A mailer that declares no action of its own - one taking them from a gem base or a mixin, or one called through class methods - is listed with where its actions come from rather than left out. A base other mailers inherit from is not one: it leaves the listing, and a line above names the ones left out. Asked for by name, a base answers with what every mailer below it inherits - its layout, helpers, defaults, callbacks and mixins as the app wrote them, the methods it defines - and which mailers inherit it.
 
+The full listing ends with the Action Mailbox mailboxes: the `routing` rules in
+the order Rails tries them, the mailbox each sends to (and whether `app/mailboxes`
+defines it), and each mailbox's processing callbacks.
+
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `mailer` | string | - | One mailer, by exact name |
