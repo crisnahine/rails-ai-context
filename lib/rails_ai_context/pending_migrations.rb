@@ -52,8 +52,8 @@ module RailsAiContext
         base = File.basename(path, ".rb")
         version = base[/\A\d+/] or next
         # The class name, so a static entry names the migration the way the
-        # connection's own pending list does.
-        name = base.sub(/\A\d+_/, "").camelize
+        # connection's own pending list does; Rails drops an engine's ".scope" suffix.
+        name = base.sub(/\A\d+_/, "").split(".", 2).first.to_s.camelize
         { version: version, name: name, path: path }
       end
     end

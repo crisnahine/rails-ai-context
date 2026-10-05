@@ -56,6 +56,11 @@ RSpec.describe RailsAiContext::PendingMigrations do
         .to eq(%w[20240101000000 20240201000000 20240301000000])
     end
 
+    it "names a scoped engine migration without its scope suffix" do
+      File.write(File.join(@migrate, "20240104000000_create_active_storage_tables.active_storage.rb"), "")
+      expect(described_class.migration_files(@migrate).map { |m| m[:name] }).to include("CreateActiveStorageTables")
+    end
+
     it "carries the path of each file it counted" do
       expect(described_class.migration_files(@migrate).map { |m| File.basename(m[:path]) })
         .to include("20240201000000_add_index.rb")
