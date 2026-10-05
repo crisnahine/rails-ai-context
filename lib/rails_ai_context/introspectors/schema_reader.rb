@@ -24,24 +24,23 @@ module RailsAiContext
       def self.for(root)
         root = root.to_s
 
-        schema_rb = File.join(root, "db", "schema.rb")
-        if File.exist?(schema_rb)
-          reader = new(schema_rb, pk_type: SchemaConventions.implicit_pk_type(root, schema_rb))
-          return reader.with_source(:schema_rb) if reader.tables.any?
-        end
+        candidates = SchemaDumpPath.candidates(root)
+        candidates.each do |format, path|
+          next unless File.exist?(path)
 
-        structure = File.join(root, "db", "structure.sql")
-        if File.exist?(structure)
-          content = RailsAiContext::SafeFile.read(structure, max_size: RailsAiContext.configuration.max_schema_file_size)
-          if content
-            parsed = StructureSqlReader.parse(content)
-            return from_tables(parsed[:tables], source: :structure_sql, path: structure) if parsed[:tables].any?
+          if format == :ruby
+            reader = new(path, pk_type: SchemaConventions.implicit_pk_type(root, path))
+            return reader.with_source(:schema_rb) if reader.tables.any?
+          else
+            content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
+            parsed = content && StructureSqlReader.parse(content)
+            return from_tables(parsed[:tables], source: :structure_sql, path: path) if parsed && parsed[:tables].any?
           end
         end
 
         migrate_dirs = MigrationReplay.migration_dirs(root)
         if MigrationReplay.migration_files(migrate_dirs).any?
-          pk_type = SchemaConventions.implicit_pk_type(root, schema_rb)
+          pk_type = SchemaConventions.implicit_pk_type(root, candidates.first.last)
           return from_tables(MigrationReplay.tables(migrate_dirs, pk_type: pk_type, root: root),
                              source: :migrations, path: migrate_dirs.first)
         end

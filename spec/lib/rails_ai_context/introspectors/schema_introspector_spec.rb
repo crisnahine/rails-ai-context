@@ -1586,4 +1586,70 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       connection.drop_table(:pa_v_users, if_exists: true)
     end
   end
+
+  describe "the dump file the app configures" do
+    def static_with(files)
+      Dir.mktmpdir do |dir|
+        files.each do |path, content|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+          File.write(File.join(dir, path), content)
+        end
+        yield described_class.new(RailsAiContext::StaticApp.new(dir)).static_call, dir
+      end
+    end
+
+    let(:one_table_rb) do
+      ->(name) { "ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do\n  create_table \"#{name}\" do |t|\n    t.string \"x\"\n  end\nend\n" }
+    end
+    let(:migration) { { "db/migrate/20260101000000_create_notes.rb" => "class CreateNotes < ActiveRecord::Migration[8.1]\n  def change\n    create_table :notes\n  end\nend\n" } }
+
+    it "reads the file database.yml names with schema_dump" do
+      files = { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  database: storage/development.sqlite3\n  schema_dump: schema_sqlite.rb\n",
+                "db/schema_sqlite.rb" => one_table_rb.call("widgets") }.merge(migration)
+      static_with(files) do |result, dir|
+        expect(result[:tables].keys).to eq(%w[widgets])
+        expect(result[:note]).to start_with("Parsed from db/schema_sqlite.rb")
+        expect(RailsAiContext::Introspectors::SchemaReader.for(dir).tables.keys).to eq(%w[widgets])
+      end
+    end
+
+    it "reads structure.sql first when the app sets schema_format = :sql" do
+      files = { "config/application.rb" => "module App\n  class Application < Rails::Application\n    # config.active_record.schema_format = :ruby\n    config.active_record.schema_format = :sql\n  end\nend\n",
+                "db/schema.rb" => one_table_rb.call("stale_things"),
+                "db/structure.sql" => "CREATE TABLE \"fresh_things\" (\"id\" integer PRIMARY KEY);\n" }
+      static_with(files) do |result, dir|
+        expect(result[:tables].keys).to eq(%w[fresh_things])
+        expect(RailsAiContext::Introspectors::SchemaReader.for(dir).source).to eq(:structure_sql)
+      end
+    end
+
+    it "takes the format database.yml gives the database over the app's" do
+      files = { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  primary:\n    adapter: sqlite3\n    schema_format: sql\n    schema_dump: primary.sql\n",
+                "db/schema.rb" => one_table_rb.call("stale_things"),
+                "db/primary.sql" => "CREATE TABLE \"fresh_things\" (\"id\" integer PRIMARY KEY);\n" }
+      static_with(files) { |result, _| expect(result[:tables].keys).to eq(%w[fresh_things]) }
+    end
+
+    it "names no configured file when schema_dump is false, and an environment file's format wins" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config/environments"))
+        File.write(File.join(dir, "config/database.yml"), "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  schema_dump: false\n")
+        File.write(File.join(dir, "config/application.rb"), "config.active_record.schema_format = :ruby\n")
+        File.write(File.join(dir, "config/environments/#{RailsAiContext.environment_name}.rb"), "config.active_record.schema_format = :sql\n")
+
+        expect(RailsAiContext::Introspectors::SchemaDumpPath.candidates(dir))
+          .to eq([ [ :sql, File.join(dir, "db/structure.sql") ], [ :ruby, File.join(dir, "db/schema.rb") ] ])
+      end
+    end
+
+    it "falls back to the usual files when the configured name is unusable" do
+      files = { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  schema_dump: ../../outside.rb\n  bad: [\n",
+                "db/schema.rb" => one_table_rb.call("things") }
+      static_with(files) { |result, _| expect(result[:tables].keys).to eq(%w[things]) }
+
+      files = { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  schema_dump: ../../outside.rb\n",
+                "db/schema.rb" => one_table_rb.call("things") }
+      static_with(files) { |result, _| expect(result[:tables].keys).to eq(%w[things]) }
+    end
+  end
 end

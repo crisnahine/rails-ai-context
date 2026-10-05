@@ -292,7 +292,7 @@ module RailsAiContext
       # full parse on every booted call, and a missing note is better than a
       # slow one.
       def declared_table_names
-        return nil unless File.exist?(schema_file_path)
+        return nil unless schema_file_path && File.exist?(schema_file_path)
 
         names = schema_reader.tables.keys.map(&:to_s)
         names.any? ? names : nil
@@ -317,12 +317,18 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, nil, label: "schema_version_for")
       end
 
-      def schema_file_path
-        File.join(app.root, "db", "schema.rb")
+      def dump_candidates
+        @dump_candidates ||= SchemaDumpPath.candidates(app.root)
       end
 
-      def structure_file_path
-        File.join(app.root, "db", "structure.sql")
+      # The schema.rb dump Rails loads for this app, or nil when it loads structure.sql or nothing.
+      def schema_file_path
+        format, path = dump_candidates.first
+        path if format == :ruby
+      end
+
+      def relative_dump_path(path)
+        path.delete_prefix("#{app.root.to_s.chomp('/')}/")
       end
 
       def migrations_dir
@@ -339,11 +345,9 @@ module RailsAiContext
         @migration_files ||= MigrationReplay.migration_files(migrations_dirs)
       end
 
-      # Fallback: parse schema file as text when DB isn't connected.
-      # Tries db/schema.rb first, then db/structure.sql, then migrations.
-      # This enables introspection in CI, Claude Code, etc.
+      # Fallback when no database answers: the dump file, then the migrations.
       # Every key the booted answer carries, answered from the files, and
-      # meaning the same thing: `declared_tables` is what db/schema.rb
+      # meaning the same thing: `declared_tables` is what the schema.rb dump
       # declares, nil for an app whose tables come from structure.sql or the
       # migrations.
       def static_schema_parse
@@ -353,35 +357,27 @@ module RailsAiContext
         result.merge(declared_tables: declared_table_names)
       end
 
+      # The configured dump first (database.yml's schema_dump, schema_format), then the default files.
       def static_schema_sources
-        schema_rb_exists = File.exist?(schema_file_path)
-
-        if schema_rb_exists
-          result = parse_schema_rb(schema_file_path)
-          return result if result[:total_tables].to_i > 0
-        end
-
-        if File.exist?(structure_file_path)
-          result = parse_structure_sql(structure_file_path)
+        present = dump_candidates.select { |_, path| File.exist?(path) }
+        present.each do |format, path|
+          result = format == :ruby ? parse_schema_rb(path) : parse_structure_sql(path)
           return result if result[:total_tables].to_i > 0
         end
 
         return parse_migrations if migration_files.any?
 
-        # schema.rb exists but has no tables - happens on fresh Rails apps right
-        # after `db:create` where no migrations have been run yet. Return a
-        # legitimate empty-schema state instead of a misleading "not found" error.
-        if schema_rb_exists
+        # An empty schema.rb is a fresh app right after `db:create`, not a missing source.
+        format, path = present.first
+        if format == :ruby
           return {
             total_tables: 0,
             tables: {},
             note: "Schema file exists but is empty - no migrations have been run yet. " \
-                  "Run `bin/rails db:migrate` after generating migrations to populate schema.rb."
+                  "Run `bin/rails db:migrate` after generating migrations to populate #{relative_dump_path(path)}."
           }
-        end
-
-        if File.exist?(structure_file_path)
-          return { total_tables: 0, tables: {}, note: "db/structure.sql has no CREATE TABLE statement this reader could read." }
+        elsif format == :sql
+          return { total_tables: 0, tables: {}, note: "#{relative_dump_path(path)} has no CREATE TABLE statement this reader could read." }
         end
 
         if RailsAiContext::AppKind.mongoid?(app.root)
@@ -400,7 +396,10 @@ module RailsAiContext
       # key so single-database consumers are unaffected.
       def secondary_database_dumps
         dumps = {}
+        primary = dump_candidates.map(&:last)
         Dir.glob(File.join(app.root.to_s, "db", "*_schema.rb")).sort.each do |path|
+          next if primary.include?(path)
+
           name = File.basename(path, ".rb").sub(/_schema\z/, "")
           parsed = parse_schema_rb(path)
           next unless parsed[:total_tables].to_i.positive?
@@ -410,7 +409,7 @@ module RailsAiContext
         end
         Dir.glob(File.join(app.root.to_s, "db", "*_structure.sql")).sort.each do |path|
           name = File.basename(path, ".sql").sub(/_structure\z/, "")
-          next if dumps.key?(name)
+          next if dumps.key?(name) || primary.include?(path)
 
           parsed = parse_structure_sql(path)
           next unless parsed[:total_tables].to_i.positive?
@@ -518,7 +517,7 @@ module RailsAiContext
           check_constraints: SchemaConventions.check_constraints_of(tables),
           enum_types: schema.enums,
           generated_columns: SchemaConventions.generated_columns_of(tables),
-          note: "Parsed from db/schema.rb (#{connection_state})"
+          note: "Parsed from #{relative_dump_path(path)} (#{connection_state})"
         }
         result[:extensions] = schema.extensions if schema.extensions.any?
         # schema.rb records only the max applied version, so pending here
@@ -552,7 +551,7 @@ module RailsAiContext
           check_constraints: SchemaConventions.check_constraints_of(tables),
           enum_types: parsed[:enums],
           generated_columns: SchemaConventions.generated_columns_of(tables),
-          note: "Parsed from db/structure.sql (#{connection_state})"
+          note: "Parsed from #{relative_dump_path(path)} (#{connection_state})"
         }
         if applied.any?
           result[:schema_version] = applied.map(&:to_i).max.to_s
@@ -585,7 +584,7 @@ module RailsAiContext
       # rename_table, drop_table, change_column, add_index, add_reference,
       # add_foreign_key, add_timestamps.
       def parse_migrations
-        pk_type = SchemaConventions.implicit_pk_type(app.root.to_s, schema_file_path)
+        pk_type = SchemaConventions.implicit_pk_type(app.root.to_s, dump_candidates.first.last)
         replayed = MigrationReplay.replayed(migrations_dirs, pk_type: pk_type, root: app.root.to_s)
         tables = replayed.tables
         tables.each_value { |table| SchemaConventions.mark_primary_key(table) }

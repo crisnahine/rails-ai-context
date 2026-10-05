@@ -363,7 +363,7 @@ module RailsAiContext
 
       private_class_method def self.static_source_lines(schema)
         lines = note_lines(schema)
-        lines << "**Dialect:** #{schema[:dialect]} (db/structure.sql)" if schema[:dialect] && schema[:dialect] != "unknown"
+        lines << "**Dialect:** #{schema[:dialect]}" if schema[:dialect] && schema[:dialect] != "unknown"
         lines << "**Schema version:** #{schema[:schema_version]}" if schema[:schema_version]
         # The header pairs a live table count with the version stamp read off
         # db/schema.rb, and nothing joined the two: at that migration the app

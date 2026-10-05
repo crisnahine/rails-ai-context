@@ -97,14 +97,14 @@ module RailsAiContext
     # ── Existence checks ──────────────────────────────────────────────
 
     def check_schema
-      schema_path = File.join(app.root, "db/schema.rb")
-      structure_path = File.join(app.root, "db/structure.sql")
-      if File.exist?(schema_path)
-        lines = File.readlines(schema_path).size
-        Check.new(name: "Schema", status: :pass, message: "db/schema.rb found (#{count_phrase(lines, "line")})", fix: nil)
-      elsif File.exist?(structure_path)
-        size = (File.size(structure_path) / 1024.0).round(1)
-        Check.new(name: "Schema", status: :pass, message: "db/structure.sql found (#{size}KB)", fix: nil)
+      format, path = RailsAiContext::Introspectors::SchemaDumpPath.present(app.root)
+      shown = path.to_s.delete_prefix("#{app.root.to_s.chomp('/')}/")
+      if format == :ruby
+        lines = File.readlines(path).size
+        Check.new(name: "Schema", status: :pass, message: "#{shown} found (#{count_phrase(lines, "line")})", fix: nil)
+      elsif format == :sql
+        size = (File.size(path) / 1024.0).round(1)
+        Check.new(name: "Schema", status: :pass, message: "#{shown} found (#{size}KB)", fix: nil)
       else
         Check.new(name: "Schema", status: :warn, message: "No schema file found", fix: "Run `rails db:schema:dump`")
       end
@@ -658,10 +658,7 @@ module RailsAiContext
 
     def check_performance_schema_size
       config = RailsAiContext.configuration
-      schema_path = File.join(app.root, "db/schema.rb")
-      structure_path = File.join(app.root, "db/structure.sql")
-
-      path = File.exist?(schema_path) ? schema_path : (File.exist?(structure_path) ? structure_path : nil)
+      _, path = RailsAiContext::Introspectors::SchemaDumpPath.present(app.root)
       return nil unless path
 
       size = File.size(path)
