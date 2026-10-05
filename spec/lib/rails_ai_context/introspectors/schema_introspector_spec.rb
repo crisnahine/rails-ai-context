@@ -1277,14 +1277,65 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       booted = introspector.call[:tables]["pa_d_items"]
       booted = booted.merge(columns: booted[:columns].map { |c| c[:null] ? c.except(:null) : c })
       static = static_tables(dump.string)[:tables]["pa_d_items"]
-      static = static.merge(columns: static[:columns].map { |c| c.except(:primary_key) })
 
-      %i[columns indexes foreign_keys].each do |key|
+      %i[columns indexes foreign_keys primary_key].each do |key|
         expect(booted[key]).to eq(static[key]), "#{key}: booted #{booted[key].inspect}, static #{static[key].inspect}"
       end
     ensure
       connection.drop_table(:pa_d_items, if_exists: true)
       connection.drop_table(:pa_d_owners, if_exists: true)
+    end
+  end
+
+  describe "the primary key" do
+    def static_parse_of(schema)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "schema.rb"), schema)
+        described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:tables]
+      end
+    end
+
+    let(:tables) do
+      static_parse_of(<<~RUBY)
+        ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+          create_table "orders", primary_key: ["shop_id", "id"], force: :cascade do |t|
+            t.integer "shop_id", null: false
+            t.integer "id", null: false
+            t.string "number"
+          end
+          create_table "legacy_widgets", primary_key: "widget_code", id: :string, force: :cascade do |t|
+            t.string "label"
+          end
+          create_table "posts", force: :cascade do |t|
+            t.string "title"
+          end
+          create_table "tags_posts", id: false, force: :cascade do |t|
+            t.integer "tag_id"
+          end
+        end
+      RUBY
+    end
+
+    it "names the key on the table and flags its columns, for the implicit id too" do
+      expect(tables.transform_values { |t| t[:primary_key] }).to eq(
+        "orders" => %w[shop_id id], "legacy_widgets" => "widget_code", "posts" => "id", "tags_posts" => nil
+      )
+      expect(tables["orders"][:columns].select { |c| c[:primary_key] }.map { |c| c[:name] }).to eq(%w[shop_id id])
+      expect(tables["tags_posts"][:columns].none? { |c| c[:primary_key] }).to be(true)
+    end
+
+    it "reads SQLite's inline key from structure.sql" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "structure.sql"), <<~SQL)
+          CREATE TABLE "accounts" ("id" integer PRIMARY KEY AUTOINCREMENT NOT NULL, "name" varchar NOT NULL);
+        SQL
+        accounts = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:tables]["accounts"]
+
+        expect(accounts[:primary_key]).to eq("id")
+        expect(accounts[:columns].first).to include(name: "id", primary_key: true)
+      end
     end
   end
 end

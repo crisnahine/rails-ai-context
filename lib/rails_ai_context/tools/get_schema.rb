@@ -221,7 +221,8 @@ module RailsAiContext
               else
                 ""
               end
-              lines << "### #{name}#{model_info}"
+              key = data[:primary_key] && data[:primary_key] != "id" ? " (primary key: #{RailsAiContext::Introspectors::SchemaConventions.primary_key_label(data[:primary_key])})" : ""
+              lines << "### #{name}#{key}#{model_info}"
               lines << cols
               lines << ""
             end
@@ -481,6 +482,7 @@ module RailsAiContext
         model_refs = models_for_table(name, models)
         lines = [ "## Table: #{name}", "" ]
         lines << "**Models:** #{model_refs.join(', ')}" if model_refs.any?
+        lines << "**Primary key:** #{RailsAiContext::Introspectors::SchemaConventions.primary_key_label(data[:primary_key])}" if data[:primary_key]
         lines << "**Comment:** #{data[:comment]}" if data[:comment]
         # A table right after a paragraph line would read as part of it.
         lines << "" if lines.size > 2

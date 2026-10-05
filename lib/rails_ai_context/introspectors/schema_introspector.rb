@@ -95,6 +95,7 @@ module RailsAiContext
             comment: table_comment(table),
             unique_constraints: unique_constraints(table)
           }.compact
+          SchemaConventions.mark_primary_key(hash[table])
         end
       end
 
@@ -422,6 +423,7 @@ module RailsAiContext
           }.compact
           key = declared.dig(:options, :primary_key)
           tables[table_name][:primary_key] = SchemaConventions.primary_key_value(key) if key
+          SchemaConventions.mark_primary_key(tables[table_name])
         end
 
         schema.foreign_keys.each do |fk|
@@ -464,6 +466,7 @@ module RailsAiContext
         parsed = StructureSqlReader.parse(content)
         dialect = parsed[:dialect]
         tables = parsed[:tables]
+        tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
 
         applied = RailsAiContext::SchemaVersion.applied_versions(content)
 
@@ -521,6 +524,7 @@ module RailsAiContext
         pk_type = SchemaConventions.implicit_pk_type(app.root.to_s, schema_file_path)
         replayed = MigrationReplay.replayed(migrations_dirs, pk_type: pk_type, root: app.root.to_s)
         tables = replayed.tables
+        tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
 
         {
           adapter: "static_parse",

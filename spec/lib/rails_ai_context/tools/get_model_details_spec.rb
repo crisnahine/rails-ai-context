@@ -115,6 +115,25 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  # A composite key reads as plain columns unless it is named; Order.find(1) is wrong for one.
+  describe "the primary key" do
+    it "names the table's key, composite or custom" do
+      allow(described_class).to receive(:cached_context).and_return({
+        models: { "Order" => { table_name: "orders" } },
+        schema: { tables: { "orders" => {
+          primary_key: %w[shop_id id],
+          columns: [ { name: "shop_id", type: "integer", primary_key: true }, { name: "id", type: "integer", primary_key: true },
+                     { name: "number", type: "string" } ]
+        } } }
+      })
+
+      text = described_class.call(model: "Order").content.first[:text]
+
+      expect(text).to include("**Primary key:** `shop_id, id`")
+      expect(text).to include("- **shop_id** | integer | primary key")
+    end
+  end
+
   describe ".call with specific model" do
     it "returns full detail including associations section" do
       result = described_class.call(model: "User")

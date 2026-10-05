@@ -132,6 +132,36 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     end
   end
 
+  describe "the primary key" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "sqlite3", total_tables: 2, tables: {
+          "orders" => { primary_key: %w[shop_id id], indexes: [], foreign_keys: [], columns: [
+            { name: "shop_id", type: "integer", null: false, primary_key: true },
+            { name: "id", type: "integer", null: false, primary_key: true },
+            { name: "number", type: "string" }
+          ] },
+          "legacy_widgets" => { primary_key: "widget_code", indexes: [], foreign_keys: [], columns: [
+            { name: "widget_code", type: "string", null: false, primary_key: true }, { name: "label", type: "string" }
+          ] }
+        } },
+        models: {}
+      })
+    end
+
+    it "names a composite or custom key in the table view" do
+      expect(described_class.call(table: "orders").content.first[:text]).to include("**Primary key:** shop_id, id")
+      expect(described_class.call(table: "legacy_widgets").content.first[:text]).to include("**Primary key:** widget_code")
+    end
+
+    it "names a key other than id in the listing" do
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("### orders (primary key: shop_id, id)")
+      expect(text).to include("### legacy_widgets (primary key: widget_code)")
+    end
+  end
+
   describe "column hints for a composite unique index" do
     before do
       allow(described_class).to receive(:cached_context).and_return({

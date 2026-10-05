@@ -212,6 +212,16 @@ module RailsAiContext
         names.size > 1 ? names : names.first
       end
 
+      # The key on the table and a flag on each of its columns, from whichever
+      # side the source gave; a table with no key keeps neither.
+      def mark_primary_key(table)
+        table[:primary_key] ||= primary_key_value(Array(table[:columns]).select { |c| c[:primary_key] }.map { |c| c[:name] })
+        keys = Array(table[:primary_key]).map(&:to_s)
+        Array(table[:columns]).each { |column| column[:primary_key] = true if keys.include?(column[:name].to_s) }
+        table.delete(:primary_key) if table[:primary_key].nil?
+        table
+      end
+
       # How a primary key reads to a person: `id`, or `tag_id, account_id`.
       def primary_key_label(key)
         Array(key || "id").join(", ")

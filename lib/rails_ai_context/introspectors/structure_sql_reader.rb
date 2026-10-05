@@ -300,6 +300,7 @@ module RailsAiContext
             default = sql_default(rest, type, col_type)
             column[:default] = default unless default.nil?
             column[:array] = true if col_type.end_with?("[]")
+            column[:primary_key] = true if rest.match?(/\bPRIMARY\s+KEY\b/i)
             column.merge!(type_detail(col_type, type, dialect))
             collation = rest[/\bCOLLATE\s+(?:pg_catalog\.)?"?([\w.-]+)"?/i, 1]
             column[:collation] = collation if collation

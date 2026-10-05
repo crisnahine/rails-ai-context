@@ -166,10 +166,14 @@ module RailsAiContext
           if schema && schema[:tables]&.key?(data[:table_name])
             table_data = schema[:tables][data[:table_name]]
             cols = table_data[:columns] || []
+            if table_data[:primary_key]
+              lines << "**Primary key:** `#{Introspectors::SchemaConventions.primary_key_label(table_data[:primary_key])}`"
+            end
             if cols.any?
               lines << "" << "## Columns"
               cols.each do |c|
                 parts = [ "**#{c[:name]}**", c[:type] ]
+                parts << "primary key" if c[:primary_key]
                 parts << "NOT NULL" if c[:null] == false
                 parts << "default: #{c[:default]}" if c[:default] && !c[:default].to_s.empty?
                 parts << "array" if c[:array]
