@@ -28,9 +28,9 @@ RSpec.describe RailsAiContext::Introspectors::RakeTaskIntrospector do
       expect(run_task[:description]).to eq("Run the example task")
     end
 
-    it "extracts file path relative to lib/tasks" do
+    it "names the file from the app root" do
       run_task = result[:tasks].find { |t| t[:name] == "example:run" }
-      expect(run_task[:file]).to eq("example.rake")
+      expect(run_task[:file]).to eq("lib/tasks/example.rake")
     end
 
     # From complex.rake
@@ -137,7 +137,7 @@ RSpec.describe RailsAiContext::Introspectors::RakeTaskIntrospector do
       ])
       expect(tasks.find { |t| t[:name] == "alpha:after" }[:description]).to eq("Should be alpha:after")
       expect(tasks.find { |t| t[:name] == "parallel" }[:dependencies]).to eq(%w[alpha:after legacy_rocket])
-      expect(tasks.map { |t| t[:file] }.uniq).to eq(%w[Rakefile leak.rake rakelib/extra.rake])
+      expect(tasks.map { |t| t[:file] }.uniq).to eq(%w[Rakefile lib/tasks/leak.rake rakelib/extra.rake])
     end
   end
 end

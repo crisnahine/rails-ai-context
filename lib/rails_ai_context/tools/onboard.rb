@@ -5,7 +5,7 @@ module RailsAiContext
     class Onboard < BaseTool
       tool_name "rails_onboard"
       description "Get a narrative walkthrough of the Rails application - stack, data model, authentication, key flows, " \
-        "background jobs, frontend, testing, and getting started instructions. " \
+        "background jobs, frontend, testing, getting started instructions, and the app's custom rake tasks. " \
         "Use when: first encountering a project, onboarding a new developer, or orienting an AI agent. " \
         "Key params: detail (quick/standard/full)."
 
@@ -28,10 +28,10 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
-      STANDARD_SECTIONS = %i[stack data_model auth key_flows jobs frontend testing getting_started].freeze
+      STANDARD_SECTIONS = %i[stack data_model auth key_flows jobs frontend testing getting_started rake_tasks].freeze
       FULL_SECTIONS = %i[
         stack data_model auth key_flows jobs frontend payments realtime storage api devops i18n engines env
-        testing getting_started
+        testing getting_started all_rake_tasks
       ].freeze
 
       def self.call(detail: "standard", server_context: nil)
@@ -413,6 +413,32 @@ module RailsAiContext
             "#{test_cmd}  # verify everything works",
             "```", ""
           ].compact
+        end
+
+        RAKE_TASKS_SHOWN = 15
+
+        def section_rake_tasks(ctx, limit: RAKE_TASKS_SHOWN)
+          tasks = Payload.list(ctx, :rake_tasks, :tasks)
+          return [] if tasks.empty?
+
+          limit ||= tasks.size
+          lines = [ "## Rake Tasks", "" ]
+          tasks.first(limit).each { |task| lines << rake_task_line(task) }
+          lines << "...#{tasks.size - limit} more: `detail:\"full\"` lists every task." if tasks.size > limit
+          lines << ""
+        end
+
+        def section_all_rake_tasks(ctx)
+          section_rake_tasks(ctx, limit: nil)
+        end
+
+        def rake_task_line(task)
+          return "- `#{task[:file]}`: not read (#{task[:error]})" if task[:error]
+
+          args = Array(task[:args])
+          line = "- `#{task[:name]}#{"[#{args.join(',')}]" if args.any?}`"
+          line += " - #{task[:description]}" if task[:description]
+          line + " (`#{task[:file]}`)"
         end
 
         # ── Full-only sections ───────────────────────────────────────────

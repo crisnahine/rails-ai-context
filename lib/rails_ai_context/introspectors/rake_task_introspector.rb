@@ -10,23 +10,21 @@ module RailsAiContext
       # The names Rake looks for, Rakefile first so a case-insensitive disk prints it as written.
       RAKEFILES = %w[Rakefile rakefile Rakefile.rb rakefile.rb].freeze
 
-      # lib/tasks paths stay relative to lib/tasks; the Rakefile and rakelib are named from the root.
       def call
-        tasks_dir = File.join(root, "lib/tasks")
         rakefile = RAKEFILES.map { |name| File.join(root, name) }.find { |path| File.file?(path) }
-        sources = [ ([ rakefile, root ] if rakefile) ]
-        sources += Dir.glob(File.join(tasks_dir, "**/*.rake")).sort.map { |path| [ path, tasks_dir ] }
+        sources = [ rakefile ].compact
+        sources += Dir.glob(File.join(root, "lib/tasks", "**/*.rake")).sort
         # Rake imports rakelib/*.rake, one level only.
-        sources += Dir.glob(File.join(root, "rakelib", "*.rake")).sort.map { |path| [ path, root ] }
+        sources += Dir.glob(File.join(root, "rakelib", "*.rake")).sort
 
-        { tasks: sources.compact.flat_map { |path, base| parse_rake_file(path, base) } }
+        { tasks: sources.flat_map { |path| parse_rake_file(path) } }
       end
 
       private
 
-      def parse_rake_file(path, base_dir)
-        relative = path.sub("#{base_dir}/", "")
-        content, located = RailsAiContext::SafePath.read(path.delete_prefix("#{root}/"), under: root)
+      def parse_rake_file(path)
+        relative = path.delete_prefix("#{root}/")
+        content, located = RailsAiContext::SafePath.read(relative, under: root)
         return [] if %i[outside sensitive traversal].include?(located.refusal)
         return [ { file: relative, error: "unreadable" } ] unless content
 
@@ -56,7 +54,7 @@ module RailsAiContext
 
         tasks
       rescue => e
-        [ { file: path.sub("#{base_dir}/", ""), error: e.message } ]
+        [ { file: relative, error: e.message } ]
       end
     end
   end

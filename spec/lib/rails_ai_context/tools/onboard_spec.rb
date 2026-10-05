@@ -78,6 +78,44 @@ RSpec.describe RailsAiContext::Tools::Onboard do
     end
   end
 
+  describe "the app's custom rake tasks" do
+    def onboard(detail, tasks)
+      Dir.mktmpdir do |dir|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+        allow(described_class).to receive(:cached_context).and_return({ app_name: "App", models: {}, rake_tasks: { tasks: tasks } })
+        described_class.call(detail: detail).content.first[:text]
+      end
+    end
+
+    it "lists each task with its arguments, description and file" do
+      tasks = [ { name: "ops:backfill", description: "Backfill totals", file: "lib/tasks/ops.rake", args: [ "batch" ] } ]
+
+      %w[standard full].each do |detail|
+        text = onboard(detail, tasks)
+        expect(text).to include("## Rake Tasks")
+        expect(text).to include("- `ops:backfill[batch]` - Backfill totals (`lib/tasks/ops.rake`)")
+      end
+    end
+
+    it "caps the standard walkthrough and lists every task in full" do
+      tasks = Array.new(30) { |i| { name: "ops:t#{i}", file: "lib/tasks/ops.rake" } }
+
+      expect(onboard("standard", tasks)).to include("`ops:t14`").and include("...15 more: `detail:\"full\"` lists every task.")
+      expect(onboard("standard", tasks)).not_to include("`ops:t15`")
+      expect(onboard("full", tasks)).to include("`ops:t29`")
+    end
+
+    it "names a task file it could not read" do
+      text = onboard("full", [ { file: "lib/tasks/bad.rake", error: "unreadable" } ])
+
+      expect(text).to include("- `lib/tasks/bad.rake`: not read (unreadable)")
+    end
+
+    it "leaves the section out when the app defines no task" do
+      expect(onboard("standard", [])).not_to include("## Rake Tasks")
+    end
+  end
+
   describe "the auth section" do
     def onboard_with(ctx)
       allow(described_class).to receive(:cached_context).and_return({ app_name: "App", models: {} }.merge(ctx))
@@ -611,14 +649,14 @@ RSpec.describe RailsAiContext::Tools::Onboard do
 
     it "renders the standard walkthrough in STANDARD_SECTIONS order" do
       expect(headings("standard")).to eq(
-        [ "Stack", "Data Model", "Key Flows", "Background Jobs & Async", "Frontend", "Testing", "Getting Started" ]
+        [ "Stack", "Data Model", "Key Flows", "Background Jobs & Async", "Frontend", "Testing", "Getting Started", "Rake Tasks" ]
       )
     end
 
     it "renders the full walkthrough in FULL_SECTIONS order" do
       expect(headings("full")).to eq(
         [ "Stack", "Data Model", "Key Flows", "Background Jobs & Async", "Frontend", "Real-Time Features",
-          "API", "Deployment & DevOps", "Testing", "Getting Started" ]
+          "API", "Deployment & DevOps", "Testing", "Getting Started", "Rake Tasks" ]
       )
     end
   end
