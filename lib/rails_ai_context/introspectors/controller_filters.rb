@@ -191,14 +191,22 @@ module RailsAiContext
 
       # [constant, source, realpath] of the app controller base the name resolves to, as Ruby looks it up.
       def base_source(root, name, scope)
-        prefix = "#{root.to_s.chomp("/")}/"
-        dirs = PathResolver.controller_dirs(root.to_s).select { |dir| dir.start_with?(prefix) }
         ConcernPaths.candidate_names(name, scope).each do |candidate|
-          dirs.each do |dir|
-            relative = File.join(dir.delete_prefix(prefix), "#{candidate.underscore}.rb")
-            source, resolution = SafePath.read(relative, under: root.to_s)
-            return [ candidate, source, resolution.realpath ] if source
-          end
+          found = RunCache.fetch([ :controller_base_source, root.to_s, candidate ]) { read_base_source(root, candidate) }
+          return found if found
+        end
+        nil
+      end
+
+      # Sibling controllers ask for the same candidates, mostly files that do not exist.
+      def read_base_source(root, candidate)
+        prefix = "#{root.to_s.chomp("/")}/"
+        PathResolver.controller_dirs(root.to_s).each do |dir|
+          next unless dir.start_with?(prefix)
+
+          relative = File.join(dir.delete_prefix(prefix), "#{candidate.underscore}.rb")
+          source, resolution = SafePath.read(relative, under: root.to_s)
+          return [ candidate, source, resolution.realpath ] if source
         end
         nil
       end
@@ -303,7 +311,7 @@ module RailsAiContext
       end
 
       private_class_method :walk, :class_level, :singleton_expansions, :declares_filters?, :base_expansions,
-                           :superclass_of, :base_source, :body_call?, :record, :positional_names, :constraints, :condition_text, :normalize, :action_condition, :lambda_body
+                           :superclass_of, :base_source, :read_base_source, :body_call?, :record, :positional_names, :constraints, :condition_text, :normalize, :action_condition, :lambda_body
     end
   end
 end
