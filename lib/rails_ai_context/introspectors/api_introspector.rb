@@ -280,7 +280,7 @@ module RailsAiContext
       # The key sits at the top, so a bounded head decides it: a spec over the
       # per-file read limit is still listed, and no file is read whole for one key.
       def openapi_document?(relative)
-        resolution = SafePath.locate(relative, under: root.to_s, max_size: Float::INFINITY)
+        resolution = SafePath.locate(relative, under: root.to_s, max_size: Float::INFINITY, listed: true)
         return false unless resolution.ok?
 
         head = File.read(resolution.realpath, OPENAPI_HEAD).to_s.force_encoding(Encoding::UTF_8).scrub("?")
