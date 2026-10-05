@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
+require "fileutils"
 
 RSpec.describe RailsAiContext::PortablePath do
   let(:gem_root) { File.join(Gem.path.first, "gems") }
@@ -50,6 +52,26 @@ RSpec.describe RailsAiContext::PortablePath do
 
   # The marker existed with a writer and no reader, so every consumer joined a
   # gem-owned path to the app root and opened nothing.
+  describe "a file of the gem the app sits inside" do
+    it "is the app's own source, relative to the root whichever spelling either path uses" do
+      Dir.mktmpdir do |dir|
+        engine = File.join(File.realpath(dir), "engine")
+        FileUtils.mkdir_p([ File.join(engine, "app/models"), File.join(engine, "test/dummy") ])
+        File.write(File.join(engine, "app/models/widget.rb"), "")
+        link = File.join(File.realpath(dir), "link")
+        File.symlink(engine, link)
+        spec = double("Gem::Specification", full_gem_path: link, full_name: "engine-0.1.0", default_gem?: false)
+        allow(Gem).to receive(:loaded_specs).and_return("engine" => spec)
+        root = File.join(link, "test/dummy")
+
+        expect(described_class.relativize_marked(File.join(engine, "app/models/widget.rb"), root)).to eq("../../app/models/widget.rb")
+        expect(described_class.relativize_marked(File.join(link, "app/models/widget.rb"), root)).to eq("../../app/models/widget.rb")
+        expect(described_class.resolve("../../app/models/widget.rb", root)).to eq(File.join(root, "../../app/models/widget.rb"))
+        expect(described_class.relativize("/opt/shared/lib", root)).to eq("/opt/shared/lib")
+      end
+    end
+  end
+
   describe ".resolve" do
     it "sends a marked path back to the gem it names, not to the app root" do
       path = File.join(gem_root, "doorkeeper-5.9.5", "app", "models", "access_grant.rb")
