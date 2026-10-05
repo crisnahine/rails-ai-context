@@ -37,4 +37,22 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     expect(text).to include("- `alias_attribute` :login → :email")
     expect(text).to include("- `has_rich_text` :bio")
   end
+
+  it "lists a default scope with the scopes, since it filters every query" do
+    text = details_for("User", "user.rb" => <<~RUBY, "account.rb" => <<~ACCOUNT)
+      class User < ApplicationRecord
+        default_scope { where(discarded_at: nil) }
+        scope :recent, -> { order(created_at: :desc) }
+      end
+    RUBY
+      class Account < ApplicationRecord
+        default_scope -> { where.not(state: "banned") }, all_queries: true
+      end
+    ACCOUNT
+
+    expect(text).to include("## Scopes\n- `default_scope` → where(discarded_at: nil) _(applies to every query on User)_\n- `recent`")
+
+    account = described_class.call(model: "Account").content.first[:text]
+    expect(account).to include("- `default_scope` → where.not(state: \"banned\") (all_queries: true) _(applies to every query on Account)_")
+  end
 end

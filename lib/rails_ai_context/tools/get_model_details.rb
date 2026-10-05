@@ -303,9 +303,13 @@ module RailsAiContext
         # Scopes - show lambda body so AI can chain correctly. Each carries
         # the AST confidence: [VERIFIED] literal bodies vs [INFERRED] dynamic
         # expressions the parser can't fully resolve.
-        if data[:scopes]&.any?
+        if data[:scopes]&.any? || data[:default_scopes]&.any?
           lines << "" << "## Scopes"
-          data[:scopes].each do |s|
+          Array(data[:default_scopes]).each do |s|
+            tail = s[:all_queries] ? " (all_queries: #{s[:all_queries]})" : ""
+            lines << "- `default_scope` → #{s[:body] || Confidence::INFERRED}#{tail} _(applies to every query on #{name})_"
+          end
+          Array(data[:scopes]).each do |s|
             if s.is_a?(Hash)
               tag = s[:confidence] ? " #{s[:confidence]}" : ""
               lines << "- `#{s[:name]}` → #{s[:body]}#{tag}"

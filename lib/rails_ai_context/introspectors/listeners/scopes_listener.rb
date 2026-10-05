@@ -12,6 +12,7 @@ module RailsAiContext
         LAMBDA_METHODS = %i[lambda proc].to_set.freeze
 
         def on_call_node_enter(node)
+          return record_default_scope(node) if node.name == :default_scope && in_scope?(node)
           return unless node.name == :scope && in_scope?(node)
 
           name = extract_first_symbol(node)
@@ -33,6 +34,23 @@ module RailsAiContext
         end
 
         private
+
+        # Named `default_scope` and marked `default`: it is no method to call,
+        # and Rails stacks every one onto each query the model runs.
+        def record_default_scope(node)
+          callable = scope_body_node(node)
+          body = callable ? lambda_body_source(callable) : nil
+          all_queries = extract_keyword_sources(node)[:all_queries]
+
+          @results << {
+            name:        "default_scope",
+            default:     true,
+            body:        body,
+            all_queries: all_queries,
+            location:    node.location.start_line,
+            confidence:  body ? Confidence::VERIFIED : Confidence::INFERRED
+          }.compact
+        end
 
         # A stabby lambda, a `lambda`/`proc` call's block, or the scope's own block only when
         # the call passes no body (otherwise that block is an extension block).

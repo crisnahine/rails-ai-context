@@ -526,6 +526,7 @@ module RailsAiContext
           custom_validates: extract_custom_validates_from_ast(source_data),
           custom_validate_conditions: custom_validate_conditions(source_data),
           scopes:           extract_scopes_from_ast(source_data),
+          default_scopes:   default_scopes(source_data),
           class_methods:    class_methods.first(PAYLOAD_METHOD_CAP),
           class_method_count: class_methods.size,
           instance_methods: instance_methods.first(PAYLOAD_METHOD_CAP),
@@ -941,7 +942,7 @@ module RailsAiContext
       # ── AST-based extraction (replaces all regex parsing) ──────────
 
       def extract_scopes_from_ast(source_data)
-        source_data[:scopes].map do |s|
+        source_data[:scopes].reject { |s| s[:default] }.map do |s|
           {
             name: s[:name],
             body: s[:body],
@@ -949,6 +950,12 @@ module RailsAiContext
             confidence: s[:confidence]
           }.compact
         end
+      end
+
+      # Base first, as Rails stacks them; each one filters every query.
+      def default_scopes(source_data)
+        found = Array(source_data[:scopes]).select { |s| s[:default] }.map { |s| s.slice(:body, :all_queries, :confidence) }
+        found.presence
       end
 
       def extract_custom_validates_from_ast(source_data)
@@ -1356,7 +1363,8 @@ module RailsAiContext
           validations: static_validations(data, [ path, *Array(inherited_from).map(&:last) ]),
           custom_validates: extract_custom_validates_from_ast(data),
           custom_validate_conditions: custom_validate_conditions(data),
-          scopes: data[:scopes],
+          scopes: Array(data[:scopes]).reject { |s| s[:default] },
+          default_scopes: default_scopes(data),
           # The booted tier answers a Hash of attribute => value map, and
           # every renderer destructures one; the listener's records are a
           # different shape under the same key.
@@ -1666,7 +1674,7 @@ module RailsAiContext
       def merge_inherited(mine, inherited)
         merged = mine.merge(inherited) { |_key, ours, theirs| Array(ours) + Array(theirs) }
         merged[:associations] = dedup(merged[:associations]) { |a| [ a[:type], a[:name] ] }
-        merged[:scopes] = dedup(merged[:scopes]) { |s| s[:name] }
+        merged[:scopes] = dedup(merged[:scopes]) { |s| s[:default] ? [ s[:name], s[:body] ] : s[:name] }
         merged[:enums] = dedup(merged[:enums]) { |e| e[:name].to_s }
         # `encrypts :secret` on a base and again on the child is one macro, and
         # the consumers read it as a list of attributes. The key is the
