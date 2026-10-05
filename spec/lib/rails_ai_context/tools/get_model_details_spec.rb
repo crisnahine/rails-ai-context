@@ -545,6 +545,27 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  describe "model gem macros" do
+    it "prints a line per gem macro and the aasm states, events and transitions" do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Order" => {
+          table_name: "orders",
+          gem_macros: [ { text: "friendly_id :name, use: :slugged" }, { text: "monetize :price_cents", adds: %w[price] } ],
+          state_machines: [ { column: "aasm_state", initial: "pending", states: %w[pending paid shipped],
+                              events: [ { name: "pay", transitions: [ { from: %w[pending], to: "paid" } ] },
+                                        { name: "reset", transitions: [ { from: [], to: "pending" } ] } ] } ]
+        } }
+      )
+
+      text = described_class.call(model: "Order").content.first[:text]
+
+      expect(text).to include("## Macros\n- `friendly_id :name, use: :slugged`\n- `monetize :price_cents` (adds `price`)")
+      expect(text).to include("## State machine (aasm, column `aasm_state`)\n- states: `pending` (initial), `paid`, `shipped`\n" \
+                              "- event `pay`: pending -> paid\n- event `reset`: any -> pending")
+    end
+  end
+
   describe "callbacks" do
     before do
       described_class.reset_cache!

@@ -25,11 +25,26 @@ module RailsAiContext
           broadcasts broadcasts_to broadcasts_refreshes_to
         ].to_set.freeze
 
+        # Model gems' class macros, each listed as written; aasm's block is read in full.
+        GEM_MACROS = %i[
+          has_paper_trail audited acts_as_paranoid friendly_id
+          mount_uploader mount_uploaders monetize
+          pg_search_scope multisearchable searchkick
+          acts_as_list acts_as_tenant multi_tenant acts_as_taggable acts_as_taggable_on
+          has_ancestry acts_as_nested_set has_closure_tree acts_as_tree
+          state_machine workflow
+        ].to_set.freeze
+
         def on_call_node_enter(node)
           return record_ignored_columns(node, :assign) if node.name == :ignored_columns= && node.receiver.is_a?(Prism::SelfNode)
           return unless in_scope?(node)
+          return read_aasm(node) if @aasm
 
-          if SIMPLE_MACROS.include?(node.name)
+          if node.name == :aasm
+            open_aasm(node)
+          elsif GEM_MACROS.include?(node.name)
+            record_gem_macro(node)
+          elsif SIMPLE_MACROS.include?(node.name)
             @results << {
               macro:      node.name,
               location:   node.location.start_line,
@@ -56,6 +71,11 @@ module RailsAiContext
           end
         end
 
+        def on_call_node_leave(node)
+          @aasm = nil if @aasm && @aasm[:node].equal?(node)
+          @event = nil if @event && @event[:node].equal?(node)
+        end
+
         # self.ignored_columns += [...] and -= [...]
         def on_call_operator_write_node_enter(node)
           return unless node.read_name == :ignored_columns && node.receiver.is_a?(Prism::SelfNode)
@@ -65,6 +85,52 @@ module RailsAiContext
         end
 
         private
+
+        def record_gem_macro(node)
+          text = node.block ? node.slice[0, node.block.location.start_offset - node.location.start_offset] : node.slice
+          text = text.gsub(/\s+/, " ").strip
+          adds = monetized_names(node) if node.name == :monetize
+          @results << { macro: :gem_macro, name: node.name, text: text, adds: adds.presence,
+                        location: node.location.start_line, confidence: confidence_for(node) }.compact
+        end
+
+        # money-rails names the attribute `as:`, or the column minus its `_cents` postfix.
+        def monetized_names(node)
+          as = extract_keyword_options(node)[:as]
+          return [ as.to_s ] if as.is_a?(Symbol) || as.is_a?(String)
+
+          extract_symbol_args(node).map(&:to_s).filter_map { |column| column.delete_suffix("_cents") if column.end_with?("_cents") }
+        end
+
+        # A named machine's column defaults to its name (AASM::Base#default_column).
+        def open_aasm(node)
+          name = extract_symbol_args(node).first
+          column = extract_keyword_options(node)[:column] || (name && name != :default ? name : "aasm_state")
+          entry = { macro: :aasm, column: column.to_s, initial: nil, states: [], events: [],
+                    location: node.location.start_line, confidence: confidence_for(node) }
+          @results << entry
+          @aasm = { node: node, entry: entry } if node.block.is_a?(Prism::BlockNode)
+        end
+
+        def read_aasm(node)
+          entry = @aasm[:entry]
+          case node.name
+          when :state
+            names = extract_symbol_args(node).map(&:to_s)
+            entry[:states].concat(names)
+            # The first state is the initial one until a state says `initial: true`.
+            entry[:initial] = names.first if names.any? && (entry[:initial].nil? || extract_keyword_options(node)[:initial] == true)
+          when :event
+            name = extract_symbol_args(node).first or return
+            event = { name: name.to_s, transitions: [] }
+            entry[:events] << event
+            @event = { node: node, event: event } if node.block
+          when :transitions
+            options = extract_keyword_nodes(node)
+            from = options[:from] ? literal_strings(options[:from]) : []
+            @event[:event][:transitions] << { from: from, to: options[:to] && literal_string(options[:to]) } if @event
+          end
+        end
 
         def record_ignored_columns(node, op)
           value = node.is_a?(Prism::CallNode) ? node.arguments&.arguments&.first : node.value

@@ -275,6 +275,38 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    context "with model gem macros" do
+      before do
+        File.write(fixture_model, <<~RUBY)
+          class Employee < ApplicationRecord
+            include AASM
+            has_paper_trail
+            monetize :salary_cents
+            aasm do
+              state :pending, initial: true
+              state :active
+              event :activate do
+                transitions from: :pending, to: :active
+              end
+            end
+          end
+        RUBY
+      end
+
+      subject(:result) do
+        data = RailsAiContext::Introspectors::SourceIntrospector.from_source(File.read(fixture_model))
+        introspector.send(:extract_macros_from_ast, data, fixture_model)
+      end
+
+      it "carries each gem macro as written and the aasm states and events" do
+        expect(result[:gem_macros]).to eq([ { text: "has_paper_trail" }, { text: "monetize :salary_cents", adds: %w[salary] } ])
+        expect(result[:state_machines]).to eq([ {
+          column: "aasm_state", initial: "pending", states: %w[pending active],
+          events: [ { name: "activate", transitions: [ { from: %w[pending], to: "active" } ] } ]
+        } ])
+      end
+    end
+
     context "with single-attribute macros" do
       before do
         File.write(fixture_model, <<~RUBY)

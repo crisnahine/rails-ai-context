@@ -89,3 +89,71 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener do
     expect(results.first[:confidence]).to eq("[VERIFIED]")
   end
 end
+
+RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "gem macros" do
+  it "reads an aasm block's states, initial state, events and transitions" do
+    results = parse_and_dispatch(<<~RUBY)
+      class Order < ApplicationRecord
+        include AASM
+        aasm column: :status do
+          state :pending, initial: true
+          state :paid, :shipped
+          event :pay do
+            transitions from: :pending, to: :paid
+          end
+          event :ship do
+            transitions from: [ :paid, :pending ], to: :shipped
+          end
+        end
+      end
+    RUBY
+    aasm = results.find { |r| r[:macro] == :aasm }
+    expect(aasm).to include(column: "status", initial: "pending", states: %w[pending paid shipped])
+    expect(aasm[:events]).to eq([
+      { name: "pay", transitions: [ { from: %w[pending], to: "paid" } ] },
+      { name: "ship", transitions: [ { from: %w[paid pending], to: "shipped" } ] }
+    ])
+    expect(results.map { |r| r[:macro] }).to eq([ :aasm ])
+  end
+
+  it "takes a named machine's column from its name and the first state as initial" do
+    results = parse_and_dispatch(<<~RUBY)
+      class Job < ApplicationRecord
+        aasm :work do
+          state :sleeping
+          state :running
+          event { transitions to: :running }
+          transitions to: :sleeping
+        end
+      end
+    RUBY
+    expect(results.first).to include(column: "work", initial: "sleeping", states: %w[sleeping running], events: [])
+  end
+
+  it "records each known gem macro as written, without its block" do
+    results = parse_and_dispatch(<<~RUBY)
+      class User < ApplicationRecord
+        has_paper_trail
+        friendly_id :name, use: :slugged
+        mount_uploader :avatar, AvatarUploader
+        pg_search_scope :search_by_title, against: :title
+        monetize :price_cents
+        monetize :fee_pence, as: :fee
+        acts_as_list scope: :category
+        acts_as_tenant :organization
+        state_machine :state, initial: :parked do
+          event(:ignite) { transition parked: :idling }
+        end
+      end
+    RUBY
+    texts = results.select { |r| r[:macro] == :gem_macro }.map { |r| r[:text] }
+    expect(texts).to eq([
+      "has_paper_trail", "friendly_id :name, use: :slugged", "mount_uploader :avatar, AvatarUploader",
+      "pg_search_scope :search_by_title, against: :title", "monetize :price_cents",
+      "monetize :fee_pence, as: :fee", "acts_as_list scope: :category",
+      "acts_as_tenant :organization", "state_machine :state, initial: :parked"
+    ])
+    expect(results.find { |r| r[:text] == "has_paper_trail" }[:name]).to eq(:has_paper_trail)
+    expect(results.filter_map { |r| r[:adds] }).to eq([ %w[price], %w[fee] ])
+  end
+end

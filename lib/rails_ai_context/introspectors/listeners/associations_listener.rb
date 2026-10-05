@@ -13,7 +13,12 @@ module RailsAiContext
           belongs_to has_many has_one has_and_belongs_to_many
         ].to_set.freeze
 
+        # acts_as_tenant calls `belongs_to tenant, scope, **valid_options`, the tenant defaulting to :account.
+        TENANT_OPTIONS = %i[foreign_key class_name inverse_of optional primary_key counter_cache polymorphic touch].freeze
+
         def on_call_node_enter(node)
+          return record_tenant(node) if node.name == :acts_as_tenant && in_scope?(node)
+
           delegated = node.name == :delegated_type
           return unless delegated || ASSOCIATION_METHODS.include?(node.name)
           return unless in_scope?(node)
@@ -41,6 +46,20 @@ module RailsAiContext
         end
 
         private
+
+        def record_tenant(node)
+          first = node.arguments&.arguments&.first
+          first = nil if first.is_a?(Prism::KeywordHashNode)
+          name, literal = first ? first_name_and_literal(node) : [ :account, true ]
+          @results << {
+            type:          "belongs_to",
+            name:          name,
+            computed_name: (true unless literal),
+            options:       scope_options(receiver_name(node)).merge(extract_keyword_sources(node).slice(*TENANT_OPTIONS)),
+            location:      node.location.start_line,
+            confidence:    confidence_for(node)
+          }.compact
+        end
 
         def delegated_types(node)
           types = extract_keyword_nodes(node)[:types]

@@ -373,9 +373,23 @@ module RailsAiContext
         if data[:alias_attributes]&.any?
           macro_lines << "- `alias_attribute` #{data[:alias_attributes].map { |a| ":#{a[:name]} → :#{a[:target]}" }.join(', ')}"
         end
+        Array(data[:gem_macros]).each do |gem_macro|
+          adds = Array(gem_macro[:adds]).map { |name| "`#{name}`" }
+          macro_lines << "- `#{gem_macro[:text]}`#{" (adds #{adds.join(', ')})" if adds.any?}"
+        end
         if macro_lines.any?
           lines << "" << "## Macros"
           lines.concat(macro_lines)
+        end
+
+        Array(data[:state_machines]).each do |machine|
+          lines << "" << "## State machine (aasm, column `#{machine[:column]}`)"
+          states = machine[:states].map { |state| "`#{state}`#{" (initial)" if state == machine[:initial]}" }
+          lines << "- states: #{states.join(', ')}" if states.any?
+          machine[:events].each do |event|
+            moves = event[:transitions].map { |t| "#{t[:from].any? ? t[:from].join(' | ') : 'any'} -> #{t[:to]}" }
+            lines << "- event `#{event[:name]}`#{": #{moves.join(', ')}" if moves.any?}"
+          end
         end
 
         # Encryption details (expanded from encrypts)

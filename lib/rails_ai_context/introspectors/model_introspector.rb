@@ -1175,6 +1175,10 @@ module RailsAiContext
             (macros[:attributes] ||= []) << { name: m[:attribute], type: m[:type], default: m.dig(:options, :default) }.compact
           elsif macro == :alias_attribute
             (macros[:alias_attributes] ||= []) << { name: m[:attribute], target: m[:target] }
+          elsif macro == :gem_macro
+            (macros[:gem_macros] ||= []) << m.slice(:text, :adds)
+          elsif macro == :aasm
+            (macros[:state_machines] ||= []) << m.slice(:column, :initial, :states, :events)
           end
 
           if BROADCAST_MACROS.include?(macro)
