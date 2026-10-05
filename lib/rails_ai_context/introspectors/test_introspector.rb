@@ -13,9 +13,10 @@ module RailsAiContext
       TEST_FILE_GLOB = "*_{spec,test}.rb"
 
       # An engine's test/dummy is tested by the engine's suite.
-      def root
-        @root ||= PathResolver.test_root(app.root)
+      def suite_root
+        @suite_root ||= PathResolver.test_root(root)
       end
+
       RAILS_CI = "config/ci.rb"
 
       def call
@@ -47,7 +48,7 @@ module RailsAiContext
       private
 
       def detect_framework
-        RailsAiContext::TestFramework.for(root)
+        RailsAiContext::TestFramework.for(suite_root)
       rescue => e
         RailsAiContext.debug_fail(e, "unknown", label: "detect_framework")
       end
@@ -57,7 +58,7 @@ module RailsAiContext
       # answers the other way.
       def first_dir_with(glob, *rels)
         rels.each do |rel|
-          dir = File.join(root, rel)
+          dir = File.join(suite_root, rel)
           next unless Dir.exist?(dir)
 
           count = Dir.glob(File.join(dir, "**", glob)).size
@@ -89,11 +90,11 @@ module RailsAiContext
       # ponytail: packs-specification's default pack_paths; a packs.yml that
       # sets its own pack_paths is not read.
       def pack_factory_paths
-        Dir.glob(File.join(root, "packs", "{*,*/*}", "package.yml")).sort.flat_map do |manifest|
+        Dir.glob(File.join(suite_root, "packs", "{*,*/*}", "package.yml")).sort.flat_map do |manifest|
           pack = File.dirname(manifest)
           next [] if Dir.glob(File.join(pack, "*.gemspec")).any?
 
-          rel = pack.delete_prefix("#{root}/")
+          rel = pack.delete_prefix("#{suite_root}/")
           [ File.join(rel, "spec/factories"), File.join(rel, "test/factories") ]
         end
       end
@@ -113,7 +114,7 @@ module RailsAiContext
         fabricator_sources.flat_map(&:last).each_with_object({}) do |path, names|
           found = SourceIntrospector.walk(path, { fabricators: -> { Listeners::GenericMacroListener.new(:Fabricator) } })[:fabricators]
           named = found.map { |hit| hit[:args].first.to_s }.reject(&:empty?)
-          names[path.delete_prefix("#{root}/")] = named if named.any?
+          names[path.delete_prefix("#{suite_root}/")] = named if named.any?
         end
       end
 
@@ -130,11 +131,11 @@ module RailsAiContext
         { location: sources.map(&:first).join(", "), count: sources.sum { |_, files| files.size } }
       end
 
-      # The files a glob under the root matches, sorted, leaving out any whose
+      # The files a glob under the suite root matches, sorted, leaving out any whose
       # real path leaves the app or names a sensitive file.
       def app_files(pattern)
-        real_root = (@real_root ||= File.realpath(root))
-        Dir.glob(File.join(root, pattern)).sort.select do |path|
+        real_root = (@real_root ||= File.realpath(suite_root))
+        Dir.glob(File.join(suite_root, pattern)).sort.select do |path|
           real = File.realpath(path)
           File.file?(real) && RailsAiContext::SafePath.contained?(real, real_root) &&
             !RailsAiContext::SafePath.sensitive?(real.delete_prefix("#{real_root}/"))
@@ -164,8 +165,8 @@ module RailsAiContext
       # fixture_paths that holds one and stays inside the app.
       def fixture_dirs
         @fixture_dirs ||= begin
-          real_root = File.realpath(root)
-          configured = HELPER_FILES.flat_map { |rel| Array(helper_walk(File.join(root, rel))&.dig(:fixture_paths)) }
+          real_root = File.realpath(suite_root)
+          configured = HELPER_FILES.flat_map { |rel| Array(helper_walk(File.join(suite_root, rel))&.dig(:fixture_paths)) }
           candidates = [ DEFAULT_FIXTURE_DIRS.find { |rel| fixture_sets?(rel, real_root) } ] +
                        configured.map { |rel| Pathname.new(rel).cleanpath.to_s }
           candidates.compact.uniq.select { |rel| fixture_sets?(rel, real_root) }
@@ -175,7 +176,7 @@ module RailsAiContext
       def fixture_sets?(rel, real_root)
         return false if RailsAiContext::SafePath.traversal?(rel)
 
-        real = File.realpath(File.join(root, rel))
+        real = File.realpath(File.join(suite_root, rel))
         RailsAiContext::SafePath.contained?(real, real_root) && File.directory?(real) &&
           Dir.glob(File.join(real, "**", "*.yml")).any?
       rescue SystemCallError
@@ -186,7 +187,7 @@ module RailsAiContext
       # test/ has both, and reporting one hid the other.
       def detect_system_tests
         rows = %w[spec/system test/system].filter_map do |rel|
-          dir = File.join(root, rel)
+          dir = File.join(suite_root, rel)
           next unless Dir.exist?(dir)
 
           count = Dir.glob(File.join(dir, "**/#{TEST_FILE_GLOB}")).size
@@ -202,7 +203,7 @@ module RailsAiContext
       HELPER_DIRS = %w[spec/support test/support test/test_helpers].freeze
 
       def detect_test_helpers
-        HELPER_DIRS.flat_map { |rel| Dir.glob(File.join(root, rel, "**/*.rb")) }.map { |f| f.sub("#{root}/", "") }.sort
+        HELPER_DIRS.flat_map { |rel| Dir.glob(File.join(suite_root, rel, "**/*.rb")) }.map { |f| f.sub("#{suite_root}/", "") }.sort
       end
 
       def detect_factory_names
@@ -226,7 +227,7 @@ module RailsAiContext
             computed += named.count(&:empty?)
             named = named.reject(&:empty?)
             trait_names = ast_data[:traits].map { |hit| hit[:args].first.to_s }.reject(&:empty?)
-            names[path.sub("#{root}/", "")] = named if named.any?
+            names[path.sub("#{suite_root}/", "")] = named if named.any?
             traits[File.basename(path)] = trait_names if trait_names.any?
           end
           { names: names.presence, traits: traits.presence, computed: computed }
@@ -239,7 +240,7 @@ module RailsAiContext
       def detect_fixture_names
         names = {}
         fixture_dirs.each do |rel|
-          dir = File.join(root, rel)
+          dir = File.join(suite_root, rel)
           app_files(File.join(rel, "**", "*.yml")).each do |path|
             set = path.delete_prefix("#{dir}/").delete_suffix(".yml")
             next if names.key?(set)
@@ -259,10 +260,10 @@ module RailsAiContext
       HELPER_FILES = %w[spec/rails_helper.rb spec/spec_helper.rb test/test_helper.rb].freeze
 
       def detect_test_helper_setup
-        helpers = (HELPER_FILES + %w[test/application_system_test_case.rb]).map { |rel| File.join(root, rel) }
+        helpers = (HELPER_FILES + %w[test/application_system_test_case.rb]).map { |rel| File.join(suite_root, rel) }
         # Apps also configure helpers in support files (Errbit's spec/support/devise.rb). A bare
         # include there is usually a support module's own mixin, so only config.include counts.
-        support = HELPER_DIRS.flat_map { |rel| Dir.glob(File.join(root, rel, "**", "*.rb")).sort }
+        support = HELPER_DIRS.flat_map { |rel| Dir.glob(File.join(suite_root, rel, "**", "*.rb")).sort }
 
         setup = []
         calls = []
@@ -295,22 +296,29 @@ module RailsAiContext
         first_dir_with("*.yml", "spec/cassettes", "spec/vcr_cassettes", "test/cassettes", "test/vcr_cassettes")
       end
 
+      # A dummy's own config/ci.rb and its engine's .github are both the project's CI.
       def detect_ci
-        configs = []
-        configs << "rails_ci" if File.file?(File.join(root, RAILS_CI))
-        configs << "github_actions" if Dir.exist?(File.join(root, ".github/workflows"))
-        configs << "circleci" if File.exist?(File.join(root, ".circleci/config.yml"))
-        configs << "gitlab_ci" if File.exist?(File.join(root, ".gitlab-ci.yml"))
-        configs << "travis" if File.exist?(File.join(root, ".travis.yml"))
-        configs << "buildkite" if Dir.exist?(File.join(root, ".buildkite")) || Dir.glob(File.join(root, "buildkite.{yml,yaml,json}")).any?
-        configs << "jenkins" if File.file?(File.join(root, "Jenkinsfile"))
-        configs
+        ci_roots.flat_map do |dir|
+          configs = []
+          configs << "rails_ci" if File.file?(File.join(dir, RAILS_CI))
+          configs << "github_actions" if Dir.exist?(File.join(dir, ".github/workflows"))
+          configs << "circleci" if File.exist?(File.join(dir, ".circleci/config.yml"))
+          configs << "gitlab_ci" if File.exist?(File.join(dir, ".gitlab-ci.yml"))
+          configs << "travis" if File.exist?(File.join(dir, ".travis.yml"))
+          configs << "buildkite" if Dir.exist?(File.join(dir, ".buildkite")) || Dir.glob(File.join(dir, "buildkite.{yml,yaml,json}")).any?
+          configs << "jenkins" if File.file?(File.join(dir, "Jenkinsfile"))
+          configs
+        end.uniq
+      end
+
+      def ci_roots
+        [ root, suite_root ].uniq
       end
 
       # The steps bin/ci runs, from the `step title, *command` calls of the
       # CI DSL Rails 8.1 generates.
       def detect_ci_steps
-        content, = RailsAiContext::SafePath.read(RAILS_CI, under: root)
+        content = ci_roots.lazy.filter_map { |dir| RailsAiContext::SafePath.read(RAILS_CI, under: dir).first }.first
         return nil unless content
 
         hits = SourceIntrospector.walk_source(content, steps: -> { Listeners::GenericMacroListener.new(:step) })[:steps]
@@ -334,7 +342,7 @@ module RailsAiContext
       def detect_shared_examples
         shared = []
         %w[spec test].each do |base|
-          support_dir = File.join(root, base, "support")
+          support_dir = File.join(suite_root, base, "support")
           next unless Dir.exist?(support_dir)
           Dir.glob(File.join(support_dir, "**/*.rb")).each do |path|
             ast_data = SourceIntrospector.walk(path, {
@@ -343,7 +351,7 @@ module RailsAiContext
             ast_data[:shared].each do |entry|
               name = entry[:args].first&.to_s
               next unless name && !name.empty?
-              shared << { name: name, file: path.sub("#{root}/", "") }
+              shared << { name: name, file: path.sub("#{suite_root}/", "") }
             end
           end
         end
@@ -358,7 +366,7 @@ module RailsAiContext
         if RailsAiContext::GemLock.for(root).any?("database_cleaner", "database_cleaner-core")
           strategy = nil
           HELPER_FILES.each do |helper|
-            ast = helper_walk(File.join(root, helper)) or next
+            ast = helper_walk(File.join(suite_root, helper)) or next
             hit = ast[:cleaner].find { |h| h[:assignment] && h[:path] == [ :strategy ] }
             strategy = hit[:value].to_s if hit
           end
@@ -392,7 +400,7 @@ module RailsAiContext
         rows = Hash.new { |h, k| h[k] = [] }
 
         %w[spec test].each do |base|
-          base_dir = File.join(root, base)
+          base_dir = File.join(suite_root, base)
           next unless Dir.exist?(base_dir)
 
           Dir.children(base_dir).sort.each do |entry|
