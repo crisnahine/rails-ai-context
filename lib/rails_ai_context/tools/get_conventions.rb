@@ -513,15 +513,28 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "detect_test_pattern")
       end
 
+      # A variable or a bare helper name: set outside the call, so a copy of
+      # the call alone signs in nil.
+      SIGN_IN_BOUND_OUTSIDE = /\A(?:@@?|\$)?[a-z_]\w*\z/
+      private_constant :SIGN_IN_BOUND_OUTSIDE
+
       # The first sign-in call as the test writes it: Devise's `sign_in` and
       # the `sign_in_as` Rails 8.1's authentication generator defines take
-      # different arguments.
+      # different arguments. An argument the skeleton never sets is swapped
+      # for the app's own users fixture.
       private_class_method def self.sign_in_call(content)
         hit = RailsAiContext::Introspectors::SourceIntrospector.walk_source(content, {
           sign_in: -> { RailsAiContext::Introspectors::Listeners::GenericMacroListener.new(:sign_in, :sign_in_as) }
         })[:sign_in].first or return nil
 
-        content.byteslice(hit[:offset], hit[:end_offset] - hit[:offset]).squish
+        call = content.byteslice(hit[:offset], hit[:end_offset] - hit[:offset]).squish
+        arg = hit[:values].first
+        return call unless arg.is_a?(String) && arg.match?(SIGN_IN_BOUND_OUTSIDE)
+
+        key = fixture_key_for("users", RailsAiContext::Payload.section(cached_context, :tests) || {})
+        return "# TODO: #{hit[:macro]} a user built from this app's own test data" unless key
+
+        call.sub(/(?<![\w@$])#{Regexp.escape(arg)}(?![\w?!])/, "users(:#{key})")
       end
     end
   end

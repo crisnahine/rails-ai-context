@@ -233,6 +233,47 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
       expect(text).not_to include("sign_in users(:one)")
     end
 
+    it "signs in a users fixture where the tests sign in a variable the skeleton never sets" do
+      FileUtils.mkdir_p(File.join(tmpdir, "test", "fixtures"))
+      File.write(File.join(tmpdir, "test", "fixtures", "users.yml"), "admin:\n  email: a@example.com\n")
+      File.write(File.join(tests_dir, "posts_controller_test.rb"), <<~RUBY)
+        class PostsControllerTest < ActionDispatch::IntegrationTest
+          setup do
+            @user = users(:admin)
+            sign_in @user
+          end
+
+          test "index" do
+            get posts_path
+            assert_response :success
+          end
+        end
+      RUBY
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("  test \"[action] renders page\" do\n    sign_in users(:admin)\n    get [path]")
+      expect(text).not_to include("sign_in @user")
+    end
+
+    it "keeps the helper the tests call when it signs in a variable" do
+      File.write(File.join(tests_dir, "posts_controller_test.rb"), <<~RUBY)
+        class PostsControllerTest < ActionDispatch::IntegrationTest
+          test "index" do
+            user = User.take
+            sign_in_as(user)
+            get posts_path
+            assert_response :success
+          end
+        end
+      RUBY
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("    # TODO: sign_in_as a user built from this app's own test data\n    get [path]")
+      expect(text).not_to include("sign_in_as(user)")
+    end
+
     it "reads no sign-in from a test name that mentions one" do
       File.write(File.join(tests_dir, "pages_controller_test.rb"), <<~RUBY)
         class PagesControllerTest < ActionDispatch::IntegrationTest
