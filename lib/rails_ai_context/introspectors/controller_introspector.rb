@@ -339,6 +339,17 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "extract_filters")
       end
 
+      # cancancan adds its callbacks as blocks; the static tier names them for the macro, and so does this.
+      def cancan_callback(filter, path)
+        if path&.end_with?("cancan/controller_resource.rb")
+          filter.binding.local_variable_get(:method).to_s
+        elsif path&.end_with?("cancan/controller_additions.rb")
+          filter.binding.local_variable_defined?(:options) ? "check_authorization" : "skip_authorization_check"
+        end
+      rescue StandardError
+        nil
+      end
+
       # A block the app wrote is named by its line, as the static tier names it, and the one
       # http_basic_authenticate_with adds by that macro; any other framework's or gem's
       # block (`allow_browser`, `rate_limit`) is not a filter the app wrote.
@@ -353,6 +364,8 @@ module RailsAiContext
 
         path, line = filter.source_location
         return "http_basic_authenticate_with" if path&.end_with?("action_controller/metal/http_authentication.rb")
+        cancan = cancan_callback(filter, path)
+        return cancan if cancan
 
         root = "#{app.root.to_s.chomp("/")}/"
         return unless path&.start_with?(root) && !path.delete_prefix(root).start_with?("vendor/")
