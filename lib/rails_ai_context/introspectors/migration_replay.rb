@@ -45,8 +45,9 @@ module RailsAiContext
         PathResolver.dirs_for(root.to_s, "db/migrate") + PathResolver.dirs_for(root.to_s, "db/post_migrate")
       end
 
+      # Rails' own glob: versioned files at any depth, run in version order.
       def migration_files(dirs)
-        Array(dirs).flat_map { |dir| Dir.glob(File.join(dir, "*.rb")) }
+        Array(dirs).flat_map { |dir| Dir.glob(File.join(dir.to_s, "**", "[0-9]*_*.rb")) }
           .sort_by { |path| [ File.basename(path), path ] }
       end
 

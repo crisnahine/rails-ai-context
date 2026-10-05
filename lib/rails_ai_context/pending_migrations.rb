@@ -42,13 +42,13 @@ module RailsAiContext
       File.join(root.to_s, "db", base.empty? ? "migrate" : "#{base}_migrate")
     end
 
-    # Every versioned migration file in the directory. One file scan behind
+    # Every versioned migration file under the directory. One file scan behind
     # both the pending derivation and the migrations listing, so the two
     # cannot disagree on which files count.
     def migration_files(migrate_dir)
       return [] unless migrate_dir && Dir.exist?(migrate_dir)
 
-      Dir.glob(File.join(migrate_dir, "*.rb")).sort.filter_map do |path|
+      Introspectors::MigrationReplay.migration_files([ migrate_dir ]).filter_map do |path|
         base = File.basename(path, ".rb")
         version = base[/\A\d+/] or next
         # The class name, so a static entry names the migration the way the

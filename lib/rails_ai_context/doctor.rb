@@ -183,8 +183,8 @@ module RailsAiContext
 
     def check_migrations
       migrate_dir = File.join(app.root, "db/migrate")
-      if Dir.exist?(migrate_dir) && Dir.glob(File.join(migrate_dir, "*.rb")).any?
-        count = Dir.glob(File.join(migrate_dir, "*.rb")).size
+      count = RailsAiContext::Introspectors::MigrationReplay.migration_files([ migrate_dir ]).size
+      if count.positive?
         Check.new(name: "Migrations", status: :pass, message: count_phrase(count, "migration file"), fix: nil)
       else
         Check.new(name: "Migrations", status: :warn, message: "No migrations", fix: nil)

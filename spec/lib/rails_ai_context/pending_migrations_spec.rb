@@ -61,6 +61,13 @@ RSpec.describe RailsAiContext::PendingMigrations do
       expect(described_class.migration_files(@migrate).map { |m| m[:name] }).to include("CreateActiveStorageTables")
     end
 
+    it "counts a migration in a subdirectory, in version order" do
+      FileUtils.mkdir_p(File.join(@migrate, "archive"))
+      File.write(File.join(@migrate, "archive", "20240102000000_create_comments.rb"), "")
+      expect(described_class.migration_files(@migrate).map { |m| m[:version] })
+        .to eq(%w[20240101000000 20240102000000 20240201000000 20240301000000])
+    end
+
     it "carries the path of each file it counted" do
       expect(described_class.migration_files(@migrate).map { |m| File.basename(m[:path]) })
         .to include("20240201000000_add_index.rb")

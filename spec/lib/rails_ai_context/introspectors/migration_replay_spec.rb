@@ -1803,4 +1803,19 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(tables["pull_requests_work_packages"][:indexes].map { |i| i[:name] }).to eq(%w[pr_wp_pr_id])
     end
   end
+
+  it "replays a migration in a subdirectory, in version order, as Rails reads them" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "archive"))
+      File.write(File.join(dir, "20240102000000_create_comments.rb"),
+                 "class CreateComments < ActiveRecord::Migration[8.1]\n  def change\n    create_table :comments\n  end\nend\n")
+      File.write(File.join(dir, "archive", "20240101000000_create_posts.rb"),
+                 "class CreatePosts < ActiveRecord::Migration[8.1]\n  def change\n    create_table :posts\n  end\nend\n")
+      File.write(File.join(dir, "helper.rb"), "")
+
+      expect(described_class.migration_files([ dir ]).map { |path| File.basename(path) })
+        .to eq(%w[20240101000000_create_posts.rb 20240102000000_create_comments.rb])
+      expect(described_class.tables(dir, pk_type: "bigint").keys).to contain_exactly("posts", "comments")
+    end
+  end
 end
