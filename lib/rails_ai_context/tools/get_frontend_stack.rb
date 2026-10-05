@@ -63,9 +63,11 @@ module RailsAiContext
           parts << "(#{count_phrase(total, "component")})" if total > 0
 
           # If no JS framework data, try building a Hotwire summary from cached context
+          pipeline = asset_pipeline
           if parts.empty?
             hotwire = build_hotwire_summary
-            return hotwire if hotwire
+            return [ hotwire, pipeline ].compact.join(", ") if hotwire
+            return "#{pipeline} (no JavaScript build)" if pipeline
           end
 
           return parts.join(" + ") if parts.any?
@@ -114,6 +116,8 @@ module RailsAiContext
           state_management = state_management.join(", ") if state_management.is_a?(Array)
           lines << "- **State management:** #{state_management}" if state_management.present?
           lines << "- **Package manager:** #{data[:package_manager]}" if data[:package_manager]
+          pipeline_lines = asset_pipeline_lines
+          lines.concat(pipeline_lines)
 
           # TypeScript
           ts_enabled = data[:typescript].is_a?(Hash) && data[:typescript][:enabled]
@@ -151,7 +155,12 @@ module RailsAiContext
             !has_testing && !has_hotwire && !has_frontend_roots
 
           if no_frontend_evidence
-            return "# Frontend Stack\n\nNo frontend stack detected (API-only app / no app/javascript, no package.json)."
+            if pipeline_lines.any?
+              return [ "# Frontend Stack", "", *pipeline_lines, "- **JavaScript build:** none (no app/javascript, no package.json)" ].join("\n")
+            end
+
+            note = api_only_note("a frontend") || "No frontend stack detected (no app/javascript, no package.json, no asset pipeline)."
+            return "# Frontend Stack\n\n#{note}"
           end
 
           lines.concat(hotwire_lines)
@@ -216,6 +225,27 @@ module RailsAiContext
           end
 
           lines.join("\n")
+        end
+
+        # Read from the gems, as rails_get_config does: the :assets section is
+        # in the full preset only.
+        def asset_pipeline
+          return "Propshaft" if Payload.gem?(cached_context, "propshaft")
+
+          "Sprockets" if Payload.gem?(cached_context, "sprockets-rails") || Payload.gem?(cached_context, "sprockets")
+        end
+
+        def asset_pipeline_lines
+          pipeline = asset_pipeline
+          return [] unless pipeline
+
+          lines = [ "- **Asset pipeline:** #{pipeline}, serving app/assets" ]
+          return lines unless pipeline == "Sprockets"
+
+          content, = RailsAiContext::SafePath.read("app/assets/config/manifest.js", under: rails_app.root.to_s)
+          links = content.to_s.scrub.scan(%r{^\s*//=\s*(link\w*\s+\S.*?)\s*$}).flatten
+          lines << "- **Sprockets manifest:** #{links.map { |l| "`#{l}`" }.join(', ')}" if links.any?
+          lines
         end
 
         # The introspector emits frameworks as a hash of framework symbol =>
