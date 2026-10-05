@@ -7,10 +7,10 @@ module RailsAiContext
   module Tools
     class SearchDocs < BaseTool
       tool_name "rails_search_docs"
-      description "Search the official Rails documentation index for guides, API docs, and tutorials. " \
+      description "Search a bundled index of the Rails guides and the Turbo, Stimulus and Hotwire Native handbooks. " \
         "Use when: you need to reference Rails conventions, API details, or best practices. " \
         "Pass query:\"active record callbacks\" to find matching topics. " \
-        "Filter with source:\"guides\" or source:\"api\". " \
+        "Filter with source:\"guides\", \"turbo\", \"stimulus\" or \"hotwire\". " \
         "Set fetch:true to retrieve full content from GitHub (cached 24h)."
 
       input_schema(
@@ -21,7 +21,7 @@ module RailsAiContext
           },
           source: {
             type: "string",
-            enum: %w[all guides api stimulus turbo hotwire],
+            enum: %w[all guides stimulus turbo hotwire],
             description: "Filter results by documentation source. Default: all."
           },
           limit: {
@@ -45,7 +45,7 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: true)
 
-      VALID_SOURCES = %w[all guides api stimulus turbo hotwire].freeze
+      VALID_SOURCES = %w[all guides stimulus turbo hotwire].freeze
       INDEX_PATH = File.join(File.dirname(__FILE__), "..", "data", "docs", "index.json").freeze
 
       def self.call(query:, source: "all", limit: 5, fetch: false, server_context: nil, **_extra)

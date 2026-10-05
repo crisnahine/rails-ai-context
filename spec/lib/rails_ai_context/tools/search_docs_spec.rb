@@ -302,3 +302,27 @@ RSpec.describe RailsAiContext::Tools::SearchDocs do
     end
   end
 end
+
+RSpec.describe RailsAiContext::Tools::SearchDocs, "against the bundled index" do
+  before { described_class.instance_variable_set(:@docs_index, nil) }
+
+  def top_title(query, **opts)
+    described_class.call(query: query, limit: 1, **opts).content.first[:text][/^## 1\. (.+) \[/, 1]
+  end
+
+  it "finds the current guides by their subject" do
+    expect(top_title("upgrading")).to eq("Upgrading Ruby on Rails")
+    expect(top_title("engines")).to eq("Getting Started with Engines")
+    expect(top_title("autoloading zeitwerk")).to eq("Autoloading and Reloading Constants")
+    expect(top_title("error reporting")).to eq("Error Reporting in Rails Applications")
+    expect(top_title("generators")).to eq("Rails Generators & Templates")
+    expect(top_title("core extensions")).to eq("Active Support Core Extensions")
+  end
+
+  it "does not offer an api source the index has no entries for" do
+    text = described_class.call(query: "has_many", source: "api").content.first[:text]
+
+    expect(text).to include("Invalid source: 'api'")
+    expect(described_class.input_schema.to_h.dig(:properties, :source, :enum)).not_to include("api")
+  end
+end

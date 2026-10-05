@@ -503,6 +503,321 @@
     "category": "api"
   },
   {
+    "id": "action_controller_advanced_topics",
+    "title": "Action Controller Advanced Topics",
+    "source": "rails",
+    "summary": "CSRF protection, HTTP authentication, streaming, log parameter filtering, rescue_from, health check endpoint",
+    "keywords": [
+      "csrf",
+      "http authentication",
+      "streaming",
+      "send_data",
+      "filter parameters",
+      "rescue_from",
+      "health check"
+    ],
+    "category": "controllers"
+  },
+  {
+    "id": "active_model_basics",
+    "title": "Active Model Basics",
+    "source": "rails",
+    "summary": "Active Model modules for plain Ruby objects: attributes, validations, callbacks, serialization, naming",
+    "keywords": [
+      "active model",
+      "activemodel",
+      "plain ruby object",
+      "form object",
+      "attributes",
+      "serialization"
+    ],
+    "category": "models"
+  },
+  {
+    "id": "active_record_composite_primary_keys",
+    "title": "Composite Primary Keys",
+    "source": "rails",
+    "summary": "Tables, queries, associations, forms and fixtures with composite primary keys",
+    "keywords": [
+      "composite primary key",
+      "primary_key",
+      "query_constraints",
+      "multi-column key"
+    ],
+    "category": "models"
+  },
+  {
+    "id": "active_record_postgresql",
+    "title": "Active Record and PostgreSQL",
+    "source": "rails",
+    "summary": "PostgreSQL datatypes, UUID keys, deferrable foreign keys, exclusion constraints, full text search, views",
+    "keywords": [
+      "postgresql",
+      "postgres",
+      "jsonb",
+      "uuid",
+      "array",
+      "full text search",
+      "exclusion constraint",
+      "database views"
+    ],
+    "category": "models"
+  },
+  {
+    "id": "active_support_core_extensions",
+    "title": "Active Support Core Extensions",
+    "source": "rails",
+    "summary": "Ruby language extensions Active Support adds: blank?, present?, try, String, Hash, Array, Date and Time helpers",
+    "keywords": [
+      "core extensions",
+      "core_ext",
+      "blank?",
+      "present?",
+      "try",
+      "string",
+      "hash",
+      "time"
+    ],
+    "category": "core"
+  },
+  {
+    "id": "active_support_instrumentation",
+    "title": "Active Support Instrumentation",
+    "source": "rails",
+    "summary": "ActiveSupport::Notifications: subscribing to hooks, the framework's instrumentation events, custom instrumentation",
+    "keywords": [
+      "instrumentation",
+      "notifications",
+      "subscribe",
+      "instrument",
+      "events",
+      "activesupport::notifications"
+    ],
+    "category": "core"
+  },
+  {
+    "id": "autoloading_and_reloading_constants",
+    "title": "Autoloading and Reloading Constants",
+    "source": "rails",
+    "summary": "Zeitwerk autoloading, reloading and eager loading, autoload paths, project structure, STI",
+    "keywords": [
+      "autoloading",
+      "autoload",
+      "zeitwerk",
+      "reloading",
+      "eager loading",
+      "autoload_paths",
+      "constants"
+    ],
+    "category": "core"
+  },
+  {
+    "id": "debugging_rails_applications",
+    "title": "Debugging Rails Applications",
+    "source": "rails",
+    "summary": "Debug helpers, the logger, the debug gem, breakpoints, stack traces, SQL query sources",
+    "keywords": [
+      "debugging",
+      "debug",
+      "debugger",
+      "logger",
+      "breakpoint",
+      "stack trace",
+      "byebug"
+    ],
+    "category": "core"
+  },
+  {
+    "id": "engines",
+    "title": "Getting Started with Engines",
+    "source": "rails",
+    "summary": "Generating and mounting engines, isolated namespaces, overriding engine code, load hooks",
+    "keywords": [
+      "engine",
+      "engines",
+      "mountable",
+      "isolate_namespace",
+      "mount",
+      "railtie"
+    ],
+    "category": "core"
+  },
+  {
+    "id": "error_reporting",
+    "title": "Error Reporting in Rails Applications",
+    "source": "rails",
+    "summary": "Rails.error reporter: handle, record, report, and custom error subscribers",
+    "keywords": [
+      "error reporting",
+      "error reporter",
+      "rails.error",
+      "exceptions",
+      "subscriber",
+      "error tracking"
+    ],
+    "category": "core"
+  },
+  {
+    "id": "generators",
+    "title": "Rails Generators & Templates",
+    "source": "rails",
+    "summary": "Listing, creating and customizing generators, overriding scaffold templates, application templates",
+    "keywords": [
+      "generators",
+      "generator",
+      "rails generate",
+      "templates",
+      "scaffold templates",
+      "application template"
+    ],
+    "category": "core"
+  },
+  {
+    "id": "getting_started_with_devcontainer",
+    "title": "Getting Started with Dev Containers",
+    "source": "rails",
+    "summary": "rails-new and running a Rails app inside a development container",
+    "keywords": [
+      "devcontainer",
+      "dev container",
+      "docker",
+      "rails-new",
+      "development environment"
+    ],
+    "category": "core"
+  },
+  {
+    "id": "initialization",
+    "title": "The Rails Initialization Process",
+    "source": "rails",
+    "summary": "The boot sequence: bin/rails, config/boot.rb, config/application.rb, Rails::Server",
+    "keywords": [
+      "initialization",
+      "boot",
+      "boot process",
+      "startup",
+      "rails server",
+      "config/application.rb"
+    ],
+    "category": "core"
+  },
+  {
+    "id": "plugins",
+    "title": "The Basics of Creating Rails Plugins",
+    "source": "rails",
+    "summary": "Creating a plugin gem, extending core classes, adding methods to ApplicationRecord, publishing",
+    "keywords": [
+      "plugins",
+      "plugin",
+      "gem",
+      "extend",
+      "acts_as"
+    ],
+    "category": "core"
+  },
+  {
+    "id": "product_reviews",
+    "title": "Product Reviews",
+    "source": "rails",
+    "summary": "Getting Started tutorial series: collecting reviews, average ratings, filtering reviews",
+    "keywords": [
+      "reviews",
+      "ratings",
+      "tutorial",
+      "e-commerce"
+    ],
+    "category": "core"
+  },
+  {
+    "id": "rails_on_rack",
+    "title": "Rails on Rack",
+    "source": "rails",
+    "summary": "Rack, the middleware stack, configuring middleware, Rails as a Rack application",
+    "keywords": [
+      "rack",
+      "middleware",
+      "middleware stack",
+      "config.ru",
+      "rack app"
+    ],
+    "category": "core"
+  },
+  {
+    "id": "sign_up_and_settings",
+    "title": "Sign Up and Settings",
+    "source": "rails",
+    "summary": "Getting Started tutorial series: user sign up, rate limiting, nested layouts, admin and user controllers",
+    "keywords": [
+      "sign up",
+      "signup",
+      "registration",
+      "settings",
+      "rate_limit",
+      "tutorial"
+    ],
+    "category": "core"
+  },
+  {
+    "id": "threading_and_code_execution",
+    "title": "Threading and Code Execution in Rails",
+    "source": "rails",
+    "summary": "Concurrency in Rails, the executor and reloader, wrapping application code, load interlock",
+    "keywords": [
+      "threading",
+      "threads",
+      "concurrency",
+      "executor",
+      "reloader",
+      "load interlock"
+    ],
+    "category": "core"
+  },
+  {
+    "id": "tuning_performance_for_deployment",
+    "title": "Tuning Performance for Deployment",
+    "source": "rails",
+    "summary": "Puma workers and threads, YJIT, memory allocators, performance testing for production",
+    "keywords": [
+      "performance",
+      "puma",
+      "tuning",
+      "workers",
+      "threads",
+      "yjit",
+      "deployment"
+    ],
+    "category": "core"
+  },
+  {
+    "id": "upgrading_ruby_on_rails",
+    "title": "Upgrading Ruby on Rails",
+    "source": "rails",
+    "summary": "Steps and per-version changes when upgrading an app to a newer Rails",
+    "keywords": [
+      "upgrading",
+      "upgrade",
+      "rails update",
+      "new framework defaults",
+      "deprecations",
+      "migration path"
+    ],
+    "category": "core"
+  },
+  {
+    "id": "wishlists",
+    "title": "Wishlists",
+    "source": "rails",
+    "summary": "Getting Started tutorial series: wishlists, counter caches, friendly URLs, filtering records",
+    "keywords": [
+      "wishlists",
+      "counter cache",
+      "friendly urls",
+      "to_param",
+      "tutorial"
+    ],
+    "category": "core"
+  },
+  {
     "id": "turbo_handbook_introduction",
     "title": "Turbo Handbook: Introduction",
     "source": "turbo",
