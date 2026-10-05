@@ -260,7 +260,8 @@ module RailsAiContext
         end
 
         # A worker or base declares its queue in `sidekiq_options`, which the introspector read.
-        queue = extract_queue(source) || (record && (record[:queue] || (record[:options] || {})["queue"]))
+        # The record's queue carries the app's prefix and delimiter, which the source line does not.
+        queue = (record && (record[:queue] || (record[:options] || {})["queue"])) || extract_queue(source)
         lines << "**Queue:** #{queue_text(queue)}" if queue
         lines << "**Throttle:** #{worker[:throttle]}" if worker && worker[:throttle]
         if base && (declares = Array(base[:declares])).any?

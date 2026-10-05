@@ -202,7 +202,7 @@ module RailsAiContext
       # picks it, the way other computed values read.
       def queue_as(ast)
         hit = ast[:macros].find { |m| m[:macro] == :queue_as } or return nil
-        return hit[:args].first.to_s if hit[:args].any?
+        return queue_name_from_part(hit[:args].first.to_s) if hit[:args].any?
         return labelled(COMPUTED_QUEUE, hit[:block]) if hit[:block]
 
         source = hit[:values].first.to_s.gsub(/\s+/, " ").strip
@@ -212,6 +212,38 @@ module RailsAiContext
         return labelled(PROC_QUEUE, assigned[:source]) if assigned
 
         source.match?(PROC_LITERAL) ? labelled(PROC_QUEUE, source) : "`#{source}` (computed)"
+      end
+
+      # ActiveJob's queue_name_from_part, with the queue settings the app's config assigns.
+      def queue_name_from_part(part)
+        settings = active_job_queue_settings
+        name = part || settings.fetch(:default_queue_name, "default")
+        prefix = settings[:queue_name_prefix]
+        return name if prefix.nil? || prefix.empty?
+
+        [ prefix, name ].join(settings.fetch(:queue_name_delimiter, "_"))
+      end
+
+      QUEUE_SETTINGS = %i[queue_name_prefix queue_name_delimiter default_queue_name].freeze
+
+      # config/application.rb, then this environment's file over it. A computed value
+      # reads as its source, so the queue says what the static tier cannot evaluate.
+      def active_job_queue_settings
+        @active_job_queue_settings ||= [ "config/application.rb", "config/environments/#{RailsAiContext.environment_name}.rb" ]
+          .each_with_object({}) do |file, settings|
+            resolution = SafePath.locate(file, under: app.root.to_s)
+            next unless resolution.ok?
+
+            Array(SourceIntrospector.walk(resolution.realpath, { config: Listeners::ConfigAssignmentListener })[:config]).each do |hit|
+              path = hit[:path]
+              next unless hit[:assignment] && path.size == 2 && path.first == :active_job && QUEUE_SETTINGS.include?(path.last)
+
+              value = hit[:value]
+              settings[path.last] = value.is_a?(String) || value.is_a?(Symbol) ? value.to_s : "`#{hit[:source]}`"
+            end
+          end
+      rescue StandardError, ScriptError => e
+        @active_job_queue_settings = RailsAiContext.debug_fail(e, {}, label: "active_job_queue_settings")
       end
 
       def sidekiq_options(macros)
@@ -288,7 +320,7 @@ module RailsAiContext
           unknown_base = !active_job?(name)
           next if unknown_base && !performs?(ActionResolver.own_methods(ast[:methods], candidate.declared))
 
-          queue = inherited_queue(name)
+          queue = inherited_queue(name) || (queue_name_from_part(nil) unless unknown_base)
 
           perform_method = ast[:methods].find { |m| m[:name] == "perform" && m[:scope] == :instance }
           perform_signature = ActionResolver.parameter_list(perform_method) if perform_method && perform_method[:params]&.any?

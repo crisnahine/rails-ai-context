@@ -466,6 +466,12 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       described_class.call(**args).content.first[:text]
     end
 
+    it "names a single job's queue with the configured prefix" do
+      write("config/application.rb", "config.active_job.queue_name_prefix = \"myapp\"\n")
+      write("app/jobs/cleanup_job.rb", "class CleanupJob < ApplicationJob\n  queue_as :low\n  def perform; end\nend\n")
+      expect(text_for(job: "CleanupJob")).to include("**Queue:** `myapp_low`")
+    end
+
     context "with a Solid Queue recurring.yml" do
       before do
         write("config/recurring.yml", <<~YAML)

@@ -466,6 +466,38 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
                                              identified_by: [ "current_user" ] } ])
     end
 
+    # ActiveJob's queue_name_from_part: prefix and name joined by the delimiter,
+    # and a job with no queue_as on the default queue name.
+    it "names queues with the configured prefix, delimiter and default queue name" do
+      result = static_result do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "jobs"))
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "application.rb"), <<~RUBY)
+          module App
+            class Application < Rails::Application
+              config.active_job.queue_name_prefix = "myapp"
+              config.active_job.queue_name_delimiter = "."
+              config.active_job.default_queue_name = "normal"
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "jobs", "cleanup_job.rb"), "class CleanupJob < ApplicationJob\n  queue_as :low\n  def perform; end\nend\n")
+        File.write(File.join(dir, "app", "jobs", "digest_job.rb"), "class DigestJob < ApplicationJob\n  def perform; end\nend\n")
+      end
+
+      queues = result[:jobs].to_h { |job| [ job[:name], job[:queue] ] }
+      expect(queues).to eq("CleanupJob" => "myapp.low", "DigestJob" => "myapp.normal")
+    end
+
+    it "names a job with no queue_as and no queue config the default queue, as the booted app does" do
+      result = static_result do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "jobs"))
+        File.write(File.join(dir, "app", "jobs", "digest_job.rb"), "class DigestJob < ApplicationJob\n  def perform; end\nend\n")
+      end
+
+      expect(result[:jobs].map { |job| job[:queue] }).to eq([ "default" ])
+    end
+
     it "names namespaced classes the way the booted app does" do
       result = static_result do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "mailers", "admin"))
