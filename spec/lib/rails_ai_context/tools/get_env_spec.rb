@@ -808,6 +808,46 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     end
   end
 
+  describe "credentials the booted app decrypts" do
+    def credentials_in(dir, content = nil)
+      key_path = File.join(dir, "development.key")
+      File.write(key_path, ActiveSupport::EncryptedConfiguration.generate_key) if content
+      config = ActiveSupport::EncryptedConfiguration.new(
+        config_path: File.join(dir, "development.yml.enc"), key_path: key_path, env_key: "RAC_SPEC_NO_KEY", raise_if_missing_key: false
+      )
+      config.write(content) if content
+      config
+    end
+
+    before do
+      allow(described_class).to receive(:detect_credentials_keys).and_call_original
+      allow(described_class).to receive(:credentials_file_present?).and_return(true)
+    end
+
+    it "says the file holds no keys when it decrypts to nothing" do
+      Dir.mktmpdir do |dir|
+        allow(Rails.application).to receive(:credentials).and_return(credentials_in(dir, ""))
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("## Credentials Keys (values hidden)", "decrypts and holds no keys")
+        expect(text).not_to include("needs a booted app")
+      end
+    end
+
+    it "still says it cannot read them when the key is missing" do
+      Dir.mktmpdir do |dir|
+        credentials_in(dir, "a: 1\n")
+        File.delete(File.join(dir, "development.key"))
+        allow(Rails.application).to receive(:credentials).and_return(credentials_in(dir))
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("needs a booted app with its master key")
+      end
+    end
+  end
+
   describe "credentials and encrypted-columns trailer" do
     let(:credentials_keys) { %w[secret_key_base aws/access_key_id] }
     let(:encrypted_columns) { { "Keypair" => %w[private_key] } }

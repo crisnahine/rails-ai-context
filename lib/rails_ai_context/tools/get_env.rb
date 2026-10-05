@@ -159,6 +159,10 @@ module RailsAiContext
           lines << "## Credentials Keys (values hidden)"
           credentials_keys.each { |k| lines << "- `#{k}`" }
           lines << ""
+        elsif (empty = empty_credentials_file)
+          lines << "## Credentials Keys (values hidden)"
+          lines << "_`#{empty}` decrypts and holds no keys._"
+          lines << ""
         elsif credentials_file_present?
           lines << "## Credentials Keys (values hidden)"
           lines << RailsAiContext::Confidence.unavailable("credentials are encrypted; reading the key names needs a booted app with its master key")
@@ -511,6 +515,20 @@ module RailsAiContext
           Dir.glob(File.join(root, "config", "credentials", "*.yml.enc")).any?
       rescue StandardError
         false
+      end
+
+      # Rails answers {} both for a file it decrypted and found empty and for
+      # one it had no key to open, so only a key plus the file tells them apart.
+      private_class_method def self.empty_credentials_file
+        return nil if RailsAiContext.static_tier?
+
+        creds = Rails.application&.credentials
+        return nil unless creds.respond_to?(:key) && creds.respond_to?(:content_path) && creds.respond_to?(:config)
+        return nil unless creds.key && creds.content_path.exist? && creds.config.empty?
+
+        creds.content_path.to_s.delete_prefix("#{rails_app.root}/")
+      rescue StandardError
+        nil
       end
 
       private_class_method def self.detect_credentials_keys
