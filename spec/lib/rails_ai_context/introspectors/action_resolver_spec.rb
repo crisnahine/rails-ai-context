@@ -166,6 +166,18 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
     end
   end
 
+  describe ".methods_in" do
+    it "walks one source once however often it is asked" do
+      source = "class Once\n  def a; end\n  def b; end\nend\n"
+      allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_dispatch).and_call_original
+
+      2.times { described_class.methods_in(source) }
+
+      expect(RailsAiContext::Introspectors::SourceIntrospector).to have_received(:walk_dispatch).once
+      expect(described_class.methods_in(source).map { |m| m[:name] }).to eq(%w[a b])
+    end
+  end
+
   describe ".public_methods_from_source" do
     let(:source) { "class Widget\n  def full_name(sep = ' ')\n  end\n\n  def self.build(attrs)\n  end\n\n  private\n\n  def secret\n  end\nend\n" }
 

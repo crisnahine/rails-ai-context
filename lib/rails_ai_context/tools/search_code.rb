@@ -613,8 +613,10 @@ module RailsAiContext
               # What does this method call? Read off the AST: the paren regex
               # this replaced saw only `foo(...)`, so a body of paren-less
               # predicate calls reported nothing at all.
-              internal_calls = internal_calls_in(body)
-              internal_calls += Introspectors::SourceCalls.calls(body)
+              # `private def x` is the modifier's line, and the modifier is no call the method makes.
+              def_source = body.sub(/\A\s*(?:[a-z_]\w*\s+)*(?=def\s)/, "")
+              internal_calls = internal_calls_in(def_source)
+              internal_calls += Introspectors::SourceCalls.calls(def_source)
               internal_calls.uniq!
               internal_calls.reject! { |c| c == cleaned }
 
@@ -807,9 +809,14 @@ module RailsAiContext
         node.compact_child_nodes.each { |child| collect_internal_calls(child, found) }
       end
 
-      # Extract a method body from a file given the def line number
+      # A method body from a file given the def line number, as the parser
+      # bounds the def; a def the walk does not record is read by indentation.
       private_class_method def self.extract_method_body(file_path, def_line)
-        source_lines = (RailsAiContext::SafeFile.read(file_path) || "").lines
+        source = RailsAiContext::SafeFile.read(file_path) || ""
+        method = Introspectors::ActionResolver.methods_in(source).find { |m| m[:location] == def_line }
+        return Introspectors::ActionResolver.body_of(source, method)&.dig(:code) if method
+
+        source_lines = source.lines
         start_idx = def_line - 1
         return nil if start_idx >= source_lines.size
 

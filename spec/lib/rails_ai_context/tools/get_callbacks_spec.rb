@@ -502,12 +502,40 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
     end
   end
 
+  describe "a one-line or endless callback method" do
+    it "shows its own line, not the rest of the class" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "user.rb")
+        File.write(path, <<~RUBY)
+          class User < ApplicationRecord
+            before_validation :strip_name
+            around_save :wrap_save
+            private
+            def strip_name; end
+            def wrap_save = yield
+            def other; end
+          end
+        RUBY
+        allow(described_class).to receive(:cached_context).and_return({
+          models: { "User" => { name: "User", file: path,
+                                callbacks: { "before_validation" => [ "strip_name" ], "around_save" => [ "wrap_save" ] } } }
+        })
+
+        text = described_class.call(model: "User", detail: "full").content.first[:text]
+
+        expect(text).to include("### :strip_name (line 5)\n```ruby\n  def strip_name; end\n```")
+        expect(text).to include("### :wrap_save (line 6)\n```ruby\n  def wrap_save = yield\n```")
+        expect(text).not_to include("def other")
+      end
+    end
+  end
+
   # A gem-owned model carries a path that names the gem, so joining it to the
   # app root opened nothing and the callback body was silently absent.
   describe "a model whose file belongs to a gem" do
     it "reads the callback body out of the gem's own file" do
       gem_file = File.join(Gem.loaded_specs["activesupport"].full_gem_path,
-                           "lib", "active_support", "notifications.rb")
+                           "lib", "active_support", "notifications", "instrumenter.rb")
       marked = RailsAiContext::PortablePath.relativize_marked(gem_file, Rails.root.to_s)
       allow(described_class).to receive(:cached_context).and_return({
         models: { "Doorkeeper::AccessGrant" => {

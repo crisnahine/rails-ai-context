@@ -594,26 +594,16 @@ module RailsAiContext
           pattern.match?(/\w\z/) ? "\\b" : ""
         end
 
-        # Extract method source from a source string via indentation-based matching.
-        # Returns { code:, start_line:, end_line: } or nil. Shared by get_callbacks, get_concern.
+        # One method's source and the lines it occupies, as the parser bounds
+        # the def, so a one-line or endless def is its own line. "self.x"
+        # asks for the class method. Returns { code:, start_line:, end_line: }
+        # or nil. Shared by get_callbacks, get_concern.
         def extract_method_source_from_string(source, method_name)
-          source_lines = source.lines
           name = method_name.to_s
-          pattern = /\A\s*def\s+#{Regexp.escape(name)}#{RailsAiContext::MethodName.definition_end(name)}/
-          start_idx = source_lines.index { |l| l.match?(pattern) }
-          return nil unless start_idx
-
-          def_indent = source_lines[start_idx][/\A\s*/].length
-          result = []
-          end_idx = start_idx
-
-          source_lines[start_idx..].each_with_index do |line, i|
-            result << line.rstrip
-            end_idx = start_idx + i
-            break if i > 0 && line.match?(/\A\s{#{def_indent}}end\b/)
-          end
-
-          { code: result.join("\n"), start_line: start_idx + 1, end_line: end_idx + 1 }
+          scope = name.start_with?("self.") ? :class : :instance
+          bare = name.delete_prefix("self.")
+          method = Introspectors::ActionResolver.methods_in(source).find { |m| m[:name] == bare && m[:scope] == scope }
+          method && Introspectors::ActionResolver.body_of(source, method)
         rescue => e
           RailsAiContext.debug_fail(e, nil, label: "extract_method_source_from_string")
         end

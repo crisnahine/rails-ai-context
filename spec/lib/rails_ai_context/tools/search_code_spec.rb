@@ -1393,6 +1393,15 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
           end
         end
 
+        it "shows a one-line def's body as its own line" do
+          with_search_app(files) do
+            traced = text(pattern: "sign", match_type: "trace")
+
+            expect(traced).to include("```ruby\n  private def sign(data) = data.to_s\n```")
+            expect(traced).not_to include("- `private`")
+          end
+        end
+
         it "counts an endless body as a call site" do
           with_search_app(files) do
             traced = text(pattern: "stamp_now", match_type: "trace")

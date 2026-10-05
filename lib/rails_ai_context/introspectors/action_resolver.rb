@@ -37,6 +37,8 @@ module RailsAiContext
       # shift-assign, which does assign.
       ASSIGNMENT = /(?<![=!<>~])=(?![=~])|(?<![<>])(?:<<|>>)=/
 
+      WALKED_METHODS = ObjectSpace::WeakMap.new
+
       module_function
 
       def framework?(klass, kind:)
@@ -242,8 +244,13 @@ module RailsAiContext
         action_source.to_s.scan(/render\s+(?:json|xml):\s*@(\w+)/).flatten.uniq
       end
 
+      # Keyed by the cached tree, so a tool asking one file for each of its
+      # callbacks walks it once.
       def methods_in(source)
-        SourceIntrospector.walk_source(source, { methods: Listeners::MethodsListener })[:methods] || []
+        result = AstCache.parse_string(source.to_s)
+        (WALKED_METHODS[result.value] ||= Array(
+          SourceIntrospector.walk_dispatch(result, { methods: Listeners::MethodsListener })[:methods]
+        ).each(&:freeze).freeze).dup
       end
 
       def own_methods_in(source, owner)
