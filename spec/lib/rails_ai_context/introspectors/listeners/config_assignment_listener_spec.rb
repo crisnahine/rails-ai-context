@@ -99,6 +99,17 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
     expect(results.first[:path]).to eq([ :assets, :paths ])
   end
 
+  it "matches the app's own config under any name, and no other library's" do
+    results = parse_and_dispatch(<<~RUBY)
+      MyApp::Application.config.time_zone = "UTC"
+      app.config.eager_load = true
+      OmniAuth.config.test_mode = true
+      OmniAuth.config.mock_auth[:github] = { uid: "1" }
+    RUBY
+
+    expect(results.map { |r| r[:path] }).to eq([ [ :time_zone ], [ :eager_load ] ])
+  end
+
   it "records a bare config reference so block sections are visible" do
     results = parse_and_dispatch(<<~RUBY)
       config.jwt do |jwt|

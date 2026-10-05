@@ -184,9 +184,17 @@ module RailsAiContext
           end
 
           root_index = parts.rindex { |part| @roots.include?(part.to_s) }
-          return nil unless root_index
+          return nil unless root_index && app_owned?(parts.first(root_index))
 
           parts[(root_index + 1)..] || []
+        end
+
+        # What the root hangs off: nothing, a local (`app`), `Rails.application` or
+        # the app's Application class. `OmniAuth.config` is another library's config.
+        def app_owned?(prefix)
+          first = prefix.first.to_s
+          prefix.empty? || !first.match?(/\A[A-Z]/) || prefix.first(2) == %i[Rails application] ||
+            first == "Application" || first.end_with?("::Application")
         end
       end
     end
