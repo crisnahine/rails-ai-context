@@ -517,14 +517,9 @@ module RailsAiContext
         {}.merge(@collected)
       end
 
-      # The method names the walk asked the class's calls about, and whether
-      # the class calls any of them: a walk it calls none of answers the same
-      # for every class that calls none of them.
+      # The method names the walk asked the class's calls about: a walk that
+      # asked about none the class calls answers the same for every such class.
       attr_reader :consulted
-
-      def calls_any_consulted?
-        @consulted.any? { |name| called.include?(name) }
-      end
 
       def initialize(root, dirs, keys, cache, listeners, calls = nil, extra = [], file = nil, known: nil)
         # The class's own file, which can declare a module it includes.
@@ -1007,7 +1002,7 @@ module RailsAiContext
       dirs = ConcernPaths.ordered_dirs(root.to_s, prefer)
       run = Run.new(root.to_s, dirs, keys, cache, listeners, calls, extra, file)
       run.walk(walked, within, MAX_DEPTH)
-      depends_on_calls = run.calls_any_consulted?
+      consulted = run.consulted.dup
       # An `included do` can call a method a concern read before the block did, so walk
       # again with the known calls until no method the walk asked about has a new call.
       known = {}
@@ -1015,15 +1010,18 @@ module RailsAiContext
         asked = run.skipped_methods | run.consulted
         break if run.included_calls.none? { |name, sites| asked.include?(name) && (sites.map(&:__id__) - Array(known[name]).map(&:__id__)).any? }
 
-        depends_on_calls = true
         known = run.included_calls
         run = Run.new(root.to_s, dirs, keys, cache, listeners, calls, extra, file, known: known)
         run.walk(walked, within, MAX_DEPTH)
+        consulted.merge(run.consulted)
       end
 
       result = [ run.collected, run.unresolved, run.hidden, run.included_calls, run.placement, run.skipped_methods,
                  run.block_sites, run.mixins ]
-      cache[memo_key] = [ run.consulted, fresh(result) ] if memo_key && !depends_on_calls
+      # The repeat walks follow the concerns' own included calls, the same for every
+      # class; only a method the class itself calls makes the answer its own.
+      own_calls = Run.merge_calls({}, calls&.sites_by_name).keys.to_set
+      cache[memo_key] = [ consulted, fresh(result) ] if memo_key && !consulted.intersect?(own_calls)
       result
     end
 

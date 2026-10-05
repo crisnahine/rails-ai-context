@@ -722,6 +722,26 @@ RSpec.describe RailsAiContext::ConcernMacros do
     end
   end
 
+  # Mastodon's ApplicationController concerns call a class method from their own
+  # included blocks, which forced a second walk for each of its 280 controllers.
+  it "keeps a walk the concerns' own included calls repeated, for classes that call none of what it asked" do
+    File.write(File.join(concern_dir, "watchable.rb"), "module Watchable\n  module ClassMethods\n    def acts_as_watchable\n      has_many :watchers\n    end\n  end\nend\n")
+    File.write(File.join(concern_dir, "journalized.rb"), "module Journalized\n  extend ActiveSupport::Concern\n  included do\n    acts_as_watchable\n  end\nend\n")
+    mixins = [ *mixin("Watchable"), *mixin("Journalized") ]
+    collect = ->(calls, cache) { described_class.collect(tmpdir, mixins, keys: %i[associations], within: "Base", cache: cache, calls: singleton_lookup(calls)) }
+    cache = {}
+    runs = 0
+    allow(described_class::Run).to receive(:new).and_wrap_original { |original, *args, **opts| runs += 1; original.call(*args, **opts) }
+
+    first, = collect.call([ "validates" ], cache)
+    walked = runs
+    second, = collect.call([ "scope" ], cache)
+
+    expect(first[:associations].map { |a| a[:name] }).to eq([ :watchers ])
+    expect(second).to eq(first)
+    expect(runs).to eq(walked)
+  end
+
   # The exclusion is applied inside the walk, so the walk is the only place
   # that knows which concerns it skipped for that reason, at any depth.
   describe "a concern excluded_concerns hides" do
