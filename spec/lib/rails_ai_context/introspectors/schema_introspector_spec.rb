@@ -1046,6 +1046,19 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
     end
   end
 
+  describe "an app that does not load Active Record" do
+    it "says so instead of calling the schema files missing" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config/application.rb"), "require \"rails\"\nrequire \"active_model/railtie\"\n# require \"active_record/railtie\"\nrequire \"action_controller/railtie\"\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:unavailable]).to eq("this app does not load Active Record; ActiveRecord schema introspection does not apply")
+      end
+    end
+  end
+
   describe "migrations_paths in database.yml" do
     def write_app(dir, files)
       files.each do |path, body|

@@ -19,6 +19,32 @@ module RailsAiContext
       RailsAiContext::Introspectors::GemfileGems.names(root).include?("mongoid")
     end
 
+    ACTIVE_RECORD_REQUIRES = %w[rails/all active_record/railtie active_record].freeze
+
+    # False only when config/application.rb picks its frameworks railtie by
+    # railtie and leaves Active Record's out (a require, or a list it requires
+    # in a loop) and never configures it; a file it cannot read is taken to load it.
+    def active_record?(root)
+      source = RailsAiContext::SafeFile.read(File.join(root.to_s, "config", "application.rb"))
+      tree = source && RailsAiContext::AstCache.parse_string(source)
+      return true unless tree && tree.errors.empty?
+
+      nodes = Introspectors::AstWalk.each(tree.value).to_a
+      strings = nodes.grep(Prism::StringNode).map(&:unescaped)
+      return true if strings.intersect?(ACTIVE_RECORD_REQUIRES) || nodes.grep(Prism::CallNode).any? { |n| n.name == :active_record }
+
+      strings.none? { |s| s.end_with?("/railtie", "/engine") }
+    rescue StandardError, ScriptError
+      true
+    end
+
+    # Why Active Record introspection does not apply here, or nil when it does.
+    def without_active_record(root)
+      return nil if active_record?(root)
+
+      mongoid?(root) ? "this app uses Mongoid" : "this app does not load Active Record"
+    end
+
     # The development database config/mongoid.yml names, by `database:` or the
     # path of its `uri:`; nil when the file is absent or computes it (ERB).
     def mongoid_database(root)

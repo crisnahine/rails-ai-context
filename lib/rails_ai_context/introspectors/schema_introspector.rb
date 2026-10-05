@@ -378,6 +378,10 @@ module RailsAiContext
 
       # The configured dump first (database.yml's schema_dump, schema_format), then the default files.
       def static_schema_sources
+        if (reason = RailsAiContext::AppKind.without_active_record(app.root))
+          return { unavailable: "#{reason}; ActiveRecord schema introspection does not apply" }
+        end
+
         present = dump_candidates.select { |_, path| File.exist?(path) }
         present.each do |format, path|
           result = format == :ruby ? parse_schema_rb(path) : parse_structure_sql(path)

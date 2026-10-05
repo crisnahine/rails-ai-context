@@ -92,6 +92,22 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  describe "an app that does not load Active Record" do
+    it "says the class is not an Active Record model" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config/application.rb"), "require \"rails\"\nrequire \"active_model/railtie\"\n# require \"active_record/railtie\"\nrequire \"action_controller/railtie\"\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+        allow(described_class).to receive(:cached_context).and_return({ models: {} })
+
+        text = described_class.call(model: "Contact").content.first[:text]
+
+        expect(text).to include("Contact is not an Active Record model: this app does not load Active Record.")
+        expect(text).not_to include("Recovery")
+      end
+    end
+  end
+
   describe ".call with model not found" do
     it "returns a not-found response with available models" do
       result = described_class.call(model: "Nonexistent")

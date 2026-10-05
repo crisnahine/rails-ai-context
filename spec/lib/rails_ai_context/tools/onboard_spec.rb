@@ -39,6 +39,25 @@ RSpec.describe RailsAiContext::Tools::Onboard do
     end
   end
 
+  describe "an app that does not load Active Record" do
+    it "says so instead of naming an unknown database" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config/application.rb"), "require \"rails\"\nrequire \"active_model/railtie\"\n# require \"active_record/railtie\"\nrequire \"action_controller/railtie\"\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+        allow(described_class).to receive(:cached_context).and_return({
+          app_name: "NoAr", models: {},
+          schema: { unavailable: "this app does not load Active Record; ActiveRecord schema introspection does not apply" }
+        })
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("application without Active Record.")
+        expect(text).not_to include("unknown")
+      end
+    end
+  end
+
   describe ".call" do
     it "returns an MCP::Tool::Response" do
       result = described_class.call
