@@ -88,9 +88,7 @@ module RailsAiContext
 
     BLOCK_NUMBER = /#\d+\z/
 
-    # Each block is a callback of its own, so one name can stand for several. Numbered from the
-    # end of a class's chain, past the ones its descendants declare (`offsets`, counted as the walk
-    # goes up), a block reads the same in a class's list and in every descendant's.
+    # Numbered from the chain's end so one block reads the same in a class's list and every descendant's.
     def number_blocks(filters, offsets)
       seen = Hash.new(0)
       numbered = filters.reverse.map do |filter|

@@ -765,8 +765,7 @@ module RailsAiContext
       # Each called method is read again with that call's literal arguments.
       def expand_called(tree, data, own_lines, label, keys)
         found = Hash.new { |hash, key| hash[key] = [] }
-        # A method that declares none of the keys expands to nothing, so the class's calls of it
-        # need not be asked about; `:expanded` marks every call read, so it asks about all.
+        # A method declaring none of the keys expands to nothing; `:expanded` marks every call read.
         declared = keys.include?(:expanded) ? nil : keys.flat_map { |key| Array(data[key]) }.filter_map { |entry| entry[:location] if entry.is_a?(Hash) }
         Array(data[:methods]).each do |method|
           name = method[:name].to_s

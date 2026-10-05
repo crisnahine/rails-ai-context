@@ -29,9 +29,7 @@ module RailsAiContext
           @foreign = []
         end
 
-        # A line takes the source line of the first code written on it; the
-        # indentation before a pruned branch's body is not code. Text the call
-        # site supplies (`from_call`) stands where its parameter does, however many lines it takes.
+        # A line takes the source line of its first code; text the call supplies keeps its parameter's line.
         def append(chunk, source_line, from_call: false)
           chunk.each_char do |char|
             @text << char
@@ -263,8 +261,7 @@ module RailsAiContext
         bindings
       end
 
-      # The leading `options.delete(:key)` statements on a hash parameter the call passed as a literal:
-      # the parameter holds the rest from there on. Returns the statements taken.
+      # Leading `options.delete(:key)` on a literal hash parameter leave it bound to the other keys.
       def deleted_keys(bindings, body)
         return [] unless body.is_a?(Prism::StatementsNode)
 
