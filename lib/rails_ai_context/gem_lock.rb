@@ -31,8 +31,6 @@ module RailsAiContext
       "jruby" => "JRuby", "truffleruby" => "TruffleRuby", "truffleruby+graalvm" => "TruffleRuby+GraalVM",
       "mruby" => "mruby", "rbx" => "Rubinius"
     }.freeze
-    # Bundler's order: what the lockfile resolved, what the Gemfile asked for, then the
-    # version-manager files the shell picks when neither says, mise's last.
     # mise's project files, highest precedence first (mise docs, configuration).
     MISE_FILES = [ "mise.local.toml", "mise.toml", ".mise.toml", "mise/config.toml", ".config/mise.toml" ].freeze
     VERSION_FILES = [ ".ruby-version", ".tool-versions", *MISE_FILES ].freeze
@@ -233,8 +231,9 @@ module RailsAiContext
     end
     private_class_method :gemfile_ruby
 
-    # Each source answers [version, engine]. The engine comes from the first
-    # source that declares anything, the file that also decides the version.
+    # Each source answers [version, engine], in Bundler's order: what the lockfile
+    # resolved, what the Gemfile asked for, then the version-manager files, mise's last.
+    # The engine comes from the first source that declares anything.
     def declared_ruby(locked, root)
       declared = {
         lockfile_name(root) => locked,
