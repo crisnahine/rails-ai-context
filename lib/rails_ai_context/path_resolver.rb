@@ -252,14 +252,16 @@ module RailsAiContext
     def enclosing_engine_roots(root)
       return [] unless defined?(::Rails::Engine)
 
-      inside = "#{root_key(root.to_s)}#{File::SEPARATOR}"
-      ::Rails::Engine.subclasses.filter_map do |engine|
-        next if engine.root.nil? || (defined?(RailsAiContext::Engine) && engine.equal?(RailsAiContext::Engine))
+      RunCache.fetch([ :enclosing_engine_roots, root.to_s ]) do
+        inside = "#{root_key(root.to_s)}#{File::SEPARATOR}"
+        ::Rails::Engine.subclasses.filter_map do |engine|
+          next if engine.root.nil? || (defined?(RailsAiContext::Engine) && engine.equal?(RailsAiContext::Engine))
 
-        dir = engine.root.to_s
-        dir if inside.start_with?("#{root_key(dir)}#{File::SEPARATOR}")
-      rescue StandardError
-        nil
+          dir = engine.root.to_s
+          dir if inside.start_with?("#{root_key(dir)}#{File::SEPARATOR}")
+        rescue StandardError
+          nil
+        end
       end
     end
 
@@ -274,7 +276,8 @@ module RailsAiContext
     # Inside the app root, or inside the engine its test/dummy runs in.
     def project_file?(path, root)
       real = File.realpath(path)
-      [ root.to_s, *enclosing_engine_roots(root) ].any? { |dir| SafePath.contained?(real, root_key(dir)) }
+      dirs = RunCache.fetch([ :project_dirs, root.to_s ]) { [ root.to_s, *enclosing_engine_roots(root) ].map { |dir| root_key(dir) } }
+      dirs.any? { |dir| SafePath.contained?(real, dir) }
     rescue SystemCallError
       false
     end
