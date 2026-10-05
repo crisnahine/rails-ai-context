@@ -25,6 +25,25 @@ RSpec.describe RailsAiContext::Introspectors::EnvIntrospector do
       expect(result[:referenced_in_code]).to be_an(Array)
     end
 
+    context "with variables Rails reads and two it does not" do
+      names = %w[RAILS_EAGER_LOAD RAILS_EVENT_REPORTER SECRET_KEY_BASE_DUMMY RAILS_DEVELOPMENT_HOSTS
+                 RAILS_GROUPS RAILS_CACHE_ID RAILS_APP_VERSION SOLID_QUEUE_IN_PUMA]
+
+      around do |example|
+        saved = names.to_h { |name| [ name, ENV[name] ] }
+        names.each { |name| ENV[name] = "1" }
+        example.run
+      ensure
+        saved.each { |name, value| ENV[name] = value }
+      end
+
+      it "lists only the ones Rails reads" do
+        set = result[:set].map { |entry| entry[:name] }
+        expect(set).to include(*names.drop(2))
+        expect(set).not_to include("RAILS_EAGER_LOAD", "RAILS_EVENT_REPORTER")
+      end
+    end
+
     context "when RAILS_ENV is explicitly set" do
       before do
         @original = ENV["RAILS_ENV"]

@@ -29,6 +29,8 @@ module RailsAiContext
         { name: "RAILS_ENV",                    safe: true,  category: :core,       doc: "Rails environment (development, test, production)." },
         { name: "RACK_ENV",                     safe: true,  category: :core,       doc: "Rack environment (falls back to RAILS_ENV)." },
         { name: "RAILS_RELATIVE_URL_ROOT",      safe: true,  category: :core,       doc: "Mount Rails at a sub-path." },
+        { name: "RAILS_GROUPS",                 safe: true,  category: :core,       doc: "Extra Bundler groups Rails.groups requires, comma-separated." },
+        { name: "RAILS_DEVELOPMENT_HOSTS",      safe: true,  category: :core,       doc: "Extra hosts allowed in development, comma-separated." },
         { name: "RAILS_LOG_LEVEL",              safe: true,  category: :logging,    doc: "Logger level (debug/info/warn/error/fatal)." },
         { name: "RAILS_LOG_TO_STDOUT",          safe: true,  category: :logging,    doc: "When set, logs go to stdout instead of log/*.log." },
         { name: "RAILS_MAX_THREADS",            safe: true,  category: :server,     doc: "Puma thread count & ActiveRecord pool default." },
@@ -37,13 +39,13 @@ module RailsAiContext
         { name: "PORT",                         safe: true,  category: :server,     doc: "HTTP port (Puma, Thruster)." },
         { name: "HOST",                         safe: true,  category: :server,     doc: "Bind address (Puma, Thruster)." },
 
-        # Assets / eager load
+        # Assets
         { name: "RAILS_SERVE_STATIC_FILES",     safe: true,  category: :assets,     doc: "Serve static assets from Rails (vs an edge CDN/nginx)." },
-        { name: "RAILS_EAGER_LOAD",             safe: true,  category: :boot,       doc: "Force eager_load regardless of environment." },
 
         # Master key / credentials - presence only
         { name: "RAILS_MASTER_KEY",             safe: false, category: :secrets,    doc: "Master key for config/credentials.yml.enc." },
         { name: "SECRET_KEY_BASE",              safe: false, category: :secrets,    doc: "Session / signed cookie / MessageEncryptor key." },
+        { name: "SECRET_KEY_BASE_DUMMY",        safe: true,  category: :secrets,    doc: "Use a throwaway secret_key_base, for assets:precompile in a build (7.1+)." },
 
         # Database - presence only
         { name: "DATABASE_URL",                 safe: false, category: :database,   doc: "Primary database connection URL." },
@@ -56,6 +58,9 @@ module RailsAiContext
         { name: "REDIS_URL",                    safe: false, category: :cache,      doc: "Redis URL (cache / Sidekiq / Action Cable)." },
         { name: "REDIS_CACHE_URL",              safe: false, category: :cache,      doc: "Dedicated Redis URL for caching." },
         { name: "MEMCACHED_URL",                safe: false, category: :cache,      doc: "Memcached URL." },
+        { name: "RAILS_CACHE_ID",               safe: true,  category: :cache,      doc: "Prefix on every cache key." },
+        { name: "RAILS_APP_VERSION",            safe: true,  category: :cache,      doc: "Prefix on every cache key when RAILS_CACHE_ID is unset." },
+        { name: "SOLID_QUEUE_IN_PUMA",          safe: true,  category: :jobs,       doc: "Run the Solid Queue supervisor inside Puma (generated config/puma.rb)." },
 
         # Kamal / deployment
         { name: "KAMAL_REGISTRY_PASSWORD",      safe: false, category: :deploy,     doc: "Kamal container registry password." },
@@ -71,9 +76,6 @@ module RailsAiContext
         { name: "BUNDLE_GEMFILE",               safe: false, category: :bundler,    doc: "Path to the Gemfile Bundler uses." },
         { name: "BUNDLE_PATH",                  safe: false, category: :bundler,    doc: "Path where gems are installed." },
         { name: "DISABLE_SPRING",               safe: true,  category: :bundler,    doc: "Disable Spring preloader." },
-
-        # Rails 8.1
-        { name: "RAILS_EVENT_REPORTER",         safe: true,  category: :observability, doc: "Enable structured event reporter (8.1+)." },
 
         # Testing / parallelism
         { name: "PARALLEL_WORKERS",             safe: true,  category: :testing,    doc: "Parallel test worker count." },
