@@ -217,6 +217,8 @@ module RailsAiContext
             detail += " [polymorphic]" if a[:polymorphic]
             detail += (a[:optional] == true ? " [optional]" : " [optional: #{a[:optional]}]") if a[:optional]
             detail += " dependent: #{a[:dependent]}" if a[:dependent]
+            detail += " (#{a[:declared_options].map { |k, v| "#{k}: #{v}" }.join(', ')})" if a[:declared_options]&.any?
+            detail += " extension methods: #{a[:extension_methods].join(', ')}" if a[:extension_methods]&.any?
             detail += " (fk: #{Introspectors::SchemaConventions.key_text(a[:foreign_key])})" if a[:foreign_key] && a[:type] == "belongs_to"
             detail += " [UNAVAILABLE: #{a[:unavailable]}]" if a[:unavailable]
             lines << detail

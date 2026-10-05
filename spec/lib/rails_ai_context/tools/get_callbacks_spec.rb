@@ -587,4 +587,24 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
       expect(text).not_to include("after_commit_on_")
     end
   end
+
+  # before_add and the rest run on the collection, not the record's own chain.
+  describe "association callbacks" do
+    it "lists them for a model with no record callbacks" do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "User" => { associations: [
+          { type: "has_many", name: "posts", declared_options: { "before_add" => ":check_limit", "after_remove" => ":log_removal", "extend" => "RecentFinder" } },
+          { type: "has_many", name: "comments" }
+        ], callbacks: {} } }
+      )
+
+      text = described_class.call(model: "User").content.first[:text]
+
+      expect(text).not_to include("No callbacks defined.")
+      expect(text).to include("## Association callbacks")
+      expect(text).to include("- **posts** before_add → :check_limit, after_remove → :log_removal")
+      expect(text).not_to include("comments")
+    end
+  end
 end

@@ -505,7 +505,7 @@ module RailsAiContext
           table_name:       model.table_name,
           file:             relative_to_root(model_source_path(model)),
           # Reflection-based (runtime, most accurate for these)
-          associations:     extract_associations(model),
+          associations:     extract_associations(model, source_data),
           # Reflection has no text for a Proc condition and names `validates_with` by kind only,
           # so the list is read off the source; an unreadable file falls back to reflection.
           validations:      booted_validations(model, source_data),
@@ -704,7 +704,7 @@ module RailsAiContext
           options = a[:options] || {}
           optional_value = a.key?(:optional) ? a[:optional] : options[:optional]
           if options.key?(:required)
-            required = literal_boolean(options[:required])
+            required = literal_boolean(options[:required]) if options.key?(:required)
             required.nil? ? [ name, "required: #{options[:required]} is true" ] : (name if required)
           elsif !optional_value.nil?
             optional = literal_boolean(optional_value)
@@ -824,13 +824,22 @@ module RailsAiContext
 
       # ── Reflection-based extraction (unchanged) ─────────────────────
 
-      def extract_associations(model)
+      def extract_associations(model, source_data = empty_source_data)
+        declared = Array(source_data[:associations]).group_by { |a| [ a[:type].to_s, a[:name].to_s ] }
         # The reject stays ahead of the map: class_name/foreign_key on an
         # excluded reflection with a broken :through raises, and `call`'s
         # per-model rescue would replace the whole model with one error line.
         model.reflect_on_all_associations.reject { |assoc| excluded_association?(assoc.name) }.map do |assoc|
-          association_detail(assoc)
+          with_declared_options(association_detail(assoc), assoc, declared[[ assoc.macro.to_s, assoc.name.to_s ]]&.first)
         end
+      end
+
+      # The source's text where the file declares the association, so both
+      # tiers print one spelling; reflection's own options where it does not.
+      def with_declared_options(detail, assoc, source)
+        options = declared_association_options(detail[:type], source ? source[:options] : assoc.options)
+        extensions = source&.dig(:extension_methods)
+        detail.merge({ declared_options: options, extension_methods: extensions }.compact)
       end
 
       # One reflection that cannot resolve costs that reflection, not the
@@ -1283,6 +1292,30 @@ module RailsAiContext
       ].freeze
       BOOLEAN_ASSOCIATION_OPTIONS = %i[polymorphic optional].freeze
 
+      # What the record already says another way, or what Rails keeps for itself.
+      UNLISTED_ASSOCIATION_OPTIONS = [ *LIFTED_ASSOCIATION_OPTIONS, :query_constraints, :anonymous_class ].freeze
+
+      # Every other option the association declares, each as display text:
+      # its callbacks, extensions, counter cache and the rest.
+      def declared_association_options(type, options)
+        return nil unless options.is_a?(Hash)
+
+        shown = options.except(*UNLISTED_ASSOCIATION_OPTIONS)
+        shown = shown.except(:required) if type.to_s == "belongs_to"
+        shown.to_h { |key, value| [ key.to_s, association_option_text(value) ] }.presence
+      end
+
+      def association_option_text(value)
+        case value
+        when Symbol then ":#{value}"
+        when Module then value.name.to_s
+        when Proc then "(proc)"
+        when Array then "[#{value.map { |v| association_option_text(v) }.join(', ')}]"
+        when Hash then "{ #{value.map { |k, v| "#{k}: #{association_option_text(v)}" }.join(', ')} }"
+        else value.to_s
+        end
+      end
+
       # A habtm join_table built from the class's affixes, as the table it names.
       def with_join_tables(associations, path, class_name)
         own = nil
@@ -1316,7 +1349,20 @@ module RailsAiContext
           else value.to_s
           end
         end
-        with_default_foreign_key(lifted)
+        lifted = with_rails_option_rules(lifted, options)
+        declared = declared_association_options(lifted[:type], options)
+        with_default_foreign_key(declared ? lifted.merge(declared_options: declared) : lifted)
+      end
+
+      # What Rails does with two options: `required:` on a belongs_to sets
+      # `optional:` to its negation, and Rails 7.1 takes `query_constraints:`
+      # as the foreign key (7.2 refuses the option).
+      def with_rails_option_rules(assoc, options)
+        required = literal_boolean(options[:required]) if options.key?(:required)
+        assoc = assoc.merge(optional: !required) if assoc[:type] == "belongs_to" && !required.nil? && !assoc.key?(:optional)
+        keys = options[:query_constraints]
+        assoc = assoc.merge(foreign_key: keys.map(&:to_s)) if keys.is_a?(Array) && !assoc.key?(:foreign_key)
+        assoc
       end
 
       # Reflection answers a belongs_to's key when none is declared: the name plus _id.

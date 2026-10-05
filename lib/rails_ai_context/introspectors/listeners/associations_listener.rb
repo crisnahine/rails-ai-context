@@ -28,12 +28,22 @@ module RailsAiContext
             # Sources, not literals: `class_name: Organisation.name` names a
             # class, and the marker names nothing.
             options:       scope_options(receiver_name(node)).merge(extract_keyword_sources(node)),
+            extension_methods: extension_methods(node),
             location:      node.location.start_line,
             confidence:    confidence_for(node)
           }.compact
         end
 
         private
+
+        # `has_many :sessions do def active ... end end` adds `user.sessions.active`.
+        def extension_methods(node)
+          body = node.block.is_a?(Prism::BlockNode) ? node.block.body : nil
+          return nil unless body.is_a?(Prism::StatementsNode)
+
+          names = body.body.grep(Prism::DefNode).map { |d| d.name.to_s }
+          names.presence
+        end
 
         # `foreign_key: AUTHOR_KEY` names a column only at run time.
         def computed_key?(node)
