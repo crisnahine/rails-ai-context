@@ -124,16 +124,16 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, {}, label: "detect_server_timing")
       end
 
-      # Rails 8.1 adds `Rails.application.event_reporter`. Report whether it's
-      # available and the subscriber count. We deliberately do NOT call
+      # Rails 8.1 adds `Rails.event` (ActiveSupport.event_reporter); the application
+      # object has no reporter of its own. Report whether it's available and the subscriber count. We deliberately do NOT call
       # `reporter.tagged` - it's a block-scoped DSL (`reporter.tagged(:x) { … }`)
       # that delegates to `TagStack#with_tags` and `yield`s unconditionally, so
       # a blockless call raises `LocalJumpError`. There is no keyspace to
       # introspect.
       def detect_event_reporter
-        return { available: false } unless app.respond_to?(:event_reporter) && app.event_reporter
+        reporter = Rails.event if Rails.respond_to?(:event)
+        return { available: false } unless reporter
 
-        reporter = app.event_reporter
         entry = { available: true }
         entry[:subscriber_count] = reporter.subscribers.size if reporter.respond_to?(:subscribers) && reporter.subscribers.respond_to?(:size)
         entry
