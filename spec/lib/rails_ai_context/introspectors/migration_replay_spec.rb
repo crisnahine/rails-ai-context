@@ -394,6 +394,79 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
     expect(tables.keys).to include("project_types")
   end
 
+  describe "statements Rails runs differently from how they read" do
+    let(:tables) do
+      replay([ <<~RUBY, <<~RUBY2 ])
+        class CreateUsers < ActiveRecord::Migration[8.1]
+          def change
+            create_table :users do |t|
+              t.string :email
+              if connection.supports_datetime_with_precision?
+                t.datetime :created_at, precision: 6, null: false
+              else
+                t.datetime :created_at, null: false
+              end
+            end
+            add_index :users, :email
+            rename_index :users, "index_users_on_email", "uniq_email"
+            create_table :users, if_not_exists: true do |t|
+              t.string :never_added
+            end
+            create_table :scratch, temporary: true do |t|
+              t.string :x
+            end
+            create_table :user_copies, as: "SELECT id, email FROM users"
+            execute "CREATE TABLE raw_things (id integer primary key, name varchar)"
+          end
+        end
+      RUBY
+        class Legacy < ActiveRecord::Migration[5.0]
+          def change
+            create_table :legacies do |t|
+              t.references :user
+            end
+          end
+        end
+      RUBY2
+    end
+
+    it "keeps one column when both branches of an if declare it" do
+      expect(tables["users"][:columns].map { |c| c[:name] }).to eq(%w[id email created_at])
+    end
+
+    it "renames an index rename_index names" do
+      expect(tables["users"][:indexes].map { |i| i[:name] }).to eq([ "uniq_email" ])
+    end
+
+    it "leaves out temporary tables and keeps the select's columns for an as: table" do
+      expect(tables.keys).not_to include("scratch")
+      expect(tables["user_copies"][:columns].map { |c| c[:name] }).to eq(%w[id email])
+    end
+
+    it "reads a table an execute creates" do
+      expect(tables["raw_things"][:columns].map { |c| c[:name] }).to eq(%w[id name])
+    end
+
+    it "survives SQL it cannot read" do
+      odd = replay([ <<~RUBY ])
+        class Odd < ActiveRecord::Migration[8.1]
+          def change
+            create_table :copies, as: "SELECT lower(email) FROM missing"
+            create_table :empty_copies, as: ""
+            execute "CREATE TABLE ("
+          end
+        end
+      RUBY
+
+      expect(odd["copies"][:columns]).to eq([])
+      expect(odd["empty_copies"][:columns]).to eq([])
+    end
+
+    it "gives a Migration[5.0] table integer keys" do
+      expect(tables["legacies"][:columns].map { |c| [ c[:name], c[:type] ] }).to eq([ %w[id integer], %w[user_id integer] ])
+    end
+  end
+
   describe "a revert block" do
     let(:create_posts) do
       <<~RUBY

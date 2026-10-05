@@ -15,7 +15,12 @@ module RailsAiContext
           table = entry[:table]
           options = entry[:options] || {}
           case entry[:action]
-          when :create_table then seed_table(tables, table, options, pk_type)
+          when :create_table
+            options[:as].is_a?(String) ? create_table_as(tables, table, options[:as]) : seed_table(tables, table, options, pk_type)
+          when :create_table_sql then tables.merge!(StructureSqlReader.parse(entry[:sql])[:tables])
+          when :rename_index
+            index = tables[table]&.dig(:indexes)&.find { |idx| idx[:name] == entry[:old_name] }
+            index[:name] = entry[:new_name] if index && entry[:new_name]
           when :create_join_table then create_join_table(entry, tables, pk_type)
           when :drop_table then tables.delete(table)
           when :rename_table
@@ -63,6 +68,26 @@ module RailsAiContext
           }
           key = (options || {})[:primary_key]
           tables[table][:primary_key] = SchemaConventions.primary_key_value(key) if key.is_a?(Array)
+        end
+
+        AS_SELECT = /\A\s*SELECT\s+(.+?)\s+FROM\s+["`]?(\w+)["`]?/im
+
+        # CREATE TABLE ... AS SELECT: the selected columns, typed by the table
+        # they come from, with no key; a column it cannot trace is left out.
+        def create_table_as(tables, table, sql)
+          return if table.nil? || table.to_s.empty?
+
+          list, from = AS_SELECT.match(sql)&.captures
+          source = Array(tables.dig(from, :columns))
+          picked = if list.to_s.strip == "*" then source
+          else
+            list.to_s.split(",").filter_map do |item|
+              expression, alias_name = item.strip.split(/\s+AS\s+/i, 2)
+              key = expression.to_s.split(".").last.to_s.delete('"`')
+              source.find { |c| c[:name] == key }&.merge(name: (alias_name || key).delete('"`'))
+            end
+          end
+          tables[table] = { columns: picked.map { |c| c.except(:primary_key, :null) }, indexes: [], foreign_keys: [] }
         end
 
         def implicit_pk_columns(options, pk_type)
@@ -123,6 +148,8 @@ module RailsAiContext
             col[:generated] = opts[:as].is_a?(String) ? opts[:as] : ""
             col[:stored] = opts[:stored] == true
           end
+          # Only one branch of an if runs, so a second declaration of a name replaces the first.
+          tables[current_table][:columns].reject! { |c| c[:name] == col[:name] }
           tables[current_table][:columns] << col
           return unless opts[:index] && opts[:index] != false
 

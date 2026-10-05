@@ -200,7 +200,8 @@ module RailsAiContext
         version = migration_version(tree)
         entries.each { |entry| entry[:migration_version] = version }
 
-        dispatch(entries, tables, run.pk_type)
+        # Migration[5.0] and older run Compatibility::V5_0, which keys a table and its references with integer.
+        dispatch(entries, tables, version && (version <=> [ 5, 0 ]) <= 0 ? "integer" : run.pk_type)
         mark_inferred(tables, inferred, inferred_existed) if used_inferred
         count(entries, run.counts)
       end
@@ -217,6 +218,10 @@ module RailsAiContext
           if entry.key?(:action)
             case entry[:action]
             when :create_table, :change_table
+              if entry[:action] == :create_table && skipped_create?(entry, tables)
+                current_table = nil
+                next
+              end
               current_table = entry[:table]
               creating = entry[:action] == :create_table
             when :drop_table, :rename_table then current_table = nil
@@ -272,6 +277,12 @@ module RailsAiContext
         return [ { kind: :not_replayed, location: head[:location] } ] unless inverse
 
         inverse[:action] == :create_table ? [ inverse, *body ] : [ inverse ]
+      end
+
+      # A temporary table is gone with the connection, and if_not_exists leaves a table that exists as it is.
+      def skipped_create?(entry, tables)
+        options = entry[:options] || {}
+        options[:temporary] == true || (options[:if_not_exists] == true && tables.key?(entry[:table]))
       end
 
       # Counted after the flow, so a call only down or a rescue reaches is not.
