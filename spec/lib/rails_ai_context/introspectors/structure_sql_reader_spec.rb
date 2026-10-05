@@ -671,4 +671,58 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
       expect(described_class.parse(sqlite)[:tables]["posts"][:check_constraints]).to eq([ { expression: "length(title) > 0" } ])
     end
   end
+
+  # Rails writes SQLite's foreign key clause across lines, and Rails 7.x writes
+  # no semicolon when ignore_tables makes it dump through sqlite_master.
+  describe "SQLite dumps" do
+    it "reads a table whose foreign key spans lines, and leaves out sqlite_sequence" do
+      sql = <<~SQL
+        CREATE TABLE "accounts" ("id" integer PRIMARY KEY AUTOINCREMENT NOT NULL, "name" varchar NOT NULL);
+        CREATE TABLE sqlite_sequence(name,seq);
+        CREATE TABLE "users" ("id" integer PRIMARY KEY AUTOINCREMENT NOT NULL, "email" varchar NOT NULL, "account_id" integer NOT NULL, CONSTRAINT "fk_rails_61ac11da2b"
+        FOREIGN KEY ("account_id")
+          REFERENCES "accounts" ("id")
+        );
+        CREATE TABLE "tags" ("name" varchar, "user_id" integer, CONSTRAINT "fk_rails_e689f6d0cc"
+        FOREIGN KEY ("user_id")
+          REFERENCES "users" ("id")
+         ON DELETE CASCADE);
+      SQL
+      tables = described_class.parse(sql)[:tables]
+
+      expect(tables.keys).to eq(%w[accounts users tags])
+      expect(tables["users"][:columns].map { |c| c[:name] }).to eq(%w[id email account_id])
+      expect(tables["tags"][:columns].map { |c| c[:name] }).to eq(%w[name user_id])
+      expect(tables["users"][:foreign_keys]).to eq([ { from_table: "users", to_table: "accounts", column: "account_id", primary_key: "id" } ])
+      expect(tables["tags"][:foreign_keys]).to eq([ { from_table: "tags", to_table: "users", column: "user_id", primary_key: "id", on_delete: "cascade" } ])
+    end
+
+    it "skips a CREATE TABLE that never closes and reads the tables after it" do
+      sql = <<~SQL
+        CREATE TABLE "broken" ("a" varchar, "b" varchar(
+        CREATE TABLE "kept" ("x" varchar, "note" varchar DEFAULT 'it''s (fine)', "naïve" integer);
+      SQL
+
+      expect(described_class.parse(sql)[:tables]["kept"][:columns].map { |c| c[:name] }).to include("x", "note")
+      expect(described_class.parse("")[:tables]).to eq({})
+    end
+
+    it "reads statements with no semicolon" do
+      sql = <<~SQL
+        CREATE TABLE "accounts" ("id" integer PRIMARY KEY AUTOINCREMENT NOT NULL, "name" varchar NOT NULL)
+        CREATE TABLE "codes" ("code" varchar, "label" varchar)
+        CREATE INDEX "index_codes_on_label" ON "codes" ("label")
+        CREATE UNIQUE INDEX "index_codes_on_code" ON "codes" ("code") WHERE code IS NOT NULL
+        CREATE TABLE "later" ("x" varchar)
+      SQL
+      tables = described_class.parse(sql)[:tables]
+
+      expect(tables.keys).to eq(%w[accounts codes later])
+      expect(tables["codes"][:columns].map { |c| c[:name] }).to eq(%w[code label])
+      expect(tables["codes"][:indexes]).to eq([
+        { name: "index_codes_on_label", columns: [ "label" ], unique: false },
+        { name: "index_codes_on_code", columns: [ "code" ], unique: true, where: "code IS NOT NULL" }
+      ])
+    end
+  end
 end

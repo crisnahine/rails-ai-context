@@ -1392,4 +1392,18 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       connection.drop_table(:pa_c_posts, if_exists: true)
     end
   end
+
+  describe "a structure.sql that names no table it can read" do
+    it "says the file is there rather than missing" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "structure.sql"), "-- nothing yet\n")
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result).not_to have_key(:unavailable)
+        expect(result[:total_tables]).to eq(0)
+        expect(result[:note]).to include("db/structure.sql")
+      end
+    end
+  end
 end

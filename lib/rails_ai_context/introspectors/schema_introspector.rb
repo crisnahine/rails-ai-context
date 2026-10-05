@@ -355,6 +355,10 @@ module RailsAiContext
           }
         end
 
+        if File.exist?(structure_file_path)
+          return { total_tables: 0, tables: {}, note: "db/structure.sql has no CREATE TABLE statement this reader could read." }
+        end
+
         if RailsAiContext::AppKind.mongoid?(app.root)
           return { unavailable: "this app uses Mongoid; ActiveRecord schema introspection does not apply" }
         end

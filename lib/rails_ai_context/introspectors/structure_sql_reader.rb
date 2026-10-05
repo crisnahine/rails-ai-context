@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "strscan"
+
 module RailsAiContext
   module Introspectors
     # Reads a structure.sql dump into the same table shape the other static
@@ -16,34 +18,19 @@ module RailsAiContext
         # Every table the file creates, by schema-qualified name, so a parent
         # outside the listed tables still resolves.
         all = {}
-        add = proc do |qualified, body, inherits, single_line|
+        each_create_table(content) do |qualified, body, inherits|
           name = qualified_name(qualified)
           shown = shown_name(name)
-          next if shown.start_with?("ar_internal_metadata", "schema_migrations") || (single_line && all.key?(name))
+          next if shown.start_with?("ar_internal_metadata", "schema_migrations")
+          # SQLite's own tables; Rails' data_sources leaves them out.
+          next if dialect == :sqlite && shown.start_with?("sqlite_")
 
           table, raw_types = parse_sql_table_body(body, shown, dialect)
           all[name] = { table: table, raw_types: raw_types, parents: inherits && split_top_level(inherits).map { |parent| qualified_name(parent) } }
           tables[shown] = table if shown.match?(/\A\w+\z/)
         end
 
-        # Identifier quoting differs per dump tool: pg_dump uses bare or
-        # "quoted" names with a public. prefix, mysqldump uses `backticks` and
-        # terminates CREATE TABLE with ") ENGINE=...;", sqlite uses "quotes"
-        # and IF NOT EXISTS. The body is captured up to the closing paren at
-        # line start because MySQL's trailer means ");" alone never appears.
-        # The negative lookahead in the body keeps a single-line CREATE TABLE
-        # (e.g. sqlite's schema_migrations) from swallowing every table that
-        # follows it: without it, the lazy scan has no "\n)" to stop at inside
-        # that one-line statement, so it keeps consuming lines - including the
-        # next CREATE TABLE - until it finds one.
-        content.scan(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?#{QUALIFIED_NAME}\s*\(((?:(?!CREATE TABLE).)*?)^\)#{INHERITS}/m, &add)
-
-        # Single-line CREATE TABLE statements (sqlite emits these for tiny
-        # tables) close with ");" on the same line and miss the multi-line
-        # scan above.
-        content.scan(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?#{QUALIFIED_NAME}\s*\(((?:(?!\)#{INHERITS_KEYWORD})[^\n])*)\)#{INHERITS};/) { |groups| add.call(*groups, true) }
-
-        content.scan(/CREATE (UNIQUE )?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF NOT EXISTS\s+)?[`"]?(\w+)[`"]?\s+ON\s+(?:ONLY\s+)?#{QUALIFIED_NAME}([^;]*)/m) do |unique, idx_name, table, rest|
+        content.scan(/CREATE (UNIQUE )?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF NOT EXISTS\s+)?[`"]?(\w+)[`"]?\s+ON\s+(?:ONLY\s+)?#{QUALIFIED_NAME}((?:(?!#{NEXT_STATEMENT})[^;])*)/m) do |unique, idx_name, table, rest|
           group = first_paren_group(rest)
           keys = index_keys(group)
           next if keys.empty?
@@ -91,11 +78,55 @@ module RailsAiContext
         end.compact
       end
 
+      # Where a statement with no semicolon ends: the next one starting a line.
+      NEXT_STATEMENT = /\n\s*(?:CREATE|ALTER|COMMENT|INSERT|DROP|SET|SELECT)\b/i
+
+      # Each CREATE TABLE's name, body and INHERITS list. The body ends at the
+      # parenthesis that closes it, whatever the line layout or terminator: SQLite
+      # closes mid-line after a multi-line foreign key, MySQL adds ENGINE=, and
+      # a Rails 7 SQLite dump through sqlite_master writes no semicolon.
+      def each_create_table(content)
+        scanner = StringScanner.new(content)
+        while scanner.skip_until(CREATE_TABLE)
+          qualified = scanner[1]
+          close = closing_paren(content, scanner.pos) or next
+          body = content.byteslice(scanner.pos + 1, close - scanner.pos - 1)
+          scanner.pos = close + 1
+          inherits = scanner[1] if scanner.scan(INHERITS)
+          yield qualified, body, inherits
+        end
+      end
+
+      QUOTE_BYTES = "'\"`".bytes.freeze
+
+      # The byte index of the parenthesis closing the one at `open`, quotes
+      # respected; nil when it never closes. Byte-wise, so a long dump costs one pass.
+      def closing_paren(text, open)
+        depth = 0
+        quote = nil
+        index = open
+        while (byte = text.getbyte(index))
+          if quote
+            quote = nil if byte == quote
+          elsif QUOTE_BYTES.include?(byte)
+            quote = byte
+          elsif byte == 40
+            depth += 1
+          elsif byte == 41
+            depth -= 1
+            return index if depth.zero?
+          end
+          index += 1
+        end
+        nil
+      end
+
       # A table name, optionally schema-qualified, each part bare or quoted.
       QUALIFIED_NAME = /((?:(?:"[^"]+"|`[^`]+`|\w+)\.)?(?:"[^"]+"|`[^`]+`|\w+))/
       INHERITS_KEYWORD = /\s*INHERITS\b/i
       # The optional INHERITS list after a CREATE TABLE body.
       INHERITS = /(?:#{INHERITS_KEYWORD}\s*\(([^)]*)\))?/
+      CREATE_TABLE = /CREATE TABLE\s+(?:IF NOT EXISTS\s+)?#{QUALIFIED_NAME}\s*(?=\()/i
 
       # "schema.name" with quotes removed; an unqualified name is in public.
       def qualified_name(text)
@@ -173,10 +204,9 @@ module RailsAiContext
       # KEY / UNIQUE KEY / CONSTRAINT lines; the other dialects emit separate
       # statements, so those lines simply never match here.
       def parse_sql_table_body(body, table_name, dialect = nil)
-        # sqlite's .schema emits whole CREATE TABLE statements on one line;
-        # the per-line parsers below would then see a single "line" and keep
-        # only its first column. Split such bodies on top-level commas first.
-        body = split_single_line_sql_body(body) unless body.include?("\n")
+        # One definition per line whatever the dump's layout: SQLite writes a
+        # table on one line and its foreign key clause across three.
+        body = split_top_level(body).map { |definition| definition.gsub(/\s*\n\s*/, " ") }.join("\n")
 
         columns, raw_types = parse_sql_columns(body, dialect)
         table = { columns: columns, indexes: [], foreign_keys: [] }
@@ -187,7 +217,7 @@ module RailsAiContext
         body.each_line do |line|
           line = line.strip.chomp(",")
           case line
-          when /\ACONSTRAINT\s+[`"]?\w+[`"]?\s+FOREIGN KEY\s*\(([^)]*)\)\s*REFERENCES\s+[`"]?(\w+)[`"]?\s*\(([^)]*)\)(.*)/i
+          when /\A(?:CONSTRAINT\s+[`"]?\w+[`"]?\s+)?FOREIGN KEY\s*\(([^)]*)\)\s*REFERENCES\s+[`"]?(\w+)[`"]?\s*\(([^)]*)\)(.*)/i
             columns, to, keys, tail = $1, $2, $3, $4
             table[:foreign_keys] << SchemaConventions.foreign_key_entry(table_name, to, columns.scan(/\w+/), keys.scan(/\w+/), **foreign_key_actions(tail))
           when /\A(?:CONSTRAINT\s+[`"]?(\w+)[`"]?\s+)?CHECK\s*(\(.*)/i
@@ -248,12 +278,6 @@ module RailsAiContext
         group = text[start..]
         scan_top_level(group) { |ch, i, depth| return group[1, i - 1] if ch == ")" && depth.zero? }
         nil
-      end
-
-      # A one-line CREATE TABLE body as one definition per line, split on the
-      # commas outside parentheses and quotes, so numeric(10,2) survives.
-      def split_single_line_sql_body(body)
-        split_top_level(body).join("\n")
       end
 
       def split_top_level(body)
