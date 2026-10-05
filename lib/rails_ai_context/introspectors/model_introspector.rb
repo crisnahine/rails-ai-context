@@ -1459,7 +1459,7 @@ module RailsAiContext
 
       # What Rails does with two options: `required:` on a belongs_to sets
       # `optional:` to its negation, and Rails 7.1 takes `query_constraints:`
-      # as the foreign key (7.2 refuses the option).
+      # as the foreign key (7.2 deprecates it, 8.0 refuses it).
       def with_rails_option_rules(assoc, options)
         required = literal_boolean(options[:required]) if options.key?(:required)
         assoc = assoc.merge(optional: !required) if assoc[:type] == "belongs_to" && !required.nil?
