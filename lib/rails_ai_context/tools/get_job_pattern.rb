@@ -471,10 +471,10 @@ module RailsAiContext
       # The `return` lines inside perform's own body, first ten.
       private_class_method def self.extract_guard_clauses(source)
         perform = perform_method(source)
-        return [] unless perform
+        body = perform && Introspectors::ActionResolver.body_of(source, perform)
+        return [] unless body
 
-        body = source.lines[perform[:location]...(perform[:end_location] - 1)] || []
-        body.map(&:strip).select { |line|
+        body[:code].lines.map(&:strip).select { |line|
           line.match?(/\Areturn\s+(if|unless)\b/) || (line.match?(/\Areturn\b/) && line.length < 120)
         }.first(10)
       end

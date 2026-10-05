@@ -215,6 +215,23 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
         expect(text).not_to include("return unless ready?")
       end
 
+      it "describes a job that delegates perform, with no guard clauses, in detail and in the listing" do
+        File.write(File.join(tmpdir, "app", "jobs", "relay_job.rb"), <<~RUBY)
+          class RelayJob < ApplicationJob
+            delegate :perform, to: :service
+          end
+        RUBY
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+        detail = described_class.call(job: "RelayJob").content.first[:text]
+        listing = described_class.call(detail: "full").content.first[:text]
+
+        expect(detail).to include("RelayJob")
+        expect(detail).not_to include("## Guard Clauses")
+        expect(listing).to include("## RelayJob")
+      end
+
       it "reads every retry, discard and sidekiq option as written, and none from a comment" do
         text = described_class.call(job: "SyncJob").content.first[:text]
 
