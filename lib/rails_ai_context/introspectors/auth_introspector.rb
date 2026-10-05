@@ -136,7 +136,6 @@ module RailsAiContext
         end
       end
 
-      # A gem is named only when the app bundles it: an app can have app/policies without pundit.
       # rodauth-rails generates its auth class into app/misc.
       def rodauth_classes
         SourceScan.each(root, kind: "app/misc").flat_map { |record|
@@ -147,6 +146,7 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "rodauth_classes")
       end
 
+      # A gem is named only when the app bundles it: an app can have app/policies without pundit.
       def detect_authorization
         authz = {}
 
