@@ -29,14 +29,22 @@ module RailsAiContext
         candidates(root).find { |_, path| File.exist?(path) }
       end
 
-      # HashConfig#schema_format (8.1) reads database.yml first; the environment's file sets it after application.rb.
+      # HashConfig#schema_format (8.0.3+) reads database.yml first; the environment's file sets it after application.rb.
       def schema_format(root, config)
         declared = config["schema_format"].to_s
-        return declared.to_sym if FILE_NAMES.key?(declared.to_sym)
+        return declared.to_sym if FILE_NAMES.key?(declared.to_sym) && reads_database_schema_format?(root)
 
         files = [ "config/application.rb", "config/environments/#{RailsAiContext.environment_name}.rb" ]
         found = files.filter_map { |path| RailsAiContext::SafeFile.read(File.join(root, path)).to_s.scan(APP_FORMAT).last&.first }
         (found.last || "ruby").to_sym
+      end
+
+      # An app whose lockfile does not say its Active Record is taken to read it.
+      def reads_database_schema_format?(root)
+        locked = RailsAiContext::GemLock.for(root).version("activerecord")
+        locked.nil? || Gem::Version.new(locked) >= Gem::Version.new("8.0.3")
+      rescue ArgumentError
+        true
       end
 
       # schema_dump: false (or empty) means no dump; a name outside db/ or the app is not read.

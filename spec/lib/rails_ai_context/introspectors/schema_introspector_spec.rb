@@ -1660,11 +1660,24 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
+    def lockfile(activerecord)
+      "GEM\n  remote: https://rubygems.org/\n  specs:\n    activerecord (#{activerecord})\n\nDEPENDENCIES\n  activerecord\n"
+    end
+
     it "takes the format database.yml gives the database over the app's" do
       files = { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  primary:\n    adapter: sqlite3\n    schema_format: sql\n    schema_dump: primary.sql\n",
                 "db/schema.rb" => one_table_rb.call("stale_things"),
                 "db/primary.sql" => "CREATE TABLE \"fresh_things\" (\"id\" integer PRIMARY KEY);\n" }
       static_with(files) { |result, _| expect(result[:tables].keys).to eq(%w[fresh_things]) }
+      static_with(files.merge("Gemfile.lock" => lockfile("8.0.3"))) { |result, _| expect(result[:tables].keys).to eq(%w[fresh_things]) }
+    end
+
+    it "leaves database.yml's schema_format to Rails versions that read it" do
+      files = { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  schema_format: sql\n",
+                "Gemfile.lock" => lockfile("8.0.2"),
+                "db/schema.rb" => one_table_rb.call("loaded_things"),
+                "db/structure.sql" => "CREATE TABLE \"ignored_things\" (\"id\" integer PRIMARY KEY);\n" }
+      static_with(files) { |result, _| expect(result[:tables].keys).to eq(%w[loaded_things]) }
     end
 
     it "names no configured file when schema_dump is false, and an environment file's format wins" do
