@@ -70,6 +70,14 @@ module RailsAiContext
             else
               mark(node.arguments.arguments, node.name, frame_scope)
             end
+          when :private_class_method, :public_class_method
+            mark(Array(node.arguments&.arguments), node.name == :private_class_method ? :private : :public, :class)
+          when :module_function
+            if node.arguments.nil?
+              @frames.last.visibility = :module_function
+            else
+              mark(node.arguments.arguments, :module_function, :instance)
+            end
           when *BLOCK_FRAMES.keys
             @scoped_blocks[node.block] = BLOCK_FRAMES[node.name] if node.block.is_a?(Prism::BlockNode)
           end
@@ -93,12 +101,18 @@ module RailsAiContext
         def on_def_node_enter(node)
           scope = def_scope(node)
           method_name = node.name.to_s
-
+          return unless scope
           return if method_name == "initialize" && scope == :instance && !@include_initialize
 
           frame = @frames.last
-          visibility = frame.marks[[ scope, method_name ]] || frame.visibility
-          record(node, method_name, scope, visibility)
+          # A bare `private` reaches only defs written without a receiver.
+          visibility = frame.marks[[ scope, method_name ]] || (node.receiver ? :public : frame.visibility)
+          if visibility == :module_function
+            record(node, method_name, :instance, :private, prefixed: false)
+            record(node, method_name, :class, :public, prefixed: true)
+          else
+            record(node, method_name, scope, visibility, prefixed: !node.receiver.nil?)
+          end
         end
 
         private
@@ -111,8 +125,17 @@ module RailsAiContext
           CLASS_SCOPE_FRAMES.include?(@frames.last.kind) ? :class : :instance
         end
 
+        # nil for a singleton def on anything but this class (`def other.x`):
+        # it is no method of the class.
         def def_scope(node)
-          node.receiver.is_a?(Prism::SelfNode) ? :class : frame_scope
+          receiver = node.receiver
+          return frame_scope if receiver.nil?
+          return :class if receiver.is_a?(Prism::SelfNode)
+          return unless receiver.is_a?(Prism::ConstantReadNode) || receiver.is_a?(Prism::ConstantPathNode)
+
+          owner = @owner_stack.join("::")
+          name = constant_path_string(receiver).delete_prefix("::")
+          :class if owner == name || owner.end_with?("::#{name}")
         end
 
         def mark(args, visibility, scope)
@@ -125,12 +148,19 @@ module RailsAiContext
               name = arg.unescaped
               marks[[ scope, name ]] = visibility
               existing = @results.reverse_each.find { |r| r[:name] == name && r[:scope] == scope && r[:owner] == @owner_stack }
-              existing[:visibility] = visibility if existing
+              apply_visibility(existing, visibility) if existing
             end
           end
         end
 
-        def record(node, method_name, scope, visibility)
+        def apply_visibility(entry, visibility)
+          return entry[:visibility] = visibility unless visibility == :module_function
+
+          entry[:visibility] = :private
+          @results << entry.merge(scope: :class, visibility: :public, signature: "self.#{entry[:signature]}")
+        end
+
+        def record(node, method_name, scope, visibility, prefixed:)
           @results << {
             name:         method_name,
             scope:        scope,
@@ -142,7 +172,7 @@ module RailsAiContext
             owner:        @owner_stack.dup,
             # Sliced off the node so defaults read as written (`options = {}`);
             # `params` records names only.
-            signature:    signature_source(node, scope == :class),
+            signature:    signature_source(node, prefixed),
             location:     node.location.start_line,
             end_location: node.location.end_line,
             confidence:   RailsAiContext::Confidence::VERIFIED
@@ -151,8 +181,8 @@ module RailsAiContext
 
         # `class << self` members carry no receiver of their own, so they read
         # as the bare name, which is how they are written.
-        def signature_source(node, is_class_method)
-          prefix = (is_class_method && node.receiver) ? "self." : ""
+        def signature_source(node, prefixed)
+          prefix = prefixed ? "self." : ""
           params = parameter_slices(node.parameters)
           return "#{prefix}#{node.name}" if params.empty?
 

@@ -382,4 +382,51 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener, "visib
     source = "class Widget\n  def x; end\n  class << self\n    def x; end\n    private :x\n  end\nend\n"
     expect(rows(source)).to eq([ [ "x", :instance, :public ], [ "x", :class, :private ] ])
   end
+
+  it "reads def Const.x as a class method of that constant" do
+    source = "class Widget\n  def Widget.beta_class_via_const; end\nend\n"
+    expect(parse_and_dispatch(source).first).to include(name: "beta_class_via_const", scope: :class,
+                                                        visibility: :public, signature: "self.beta_class_via_const")
+  end
+
+  it "leaves a singleton def on another object out of the class's methods" do
+    expect(rows("class Widget\n  def other.x; end\n  def Other.y; end\nend\n")).to eq([])
+  end
+
+  it "keeps def self.x public after a bare private, as Ruby does" do
+    expect(rows("class Widget\n  private\n  def self.x; end\nend\n")).to eq([ [ "x", :class, :public ] ])
+  end
+
+  it "reads private_class_method, inline and by name, as private class methods" do
+    source = <<~RUBY
+      class Widget
+        private_class_method def self.zeta_private_class; end
+        def self.eta_class; end
+        private_class_method :eta_class
+        def eta_class; end
+      end
+    RUBY
+    expect(rows(source)).to eq([
+      [ "zeta_private_class", :class, :private ], [ "eta_class", :class, :private ], [ "eta_class", :instance, :public ]
+    ])
+  end
+
+  it "reads module_function as a public module method and a private instance method" do
+    source = <<~RUBY
+      module PriceCalc
+        module_function
+        def total(items) = items.sum
+      end
+      module Fmt
+        def money(x) = x
+        module_function :money
+      end
+    RUBY
+    methods = parse_and_dispatch(source)
+    expect(methods.map { |m| [ m[:name], m[:scope], m[:visibility] ] }).to contain_exactly(
+      [ "total", :instance, :private ], [ "total", :class, :public ],
+      [ "money", :instance, :private ], [ "money", :class, :public ]
+    )
+    expect(methods.find { |m| m[:name] == "total" && m[:scope] == :class }[:signature]).to eq("self.total(items)")
+  end
 end

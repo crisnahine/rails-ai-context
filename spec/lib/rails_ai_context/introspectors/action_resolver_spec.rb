@@ -178,6 +178,18 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
       expect(described_class.class_methods_from_source(source)).to eq([ "build(attrs)" ])
     end
 
+    it "leaves a private_class_method out of the class methods and keeps def Widget.x in" do
+      source = <<~RUBY
+        class Widget
+          def Widget.beta_class_via_const; end
+          private_class_method def self.zeta_private_class; end
+          def self.eta_class; end
+          private_class_method :eta_class
+        end
+      RUBY
+      expect(described_class.class_methods_from_source(source)).to eq(%w[beta_class_via_const])
+    end
+
     it "reads a module as the owner and keeps a nested class out of it" do
       concern = <<~RUBY
         module Searchable

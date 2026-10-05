@@ -130,7 +130,7 @@ module RailsAiContext
       # inside `class_methods do` or `class << self`.
       def class_methods_from_source(source, owner: nil)
         own_methods_in(source, owner)
-          .select { |m| m[:scope] == :class && (m[:visibility] == :public || m[:signature].to_s.start_with?("self.")) }
+          .select { |m| m[:scope] == :class && m[:visibility] == :public }
           .map { |m| signature(m) }.uniq
       end
 
