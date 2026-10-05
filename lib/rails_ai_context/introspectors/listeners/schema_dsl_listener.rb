@@ -68,7 +68,7 @@ module RailsAiContext
 
         # Block methods the replay reads, or that never add an index.
         OTHER_TABLE_METHODS = %i[
-          column foreign_key remove_foreign_key remove_check_constraint rename_index
+          foreign_key remove_foreign_key remove_check_constraint rename_index
           column_exists? index_exists? foreign_key_exists? check_constraint_exists?
         ].to_set.freeze
 
@@ -219,7 +219,7 @@ module RailsAiContext
         end
 
         def column_call?(node)
-          return false unless COLUMN_TYPES.include?(node.name.to_s)
+          return false unless node.name == :column || COLUMN_TYPES.include?(node.name.to_s)
           receiver_is_t?(node.receiver)
         end
 
@@ -243,16 +243,18 @@ module RailsAiContext
           # `t.string "name", { limit: 50 }` passes its options braced.
           braced, positional = (node.arguments&.arguments || []).reject { |arg| arg.is_a?(Prism::KeywordHashNode) }
                                                                  .partition { |arg| arg.is_a?(Prism::HashNode) }
-          positional = positional.first(1) if node.name == :primary_key
+          # TableDefinition#column(name, type): a type with no method of its own, as MySQL dumps enum('a','b').
+          column_type = node.name == :column ? literal_string(positional[1]) : node.name.to_s
+          positional = positional.first(1) if node.name == :primary_key || node.name == :column
           names = positional.map { |arg| literal_string(arg) }
-          return unread_call(node) if names.empty? || names.any?(&:nil?)
+          return unread_call(node) if names.empty? || names.any?(&:nil?) || column_type.nil?
 
           options = braced.map { |hash| hash_node_to_hash(hash) }.reduce(extract_keyword_options(node), :merge)
           names.each do |col_name|
             @results << {
               type:        :column,
               table:       nil,
-              column_type: node.name.to_s,
+              column_type: column_type,
               name:        col_name,
               options:     options,
               # A proc default (`default: -> { "now()" }`) has no literal value,

@@ -27,8 +27,6 @@ module RailsAiContext
           args = node.arguments&.arguments || []
           if %i[down revert].include?(node.name) && node.block
             @results << { kind: :down, range: node.location.start_line..node.location.end_line }
-          elsif node.name == :column && block_column?(node.receiver)
-            @results << column_definition(node, args)
           elsif TABLE_OPS[node.name] == :remove_reference && block_column?(node.receiver)
             # Table#remove_references drops each name it is given.
             args.reject { |arg| arg.is_a?(Prism::KeywordHashNode) }.each do |arg|
@@ -91,14 +89,6 @@ module RailsAiContext
           when :add_timestamps then result.merge!(default_source: default_source(node), default_proc: proc_default?(node))
           end
           result
-        end
-
-        # t.column is TableDefinition#column: a column definition like t.string.
-        def column_definition(node, args)
-          positional = args.reject { |arg| arg.is_a?(Prism::KeywordHashNode) }
-          { type: :column, name: literal_string(positional[0]), column_type: literal_string(positional[1]),
-            options: extract_keyword_options(node), default_source: default_source(node), default_proc: proc_default?(node),
-            location: node.location.start_line }
         end
 
         # The block parameter a create_table body names `t`, whether it reads

@@ -1406,4 +1406,23 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
   end
+
+  describe "a column schema.rb writes with t.column" do
+    it "reads it with the type it names" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+            create_table "things", force: :cascade do |t|
+              t.column "kind", "enum('a','b')"
+            end
+          end
+        RUBY
+        things = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:tables]["things"]
+
+        expect(things[:columns].map { |c| [ c[:name], c[:type] ] }).to eq([ %w[id bigint], [ "kind", "enum('a','b')" ] ])
+        expect(things).not_to have_key(:unread_calls)
+      end
+    end
+  end
 end
