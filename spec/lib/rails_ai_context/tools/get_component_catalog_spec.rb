@@ -167,6 +167,14 @@ RSpec.describe RailsAiContext::Tools::GetComponentCatalog do
       expect(text).to include("render")
     end
 
+    it "sets one item of a renders_many slot with the singular setter, as view_component defines it" do
+      text = described_class.call(component: "card", detail: "full").content.first[:text]
+
+      expect(text).to include("<% c.with_badge do %>item<% end %>")
+      expect(text).not_to include("c.with_badges do")
+      expect(text).to include("<% c.with_header do %>content<% end %>")
+    end
+
     context "no-props no-slots component" do
       before do
         data = {
