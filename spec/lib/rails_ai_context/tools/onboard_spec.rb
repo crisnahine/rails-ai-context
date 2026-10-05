@@ -170,6 +170,14 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       expect(text).to include("has_secure_password on User.")
     end
 
+    it "still names the authentication gem when the introspector found only policy classes" do
+      text = onboard_with(auth: { authentication: {}, authorization: { policies: %w[APolicy BPolicy] } },
+                          gems: { notable_gems: [ { name: "omniauth", version: "1.9.2", category: "auth" } ] })
+
+      expect(text).to include("Authentication via omniauth (1.9.2).")
+      expect(text).to include("2 policy classes in app/policies.")
+    end
+
     it "names the Devise model and its modules" do
       text = onboard_with(auth: { authentication: { devise: [ { model: "User", matches: [ ":database_authenticatable, :lockable" ] } ] },
                                   authorization: {},
