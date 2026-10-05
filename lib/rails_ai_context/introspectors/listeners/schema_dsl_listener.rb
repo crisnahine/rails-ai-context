@@ -3,8 +3,8 @@
 module RailsAiContext
   module Introspectors
     module Listeners
-      # Detects schema.rb DSL patterns via Prism AST:
-      # create_table, t.string, t.index, add_foreign_key, create_enum
+      # Detects schema.rb DSL patterns via Prism AST: create_table, t.string, t.index,
+      # add_foreign_key, create_enum, create_view, create_virtual_table, and a table the dumper skipped
       class SchemaDslListener < BaseListener
         # Whether a `t` receiver is a table: `Tag.find_each { |t| t.update! }` binds
         # `t` to a record. A receiverless block is a table helper's, a def's `t` a helper's argument.
@@ -49,6 +49,19 @@ module RailsAiContext
           multi_polygon st_point st_polygon
         ].to_set.freeze
 
+        # The dumper writes a comment, not a create_table, for a table it could not describe.
+        NOT_DUMPED = /\A#\s*Could not dump table "([^"]+)" because of following (\S+)/
+
+        def on_program_node_enter(_node)
+          comments = Array(@comments)
+          comments.each_with_index do |comment, i|
+            match = NOT_DUMPED.match(comment.location.slice) or next
+            message = comments[i + 1]&.location&.slice.to_s[/\A#\s+(\S.*)/, 1]
+            @results << { type: :not_dumped, table: SchemaConventions.local_name(match[1]),
+                          reason: [ match[2], message ].compact.join(": "), location: comment.location.start_line }
+          end
+        end
+
         def on_call_node_enter(node)
           note_block(node)
           if node.receiver.nil?
@@ -59,6 +72,8 @@ module RailsAiContext
             extract_index(node)
           elsif check_constraint_call?(node)
             extract_check_constraint(node)
+          elsif node.name == :unique_constraint && receiver_is_t?(node.receiver)
+            extract_unique_constraint(node)
           elsif receiver_is_t?(node.receiver) && !read_elsewhere?(node.name)
             unread_call(node)
           end
@@ -66,7 +81,7 @@ module RailsAiContext
 
         # Block methods the replay reads, or that never add an index.
         OTHER_TABLE_METHODS = %i[
-          column foreign_key remove_foreign_key remove_check_constraint rename_index
+          foreign_key remove_foreign_key remove_check_constraint rename_index
           column_exists? index_exists? foreign_key_exists? check_constraint_exists?
         ].to_set.freeze
 
@@ -93,7 +108,32 @@ module RailsAiContext
             extract_top_level_add_index(node)
           when :add_check_constraint
             extract_top_level_check_constraint(node)
+          when :enable_extension
+            name = literal_string(node.arguments&.arguments&.first)
+            @results << { type: :extension, name: name, location: node.location.start_line } if name
+          when :create_view
+            extract_view(node)
+          when :create_virtual_table
+            extract_virtual_table(node)
           end
+        end
+
+        # scenic's dump: create_view "name", [materialized: true,] sql_definition: <<-SQL.
+        def extract_view(node)
+          name = literal_string(node.arguments&.arguments&.first) or return
+          options = keyword_hash(node) { |value| value }
+          @results << {
+            type: :view, name: SchemaConventions.local_name(name), materialized: options[:materialized].is_a?(Prism::TrueNode),
+            sql: literal_string(options[:sql_definition])&.strip, location: node.location.start_line
+          }.compact
+        end
+
+        # SQLite's dump (8.0+): create_virtual_table "name", "fts5", ["title", "body"].
+        def extract_virtual_table(node)
+          name, mod, arguments = node.arguments&.arguments
+          name = literal_string(name) or return
+          @results << { type: :virtual_table, name: name, module: literal_string(mod), arguments: literal_strings(arguments),
+                        location: node.location.start_line }
         end
 
         def extract_create_table(node)
@@ -103,7 +143,7 @@ module RailsAiContext
 
           @results << {
             type:     :create_table,
-            table:    table_arg.unescaped,
+            table:    SchemaConventions.local_name(table_arg.unescaped),
             # id: false / id: :uuid / primary_key: ... decide whether the
             # implicit primary-key column exists and what to call it.
             options:  extract_keyword_options(node),
@@ -121,12 +161,14 @@ module RailsAiContext
 
           @results << {
             type:        :foreign_key,
-            from:        from_arg.unescaped,
-            to:          to_arg.unescaped,
+            from:        SchemaConventions.local_name(from_arg.unescaped),
+            to:          SchemaConventions.local_name(to_arg.unescaped),
             # Absent means the Rails convention holds; naming it here would
             # make a declared column indistinguishable from a guessed one.
             column:      SchemaConventions.primary_key_value(options[:column]),
             primary_key: SchemaConventions.primary_key_value(options[:primary_key]),
+            on_delete:   options[:on_delete],
+            on_update:   options[:on_update],
             location:    node.location.start_line
           }.compact
         end
@@ -147,7 +189,7 @@ module RailsAiContext
 
           @results << {
             type:     :enum,
-            name:     name_arg.unescaped,
+            name:     SchemaConventions.local_name(name_arg.unescaped),
             values:   values,
             location: node.location.start_line
           }
@@ -163,7 +205,7 @@ module RailsAiContext
 
           @results << {
             type:     :add_index,
-            table:    table_arg.unescaped,
+            table:    SchemaConventions.local_name(table_arg.unescaped),
             columns:  columns,
             options:  options,
             location: node.location.start_line
@@ -178,10 +220,11 @@ module RailsAiContext
 
           @results << {
             type:       :add_check_constraint,
-            table:      table_arg.unescaped,
+            table:      SchemaConventions.local_name(table_arg.unescaped),
             expression: expr_arg.unescaped,
+            name:       literal_string(keyword_hash(node) { |value| value }[:name]),
             location:   node.location.start_line
-          }
+          }.compact
         end
 
         def check_constraint_call?(node)
@@ -196,12 +239,22 @@ module RailsAiContext
           @results << {
             type:       :check_constraint,
             expression: expr_arg.unescaped,
+            name:       literal_string(keyword_hash(node) { |value| value }[:name]),
             location:   node.location.start_line
+          }.compact
+        end
+
+        def extract_unique_constraint(node)
+          @results << {
+            type:     :unique_constraint,
+            columns:  literal_strings(node.arguments&.arguments&.first),
+            options:  extract_keyword_options(node),
+            location: node.location.start_line
           }
         end
 
         def column_call?(node)
-          return false unless COLUMN_TYPES.include?(node.name.to_s)
+          return false unless node.name == :column || COLUMN_TYPES.include?(node.name.to_s)
           receiver_is_t?(node.receiver)
         end
 
@@ -225,16 +278,22 @@ module RailsAiContext
           # `t.string "name", { limit: 50 }` passes its options braced.
           braced, positional = (node.arguments&.arguments || []).reject { |arg| arg.is_a?(Prism::KeywordHashNode) }
                                                                  .partition { |arg| arg.is_a?(Prism::HashNode) }
-          positional = positional.first(1) if node.name == :primary_key
+          # TableDefinition#column(name, type): a type with no method of its own, as MySQL dumps enum('a','b').
+          column_type = node.name == :column ? literal_string(positional[1]) : node.name.to_s
+          positional = positional.first(1) if node.name == :primary_key || node.name == :column
           names = positional.map { |arg| literal_string(arg) }
-          return unread_call(node) if names.empty? || names.any?(&:nil?)
+          return unread_call(node) if names.empty? || names.any?(&:nil?) || column_type.nil?
 
           options = braced.map { |hash| hash_node_to_hash(hash) }.reduce(extract_keyword_options(node), :merge)
+          virtual = node.name == :virtual
+          options[:enum_type] = SchemaConventions.local_name(options[:enum_type]) if options[:enum_type].is_a?(String)
+          # A generated column takes its own type from type: (each adapter's virtual, 7.0 to 8.1).
+          column_type = options[:type].to_s if virtual && (options[:type].is_a?(Symbol) || options[:type].is_a?(String))
           names.each do |col_name|
             @results << {
               type:        :column,
               table:       nil,
-              column_type: node.name.to_s,
+              column_type: column_type,
               name:        col_name,
               options:     options,
               # A proc default (`default: -> { "now()" }`) has no literal value,
@@ -243,6 +302,7 @@ module RailsAiContext
               default_proc: proc_default?(node),
               location:    node.location.start_line
             }
+            @results.last[:virtual] = true if virtual
           end
         end
 

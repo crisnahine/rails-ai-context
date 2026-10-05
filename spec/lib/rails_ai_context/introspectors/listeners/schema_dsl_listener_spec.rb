@@ -100,4 +100,29 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::SchemaDslListener do
     expect(table[:location]).to eq(1)
     expect(col[:location]).to eq(2)
   end
+
+  it "reads t.column as a column of the type it names" do
+    results = parse_and_dispatch(<<~RUBY)
+      create_table "things" do |t|
+        t.column "kind", "enum('a','b')"
+        t.column :score, :decimal, precision: 5
+      end
+    RUBY
+
+    cols = results.select { |r| r[:type] == :column }
+    expect(cols.map { |c| [ c[:name], c[:column_type] ] }).to eq([ [ "kind", "enum('a','b')" ], [ "score", "decimal" ] ])
+    expect(cols.last[:options]).to include(precision: 5)
+    expect(results.none? { |r| r[:type] == :unread_call }).to be(true)
+  end
+
+  it "types t.virtual by its type: option and marks it virtual" do
+    results = parse_and_dispatch('t.virtual "area", type: :integer, as: "w * h", stored: true')
+    col = results.find { |r| r[:type] == :column }
+    expect(col).to include(name: "area", column_type: "integer", virtual: true)
+  end
+
+  it "keeps a t.virtual with no type: typed virtual" do
+    results = parse_and_dispatch('t.virtual "area", as: "w * h"')
+    expect(results.find { |r| r[:type] == :column }).to include(column_type: "virtual", virtual: true)
+  end
 end

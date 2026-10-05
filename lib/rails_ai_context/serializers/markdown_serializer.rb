@@ -64,7 +64,7 @@ module RailsAiContext
 
         lines = [ "## Database Schema (#{count_phrase(schema[:total_tables], "table")})" ]
         schema[:tables]&.each do |name, data|
-          cols = (data[:columns] || []).map { |c| "`#{c[:name]}` (#{c[:type]})" }.join(", ")
+          cols = (data[:columns] || []).map { |c| c[:type] ? "`#{c[:name]}` (#{c[:type]})" : "`#{c[:name]}`" }.join(", ")
           lines << "### #{escape_markdown(name)}"
           lines << cols
         end

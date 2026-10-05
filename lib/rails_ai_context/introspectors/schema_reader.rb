@@ -24,24 +24,23 @@ module RailsAiContext
       def self.for(root)
         root = root.to_s
 
-        schema_rb = File.join(root, "db", "schema.rb")
-        if File.exist?(schema_rb)
-          reader = new(schema_rb, pk_type: SchemaConventions.implicit_pk_type(root, schema_rb))
-          return reader.with_source(:schema_rb) if reader.tables.any?
-        end
+        candidates = SchemaDumpPath.candidates(root)
+        candidates.each do |format, path|
+          next unless File.exist?(path)
 
-        structure = File.join(root, "db", "structure.sql")
-        if File.exist?(structure)
-          content = RailsAiContext::SafeFile.read(structure, max_size: RailsAiContext.configuration.max_schema_file_size)
-          if content
-            parsed = StructureSqlReader.parse(content)
-            return from_tables(parsed[:tables], source: :structure_sql, path: structure) if parsed[:tables].any?
+          if format == :ruby
+            reader = new(path, pk_type: SchemaConventions.implicit_pk_type(root))
+            return reader.with_source(:schema_rb) if reader.tables.any?
+          else
+            content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
+            parsed = content && StructureSqlReader.parse(content)
+            return from_tables(parsed[:tables], source: :structure_sql, path: path) if parsed && parsed[:tables].any?
           end
         end
 
         migrate_dirs = MigrationReplay.migration_dirs(root)
         if MigrationReplay.migration_files(migrate_dirs).any?
-          pk_type = SchemaConventions.implicit_pk_type(root, schema_rb)
+          pk_type = SchemaConventions.implicit_pk_type(root)
           return from_tables(MigrationReplay.tables(migrate_dirs, pk_type: pk_type, root: root),
                              source: :migrations, path: migrate_dirs.first)
         end
@@ -89,9 +88,29 @@ module RailsAiContext
         parse[:enums]
       end
 
-      # @return [Array<Hash>] { table:, expression: } per declared constraint
+      # @return [Array<Hash>] { table:, name:, expression: } per declared constraint, name when given
       def check_constraints
         parse[:check_constraints]
+      end
+
+      # @return [Array<String>] the extensions the dump enables
+      def extensions
+        parse[:extensions]
+      end
+
+      # @return [Hash] view name => { materialized:, sql: }
+      def views
+        parse[:views]
+      end
+
+      # @return [Hash] virtual table name => { module:, arguments: }
+      def virtual_tables
+        parse[:virtual_tables]
+      end
+
+      # @return [Hash] table name => why the dumper wrote a comment in its place
+      def not_dumped
+        parse[:not_dumped]
       end
 
       # Declared defaults for one table, as source text. Callers report these
@@ -123,10 +142,15 @@ module RailsAiContext
           # structure.sql and the replay keep from_table/to_table on the table;
           # every reader answers the schema.rb shape, so no consumer checks both.
           foreign_keys: tables.flat_map { |_name, t| t[:foreign_keys] || [] }.map do |fk|
-            { from: fk[:from_table], to: fk[:to_table], column: fk[:column], primary_key: fk[:primary_key] }.compact
+            { from: fk[:from_table], to: fk[:to_table], column: fk[:column], primary_key: fk[:primary_key],
+              on_delete: fk[:on_delete], on_update: fk[:on_update] }.compact
           end,
           enums: [],
-          check_constraints: []
+          check_constraints: [],
+          extensions: [],
+          views: {},
+          virtual_tables: {},
+          not_dumped: {}
         }
       end
 
@@ -139,7 +163,7 @@ module RailsAiContext
       end
 
       def empty_schema
-        { tables: {}, foreign_keys: [], enums: [], check_constraints: [] }
+        { tables: {}, foreign_keys: [], enums: [], check_constraints: [], extensions: [], views: {}, virtual_tables: {}, not_dumped: {} }
       end
 
       def build
@@ -215,16 +239,24 @@ module RailsAiContext
         when :add_index
           schema[:tables][event[:table]]&.dig(:indexes)&.push(index_entry(event))
         when :foreign_key
-          schema[:foreign_keys] << {
-            from: event[:from], to: event[:to],
-            column: event[:column], primary_key: event[:primary_key]
-          }.compact
+          schema[:foreign_keys] << event.slice(:from, :to, :column, :primary_key, :on_delete, :on_update)
+        when :unique_constraint
+          table = schema[:tables][current] if current
+          (table[:unique_constraints] ||= []) << event.slice(:columns, :options) if table
+        when :extension
+          schema[:extensions] << event[:name]
         when :enum
           schema[:enums] << { name: event[:name], values: event[:values] }
         when :check_constraint
-          schema[:check_constraints] << { table: current, expression: event[:expression] } if current
+          schema[:check_constraints] << { table: current, **event.slice(:name, :expression) } if current
         when :add_check_constraint
-          schema[:check_constraints] << { table: event[:table], expression: event[:expression] }
+          schema[:check_constraints] << event.slice(:table, :name, :expression)
+        when :view
+          schema[:views][event[:name]] = { materialized: event[:materialized], sql: event[:sql] }
+        when :virtual_table
+          schema[:virtual_tables][event[:name]] = event.slice(:module, :arguments)
+        when :not_dumped
+          schema[:not_dumped][event[:table]] = event[:reason]
         end
 
         current
@@ -236,8 +268,9 @@ module RailsAiContext
           name:    column_name(event),
           type:    event[:column_type],
           default: default_for(event, options),
-          options: options
-        }
+          options: options,
+          virtual: event[:virtual]
+        }.compact
       end
 
       def index_entry(event)

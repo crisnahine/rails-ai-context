@@ -271,17 +271,26 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       it "reads a PostgreSQL array column as the static tier does" do
         metadata = double(sql_type: "character varying[]")
         column = double(name: "tags", type: :string, null: true, default: '{a,"b c"}', limit: nil, precision: nil,
-                        scale: nil, comment: nil, array?: true, sql_type_metadata: metadata)
+                        scale: nil, comment: nil, collation: nil, sql_type: "character varying[]", array?: true, sql_type_metadata: metadata)
         allow(ActiveRecord::Base.connection).to receive(:columns).with("pa_v_things").and_return([ column ])
 
         expect(introspector.send(:extract_columns, "pa_v_things"))
           .to eq([ { name: "tags", type: "string", null: true, default: '["a", "b c"]', array: true } ])
       end
 
+      it "reads a MySQL text column's size as schema.rb writes it" do
+        column = double(name: "body", type: :text, null: true, default: nil, limit: 16_777_215, precision: nil,
+                        scale: nil, comment: nil, collation: nil, sql_type: "mediumtext", array?: false)
+        allow(introspector).to receive(:connection).and_return(double("mysql2", columns: [ column ], native_database_types: {}, mariadb?: false))
+
+        expect(introspector.send(:extract_columns, "pa_v_posts")).to eq([ { name: "body", type: "text", null: true, size: "medium" } ])
+      end
+
       # ActiveRecord gives an expression index's columns as one String; the
       # static readers split it into keys, and every consumer maps the list.
       it "reads an expression index's columns as the static readers do" do
-        index = double(name: "idx_lower_email", columns: "lower((email)::text), id", unique: true, where: nil)
+        index = double(name: "idx_lower_email", columns: "lower((email)::text), id", unique: true, where: nil,
+                       using: :btree, type: nil, orders: {}, opclasses: {}, lengths: {})
         allow(ActiveRecord::Base.connection).to receive(:indexes).with("pa_v_people").and_return([ index ])
 
         expect(introspector.send(:extract_indexes, "pa_v_people"))
@@ -504,6 +513,10 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
             create_table "orders" do |t|
               t.integer "quantity"
               t.check_constraint "quantity > 0", name: "quantity_positive"
+            end
+
+            create_table "users" do |t|
+              t.integer "age"
             end
 
             add_check_constraint "users", "age >= 18", name: "age_check"
@@ -879,6 +892,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
         expect(result[:declared_tables]).to contain_exactly("users", "order_comments")
         expect(result[:tables].keys).to eq([ "users" ])
+        expect(result[:declared_in]).to eq("db/schema.rb")
       ensure
         FileUtils.rm_rf(db_dir)
       end
@@ -1185,6 +1199,530 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
         expect(static_parse(dir)).not_to have_key(:pending_migrations)
       end
+    end
+  end
+
+  describe "what a column, index, key and table declare beyond name and type" do
+    def static_tables(schema)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "database.yml"), "test:\n  adapter: sqlite3\n")
+        File.write(File.join(dir, "db", "schema.rb"), schema)
+        described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+      end
+    end
+
+    let(:result) do
+      static_tables(<<~RUBY)
+        ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+          enable_extension "citext"
+          create_table "accounts", comment: "Tenant accounts", force: :cascade do |t|
+            t.string "name", limit: 120, null: false, collation: "C"
+            t.integer "seats", unsigned: true
+            t.decimal "total", precision: 10, scale: 2
+            t.text "bio", size: :long
+            t.unique_constraint ["name"], deferrable: :immediate, name: "uniq_name"
+          end
+          create_table "users", force: :cascade do |t|
+            t.jsonb "data"
+            t.bigint "account_id"
+            t.index ["data"], name: "index_users_on_data", using: :gin
+            t.index ["account_id"], name: "idx_acct", include: ["data"], order: { account_id: :desc }
+          end
+          add_foreign_key "users", "accounts", on_delete: :cascade
+        end
+      RUBY
+    end
+
+    it "keeps a column's limit, precision, scale, unsigned flag and collation" do
+      columns = result[:tables]["accounts"][:columns].to_h { |c| [ c[:name], c ] }
+
+      expect(columns["name"]).to include(limit: 120, collation: "C")
+      expect(columns["seats"]).to include(unsigned: true)
+      expect(columns["total"]).to include(precision: 10, scale: 2)
+      expect(columns["bio"]).to include(size: "long")
+    end
+
+    it "keeps the table comment and its unique constraints" do
+      accounts = result[:tables]["accounts"]
+
+      expect(accounts[:comment]).to eq("Tenant accounts")
+      expect(accounts[:unique_constraints]).to eq([ { name: "uniq_name", columns: [ "name" ], deferrable: "immediate" } ])
+    end
+
+    it "keeps an index's method, included columns and order" do
+      indexes = result[:tables]["users"][:indexes].to_h { |i| [ i[:name], i ] }
+
+      expect(indexes["index_users_on_data"]).to include(using: "gin")
+      expect(indexes["idx_acct"]).to include(include: [ "data" ], order: { "account_id" => "desc" })
+    end
+
+    it "keeps a foreign key's on_delete action" do
+      expect(result[:tables]["users"][:foreign_keys]).to eq([
+        { from_table: "users", to_table: "accounts", column: "account_id", primary_key: "id", on_delete: "cascade" }
+      ])
+    end
+
+    it "lists the extensions the dump enables" do
+      expect(result[:extensions]).to eq([ "citext" ])
+    end
+
+    # The booted tier reads the connection and the static tier reads what Rails
+    # dumps from that same connection, so a table must come out the same.
+    it "gives the booted answer the static tier reads from the dump of the same table" do
+      connection = ActiveRecord::Base.connection
+      connection.create_table(:pa_d_owners, force: true) { |t| t.string :label }
+      connection.create_table(:pa_d_items, force: true) do |t|
+        t.decimal :total, precision: 10, scale: 2
+        t.string :code, limit: 20
+        t.string :slug, collation: "NOCASE"
+        t.datetime :seen_at, precision: 3
+        t.datetime :made_at
+        t.integer :pa_d_owner_id
+        t.index [ :code, :total ], name: "idx_pa_d_code", order: { code: :desc }
+        t.check_constraint "total >= 0", name: "pa_d_total_nonneg"
+        t.virtual :doubled, type: :decimal, as: "total * 2", stored: true if connection.supports_virtual_columns?
+      end
+      connection.add_foreign_key :pa_d_items, :pa_d_owners, on_delete: :cascade
+
+      dump = StringIO.new
+      # Rails 7.2 dumps from a pool, earlier versions from a connection.
+      source = ActiveRecord.version >= Gem::Version.new("7.2") ? ActiveRecord::Base.connection_pool : connection
+      ActiveRecord::SchemaDumper.dump(source, dump)
+      # The static tier leaves out null: true, which the booted tier spells.
+      booted = introspector.call[:tables]["pa_d_items"]
+      booted = booted.merge(columns: booted[:columns].map { |c| c[:null] ? c.except(:null) : c })
+      static = static_tables(dump.string)[:tables]["pa_d_items"]
+
+      expect(booted[:check_constraints]).to eq([ { name: "pa_d_total_nonneg", expression: "total >= 0" } ])
+      %i[columns indexes foreign_keys primary_key check_constraints].each do |key|
+        expect(booted[key]).to eq(static[key]), "#{key}: booted #{booted[key].inspect}, static #{static[key].inspect}"
+      end
+    ensure
+      connection.drop_table(:pa_d_items, if_exists: true)
+      connection.drop_table(:pa_d_owners, if_exists: true)
+    end
+  end
+
+  describe "the primary key" do
+    def static_parse_of(schema)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "schema.rb"), schema)
+        described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:tables]
+      end
+    end
+
+    let(:tables) do
+      static_parse_of(<<~RUBY)
+        ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+          create_table "orders", primary_key: ["shop_id", "id"], force: :cascade do |t|
+            t.integer "shop_id", null: false
+            t.integer "id", null: false
+            t.string "number"
+          end
+          create_table "legacy_widgets", primary_key: "widget_code", id: :string, force: :cascade do |t|
+            t.string "label"
+          end
+          create_table "posts", force: :cascade do |t|
+            t.string "title"
+          end
+          create_table "tags_posts", id: false, force: :cascade do |t|
+            t.integer "tag_id"
+          end
+        end
+      RUBY
+    end
+
+    it "types a key written as an id: hash by its type" do
+      tokens = static_parse_of(<<~RUBY)["tokens"]
+        ActiveRecord::Schema[8.1].define(version: 2026_01_01_000000) do
+          create_table "tokens", id: { type: :string, limit: 36 }, force: :cascade do |t|
+            t.string "name"
+          end
+        end
+      RUBY
+
+      expect(tokens[:columns].first).to include(name: "id", type: "string", limit: 36, primary_key: true)
+    end
+
+    it "names the key on the table and flags its columns, for the implicit id too" do
+      expect(tables.transform_values { |t| t[:primary_key] }).to eq(
+        "orders" => %w[shop_id id], "legacy_widgets" => "widget_code", "posts" => "id", "tags_posts" => nil
+      )
+      expect(tables["orders"][:columns].select { |c| c[:primary_key] }.map { |c| c[:name] }).to eq(%w[shop_id id])
+      expect(tables["tags_posts"][:columns].none? { |c| c[:primary_key] }).to be(true)
+    end
+
+    it "reads SQLite's inline key from structure.sql" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "structure.sql"), <<~SQL)
+          CREATE TABLE "accounts" ("id" integer PRIMARY KEY AUTOINCREMENT NOT NULL, "name" varchar NOT NULL);
+        SQL
+        accounts = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:tables]["accounts"]
+
+        expect(accounts[:primary_key]).to eq("id")
+        expect(accounts[:columns].first).to include(name: "id", primary_key: true)
+      end
+    end
+  end
+
+  describe "check constraints, enum types and generated columns" do
+    let(:result) do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+            create_enum "mood", ["happy", "sad"]
+            create_table "users", force: :cascade do |t|
+              t.integer "age"
+              t.enum "mood", enum_type: "mood"
+              t.virtual "age_next", type: :integer, as: "age + 1", stored: true
+              t.check_constraint "age >= 0", name: "age_nonneg"
+            end
+          end
+        RUBY
+        described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+      end
+    end
+
+    it "keeps a table's check constraints, with their names, on the table" do
+      expect(result[:tables]["users"][:check_constraints]).to eq([ { name: "age_nonneg", expression: "age >= 0" } ])
+      expect(result[:check_constraints]).to eq([ { table: "users", name: "age_nonneg", expression: "age >= 0" } ])
+    end
+
+    it "types a generated column by its type and keeps its expression" do
+      age_next = result[:tables]["users"][:columns].find { |c| c[:name] == "age_next" }
+
+      expect(age_next).to include(type: "integer", generated: "age + 1", stored: true)
+      expect(result[:generated_columns]).to eq([ { table: "users", column: "age_next", expression: "age + 1", stored: true } ])
+    end
+
+    it "names the enum type an enum column uses" do
+      expect(result[:tables]["users"][:columns].find { |c| c[:name] == "mood" }).to include(type: "enum", enum_type: "mood")
+    end
+
+    it "reads a booted table's check constraints from the connection" do
+      connection = ActiveRecord::Base.connection
+      connection.create_table(:pa_c_posts, force: true) { |t| t.string :title }
+      connection.add_check_constraint :pa_c_posts, "length(title) > 0", name: "pa_c_title_present"
+
+      expect(introspector.call[:tables]["pa_c_posts"][:check_constraints])
+        .to eq([ { name: "pa_c_title_present", expression: "length(title) > 0" } ])
+    ensure
+      connection.drop_table(:pa_c_posts, if_exists: true)
+    end
+  end
+
+  describe "a structure.sql that names no table it can read" do
+    it "says the file is there rather than missing" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "structure.sql"), "-- nothing yet\n")
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result).not_to have_key(:unavailable)
+        expect(result[:total_tables]).to eq(0)
+        expect(result[:note]).to include("db/structure.sql")
+      end
+    end
+  end
+
+  describe "a column schema.rb writes with t.column" do
+    it "reads it with the type it names" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+            create_table "things", force: :cascade do |t|
+              t.column "kind", "enum('a','b')"
+            end
+          end
+        RUBY
+        things = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:tables]["things"]
+
+        expect(things[:columns].map { |c| [ c[:name], c[:type] ] }).to eq([ %w[id bigint], [ "kind", "enum('a','b')" ] ])
+        expect(things).not_to have_key(:unread_calls)
+      end
+    end
+  end
+
+  describe "a schema.rb dumped with more than one schema" do
+    it "names a table in public by its bare name, as the app sees it" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+            create_schema "other"
+            create_enum "public.mood", ["happy", "sad"]
+            create_table "other.widgets", force: :cascade do |t|
+              t.string "n"
+            end
+            create_table "public.posts", force: :cascade do |t|
+              t.bigint "user_id"
+              t.enum "mood", enum_type: "public.mood"
+            end
+            create_table "public.users", force: :cascade do |t|
+              t.string "email", null: false
+            end
+            add_index "public.posts", ["user_id"], name: "idx_posts_user"
+            add_foreign_key "public.posts", "public.users"
+          end
+        RUBY
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:tables].keys).to eq(%w[other.widgets posts users])
+        expect(result[:tables]["users"][:columns].map { |c| c[:name] }).to eq(%w[id email])
+        expect(result[:tables]["posts"][:indexes].map { |i| i[:name] }).to eq(%w[idx_posts_user])
+        expect(result[:tables]["posts"][:foreign_keys]).to eq([ { from_table: "posts", to_table: "users", column: "user_id", primary_key: "id" } ])
+        expect(result[:enum_types]).to eq([ { name: "mood", values: %w[happy sad] } ])
+        expect(result[:tables]["posts"][:columns].find { |c| c[:name] == "mood" }).to include(enum_type: "mood")
+      end
+    end
+  end
+
+  describe "views, virtual tables and a table the dumper could not write" do
+    def static_of(file, content)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", file), content)
+        described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+      end
+    end
+
+    it "lists scenic's views from schema.rb with their SQL" do
+      tables = static_of("schema.rb", <<~RUBY)[:tables]
+        ActiveRecord::Schema[8.1].define(version: 2026_01_01_000002) do
+          create_table "users", force: :cascade do |t|
+            t.string "email", null: false
+          end
+
+          create_view "active_users", sql_definition: <<-SQL
+              SELECT users.id, users.email FROM users WHERE users.active;
+          SQL
+          create_view "user_stats", materialized: true, sql_definition: <<-SQL
+              SELECT count(*) AS total FROM users;
+          SQL
+        end
+      RUBY
+
+      expect(tables.keys).to eq(%w[users active_users user_stats])
+      expect(tables["active_users"]).to include(kind: "view", sql: "SELECT users.id, users.email FROM users WHERE users.active;", columns: [])
+      expect(tables["user_stats"]).to include(kind: "materialized_view", sql: "SELECT count(*) AS total FROM users;")
+    end
+
+    it "lists a SQLite virtual table from schema.rb with its columns" do
+      tables = static_of("schema.rb", <<~RUBY)[:tables]
+        ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+          create_table "docs", force: :cascade do |t|
+            t.string "title"
+          end
+          create_virtual_table "docs_fts", "fts5", ["title", "body", "tokenize='porter'"]
+        end
+      RUBY
+
+      expect(tables["docs_fts"]).to include(kind: "virtual_table", module: "fts5", columns: [ { name: "title" }, { name: "body" } ])
+    end
+
+    it "lists a table the dumper could not describe, with its reason" do
+      tables = static_of("schema.rb", <<~RUBY)[:tables]
+        ActiveRecord::Schema[7.0].define(version: 2026_01_01_000001) do
+          create_table "docs", force: :cascade do |t|
+            t.string "title"
+          end
+
+        # Could not dump table "boxes" because of following StandardError
+        #   Unknown type 'virtual' for column 'area'
+
+        end
+      RUBY
+
+      expect(tables["boxes"]).to include(columns: [], not_dumped: "StandardError: Unknown type 'virtual' for column 'area'")
+    end
+
+    it "reads views and virtual tables from structure.sql" do
+      tables = static_of("structure.sql", <<~SQL)[:tables]
+        CREATE TABLE IF NOT EXISTS "users" ("id" integer PRIMARY KEY AUTOINCREMENT NOT NULL, "active" boolean);
+        CREATE VIEW active_users AS SELECT id FROM users WHERE active;
+        CREATE VIRTUAL TABLE docs_fts USING fts5 (title, body)
+        /* docs_fts(title,body) */;
+        CREATE TABLE IF NOT EXISTS 'docs_fts_data'(id INTEGER PRIMARY KEY, block BLOB);
+      SQL
+
+      expect(tables.keys).to eq(%w[users active_users docs_fts])
+      expect(tables["active_users"]).to include(kind: "view", sql: "SELECT id FROM users WHERE active")
+      expect(tables["docs_fts"]).to include(kind: "virtual_table", module: "fts5", columns: [ { name: "title" }, { name: "body" } ])
+    end
+
+    it "reads a PostgreSQL materialized view from structure.sql" do
+      tables = static_of("structure.sql", <<~SQL)[:tables]
+        CREATE TABLE public.users (
+            id bigint NOT NULL
+        );
+        CREATE MATERIALIZED VIEW public.user_stats AS
+         SELECT count(*) AS total
+           FROM public.users
+          WITH NO DATA;
+      SQL
+
+      expect(tables["user_stats"]).to include(kind: "materialized_view", sql: "SELECT count(*) AS total\n   FROM public.users")
+    end
+
+    it "skips a view or virtual table it cannot read instead of failing" do
+      rb = static_of("schema.rb", <<~RUBY)[:tables]
+        ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+          create_table "docs", force: :cascade do |t|
+            t.string "title"
+          end
+          create_view view_name, sql_definition: sql
+          create_view "bare"
+          create_virtual_table "loose", "fts5"
+        end
+      RUBY
+      sql = static_of("structure.sql", <<~SQL)[:tables]
+        CREATE TABLE "docs" ("id" integer PRIMARY KEY);
+        CREATE VIRTUAL TABLE plain USING rtree;
+        CREATE VIEW broken AS SELECT
+      SQL
+
+      expect(rb.keys).to eq(%w[docs bare loose])
+      expect(rb["bare"]).to eq(kind: "view", columns: [], indexes: [], foreign_keys: [])
+      expect(rb["loose"][:columns]).to eq([])
+      expect(sql.keys).to eq(%w[docs plain])
+    end
+
+    it "tells PostgreSQL's materialized views apart and leaves out an extension's views" do
+      connection = double("pg", views: %w[user_stats geometry_columns], columns: [], native_database_types: {})
+      allow(connection).to receive(:select_rows).and_return([ [ "user_stats", "m", false ], [ "geometry_columns", "v", true ] ])
+      allow(introspector).to receive_messages(connection: connection, adapter_name: "PostgreSQL")
+
+      tables = introspector.send(:add_live_relations, {})
+      expect(tables.keys).to eq(%w[user_stats])
+      expect(tables["user_stats"]).to include(kind: "materialized_view")
+    end
+
+    it "lists a booted view with the connection's columns and the dump's SQL" do
+      connection = ActiveRecord::Base.connection
+      connection.create_table(:pa_v_users, force: true) { |t| t.string :email }
+      connection.execute("CREATE VIEW pa_v_active AS SELECT id, email FROM pa_v_users")
+      connection.execute("CREATE VIRTUAL TABLE pa_v_fts USING fts5 (title, body)")
+
+      tables = introspector.call[:tables]
+      expect(tables["pa_v_active"]).to include(kind: "view")
+      expect(tables["pa_v_active"][:columns].map { |c| c[:name] }).to eq(%w[id email])
+      expect(tables["pa_v_fts"]).to include(kind: "virtual_table", module: "fts5", columns: [ { name: "title" }, { name: "body" } ])
+    ensure
+      connection.execute("DROP VIEW IF EXISTS pa_v_active")
+      connection.execute("DROP TABLE IF EXISTS pa_v_fts")
+      connection.drop_table(:pa_v_users, if_exists: true)
+    end
+  end
+
+  describe "the dump file the app configures" do
+    def static_with(files)
+      Dir.mktmpdir do |dir|
+        files.each do |path, content|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+          File.write(File.join(dir, path), content)
+        end
+        yield described_class.new(RailsAiContext::StaticApp.new(dir)).static_call, dir
+      end
+    end
+
+    let(:one_table_rb) do
+      ->(name) { "ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do\n  create_table \"#{name}\" do |t|\n    t.string \"x\"\n  end\nend\n" }
+    end
+    let(:migration) { { "db/migrate/20260101000000_create_notes.rb" => "class CreateNotes < ActiveRecord::Migration[8.1]\n  def change\n    create_table :notes\n  end\nend\n" } }
+
+    it "reads the file database.yml names with schema_dump" do
+      files = { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  database: storage/development.sqlite3\n  schema_dump: schema_sqlite.rb\n",
+                "db/schema_sqlite.rb" => one_table_rb.call("widgets") }.merge(migration)
+      static_with(files) do |result, dir|
+        expect(result[:tables].keys).to eq(%w[widgets])
+        expect(result[:note]).to start_with("Parsed from db/schema_sqlite.rb")
+        expect(RailsAiContext::Introspectors::SchemaReader.for(dir).tables.keys).to eq(%w[widgets])
+      end
+    end
+
+    it "compares a configured dump against db/migrate, the primary database's migrations" do
+      files = { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  schema_dump: schema_sqlite.rb\n",
+                "db/schema_sqlite.rb" => one_table_rb.call("widgets").sub("2026_01_01_000001", "2025_01_01_000000") }.merge(migration)
+      static_with(files) do |result, _|
+        expect(result[:pending_migrations]).to eq([ { version: "20260101000000", name: "CreateNotes" } ])
+      end
+    end
+
+    it "types a configured primary dump's implicit key by the primary database's adapter" do
+      yml = "#{RailsAiContext.environment_name}:\n  queue:\n    adapter: sqlite3\n  primary:\n    adapter: postgresql\n    schema_dump: main.rb\n"
+      static_with({ "config/database.yml" => yml, "db/main.rb" => one_table_rb.call("widgets") }) do |result, _|
+        expect(result[:tables]["widgets"][:columns].first).to include(name: "id", type: "bigint")
+      end
+    end
+
+    it "reads structure.sql first when the app sets schema_format = :sql" do
+      files = { "config/application.rb" => "module App\n  class Application < Rails::Application\n    # config.active_record.schema_format = :ruby\n    config.active_record.schema_format = :sql\n  end\nend\n",
+                "db/schema.rb" => one_table_rb.call("stale_things"),
+                "db/structure.sql" => "CREATE TABLE \"fresh_things\" (\"id\" integer PRIMARY KEY);\n" }
+      static_with(files) do |result, dir|
+        expect(result[:tables].keys).to eq(%w[fresh_things])
+        expect(RailsAiContext::Introspectors::SchemaReader.for(dir).source).to eq(:structure_sql)
+      end
+    end
+
+    def lockfile(activerecord)
+      "GEM\n  remote: https://rubygems.org/\n  specs:\n    activerecord (#{activerecord})\n\nDEPENDENCIES\n  activerecord\n"
+    end
+
+    it "takes the format database.yml gives the database over the app's" do
+      files = { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  primary:\n    adapter: sqlite3\n    schema_format: sql\n    schema_dump: primary.sql\n",
+                "db/schema.rb" => one_table_rb.call("stale_things"),
+                "db/primary.sql" => "CREATE TABLE \"fresh_things\" (\"id\" integer PRIMARY KEY);\n" }
+      static_with(files) { |result, _| expect(result[:tables].keys).to eq(%w[fresh_things]) }
+      static_with(files.merge("Gemfile.lock" => lockfile("8.0.3"))) { |result, _| expect(result[:tables].keys).to eq(%w[fresh_things]) }
+    end
+
+    it "leaves database.yml's schema_format to Rails versions that read it" do
+      files = { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  schema_format: sql\n",
+                "Gemfile.lock" => lockfile("8.0.2"),
+                "db/schema.rb" => one_table_rb.call("loaded_things"),
+                "db/structure.sql" => "CREATE TABLE \"ignored_things\" (\"id\" integer PRIMARY KEY);\n" }
+      static_with(files) { |result, _| expect(result[:tables].keys).to eq(%w[loaded_things]) }
+    end
+
+    it "names no configured file when schema_dump is false, and an environment file's format wins" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config/environments"))
+        File.write(File.join(dir, "config/database.yml"), "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  schema_dump: false\n")
+        File.write(File.join(dir, "config/application.rb"), "config.active_record.schema_format = :ruby\n")
+        File.write(File.join(dir, "config/environments/#{RailsAiContext.environment_name}.rb"), "config.active_record.schema_format = :sql\n")
+
+        expect(RailsAiContext::Introspectors::SchemaDumpPath.candidates(dir))
+          .to eq([ [ :sql, File.join(dir, "db/structure.sql") ], [ :ruby, File.join(dir, "db/schema.rb") ] ])
+      end
+    end
+
+    it "says the configured dump is too large instead of answering from another file" do
+      allow(RailsAiContext.configuration).to receive(:max_schema_file_size).and_return(50)
+      files = { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  schema_dump: big.rb\n",
+                "db/big.rb" => one_table_rb.call("fresh_things"),
+                "db/structure.sql" => "CREATE TABLE \"stale\" (\"id\" integer);\n" }
+      static_with(files) do |result, dir|
+        expect(RailsAiContext::Introspectors::SchemaDumpPath.candidates(dir).first).to eq([ :ruby, File.join(dir, "db/big.rb") ])
+        expect(result[:error]).to start_with("db/big.rb too large")
+        expect(result[:tables]).to be_nil
+      end
+    end
+
+    it "falls back to the usual files when the configured name is unusable" do
+      files = { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  schema_dump: ../../outside.rb\n  bad: [\n",
+                "db/schema.rb" => one_table_rb.call("things") }
+      static_with(files) { |result, _| expect(result[:tables].keys).to eq(%w[things]) }
+
+      files = { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  schema_dump: ../../outside.rb\n",
+                "db/schema.rb" => one_table_rb.call("things") }
+      static_with(files) { |result, _| expect(result[:tables].keys).to eq(%w[things]) }
     end
   end
 end

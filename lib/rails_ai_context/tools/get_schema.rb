@@ -80,18 +80,22 @@ module RailsAiContext
               declared = table_key.to_s.underscore
               if declared_not_connected(schema).include?(declared)
                 return text_response(
-                  "Table '#{declared}' is declared in db/schema.rb and missing from the connected database. " \
+                  "Table '#{declared}' is declared in #{schema[:declared_in] || "db/schema.rb"} and missing from the connected database. " \
                   "#{pending_for_table(schema, declared)}" \
                   "Run `rails db:migrate`, or pass `--no-boot` to read the declaration instead."
                 )
               end
 
-              return not_found_response("Table", table, tables.keys.sort,
-                recovery_tool: "Call rails_get_schema(detail:\"summary\") to see all tables")
+              recovery = "Call rails_get_schema(detail:\"summary\") to see all tables"
+              # Rails' own schema.rb dumper writes no view; only a gem such as scenic adds them.
+              if [ schema[:adapter], schema[:adapter_source] ].include?("static_parse")
+                recovery += ". Without a connection a view is listed only when the dump records it: structure.sql does, schema.rb only through a gem such as scenic"
+              end
+              return not_found_response("Table", table, tables.keys.sort, recovery_tool: recovery)
             end
             return json_response(table_data.except(:unread_calls)) if format == "json"
 
-            output = format_table_markdown(table_key, table_data, models_data)
+            output = format_table_markdown(table_key, table_data, models_data, schema[:enum_types])
             # Cross-reference hint for AI: suggest next tool call
             model_refs = models_for_table(table_key, models_data)
             if model_refs.any?
@@ -117,7 +121,7 @@ module RailsAiContext
               data = tables[name]
               col_count = data[:columns]&.size || 0
               idx_count = data[:indexes]&.size || 0
-              lines << "- **#{name}** - #{count_phrase(col_count, "column")}, #{count_phrase(idx_count, "index", plural: "indexes")}"
+              lines << "- **#{name}**#{relation_suffix(data)} - #{count_phrase(col_count, "column")}, #{count_phrase(idx_count, "index", plural: "indexes")}"
             end
             coverage = model_coverage_lines(tables, models_data)
             lines.concat([ "" ] + coverage) if coverage.any?
@@ -201,7 +205,7 @@ module RailsAiContext
                   end
                   # A clause can hold a column list, so clauses part with a semicolon.
                   hint_str = hints.any? ? " [#{hints.join('; ')}]" : ""
-                  "#{c[:name]}:#{c[:type]}#{hint_str}"
+                  "#{[ c[:name], c[:type] ].compact.join(':')}#{hint_str}"
                 end.join(", ")
               # Inline model info so AI doesn't need a separate get_model_details call
               # Every model on the table, richest first: an STI child or a
@@ -221,8 +225,9 @@ module RailsAiContext
               else
                 ""
               end
-              lines << "### #{name}#{model_info}"
-              lines << cols
+              key = data[:primary_key] && data[:primary_key] != "id" ? " (primary key: #{RailsAiContext::Introspectors::SchemaConventions.primary_key_label(data[:primary_key])})" : ""
+              lines << "### #{name}#{key}#{relation_suffix(data)}#{model_info}"
+              lines << cols unless cols.empty? && data[:columns].blank?
               lines << ""
             end
 
@@ -244,7 +249,7 @@ module RailsAiContext
             lines = [ "# Schema Full Detail (#{paginated.size} of #{count_phrase(total, "table")})", "" ]
             lines.concat(note_lines(schema))
             paginated.each do |name|
-              lines << format_table_markdown(name, tables[name], models_data)
+              lines << format_table_markdown(name, tables[name], models_data, schema[:enum_types])
               lines << ""
             end
             coverage = model_coverage_lines(tables, models_data)
@@ -355,12 +360,14 @@ module RailsAiContext
       # schema version recorded by the dump, and migration files it doesn't
       # cover - the static-tier stand-ins for a live connection's answers.
       private_class_method def self.note_lines(schema)
-        schema[:note].to_s.empty? ? [] : [ "_#{schema[:note]}_" ]
+        lines = schema[:note].to_s.empty? ? [] : [ "_#{schema[:note]}_" ]
+        lines << "**Extensions:** #{schema[:extensions].join(', ')}" if schema[:extensions]&.any?
+        lines
       end
 
       private_class_method def self.static_source_lines(schema)
         lines = note_lines(schema)
-        lines << "**Dialect:** #{schema[:dialect]} (db/structure.sql)" if schema[:dialect] && schema[:dialect] != "unknown"
+        lines << "**Dialect:** #{schema[:dialect]}" if schema[:dialect] && schema[:dialect] != "unknown"
         lines << "**Schema version:** #{schema[:schema_version]}" if schema[:schema_version]
         # The header pairs a live table count with the version stamp read off
         # db/schema.rb, and nothing joined the two: at that migration the app
@@ -368,7 +375,7 @@ module RailsAiContext
         missing = declared_not_connected(schema)
         if missing.any?
           declared_total = Array(schema[:declared_tables]).size
-          lines << "_db/schema.rb declares #{count_phrase(declared_total, "table")}; the connected database has " \
+          lines << "_#{schema[:declared_in] || "db/schema.rb"} declares #{count_phrase(declared_total, "table")}; the connected database has " \
                    "#{(schema[:tables] || {}).size}. Missing: #{missing.sort.first(5).join(', ')}" \
                    "#{missing.size > 5 ? " (+#{missing.size - 5} more)" : ""}. Run `rails db:migrate`._"
         end
@@ -416,7 +423,8 @@ module RailsAiContext
       # Over every table, not the page: which ones no model file claims, and
       # of those, which a gem the app bundles owns.
       private_class_method def self.model_coverage(tables, models)
-        unclaimed = tables.keys.sort.select { |name| models_for_table(name, models).empty? } - habtm_join_tables(models).to_a
+        # A view or virtual table often has no model and is still read, so only tables count.
+        unclaimed = tables.keys.sort.select { |name| !tables[name][:kind] && models_for_table(name, models).empty? } - habtm_join_tables(models).to_a
         unclaimed -= declared_join_tables(models).to_a if unclaimed.any?
         # A file the walk could not read claims no table, but it is still a model file.
         unclaimed -= models.filter_map { |_, d| d[:table_name] || Introspectors::TableName.stem(d[:file]) if d.is_a?(Hash) && d[:error] && d[:file] }
@@ -446,34 +454,87 @@ module RailsAiContext
         "#{names.first(COVERAGE_CAP).join(', ')}, and #{names.size - COVERAGE_CAP} more"
       end
 
-      private_class_method def self.format_table_markdown(name, data, models)
+      # The type as a migration declares it: `decimal(10,2)`, `string, limit: 20`.
+      private_class_method def self.column_type_label(col)
+        label = col[:type].to_s
+        sizes = [ col[:precision], col[:scale] ].compact
+        label += "(#{sizes.join(',')})" if col[:precision]
+        label += "[]" if col[:array]
+        label += ", limit: #{col[:limit]}" if col[:limit]
+        label += ", size: #{col[:size]}" if col[:size]
+        label += ", unsigned" if col[:unsigned]
+        label += ", collation: #{col[:collation]}" if col[:collation]
+        label += ", enum_type: #{col[:enum_type]}" if col[:enum_type]
+        label
+      end
+
+      # Options are joined by semicolons because a value can list columns.
+      private_class_method def self.index_options_text(idx)
+        parts = []
+        parts << "using: #{idx[:using]}" if idx[:using]
+        parts << "type: #{idx[:type]}" if idx[:type]
+        parts << "include: #{idx[:include].join(', ')}" if idx[:include]
+        %i[order opclass length].each do |key|
+          parts << "#{key}: #{idx[key].map { |column, value| "#{column} #{value}" }.join(', ')}" if idx[key]
+        end
+        parts << "nulls not distinct" if idx[:nulls_not_distinct]
+        parts.any? ? " - #{parts.join('; ')}" : ""
+      end
+
+      RELATION_KINDS = { "view" => "View", "materialized_view" => "Materialized view", "virtual_table" => "Virtual table" }.freeze
+
+      # What a listed name is when it is not a plain table.
+      private_class_method def self.relation_suffix(data)
+        label = case data[:kind]
+        when "virtual_table" then "#{data[:module]} virtual table".strip
+        when "view", "materialized_view" then RELATION_KINDS[data[:kind]].downcase
+        else "not dumped" if data[:not_dumped]
+        end
+        label ? " (#{label})" : ""
+      end
+
+      private_class_method def self.format_table_markdown(name, data, models, enum_types = nil)
         columns = data[:columns] || []
         # Always show Nullable and Default - agents need these for migrations and validations
         has_defaults = columns.any? { |c| c.key?(:default) && !c[:default].nil? }
 
         model_refs = models_for_table(name, models)
-        lines = [ "## Table: #{name}", "" ]
+        lines = [ "## #{RELATION_KINDS.fetch(data[:kind].to_s, "Table")}: #{name}", "" ]
         lines << "**Models:** #{model_refs.join(', ')}" if model_refs.any?
-
-        header = "| Column | Type | Null"
-        sep = "|--------|------|-----"
-        header += " | Default" if has_defaults
-        sep += "-|---------" if has_defaults
-        lines << "#{header} |" << "#{sep}|"
+        lines << "**Module:** #{data[:module]}" if data[:module]
+        lines << "**Primary key:** #{RailsAiContext::Introspectors::SchemaConventions.primary_key_label(data[:primary_key])}" if data[:primary_key]
+        lines << "**Comment:** #{data[:comment]}" if data[:comment]
+        if data[:not_dumped]
+          lines << "The schema dumper could not describe this table (#{data[:not_dumped]}), so the dump holds no columns for it."
+        elsif data[:sql] && columns.empty?
+          lines << "A view's columns are read from the database, and this answer has no connection: boot the app to list them."
+        end
+        # A table right after a paragraph line would read as part of it.
+        lines << "" if lines.size > 2
+        definition = data[:sql] ? [ "### Definition", "```sql", data[:sql], "```" ] : []
+        return lines.concat(definition).join("\n").rstrip if columns.empty? && (data[:sql] || data[:not_dumped])
 
         has_comments = columns.any? { |c| c[:comment] && !c[:comment].to_s.empty? }
+        # A virtual table's module, not a column type, decides what its columns hold.
+        typed = columns.any? { |c| c[:type] }
+        header = typed ? "| Column | Type | Null" : "| Column"
+        sep = typed ? "|--------|------|-----" : "|--------"
+        header += " | Default" if has_defaults
+        sep += "-|---------" if has_defaults
+        header += " | Comment" if has_comments
+        sep += "-|---------" if has_comments
+        lines << "#{header} |" << "#{sep}|"
 
         columns.each do |col|
           nullable = col.key?(:null) ? (col[:null] ? "yes" : "**NO**") : "yes"
-          col_type = col[:array] ? "#{col[:type]}[]" : col[:type].to_s
-          line = "| #{col[:name]} | #{col_type} | #{nullable}"
+          line = typed ? "| #{col[:name]} | #{column_type_label(col)} | #{nullable}" : "| #{col[:name]}"
           if has_defaults
             default_val = col[:default]
             display_default = default_val == "" ? '""' : default_val
             line += " | #{display_default}"
           end
+          line += " | #{col[:comment].to_s.gsub('|', '\\|').gsub(/\s*\n\s*/, ' ')}" if has_comments
           lines << "#{line} |"
-          lines << "  _#{col[:comment]}_" if has_comments && col[:comment] && !col[:comment].to_s.empty?
         end
         if data[:inherits_unresolved]&.any?
           parents = data[:inherits_unresolved].map { |parent| "`#{parent}`" }.join(", ")
@@ -484,44 +545,52 @@ module RailsAiContext
           lines << "" << "### Indexes"
           data[:indexes].each do |idx|
             unique = idx[:unique] ? " (unique)" : ""
-            lines << "- `#{idx[:name]}` on (#{Array(idx[:columns]).join(', ')})#{unique}#{RailsAiContext::Introspectors::SchemaConventions.where_clause(idx[:where])}"
+            lines << "- `#{idx[:name]}` on (#{Array(idx[:columns]).join(', ')})#{unique}#{RailsAiContext::Introspectors::SchemaConventions.where_clause(idx[:where])}#{index_options_text(idx)}"
+          end
+        end
+
+        if data[:unique_constraints]&.any?
+          lines << "" << "### Unique constraints"
+          data[:unique_constraints].each do |constraint|
+            deferrable = constraint[:deferrable] ? ", deferrable: #{constraint[:deferrable]}" : ""
+            lines << "- `#{constraint[:name]}` on (#{Array(constraint[:columns]).join(', ')})#{deferrable}"
           end
         end
 
         if data[:foreign_keys]&.any?
           lines << "" << "### Foreign keys"
           data[:foreign_keys].each do |fk|
+            actions = fk.slice(:on_delete, :on_update).map { |key, value| "#{key}: #{value}" }
             lines << "- `#{RailsAiContext::Introspectors::SchemaConventions.key_text(fk[:column])}` → " \
-                     "`#{fk[:to_table]}.#{RailsAiContext::Introspectors::SchemaConventions.key_text(fk[:primary_key])}`"
+                     "`#{fk[:to_table]}.#{RailsAiContext::Introspectors::SchemaConventions.key_text(fk[:primary_key])}`" \
+                     "#{" (#{actions.join(', ')})" if actions.any?}"
           end
         end
 
-        # Check constraints (full detail)
         if data[:check_constraints]&.any?
-          lines << "" << "### Check Constraints"
-          data[:check_constraints].each do |cc|
-            label = cc[:name] ? "`#{cc[:name]}`" : ""
-            lines << "- #{label} #{cc[:expression]}"
+          lines << "" << "### Check constraints"
+          data[:check_constraints].each do |constraint|
+            lines << "- #{"`#{constraint[:name]}`: " if constraint[:name]}#{constraint[:expression]}"
           end
         end
 
-        # Enum types (full detail)
-        if data[:enum_types]&.any?
-          lines << "" << "### Enum Types"
-          data[:enum_types].each do |et|
-            values = et[:values]&.join(", ") || ""
-            lines << "- `#{et[:name]}`: #{values}"
+        used = columns.filter_map { |c| c[:enum_type] }
+        enums = Array(enum_types).select { |enum| used.include?(enum[:name]) }
+        if enums.any?
+          lines << "" << "### Enum types"
+          enums.each { |enum| lines << "- `#{enum[:name]}`: #{Array(enum[:values]).join(', ')}" }
+        end
+
+        generated = columns.select { |c| c.key?(:generated) }
+        if generated.any?
+          lines << "" << "### Generated columns"
+          generated.each do |col|
+            expression = col[:generated].to_s.empty? ? "" : ": #{col[:generated]}"
+            lines << "- `#{col[:name]}`#{expression} (#{col[:stored] ? "stored" : "virtual"})"
           end
         end
 
-        # Generated columns (full detail)
-        if data[:generated_columns]&.any?
-          lines << "" << "### Generated Columns"
-          data[:generated_columns].each do |gc|
-            lines << "- `#{gc[:name]}` - #{gc[:expression]}"
-          end
-        end
-
+        lines.concat([ "" ] + definition) if definition.any?
         lines.join("\n")
       end
     end

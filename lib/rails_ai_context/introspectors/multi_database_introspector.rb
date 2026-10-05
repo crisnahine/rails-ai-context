@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require "yaml"
-
 module RailsAiContext
   module Introspectors
     # Discovers multi-database configuration: multiple databases, replicas,
@@ -10,9 +8,7 @@ module RailsAiContext
       extend StaticTier
       static_tier :files_only
 
-      ERB_SENTINEL = "__rails_ai_context_erb__"
-      # `ENV["X"].presence || "mysql2"`: the literal is what runs with the variable unset.
-      ERB_DEFAULT = /\|\|\s*(["'])([\w.-]+)\1\s*\z/
+      ERB_SENTINEL = RailsAiContext::DatabaseYml::ERB_SENTINEL
 
       # @return [Hash] multi-database configuration
       def call
@@ -166,26 +162,7 @@ module RailsAiContext
       end
 
       def database_yml_env
-        path = File.join(root, "config/database.yml")
-        return nil unless File.exist?(path)
-
-        content = RailsAiContext::SafeFile.read(path)
-        return nil unless content
-
-        data = YAML.safe_load(neutralize_erb(content), aliases: true, permitted_classes: [ Symbol ])
-        return nil unless data.is_a?(Hash)
-
-        data[RailsAiContext.environment_name]
-      rescue => e
-        RailsAiContext.debug_fail(e, nil, label: "database_yml")
-      end
-
-      # ERB never runs: an output tag becomes an unknown marker, other tags go, and both keep
-      # their newlines so the rest of the file parses at its written indentation.
-      def neutralize_erb(content)
-        content.gsub(RailsAiContext::ErbSource::TAG) do |tag|
-          (tag.start_with?("<%=") ? ERB_SENTINEL + Regexp.last_match(1).to_s[ERB_DEFAULT, 2].to_s : "") + ("\n" * tag.count("\n"))
-        end
+        RailsAiContext::DatabaseYml.env(root)
       end
 
       def anonymize_db_name(name)

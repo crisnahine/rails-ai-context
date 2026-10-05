@@ -1746,6 +1746,15 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(table[:indexes]).to include({ name: "index_posts_on_tags", columns: %w[tags], unique: false },
                                          { name: "index_posts_on_score", columns: %w[score], unique: true })
     end
+
+    it "types a t.virtual by its type: option" do
+      boxes = replay([ <<~RUBY ])["boxes"]
+        create_table :boxes do |t|
+          t.virtual :area, type: :integer, as: "w * 2", stored: true
+        end
+      RUBY
+      expect(boxes[:columns].find { |c| c[:name] == "area" }).to include(type: "integer", generated: "w * 2", stored: true)
+    end
   end
   # create_join_table (schema_statements.rb, 7.0 and 8.1) creates the join
   # table with two non-null references and no id, and yields its definition;

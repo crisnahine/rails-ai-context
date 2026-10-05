@@ -22,19 +22,55 @@ module RailsAiContext
         composite_pk = !pk_opt.nil? && !pk_opt.is_a?(String) && !pk_opt.is_a?(Symbol)
         return [] if options[:id] == false || composite_pk
 
-        id_type = options[:id].is_a?(String) || options[:id].is_a?(Symbol) ? options[:id].to_s : pk_type
+        # set_primary_key (7.0 to 8.1): an id: hash gives the type, its other keys the column's options.
+        id = options[:id]
+        id_options = id.is_a?(Hash) ? id.except(:type).reject { |_, value| value == RailsAiContext::Confidence::INFERRED } : {}
+        id = id[:type] if id.is_a?(Hash)
+        id_type = (id.is_a?(String) || id.is_a?(Symbol)) && id.to_s != "primary_key" ? id.to_s : pk_type
         [ { name: pk_opt ? pk_opt.to_s : "id", type: id_type, default: nil,
-            options: { null: false }, primary_key: true } ]
+            options: { null: false }.merge(id_options), primary_key: true } ]
       end
 
       # Rails omits column:/primary_key: only where the convention holds, so
-      # the fallback is what was declared rather than a guess.
-      def foreign_key_entry(from, to, column, primary_key)
+      # the fallback is what was declared rather than a guess. PostgreSQL's
+      # convention drops the schema of a qualified target.
+      def foreign_key_entry(from, to, column, primary_key, on_delete: nil, on_update: nil)
         {
           from_table: from, to_table: to,
-          column: primary_key_value(column) || "#{to.to_s.singularize}_id",
-          primary_key: primary_key_value(primary_key) || "id"
-        }
+          column: primary_key_value(column) || "#{to.to_s.split('.').last.to_s.singularize}_id",
+          primary_key: primary_key_value(primary_key) || "id",
+          on_delete: on_delete&.to_s, on_update: on_update&.to_s
+        }.compact
+      end
+
+      # An index's options past name, columns, unique and where, as schema.rb
+      # writes them; btree is every adapter's default, so the dump leaves it out.
+      def index_detail(columns, using: nil, type: nil, include: nil, order: nil, opclass: nil, length: nil, nulls_not_distinct: nil)
+        {
+          using: (using.to_s unless using.nil? || using.to_s == "btree"),
+          type: (type.to_s unless type.nil? || type.to_s.empty?),
+          include: (Array(include).map(&:to_s) unless Array(include).empty?),
+          order: per_key(order, columns),
+          opclass: per_key(opclass, columns),
+          length: per_key(length, columns),
+          nulls_not_distinct: (true if nulls_not_distinct == true)
+        }.compact
+      end
+
+      # An index option given per key, or once for every key (`order: :desc`).
+      def per_key(value, columns)
+        value = Array(columns).to_h { |column| [ column, value ] } unless value.is_a?(Hash)
+        value = value.reject { |_, v| v.nil? || v.to_s.empty? }
+        value.to_h { |key, v| [ key.to_s, v.is_a?(Integer) ? v : v.to_s ] } unless value.empty?
+      end
+
+      # deferrable: false is the default the dump leaves out.
+      def unique_constraint_entry(name, columns, deferrable)
+        {
+          name: name&.to_s,
+          columns: Array(columns).map(&:to_s),
+          deferrable: (deferrable.to_s if deferrable)
+        }.compact
       end
 
       # Rails' limit before it shortens an index name (max_index_name_size).
@@ -134,8 +170,9 @@ module RailsAiContext
       # since Rails 5.1, except SQLite where it stays integer. The dump does
       # not record it, but config/database.yml names the adapter - looked up
       # per database, because a multi-db app can mix adapters (postgres
-      # primary, sqlite queue) and each dump must be typed by its own.
-      def implicit_pk_type(root, dump_path)
+      # primary, sqlite queue) and each dump must be typed by its own. dump_path
+      # names a secondary database's dump; nil is the primary's.
+      def implicit_pk_type(root, dump_path = nil)
         db_name = File.basename(dump_path.to_s).sub(/\.(rb|sql)\z/, "").sub(/_?(schema|structure)\z/, "")
         db_name = "primary" if db_name.empty?
 
@@ -174,11 +211,66 @@ module RailsAiContext
         content.empty? || content.end_with?("\n") ? content : "#{content}\n"
       end
 
+      # A dump of more than one schema qualifies every name (relation_name, 8.1);
+      # the app sees a public table by its bare name under the default search_path.
+      def local_name(name)
+        name.delete_prefix("public.")
+      end
+
       # A primary key as connection.primary_key gives it: the column's name, or
       # the names in order for a composite key; nil for none.
       def primary_key_value(key)
         names = Array(key).map(&:to_s).reject(&:empty?)
         names.size > 1 ? names : names.first
+      end
+
+      # The key on the table and a flag on each of its columns, from whichever
+      # side the source gave; a table with no key keeps neither.
+      def mark_primary_key(table)
+        table[:primary_key] ||= primary_key_value(Array(table[:columns]).select { |c| c[:primary_key] }.map { |c| c[:name] })
+        keys = Array(table[:primary_key]).map(&:to_s)
+        Array(table[:columns]).each { |column| column[:primary_key] = true if keys.include?(column[:name].to_s) }
+        table.delete(:primary_key) if table[:primary_key].nil?
+        table
+      end
+
+      # Every table's check constraints in one list, each naming its table.
+      def check_constraints_of(tables)
+        tables.flat_map { |name, table| Array(table[:check_constraints]).map { |constraint| { table: name, **constraint } } }
+      end
+
+      def generated_columns_of(tables)
+        tables.flat_map do |name, table|
+          Array(table[:columns]).filter_map do |column|
+            { table: name, column: column[:name], expression: column[:generated], stored: column[:stored] }.compact if column.key?(:generated)
+          end
+        end
+      end
+
+      # Views, virtual tables and tables the dumper skipped, listed beside the tables
+      # under the names Rails gives them. A view replaces a table of its name: mysqldump
+      # writes a placeholder table before the view it stands in for.
+      def add_relations(tables, views: {}, virtual_tables: {}, not_dumped: {})
+        views.each { |name, view| tables[name] = view_entry(view[:sql], materialized: view[:materialized]) }
+        virtual_tables.each { |name, table| tables[name] = virtual_table_entry(table[:module], table[:arguments]) }
+        not_dumped.each { |name, reason| tables[name] ||= { columns: [], indexes: [], foreign_keys: [], not_dumped: reason } }
+        tables
+      end
+
+      # A dump holds a view's SQL, not its columns; only a connection lists those.
+      def view_entry(sql, materialized:, columns: [])
+        { kind: materialized ? "materialized_view" : "view", columns: columns, indexes: [], foreign_keys: [], sql: sql }.compact
+      end
+
+      # A virtual table's columns are its module arguments that set no option (fts5's tokenize=...).
+      def virtual_table_entry(mod, arguments)
+        columns = Array(arguments).filter_map { |arg| arg.strip[/\A["`]?(\w+)["`]?(?:\s+UNINDEXED)?\z/i, 1] }
+        { kind: "virtual_table", module: mod, columns: columns.map { |name| { name: name } }, indexes: [], foreign_keys: [] }.compact
+      end
+
+      # MySQL's dumper writes a tiny, medium or long text or blob type as size:.
+      def mysql_text_size(sql_type)
+        sql_type.to_s[/\A(tiny|medium|long)(?:text|blob)/i, 1]&.downcase
       end
 
       # How a primary key reads to a person: `id`, or `tag_id, account_id`.

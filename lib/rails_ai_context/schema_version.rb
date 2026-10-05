@@ -13,16 +13,14 @@ module RailsAiContext
   # (mysqldump quotes the table name with backticks, pg_dump with double
   # quotes; the version literals themselves are always single-quoted).
   module SchemaVersion
+    # From the dump the app configures, then the default files.
     def self.current(root)
-      schema_path = File.join(root, "db", "schema.rb")
-      if File.exist?(schema_path)
-        version = from_schema_rb(schema_path)
+      Introspectors::SchemaDumpPath.candidates(root).each do |format, path|
+        next unless File.exist?(path)
+
+        version = format == :ruby ? from_schema_rb(path) : from_structure_sql(path)
         return version if version
       end
-
-      structure_path = File.join(root, "db", "structure.sql")
-      return from_structure_sql(structure_path) if File.exist?(structure_path)
-
       nil
     end
 
@@ -50,8 +48,8 @@ module RailsAiContext
     # The whole applied set, which only structure.sql records; schema.rb
     # carries the max version alone, so `current` is the answer there.
     def self.applied(root)
-      path = File.join(root.to_s, "db", "structure.sql")
-      return nil unless File.exist?(path)
+      format, path = Introspectors::SchemaDumpPath.present(root)
+      return nil unless format == :sql
 
       content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
       return nil unless content

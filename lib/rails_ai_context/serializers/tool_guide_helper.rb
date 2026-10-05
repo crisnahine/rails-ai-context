@@ -317,11 +317,14 @@ module RailsAiContext
         elsif defined?(ActiveRecord::Base) && ActiveRecord::Base.respond_to?(:schema_format)
           ActiveRecord::Base.schema_format == :sql
         end
-        if sql_format.nil?
-          root = defined?(Rails) && Rails.respond_to?(:root) && Rails.root ? Rails.root.to_s : Dir.pwd
-          sql_format = !File.exist?(File.join(root, "db/schema.rb")) && File.exist?(File.join(root, "db/structure.sql"))
+        root = defined?(Rails) && Rails.respond_to?(:root) && Rails.root ? Rails.root.to_s : Dir.pwd
+        candidates = RailsAiContext::Introspectors::SchemaDumpPath.candidates(root)
+        _, path = if sql_format.nil?
+          candidates.find { |_, candidate| File.exist?(candidate) } || candidates.first
+        else
+          candidates.find { |format, _| format == (sql_format ? :sql : :ruby) }
         end
-        sql_format ? "db/structure.sql" : "db/schema.rb"
+        path.delete_prefix("#{root.chomp('/')}/")
       end
 
       # Generate zsh-safe CLI command. In-Gemfile installs go through the rake

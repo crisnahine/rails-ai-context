@@ -580,4 +580,265 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
       expect(audit[:foreign_keys].map { |fk| fk[:to_table] }).to eq(%w[audit.users])
     end
   end
+
+  # What schema.rb writes for the same column: a size the type was given, less
+  # the defaults the dumper leaves out.
+  describe "a column's size, collation and a foreign key's actions" do
+    def columns(sql, table)
+      described_class.parse(sql)[:tables][table][:columns].to_h { |c| [ c[:name], c.except(:name, :type, :null) ] }
+    end
+
+    it "reads them from pg_dump" do
+      sql = <<~SQL
+        SET search_path = '';
+        CREATE TABLE public.orders (
+            id bigint NOT NULL,
+            total numeric(10,2),
+            whole numeric(8),
+            code character varying(20),
+            label character varying COLLATE pg_catalog."C",
+            seen_at timestamp(3) without time zone,
+            made_at timestamp(6) without time zone,
+            account_id bigint
+        );
+
+        ALTER TABLE ONLY public.orders
+            ADD CONSTRAINT fk_rails_1 FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON UPDATE RESTRICT ON DELETE CASCADE;
+      SQL
+
+      expect(columns(sql, "orders")).to eq(
+        "id" => {}, "total" => { precision: 10, scale: 2 }, "whole" => { precision: 8, scale: 0 },
+        "code" => { limit: 20 }, "label" => { collation: "C" }, "seen_at" => { precision: 3 }, "made_at" => {}, "account_id" => {}
+      )
+      expect(described_class.parse(sql)[:tables]["orders"][:foreign_keys].first).to include(on_delete: "cascade", on_update: "restrict")
+    end
+
+    it "reads them from mysqldump, where varchar(255) and datetime(6) are the defaults" do
+      sql = <<~SQL
+        CREATE TABLE `orders` (
+          `id` bigint NOT NULL AUTO_INCREMENT,
+          `total` decimal(10,2) DEFAULT NULL,
+          `code` varchar(255) DEFAULT NULL,
+          `name` varchar(120) COLLATE utf8mb4_bin NOT NULL,
+          `made_at` datetime(6) NOT NULL,
+          `seen_at` datetime(3) DEFAULT NULL,
+          `views` int DEFAULT NULL,
+          `account_id` bigint DEFAULT NULL,
+          PRIMARY KEY (`id`),
+          CONSTRAINT `fk_rails_1` FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+      SQL
+
+      expect(columns(sql, "orders")).to eq(
+        "id" => {}, "total" => { precision: 10, scale: 2 }, "code" => {}, "name" => { limit: 120, collation: "utf8mb4_bin" },
+        "made_at" => {}, "seen_at" => { precision: 3 }, "views" => {}, "account_id" => {}
+      )
+      expect(described_class.parse(sql)[:tables]["orders"][:foreign_keys].first).to include(on_delete: "nullify")
+    end
+  end
+
+  describe "check constraints and generated columns" do
+    it "reads pg_dump's inline CHECK and a stored generated column" do
+      sql = <<~SQL
+        CREATE TABLE public.users (
+            id bigint NOT NULL,
+            age integer,
+            age_next integer GENERATED ALWAYS AS ((age + 1)) STORED,
+            CONSTRAINT age_nonneg CHECK ((age >= 0))
+        );
+      SQL
+      users = described_class.parse(sql)[:tables]["users"]
+
+      expect(users[:columns].map { |c| c[:name] }).to eq(%w[id age age_next])
+      expect(users[:columns].last).to include(type: "integer", generated: "(age + 1)", stored: true)
+      expect(users[:check_constraints]).to eq([ { name: "age_nonneg", expression: "(age >= 0)" } ])
+    end
+
+    it "reads mysqldump's virtual column and an unnamed SQLite CHECK" do
+      mysql = <<~SQL
+        CREATE TABLE `users` (
+          `age` int DEFAULT NULL,
+          `age_next` int GENERATED ALWAYS AS ((`age` + 1)) VIRTUAL,
+          CONSTRAINT `users_chk_1` CHECK ((`age` >= 0))
+        ) ENGINE=InnoDB;
+      SQL
+      sqlite = <<~SQL
+        CREATE TABLE "posts" ("title" varchar, CHECK (length(title) > 0));
+      SQL
+
+      expect(described_class.parse(mysql)[:tables]["users"][:columns].last).to include(generated: "(`age` + 1)", stored: false)
+      expect(described_class.parse(mysql)[:tables]["users"][:check_constraints]).to eq([ { name: "users_chk_1", expression: "`age` >= 0" } ])
+      expect(described_class.parse(sqlite)[:tables]["posts"][:check_constraints]).to eq([ { expression: "length(title) > 0" } ])
+    end
+    it "drops the parentheses MySQL wraps a CHECK in, as the booted MySQL adapter does" do
+      mysql = <<~SQL
+        CREATE TABLE `users` (
+          `a` int DEFAULT NULL,
+          `b` int DEFAULT NULL,
+          CONSTRAINT `both` CHECK (((`a` > 0) and (`b` > 0))),
+          CONSTRAINT `either` CHECK ((`a` > 0) or (`b` > 0))
+        ) ENGINE=InnoDB;
+      SQL
+
+      expect(described_class.parse(mysql)[:tables]["users"][:check_constraints]).to eq([
+        { name: "both", expression: "(`a` > 0) and (`b` > 0)" },
+        { name: "either", expression: "(`a` > 0) or (`b` > 0)" }
+      ])
+    end
+  end
+
+  # Rails writes SQLite's foreign key clause across lines, and Rails 7.x writes
+  # no semicolon when ignore_tables makes it dump through sqlite_master.
+  describe "SQLite dumps" do
+    it "reads a table whose foreign key spans lines, and leaves out sqlite_sequence" do
+      sql = <<~SQL
+        CREATE TABLE "accounts" ("id" integer PRIMARY KEY AUTOINCREMENT NOT NULL, "name" varchar NOT NULL);
+        CREATE TABLE sqlite_sequence(name,seq);
+        CREATE TABLE "users" ("id" integer PRIMARY KEY AUTOINCREMENT NOT NULL, "email" varchar NOT NULL, "account_id" integer NOT NULL, CONSTRAINT "fk_rails_61ac11da2b"
+        FOREIGN KEY ("account_id")
+          REFERENCES "accounts" ("id")
+        );
+        CREATE TABLE "tags" ("name" varchar, "user_id" integer, CONSTRAINT "fk_rails_e689f6d0cc"
+        FOREIGN KEY ("user_id")
+          REFERENCES "users" ("id")
+         ON DELETE CASCADE);
+      SQL
+      tables = described_class.parse(sql)[:tables]
+
+      expect(tables.keys).to eq(%w[accounts users tags])
+      expect(tables["users"][:columns].map { |c| c[:name] }).to eq(%w[id email account_id])
+      expect(tables["tags"][:columns].map { |c| c[:name] }).to eq(%w[name user_id])
+      expect(tables["users"][:foreign_keys]).to eq([ { from_table: "users", to_table: "accounts", column: "account_id", primary_key: "id" } ])
+      expect(tables["tags"][:foreign_keys]).to eq([ { from_table: "tags", to_table: "users", column: "user_id", primary_key: "id", on_delete: "cascade" } ])
+    end
+
+    it "skips a CREATE TABLE that never closes and reads the tables after it" do
+      sql = <<~SQL
+        CREATE TABLE "broken" ("a" varchar, "b" varchar(
+        CREATE TABLE "kept" ("x" varchar, "note" varchar DEFAULT 'it''s (fine)', "naïve" integer);
+      SQL
+
+      expect(described_class.parse(sql)[:tables]["kept"][:columns].map { |c| c[:name] }).to include("x", "note")
+      expect(described_class.parse("")[:tables]).to eq({})
+    end
+
+    it "splits a one-line table with multibyte text where it should" do
+      sql = <<~SQL
+        CREATE TABLE "notes" ("title" varchar DEFAULT 'é, (ü)' NOT NULL, "note" text DEFAULT 'ñ', CHECK (length("title") > 0));
+      SQL
+      notes = described_class.parse(sql)[:tables]["notes"]
+
+      expect(notes[:columns].map { |c| c.values_at(:name, :default, :null) }).to eq([ [ "title", "é, (ü)", false ], [ "note", "ñ", true ] ])
+      expect(notes[:check_constraints]).to eq([ { expression: 'length("title") > 0' } ])
+    end
+
+    it "reads statements with no semicolon" do
+      sql = <<~SQL
+        CREATE TABLE "accounts" ("id" integer PRIMARY KEY AUTOINCREMENT NOT NULL, "name" varchar NOT NULL)
+        CREATE TABLE "codes" ("code" varchar, "label" varchar)
+        CREATE INDEX "index_codes_on_label" ON "codes" ("label")
+        CREATE UNIQUE INDEX "index_codes_on_code" ON "codes" ("code") WHERE code IS NOT NULL
+        CREATE TABLE "later" ("x" varchar)
+      SQL
+      tables = described_class.parse(sql)[:tables]
+
+      expect(tables.keys).to eq(%w[accounts codes later])
+      expect(tables["codes"][:columns].map { |c| c[:name] }).to eq(%w[code label])
+      expect(tables["codes"][:indexes]).to eq([
+        { name: "index_codes_on_label", columns: [ "label" ], unique: false },
+        { name: "index_codes_on_code", columns: [ "code" ], unique: true, where: "code IS NOT NULL" }
+      ])
+    end
+  end
+
+  # The same table gives the same types whichever schema_format the app dumps.
+  describe "column types as schema.rb names them" do
+    it "reads pg_dump's schema-qualified, zoned and sized types" do
+      sql = <<~SQL
+        SET search_path = '';
+        CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public;
+        CREATE EXTENSION IF NOT EXISTS hstore WITH SCHEMA public;
+        CREATE TYPE public.mood AS ENUM ('happy', 'sad');
+
+        CREATE TABLE public.things (
+            id bigint NOT NULL,
+            attrs public.hstore,
+            handle public.citext,
+            mood public.mood DEFAULT 'happy'::public.mood NOT NULL,
+            data jsonb,
+            at timestamp with time zone,
+            blob bytea,
+            alarm time without time zone,
+            age smallint,
+            code character(3),
+            ratio real
+        );
+        COMMENT ON TABLE public.things IS 'Everything';
+        COMMENT ON COLUMN public.things.data IS 'Raw payload';
+      SQL
+      parsed = described_class.parse(sql)
+      things = parsed[:tables]["things"]
+      columns = things[:columns].to_h { |c| [ c[:name], c ] }
+
+      expect(columns.transform_values { |c| c[:type] }).to eq(
+        "id" => "bigint", "attrs" => "hstore", "handle" => "citext", "mood" => "enum", "data" => "jsonb",
+        "at" => "timestamptz", "blob" => "binary", "alarm" => "time", "age" => "integer", "code" => "string", "ratio" => "float"
+      )
+      expect(columns["mood"]).to include(enum_type: "mood", default: "happy", null: false)
+      expect(columns["age"]).to include(limit: 2)
+      expect(columns["code"]).to include(limit: 3)
+      expect(columns["data"]).to include(comment: "Raw payload")
+      expect(things[:comment]).to eq("Everything")
+      expect(parsed[:enums]).to eq([ { name: "mood", values: %w[happy sad] } ])
+    end
+
+    it "reads mysqldump's unsigned, small and timestamp types and its comments" do
+      sql = <<~SQL
+        CREATE TABLE `things` (
+          `u` int unsigned DEFAULT NULL,
+          `big` bigint unsigned NOT NULL,
+          `tiny` tinyint DEFAULT NULL,
+          `flag` tinyint(1) DEFAULT NULL,
+          `medium` mediumint DEFAULT NULL,
+          `at` timestamp NULL DEFAULT NULL,
+          `made` datetime(6) NOT NULL,
+          `note` varchar(255) DEFAULT NULL COMMENT 'Shown, it''s fine',
+          `raw` varbinary(16) DEFAULT NULL,
+          `body` mediumtext,
+          `blob` longblob
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Mixed bag';
+      SQL
+      things = described_class.parse(sql)[:tables]["things"]
+      columns = things[:columns].to_h { |c| [ c[:name], c.except(:name, :null) ] }
+
+      expect(columns).to eq(
+        "u" => { type: "integer", unsigned: true }, "big" => { type: "bigint", unsigned: true },
+        "tiny" => { type: "integer", limit: 1 }, "flag" => { type: "boolean" }, "medium" => { type: "integer", limit: 3 },
+        "at" => { type: "timestamp" }, "made" => { type: "datetime" },
+        "note" => { type: "string", comment: "Shown, it's fine" }, "raw" => { type: "binary", limit: 16 },
+        "body" => { type: "text", size: "medium" }, "blob" => { type: "binary", size: "long" }
+      )
+      expect(things[:comment]).to eq("Mixed bag")
+    end
+  end
+
+  it "reads mysqldump's FULLTEXT and SPATIAL keys as indexes, not columns" do
+    sql = <<~SQL
+      CREATE TABLE `posts` (
+        `id` bigint NOT NULL AUTO_INCREMENT,
+        `body` text,
+        `spot` point NOT NULL /*!80003 SRID 0 */,
+        PRIMARY KEY (`id`),
+        SPATIAL KEY `index_posts_on_spot` (`spot`),
+        FULLTEXT KEY `index_posts_on_body` (`body`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+    SQL
+    posts = described_class.parse(sql)[:tables]["posts"]
+
+    expect(posts[:columns].map { |c| c[:name] }).to eq(%w[id body spot])
+    expect(posts[:indexes]).to contain_exactly(
+      { name: "index_posts_on_spot", columns: [ "spot" ], unique: false, type: "spatial" },
+      { name: "index_posts_on_body", columns: [ "body" ], unique: false, type: "fulltext" }
+    )
+  end
 end

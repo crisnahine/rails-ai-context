@@ -14,6 +14,12 @@ RSpec.describe RailsAiContext::Introspectors::SchemaConventions do
       expect(key).to include(name: "uuid", type: "uuid")
     end
 
+    it "takes the type and options from an id: hash, as set_primary_key does" do
+      key = described_class.implicit_primary_key({ id: { type: :string, limit: 36 } }, "bigint").first
+      expect(key).to include(name: "id", type: "string", options: { null: false, limit: 36 })
+      expect(described_class.implicit_primary_key({ id: { limit: 4 } }, "integer").first).to include(type: "integer")
+    end
+
     it "adds nothing for id: false or a composite key" do
       expect(described_class.implicit_primary_key({ id: false }, "bigint")).to eq([])
       expect(described_class.implicit_primary_key({ primary_key: %w[a b] }, "bigint")).to eq([])
@@ -24,6 +30,11 @@ RSpec.describe RailsAiContext::Introspectors::SchemaConventions do
     it "falls back to the conventional column and id" do
       expect(described_class.foreign_key_entry("posts", "users", nil, nil))
         .to eq(from_table: "posts", to_table: "users", column: "user_id", primary_key: "id")
+    end
+
+    it "infers the column from the bare table name of a schema-qualified target" do
+      expect(described_class.foreign_key_entry("public.users", "other.widgets", nil, nil))
+        .to include(to_table: "other.widgets", column: "widget_id")
     end
 
     it "keeps a composite column list" do

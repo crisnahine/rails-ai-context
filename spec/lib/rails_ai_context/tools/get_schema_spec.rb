@@ -74,6 +74,141 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
   # A composite unique index constrains the pair, not each column: a blog's
   # articles read series_id and position as unique on their own, and lost the
   # plain index on series_id.
+  # A migration or validation written from the table view needs what the dump declares.
+  describe "what the table view shows beyond name and type" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "postgresql", total_tables: 2, extensions: [ "citext" ], tables: {
+          "accounts" => {
+            comment: "Tenant accounts",
+            columns: [
+              { name: "name", type: "string", null: false, limit: 120, collation: "C" },
+              { name: "seats", type: "integer", unsigned: true },
+              { name: "total", type: "decimal", precision: 10, scale: 2 },
+              { name: "seen_at", type: "datetime", precision: 3 },
+              { name: "bio", type: "text", size: "medium" }
+            ],
+            indexes: [], foreign_keys: [],
+            unique_constraints: [ { name: "uniq_name", columns: [ "name" ], deferrable: "immediate" } ]
+          },
+          "users" => {
+            columns: [ { name: "data", type: "jsonb" }, { name: "account_id", type: "bigint" } ],
+            indexes: [
+              { name: "index_users_on_data", columns: [ "data" ], unique: false, using: "gin" },
+              { name: "idx_acct", columns: [ "account_id" ], unique: false, include: [ "data" ], order: { "account_id" => "desc" } }
+            ],
+            foreign_keys: [ { from_table: "users", to_table: "accounts", column: "account_id", primary_key: "id", on_delete: "cascade" } ]
+          }
+        } },
+        models: {}
+      })
+    end
+
+    it "shows a column's precision, scale, limit, unsigned flag and collation" do
+      text = described_class.call(table: "accounts").content.first[:text]
+
+      expect(text).to include("| name | string, limit: 120, collation: C | **NO** |")
+      expect(text).to include("| seats | integer, unsigned | yes |")
+      expect(text).to include("| total | decimal(10,2) | yes |")
+      expect(text).to include("| seen_at | datetime(3) | yes |")
+      expect(text).to include("| bio | text, size: medium | yes |")
+    end
+
+    it "shows the table comment and its unique constraints" do
+      text = described_class.call(table: "accounts").content.first[:text]
+
+      expect(text).to include("**Comment:** Tenant accounts")
+      expect(text).to include("### Unique constraints\n- `uniq_name` on (name), deferrable: immediate")
+    end
+
+    it "shows an index's options and a foreign key's actions" do
+      text = described_class.call(table: "users").content.first[:text]
+
+      expect(text).to include("- `index_users_on_data` on (data) - using: gin")
+      expect(text).to include("- `idx_acct` on (account_id) - include: data; order: account_id desc")
+      expect(text).to include("- `account_id` → `accounts.id` (on_delete: cascade)")
+    end
+
+    # A line inside a markdown table ends it, so a comment is a cell.
+    it "puts a column comment in its own cell and keeps the table whole" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "postgresql", total_tables: 1, tables: { "things" => { indexes: [], foreign_keys: [], columns: [
+          { name: "data", type: "jsonb", comment: "Raw | payload" }, { name: "at", type: "timestamptz" }
+        ] } } },
+        models: {}
+      })
+
+      text = described_class.call(table: "things").content.first[:text]
+
+      expect(text).to include("| Column | Type | Null | Comment |")
+      expect(text).to include("| data | jsonb | yes | Raw \\| payload |")
+      expect(text).to include("| at | timestamptz | yes |  |")
+    end
+
+    it "names the enabled extensions in the full listing" do
+      expect(described_class.call(detail: "full").content.first[:text]).to include("**Extensions:** citext")
+    end
+  end
+
+  describe "the primary key" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "sqlite3", total_tables: 2, tables: {
+          "orders" => { primary_key: %w[shop_id id], indexes: [], foreign_keys: [], columns: [
+            { name: "shop_id", type: "integer", null: false, primary_key: true },
+            { name: "id", type: "integer", null: false, primary_key: true },
+            { name: "number", type: "string" }
+          ] },
+          "legacy_widgets" => { primary_key: "widget_code", indexes: [], foreign_keys: [], columns: [
+            { name: "widget_code", type: "string", null: false, primary_key: true }, { name: "label", type: "string" }
+          ] }
+        } },
+        models: {}
+      })
+    end
+
+    it "names a composite or custom key in the table view" do
+      expect(described_class.call(table: "orders").content.first[:text]).to include("**Primary key:** shop_id, id")
+      expect(described_class.call(table: "legacy_widgets").content.first[:text]).to include("**Primary key:** widget_code")
+    end
+
+    it "names a key other than id in the listing" do
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("### orders (primary key: shop_id, id)")
+      expect(text).to include("### legacy_widgets (primary key: widget_code)")
+    end
+  end
+
+  describe "check constraints, enum types and generated columns in the table view" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "postgresql", total_tables: 1,
+                  enum_types: [ { name: "mood", values: %w[happy sad] }, { name: "unused", values: %w[x] } ],
+                  tables: { "users" => {
+                    indexes: [], foreign_keys: [],
+                    columns: [
+                      { name: "age", type: "integer" },
+                      { name: "mood", type: "enum", enum_type: "mood" },
+                      { name: "age_next", type: "integer", generated: "age + 1", stored: true }
+                    ],
+                    check_constraints: [ { name: "age_nonneg", expression: "age >= 0" }, { expression: "age < 200" } ]
+                  } } },
+        models: {}
+      })
+    end
+
+    it "lists each for the table" do
+      text = described_class.call(table: "users").content.first[:text]
+
+      expect(text).to include("### Check constraints\n- `age_nonneg`: age >= 0\n- age < 200")
+      expect(text).to include("### Enum types\n- `mood`: happy, sad")
+      expect(text).not_to include("unused")
+      expect(text).to include("### Generated columns\n- `age_next`: age + 1 (stored)")
+      expect(text).to include("| mood | enum, enum_type: mood | yes |")
+    end
+  end
+
   describe "column hints for a composite unique index" do
     before do
       allow(described_class).to receive(:cached_context).and_return({
@@ -674,6 +809,21 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     end
   end
 
+  describe "a table a renamed dump declares and the database does not have" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "sqlite3", tables: tables, total_tables: 3,
+                  declared_tables: tables.keys + [ "order_comments" ], declared_in: "db/schema_sqlite.rb" },
+        models: {}
+      })
+    end
+
+    it "names the file database.yml's schema_dump gives" do
+      expect(described_class.call(table: "order_comments").content.first[:text]).to include("declared in db/schema_sqlite.rb")
+      expect(described_class.call(detail: "summary").content.first[:text]).to include("db/schema_sqlite.rb declares 4")
+    end
+  end
+
   describe ".call with model name normalization" do
     it "resolves model name to pluralized table name" do
       result = described_class.call(table: "User")
@@ -933,5 +1083,64 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     text = described_class.call(table: "orphan").content.first[:text]
 
     expect(text).to include("Inherits from `elsewhere.gone`, which the structure.sql dump does not define: its columns are not shown.")
+  end
+
+  describe "views, virtual tables and a table the dumper could not write" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "SQLite", adapter_source: "static_parse", total_tables: 4, tables: {
+          "users" => { columns: [ { name: "email", type: "string" } ], indexes: [], foreign_keys: [] },
+          "active_users" => { kind: "view", sql: "SELECT id FROM users", columns: [], indexes: [], foreign_keys: [] },
+          "docs_fts" => { kind: "virtual_table", module: "fts5", columns: [ { name: "title" } ], indexes: [], foreign_keys: [] },
+          "boxes" => { columns: [], indexes: [], foreign_keys: [], not_dumped: "StandardError: Unknown type 'virtual'" }
+        } },
+        models: {}
+      })
+    end
+
+    it "labels each in the listing" do
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("### active_users (view)", "### docs_fts (fts5 virtual table)", "### boxes (not dumped)")
+    end
+
+    it "shows a view's SQL and says its columns need a connection" do
+      text = described_class.call(table: "active_users").content.first[:text]
+
+      expect(text).to include("## View: active_users", "```sql\nSELECT id FROM users\n```")
+      expect(text).to include("A view's columns are read from the database")
+      expect(text).not_to include("| Column |")
+    end
+
+    it "says why a table has no columns when the dumper could not write it" do
+      text = described_class.call(table: "boxes").content.first[:text]
+
+      expect(text).to include("The schema dumper could not describe this table (StandardError: Unknown type 'virtual')")
+    end
+
+    it "says, without a connection, that a view the dump does not record cannot be listed" do
+      text = described_class.call(table: "missing_view").content.first[:text]
+
+      expect(text).to include("a view is listed only when the dump records it")
+    end
+
+    it "names a virtual table's module" do
+      text = described_class.call(table: "docs_fts").content.first[:text]
+
+      expect(text).to include("## Virtual table: docs_fts", "**Module:** fts5", "| Column |\n|--------|\n| title |")
+      expect(text).not_to include("| Null")
+    end
+
+    it "lists a virtual table's columns without a type label" do
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("### docs_fts (fts5 virtual table)\ntitle\n")
+    end
+
+    it "leaves views and virtual tables out of the tables with no model file" do
+      text = described_class.call(detail: "summary").content.first[:text]
+
+      expect(text).to match(/Tables with no model file in this app\*\*: boxes, users$/)
+    end
   end
 end
