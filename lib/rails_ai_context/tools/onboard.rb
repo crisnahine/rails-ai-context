@@ -5,7 +5,7 @@ module RailsAiContext
     class Onboard < BaseTool
       tool_name "rails_onboard"
       description "Get a narrative walkthrough of the Rails application - stack, data model, authentication, key flows, " \
-        "background jobs, frontend, testing, getting started instructions, and the app's custom rake tasks. " \
+        "background jobs, frontend, testing, getting started instructions, and the app's custom rake tasks, generators and Railties. " \
         "Use when: first encountering a project, onboarding a new developer, or orienting an AI agent. " \
         "Key params: detail (quick/standard/full)."
 
@@ -28,10 +28,10 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
-      STANDARD_SECTIONS = %i[stack data_model auth key_flows jobs frontend testing getting_started rake_tasks].freeze
+      STANDARD_SECTIONS = %i[stack data_model auth key_flows jobs frontend testing getting_started rake_tasks generators].freeze
       FULL_SECTIONS = %i[
         stack data_model auth key_flows jobs frontend payments realtime storage api devops i18n engines env
-        testing getting_started all_rake_tasks
+        testing getting_started all_rake_tasks generators
       ].freeze
 
       def self.call(detail: "standard", server_context: nil)
@@ -430,6 +430,30 @@ module RailsAiContext
 
         def section_all_rake_tasks(ctx)
           section_rake_tasks(ctx, limit: nil)
+        end
+
+        def section_generators(ctx)
+          data = Payload.section(ctx, :rake_tasks) || {}
+          generators = Array(data[:generators])
+          templates = Array(data[:generator_templates])
+          railties = Array(data[:railties])
+          return [] if generators.empty? && templates.empty? && railties.empty?
+
+          lines = [ "## Generators and Railties", "" ]
+          generators.each do |g|
+            lines << "- `#{g[:command]}`#{" - #{g[:usage]}" if g[:usage]} (`#{g[:file]}`)"
+          end
+          templates.each do |t|
+            lines << "- `#{t[:file]}` replaces the template the `#{t[:generator]}` generator writes"
+          end
+          railties.each do |r|
+            line = "- Railtie `#{r[:name]}` (`#{r[:file]}`)"
+            notes = []
+            notes << "initializers #{r[:initializers].map { |i| "`#{i}`" }.join(', ')}" if Array(r[:initializers]).any?
+            notes << "adds rake tasks" if r[:rake_tasks]
+            lines << (notes.any? ? "#{line}: #{notes.join('; ')}" : line)
+          end
+          lines << ""
         end
 
         def rake_task_line(task)

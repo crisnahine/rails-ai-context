@@ -116,6 +116,37 @@ RSpec.describe RailsAiContext::Tools::Onboard do
     end
   end
 
+  describe "the app's generators and Railties" do
+    def onboard(detail, rake_tasks)
+      Dir.mktmpdir do |dir|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+        allow(described_class).to receive(:cached_context).and_return({ app_name: "App", models: {}, rake_tasks: rake_tasks })
+        described_class.call(detail: detail).content.first[:text]
+      end
+    end
+
+    it "names each generator command, each template override and each Railtie" do
+      data = {
+        tasks: [],
+        generators: [ { command: "bin/rails generate service", file: "lib/generators/service/service_generator.rb", usage: "Creates a service object." } ],
+        generator_templates: [ { file: "lib/templates/active_record/model/model.rb.tt", generator: "active_record:model" } ],
+        railties: [ { name: "MyThing::Railtie", file: "lib/my_thing/railtie.rb", initializers: [ "my_thing.setup" ], rake_tasks: true } ]
+      }
+
+      %w[standard full].each do |detail|
+        text = onboard(detail, data)
+        expect(text).to include("## Generators and Railties")
+        expect(text).to include("- `bin/rails generate service` - Creates a service object. (`lib/generators/service/service_generator.rb`)")
+        expect(text).to include("- `lib/templates/active_record/model/model.rb.tt` replaces the template the `active_record:model` generator writes")
+        expect(text).to include("- Railtie `MyThing::Railtie` (`lib/my_thing/railtie.rb`): initializers `my_thing.setup`; adds rake tasks")
+      end
+    end
+
+    it "leaves the section out when the app has none" do
+      expect(onboard("standard", { tasks: [] })).not_to include("## Generators and Railties")
+    end
+  end
+
   describe "the auth section" do
     def onboard_with(ctx)
       allow(described_class).to receive(:cached_context).and_return({ app_name: "App", models: {} }.merge(ctx))

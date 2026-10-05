@@ -128,7 +128,7 @@ end
 | Introspector | Key | What it extracts |
 |:-------------|:----|:-----------------|
 | JobIntrospector | `:jobs` | Background jobs and Sidekiq workers, read from `app/jobs`, `app/workers` and `app/sidekiq`, and mailers (anywhere under `app/`, by parent chain): queue, retries, `sidekiq_options`, any `sidekiq_throttle`, schedules, and the `file:` each one is defined in |
-| RakeTaskIntrospector | `:rake_tasks` | Custom rake tasks from the Rakefile, lib/tasks and rakelib |
+| RakeTaskIntrospector | `:rake_tasks` | Custom rake tasks from the Rakefile, lib/tasks and rakelib; the app's generators (lib/generators), generator template overrides (lib/templates) and Railties under lib/ |
 
 ### Security & Auth
 

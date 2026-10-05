@@ -133,6 +133,9 @@ Composite context: schema + model + controller + routes + views for a resource. 
 Narrative app walkthrough for getting up to speed. It ends with the app's custom
 rake tasks (Rakefile, `lib/tasks`, `rakelib`), each with its arguments,
 description and file: the first 15 at `standard`, every one at `full`.
+Then the app's own generators under `lib/generators` (the `bin/rails generate`
+command and its USAGE line), the `lib/templates` files that replace a built-in
+generator's template, and the Railties under `lib/` with their initializers.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|

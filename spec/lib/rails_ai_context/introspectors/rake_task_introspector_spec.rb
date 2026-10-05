@@ -140,4 +140,54 @@ RSpec.describe RailsAiContext::Introspectors::RakeTaskIntrospector do
       expect(tasks.map { |t| t[:file] }.uniq).to eq(%w[Rakefile lib/tasks/leak.rake rakelib/extra.rake])
     end
   end
+  describe "generators, generator template overrides and Railties under lib/" do
+    around do |example|
+      Dir.mktmpdir do |dir|
+        @root = File.realpath(dir)
+        example.run
+      end
+    end
+
+    def write(rel, body)
+      path = File.join(@root, rel)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, body)
+    end
+
+    subject(:result) { described_class.new(RailsAiContext::StaticApp.new(@root)).call }
+
+    it "names the app's generators, the built-in templates it overrides and its Railties" do
+      write("lib/generators/service/service_generator.rb", "class ServiceGenerator < Rails::Generators::NamedBase\nend\n")
+      write("lib/generators/service/templates/service.rb.tt", "class <%= class_name %>; end\n")
+      write("lib/generators/service/USAGE", "Description:\n    Creates a service object.\n\nExample:\n    bin/rails g service Pay\n")
+      write("lib/generators/admin/page/page_generator.rb", "module Admin\n  class PageGenerator < Rails::Generators::Base\n  end\nend\n")
+      write("lib/templates/active_record/model/model.rb.tt", "class <%= class_name %> < ApplicationRecord; end\n")
+      write("lib/my_thing/railtie.rb", <<~RUBY)
+        module MyThing
+          class Railtie < Rails::Railtie
+            initializer "my_thing.setup" do; end
+            rake_tasks { load "tasks/my_thing.rake" }
+          end
+        end
+      RUBY
+
+      expect(result[:generators]).to eq([
+        { command: "bin/rails generate admin:page", file: "lib/generators/admin/page/page_generator.rb" },
+        { command: "bin/rails generate service", file: "lib/generators/service/service_generator.rb", usage: "Creates a service object." }
+      ])
+      expect(result[:generator_templates]).to eq([
+        { file: "lib/templates/active_record/model/model.rb.tt", generator: "active_record:model" }
+      ])
+      expect(result[:railties]).to eq([
+        { name: "MyThing::Railtie", file: "lib/my_thing/railtie.rb", initializers: [ "my_thing.setup" ], rake_tasks: true }
+      ])
+    end
+
+    it "leaves the keys out for an app with none, and survives a generator file that does not parse" do
+      expect(result).not_to include(:generators, :generator_templates, :railties)
+
+      write("lib/generators/bad/bad_generator.rb", "class BadGenerator < (((\n\xFF")
+      expect { result }.not_to raise_error
+    end
+  end
 end

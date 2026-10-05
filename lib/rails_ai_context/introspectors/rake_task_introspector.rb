@@ -2,7 +2,9 @@
 
 module RailsAiContext
   module Introspectors
-    # Discovers custom rake tasks from the Rakefile, lib/tasks/ and rakelib/.
+    # Discovers the app's own commands: rake tasks from the Rakefile, lib/tasks/
+    # and rakelib/, and the generators, generator template overrides and
+    # Railties it keeps under lib/.
     class RakeTaskIntrospector < Base
       extend StaticTier
       static_tier :files_only
@@ -17,10 +19,69 @@ module RailsAiContext
         # Rake imports rakelib/*.rake, one level only.
         sources += Dir.glob(File.join(root, "rakelib", "*.rake")).sort
 
-        { tasks: sources.flat_map { |path| parse_rake_file(path) } }
+        {
+          tasks: sources.flat_map { |path| parse_rake_file(path) },
+          generators: lib_classes[:generators].sort_by { |g| g[:command] }.presence,
+          generator_templates: generator_templates.presence,
+          railties: lib_classes[:railties].presence
+        }.compact
       end
 
       private
+
+      RAILTIE_BASES = %w[Rails::Railtie].freeze
+
+      # One pass over lib/ (the cached SourceScan list) for both kinds of class.
+      def lib_classes
+        @lib_classes ||= { generators: [], railties: [] }.tap do |found|
+          SourceScan.each(root, kind: "lib") do |record|
+            if record.file.start_with?("lib/generators/") && record.file.end_with?("_generator.rb")
+              generator = generator_entry(record)
+              found[:generators] << generator if generator
+            elsif record.source.include?("Railtie")
+              found[:railties].concat(railties_in(record))
+            end
+          end
+        end
+      end
+
+      # The command Rails::Generators::Base.namespace gives the class:
+      # Admin::PageGenerator answers to `admin:page`.
+      def generator_entry(record)
+        declared = DeclaredConstant.declarations(record.source).map(&:name).find { |name| name.end_with?("Generator") } or return nil
+        entry = { command: "bin/rails generate #{declared.delete_suffix('Generator').underscore.tr('/', ':')}", file: record.file }
+        usage = SafeFile.read(File.join(File.dirname(record.path), "USAGE"))
+        line = usage&.lines&.map(&:strip)&.find { |text| !text.empty? && text != "Description:" }
+        line ? entry.merge(usage: line) : entry
+      end
+
+      def railties_in(record)
+        railties = DeclaredConstant.declarations(record.source).select { |d| RAILTIE_BASES.include?(d.superclass.to_s.delete_prefix("::")) }
+        return [] if railties.empty?
+
+        calls = SourceIntrospector.walk_source(record.source, { calls: -> { Listeners::GenericMacroListener.new(:initializer, :rake_tasks) } })[:calls]
+        initializers = calls.select { |c| c[:macro] == :initializer }.filter_map { |c| c[:values].first if c[:values].first.is_a?(String) }
+        railties.map do |railtie|
+          { name: railtie.name, file: record.file, initializers: initializers, rake_tasks: calls.any? { |c| c[:macro] == :rake_tasks } }
+        end
+      end
+
+      # Rails adds lib/templates to every generator's source paths ahead of its
+      # own, so a file at lib/templates/<namespace>/ replaces that generator's template.
+      def generator_templates
+        dir = File.join(root, "lib", "templates")
+        return [] unless File.directory?(dir) && SafePath.contained?(File.realpath(dir), File.realpath(root))
+
+        Dir.glob(File.join(dir, "**", "*")).sort.filter_map do |path|
+          next unless File.file?(path) && SafePath.contained?(File.realpath(path), File.realpath(root))
+
+          relative = path.delete_prefix("#{dir}/")
+          namespace = File.dirname(relative)
+          next if namespace == "."
+
+          { file: "lib/templates/#{relative}", generator: namespace.tr("/", ":") }
+        end
+      end
 
       def parse_rake_file(path)
         relative = path.delete_prefix("#{root}/")
