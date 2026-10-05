@@ -177,4 +177,29 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     expect(text).to include("- `tone`: warm(0), cold(1) [integer] methods: warm_tone?, cold_tone?\n")
     expect(text).to include("- `source`: web(0), in store(1) [integer] methods: from_web?, from_in_store?")
   end
+
+  it "reads half-written declarations without raising" do
+    text = details_for("Odd", "odd.rb" => <<~RUBY)
+      class Odd < ApplicationRecord
+        alias_attribute :lonely
+        skip_callback
+        skip_callback :save
+        default_scope Scoper
+        validate do
+        end
+        has_many :things do
+        end
+        enum :level, Levels.to_h, prefix: compute_prefix
+        enum :tier, { low: 0 }, suffix: compute_suffix
+        after_save AuditTrail
+      end
+    RUBY
+
+    expect(text).to include("- `default_scope` → [INFERRED] _(applies to every query on Odd)_")
+    expect(text).to include("- **Custom:** block\n")
+    expect(text).to include("- `has_many` **things**\n")
+    expect(text).to include("- `after_save`: AuditTrail")
+    expect(text).to include("- `tier`: low(0) [integer] methods: [INFERRED] (the prefix or suffix is computed)")
+    expect(text).not_to include("alias_attribute")
+  end
 end

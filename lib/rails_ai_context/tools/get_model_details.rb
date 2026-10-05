@@ -522,6 +522,9 @@ module RailsAiContext
         text = options[:default].nil? ? "" : " default: #{options[:default]}"
         prefix, suffix = options.values_at(:prefix, :suffix)
         return text unless prefix || suffix
+        if [ prefix, suffix ].include?(Confidence::INFERRED)
+          return "#{text} methods: #{Confidence::INFERRED} (the prefix or suffix is computed)"
+        end
 
         prefix = "#{prefix == true ? attr : prefix}_" if prefix
         suffix = "_#{suffix == true ? attr : suffix}" if suffix
