@@ -205,6 +205,12 @@ module RailsAiContext
         content.empty? || content.end_with?("\n") ? content : "#{content}\n"
       end
 
+      # A dump of more than one schema qualifies every name (relation_name, 8.1);
+      # the app sees a public table by its bare name under the default search_path.
+      def local_name(name)
+        name.delete_prefix("public.")
+      end
+
       # A primary key as connection.primary_key gives it: the column's name, or
       # the names in order for a composite key; nil for none.
       def primary_key_value(key)

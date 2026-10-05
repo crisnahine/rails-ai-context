@@ -155,9 +155,8 @@ module RailsAiContext
         parts.join(".")
       end
 
-      # A public table is shown by its bare name.
       def shown_name(name)
-        name.delete_prefix("public.")
+        SchemaConventions.local_name(name)
       end
 
       # Each parent's columns, then the child's own. pg_dump writes only local

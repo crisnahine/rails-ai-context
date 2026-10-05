@@ -108,7 +108,7 @@ module RailsAiContext
 
           @results << {
             type:     :create_table,
-            table:    table_arg.unescaped,
+            table:    SchemaConventions.local_name(table_arg.unescaped),
             # id: false / id: :uuid / primary_key: ... decide whether the
             # implicit primary-key column exists and what to call it.
             options:  extract_keyword_options(node),
@@ -126,8 +126,8 @@ module RailsAiContext
 
           @results << {
             type:        :foreign_key,
-            from:        from_arg.unescaped,
-            to:          to_arg.unescaped,
+            from:        SchemaConventions.local_name(from_arg.unescaped),
+            to:          SchemaConventions.local_name(to_arg.unescaped),
             # Absent means the Rails convention holds; naming it here would
             # make a declared column indistinguishable from a guessed one.
             column:      SchemaConventions.primary_key_value(options[:column]),
@@ -154,7 +154,7 @@ module RailsAiContext
 
           @results << {
             type:     :enum,
-            name:     name_arg.unescaped,
+            name:     SchemaConventions.local_name(name_arg.unescaped),
             values:   values,
             location: node.location.start_line
           }
@@ -170,7 +170,7 @@ module RailsAiContext
 
           @results << {
             type:     :add_index,
-            table:    table_arg.unescaped,
+            table:    SchemaConventions.local_name(table_arg.unescaped),
             columns:  columns,
             options:  options,
             location: node.location.start_line
@@ -185,7 +185,7 @@ module RailsAiContext
 
           @results << {
             type:       :add_check_constraint,
-            table:      table_arg.unescaped,
+            table:      SchemaConventions.local_name(table_arg.unescaped),
             expression: expr_arg.unescaped,
             name:       literal_string(keyword_hash(node) { |value| value }[:name]),
             location:   node.location.start_line
@@ -251,6 +251,7 @@ module RailsAiContext
 
           options = braced.map { |hash| hash_node_to_hash(hash) }.reduce(extract_keyword_options(node), :merge)
           virtual = node.name == :virtual
+          options[:enum_type] = SchemaConventions.local_name(options[:enum_type]) if options[:enum_type].is_a?(String)
           # A generated column takes its own type from type: (each adapter's virtual, 7.0 to 8.1).
           column_type = options[:type].to_s if virtual && (options[:type].is_a?(Symbol) || options[:type].is_a?(String))
           names.each do |col_name|

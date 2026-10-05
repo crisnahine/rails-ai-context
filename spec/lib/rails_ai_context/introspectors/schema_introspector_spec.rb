@@ -1425,4 +1425,38 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
   end
+
+  describe "a schema.rb dumped with more than one schema" do
+    it "names a table in public by its bare name, as the app sees it" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+            create_schema "other"
+            create_enum "public.mood", ["happy", "sad"]
+            create_table "other.widgets", force: :cascade do |t|
+              t.string "n"
+            end
+            create_table "public.posts", force: :cascade do |t|
+              t.bigint "user_id"
+              t.enum "mood", enum_type: "public.mood"
+            end
+            create_table "public.users", force: :cascade do |t|
+              t.string "email", null: false
+            end
+            add_index "public.posts", ["user_id"], name: "idx_posts_user"
+            add_foreign_key "public.posts", "public.users"
+          end
+        RUBY
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:tables].keys).to eq(%w[other.widgets posts users])
+        expect(result[:tables]["users"][:columns].map { |c| c[:name] }).to eq(%w[id email])
+        expect(result[:tables]["posts"][:indexes].map { |i| i[:name] }).to eq(%w[idx_posts_user])
+        expect(result[:tables]["posts"][:foreign_keys]).to eq([ { from_table: "posts", to_table: "users", column: "user_id", primary_key: "id" } ])
+        expect(result[:enum_types]).to eq([ { name: "mood", values: %w[happy sad] } ])
+        expect(result[:tables]["posts"][:columns].find { |c| c[:name] == "mood" }).to include(enum_type: "mood")
+      end
+    end
+  end
 end
