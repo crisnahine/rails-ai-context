@@ -720,7 +720,7 @@ module RailsAiContext
           options = a[:options] || {}
           optional_value = a.key?(:optional) ? a[:optional] : options[:optional]
           if options.key?(:required)
-            required = literal_boolean(options[:required]) if options.key?(:required)
+            required = literal_boolean(options[:required])
             required.nil? ? [ name, "required: #{options[:required]} is true" ] : (name if required)
           elsif !optional_value.nil?
             optional = literal_boolean(optional_value)
