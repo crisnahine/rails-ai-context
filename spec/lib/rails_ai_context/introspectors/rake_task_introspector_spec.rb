@@ -107,6 +107,28 @@ RSpec.describe RailsAiContext::Introspectors::RakeTaskIntrospector do
       expect(introspector.call[:tasks].map { |t| t[:name] }).to include("legacy_rocket", "from_rakelib")
     end
 
+    it "does not follow a Rakefile, rakelib or lib/tasks symlink out of the app root" do
+      outside = Dir.mktmpdir
+      File.write(File.join(outside, "outside.rake"), "task :outside_secret_task\n")
+      File.symlink(File.join(outside, "outside.rake"), File.join(tmpdir, "rakelib", "linked.rake"))
+      File.symlink(File.join(outside, "outside.rake"), File.join(tmpdir, "lib", "tasks", "linked.rake"))
+      File.delete(File.join(tmpdir, "Rakefile"))
+      File.symlink(File.join(outside, "outside.rake"), File.join(tmpdir, "Rakefile"))
+
+      tasks = introspector.call[:tasks]
+
+      expect(tasks.map { |t| t[:name] }).not_to include("outside_secret_task")
+      expect(tasks.map { |t| t[:name] }).to include("from_rakelib", "legacy_rocket")
+    ensure
+      FileUtils.remove_entry(outside)
+    end
+
+    it "parses each rake file from the one read it makes" do
+      expect(RailsAiContext::Introspectors::SourceIntrospector).not_to receive(:walk)
+
+      expect(introspector.call[:tasks].map { |t| t[:name] }).to include("from_rakefile", "from_rakelib")
+    end
+
     it "names each task as Rake defines it" do
       tasks = introspector.call[:tasks]
 

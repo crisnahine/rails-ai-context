@@ -25,11 +25,12 @@ module RailsAiContext
       private
 
       def parse_rake_file(path, base_dir)
-        content = RailsAiContext::SafeFile.read(path)
-        return [ { file: path.sub("#{base_dir}/", ""), error: "unreadable" } ] unless content
         relative = path.sub("#{base_dir}/", "")
+        content, located = RailsAiContext::SafePath.read(path.delete_prefix("#{root}/"), under: root)
+        return [] if %i[outside sensitive traversal].include?(located.refusal)
+        return [ { file: relative, error: "unreadable" } ] unless content
 
-        ast_data = SourceIntrospector.walk(path, { rake: -> { Listeners::RakeTaskDslListener.new } })
+        ast_data = SourceIntrospector.walk_source(content, { rake: -> { Listeners::RakeTaskDslListener.new } })
         results = ast_data[:rake]
 
         # Rake's desc applies to the next task defined, whatever namespace it is in.
