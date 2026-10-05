@@ -122,7 +122,7 @@ module RailsAiContext
           else
             if statement && node.block
               # An empty block (a commented-out `constraints do`) configures nothing.
-              push_frame(node, unknown_block: @routing_calls) if node.block.body
+              push_frame(node, unknown_block: @routing_calls, pending: []) if node.block.body
             elsif statement && !NON_ROUTING.include?(node.name)
               call_method_or_count(node)
             end
@@ -130,13 +130,18 @@ module RailsAiContext
         end
 
         # A block call this walk does not know is read through when it holds
-        # routes (`constraints`, `devise_scope`); one that holds none is a gem
-        # macro configured by its block (`use_doorkeeper do controllers ... end`).
+        # routes (`constraints`, `devise_scope`), and the unknown calls in it
+        # count one each; one that holds none is a gem macro configured by its
+        # block (`use_doorkeeper do controllers ... end`) and counts once.
         def on_call_node_leave(node)
           return unless @stack.last && @stack.last[:node].equal?(node)
 
           frame = @stack.pop
-          emit_dynamic(node) if frame[:unknown_block] == @routing_calls
+          return unless frame[:unknown_block]
+          return frame[:pending].each { |call| emit_dynamic(call) } if frame[:unknown_block] != @routing_calls
+
+          outer = open_unknown_block
+          outer ? outer[:pending] << node : emit_dynamic(node)
         end
 
         private
@@ -149,8 +154,9 @@ module RailsAiContext
         def call_method_or_count(node)
           definition = @methods[node.name]
           key = "def #{node.name}"
-          # Inside a gem macro's block a call is its configuration.
-          return if definition.nil? && @stack.any? { |f| f[:unknown_block] }
+          # A gem macro's configuration until its block turns out to draw routes.
+          outer = open_unknown_block if definition.nil?
+          return (outer[:pending] << node unless suppressed?) if outer
           return emit_dynamic(node) if definition.nil? || node.arguments || @replaying.include?(key) || takes_arguments?(definition)
           return if suppressed?
 
@@ -161,6 +167,10 @@ module RailsAiContext
           ensure
             @replaying.pop
           end
+        end
+
+        def open_unknown_block
+          @stack.reverse.find { |f| f[:unknown_block] }
         end
 
         def takes_arguments?(definition)

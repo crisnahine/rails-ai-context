@@ -875,6 +875,37 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
       expect(results.select { |r| r[:type] == :dynamic }.map { |r| r[:macro] }).to eq([ :use_doorkeeper ])
     end
 
+    it "counts a gem macro inside a block that draws routes, and a block of blocks once" do
+      results = routes_for(<<~RUBY)
+        Rails.application.routes.draw do
+          constraints(subdomain: "api") do
+            get "/in", to: "pages#in"
+            use_doorkeeper
+            health_check_routes
+          end
+          authenticate :user do
+            get "/mine", to: "pages#mine"
+            use_doorkeeper
+          end
+          outer_macro do
+            inner_config do
+              setting :x
+            end
+          end
+          constraints(subdomain: "admin") do
+            inner_macro do
+              setting :y
+            end
+            get "/admin", to: "pages#admin"
+          end
+        end
+      RUBY
+
+      expect(results.select { |r| r[:type] == :route }.map { |r| r[:path] }).to eq(%w[/in /mine /admin])
+      expect(results.select { |r| r[:type] == :dynamic }.map { |r| r[:macro] })
+        .to eq(%i[use_doorkeeper health_check_routes use_doorkeeper outer_macro inner_macro])
+    end
+
     it "reads controller blocks and options routes, draws nothing for direct and resolve, and counts a lambda mount" do
       results = routes_for(<<~RUBY)
         Rails.application.routes.draw do
