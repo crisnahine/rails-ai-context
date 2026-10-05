@@ -28,7 +28,7 @@ module RailsAiContext
       # and keeps only the entries that carry a `schedule`.
       def solid_queue(root)
         file = "config/recurring.yml"
-        data = yaml(root, file)
+        data = yaml(root, file, marker: ERB_OUTPUT)
         return [] unless data.is_a?(Hash)
 
         data.flat_map do |key, value|
@@ -41,14 +41,14 @@ module RailsAiContext
 
       def sidekiq_cron(root)
         %w[config/schedule.yml config/schedule.yaml config/sidekiq_cron.yml].flat_map do |file|
-          named_tasks(yaml(root, file)).filter_map { |name, options| task(file, name, options, :cron) }
+          named_tasks(yaml(root, file, marker: ERB_OUTPUT)).filter_map { |name, options| task(file, name, options, :cron) }
         end
       end
 
       # sidekiq-scheduler runs a job by its entry's name when no class is given.
       def sidekiq_scheduler(root)
         file = "config/sidekiq.yml"
-        data = yaml(root, file)
+        data = yaml(root, file, marker: ERB_OUTPUT)
         return [] unless data.is_a?(Hash)
 
         section = data["scheduler"].is_a?(Hash) ? data["scheduler"]["schedule"] : data["schedule"]
@@ -121,15 +121,16 @@ module RailsAiContext
         klass = options["class"] || options["klass"]
         klass = nil if klass == :computed
         command = options["command"] unless options["command"] == :computed
-        { name: name.to_s, class: klass&.to_s&.delete_prefix("::"), command: command&.to_s,
-          schedule: schedule.to_s, env: env&.to_s, file: file }.compact
+        { name: computed?(name.to_s) ? "computed" : name.to_s, class: klass&.to_s&.delete_prefix("::"), command: command&.to_s,
+          schedule: schedule.to_s, env: computed?(env.to_s) ? "computed" : env&.to_s, file: file }.compact
       end
 
       ERB_OUTPUT = "RAC_ERB_OUTPUT"
 
       def computed?(value)
         value == RailsAiContext::Confidence::INFERRED || (value.is_a?(String) && value.include?(ERB_OUTPUT)) ||
-          (value.is_a?(Array) && value.any? { |part| computed?(part) })
+          (value.is_a?(Array) && value.any? { |part| computed?(part) }) ||
+          (value.is_a?(Hash) && value.values.any? { |part| computed?(part) })
       end
 
       # sidekiq-cron accepts a hash keyed by name or a list of hashes that carry it.
@@ -145,9 +146,11 @@ module RailsAiContext
         value.is_a?(Hash) ? value.to_h { |key, inner| [ key.to_s, inner ] } : value
       end
 
-      def yaml(root, file)
+      # Only the scheduler readers pass `marker`; every other caller prints values, so an output tag reads as empty.
+      def yaml(root, file, marker: nil)
         content = read_file(root, file) or return nil
-        stringify_keys(YAML.safe_load(ErbSource.with_output_marked(content, ERB_OUTPUT), aliases: true, permitted_classes: [ Symbol ]))
+        content = marker ? ErbSource.with_output_marked(content, marker) : ErbSource.without_tags(content)
+        stringify_keys(YAML.safe_load(content, aliases: true, permitted_classes: [ Symbol ]))
       rescue StandardError, ScriptError => e
         RailsAiContext.debug_fail(e, nil, label: "schedule #{file}")
       end

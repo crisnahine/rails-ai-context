@@ -960,6 +960,14 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       expect(text).not_to include("Zx9kQ2mW7pL4vB8nR3tY6uH1")
     end
 
+    it "never prints the ERB marker for a clear value an ERB tag sets" do
+      write_deploy("env:\n  clear:\n    DB_HOST: <%= ENV[\"DB_HOST\"] %>\n")
+
+      text = described_class.call.content.first[:text]
+      expect(text).to include("- `DB_HOST` = ``")
+      expect(text).not_to include("RAC_ERB_OUTPUT")
+    end
+
     it "adds nothing for a deploy file that is not valid YAML or has no env" do
       write_deploy("env: [unclosed\n")
       expect(described_class.call.content.first[:text]).not_to include("Set by Kamal")

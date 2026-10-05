@@ -96,6 +96,11 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
         expect(text).to include("config/queue.yml workers poll 2 queues: default, mailers. No worker polls maintenance (CleanupJob).")
       end
 
+      it "never names the ERB marker as a queue" do
+        text = answer("workers:\n  - queues: <%= ENV.fetch(\"QUEUES\", \"default\") %>\n")
+        expect(text).not_to include("RAC_ERB_OUTPUT")
+      end
+
       it "says so on the page of a job whose queue no worker polls" do
         expect(answer(queue_yml, job: "CleanupJob")).to include("**Queue:** `maintenance` (no worker in config/queue.yml polls it)")
         expect(answer(queue_yml, job: "MailJob")).to include("**Queue:** `mailers`\n")
@@ -814,6 +819,25 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       YAML
       expect(text_for(job: "NightlyJob")).to include("**Schedule:** computed (from config/sidekiq.yml)")
       expect(text_for(job: "CleanupJob")).to include("**Schedule:** 5m, first_in: 4m (from config/sidekiq.yml)")
+    end
+
+    it "never prints the ERB marker in a task name, environment or every: option" do
+      write("config/recurring.yml", <<~YAML)
+        <%= Rails.env %>:
+          <%= Rails.env %>_cleanup:
+            class: CleanupJob
+            schedule: every hour
+      YAML
+      write("config/sidekiq.yml", <<~YAML)
+        :scheduler:
+          :schedule:
+            NightlyJob:
+              every: ['5m', first_in: <%= 4 %>]
+      YAML
+      text = text_for(detail: "full")
+      expect(text).to include("- `computed`: `CleanupJob` every hour (computed, from config/recurring.yml)")
+      expect(text_for(job: "NightlyJob")).to include("**Schedule:** computed (from config/sidekiq.yml)")
+      expect(text).not_to include("RAC_ERB_OUTPUT")
     end
 
     it "reads a computed GoodJob cron schedule as computed, not as a marker" do
