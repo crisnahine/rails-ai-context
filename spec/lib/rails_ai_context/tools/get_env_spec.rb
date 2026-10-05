@@ -793,6 +793,35 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     end
   end
 
+  describe "HTTP clients in the forms their docs use" do
+    it "detects URI(...), Faraday.get and a client kept in lib/" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/clients"))
+        FileUtils.mkdir_p(File.join(dir, "lib/clients"))
+        File.write(File.join(dir, "app/clients/probe_client.rb"), <<~RUBY)
+          class ProbeClient
+            def a = Faraday.new(url: "https://api.alpha.example")
+            def b = Net::HTTP.get(URI.parse("https://api.beta.example/x"))
+            def c = Net::HTTP.get(URI("https://api.gamma.example/x"))
+            def d = Faraday.get("https://api.delta.example/x")
+            def e = HTTParty.get("https://api.epsilon.example/x")
+          end
+        RUBY
+        File.write(File.join(dir, "lib/clients/zeta_client.rb"), <<~RUBY)
+          class ZetaClient
+            def a = Faraday.new(url: "https://api.zeta.example")
+          end
+        RUBY
+        allow(described_class).to receive(:detect_external_services).and_call_original
+
+        services = described_class.send(:detect_external_services, dir, [])
+
+        expect(services.map { |s| s[:name] }).to contain_exactly(*%w[Alpha Beta Gamma Delta Epsilon Zeta])
+        expect(services.find { |s| s[:name] == "Zeta" }[:file]).to eq("lib/clients/zeta_client.rb")
+      end
+    end
+  end
+
   describe "a service the Gemfile only names in a comment" do
     it "is not detected" do
       Dir.mktmpdir do |dir|
