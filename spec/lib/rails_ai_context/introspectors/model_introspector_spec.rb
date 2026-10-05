@@ -257,6 +257,8 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
           class Employee < ApplicationRecord
             STATUSES = %w[pending active suspended].freeze
             ROLES = %i[admin editor viewer]
+            LEVELS = Ractor.make_shareable(%w[gold silver])
+            TIERS = ::Ractor.make_shareable(%w[basic pro].freeze)
           end
         RUBY
       end
@@ -272,6 +274,10 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         statuses = result[:constants].find { |c| c[:name] == "STATUSES" }
         expect(statuses).not_to be_nil
         expect(statuses[:values]).to contain_exactly("pending", "active", "suspended")
+      end
+
+      it "reads an array Ractor.make_shareable wraps, as it returns its argument" do
+        expect(result[:constants]).to include({ name: "LEVELS", values: %w[gold silver] }, { name: "TIERS", values: %w[basic pro] })
       end
     end
 

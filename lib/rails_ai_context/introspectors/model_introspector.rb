@@ -1283,9 +1283,7 @@ module RailsAiContext
           name = node.name.to_s
           # Only capture UPPER_CASE constants (matching the old regex behavior)
           if name.match?(/\A[A-Z][A-Z_]+\z/)
-            # Unwrap .freeze if present: STATUSES = %w[...].freeze
-            value_node = node.value
-            value_node = value_node.receiver if value_node.is_a?(Prism::CallNode) && value_node.name == :freeze
+            value_node = unwrap_frozen(node.value)
 
             if value_node.is_a?(Prism::ArrayNode)
               values = value_node.elements.filter_map { |el|
@@ -1300,6 +1298,21 @@ module RailsAiContext
           end
         end
         node.child_nodes.compact.each { |child| find_constant_arrays(child, constants) }
+      end
+
+      # `%w[...].freeze` and `Ractor.make_shareable(%w[...])` are the array itself, frozen.
+      def unwrap_frozen(node)
+        loop do
+          break node unless node.is_a?(Prism::CallNode)
+
+          if node.name == :freeze && node.arguments.nil?
+            node = node.receiver
+          elsif node.name == :make_shareable && node.receiver&.slice&.delete_prefix("::") == "Ractor" && node.arguments&.arguments&.size == 1
+            node = node.arguments.arguments.first
+          else
+            break node
+          end
+        end
       end
 
       def extract_detailed_macros_from_ast(source_data)
