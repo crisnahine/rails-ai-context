@@ -378,6 +378,16 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(text).to include("- `user_params` (requires: :user) permits: :name, preferences: [:color], tags: []")
     end
 
+    it "summarizes the arrays and hashes a nested key permits" do
+      params = [ { name: "s_params", requires: "s", permits: [ "hide" ], hashes: [ "colors" ],
+                   nested: { "filters" => [ "module_id", { "module_ids" => [] }, { "range" => %w[from to] }, { "opts" => {} } ] } } ]
+      stub_controllers({ "SController" => { actions: %w[update], filters: [], parent_class: "ApplicationController", strong_params: params } })
+
+      text = described_class.call(controller: "SController").content.first[:text]
+
+      expect(text).to include("permits: :hide, filters: [:module_id, { module_ids: [] }, { range: [:from, :to] }, { opts: {} }], colors: {}")
+    end
+
     it "names both strong params methods of a controller under an app parent" do
       stub_controllers({
         "Admin::AccountsController" => {

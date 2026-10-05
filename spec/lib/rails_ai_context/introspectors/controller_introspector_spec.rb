@@ -316,6 +316,30 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
                            nested: { "preferences" => [ "color" ] }, arrays: [ "tags" ])
     end
 
+    # A hash inside a nested list permits more keys under it, and `{}` permits any hash.
+    it "keeps the arrays and hashes a nested list permits" do
+      source = <<~RUBY
+        def settings_params
+          params.expect(settings: [ { filters: [ :module_id, { module_ids: [] }, { range: [ :from, :to ] } ] }, { colors: {} }, :hide ])
+        end
+      RUBY
+
+      result = introspector.send(:extract_strong_params, source).first
+
+      expect(result).to eq(name: "settings_params", requires: "settings", permits: [ "hide" ],
+                           nested: { "filters" => [ "module_id", { "module_ids" => [] }, { "range" => %w[from to] } ] },
+                           hashes: [ "colors" ])
+    end
+
+    it "keeps the arrays and hashes a nested permit list permits" do
+      source = "def s_params = params.require(:s).permit(:hide, colors: {}, filters: [ :module_id, { module_ids: [] } ])\n"
+
+      result = introspector.send(:extract_strong_params, source).first
+
+      expect(result).to eq(name: "s_params", requires: "s", permits: [ "hide" ],
+                           nested: { "filters" => [ "module_id", { "module_ids" => [] } ] }, hashes: [ "colors" ])
+    end
+
     it "returns name only when method has no permit call" do
       source = <<~RUBY
         def post_params

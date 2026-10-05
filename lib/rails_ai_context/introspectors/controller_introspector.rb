@@ -574,6 +574,7 @@ module RailsAiContext
         permits = []
         nested = {}
         arrays = []
+        hashes = []
 
         args = permit_call.arguments&.arguments || []
         args.each do |arg|
@@ -586,12 +587,10 @@ module RailsAiContext
               key = extract_ast_value(assoc.key).to_s
               val = assoc.value
               if val.is_a?(Prism::ArrayNode)
-                inner = val.elements.map { |e| extract_ast_value(e).to_s }
-                if inner.any? { |v| v != "" && v != "inferred" }
-                  nested[key] = inner.reject { |v| v == "" || v == "inferred" }
-                else
-                  arrays << key
-                end
+                fields = permit_fields(val)
+                fields.any? ? nested[key] = fields : arrays << key
+              elsif val.is_a?(Prism::HashNode)
+                hashes << key
               else
                 permits << key
               end
@@ -605,6 +604,7 @@ module RailsAiContext
         result[:permits] = permits if permits.any?
         result[:nested] = nested if nested.any?
         result[:arrays] = arrays if arrays.any?
+        result[:hashes] = hashes if hashes.any?
         result
       end
 
@@ -616,6 +616,7 @@ module RailsAiContext
         permits = []
         nested = {}
         arrays = []
+        hashes = []
 
         args = expect_call.arguments&.arguments || []
         args.each do |arg|
@@ -628,7 +629,7 @@ module RailsAiContext
               key = extract_ast_value(assoc.key).to_s
               if assoc.value.is_a?(Prism::ArrayNode)
                 result[:requires] ||= key
-                collect_expect_array(assoc.value, key, permits, nested, arrays)
+                collect_expect_array(assoc.value, key, permits, nested, arrays, hashes)
               else
                 permits << key
               end
@@ -639,17 +640,18 @@ module RailsAiContext
         result[:permits] = permits if permits.any?
         result[:nested] = nested if nested.any?
         result[:arrays] = arrays if arrays.any?
+        result[:hashes] = hashes if hashes.any?
         result
       end
 
-      def collect_expect_array(array_node, key, permits, nested, arrays)
+      def collect_expect_array(array_node, key, permits, nested, arrays, hashes)
         array_node.elements.each do |el|
           case el
           when Prism::SymbolNode
             permits << el.unescaped
           when Prism::ArrayNode
             # Doubly-wrapped array marks an array-of-hashes attribute
-            nested[key] = expect_symbol_values(el)
+            nested[key] = permit_fields(el)
           when Prism::KeywordHashNode, Prism::HashNode
             el.elements.each do |inner|
               next unless inner.is_a?(Prism::AssocNode)
@@ -657,7 +659,9 @@ module RailsAiContext
               if inner.value.is_a?(Prism::ArrayNode) && inner.value.elements.empty?
                 arrays << inner_key
               elsif inner.value.is_a?(Prism::ArrayNode)
-                nested[inner_key] = expect_symbol_values(inner.value)
+                nested[inner_key] = permit_fields(inner.value)
+              elsif inner.value.is_a?(Prism::HashNode)
+                hashes << inner_key
               else
                 permits << inner_key
               end
@@ -666,11 +670,22 @@ module RailsAiContext
         end
       end
 
-      def expect_symbol_values(array_node)
+      # What a nested list permits: a scalar by name, `{ key => fields }` for an
+      # array (empty for scalars), `{ key => {} }` for any hash.
+      def permit_fields(array_node)
         array_node.elements.flat_map do |el|
           case el
-          when Prism::SymbolNode then [ el.unescaped ]
-          when Prism::ArrayNode then expect_symbol_values(el)
+          when Prism::SymbolNode, Prism::StringNode then [ el.unescaped ]
+          when Prism::ArrayNode then permit_fields(el)
+          when Prism::KeywordHashNode, Prism::HashNode
+            el.elements.grep(Prism::AssocNode).map do |assoc|
+              key = extract_ast_value(assoc.key).to_s
+              case assoc.value
+              when Prism::ArrayNode then { key => permit_fields(assoc.value) }
+              when Prism::HashNode then { key => {} }
+              else key
+              end
+            end
           else []
           end
         end
