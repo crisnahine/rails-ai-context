@@ -257,13 +257,14 @@ module RailsAiContext
           one_line_source(node)
         end
 
-        # `Cron::CleanupJob.name` is the constant's own name.
+        # `Cron::CleanupJob.name` is the constant's own name; `APP_SETTINGS.name` holds a value, so it stays unknown.
         def module_name(node)
           receiver = node.receiver
           constant = receiver.is_a?(Prism::ConstantReadNode) || receiver.is_a?(Prism::ConstantPathNode)
           return RailsAiContext::Confidence::INFERRED unless constant && node.name == :name && node.arguments.nil? && node.block.nil?
 
-          constant_path_string(receiver)
+          name = constant_path_string(receiver)
+          name.split("::").last.match?(/\A[A-Z0-9_]+\z/) ? RailsAiContext::Confidence::INFERRED : name
         end
 
         # `"a" "b"` and its line-continued form parse as one interpolated node
