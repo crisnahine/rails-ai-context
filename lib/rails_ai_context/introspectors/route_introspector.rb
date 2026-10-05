@@ -53,12 +53,13 @@ module RailsAiContext
         return { error: "config/routes.rb not found in #{app.root}" } if top_files.empty?
 
         records, mounts, files = walk_route_files(top_files)
+        records = records.map { |r| r.except(:engine) } if engine_root?
         in_repo = in_repo_routes(mounts)
         records += in_repo.values.flat_map(&:first)
         mounts = (mounts + in_repo.values.flat_map(&:last)).uniq { |mount| [ mount[:engine], mount[:path] ] }
         # What an app draws into an engine's table is the engine's, which the
         # booted tier's Rails.application.routes holds only as the mount.
-        app_records, engine_records = records.partition { |r| r[:engine].nil? || project_engine?(r[:engine]) }
+        app_records, engine_records = records.partition { |r| r[:engine].nil? }
         entries = app_records.select { |r| r[:type] == :route }
         # A followed `draw` is no longer unexpanded - its routes are in the
         # list above. Counting it would overstate what is missing by exactly
@@ -92,11 +93,12 @@ module RailsAiContext
 
       # Run from a mountable engine's own root there is no app table: the
       # engine's table, drawn in its config/routes.rb, is the project's routes.
-      def project_engine?(engine)
+      def engine_root?
+        return @engine_root unless @engine_root.nil?
+
         root = app.root.to_s
         @engine_root = !File.exist?(File.join(root, "config", "application.rb")) &&
-                       !app_route_file?(File.join(root, "config", "routes.rb")) if @engine_root.nil?
-        @engine_root && File.file?(File.join(root, "lib", "#{engine.underscore}.rb"))
+                       !app_route_file?(File.join(root, "config", "routes.rb"))
       end
 
       # Every routes.rb under an in-repo engine or plugin root. One the app does not mount has

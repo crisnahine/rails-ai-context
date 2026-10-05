@@ -367,6 +367,20 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       end
     end
 
+    it "reads an engine whose namespace does not underscore back to its path as the project's table" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "lib", "pghero"))
+        File.write(File.join(dir, "lib", "pghero", "engine.rb"), "module PgHero\n  class Engine < ::Rails::Engine\n    isolate_namespace PgHero\n  end\nend\n")
+        File.write(File.join(dir, "config", "routes.rb"), "PgHero::Engine.routes.draw do\n  resources :queries\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:total_routes]).to eq(7)
+        expect(result).not_to have_key(:engine_routes)
+      end
+    end
+
     it "keeps the condition a route is drawn under" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))
