@@ -91,7 +91,7 @@ module RailsAiContext
           return read_aasm(node) if @aasm
 
           if node.name == :aasm
-            open_aasm(node)
+            open_aasm(node) if node.block || node.arguments
           elsif GEM_MACROS.include?(node.name)
             record_gem_macro(node)
           elsif node.name == :connects_to

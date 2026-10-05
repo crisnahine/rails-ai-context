@@ -130,6 +130,21 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "gem ma
     expect(results.first).to include(column: "work", initial: "sleeping", states: %w[sleeping running], events: [])
   end
 
+  it "opens a machine only for the class-level aasm DSL, not the aasm reader a method calls" do
+    results = parse_and_dispatch(<<~RUBY)
+      class Order < ApplicationRecord
+        aasm do
+          state :pending
+        end
+        aasm
+        def state_label
+          aasm.current_state.to_s
+        end
+      end
+    RUBY
+    expect(results.map { |r| [ r[:macro], r[:states] ] }).to eq([ [ :aasm, %w[pending] ] ])
+  end
+
   it "records each known gem macro as written, without its block" do
     results = parse_and_dispatch(<<~RUBY)
       class User < ApplicationRecord
