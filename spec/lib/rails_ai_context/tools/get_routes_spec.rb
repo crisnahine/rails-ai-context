@@ -326,9 +326,13 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
     it "combines PUT and PATCH into a single entry" do
       result = described_class.call(controller: "posts", detail: "full")
       text = result.content.first[:text]
-      expect(text).to include("PATCH|PUT")
-      # Should not have separate PUT and PATCH rows for the same action
-      expect(text.scan("update").size).to be >= 1
+      expect(text).to include("| PATCH\\|PUT | `/posts/:id` | posts#update | - |")
+    end
+
+    it "keeps each full-detail table row to four cells" do
+      rows = described_class.call(detail: "full").content.first[:text].lines.grep(/\A\| /)
+
+      expect(rows.map { |row| row.strip.split(/(?<!\\)\|/).size - 1 }.uniq).to eq([ 4 ])
     end
   end
 

@@ -295,7 +295,9 @@ module RailsAiContext
             lines << "| Verb | Path | Controller#Action | Name |"
             lines << "|------|------|-------------------|------|"
             page[:items].each do |r|
-              lines << "| #{r[:verb]} | `#{r[:path]}` | #{r[:_ctrl]}##{r[:action]} | #{r[:name] || '-'} |"
+              cells = [ r[:verb], "`#{r[:path]}`", "#{r[:_ctrl]}##{r[:action]}", r[:name] || "-" ]
+              # A merged verb is `PATCH|PUT`, and a bare pipe splits the row.
+              lines << "| #{cells.map { |cell| cell.to_s.gsub("|", "\\|") }.join(' | ')} |"
             end
             lines.concat(mounted_apps_lines(mounted_apps, controller ? [] : routes[:engine_routes]))
 
