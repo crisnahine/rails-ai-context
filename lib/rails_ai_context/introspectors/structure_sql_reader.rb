@@ -260,8 +260,10 @@ module RailsAiContext
             table[:foreign_keys] << SchemaConventions.foreign_key_entry(table_name, to, columns.scan(/\w+/), keys.scan(/\w+/), **foreign_key_actions(tail))
           when /\A(?:CONSTRAINT\s+[`"]?(\w+)[`"]?\s+)?CHECK\s*(\(.*)/i
             name = $1
-            expression = first_paren_group($2)
-            (table[:check_constraints] ||= []) << { name: name, expression: expression.strip }.compact if expression
+            expression = first_paren_group($2)&.strip
+            # The MySQL adapter drops the parentheses MySQL wraps a check clause in.
+            expression = unwrap_parens(expression) if dialect == :mysql && expression
+            (table[:check_constraints] ||= []) << { name: name, expression: expression }.compact if expression
           when /\A(UNIQUE\s+|FULLTEXT\s+|SPATIAL\s+)?(?:KEY|INDEX)\s+[`"](\w+)[`"]\s*(\(.*)/i
             # Captured to locals first: the parsing below runs more regexes,
             # which would clobber $~ before the hash literal reads it.
@@ -329,6 +331,12 @@ module RailsAiContext
         group = text[start..]
         scan_top_level(group, PAREN_RUN) { |byte, i, depth| return group.byteslice(1, i - 1) if byte == 41 && depth.zero? }
         nil
+      end
+
+      # The expression inside one pair of parentheses that encloses all of it.
+      def unwrap_parens(expression)
+        inner = first_paren_group(expression) if expression.start_with?("(")
+        inner && inner.bytesize == expression.bytesize - 2 ? inner.strip : expression
       end
 
       def split_top_level(body)

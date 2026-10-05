@@ -667,8 +667,23 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
       SQL
 
       expect(described_class.parse(mysql)[:tables]["users"][:columns].last).to include(generated: "(`age` + 1)", stored: false)
-      expect(described_class.parse(mysql)[:tables]["users"][:check_constraints]).to eq([ { name: "users_chk_1", expression: "(`age` >= 0)" } ])
+      expect(described_class.parse(mysql)[:tables]["users"][:check_constraints]).to eq([ { name: "users_chk_1", expression: "`age` >= 0" } ])
       expect(described_class.parse(sqlite)[:tables]["posts"][:check_constraints]).to eq([ { expression: "length(title) > 0" } ])
+    end
+    it "drops the parentheses MySQL wraps a CHECK in, as the booted MySQL adapter does" do
+      mysql = <<~SQL
+        CREATE TABLE `users` (
+          `a` int DEFAULT NULL,
+          `b` int DEFAULT NULL,
+          CONSTRAINT `both` CHECK (((`a` > 0) and (`b` > 0))),
+          CONSTRAINT `either` CHECK ((`a` > 0) or (`b` > 0))
+        ) ENGINE=InnoDB;
+      SQL
+
+      expect(described_class.parse(mysql)[:tables]["users"][:check_constraints]).to eq([
+        { name: "both", expression: "(`a` > 0) and (`b` > 0)" },
+        { name: "either", expression: "(`a` > 0) or (`b` > 0)" }
+      ])
     end
   end
 
