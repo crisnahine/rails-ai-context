@@ -14,12 +14,18 @@ module RailsAiContext
       # constraints are simplified: paths anchor at the accumulated prefix,
       # constraints are ignored.
       class RoutesDslListener < BaseListener
-        VERB_METHODS = %i[get post put patch delete].freeze
+        VERB_METHODS = %i[get post put patch delete options].freeze
         PLURAL_ACTIONS = %i[index create new edit show update destroy].freeze
         # Rails' drawing order: the first route asking for a name gets it.
         SINGULAR_ACTIONS = %i[new edit show update destroy create].freeze
         RESTFUL_ACTIONS = %w[index show new create edit update destroy].freeze
-        DYNAMIC_MACROS = %i[devise_for draw direct resolve].freeze
+        DYNAMIC_MACROS = %i[devise_for draw].freeze
+        # `direct` and `resolve` define URL helpers and draw no route.
+        URL_HELPER_MACROS = %i[direct resolve].freeze
+        # Statement-level calls that draw nothing into the table.
+        ROUTE_METHODS = (VERB_METHODS + %i[match namespace scope resources resource member collection new shallow
+                                           concern concerns with_options controller mount root draw devise_for]).freeze
+        NON_ROUTING = %i[require require_relative puts p pp print warn raise default_url_options extend include].freeze
 
         # `scope` is the frames a `draw` of this file sits in, as its record carries them.
         # `route_set` answers { prefix:, name_prefix: } for an app class that draws routes.
@@ -37,13 +43,27 @@ module RailsAiContext
           @replaying = []
           # Rails leaves a route unnamed when another route already took its name.
           @taken_names = names
+          # The calls that stand as statements of a route body, as opposed to
+          # arguments or lambda bodies: only those can draw a route.
+          @statements = {}.compare_by_identity
+          @global_path_names = {}
+          @routing_calls = 0
+        end
+
+        def on_program_node_enter(node)
+          register_statements(node.statements)
         end
 
         def on_call_node_enter(node)
+          statement = @statements.key?(node)
+          register_statements(node.block.body) if statement && route_body?(node)
           return enter_engine_draw(node) if engine_draw?(node)
           return enter_route_set(node) if route_set_draw?(node)
+          # `ActiveAdmin.routes(self)` hands the mapper to code this walk cannot see.
+          return emit_dynamic(node) if node.receiver && statement && node.arguments&.arguments&.any?(Prism::SelfNode)
           return unless node.receiver.nil?
 
+          @routing_calls += 1 if ROUTE_METHODS.include?(node.name)
           case node.name
           when :namespace then enter_namespace(node)
           when :scope then enter_scope(node)
@@ -56,17 +76,63 @@ module RailsAiContext
           when :concern then define_concern(node)
           when :concerns then apply_concerns(node)
           when :with_options then enter_with_options(node)
+          when :controller then enter_controller(node)
+          when :resources_path_names then @global_path_names.merge!(path_names_option(path_names: own_options(node)))
+          when *URL_HELPER_MACROS then push_frame(node, suppress: true) if node.block
+          when :mount then emit_dynamic(node) unless mounted_app?(node)
           when :root then emit_root(node)
           when *VERB_METHODS, :match then emit_verb_route(node) unless rack_app_target?(node)
           when *DYNAMIC_MACROS then emit_dynamic(node) unless rack_app_target?(node)
+          else
+            if statement && node.block
+              # An empty block (a commented-out `constraints do`) configures nothing.
+              push_frame(node, unknown_block: @routing_calls) if node.block.body
+            elsif statement && !NON_ROUTING.include?(node.name) && @stack.none? { |f| f[:unknown_block] }
+              # Inside a gem macro's block a call is its configuration.
+              emit_dynamic(node)
+            end
           end
         end
 
+        # A block call this walk does not know is read through when it holds
+        # routes (`constraints`, `devise_scope`); one that holds none is a gem
+        # macro configured by its block (`use_doorkeeper do controllers ... end`).
         def on_call_node_leave(node)
-          @stack.pop if @stack.last && @stack.last[:node].equal?(node)
+          return unless @stack.last && @stack.last[:node].equal?(node)
+
+          frame = @stack.pop
+          emit_dynamic(node) if frame[:unknown_block] == @routing_calls
         end
 
         private
+
+        # A receiver's block (`Sidekiq::Web.use ... do`) is plain Ruby; only a draw holds routes.
+        def route_body?(node)
+          node.block.is_a?(Prism::BlockNode) && (node.receiver.nil? || %i[draw append prepend].include?(node.name))
+        end
+
+        def register_statements(statements)
+          Array(statements&.body).each { |statement| @statements[statement] = true } if statements.is_a?(Prism::StatementsNode)
+        end
+
+        # `controller :pages do` is `scope(controller: :pages)`.
+        def enter_controller(node)
+          return unless node.block
+
+          name = literal_first_arg(node)
+          return push_frame(node, controller: name.to_s) if name
+
+          emit_dynamic(node)
+          push_frame(node, suppress: true)
+        end
+
+        # A mount MountListener names. A lambda or a variable is an app no walk
+        # can name, and the booted tier counts a lambda as a dynamic construct.
+        def mounted_app?(node)
+          first = node.arguments&.arguments&.first
+          first = first.elements.first&.key if first.is_a?(Prism::KeywordHashNode) || first.is_a?(Prism::HashNode)
+          !first.nil? && !app_name(first).nil?
+        end
 
         # `Spree::Core::Engine.routes.draw` adds to the engine's table, controllers under its
         # namespace (spree/admin/orders); the app's own `X::Application.routes.draw` is no engine.
@@ -184,6 +250,7 @@ module RailsAiContext
 
             @replaying.push(key)
             begin
+              register_statements(block.body)
               replay_dispatcher.dispatch(block)
             ensure
               @replaying.pop
@@ -389,7 +456,7 @@ module RailsAiContext
         end
 
         def current_path_names
-          @stack.filter_map { |f| f[:path_names] }.reduce({}, :merge)
+          @stack.filter_map { |f| f[:path_names] }.reduce(@global_path_names, :merge)
         end
 
         def path_names_option(opts)

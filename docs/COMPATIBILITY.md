@@ -342,16 +342,24 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   A booted run answers that one from reflection.
 - **Some route macros surface as a dynamic tally, not resolved entries.**
   `RouteIntrospector#static_call` counts routes behind `devise_for`, a `match`
-  whose `via:` it cannot read, `direct`, `resolve`, a `draw` it cannot read, a block drawn
+  whose `via:` it cannot read, a `draw` it cannot read, a block drawn
   through an app class whose prefix is not a literal (and that class's own
-  `resources`), and a route whose `to:` is a
-  lambda or a `redirect(...)` into a `dynamic_routes` count rather than
+  `resources`), a route whose `to:` is a lambda or a `redirect(...)`, a mount
+  of a lambda or a variable, a resource whose options are a variable or a
+  splat, a call it does not know (`load`, `use_doorkeeper`,
+  `ActiveAdmin.routes(self)`) and a call to a route-file method that takes
+  arguments into a `dynamic_routes` count rather than
   fabricating per-route controller/action pairs it can't actually determine
-  from source. Routing concerns and a `with_options` block that takes no block
-  parameter are expanded, so they are not in that count. A `with_options` that
+  from source. Routing concerns, a `with_options` block that takes no block
+  parameter and a route-file method called without arguments are expanded, so
+  they are not in that count; `direct` and `resolve` draw no route and are not
+  counted either. A `with_options` that
   yields a mapper is in it, and so is a `concerns:` naming a concern defined in
-  another drawn file. `constraints do...end` does not hide its
-  children: they are read and resolved, the constraint itself is ignored.
+  another drawn file. `constraints do...end` and any other block that draws
+  routes do not hide their children: they are read and resolved, the
+  constraint itself is ignored. A route under `if`/`unless` is listed with
+  that condition, since source cannot tell whether it holds. Routes Rails' own
+  engines and gems draw into the app's table are read only with the app booted.
 
 <br>
 

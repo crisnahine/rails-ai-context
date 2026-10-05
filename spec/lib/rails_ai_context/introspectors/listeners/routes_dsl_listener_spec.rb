@@ -835,4 +835,93 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
       expect(drawn).to eq([ [ "GET", "/one", "pages#two", "one" ], [ "GET", "/two", "pages#two", "two" ] ])
     end
   end
+
+  describe "calls the walk does not know" do
+    def dynamic_macros(source)
+      routes_for(source).select { |r| r[:type] == :dynamic }.map { |r| r[:macro] }
+    end
+
+    it "counts a bare call or a call handed the mapper as a construct it did not expand" do
+      results = routes_for(<<~RUBY)
+        Rails.application.routes.draw do
+          get "/home", to: "home#show"
+          load Rails.root.join("config/routes/extra.rb")
+          use_doorkeeper
+          ActiveAdmin.routes(self)
+        end
+      RUBY
+
+      expect(results.select { |r| r[:type] == :route }.map { |r| r[:path] }).to eq([ "/home" ])
+      expect(results.select { |r| r[:type] == :dynamic }.map { |r| r[:macro] }).to eq(%i[load use_doorkeeper routes])
+    end
+
+    it "counts a gem macro configured by a block once, and reads through a block that holds routes" do
+      results = routes_for(<<~RUBY)
+        Rails.application.routes.draw do
+          use_doorkeeper do
+            skip_controllers :applications
+            controllers tokens: "oauth/tokens"
+          end
+          devise_scope :user do
+            get "/enter", to: "registrations#new"
+          end
+          constraints lambda { |request| request.subdomain.present? } do
+            # nothing here yet
+          end
+        end
+      RUBY
+
+      expect(results.select { |r| r[:type] == :route }.map { |r| r[:path] }).to eq([ "/enter" ])
+      expect(results.select { |r| r[:type] == :dynamic }.map { |r| r[:macro] }).to eq([ :use_doorkeeper ])
+    end
+
+    it "reads controller blocks and options routes, draws nothing for direct and resolve, and counts a lambda mount" do
+      results = routes_for(<<~RUBY)
+        Rails.application.routes.draw do
+          controller :pages do
+            get "terms", action: :terms, as: :terms
+          end
+          direct(:homepage) { "https://example.com" }
+          resolve("Profile") { [:profile] }
+          mount ->(env) { [200, {}, ["ok"]] }, at: "/ping", as: :ping
+          options "opts", to: "pages#opts"
+          namespace :admin do
+            controller :reports do
+              get "summary", action: :summary
+            end
+          end
+        end
+      RUBY
+
+      expect(results.select { |r| r[:type] == :route }.map { |r| [ r[:name], r[:verb], r[:path], "#{r[:controller]}##{r[:action]}" ] })
+        .to eq([ [ "terms", "GET", "/terms", "pages#terms" ], [ "opts", "OPTIONS", "/opts", "pages#opts" ],
+                 [ "admin_summary", "GET", "/admin/summary", "admin/reports#summary" ] ])
+      expect(results.select { |r| r[:type] == :dynamic }.map { |r| r[:macro] }).to eq([ :mount ])
+    end
+
+    it "does not count Ruby that draws no route" do
+      expect(dynamic_macros(<<~RUBY)).to be_empty
+        require "sidekiq/web"
+        Rails.application.routes.draw do
+          default_url_options host: "example.com"
+          resources_path_names new: "neu"
+          get "legacy", to: "pages#legacy", constraints: lambda { |req| admin?(req) }
+          constraints ->(req) { admin?(req) } do
+            mount Sidekiq::Web => "/sidekiq"
+          end
+        end
+      RUBY
+    end
+
+    it "takes the new segment from resources_path_names" do
+      records = route_records(<<~RUBY)
+        Rails.application.routes.draw do
+          resources_path_names new: "neu"
+          resources :cars, only: [:new]
+        end
+      RUBY
+
+      expect(records.map { |r| r[:path] }).to eq([ "/cars/neu" ])
+    end
+  end
 end
