@@ -13,14 +13,14 @@ module RailsAiContext
     # namespace and the superclass chain is the caller's business, because only
     # it knows the other files.
     #
-    # It reads table_name, table_name_prefix and table_name_suffix and nothing
-    # else: a class-level `self.primary_key =` is just as invisible to the
+    # It reads table_name, table_name_prefix, table_name_suffix and
+    # pluralize_table_names and nothing else: a class-level `self.primary_key =` is just as invisible to the
     # static tier, and answering one of those and not the other would be worse
     # than answering neither.
     module TableName
       module_function
 
-      NONE = { table_name: nil, table_name_prefix: nil, table_name_suffix: nil }.freeze
+      NONE = { table_name: nil, table_name_prefix: nil, table_name_suffix: nil, pluralize_table_names: nil }.freeze
 
       PREFIX_INDEX = Concurrent::Map.new
       APP_AFFIXES = Concurrent::Map.new
@@ -53,17 +53,18 @@ module RailsAiContext
         APP_AFFIXES.compute_if_absent(root) { read_app_affixes(root) }
       end
 
-      # All three declarations of one class body, read in one walk.
+      # All four declarations of one class body, read in one walk.
       #
       # @param source [String] the file's source
       # @param name [String] the qualified name of the class or module
-      # @return [Hash] the three, each nil when this scope declares none
+      # @return [Hash] the four, each nil when this scope declares none
       # @param root [String, nil] the app, whose configured affixes a table
       #   name interpolating table_name_prefix or table_name_suffix reads
       def declarations(source, name, root = nil)
         read(source, name) do |body|
           own = { table_name_prefix: affix(body, :table_name_prefix), table_name_suffix: affix(body, :table_name_suffix) }
           { table_name: assigned(body, :table_name=) || interpolated(body, own, root) }.merge(own)
+            .merge(pluralize_table_names: boolean_assigned(body, :pluralize_table_names=))
         end || NONE
       end
 
@@ -77,8 +78,9 @@ module RailsAiContext
       # name already carries that inflection - Zeitwerk resolved the constant
       # from it. Underscoring the constant instead turns OAuthClientConfig into
       # o_auth_client_configs, a table no app has.
-      def stem(path)
-        File.basename(path.to_s, ".rb").pluralize
+      def stem(path, pluralize = true)
+        base = File.basename(path.to_s, ".rb")
+        pluralize ? base.pluralize : base
       end
 
       # The table a model name alone implies. The namespace is not part of it:
@@ -148,9 +150,11 @@ module RailsAiContext
         Array(SourceIntrospector.walk(path, { config: Listeners::ConfigAssignmentListener })[:config])
           .each_with_object({}) do |entry, found|
             path = entry[:path]
-            next unless path.size == 2 && path.first == :active_record && entry[:value].is_a?(String)
+            next unless path.size == 2 && path.first == :active_record
 
-            found[path.last] = entry[:value] if %i[table_name_prefix table_name_suffix].include?(path.last)
+            value = entry[:value]
+            found[path.last] = value if %i[table_name_prefix table_name_suffix].include?(path.last) && value.is_a?(String)
+            found[path.last] = value if path.last == :pluralize_table_names && [ true, false ].include?(value)
           end
       rescue StandardError, ScriptError => e
         RailsAiContext.debug_fail(e, {}, label: "app_affixes")
@@ -236,6 +240,16 @@ module RailsAiContext
         call && literal(call.arguments&.arguments)
       end
 
+      def boolean_assigned(body, name)
+        call = body.find do |node|
+          node.is_a?(Prism::CallNode) && node.name == name && node.receiver.is_a?(Prism::SelfNode)
+        end
+        args = call&.arguments&.arguments
+        return nil unless args&.size == 1
+
+        { Prism::TrueNode => true, Prism::FalseNode => false }[args.first.class]
+      end
+
       # `self.table_name = "#{table_name_prefix}users#{table_name_suffix}"`: the class's
       # own affix, else the app's configured one.
       def interpolated(body, own, root)
@@ -285,7 +299,7 @@ module RailsAiContext
       end
 
       private_class_method :affix, :read, :body_of, :descend, :statements, :segment,
-                           :assigned, :returned, :literal, :read_namespace_prefixes, :read_app_affixes,
+                           :assigned, :boolean_assigned, :returned, :literal, :read_namespace_prefixes, :read_app_affixes,
                            :interpolated, :affixed_node, :affix_read,
                            :engine_files, :collect_isolate_calls
     end

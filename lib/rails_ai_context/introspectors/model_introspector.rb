@@ -292,8 +292,20 @@ module RailsAiContext
 
         [ namespace_affix(class_name, candidates, :table_name_prefix),
           contained_prefix(class_name, candidates, seen),
-          TableName.stem(candidate[:path]),
+          TableName.stem(candidate[:path], pluralize_tables?(class_name, candidates)),
           namespace_affix(class_name, candidates, :table_name_suffix) ].join
+      end
+
+      # A class attribute: the class's own assignment, else its superclass chain's, else the app's.
+      def pluralize_tables?(class_name, candidates, seen = [])
+        own = candidates.dig(class_name, :pluralize_table_names)
+        return own unless own.nil?
+
+        parent = candidates.dig(class_name, :superclass)
+        resolved = parent && !seen.include?(class_name) && resolve_superclass(parent, class_name, candidates)
+        return pluralize_tables?(resolved, candidates, seen + [ class_name ]) if resolved && candidates.key?(resolved)
+
+        TableName.app_affixes(app.root)[:pluralize_table_names] != false
       end
 
       # compute_table_name (7.0 and 8.1): a class nested in a concrete model
@@ -304,7 +316,9 @@ module RailsAiContext
         return "" unless model_class?(parent, candidates)
 
         table = resolve_table_name(parent, candidates, seen + [ class_name ])
-        table.to_s.empty? ? "" : "#{table.singularize}_"
+        return "" if table.to_s.empty?
+
+        "#{pluralize_tables?(parent, candidates) ? table.singularize : table}_"
       end
 
       # Every class this one inherits declarations from: the superclass chain
