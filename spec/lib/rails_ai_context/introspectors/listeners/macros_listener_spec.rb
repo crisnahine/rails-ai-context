@@ -220,3 +220,41 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "connec
     expect(results.map { |r| r.slice(:macro, :text) }).to eq([ { macro: :connects_to, text: "connects_to shards: { shard_one: { writing: :shard_one } }" } ])
   end
 end
+
+RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "scope" do
+  it "leaves out a macro or setting a method body runs, and keeps one a mixin hook sends to the includer" do
+    results = parse_and_dispatch(<<~RUBY)
+      class Gadget < ApplicationRecord
+        def self.with_lock
+          self.locking_column = :temp_lock
+          self.ignored_columns += %w[a]
+          has_paper_trail
+        end
+        def touch_all
+          encrypts :token
+        end
+      end
+      module Trackable
+        def self.included(base)
+          base.encrypts :ssn
+        end
+      end
+    RUBY
+    expect(results.map { |r| [ r[:macro], r[:attribute] ] }).to eq([ [ :encrypts, "ssn" ] ])
+  end
+
+  it "names the class each record is written in, so a nested class keeps its own" do
+    results = parse_and_dispatch(<<~RUBY)
+      class Gadget < ApplicationRecord
+        self.locking_column = :lock_version
+        class Part < ApplicationRecord
+          self.implicit_order_column = "made_at"
+          has_paper_trail
+        end
+      end
+    RUBY
+    expect(results.map { |r| [ r[:macro], r[:owner] ] }).to eq([
+      [ :model_setting, %w[Gadget] ], [ :model_setting, %w[Gadget Part] ], [ :gem_macro, %w[Gadget Part] ]
+    ])
+  end
+end

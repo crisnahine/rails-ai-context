@@ -543,6 +543,35 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    it "credits a nested class's settings and gem macros to the nested class, not the model around it" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/gadget.rb" => <<~RUBY
+            class Gadget < ApplicationRecord
+              encrypts :serial
+              def self.with_lock
+                self.locking_column = :temp_lock
+              end
+              class Part < ApplicationRecord
+                self.implicit_order_column = "made_at"
+                has_paper_trail
+              end
+            end
+          RUBY
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        gadget = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Gadget"]
+
+        expect(gadget[:model_settings]).to be_nil
+        expect(gadget[:macros].map { |m| m[:macro] }).to eq([ :encrypts ])
+      end
+    end
+
     it "says which models Apartment keeps in the shared schema and which per tenant" do
       Dir.mktmpdir do |dir|
         files = {

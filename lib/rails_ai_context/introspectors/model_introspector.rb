@@ -1930,7 +1930,7 @@ module RailsAiContext
         # declaration: the line it was read at differs between two files, and
         # the concern tag differs between two ways of reaching one file.
         # Bases first, the order Rails runs them: a child's `ignored_columns +=` adds to its base's list.
-        merged[:macros] = dedup(Array(inherited[:macros]) + Array(mine[:macros])) { |m| m.except(:from_concern, :location) }
+        merged[:macros] = dedup(Array(inherited[:macros]) + Array(mine[:macros])) { |m| m.except(:from_concern, :location, :owner) }
         merged[:callbacks] = Array(inherited[:callbacks]) + Array(mine[:callbacks])
         # One source line read twice is still one declaration: a concern the
         # model and one of its bases both include is walked once per class, and
@@ -2079,7 +2079,8 @@ module RailsAiContext
       # nested in the model's file includes for itself, not for the model.
       def own_body(data, class_name)
         data.merge(mixins: ConcernMembership.owned_by(data[:mixins], class_name, root: app.root),
-                   callbacks: ConcernMembership.owned_by(data[:callbacks], class_name))
+                   callbacks: ConcernMembership.owned_by(data[:callbacks], class_name),
+                   macros: ConcernMembership.owned_by(data[:macros], class_name))
       end
 
       def source_walk(path)

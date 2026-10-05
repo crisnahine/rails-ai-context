@@ -9,6 +9,7 @@ module RailsAiContext
       # broadcasts, generates_token_for, attribute, etc.
       class MacrosListener < BaseListener
         include WithOptionsScope
+        include OwnerScope
 
         SIMPLE_MACROS = %i[
           has_secure_password
@@ -41,7 +42,49 @@ module RailsAiContext
           state_machine workflow
         ].to_set.freeze
 
+        def initialize
+          super
+          @def_depth = 0
+        end
+
+        def on_def_node_enter(_node)
+          @def_depth += 1
+        end
+
+        def on_def_node_leave(_node)
+          @def_depth -= 1
+        end
+
+        # A method body runs only when called, so only a call sent to a mixin hook's
+        # includer counts there. Each record names the class it is written in.
         def on_call_node_enter(node)
+          return if @def_depth.positive? && !(node.receiver && in_scope?(node))
+
+          owned { record_call(node) }
+        end
+
+        def on_call_node_leave(node)
+          @aasm = nil if @aasm && @aasm[:node].equal?(node)
+          @event = nil if @event && @event[:node].equal?(node)
+        end
+
+        # self.ignored_columns += [...] and -= [...]
+        def on_call_operator_write_node_enter(node)
+          return unless @def_depth.zero? && node.read_name == :ignored_columns && node.receiver.is_a?(Prism::SelfNode)
+
+          op = { :+ => :add, :- => :remove }[node.binary_operator]
+          owned { record_ignored_columns(node, op) } if op
+        end
+
+        private
+
+        def owned
+          count = @results.size
+          yield
+          @results.drop(count).each { |result| result[:owner] = @owner_stack.dup }
+        end
+
+        def record_call(node)
           return record_ignored_columns(node, :assign) if node.name == :ignored_columns= && node.receiver.is_a?(Prism::SelfNode)
           return record_setting(node) if SETTINGS.include?(node.name) && node.receiver.is_a?(Prism::SelfNode)
           return unless in_scope?(node)
@@ -82,21 +125,6 @@ module RailsAiContext
             extract_nested_attributes(node)
           end
         end
-
-        def on_call_node_leave(node)
-          @aasm = nil if @aasm && @aasm[:node].equal?(node)
-          @event = nil if @event && @event[:node].equal?(node)
-        end
-
-        # self.ignored_columns += [...] and -= [...]
-        def on_call_operator_write_node_enter(node)
-          return unless node.read_name == :ignored_columns && node.receiver.is_a?(Prism::SelfNode)
-
-          op = { :+ => :add, :- => :remove }[node.binary_operator]
-          record_ignored_columns(node, op) if op
-        end
-
-        private
 
         # Every keyword option as the file writes it: a lambda, `2.days` or a nested hash
         # reads the same on every Ruby, where a value's inspect does not.
