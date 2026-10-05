@@ -244,13 +244,16 @@ module RailsAiContext
             name = $1
             expression = first_paren_group($2)
             (table[:check_constraints] ||= []) << { name: name, expression: expression.strip }.compact if expression
-          when /\A(UNIQUE\s+)?(?:KEY|INDEX)\s+[`"](\w+)[`"]\s*(\(.*)/i
+          when /\A(UNIQUE\s+|FULLTEXT\s+|SPATIAL\s+)?(?:KEY|INDEX)\s+[`"](\w+)[`"]\s*(\(.*)/i
             # Captured to locals first: the parsing below runs more regexes,
             # which would clobber $~ before the hash literal reads it.
-            unique = !$1.nil?
+            kind = $1.to_s.strip.downcase
             idx_name = $2
             keys = index_keys(first_paren_group($3))
-            table[:indexes] << { name: idx_name, columns: keys, unique: unique } if keys.any?
+            # Rails names a MySQL fulltext or spatial index by type:.
+            index = { name: idx_name, columns: keys, unique: kind == "unique" }
+            index[:type] = kind if %w[fulltext spatial].include?(kind)
+            table[:indexes] << index if keys.any?
           end
         end
 
@@ -327,7 +330,7 @@ module RailsAiContext
           # inline index names ("KEY `name` (...)"), so a quoted name after
           # KEY/INDEX is the reliable signal that this line is an index
           # definition rather than a column named "key" or "index".
-          next if line.match?(/\A(?:UNIQUE\s+)?(?:KEY|INDEX)\s+[`"]/i)
+          next if line.match?(/\A(?:UNIQUE\s+|FULLTEXT\s+|SPATIAL\s+)?(?:KEY|INDEX)\s+[`"]/i)
 
           # Match: column_name type_with_params [constraints]
           if (match = line.match(/\A[`"]?(\w+)[`"]?\s+(.+)/))

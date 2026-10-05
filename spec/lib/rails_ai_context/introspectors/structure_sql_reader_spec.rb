@@ -793,4 +793,24 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
       expect(things[:comment]).to eq("Mixed bag")
     end
   end
+
+  it "reads mysqldump's FULLTEXT and SPATIAL keys as indexes, not columns" do
+    sql = <<~SQL
+      CREATE TABLE `posts` (
+        `id` bigint NOT NULL AUTO_INCREMENT,
+        `body` text,
+        `spot` point NOT NULL /*!80003 SRID 0 */,
+        PRIMARY KEY (`id`),
+        SPATIAL KEY `index_posts_on_spot` (`spot`),
+        FULLTEXT KEY `index_posts_on_body` (`body`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+    SQL
+    posts = described_class.parse(sql)[:tables]["posts"]
+
+    expect(posts[:columns].map { |c| c[:name] }).to eq(%w[id body spot])
+    expect(posts[:indexes]).to contain_exactly(
+      { name: "index_posts_on_spot", columns: [ "spot" ], unique: false, type: "spatial" },
+      { name: "index_posts_on_body", columns: [ "body" ], unique: false, type: "fulltext" }
+    )
+  end
 end
