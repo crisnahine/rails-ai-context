@@ -68,6 +68,7 @@ module RailsAiContext
             lines << "- **System tests:** #{data[:system_tests][:location]}" if data[:system_tests]
             lines << "- **CI:** #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
             lines << "- **Coverage:** #{data[:coverage]}" if data[:coverage]
+            lines.concat(ci_step_lines(data[:ci_steps]))
 
             if data[:test_files]&.any?
               lines << "" << "## Test Files"
@@ -94,6 +95,7 @@ module RailsAiContext
             lines << "- **Framework:** #{data[:framework]}"
             lines << "- **CI:** #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
             lines << "- **Coverage:** #{data[:coverage]}" if data[:coverage]
+            lines.concat(ci_step_lines(data[:ci_steps]))
 
             lines.concat(trait_lines(data[:factory_traits], 20))
 
@@ -321,6 +323,13 @@ module RailsAiContext
         nearby.any? ? "\n\nFiles in test directory: #{nearby.join(', ')}" : ""
       rescue SystemCallError
         ""
+      end
+
+      private_class_method def self.ci_step_lines(steps)
+        return [] unless steps.is_a?(Array) && steps.any?
+
+        [ "", "## CI Steps (`config/ci.rb`, run by `bin/ci`)" ] +
+          steps.map { |step| "- #{step[:name]}: `#{step[:command]}`" }
       end
 
       private_class_method def self.trait_lines(traits, limit)

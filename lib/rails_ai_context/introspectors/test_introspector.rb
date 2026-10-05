@@ -9,6 +9,7 @@ module RailsAiContext
       static_tier :files_only
 
       TEST_FILE_GLOB = "*_{spec,test}.rb"
+      RAILS_CI = "config/ci.rb"
 
       def call
         {
@@ -24,6 +25,7 @@ module RailsAiContext
           test_files: test_categories,
           vcr_cassettes: detect_vcr,
           ci_config: detect_ci,
+          ci_steps: detect_ci_steps,
           coverage: detect_coverage,
           factory_traits: detect_factory_traits,
           test_count_by_category: detect_test_count_by_category,
@@ -179,11 +181,28 @@ module RailsAiContext
 
       def detect_ci
         configs = []
+        configs << "rails_ci" if File.file?(File.join(root, RAILS_CI))
         configs << "github_actions" if Dir.exist?(File.join(root, ".github/workflows"))
         configs << "circleci" if File.exist?(File.join(root, ".circleci/config.yml"))
         configs << "gitlab_ci" if File.exist?(File.join(root, ".gitlab-ci.yml"))
         configs << "travis" if File.exist?(File.join(root, ".travis.yml"))
+        configs << "buildkite" if Dir.exist?(File.join(root, ".buildkite")) || Dir.glob(File.join(root, "buildkite.{yml,yaml,json}")).any?
+        configs << "jenkins" if File.file?(File.join(root, "Jenkinsfile"))
         configs
+      end
+
+      # The steps bin/ci runs, from the `step title, *command` calls of the
+      # CI DSL Rails 8.1 generates.
+      def detect_ci_steps
+        content, = RailsAiContext::SafePath.read(RAILS_CI, under: root)
+        return nil unless content
+
+        hits = SourceIntrospector.walk_source(content, steps: -> { Listeners::GenericMacroListener.new(:step) })[:steps]
+        steps = hits.filter_map do |hit|
+          title, *command = hit[:values]
+          { name: title, command: command.join(" ") } if title.is_a?(String)
+        end
+        steps.presence
       end
 
       def detect_coverage

@@ -202,6 +202,26 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
     end
   end
 
+  describe "the steps bin/ci runs" do
+    before do
+      test_data[:ci_config] = %w[rails_ci]
+      test_data[:ci_steps] = [ { name: "Setup", command: "bin/setup --skip-server" }, { name: "Tests: Rails", command: "bin/rails test" } ]
+    end
+
+    it "lists them under config/ci.rb at standard and full detail" do
+      %w[standard full].each do |detail|
+        text = described_class.call(detail: detail).content.first[:text]
+
+        expect(text).to include("- **CI:** rails_ci")
+        expect(text).to include("## CI Steps (`config/ci.rb`, run by `bin/ci`)\n- Setup: `bin/setup --skip-server`\n- Tests: Rails: `bin/rails test`")
+      end
+    end
+
+    it "keeps them out of the summary" do
+      expect(described_class.call(detail: "summary").content.first[:text]).not_to include("CI Steps")
+    end
+  end
+
   describe ".call with unknown detail level" do
     it "reads an invalid detail level as the default, and says so" do
       text = described_class.call(detail: "invalid").content.first[:text]

@@ -459,6 +459,52 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
     end
   end
 
+  describe "CI configuration" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def write(rel, body = "")
+      path = File.join(@root, rel)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, body)
+    end
+
+    def payload
+      described_class.new(double("app", root: @root)).call
+    end
+
+    it "names Rails 8.1's config/ci.rb and lists the steps bin/ci runs" do
+      write("config/ci.rb", <<~RUBY)
+        CI.run do
+          step "Setup", "bin/setup --skip-server"
+          step "Tests: Rails", "bin/rails test"
+          # step "Tests: System", "bin/rails test:system"
+        end
+      RUBY
+
+      expect(payload[:ci_config]).to eq(%w[rails_ci])
+      expect(payload[:ci_steps]).to eq([
+        { name: "Setup", command: "bin/setup --skip-server" },
+        { name: "Tests: Rails", command: "bin/rails test" }
+      ])
+    end
+
+    it "names Buildkite and Jenkins beside the others" do
+      write(".gitlab-ci.yml")
+      write(".circleci/config.yml")
+      write(".buildkite/pipeline.yml")
+      write("Jenkinsfile")
+
+      expect(payload[:ci_config]).to eq(%w[circleci gitlab_ci buildkite jenkins])
+      expect(payload[:ci_steps]).to be_nil
+    end
+
+    it "keeps a config/ci.rb that does not parse to its name" do
+      write("config/ci.rb", "CI.run do\n  step \"Setup\", \n")
+
+      expect(payload[:ci_config]).to eq(%w[rails_ci])
+    end
+  end
+
   describe "#detect_framework" do
     around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
 
