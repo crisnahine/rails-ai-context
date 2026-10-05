@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "json"
+
 module RailsAiContext
   module Introspectors
     # Discovers API layer setup: api_only mode, serializers, GraphQL,
@@ -250,21 +252,33 @@ module RailsAiContext
         dirs.map { |path| path.chomp("/").sub("#{root}/", "") }.uniq.sort
       end
 
-      def detect_openapi_specs
-        globs = %w[
-          openapi/**/*.json openapi/**/*.yaml openapi/**/*.yml
-          swagger/**/*.json swagger/**/*.yaml swagger/**/*.yml
-          public/api-docs/**/*
-          docs/**/*.json docs/**/*.yaml docs/**/*.yml
-        ]
+      # Where apps keep a spec: rswag's swagger/, a docs site, public/ for a served spec,
+      # and app/ beside a Grape or versioned API.
+      OPENAPI_GLOBS = %w[
+        *.{json,yaml,yml} {openapi,swagger,doc,docs,public,app,config}/**/*.{json,yaml,yml}
+      ].freeze
+      OPENAPI_YAML_KEY = /^["']?(?:openapi|swagger)["']?[ \t]*:/
+      OPENAPI_SKIP = %r{(?:\A|/)(?:node_modules|packs|assets|vite)/}
 
-        globs.flat_map { |pattern| Dir.glob(File.join(root, pattern)) }
-             .select { |path| File.file?(path) }
-             .map { |path| path.sub("#{root}/", "") }
-             .sort
-             .uniq
+      # A file is a spec by its top-level `openapi` or `swagger` key, never by where it is.
+      def detect_openapi_specs
+        OPENAPI_GLOBS.flat_map { |pattern| Dir.glob(pattern, base: root.to_s) }
+          .uniq.reject { |relative| relative.match?(OPENAPI_SKIP) }
+          .select { |relative| openapi_document?(relative) }
+          .sort
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "detect_openapi_specs")
+      end
+
+      def openapi_document?(relative)
+        source = SafePath.read(relative, under: root.to_s).first
+        return false unless source&.match?(/openapi|swagger/)
+        return source.match?(OPENAPI_YAML_KEY) unless relative.end_with?(".json")
+
+        parsed = JSON.parse(source)
+        parsed.is_a?(Hash) && (parsed.key?("openapi") || parsed.key?("swagger"))
+      rescue JSON::ParserError
+        false
       end
 
       # Per `allow` block, because that is the unit rack-cors applies: one

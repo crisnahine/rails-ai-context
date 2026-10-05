@@ -95,30 +95,32 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
       end
 
       context "with OpenAPI spec files" do
-        let(:openapi_dir) { File.join(Rails.root, "openapi") }
-        let(:swagger_dir) { File.join(Rails.root, "swagger") }
-        let(:docs_dir) { File.join(Rails.root, "docs") }
+        let(:dirs) { %w[openapi swagger docs public doc app/api].map { |d| File.join(Rails.root, d) } }
+
+        def write(relative, content)
+          path = File.join(Rails.root, relative)
+          FileUtils.mkdir_p(File.dirname(path))
+          File.write(path, content)
+        end
 
         before do
-          FileUtils.mkdir_p(openapi_dir)
-          FileUtils.mkdir_p(File.join(swagger_dir, "v2"))
-          FileUtils.mkdir_p(docs_dir)
-          File.write(File.join(openapi_dir, "v1.yaml"), "openapi: 3.0.0")
-          File.write(File.join(swagger_dir, "v2", "api.json"), "{}")
-          File.write(File.join(docs_dir, "schema.yml"), "---")
+          write("openapi/v1.yaml", "openapi: 3.0.0\ninfo: { title: A, version: '1' }\n")
+          write("swagger/v2/api.json", '{"swagger": "2.0", "info": {}}')
+          write("docs/_config.yml", "title: My docs site\n")
+          write("docs/locales/en.yml", "en: { hello: Hi }\n")
+          write("docs/nested.yml", "components:\n  openapi: 3.0.0\n")
+          write("public/openapi.yml", "# the public spec\nopenapi: 3.0.0\n")
+          write("doc/api/openapi.yaml", "openapi: 3.0.0\n")
+          write("app/api/v0/openapi.json", '{"openapi":"3.0.0", "paths": {}}')
+          write("public/broken.json", '{"openapi": ')
         end
 
-        after do
-          FileUtils.rm_rf(openapi_dir)
-          FileUtils.rm_rf(swagger_dir)
-          FileUtils.rm_rf(docs_dir)
-        end
+        after { dirs.each { |dir| FileUtils.rm_rf(dir) } }
 
-        it "detects OpenAPI spec files across all search paths" do
-          specs = result[:openapi_spec]
-          expect(specs).to include("openapi/v1.yaml")
-          expect(specs).to include("swagger/v2/api.json")
-          expect(specs).to include("docs/schema.yml")
+        it "lists the files whose top-level key is openapi or swagger, wherever they live" do
+          expect(result[:openapi_spec]).to eq(%w[
+            app/api/v0/openapi.json doc/api/openapi.yaml openapi/v1.yaml public/openapi.yml swagger/v2/api.json
+          ])
         end
       end
     end
