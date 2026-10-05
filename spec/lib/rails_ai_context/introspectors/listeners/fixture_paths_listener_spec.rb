@@ -17,6 +17,14 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::FixturePathsListener do
     RUBY
   end
 
+  it "reads the setting on the block parameter RSpec.configure yields" do
+    expect(paths(<<~RUBY)).to eq(%w[spec/fixtures])
+      RSpec.configure do |config|
+        config.fixture_paths = [Rails.root.join("spec/fixtures")]
+      end
+    RUBY
+  end
+
   it "leaves out file_fixture_path and paths it cannot read" do
     expect(paths(<<~RUBY)).to eq([])
       self.file_fixture_path = "test/fixtures/files"

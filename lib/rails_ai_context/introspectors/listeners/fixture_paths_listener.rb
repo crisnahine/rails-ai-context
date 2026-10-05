@@ -36,9 +36,10 @@ module RailsAiContext
           node.is_a?(Prism::CallNode) && SETTINGS.include?(node.name) && setting_receiver?(node.receiver)
         end
 
-        # The test case class itself, or RSpec's `config`.
+        # The test case class itself, or RSpec's `config` (the block parameter `RSpec.configure` yields).
         def setting_receiver?(node)
-          node.nil? || node.is_a?(Prism::SelfNode) || (node.is_a?(Prism::CallNode) && node.name == :config)
+          node.nil? || node.is_a?(Prism::SelfNode) ||
+            ((node.is_a?(Prism::CallNode) || node.is_a?(Prism::LocalVariableReadNode)) && node.name == :config)
         end
       end
     end
