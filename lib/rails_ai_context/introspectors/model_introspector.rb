@@ -1466,7 +1466,9 @@ module RailsAiContext
       BOOLEAN_ASSOCIATION_OPTIONS = %i[polymorphic optional].freeze
 
       # What the record already says another way, or what Rails keeps for itself.
-      UNLISTED_ASSOCIATION_OPTIONS = [ *LIFTED_ASSOCIATION_OPTIONS, :query_constraints, :anonymous_class ].freeze
+      # A has_many's foreign key stays listed: its record carries reflection's
+      # default key too, so only the declaration tells a reader it is not the default.
+      UNLISTED_ASSOCIATION_OPTIONS = [ *(LIFTED_ASSOCIATION_OPTIONS - [ :foreign_key ]), :query_constraints, :anonymous_class ].freeze
 
       # Every other option the association declares, each as display text:
       # its callbacks, extensions, counter cache and the rest.
@@ -1474,7 +1476,7 @@ module RailsAiContext
         return nil unless options.is_a?(Hash)
 
         shown = options.except(*UNLISTED_ASSOCIATION_OPTIONS)
-        shown = shown.except(:required) if type.to_s == "belongs_to"
+        shown = shown.except(:required, :foreign_key) if type.to_s == "belongs_to"
         shown.to_h { |key, value| [ key.to_s, association_option_text(value) ] }.presence
       end
 

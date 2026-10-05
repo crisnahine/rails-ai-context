@@ -125,6 +125,20 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  it "prints the foreign key a has_many or has_one declares" do
+    text = details_for("Person", "person.rb" => <<~RUBY)
+      class Person < ApplicationRecord
+        has_many :photos, :foreign_key => :author_id, :dependent => :destroy
+        has_one :profile, foreign_key: "owner_id"
+        has_many :posts
+      end
+    RUBY
+
+    expect(text).to include("- `has_many` **photos** dependent: destroy (foreign_key: :author_id)")
+    expect(text).to include("- `has_one` **profile** (foreign_key: owner_id)")
+    expect(text).to include("- `has_many` **posts**\n")
+  end
+
   it "lists a validate block as a custom validation" do
     text = details_for("User", "user.rb" => <<~RUBY)
       class User < ApplicationRecord
