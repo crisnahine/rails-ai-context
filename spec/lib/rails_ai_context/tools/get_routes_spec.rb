@@ -322,13 +322,81 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
     end
   end
 
+  describe "the framework count read from source" do
+    let(:static_routes) do
+      { total_routes: 2, confidence: RailsAiContext::Confidence::STATIC, api_namespaces: [],
+        by_controller: { "posts" => [ { verb: "GET", path: "/posts", action: "index", name: "posts" } ],
+                         "rails/health" => [ { verb: "GET", path: "/up", action: "show", name: "rails_health_check" } ] } }
+    end
+
+    before { allow(described_class).to receive(:cached_context).and_return({ routes: static_routes }) }
+
+    it "says it covers only the app's route files" do
+      %w[summary standard full].each do |detail|
+        text = described_class.call(detail: detail).content.first[:text]
+
+        expect(text).to include("excluding 1 framework route drawn in the app's route files")
+        expect(text).to include(described_class::GEM_DRAWN_NOTE)
+      end
+    end
+
+    it "says so even when the app's files draw no framework route" do
+      static_routes[:by_controller].delete("rails/health")
+
+      expect(described_class.call.content.first[:text]).to include(described_class::GEM_DRAWN_NOTE)
+    end
+
+    it "is not said of a booted table, or of one controller's routes" do
+      expect(described_class.call(controller: "posts").content.first[:text]).not_to include(described_class::GEM_DRAWN_NOTE)
+      static_routes.delete(:confidence)
+      text = described_class.call.content.first[:text]
+      expect(text).to include("excluding 1 framework route)")
+      expect(text).not_to include(described_class::GEM_DRAWN_NOTE)
+    end
+  end
+
+  describe "a route drawn under a condition" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({ routes: { total_routes: 1, api_namespaces: [], by_controller: {
+        "posts" => [ { verb: "GET", path: "/dev_only", action: "index", name: "dev_only", condition: "if a || b" } ]
+      } } })
+    end
+
+    it "names the condition at every listing level" do
+      expect(described_class.call.content.first[:text]).to include("- `GET` `/dev_only` → index `dev_only_path` (`if a || b`)")
+      expect(described_class.call(detail: "full").content.first[:text])
+        .to include("| GET | `/dev_only` (`if a \\|\\| b`) | posts#index | dev_only |")
+    end
+  end
+
+  describe "a route with constraints" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({ routes: { total_routes: 2, api_namespaces: [], by_controller: {
+        "status" => [ { verb: "GET", path: "/status", action: "show", name: "status", constraints: '{subdomain: "api"}' } ],
+        "photos" => [ { verb: "GET", path: "/photos/:id", action: "show", constraints: '{id: /[A-Z]\d{5}|x/}' } ]
+      } } })
+    end
+
+    it "prints them beside the path at full detail only" do
+      full = described_class.call(detail: "full").content.first[:text]
+
+      expect(full).to include('| GET | `/status` `{subdomain: "api"}` | status#show | status |')
+      expect(full).to include('| GET | `/photos/:id` `{id: /[A-Z]\d{5}\|x/}` | photos#show | - |')
+      expect(described_class.call.content.first[:text]).not_to include("subdomain")
+    end
+  end
+
   describe "PUT/PATCH deduplication" do
     it "combines PUT and PATCH into a single entry" do
       result = described_class.call(controller: "posts", detail: "full")
       text = result.content.first[:text]
-      expect(text).to include("PATCH|PUT")
-      # Should not have separate PUT and PATCH rows for the same action
-      expect(text.scan("update").size).to be >= 1
+      expect(text).to include("| PATCH\\|PUT | `/posts/:id` | posts#update | - |")
+    end
+
+    it "keeps each full-detail table row to four cells" do
+      rows = described_class.call(detail: "full").content.first[:text].lines.grep(/\A\| /)
+
+      expect(rows.map { |row| row.strip.split(/(?<!\\)\|/).size - 1 }.uniq).to eq([ 4 ])
     end
   end
 

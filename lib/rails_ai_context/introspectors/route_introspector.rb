@@ -53,6 +53,7 @@ module RailsAiContext
         return { error: "config/routes.rb not found in #{app.root}" } if top_files.empty?
 
         records, mounts, files = walk_route_files(top_files)
+        records = records.map { |r| r.except(:engine) } if engine_root?
         in_repo = in_repo_routes(mounts)
         records += in_repo.values.flat_map(&:first)
         mounts = (mounts + in_repo.values.flat_map(&:last)).uniq { |mount| [ mount[:engine], mount[:path] ] }
@@ -78,6 +79,7 @@ module RailsAiContext
           unrouted_mounts: mounts.size,
           root_route: static_root_route(entries),
           note: "Parsed statically from #{static_sources_phrase(files, top_files)}" \
+                "#{initializers_phrase}" \
                 "#{computed ? ', plus route files config/application.rb computes (not read)' : ''} (app not booted)",
           confidence: Confidence::STATIC
         }
@@ -87,6 +89,16 @@ module RailsAiContext
         unread = (in_repo_route_files - in_repo.keys).size
         result[:in_repo_route_files] = unread if unread.positive?
         result
+      end
+
+      # Run from a mountable engine's own root there is no app table: the
+      # engine's table, drawn in its config/routes.rb, is the project's routes.
+      def engine_root?
+        return @engine_root unless @engine_root.nil?
+
+        root = app.root.to_s
+        @engine_root = !File.exist?(File.join(root, "config", "application.rb")) &&
+                       !app_route_file?(File.join(root, "config", "routes.rb"))
       end
 
       # Every routes.rb under an in-repo engine or plugin root. One the app does not mount has
@@ -264,7 +276,31 @@ module RailsAiContext
           all_mounts.concat(sub_mounts)
           all_files.concat(sub_files)
         end
-        [ records, mounts.uniq { |mount| [ mount[:engine], mount[:path] ] }, files.uniq ]
+        added, added_mounts = walk_route_initializers(already_read)
+        prepended, appended = added.partition { |r| r[:prepend] }
+        records = (prepended + records + appended).map { |r| r.except(:prepend) }
+        mounts = (mounts + added_mounts).uniq { |mount| [ mount[:engine], mount[:path] ] }
+        [ records, mounts, files.uniq ]
+      end
+
+      # Initializers that add to the app's table with `routes.prepend` or
+      # `routes.append`, which Rails evaluates before and after the draw.
+      def route_initializers
+        @route_initializers ||= begin
+          root = app.root.to_s
+          listed = Dir.glob("config/initializers/**/*.rb", base: root).sort
+          contained_route_files(root, listed).select do |path|
+            SafeFile.read(path).to_s.match?(/\.routes\.(?:append|prepend)\b/) && app_route_file?(path)
+          end
+        end
+      end
+
+      def walk_route_initializers(already_read)
+        route_initializers.each_with_object([ [], [] ]) do |path, (records, mounts)|
+          sub_records, sub_mounts = walk_draw_target(path, already_read, 0, {})
+          records.concat(sub_records)
+          mounts.concat(sub_mounts)
+        end
       end
 
       private
@@ -407,6 +443,13 @@ module RailsAiContext
         "#{lead} and #{CountPhrase.call(drawn, "file")} #{tops.size == 1 ? 'it draws' : 'they draw'}"
       end
 
+      def initializers_phrase
+        return "" if route_initializers.empty?
+
+        root = "#{app.root}#{File::SEPARATOR}"
+        ", plus routes appended or prepended in #{route_initializers.map { |f| f.delete_prefix(root) }.join(', ')}"
+      end
+
       def extract_routes
         # Force Rails to reload routes if routes.rb has changed
         app.routes_reloader&.execute_if_updated rescue nil
@@ -470,9 +513,13 @@ module RailsAiContext
         end
       end
 
+      # The engines section counts an engine's table with these same rows.
+      public :table_routes
+
+      # What `bin/rails routes` prints beside the route, written alike on every Ruby.
       def extract_constraints(route)
-        constraints = route.constraints.to_s
-        constraints.empty? ? nil : constraints
+        shown = route.requirements.except(:controller, :action)
+        "{#{shown.map { |key, value| "#{key}: #{value.inspect}" }.join(', ')}}" if shown.any?
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "extract_constraints")
       end
@@ -483,6 +530,8 @@ module RailsAiContext
             entry = { verb: r[:verb], path: r[:path], action: r[:action], name: r[:name] }
             entry[:params] = r[:params] if r[:params]
             entry[:restful] = r[:restful] unless r[:restful].nil?
+            entry[:condition] = r[:condition] if r[:condition]
+            entry[:constraints] = r[:constraints] if r[:constraints]
             entry.compact
           end
         end

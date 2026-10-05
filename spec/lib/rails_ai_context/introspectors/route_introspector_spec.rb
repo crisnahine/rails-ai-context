@@ -241,7 +241,162 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
     end
   end
 
+  describe "route constraints on both tiers" do
+    let(:routes_source) do
+      <<~'RUBY'
+        constraints subdomain: "api" do
+          get "/status", to: "status#show"
+        end
+        get "/photos/:id", to: "photos#show", constraints: { id: /[A-Z]\d{5}/ }
+        resources :items, only: [:index, :show], constraints: { id: /\d+/ }
+        scope defaults: { format: :json } do
+          get "/feed", to: "feed#index", constraints: { flavor: "x", protocol: "https" }
+        end
+        get "/loose", to: "loose#show", constraints: ->(req) { true }
+      RUBY
+    end
+
+    def constraints_of(result)
+      result[:by_controller].transform_values { |rows| rows.map { |r| [ r[:path], r[:constraints] ] } }
+    end
+
+    it "lists what bin/rails routes prints beside each route, the same booted and static" do
+      source = routes_source
+      set = ActionDispatch::Routing::RouteSet.new.tap { |s| s.draw { instance_eval(source) } }
+      booted = described_class.new(double("app", routes: set, routes_reloader: nil, root: Rails.root)).call
+
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), "Rails.application.routes.draw do\n#{source}end\n")
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(constraints_of(booted)).to eq(
+          "status" => [ [ "/status", '{subdomain: "api"}' ] ],
+          "photos" => [ [ "/photos/:id", '{id: /[A-Z]\d{5}/}' ] ],
+          "items" => [ [ "/items", nil ], [ "/items/:id", '{id: /\d+/}' ] ],
+          "feed" => [ [ "/feed", '{protocol: "https", format: :json}' ] ],
+          "loose" => [ [ "/loose", nil ] ]
+        )
+        expect(constraints_of(static)).to eq(constraints_of(booted))
+      end
+    end
+  end
+
   describe "#static_call" do
+    # RouteSet evaluates prepend blocks before the draw and append blocks after it.
+    it "reads routes an initializer prepends or appends, in the order Rails draws them" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            get "main", to: "posts#index"
+          end
+        RUBY
+        File.write(File.join(dir, "config", "initializers", "more_routes.rb"), <<~RUBY)
+          Rails.application.routes.append do
+            get "appended", to: "posts#index"
+          end
+          Rails.application.routes.prepend do
+            get "prepended", to: "posts#index"
+          end
+        RUBY
+        File.write(File.join(dir, "config", "initializers", "plain.rb"), "Rails.application.config.x.y = 1\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:by_controller]["posts"].map { |r| [ r[:name], r[:path] ] })
+          .to eq([ %w[prepended /prepended], %w[main /main], %w[appended /appended] ])
+        expect(result[:total_routes]).to eq(3)
+        expect(result[:note]).to include("config/initializers/more_routes.rb")
+        expect(result[:note]).not_to include("plain.rb")
+      end
+    end
+
+    # A prepend registered after the draw reaches the table only on the next reload.
+    it "counts a prepend nested in an initializer block as not expanded" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "routes.rb"), "Rails.application.routes.draw do\n  get \"main\", to: \"posts#index\"\nend\n")
+        File.write(File.join(dir, "config", "initializers", "late.rb"), <<~RUBY)
+          Rails.application.config.after_initialize do
+            Rails.application.routes.prepend do
+              get "late", to: "posts#index"
+            end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:by_controller]["posts"].map { |r| r[:path] }).to eq([ "/main" ])
+        expect(result[:dynamic_routes]).to eq(1)
+      end
+    end
+
+    it "skips an initializer that cannot be parsed or links outside the app" do
+      Dir.mktmpdir do |dir|
+        app = File.join(dir, "app")
+        FileUtils.mkdir_p(File.join(app, "config", "initializers"))
+        File.write(File.join(app, "config", "routes.rb"), "Rails.application.routes.draw do\n  get \"main\", to: \"posts#index\"\nend\n")
+        File.binwrite(File.join(app, "config", "initializers", "broken.rb"), "Rails.application.routes.append do\n  get \"\xff\", to:\n")
+        File.write(File.join(dir, "outside.rb"), "Rails.application.routes.append do\n  get \"leak\", to: \"leak#index\"\nend\n")
+        File.symlink(File.join(dir, "outside.rb"), File.join(app, "config", "initializers", "outside.rb"))
+        File.symlink(File.join(app, "config", "initializers"), File.join(app, "config", "initializers", "loop"))
+
+        result = described_class.new(RailsAiContext::StaticApp.new(app)).static_call
+
+        expect(result[:by_controller].keys).not_to include("leak")
+        expect(result[:by_controller]["posts"].first[:path]).to eq("/main")
+      end
+    end
+
+    # `rails plugin new shop --mountable`: the engine's table is the project's whole route surface.
+    it "reads a mountable engine's own table as the routes, from the engine's root" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "lib", "shop"))
+        File.write(File.join(dir, "lib", "shop", "engine.rb"), "module Shop\n  class Engine < ::Rails::Engine\n    isolate_namespace Shop\n  end\nend\n")
+        File.write(File.join(dir, "config", "routes.rb"), "Shop::Engine.routes.draw do\n  resources :widgets\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:total_routes]).to eq(7)
+        expect(result[:by_controller]["shop/widgets"].map { |r| [ r[:verb], r[:path], r[:name] ] }).to include(
+          [ "GET", "/widgets", "widgets" ], [ "GET", "/widgets/:id", "widget" ]
+        )
+        expect(result).not_to have_key(:engine_routes)
+      end
+    end
+
+    it "reads an engine whose namespace does not underscore back to its path as the project's table" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "lib", "pghero"))
+        File.write(File.join(dir, "lib", "pghero", "engine.rb"), "module PgHero\n  class Engine < ::Rails::Engine\n    isolate_namespace PgHero\n  end\nend\n")
+        File.write(File.join(dir, "config", "routes.rb"), "PgHero::Engine.routes.draw do\n  resources :queries\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:total_routes]).to eq(7)
+        expect(result).not_to have_key(:engine_routes)
+      end
+    end
+
+    it "keeps the condition a route is drawn under" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            get "dev_only", to: "posts#index" if Rails.env.development?
+          end
+        RUBY
+
+        posts = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:by_controller]["posts"]
+
+        expect(posts).to eq([ { verb: "GET", path: "/dev_only", action: "index", name: "dev_only", restful: true,
+                                condition: "if Rails.env.development?" } ])
+      end
+    end
+
     it "builds the runtime output shape from config/routes.rb without booting" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))

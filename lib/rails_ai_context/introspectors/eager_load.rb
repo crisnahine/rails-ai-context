@@ -12,11 +12,25 @@ module RailsAiContext
       def dir(root, kind:)
         return if Rails.application.config.eager_load
 
-        PathResolver.dirs_for(root, kind).each do |path|
-          load_dir(path)
-        end
+        dirs = PathResolver.dirs_for(root, kind) + enclosing_engine_roots(root).map { |engine| File.join(engine, kind) }
+        dirs.select { |path| Dir.exist?(path) }.uniq.each { |path| load_dir(path) }
       rescue StandardError, ScriptError => e
         RailsAiContext.debug_fail(e, nil, label: "eager load of #{kind}")
+      end
+
+      # An engine's test/dummy runs inside the engine, whose classes are the project's.
+      def enclosing_engine_roots(root)
+        return [] unless defined?(::Rails::Engine)
+
+        inside = "#{File.expand_path(root.to_s)}#{File::SEPARATOR}"
+        ::Rails::Engine.subclasses.filter_map do |engine|
+          next if engine.root.nil?
+
+          dir = File.expand_path(engine.root.to_s)
+          dir if inside.start_with?("#{dir}#{File::SEPARATOR}")
+        rescue StandardError
+          nil
+        end
       end
 
       # eager_load_dir returns silently for a directory the loader manages
@@ -70,7 +84,7 @@ module RailsAiContext
       rescue Zeitwerk::Error
         nil
       end
-      private_class_method :load_dir, :load_individually, :cpath_for, :expected_cpath
+      private_class_method :load_dir, :enclosing_engine_roots, :load_individually, :cpath_for, :expected_cpath
     end
   end
 end

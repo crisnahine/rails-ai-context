@@ -109,9 +109,9 @@ module RailsAiContext
           next if engine.name.start_with?("Rails::", "ActionPack::", "ActionView::", "ActiveModel::")
 
           entry = { name: engine.name, root: portable_root(engine.root) }
-          # Count routes and models inside the engine
+          # Counted as the routes section lists the table, so one engine has one number.
           if engine.respond_to?(:routes) && engine.routes.respond_to?(:routes)
-            entry[:route_count] = engine.routes.routes.size rescue nil
+            entry[:route_count] = (RouteCoverage.dedupe_put_patch_routes(RouteIntrospector.new(app).table_routes(engine.routes)).size rescue nil)
           end
           if Dir.exist?(File.join(engine.root.to_s, "app", "models"))
             entry[:model_count] = ModelIntrospector.new(StaticApp.new(engine.root.to_s)).model_count
