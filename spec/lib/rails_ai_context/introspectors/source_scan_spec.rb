@@ -138,6 +138,26 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
     end
   end
 
+  it "keeps a class outside app/models only when its superclass resolves, from where it is declared, to a model" do
+    Dir.mktmpdir do |dir|
+      {
+        "app/models/queries/base.rb" => "module Queries\n  class Base < ApplicationRecord\n  end\nend\n",
+        "app/forms/application_form.rb" => "class ApplicationForm < Primer::Forms::Base\nend\n",
+        "app/forms/lost_password_form.rb" => "class LostPasswordForm < ApplicationForm\nend\n",
+        "app/services/reports/base.rb" => "module Reports\n  class Base\n  end\nend\n",
+        "app/services/reports/daily.rb" => "module Reports\n  class Daily < Base\n  end\nend\n",
+        "app/services/queries/saved.rb" => "module Queries\n  class Saved < Base\n  end\nend\n"
+      }.each do |name, source|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+        File.write(File.join(dir, name), source)
+      end
+
+      expect(described_class.model_paths(dir).map(&:file)).to contain_exactly(
+        "app/models/queries/base.rb", "app/services/queries/saved.rb"
+      )
+    end
+  end
+
   it "follows a symlinked directory or file in app/models to a target inside the app, as Zeitwerk does" do
     Dir.mktmpdir do |dir|
       Dir.mktmpdir do |elsewhere|

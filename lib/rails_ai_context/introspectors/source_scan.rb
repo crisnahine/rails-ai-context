@@ -115,30 +115,38 @@ module RailsAiContext
 
       # Rails autoloads every app/* directory and the roots config/application.rb
       # adds, so a model can live outside app/models. A class there is kept when
-      # its superclass, by last name segment, is a model base or a class already
-      # kept; the listing still decides modelhood, but a thousand services are not parsed.
+      # its superclass, looked up from the namespace its path names, is a model base,
+      # a model or a class already kept; the listing still decides modelhood, but a
+      # thousand services are not parsed.
       def extra_model_candidates(root, model_records, base_model = nil)
         pending = RunCache.fetch([ :source_scan_model_declarations, root ]) { extra_model_declarations(root, File.realpath(root)) }
-        known = model_records.to_set { |record| record.path_name.split("::").last }.merge(MODEL_BASES)
+        known = model_records.to_set(&:path_name).merge(MODEL_BASES)
         loaded = Hash.new { |cache, pair| cache[pair] = base_model ? base_model.call(*pair) : false }
         kept = Set.new
         loop do
           added = pending.select do |record, pairs|
             !kept.include?(record) && pairs.any? do |name, base|
               # A nested `class Item < Base` names no namespace; the path does.
-              known.include?(base) || known.include?(base.split("::").last) || loaded[[ name.include?("::") ? name : record.path_name, base ]]
+              lookup(record.path_name, base).any? { |candidate| known.include?(candidate) } ||
+                loaded[[ name.include?("::") ? name : record.path_name, base ]]
             end
           end
           break if added.empty?
 
           added.each do |record, pairs|
             kept << record
-            known.merge(pairs.map { |name, _| name.split("::").last })
+            known.merge(pairs.map { |name, _| name.include?("::") ? name : lookup(record.path_name, name).last })
           end
         end
         pending.filter_map { |record, _| record if kept.include?(record) }
       rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
         []
+      end
+
+      # The names `base` can mean inside the namespace `path_name` sits in, outermost first.
+      def lookup(path_name, base)
+        scopes = path_name.split("::")[0...-1]
+        (0..scopes.size).map { |depth| [ *scopes.first(depth), base ].join("::") }
       end
 
       # ponytail: the app/* kinds Rails generates for other code are skipped by name.
@@ -168,7 +176,7 @@ module RailsAiContext
         pairs
       end
 
-      private_class_method :scan, :scan_dir, :ruby_files, :walk_dir, :within?, :extra_model_candidates, :extra_model_declarations, :class_declarations
+      private_class_method :scan, :scan_dir, :ruby_files, :walk_dir, :within?, :extra_model_candidates, :extra_model_declarations, :class_declarations, :lookup
 
       # `kind: :models` reads model_paths: what model_details lists, not only app/models.
       def each(root, kind:, skip_concerns: true, base_model: nil, &block)
