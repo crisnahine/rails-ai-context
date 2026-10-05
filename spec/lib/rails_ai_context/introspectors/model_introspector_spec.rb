@@ -433,6 +433,31 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
   end
 
   describe "#static_call" do
+    it "finds a model under another app/ root or a root config/application.rb adds, and nothing else there" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "config/application.rb" => "module X\n  class Application < Rails::Application\n    config.eager_load_paths << Rails.root.join(\"enterprise/app/models\")\n  end\nend\n",
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/domain/invoice.rb" => "class Invoice < ApplicationRecord\n  self.table_name = \"notes\"\nend\n",
+          "app/domain/special_invoice.rb" => "class SpecialInvoice < Invoice\nend\n",
+          "app/domain/plain.rb" => "class Plain\nend\n",
+          "app/domain/concerns/billable.rb" => "module Billable\nend\n",
+          "app/controllers/invoices_controller.rb" => "class InvoicesController < ApplicationController\nend\n",
+          "enterprise/app/models/enterprise_thing.rb" => "class EnterpriseThing < ApplicationRecord\n  self.table_name = \"teams\"\nend\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models.keys).to contain_exactly("Invoice", "SpecialInvoice", "EnterpriseThing")
+        expect(models["Invoice"]).to include(file: "app/domain/invoice.rb", table_name: "notes")
+        expect(models["EnterpriseThing"][:file]).to eq("enterprise/app/models/enterprise_thing.rb")
+      end
+    end
+
     it "reads a compact model's bare superclass from the top level, as Ruby does" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models", "admin"))

@@ -43,8 +43,12 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
   end
 
   describe ".paths" do
-    it "answers the resolved records without reading a file" do
-      allow(RailsAiContext::SafeFile).to receive(:read).and_raise("paths must not read")
+    it "answers the model directories' records without reading a file" do
+      allow(RailsAiContext::SafeFile).to receive(:read).and_wrap_original do |original, path, *args, **options|
+        raise "paths must not read #{path}" if path.to_s.include?("/app/models/")
+
+        original.call(path, *args, **options)
+      end
       records = described_class.paths(root, kind: "app/models").to_a
       expect(records.map(&:file)).to include("app/models/post.rb", "packs/billing/app/models/invoice.rb")
       expect(records.map(&:source).uniq).to eq([ nil ])
@@ -61,6 +65,25 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
 
         expect(described_class.each(root, kind: "app/models").map(&:file)).to eq([ "packs/billing/app/models/invoice.rb" ])
       end
+    end
+  end
+
+  it "adds the classes with a superclass under other app/ roots to app/models, and survives odd files there" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "app/models"))
+      FileUtils.mkdir_p(File.join(dir, "app/domain/concerns"))
+      FileUtils.mkdir_p(File.join(dir, "app/controllers"))
+      File.write(File.join(dir, "app/domain/invoice.rb"), "class Invoice < ApplicationRecord\nend\n")
+      File.write(File.join(dir, "app/domain/plain.rb"), "module Plain\nend\n")
+      File.binwrite(File.join(dir, "app/domain/odd.rb"), "\xFF\xFE\nclass Odd < ApplicationRecord\nend\n")
+      File.write(File.join(dir, "app/domain/empty.rb"), "")
+      File.write(File.join(dir, "app/domain/concerns/billable.rb"), "class Billable < Base\nend\n")
+      File.write(File.join(dir, "app/controllers/invoices_controller.rb"), "class InvoicesController < ApplicationController\nend\n")
+      File.symlink(File.join(dir, "app/domain"), File.join(dir, "app/domain/loop"))
+
+      files = described_class.paths(dir, kind: "app/models").map(&:file)
+      expect(files).to contain_exactly("app/domain/invoice.rb", "app/domain/odd.rb")
+      expect(described_class.paths(dir, kind: "app/controllers").map(&:file)).to eq([ "app/controllers/invoices_controller.rb" ])
     end
   end
 

@@ -72,6 +72,21 @@ module RailsAiContext
       end
     end
 
+    # app/* directories Rails generates for code that is not a model.
+    NON_MODEL_APP_DIRS = %w[
+      assets javascript views controllers helpers mailers mailboxes jobs channels models
+      components serializers policies decorators presenters workers graphql uploaders validators
+    ].freeze
+
+    # The autoload roots besides the model directories that can hold a model:
+    # every other app/* root and the roots config/application.rb adds.
+    def extra_model_roots(root)
+      models = model_dirs(root).map { |dir| root_key(dir) }
+      candidates = app_roots(root).reject { |dir| NON_MODEL_APP_DIRS.include?(File.basename(dir)) } + declared_roots(root)
+      candidates.reject { |dir| models.any? { |model_dir| SafePath.contained?(model_dir, root_key(dir)) } }
+                .uniq { |dir| root_key(dir) }
+    end
+
     # Only path gems inside the repo (`path "../gems" do` locks as `remote: gems`);
     # one outside is an installed gem as far as the app's source goes.
     def path_gem_libs(root)
