@@ -31,6 +31,21 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
     expect(tables["posts"][:columns].map { |c| c[:name] }).to eq(%w[id title])
   end
 
+  it "replays migrations when the app root is the filesystem root" do
+    tables = Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "20240101000000_create_posts.rb"), <<~RUBY)
+        class CreatePosts < ActiveRecord::Migration[7.1]
+          def change
+            create_table :posts
+          end
+        end
+      RUBY
+      described_class.tables(dir, pk_type: "bigint", root: File::SEPARATOR)
+    end
+
+    expect(tables.keys).to eq(%w[posts])
+  end
+
   it "types the implicit key and references per adapter" do
     tables = replay([ <<~RUBY ], pk_type: "integer")
       class CreateComments < ActiveRecord::Migration[7.1]

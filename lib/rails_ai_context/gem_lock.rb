@@ -165,7 +165,7 @@ module RailsAiContext
 
       real_root = File.expand_path(root)
       target = File.expand_path(literal, File.join(real_root, "config"))
-      return nil if target.start_with?(real_root + File::SEPARATOR)
+      return nil if target.start_with?(SafePath.dir_prefix(real_root))
 
       Pathname.new(target).relative_path_from(Pathname.new(real_root)).to_s
     end

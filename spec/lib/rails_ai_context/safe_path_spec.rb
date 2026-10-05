@@ -84,6 +84,17 @@ RSpec.describe RailsAiContext::SafePath do
       expect(described_class.contained?(views, views)).to be true
       expect(described_class.contained?(File.join(@root, "app/views_backup"), views)).to be false
     end
+
+    it "treats the filesystem root as containing every path under it" do
+      expect(described_class.contained?(views, File::SEPARATOR)).to be true
+      expect(described_class.contained?(File::SEPARATOR, File::SEPARATOR)).to be true
+    end
+
+    it "names a file relative to a filesystem-root root without a leading separator" do
+      result = described_class.locate("posts/index.html.erb", under: views, root: File::SEPARATOR)
+
+      expect(result.relative).to eq(File.join(@root, "app/views/posts/index.html.erb").delete_prefix(File::SEPARATOR))
+    end
   end
 
   describe ".read" do
