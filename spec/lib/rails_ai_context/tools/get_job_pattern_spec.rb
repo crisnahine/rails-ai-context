@@ -442,6 +442,124 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
     end
   end
 
+  describe "schedules" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    def write(relative, content)
+      path = File.join(tmpdir, relative)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, content)
+    end
+
+    before do
+      %w[CleanupJob RecordsJob NightlyJob].each do |name|
+        write("app/jobs/#{name.underscore}.rb", "class #{name} < ApplicationJob\n  def perform; end\nend\n")
+      end
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    def text_for(**args)
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+      described_class.call(**args).content.first[:text]
+    end
+
+    context "with a Solid Queue recurring.yml" do
+      before do
+        write("config/recurring.yml", <<~YAML)
+          # examples:
+          #   periodic_cleanup:
+          #     class: CleanSoftDeletedRecordsJob
+          #     schedule: every hour
+
+          production:
+            clear_solid_queue_finished_jobs:
+              command: "SolidQueue::Job.clear_finished_in_batches(sleep_between_batches: 0.3)"
+              schedule: every hour at minute 12
+            nightly_cleanup:
+              class: CleanupJob
+              schedule: every day at 3am
+        YAML
+      end
+
+      it "gives the task's schedule and environment" do
+        expect(text_for(job: "CleanupJob")).to include("**Schedule:** every day at 3am (production, from config/recurring.yml)")
+      end
+
+      it "does not count a name inside a comment as scheduled" do
+        expect(text_for(job: "RecordsJob")).not_to include("**Schedule:**")
+      end
+
+      it "lists every recurring task, a command task included, in the full listing" do
+        text = text_for(detail: "full")
+        expect(text).to include("## Recurring Tasks")
+        expect(text).to include("- `clear_solid_queue_finished_jobs`: `SolidQueue::Job.clear_finished_in_batches(sleep_between_batches: 0.3)` " \
+                                "every hour at minute 12 (production, from config/recurring.yml)")
+        expect(text).to include("- `nightly_cleanup`: `CleanupJob` every day at 3am (production, from config/recurring.yml)")
+      end
+    end
+
+    it "reads GoodJob cron from config/application.rb" do
+      write("config/application.rb", <<~RUBY)
+        module App
+          class Application < Rails::Application
+            config.good_job.enable_cron = true
+            config.good_job.cron = {
+              nightly: { cron: "0 3 * * *", class: "NightlyJob" }
+            }
+          end
+        end
+      RUBY
+      expect(text_for(job: "NightlyJob")).to include("**Schedule:** 0 3 * * * (from config/application.rb)")
+    end
+
+    it "reads a whenever config/schedule.rb runner" do
+      write("config/schedule.rb", <<~RUBY)
+        every 1.day, at: "4:30 am" do
+          runner "CleanupJob.perform_later"
+        end
+      RUBY
+      expect(text_for(job: "CleanupJob")).to include("**Schedule:** every 1.day at 4:30 am (from config/schedule.rb)")
+    end
+
+    it "reads a sidekiq-cron schedule.yml by class, not by substring" do
+      write("config/schedule.yml", <<~YAML)
+        records_cleanup:
+          cron: "*/5 * * * *"
+          class: "CleanSoftDeletedRecordsJob"
+        nightly:
+          cron: "0 3 * * *"
+          class: "NightlyJob"
+      YAML
+      expect(text_for(job: "NightlyJob")).to include("**Schedule:** 0 3 * * * (from config/schedule.yml)")
+      expect(text_for(job: "RecordsJob")).not_to include("**Schedule:**")
+    end
+
+    it "reads a sidekiq-scheduler entry in config/sidekiq.yml, named for its job when no class is given" do
+      write("config/sidekiq.yml", <<~YAML)
+        :scheduler:
+          :schedule:
+            NightlyJob:
+              every: "1h"
+      YAML
+      expect(text_for(job: "NightlyJob")).to include("**Schedule:** 1h (from config/sidekiq.yml)")
+    end
+
+    it "reads a GoodJob cron held in a constant as no schedule" do
+      write("config/initializers/good_job.rb", "Rails.application.configure { config.good_job.cron = CRON }\n")
+      expect(text_for(job: "NightlyJob")).not_to include("**Schedule:**")
+    end
+
+    it "reads a malformed schedule file as no schedule" do
+      write("config/recurring.yml", "production: [unclosed\n")
+      write("config/schedule.yml", "--- just a string\n")
+      write("config/schedule.rb", "every do\n")
+      expect(text_for(job: "CleanupJob")).not_to include("**Schedule:**")
+    end
+  end
+
   # The job's name does not rebuild its path: a pack job lives where the
   # introspector found it, and the tool reads that file through the payload.
   describe "a job in a pack" do

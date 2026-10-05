@@ -50,9 +50,10 @@ module RailsAiContext
 
         sidekiq_line = sidekiq_queues_line(jobs_data)
         workers = (jobs_data.is_a?(Hash) ? jobs_data[:workers] : nil) || []
+        schedules = Array(jobs_data.is_a?(Hash) ? jobs_data[:recurring_jobs] : nil).select { |task| task.is_a?(Hash) }
 
         if job
-          return format_single_job(job, jobs, real_root, sidekiq_line, workers, job_bases(jobs_data), enqueue_helpers)
+          return format_single_job(job, jobs, real_root, sidekiq_line, workers, job_bases(jobs_data), enqueue_helpers, schedules)
         end
 
         # No jobs and no channels - bail out. Channel absence is only a real
@@ -72,6 +73,14 @@ module RailsAiContext
         if channels.any?
           lines << "" if lines.any?
           lines.concat(format_channels_section(channels, jobs_data[:connections]))
+        end
+        if detail == "full" && schedules.any?
+          lines << "" if lines.any?
+          lines << "## Recurring Tasks"
+          schedules.each do |task|
+            label = task[:name] ? "`#{task[:name]}`: " : ""
+            lines << "- #{label}`#{task[:class] || task[:command]}` #{schedule_text(task)}"
+          end
         end
         bases = bases_note("jobs", job_bases(jobs_data).map { |base| base[:name] })
         if bases
@@ -185,7 +194,7 @@ module RailsAiContext
         (jobs_data.is_a?(Hash) ? jobs_data[:job_bases] : nil).then { |list| Array(list).select { |b| b.is_a?(Hash) } }
       end
 
-      private_class_method def self.format_single_job(job, jobs, root, sidekiq_line, workers, bases = [], helpers = [])
+      private_class_method def self.format_single_job(job, jobs, root, sidekiq_line, workers, bases = [], helpers = [], schedules = [])
         names = jobs.map { |j| j[:name] }
         worker_names = workers.map { |w| w[:name] }.compact
         # A base answers by name because every listing, the empty one too,
@@ -290,9 +299,8 @@ module RailsAiContext
           broadcasts.each { |b| lines << "- `#{b}`" }
         end
 
-        # Sidekiq-cron / recurring schedule
-        schedule = extract_schedule(source, class_name, root)
-        lines << "**Schedule:** #{schedule}" if schedule
+        scheduled = schedules.select { |task| task[:class] == class_name }
+        lines << "**Schedule:** #{scheduled.map { |task| schedule_text(task) }.join('; ')}" if scheduled.any?
 
         # Side effects
         side_effects = extract_side_effects(source)
@@ -513,44 +521,8 @@ module RailsAiContext
         effects.to_a.sort
       end
 
-      private_class_method def self.extract_schedule(source, class_name, root)
-        # Check for sidekiq-cron in config/sidekiq.yml or config/schedule.yml
-        schedule_files = %w[config/sidekiq.yml config/sidekiq_cron.yml config/schedule.yml config/recurring.yml]
-        schedule_files.each do |file|
-          path = File.join(root, file)
-          content = safe_read(path)
-          next unless content
-          next unless content.include?(class_name)
-
-          # Extract the cron expression near the class name
-          content.each_line do |line|
-            if line.include?("cron:") && content_near_class?(content, class_name, line)
-              cron = line.match(/cron:\s*["']?([^"'\n]+)/)
-              return "#{cron[1].strip} (from #{file})" if cron
-            end
-          end
-
-          return "scheduled (found in #{file})"
-        end
-
-        # Check for inline Sidekiq::Cron or recurring
-        if source.match?(/sidekiq_options\s+.*cron:|recurring\b/)
-          match = source.match(/cron:\s*["']([^"']+)["']/)
-          return match[1] if match
-        end
-
-        nil
-      end
-
-      private_class_method def self.content_near_class?(content, class_name, target_line)
-        lines = content.lines
-        target_idx = lines.index(target_line)
-        return false unless target_idx
-
-        # Check surrounding lines (within 5 lines) for the class name
-        start_idx = [ target_idx - 5, 0 ].max
-        end_idx = [ target_idx + 5, lines.size - 1 ].min
-        lines[start_idx..end_idx].any? { |l| l.include?(class_name) }
+      private_class_method def self.schedule_text(task)
+        "#{task[:schedule]} (#{"#{task[:env]}, " if task[:env]}from #{task[:file]})"
       end
 
       # Read off call nodes, so a call inside a comment does not count. The app's own enqueue

@@ -39,7 +39,7 @@ module RailsAiContext
           mailer_bases: booted_mailers[:bases],
           channels: extract_channels,
           connections: extract_connections,
-          recurring_jobs: extract_solid_queue_recurring,
+          recurring_jobs: recurring_jobs,
           sidekiq_config: extract_sidekiq_config
         }
       end
@@ -57,7 +57,7 @@ module RailsAiContext
           mailer_bases: source_mailers[:bases],
           channels: extract_channels_from_source,
           connections: extract_connections,
-          recurring_jobs: extract_solid_queue_recurring,
+          recurring_jobs: recurring_jobs,
           sidekiq_config: extract_sidekiq_config
         }
       end
@@ -460,23 +460,10 @@ module RailsAiContext
         worker?(parent, seen + [ name ])
       end
 
-      def extract_solid_queue_recurring
-        paths = [
-          File.join(app.root, "config", "recurring.yml"),
-          File.join(app.root, "config", "solid_queue.yml")
-        ]
-        path = paths.find { |p| File.exist?(p) }
-        return [] unless path
-
-        content = RailsAiContext::SafeFile.read(path)
-        return [] unless content
-        jobs = []
-        content.scan(/(\w+):\s*\n\s+class:\s*(\w+).*?(?:schedule:\s*["']?([^"'\n]+))?/m) do |name, klass, schedule|
-          jobs << { name: name, class: klass, schedule: schedule&.strip }.compact
-        end
-        jobs
+      def recurring_jobs
+        RecurringSchedules.read(app.root)
       rescue => e
-        RailsAiContext.debug_fail(e, [], label: "extract_solid_queue_recurring")
+        RailsAiContext.debug_fail(e, [], label: "recurring_jobs")
       end
 
       # Read as YAML so a path in a comment is no queue. Sidekiq's keys may be symbols or
