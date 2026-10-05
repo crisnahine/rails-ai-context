@@ -155,6 +155,9 @@ module RailsAiContext
         candidates = static_candidates
         @unloadable.each_with_object({}) do |(class_name, error), entries|
           candidate = candidates[class_name]
+          # Other roots hold generators and gem subclasses too; static lists one only as a model.
+          next if @outside_model_dirs&.include?(class_name) && !static_model?(class_name, candidates)
+
           entries[class_name] = {
             error: error,
             file: candidate&.dig(:file),
@@ -243,6 +246,10 @@ module RailsAiContext
           resolved = resolve_superclass(parent, name, candidates)
           found << resolved if resolved
         end
+      end
+
+      def static_model?(class_name, candidates)
+        candidates.key?(class_name) && !candidates.dig(class_name, :abstract) && model_class?(class_name, candidates)
       end
 
       def model_class?(class_name, candidates, seen = [])
@@ -433,6 +440,10 @@ module RailsAiContext
         false
       end
 
+      def model_dir_file?(path)
+        PathResolver.model_dirs(app.root).any? { |dir| SafePath.contained?(path, PathResolver.root_key(dir)) }
+      end
+
       def discover_models
         return [] unless defined?(ActiveRecord::Base)
 
@@ -445,6 +456,7 @@ module RailsAiContext
         end
 
         known = models.map(&:name).to_set
+        @outside_model_dirs = Set.new
         # Concerns stay in: a nested concerns directory is a namespace, so a
         # class declared under one is a model and constantize sorts the mixins
         # out. A top-level `app/models/concerns` is an autoload root instead,
@@ -474,6 +486,7 @@ module RailsAiContext
             # its name is recorded: a file that exists for a class reflection
             # lacks is not the same answer as no such model.
             @unloadable[class_name] = e.message.to_s.lines.first.to_s.strip
+            @outside_model_dirs << class_name unless model_dir_file?(record.path)
           end
         end
 
@@ -505,7 +518,7 @@ module RailsAiContext
           table_name:       model.table_name,
           file:             relative_to_root(model_source_path(model)),
           # Reflection-based (runtime, most accurate for these)
-          associations:     extract_associations(model),
+          associations:     extract_associations(model, source_data),
           # Reflection has no text for a Proc condition and names `validates_with` by kind only,
           # so the list is read off the source; an unreadable file falls back to reflection.
           validations:      booted_validations(model, source_data),
@@ -514,8 +527,8 @@ module RailsAiContext
           # hold no block callbacks, so both tiers read the model's source.
           callbacks:        group_callbacks_by_type(source_data[:callbacks]),
           callback_conditions: callback_conditions(source_data[:callbacks]),
-          concerns:         booted_concerns(model),
-          concern_sources:  concern_sources(booted_concerns(model), source_data[:mixins], booted: true),
+          concerns:         booted_concerns(model, source_data[:mixins]),
+          concern_sources:  concern_sources(booted_concerns(model, source_data[:mixins]), source_data[:mixins], booted: true),
           concerns_hidden:  (hidden.size if hidden.any?),
           concern_callbacks: concern_callbacks(source_data[:callbacks]),
           concerns_unread:  (unread if unread.any?),
@@ -525,7 +538,9 @@ module RailsAiContext
           # AST-based (replaces regex source parsing)
           custom_validates: extract_custom_validates_from_ast(source_data),
           custom_validate_conditions: custom_validate_conditions(source_data),
+          custom_validate_blocks: custom_validate_blocks(source_data),
           scopes:           extract_scopes_from_ast(source_data),
+          default_scopes:   default_scopes(source_data),
           class_methods:    class_methods.first(PAYLOAD_METHOD_CAP),
           class_method_count: class_methods.size,
           instance_methods: instance_methods.first(PAYLOAD_METHOD_CAP),
@@ -535,6 +550,7 @@ module RailsAiContext
 
         sti_info = extract_sti_info(model)
         details[:sti] = sti_info if sti_info
+
         parent = model.superclass
         details[:parent_model] = parent.name if parent < ActiveRecord::Base && !parent.abstract_class?
 
@@ -549,6 +565,7 @@ module RailsAiContext
         # AST-based detailed macros (replaces regex)
         detailed = extract_detailed_macros_from_ast(source_data)
         details.merge!(detailed)
+        details[:ignored_columns] = model.ignored_columns.map(&:to_s).presence
 
         details.compact
       end
@@ -781,9 +798,23 @@ module RailsAiContext
       # ActiveRecord::Base's chain, which is what a gem (or an initializer)
       # puts into all models. A module a gem macro includes into this model
       # alone (`devise :lockable`) stays.
-      def booted_concerns(model)
-        own = (model.ancestors - every_model_modules).reject { |mod| mod.is_a?(Class) }.filter_map(&:name).reverse
+      def booted_concerns(model, mixins = [])
+        own = (model.ancestors - every_model_modules - base_gem_modules(model, mixins)).reject { |mod| mod.is_a?(Class) }.filter_map(&:name).reverse
         ConcernMembership.payload(own)
+      end
+
+      # A gem can mix a module into the app's abstract base (Kaminari's
+      # inherited hook): every model then has it and no file of the app names
+      # it. A module the source includes, or one the app defines, stays.
+      def base_gem_modules(model, mixins)
+        written = ConcernMembership.from_mixins(mixins)
+        abstract_bases(model).flat_map { |base| base.ancestors - every_model_modules }.uniq.select do |mod|
+          !mod.is_a?(Class) && mod.name && !written.include?(mod.name) && !ConcernPaths.find_file(app.root.to_s, mod.name)
+        end
+      end
+
+      def abstract_bases(model)
+        model.ancestors.select { |klass| klass.is_a?(Class) && klass < ActiveRecord::Base && klass != model && klass.abstract_class? }
       end
 
       def every_model_modules
@@ -823,13 +854,22 @@ module RailsAiContext
 
       # ── Reflection-based extraction (unchanged) ─────────────────────
 
-      def extract_associations(model)
+      def extract_associations(model, source_data = empty_source_data)
+        declared = Array(source_data[:associations]).group_by { |a| [ a[:type].to_s, a[:name].to_s ] }
         # The reject stays ahead of the map: class_name/foreign_key on an
         # excluded reflection with a broken :through raises, and `call`'s
         # per-model rescue would replace the whole model with one error line.
         model.reflect_on_all_associations.reject { |assoc| excluded_association?(assoc.name) }.map do |assoc|
-          association_detail(assoc)
+          with_declared_options(association_detail(assoc), declared[[ assoc.macro.to_s, assoc.name.to_s ]]&.first)
         end
+      end
+
+      # Only what the source declares, so both tiers print one spelling; a gem
+      # macro's generated association carries Rails' options, not the app's.
+      def with_declared_options(detail, source)
+        options = declared_association_options(detail[:type], source&.dig(:options))
+        extensions = source&.dig(:extension_methods)
+        detail.merge({ declared_options: options, extension_methods: extensions, delegated_types: source&.dig(:delegated_types) }.compact)
       end
 
       # One reflection that cannot resolve costs that reflection, not the
@@ -941,7 +981,7 @@ module RailsAiContext
       # ── AST-based extraction (replaces all regex parsing) ──────────
 
       def extract_scopes_from_ast(source_data)
-        source_data[:scopes].map do |s|
+        source_data[:scopes].reject { |s| s[:default] }.map do |s|
           {
             name: s[:name],
             body: s[:body],
@@ -951,10 +991,24 @@ module RailsAiContext
         end
       end
 
+      # Base first, as Rails stacks them; each one filters every query.
+      def default_scopes(source_data)
+        found = Array(source_data[:scopes]).select { |s| s[:default] }.map { |s| s.slice(:body, :all_queries, :confidence) }
+        found.presence
+      end
+
       def extract_custom_validates_from_ast(source_data)
         source_data[:validations]
           .select { |v| v[:kind] == "custom" }
           .flat_map { |v| v[:attributes] }
+      end
+
+      # `validate do ... end` names no method, so it is listed by what it runs.
+      def custom_validate_blocks(source_data)
+        found = Array(source_data[:validations]).select { |v| v[:kind] == "custom" && v[:block] }.map do |v|
+          { body: v[:block], conditions: (v[:options] || {}).slice(*CONDITION_KEYS, :on).presence }.compact
+        end
+        found.presence
       end
 
       # `validate :check, on: :create` runs only then; the method name alone
@@ -967,12 +1021,14 @@ module RailsAiContext
         found.presence
       end
 
+      # The options that decide the value a new record holds and the names of
+      # the methods the enum defines.
       def extract_enum_options_from_ast(source_data)
-        source_data[:enums].each_with_object({}) do |enum, opts|
-          entry = {}
-          entry[:prefix] = enum[:options][:prefix] || enum[:options][:_prefix] if enum[:options][:prefix] || enum[:options][:_prefix]
-          entry[:suffix] = enum[:options][:suffix] || enum[:options][:_suffix] if enum[:options][:suffix] || enum[:options][:_suffix]
-          opts[enum[:name]] = entry if entry.any?
+        Array(source_data[:enums]).each_with_object({}) do |enum, opts|
+          options = enum[:options] || {}
+          entry = %i[prefix suffix default].to_h { |key| [ key, options.fetch(key) { options[:"_#{key}"] } ] }
+          entry.reject! { |_, value| value.nil? || value == false }
+          opts[enum[:name].to_s] = entry if entry.any?
         end
       end
 
@@ -1017,7 +1073,10 @@ module RailsAiContext
           .reject { |m| scope_names.include?(m) }
 
         # Reflection-discovered class methods (for completeness)
-        all_methods = (model.methods - ActiveRecord::Base.methods - Object.methods)
+        # The abstract bases' class methods reach every model, the static tier reads none of
+        # them, and a gem's (Kaminari's `page`) would otherwise be listed on each model.
+        base_methods = abstract_bases(model).flat_map(&:methods)
+        all_methods = (model.methods - ActiveRecord::Base.methods - Object.methods - base_methods)
           .reject { |m|
             ms = m.to_s
             ms == "self" ||
@@ -1072,9 +1131,10 @@ module RailsAiContext
         has_rich_text: :has_rich_text,
         generates_token_for: :generates_token_for,
         serialize: :serialize,
-        store: :store,
-        store_accessor: :store
+        has_secure_token: :has_secure_token
       }.freeze
+
+      STORE_MACROS = %i[store store_accessor].to_set.freeze
 
       BROADCAST_MACROS = %i[broadcasts broadcasts_to broadcasts_refreshes_to].to_set.freeze
 
@@ -1087,12 +1147,20 @@ module RailsAiContext
             macros[:has_secure_password] = true
           elsif (key = ATTRIBUTE_MACRO_MAP[macro])
             (macros[key] ||= []) << m[:attribute]
+          elsif STORE_MACROS.include?(macro)
+            add_store_accessors(macros, m)
+          elsif macro == :accepts_nested_attributes_for
+            (macros[:nested_attributes] ||= []) << { names: m[:names], options: m[:options] }.compact
+          elsif macro == :ignored_columns
+            macros[:ignored_columns] = apply_ignored_columns(macros[:ignored_columns] || [], m)
           elsif macro == :delegate
-            (macros[:delegations] ||= []) << { methods: m[:methods], to: m[:to] }
+            (macros[:delegations] ||= []) << delegation_entry(m)
           elsif macro == :delegate_missing_to
             macros[:delegate_missing_to] = m[:to]
           elsif macro == :attribute
-            (macros[:attributes] ||= []) << { name: m[:attribute], type: m[:type] }.compact
+            (macros[:attributes] ||= []) << { name: m[:attribute], type: m[:type], default: m.dig(:options, :default) }.compact
+          elsif macro == :alias_attribute
+            (macros[:alias_attributes] ||= []) << { name: m[:attribute], target: m[:target] }
           end
 
           if BROADCAST_MACROS.include?(macro)
@@ -1105,6 +1173,59 @@ module RailsAiContext
         macros[:constants] = constants if constants&.any?
 
         macros.reject { |_, v| v.is_a?(Array) && v.empty? }
+      end
+
+      # Declarations arrive bases first, so `=` replaces what a base set and
+      # `+=` adds to it; a list the source computes cannot be read.
+      def apply_ignored_columns(current, macro)
+        return [ RailsAiContext::Confidence::INFERRED ] if macro[:columns].nil? || current.include?(RailsAiContext::Confidence::INFERRED)
+
+        case macro[:op]
+        when :assign then macro[:columns].uniq
+        when :add then (current + macro[:columns]).uniq
+        else current - macro[:columns]
+        end
+      end
+
+      # Rails names a store accessor "#{prefix}_#{key}_#{suffix}", where true
+      # stands for the column name (ActiveRecord::Store.store_accessor).
+      def add_store_accessors(macros, macro)
+        column = macro[:attribute]
+        (macros[:store] ||= []) << column unless macros[:store]&.include?(column)
+        keys = macro[:keys] || []
+        return if keys.empty?
+
+        options = macro[:options] || {}
+        accessors = (macros[:store_accessors] ||= {})[column] ||= []
+        affixes = options.values_at(:prefix, :suffix)
+        if affixes.include?(RailsAiContext::Confidence::INFERRED)
+          accessors << RailsAiContext::Confidence::INFERRED unless accessors.include?(RailsAiContext::Confidence::INFERRED)
+          return
+        end
+
+        prefix, suffix = affixes.map { |affix| affix == true ? column : (affix.is_a?(Symbol) || affix.is_a?(String) ? affix : nil) }
+        keys.each do |key|
+          name = [ prefix, key, suffix ].compact.join("_")
+          accessors << name unless accessors.include?(name)
+        end
+      end
+
+      # ActiveSupport names a prefixed delegate "#{prefix == true ? to : prefix}_#{method}".
+      def delegation_entry(macro)
+        options = macro[:options] || {}
+        entry = { methods: macro[:methods], to: macro[:to] }
+        entry[:private] = true if options[:private] == true
+        prefix = options[:prefix]
+        case prefix
+        when true, Symbol, String
+          if prefix == RailsAiContext::Confidence::INFERRED
+            entry[:prefix_computed] = true
+          else
+            head = prefix == true ? macro[:to] : prefix
+            entry[:defines] = macro[:methods].map { |name| "#{head}_#{name}" } if head
+          end
+        end
+        entry
       end
 
       # Extract constant definitions from source via AST.
@@ -1274,6 +1395,30 @@ module RailsAiContext
       ].freeze
       BOOLEAN_ASSOCIATION_OPTIONS = %i[polymorphic optional].freeze
 
+      # What the record already says another way, or what Rails keeps for itself.
+      UNLISTED_ASSOCIATION_OPTIONS = [ *LIFTED_ASSOCIATION_OPTIONS, :query_constraints, :anonymous_class ].freeze
+
+      # Every other option the association declares, each as display text:
+      # its callbacks, extensions, counter cache and the rest.
+      def declared_association_options(type, options)
+        return nil unless options.is_a?(Hash)
+
+        shown = options.except(*UNLISTED_ASSOCIATION_OPTIONS)
+        shown = shown.except(:required) if type.to_s == "belongs_to"
+        shown.to_h { |key, value| [ key.to_s, association_option_text(value) ] }.presence
+      end
+
+      def association_option_text(value)
+        case value
+        when Symbol then ":#{value}"
+        when Module then value.name.to_s
+        when Proc then "(proc)"
+        when Array then "[#{value.map { |v| association_option_text(v) }.join(', ')}]"
+        when Hash then "{ #{value.map { |k, v| "#{k}: #{association_option_text(v)}" }.join(', ')} }"
+        else value.to_s
+        end
+      end
+
       # A habtm join_table built from the class's affixes, as the table it names.
       def with_join_tables(associations, path, class_name)
         own = nil
@@ -1307,7 +1452,20 @@ module RailsAiContext
           else value.to_s
           end
         end
-        with_default_foreign_key(lifted)
+        lifted = with_rails_option_rules(lifted, options)
+        declared = declared_association_options(lifted[:type], options)
+        with_default_foreign_key(declared ? lifted.merge(declared_options: declared) : lifted)
+      end
+
+      # What Rails does with two options: `required:` on a belongs_to sets
+      # `optional:` to its negation, and Rails 7.1 takes `query_constraints:`
+      # as the foreign key (7.2 deprecates it, 8.0 refuses it).
+      def with_rails_option_rules(assoc, options)
+        required = literal_boolean(options[:required]) if options.key?(:required)
+        assoc = assoc.merge(optional: !required) if assoc[:type] == "belongs_to" && !required.nil?
+        keys = options[:query_constraints]
+        assoc = assoc.merge(foreign_key: keys.map(&:to_s)) if keys.is_a?(Array) && !assoc.key?(:foreign_key)
+        assoc
       end
 
       # Reflection answers a belongs_to's key when none is declared: the name plus _id.
@@ -1354,11 +1512,14 @@ module RailsAiContext
           validations: static_validations(data, [ path, *Array(inherited_from).map(&:last) ]),
           custom_validates: extract_custom_validates_from_ast(data),
           custom_validate_conditions: custom_validate_conditions(data),
-          scopes: data[:scopes],
+          custom_validate_blocks: custom_validate_blocks(data),
+          scopes: Array(data[:scopes]).reject { |s| s[:default] },
+          default_scopes: default_scopes(data),
           # The booted tier answers a Hash of attribute => value map, and
           # every renderer destructures one; the listener's records are a
           # different shape under the same key.
           enums: static_enums(data[:enums]),
+          enum_options: extract_enum_options_from_ast(data).presence,
           # Same shape as the booted tier: a Hash keyed by callback type. The
           # listener hands back a flat Array, and every consumer filters on
           # `callbacks.is_a?(Hash)` - so passing it through rendered "No models
@@ -1538,7 +1699,29 @@ module RailsAiContext
         sorted = Array(callbacks).each_with_index.sort_by do |cb, index|
           [ -cb[:rank].to_i, cb[:chain_at] || [ cb[:location].to_i, -1 ], index ]
         end
-        run_order(callback_chain(sorted.map(&:first)), commits_in_order).map { |cb| cb.except(*CHAIN_KEYS) }
+        run_order(callback_chain(without_skipped(sorted.map(&:first))), commits_in_order).map { |cb| cb.except(*CHAIN_KEYS) }
+      end
+
+      # A `skip_callback` removes the matching callback already in the chain;
+      # with `if:`/`unless:` Rails keeps it under the negated condition.
+      def without_skipped(callbacks)
+        callbacks.each_with_object([]) do |cb, kept|
+          next kept << cb unless cb[:skip]
+
+          key = Listeners::CallbacksListener.chain_key(cb[:type])
+          matching = ->(k) { Listeners::CallbacksListener.chain_key(k[:type]) == key && k[:method].to_s == cb[:method].to_s }
+          conditions = (cb[:options] || {}).slice(:if, :unless)
+          if conditions.empty?
+            kept.reject!(&matching)
+          else
+            kept.map! { |k| matching.call(k) ? k.merge(options: negated_conditions(k[:options] || {}, conditions)) : k }
+          end
+        end
+      end
+
+      def negated_conditions(options, skip)
+        flipped = { unless: skip[:if], if: skip[:unless] }.compact
+        options.merge(flipped) { |_key, ours, theirs| [ *Array(ours), theirs ] }
       end
 
       # A prepended callback goes to the front and after callbacks run from the
@@ -1664,13 +1847,17 @@ module RailsAiContext
       def merge_inherited(mine, inherited)
         merged = mine.merge(inherited) { |_key, ours, theirs| Array(ours) + Array(theirs) }
         merged[:associations] = dedup(merged[:associations]) { |a| [ a[:type], a[:name] ] }
-        merged[:scopes] = dedup(merged[:scopes]) { |s| s[:name] }
+        # Default scopes stack base first; a named scope the model redefines is its own.
+        base_defaults, base_named = Array(inherited[:scopes]).partition { |s| s[:default] }
+        own_defaults, own_named = Array(mine[:scopes]).partition { |s| s[:default] }
+        merged[:scopes] = dedup(base_defaults + own_defaults + own_named + base_named) { |s| s[:default] ? [ s[:name], s[:body] ] : s[:name] }
         merged[:enums] = dedup(merged[:enums]) { |e| e[:name].to_s }
         # `encrypts :secret` on a base and again on the child is one macro, and
         # the consumers read it as a list of attributes. The key is the
         # declaration: the line it was read at differs between two files, and
         # the concern tag differs between two ways of reaching one file.
-        merged[:macros] = dedup(merged[:macros]) { |m| m.except(:from_concern, :location) }
+        # Bases first, the order Rails runs them: a child's `ignored_columns +=` adds to its base's list.
+        merged[:macros] = dedup(Array(inherited[:macros]) + Array(mine[:macros])) { |m| m.except(:from_concern, :location) }
         merged[:callbacks] = Array(inherited[:callbacks]) + Array(mine[:callbacks])
         # One source line read twice is still one declaration: a concern the
         # model and one of its bases both include is walked once per class, and

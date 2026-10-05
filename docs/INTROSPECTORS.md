@@ -179,12 +179,12 @@ It runs a single-pass Dispatcher that walks the AST once and feeds events to all
 
 | Listener | What it detects |
 |:---------|:---------------|
-| AssociationsListener | `belongs_to`, `has_many`, `has_one`, `has_and_belongs_to_many`, under the options of an enclosing `with_options` block |
+| AssociationsListener | `belongs_to`, `has_many`, `has_one`, `has_and_belongs_to_many`, the polymorphic `belongs_to` of `delegated_type`, under the options of an enclosing `with_options` block |
 | ValidationsListener | `validates`, `validates_*_of`, custom `validate :method`, under the options of an enclosing `with_options` block |
 | ScopesListener | `scope :name, -> { ... }`, `lambda { ... }` and the block form |
 | EnumsListener | Rails 7+ and legacy enum syntax, prefix/suffix options |
 | CallbacksListener | All AR callback types including `around_*`, `after_touch`, `after_initialize` and `after_find`; `after_commit` with `on:` resolution; a callback object by its constant, a block as `[inline_block]`; `if:`/`unless:` kept as the source wrote them, and the options of an enclosing `with_options` block |
-| MacrosListener | `encrypts`, `normalizes`, `delegate`, `has_secure_password`, `serialize`, `store`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `generates_token_for`, `attribute` |
+| MacrosListener | `encrypts`, `normalizes`, `delegate`, `has_secure_password`, `serialize`, `store`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `generates_token_for`, `attribute`, `alias_attribute`, `store_accessor`, `self.ignored_columns`, `has_secure_token`, `accepts_nested_attributes_for` |
 | MethodsListener | `def`/`def self.`, visibility tracking, parameter extraction, `class << self`, the methods `delegate` and Forwardable's `def_delegators`/`def_delegator` define (public unless `private: true`, and with no `end_location`, since a delegation has no body); each `def` carries `offset`/`end_offset`, which `SourceIntrospector.outside_defs` pairs against a call's `offset` to tell a call on the same line as a def from one inside it; `include_initialize: true` adds the constructor a caller reports on its own |
 | MixinsListener | `include`, `prepend`, `extend`, `singleton_class.include` and `singleton_class.prepend` (`singleton_class.extend` is not read), flagging the ones that reach the ancestor chain, as reflection reports them |
 
@@ -202,6 +202,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 | MiddlewareConfigListener | The app's own stack, reached through its config (`config.middleware`, `Rails.configuration.middleware`, `app.config.middleware`), through the app (`Rails.application.middleware`, `app.middleware`) or through the app's own application class (`MyApp::Application.config.middleware`, given as `app_class:`), never another rack stack: any other constant anywhere in the chain (`MyEngine.config.middleware`, `GoodJob::Engine.middleware`) is an engine's. Reads `use`, `insert`, `insert_before`, `insert_after`, `unshift`, `swap`, `move_before`, `move_after`, `delete`, and `config.exceptions_app =` as its own `exceptions_app` action |
 | RouteFilesListener | The route files `config/application.rb` puts in `config.paths["config/routes.rb"]`: an assignment (a list, `.map`ped or not), `<<`/`push`/`concat`, `unshift`/`prepend`, `Rails.root.join` and literal `Dir[...]` globs, each as `set`/`append`/`prepend`. A list the app computes is recorded as `computed` |
 | AutoloadPathsListener | Autoload roots `config/application.rb` adds by hand: `autoload_paths`/`eager_load_paths`/`autoload_once_paths` appends, `autoload_lib`, and `config.paths.add` with `eager_load:`. Literal paths under the app root only |
+| AutoloadIgnoreListener | The lib subdirectories `autoload_lib(ignore:)` and `autoload_lib_once(ignore:)` keep out of autoloading, as `lib/<name>`. Literal strings and symbols only |
 | PreviewPathsListener | ViewComponent preview directories the config sets: `view_component.previews.paths`, `preview_paths`, `preview_path`, in the same literal forms as AutoloadPathsListener |
 | FixturePathsListener | Fixture directories a test helper sets: `fixture_paths =`/`<<`/`+=`/`push` and the older `fixture_path =`, on `self`, `config` or no receiver, in the same literal forms as AutoloadPathsListener |
 | SchemaDslListener | `schema.rb`: `create_table`, `t.string`, `t.column`, `t.index`, `add_foreign_key`, `create_enum`, `create_view`, `create_virtual_table`, and the comment the dumper writes for a table it could not describe |

@@ -43,8 +43,12 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
   end
 
   describe ".paths" do
-    it "answers the resolved records without reading a file" do
-      allow(RailsAiContext::SafeFile).to receive(:read).and_raise("paths must not read")
+    it "answers the model directories' records without reading a file" do
+      allow(RailsAiContext::SafeFile).to receive(:read).and_wrap_original do |original, path, *args, **options|
+        raise "paths must not read #{path}" if path.to_s.include?("/app/models/")
+
+        original.call(path, *args, **options)
+      end
       records = described_class.paths(root, kind: "app/models").to_a
       expect(records.map(&:file)).to include("app/models/post.rb", "packs/billing/app/models/invoice.rb")
       expect(records.map(&:source).uniq).to eq([ nil ])
@@ -64,6 +68,87 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
     end
   end
 
+  it "adds the classes with a superclass under other app/ roots to app/models, and survives odd files there" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "app/models"))
+      FileUtils.mkdir_p(File.join(dir, "app/domain/concerns"))
+      FileUtils.mkdir_p(File.join(dir, "app/controllers"))
+      File.write(File.join(dir, "app/domain/invoice.rb"), "class Invoice < ApplicationRecord\nend\n")
+      File.write(File.join(dir, "app/domain/plain.rb"), "module Plain\nend\n")
+      File.binwrite(File.join(dir, "app/domain/odd.rb"), "\xFF\xFE\nclass Odd < ApplicationRecord\nend\n")
+      File.write(File.join(dir, "app/domain/empty.rb"), "")
+      File.write(File.join(dir, "app/domain/concerns/billable.rb"), "class Billable < Base\nend\n")
+      File.write(File.join(dir, "app/controllers/invoices_controller.rb"), "class InvoicesController < ApplicationController\nend\n")
+      File.symlink(File.join(dir, "app/domain"), File.join(dir, "app/domain/loop"))
+
+      files = described_class.paths(dir, kind: "app/models").map(&:file)
+      expect(files).to contain_exactly("app/domain/invoice.rb", "app/domain/odd.rb")
+      expect(described_class.paths(dir, kind: "app/controllers").map(&:file)).to eq([ "app/controllers/invoices_controller.rb" ])
+    end
+  end
+
+  it "follows a symlinked directory or file in app/models to a target inside the app, as Zeitwerk does" do
+    Dir.mktmpdir do |dir|
+      Dir.mktmpdir do |elsewhere|
+        FileUtils.mkdir_p(File.join(dir, "app/models"))
+        FileUtils.mkdir_p(File.join(dir, "shared/billing"))
+        FileUtils.mkdir_p(File.join(dir, "shared2"))
+        File.write(File.join(dir, "shared/billing/invoice.rb"), "module Billing\n  class Invoice < ApplicationRecord\n  end\nend\n")
+        File.write(File.join(dir, "shared2/coupon.rb"), "class Coupon < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app/models/user.rb"), "class User < ApplicationRecord\nend\n")
+        File.write(File.join(elsewhere, "secret.rb"), "class Secret < ApplicationRecord\nend\n")
+        File.symlink("../../shared/billing", File.join(dir, "app/models/billing"))
+        File.symlink("../../shared2/coupon.rb", File.join(dir, "app/models/coupon.rb"))
+        File.symlink(File.join(elsewhere, "secret.rb"), File.join(dir, "app/models/secret.rb"))
+        File.symlink(elsewhere, File.join(dir, "app/models/outside"))
+        File.symlink("..", File.join(dir, "app/models/billing_loop"))
+
+        records = described_class.paths(dir, kind: "app/models").to_a
+        expect(records.map(&:path_name)).to contain_exactly("Billing::Invoice", "Coupon", "User")
+        expect(records.map(&:file)).to contain_exactly("shared/billing/invoice.rb", "shared2/coupon.rb", "app/models/user.rb")
+      end
+    end
+  end
+
+  it "names a file by its real directory when a link in app/models reaches the same one, in any listing order" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "app/models/admin"))
+      FileUtils.mkdir_p(File.join(dir, "app/models/zone/deep"))
+      File.write(File.join(dir, "app/models/admin/report.rb"), "class Admin::Report < ApplicationRecord\nend\n")
+      File.write(File.join(dir, "app/models/zone/deep/note.rb"), "class Zone::Deep::Note < ApplicationRecord\nend\n")
+      File.symlink("admin", File.join(dir, "app/models/aa_admin"))
+      File.symlink("admin", File.join(dir, "app/models/zz_admin"))
+      File.symlink("zone/deep", File.join(dir, "app/models/a_deep"))
+
+      [ :sort, :reverse ].each do |order|
+        RailsAiContext::PathResolver.clear_code_roots
+        allow(Dir).to receive(:children).and_wrap_original { |original, path| original.call(path).sort.then { |names| order == :sort ? names : names.reverse } }
+
+        names = described_class.paths(dir, kind: "app/models").map(&:path_name)
+        expect(names).to contain_exactly("Admin::Report", "Zone::Deep::Note")
+      end
+    end
+  end
+
+  it "skips the lib subdirectories autoload_lib ignores, as Zeitwerk does" do
+    Dir.mktmpdir do |dir|
+      files = {
+        "config/application.rb" => "class Application < Rails::Application\n  config.autoload_lib(ignore: %w[assets tasks generators])\nend\n",
+        "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\nend\n",
+        "lib/generators/widget/widget_generator.rb" => "class WidgetGenerator < Rails::Generators::NamedBase\nend\n",
+        "lib/tasks_helper/thing.rb" => "class TasksHelper::Thing < ApplicationRecord\nend\n",
+        "lib/lib_record.rb" => "class LibRecord < ApplicationRecord\nend\n"
+      }
+      files.each do |name, source|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+        File.write(File.join(dir, name), source)
+      end
+
+      files = described_class.paths(dir, kind: "app/models").map(&:file)
+      expect(files).to contain_exactly("app/models/application_record.rb", "lib/lib_record.rb", "lib/tasks_helper/thing.rb")
+    end
+  end
+
   it "answers nothing for a root that does not exist" do
     expect(described_class.each("/nonexistent/rails-ai-context-root", kind: "app/models").to_a).to eq([])
   end
@@ -71,14 +156,15 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
   # OpenProject's run asked for app/models five times and app/controllers
   # four; the glob and a realpath per file were a fifth of its CPU.
   describe "within one introspection run" do
-    it "globs a kind once, and again in the next run" do
+    it "walks a kind once, and again in the next run" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models"))
         File.write(File.join(dir, "app", "models", "post.rb"), "class Post; end\n")
         globs = 0
-        allow(Dir).to receive(:glob).and_wrap_original do |original, *args, **kwargs, &block|
-          globs += 1 if args.first.to_s.end_with?("**/*.rb")
-          original.call(*args, **kwargs, &block)
+        models = File.join(dir, "app", "models")
+        allow(Dir).to receive(:children).and_wrap_original do |original, *args, **kwargs|
+          globs += 1 if args.first.to_s == models
+          original.call(*args, **kwargs)
         end
 
         RailsAiContext::RunCache.around do

@@ -94,6 +94,13 @@ module RailsAiContext
           options = declared_options(node)
 
           methods.each { |method_name| record(node, "custom", [ method_name ], options) }
+          record(node, "custom", [], options, block: block_text(node.block)) if methods.empty? && node.block.is_a?(Prism::BlockNode)
+        end
+
+        # The block's first statement, which is usually the rule itself.
+        def block_text(block)
+          first = block.body.is_a?(Prism::StatementsNode) ? block.body.body.first : block.body
+          first ? one_line_source(first).truncate(120) : ""
         end
 
         # The validators `has_secure_password` registers. Rails 7.1 turned the
@@ -134,10 +141,11 @@ module RailsAiContext
         # The booted tier reads the kind off `validator.kind.to_s`, so a
         # static record spells it the same way or no consumer can compare the
         # two.
-        def record(node, kind, attributes, options, validator: nil, computed: nil, options_source: nil)
+        def record(node, kind, attributes, options, validator: nil, computed: nil, options_source: nil, block: nil)
           @results << {
             kind:       kind.to_s,
             attributes: attributes.map(&:to_s),
+            block:      block,
             computed_attributes: computed.presence,
             options_source: options_source,
             validator:  validator,

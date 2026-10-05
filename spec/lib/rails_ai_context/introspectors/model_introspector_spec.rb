@@ -433,6 +433,31 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
   end
 
   describe "#static_call" do
+    it "finds a model under another app/ root or a root config/application.rb adds, and nothing else there" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "config/application.rb" => "module X\n  class Application < Rails::Application\n    config.eager_load_paths << Rails.root.join(\"enterprise/app/models\")\n  end\nend\n",
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/domain/invoice.rb" => "class Invoice < ApplicationRecord\n  self.table_name = \"notes\"\nend\n",
+          "app/domain/special_invoice.rb" => "class SpecialInvoice < Invoice\nend\n",
+          "app/domain/plain.rb" => "class Plain\nend\n",
+          "app/domain/concerns/billable.rb" => "module Billable\nend\n",
+          "app/controllers/invoices_controller.rb" => "class InvoicesController < ApplicationController\nend\n",
+          "enterprise/app/models/enterprise_thing.rb" => "class EnterpriseThing < ApplicationRecord\n  self.table_name = \"teams\"\nend\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models.keys).to contain_exactly("Invoice", "SpecialInvoice", "EnterpriseThing")
+        expect(models["Invoice"]).to include(file: "app/domain/invoice.rb", table_name: "notes")
+        expect(models["EnterpriseThing"][:file]).to eq("enterprise/app/models/enterprise_thing.rb")
+      end
+    end
+
     it "reads a compact model's bare superclass from the top level, as Ruby does" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models", "admin"))
@@ -2176,6 +2201,35 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  # A root outside app/models holds generators and gem subclasses too; one of
+  # them that will not load is not a model, and static leaves it out.
+  describe "a class outside the model directories that cannot load" do
+    let(:domain) { Rails.root.join("app", "zz_domain") }
+
+    around do |example|
+      FileUtils.mkdir_p(domain)
+      File.write(domain.join("zz_widget_generator.rb"), "class ZzWidgetGenerator < Rails::Generators::NamedBase\nend\n")
+      File.write(domain.join("zz_unknown_base.rb"), "class ZzUnknownBase < SomeGem::Base\nend\n")
+      File.write(domain.join("zz_lost_record.rb"), "class ZzLostRecord < ApplicationRecord\nend\n")
+      example.run
+    ensure
+      FileUtils.rm_rf(domain)
+    end
+
+    it "is left out of the booted answer unless its chain reaches a model base, as in static" do
+      allow(RailsAiContext::PathResolver).to receive(:extra_model_roots).and_return([ domain.to_s ])
+
+      booted = described_class.new(Rails.application).call
+      static = described_class.new(RailsAiContext::StaticApp.new(Rails.root.to_s)).static_call
+
+      expect(booted.keys).not_to include("ZzWidgetGenerator", "ZzUnknownBase")
+      expect(static.keys).not_to include("ZzWidgetGenerator", "ZzUnknownBase")
+      expect(booted["ZzLostRecord"]).to include(file: "app/zz_domain/zz_lost_record.rb")
+      expect(booted["ZzLostRecord"][:error]).to be_a(String)
+      expect(static.keys).to include("ZzLostRecord")
+    end
+  end
+
   # Rebuilding app/models/<underscored>.rb from the name is wrong for a model
   # in a pack or an engine, and wrong wherever the app registers an inflection,
   # so the file travels with the model the way it does with a controller.
@@ -2698,6 +2752,36 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
                                                "WidgetGem::Widget" => "a gem macro (booted only)")
         expect(static[:concerns]).to contain_exactly("Trackable", "Devise::Models::Authenticatable", "Devise::Models::Lockable")
         expect(static[:concern_sources]).to eq("Devise::Models::Authenticatable" => "devise", "Devise::Models::Lockable" => "devise")
+      end
+    end
+  end
+
+  # Kaminari includes its extension into the app's abstract base from an
+  # inherited hook, so every model has it and no file of the app says so.
+  describe "what a gem puts into the app's abstract base" do
+    it "is neither a concern nor a class method of the model" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "category.rb"), "class Category < AppBase\n  acts_as_widget\nend\n")
+        stub_const("PagerGem::ModelExtension", Module.new)
+        stub_const("WidgetGem::Widget", Module.new)
+        base = Class.new(ActiveRecord::Base) { self.abstract_class = true }
+        stub_const("AppBase", base)
+        base.include(PagerGem::ModelExtension)
+        base.define_singleton_method(:page) { |*| all }
+        model = Class.new(base) do
+          self.table_name = "posts"
+          include WidgetGem::Widget
+        end
+        model.define_singleton_method(:name) { "Category" }
+        model.define_singleton_method(:featured) { all }
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+
+        booted = introspector.send(:extract_model_details, model)
+
+        expect(booted[:concerns]).to eq([ "WidgetGem::Widget" ])
+        expect(booted[:class_methods]).to include("featured")
+        expect(booted[:class_methods]).not_to include("page")
       end
     end
   end
@@ -5552,6 +5636,19 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       expect(associations.first).to include(name: "comments", class_name: "Comment")
       expect(associations.last).to include(name: "reader_emails",
                                            unavailable: "through :reader is not an association")
+    end
+
+    # has_one_attached defines avatar_attachment with Rails' own options; the
+    # app wrote none of them, and the static tier has nothing to print.
+    it "prints no options for an association the source does not declare" do
+      generated = double("avatar_attachment", name: :avatar_attachment, macro: :has_one, class_name: "ActiveStorage::Attachment",
+                                              foreign_key: "record_id", options: { as: :record, inverse_of: :record, strict_loading: false })
+      model = double("User", reflect_on_all_associations: [ generated ])
+
+      association = introspector.send(:extract_associations, model).first
+
+      expect(association).to include(name: "avatar_attachment")
+      expect(association).not_to have_key(:declared_options)
     end
   end
   # A display cap must not decide whether a method exists, so the model's own

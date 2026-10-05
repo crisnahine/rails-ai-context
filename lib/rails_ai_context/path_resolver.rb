@@ -72,6 +72,21 @@ module RailsAiContext
       end
     end
 
+    # app/* directories Rails generates for code that is not a model.
+    NON_MODEL_APP_DIRS = %w[
+      assets javascript views controllers helpers mailers mailboxes jobs channels models
+      components serializers policies decorators presenters workers graphql uploaders validators
+    ].freeze
+
+    # The autoload roots besides the model directories that can hold a model:
+    # every other app/* root and the roots config/application.rb adds.
+    def extra_model_roots(root)
+      models = model_dirs(root).map { |dir| root_key(dir) }
+      candidates = app_roots(root).reject { |dir| NON_MODEL_APP_DIRS.include?(File.basename(dir)) } + declared_roots(root)
+      candidates.reject { |dir| models.any? { |model_dir| SafePath.contained?(model_dir, root_key(dir)) } }
+                .uniq { |dir| root_key(dir) }
+    end
+
     # Only path gems inside the repo (`path "../gems" do` locks as `remote: gems`);
     # one outside is an installed gem as far as the app's source goes.
     def path_gem_libs(root)
@@ -99,21 +114,32 @@ module RailsAiContext
 
     # The roots config/application.rb adds by hand, such as lib_static.
     def declared_roots(root)
+      declared_config(root)[:roots]
+    end
+
+    # The lib subdirectories `autoload_lib(ignore:)` keeps out of autoloading.
+    def ignored_dirs(root)
+      declared_config(root)[:ignored]
+    end
+
+    def declared_config(root)
       key = File.expand_path(root.to_s)
       DECLARED_ROOTS.compute_if_absent(key) { read_declared_roots(key) }
     end
 
     def read_declared_roots(root)
       path = File.join(root, "config", "application.rb")
-      return [] unless File.file?(path)
+      return { roots: [], ignored: [] } unless File.file?(path)
 
       declared = Introspectors::SourceIntrospector.walk(
-        path, { autoload: Introspectors::Listeners::AutoloadPathsListener }
-      )[:autoload]
+        path, { autoload: Introspectors::Listeners::AutoloadPathsListener,
+                ignored: Introspectors::Listeners::AutoloadIgnoreListener }
+      )
       real_root = File.realpath(root)
-      declared.uniq.map { |relative| File.join(root, relative) }.select { |dir| contained_dir?(dir, real_root) }
+      dirs = ->(key) { declared[key].uniq.map { |relative| File.join(root, relative) }.select { |dir| contained_dir?(dir, real_root) } }
+      { roots: dirs.call(:autoload), ignored: dirs.call(:ignored) }
     rescue StandardError => e
-      RailsAiContext.debug_fail(e, [], label: "PathResolver.declared_roots")
+      RailsAiContext.debug_fail(e, { roots: [], ignored: [] }, label: "PathResolver.declared_roots")
     end
 
     # A declared root is still a path the file wrote: `#{config.root}/../shared`

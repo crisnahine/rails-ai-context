@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "set"
+
 module RailsAiContext
   module Introspectors
     # One walk over a kind of app source: every directory PathResolver
@@ -25,23 +27,28 @@ module RailsAiContext
         end.each(&block)
       end
 
-      def scan(root, kind, skip_concerns)
+      def scan(root, kind, skip_concerns, &block)
         root = root.to_s
         real_root = File.realpath(root)
         PathResolver.dirs_for(root, kind).each do |dir|
-          real_dir = File.realpath(dir)
-          Dir.glob(File.join(dir, "**", "*.rb")).sort.each do |path|
-            relative_to_dir = path.delete_prefix(dir + File::SEPARATOR)
-            next if skip_concerns && relative_to_dir.start_with?("concerns/")
+          scan_dir(dir, root, real_root, skip_concerns, &block)
+        end
+        scan_extra_model_roots(root, real_root, &block) if kind == "app/models"
+      rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
+        nil
+      end
 
-            real = File.realpath(path)
-            next unless SafePath.contained?(real, real_dir)
+      def scan_dir(dir, root, real_root, skip_concerns)
+        real_dir = File.realpath(dir)
+        ruby_files(dir, [ real_dir, real_root ], Set.new).sort.each do |path|
+          relative_to_dir = path.delete_prefix(dir + File::SEPARATOR)
+          next if skip_concerns && relative_to_dir.start_with?("concerns/")
 
-            path_name = relative_to_dir.sub(/\.rb\z/, "").split("/").map(&:camelize).join("::")
-            yield Record.new(path: real, file: relative_file(path, real, root, real_root), path_name: path_name, source: nil)
-          rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
-            next
-          end
+          real = File.realpath(path)
+          next unless within?(real, real_dir, real_root)
+
+          path_name = relative_to_dir.sub(/\.rb\z/, "").split("/").map(&:camelize).join("::")
+          yield Record.new(path: real, file: relative_file(path, real, root, real_root), path_name: path_name, source: nil)
         rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
           next
         end
@@ -49,7 +56,66 @@ module RailsAiContext
         nil
       end
 
-      private_class_method :scan
+      # Zeitwerk follows symlinks, so the walk does too, as far as the app's
+      # own tree; a directory reached twice (a link back up) is walked once.
+      # Linked directories wait until the real tree is done, so a directory
+      # both spell is named by its real path whatever order the disk lists.
+      def ruby_files(dir, bounds, visited)
+        pending = [ dir ]
+        found = []
+        found.concat(walk_dir(pending.shift, bounds, visited, pending)) while pending.any?
+        found
+      end
+
+      def walk_dir(dir, bounds, visited, links)
+        return [] unless visited.add?(File.realpath(dir))
+
+        Dir.children(dir).sort.flat_map do |name|
+          next [] if name.start_with?(".")
+
+          path = File.join(dir, name)
+          if !File.directory?(path)
+            name.end_with?(".rb") ? [ path ] : []
+          elsif !within?(File.realpath(path), *bounds)
+            []
+          elsif File.symlink?(path)
+            links << path
+            []
+          else
+            walk_dir(path, bounds, visited, links)
+          end
+        rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
+          []
+        end
+      rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
+        []
+      end
+
+      def within?(real, real_dir, real_root)
+        SafePath.contained?(real, real_dir) || SafePath.contained?(real, real_root)
+      end
+
+      SUPERCLASS_DECLARATION = /^[^\S\n]*class[^\S\n]+[\w:]+[^\S\n]*</
+
+      # Rails autoloads every app/* directory and the roots config/application.rb
+      # adds, so a model can live outside app/models. Only a file that declares
+      # a class with a superclass is kept: each one is read here, and parsed later.
+      # ponytail: the app/* kinds Rails generates for other code are skipped by name.
+      def scan_extra_model_roots(root, real_root)
+        seen = Set.new
+        ignored = PathResolver.ignored_dirs(root).map { |dir| PathResolver.root_key(dir) }
+        PathResolver.extra_model_roots(root).each do |dir|
+          scan_dir(dir, root, real_root, true) do |record|
+            next unless seen.add?(record.path)
+            next if ignored.any? { |ignored_dir| SafePath.contained?(record.path, ignored_dir) }
+
+            source = SafeFile.read(record.path)
+            yield record if source&.match?(SUPERCLASS_DECLARATION)
+          end
+        end
+      end
+
+      private_class_method :scan, :scan_dir, :ruby_files, :walk_dir, :within?, :scan_extra_model_roots
 
       def each(root, kind:, skip_concerns: true)
         return enum_for(:each, root, kind: kind, skip_concerns: skip_concerns) unless block_given?

@@ -88,11 +88,19 @@ module RailsAiContext
 
       private_class_method def self.format_model_callbacks(name, data, detail, ctx)
         callbacks = data[:callbacks] || {}
-        if callbacks.empty?
+        association_lines = association_callback_lines(data)
+        if callbacks.empty? && association_lines.empty?
           return "# #{name}\n\nNo callbacks defined.\n\n_Next: `rails_get_model_details(model:\"#{name}\")` for full model detail._"
         end
 
         lines = [ "# #{name} - Callbacks", "" ]
+        if callbacks.empty?
+          lines << "No record callbacks defined."
+          lines << "" << "## Association callbacks" << "_Run when a record is added to or removed from the collection:_"
+          lines.concat(association_lines)
+          lines << "" << "_Next: `rails_get_model_details(model:\"#{name}\")` for associations and validations_"
+          return lines.join("\n")
+        end
 
         # Organize callbacks by type, in Rails event order
         ordered = order_callbacks(callbacks)
@@ -143,12 +151,26 @@ module RailsAiContext
           end
         end
 
+        if association_lines.any?
+          lines << "" << "## Association callbacks" << "_Run when a record is added to or removed from the collection:_"
+          lines.concat(association_lines)
+        end
+
         # Cross-reference hints
         lines << ""
         lines << "_Next: `rails_get_model_details(model:\"#{name}\")` for associations and validations"
         lines << " | `rails_get_concern(name:\"ConcernName\")` for concern-provided callbacks_"
 
         lines.join("\n")
+      end
+
+      ASSOCIATION_CALLBACKS = %w[before_add after_add before_remove after_remove].freeze
+
+      private_class_method def self.association_callback_lines(data)
+        Array(data[:associations]).filter_map do |a|
+          hooks = (a[:declared_options] || {}).slice(*ASSOCIATION_CALLBACKS)
+          "- **#{a[:name]}** #{hooks.map { |hook, target| "#{hook} → #{target}" }.join(', ')}" if hooks.any?
+        end
       end
 
       private_class_method def self.list_all_callbacks(models, detail, ctx)

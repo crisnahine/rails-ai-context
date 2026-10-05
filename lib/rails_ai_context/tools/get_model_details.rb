@@ -165,7 +165,8 @@ module RailsAiContext
           schema = Payload.section(cached_context, :schema)
           if schema && schema[:tables]&.key?(data[:table_name])
             table_data = schema[:tables][data[:table_name]]
-            cols = table_data[:columns] || []
+            ignored = Array(data[:ignored_columns])
+            cols = (table_data[:columns] || []).reject { |c| ignored.include?(c[:name].to_s) }
             if table_data[:primary_key]
               lines << "**Primary key:** `#{Introspectors::SchemaConventions.primary_key_label(table_data[:primary_key])}`"
             end
@@ -180,6 +181,7 @@ module RailsAiContext
                 lines << "- #{parts.join(' | ')}"
               end
             end
+            lines << ignored_columns_line(ignored) if ignored.any?
           end
         end
 
@@ -217,6 +219,9 @@ module RailsAiContext
             detail += " [polymorphic]" if a[:polymorphic]
             detail += (a[:optional] == true ? " [optional]" : " [optional: #{a[:optional]}]") if a[:optional]
             detail += " dependent: #{a[:dependent]}" if a[:dependent]
+            detail += " (#{a[:declared_options].map { |k, v| "#{k}: #{v}" }.join(', ')})" if a[:declared_options]&.any?
+            detail += " (delegated types: #{a[:delegated_types].join(', ')})" if a[:delegated_types]&.any?
+            detail += " extension methods: #{a[:extension_methods].join(', ')}" if a[:extension_methods]&.any?
             detail += " (fk: #{Introspectors::SchemaConventions.key_text(a[:foreign_key])})" if a[:foreign_key] && a[:type] == "belongs_to"
             detail += " [UNAVAILABLE: #{a[:unavailable]}]" if a[:unavailable]
             lines << detail
@@ -276,24 +281,30 @@ module RailsAiContext
         end
 
         # Custom validate methods (business rules) - show method body when possible
-        if data[:custom_validates]&.any?
+        if data[:custom_validates]&.any? || data[:custom_validate_blocks]&.any?
           lines << "" << "## Validations" unless data[:validations]&.any?
-          bodies = extract_custom_validate_bodies(name, data[:custom_validates])
+          custom = Array(data[:custom_validates])
+          bodies = custom.any? ? extract_custom_validate_bodies(name, custom) : {}
           conditions = data[:custom_validate_conditions] || {}
-          data[:custom_validates].each do |v|
+          custom.each do |v|
             tail = callback_condition_tail(conditions[v.to_s] || conditions[v.to_sym])
             lines << "- **Custom:** `#{v}`#{tail}#{" → #{bodies[v]}" if bodies[v]}"
+          end
+          Array(data[:custom_validate_blocks]).each do |b|
+            lines << "- **Custom:** block#{callback_condition_tail(b[:conditions])}#{" → #{b[:body]}" unless b[:body].to_s.empty?}"
           end
         end
 
         # Enums
         if data[:enums]&.any?
           lines << "" << "## Enums"
+          enum_options = data[:enum_options] || {}
           data[:enums].each do |attr, values|
             if values.is_a?(Hash)
               backing = values.values.first.is_a?(Integer) ? "integer" : "string"
               entries = values.map { |k, v| "#{k}(#{v})" }.join(", ")
-              lines << "- `#{attr}`: #{entries} [#{backing}]"
+              options = enum_options[attr.to_s] || enum_options[attr.to_sym] || {}
+              lines << "- `#{attr}`: #{entries} [#{backing}]#{enum_options_text(attr, values.keys, options)}"
             else
               lines << "- `#{attr}`: #{Serializers::SectionFacts.enum_values(values)}"
             end
@@ -303,9 +314,13 @@ module RailsAiContext
         # Scopes - show lambda body so AI can chain correctly. Each carries
         # the AST confidence: [VERIFIED] literal bodies vs [INFERRED] dynamic
         # expressions the parser can't fully resolve.
-        if data[:scopes]&.any?
+        if data[:scopes]&.any? || data[:default_scopes]&.any?
           lines << "" << "## Scopes"
-          data[:scopes].each do |s|
+          Array(data[:default_scopes]).each do |s|
+            tail = s[:all_queries] ? " (all_queries: #{s[:all_queries]})" : ""
+            lines << "- `default_scope` → #{s[:body] || Confidence::INFERRED}#{tail} _(applies to every query on #{name})_"
+          end
+          Array(data[:scopes]).each do |s|
             if s.is_a?(Hash)
               tag = s[:confidence] ? " #{s[:confidence]}" : ""
               lines << "- `#{s[:name]}` → #{s[:body]}#{tag}"
@@ -332,17 +347,29 @@ module RailsAiContext
         # Macros - surface hidden introspector data
         macro_lines = []
         macro_lines << "- `has_secure_password`" if data[:has_secure_password]
+        macro_lines << "- `has_secure_token` #{data[:has_secure_token].map { |f| ":#{f}" }.join(', ')}" if data[:has_secure_token]&.any?
+        Array(data[:nested_attributes]).each do |nested|
+          options = nested[:options]&.any? ? " (#{nested[:options].map { |k, v| "#{k}: #{v}" }.join(', ')})" : ""
+          macro_lines << "- `accepts_nested_attributes_for` #{nested[:names].map { |n| ":#{n}" }.join(', ')}#{options}"
+        end
         macro_lines << "- `encrypts` #{data[:encrypts].map { |f| ":#{f}" }.join(', ')}" if data[:encrypts]&.any?
         macro_lines << "- `normalizes` #{data[:normalizes].map { |f| ":#{f}" }.join(', ')}" if data[:normalizes]&.any?
         macro_lines << "- `generates_token_for` #{data[:generates_token_for].map { |f| ":#{f}" }.join(', ')}" if data[:generates_token_for]&.any?
         macro_lines << "- `serialize` #{data[:serialize].map { |f| ":#{f}" }.join(', ')}" if data[:serialize]&.any?
-        macro_lines << "- `store` #{data[:store].map { |f| ":#{f}" }.join(', ')}" if data[:store]&.any?
+        macro_lines << "- `store` #{data[:store].map { |f| store_column_text(f, data[:store_accessors]) }.join(', ')}" if data[:store]&.any?
         macro_lines << "- `broadcasts` #{data[:broadcasts].join(', ')}" if data[:broadcasts]&.any?
         if data[:has_one_attached]&.any?
           macro_lines << "- `has_one_attached` #{data[:has_one_attached].map { |f| ":#{f}" }.join(', ')}"
         end
         if data[:has_many_attached]&.any?
           macro_lines << "- `has_many_attached` #{data[:has_many_attached].map { |f| ":#{f}" }.join(', ')}"
+        end
+        macro_lines << "- `has_rich_text` #{data[:has_rich_text].map { |f| ":#{f}" }.join(', ')}" if data[:has_rich_text]&.any?
+        if data[:attributes]&.any?
+          macro_lines << "- `attribute` #{data[:attributes].map { |a| attribute_api_text(a) }.join(', ')}"
+        end
+        if data[:alias_attributes]&.any?
+          macro_lines << "- `alias_attribute` #{data[:alias_attributes].map { |a| ":#{a[:name]} → :#{a[:target]}" }.join(', ')}"
         end
         if macro_lines.any?
           lines << "" << "## Macros"
@@ -378,7 +405,11 @@ module RailsAiContext
         if data[:delegations]&.any?
           lines << "" << "## Delegations"
           data[:delegations].each do |d|
-            lines << "- delegate #{d[:methods].map { |m| ":#{m}" }.join(', ')} to: :#{d[:to]}"
+            line = "- delegate #{d[:methods].map { |m| ":#{m}" }.join(', ')} to: :#{d[:to]}"
+            line += " → #{d[:defines].join(', ')}" if d[:defines]
+            line += " → #{RailsAiContext::Confidence::INFERRED} (the prefix is computed)" if d[:prefix_computed]
+            line += " (private)" if d[:private]
+            lines << line
           end
         end
         lines << "- `delegate_missing_to` :#{data[:delegate_missing_to]}" if data[:delegate_missing_to]
@@ -495,6 +526,43 @@ module RailsAiContext
         end
 
         pairs.any? ? "**#{ed[:field]}** (#{pairs.join(', ')})" : "**#{ed[:field]}**"
+      end
+
+      # Rails names each value's methods "#{prefix}#{label}#{suffix}", so the
+      # bare label is wrong once either is set.
+      private_class_method def self.enum_options_text(attr, labels, options)
+        text = options[:default].nil? ? "" : " default: #{options[:default]}"
+        prefix, suffix = options.values_at(:prefix, :suffix)
+        return text unless prefix || suffix
+        if [ prefix, suffix ].include?(Confidence::INFERRED)
+          return "#{text} methods: #{Confidence::INFERRED} (the prefix or suffix is computed)"
+        end
+
+        prefix = "#{prefix == true ? attr : prefix}_" if prefix
+        suffix = "_#{suffix == true ? attr : suffix}" if suffix
+        methods = labels.map { |label| "#{prefix}#{label.to_s.gsub(/[\W&&[:ascii:]]+/, '_')}#{suffix}?" }
+        "#{text} methods: #{methods.join(', ')}"
+      end
+
+      private_class_method def self.ignored_columns_line(ignored)
+        inferred = RailsAiContext::Confidence::INFERRED
+        return "\n**Ignored columns:** #{inferred} (computed in the source)" if ignored.include?(inferred)
+
+        "\n**Ignored columns:** #{ignored.map { |c| "`#{c}`" }.join(', ')} _(the model cannot read or write them)_"
+      end
+
+      private_class_method def self.store_column_text(column, accessors)
+        names = Array(accessors&.dig(column))
+        return ":#{column}" if names.empty?
+
+        inferred = RailsAiContext::Confidence::INFERRED
+        names = names.map { |n| n == inferred ? "#{inferred}: the prefix or suffix is computed" : n }
+        ":#{column} (#{names.join(', ')})"
+      end
+
+      private_class_method def self.attribute_api_text(attribute)
+        facts = [ attribute[:type], ("default: #{attribute[:default]}" if attribute[:default]) ].compact
+        ":#{attribute[:name]}#{" (#{facts.join(', ')})" if facts.any?}"
       end
 
       # A transformation the parser could not resolve is a marker, not the

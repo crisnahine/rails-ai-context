@@ -104,7 +104,7 @@ module RailsAiContext
         end
 
         def enum_modifier_key?(key)
-          %i[prefix suffix _prefix _suffix default scopes].include?(key)
+          %i[prefix suffix _prefix _suffix default _default scopes _scopes].include?(key)
         end
       end
     end

@@ -464,6 +464,7 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
               after_initialize :seed
               after_find :log
               after_create_commit :ping
+              skip_callback :save, :before, :stamp_audit, if: :draft?
               around_create Some::CallbackObject
               after_update do
                 bump!
@@ -483,6 +484,7 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
         expect(callbacks).to include("after_find :log")
         expect(callbacks).to include("after_create_commit :ping")
         expect(callbacks).to include("around_create Some::CallbackObject")
+        expect(callbacks).to include("skip_callback :save, :before, :stamp_audit, if: :draft?")
         expect(callbacks).to include("after_update do")
       end
     end

@@ -700,8 +700,9 @@ module RailsAiContext
           method.to_s == RailsAiContext::Introspectors::Listeners::CallbacksListener::INLINE_BLOCK
         end
 
+        # A constant (`AuditTrail`) is a callback object, not a method.
         def method_name?(method)
-          method.to_s.match?(/\A\w+[?!=]?\z/)
+          method.to_s.match?(/\A[a-z_]\w*[?!=]?\z/)
         end
 
         # A callback type as a reader can write it. `after_commit_on_create`
@@ -726,6 +727,11 @@ module RailsAiContext
         # declared macro, not the resolved type: `after_commit_on_create` is
         # a key this gem synthesizes, not something the source says.
         def callback_declaration(callback)
+          if callback[:skip]
+            kind, event = callback[:type].to_s.split("_", 2)
+            return "skip_callback :#{event}, :#{kind}, :#{callback[:method]}#{callback_options_tail(callback[:options])}"
+          end
+
           name = callback[:name] || callback[:type]
           method = callback[:method].to_s
           target = inline_block_callback?(method) ? "do" : callback_target(method)
