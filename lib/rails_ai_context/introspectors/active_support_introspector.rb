@@ -172,11 +172,12 @@ module RailsAiContext
         namespace = call[:arguments].first
         return [] unless namespace.is_a?(Symbol) || namespace.is_a?(String)
 
-        owner = call[:receiver] || owner_at(methods, call)
-        names = Array(methods).select { |m| m[:scope] == :instance && m[:visibility] == :public && m[:owner]&.last == owner }.map { |m| m[:name] }
-        names = [ "*" ] if names.empty? || call[:receiver]
+        owner = call[:receiver]&.to_s || owner_at(methods, call)
+        short = owner.to_s.split("::").last
+        names = Array(methods).select { |m| m[:scope] == :instance && m[:visibility] == :public && m[:owner]&.last.to_s.split("::").last == short }.map { |m| m[:name] }
         via = [ owner, "attach_to" ].compact.join(".")
-        names.map { |name| { event: "#{name}.#{namespace}", via: via, file: relative, line: call[:line] } }
+        events = names.empty? ? [ "every public method of #{owner || "the subscriber"}, as <method>.#{namespace}" ] : names.map { |name| "#{name}.#{namespace}" }
+        events.map { |event| { event: event, via: via, file: relative, line: call[:line] } }
       end
 
       # attach_to sits in the class body above the defs it attaches, so the next def names the class.

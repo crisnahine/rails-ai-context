@@ -217,6 +217,25 @@ RSpec.describe RailsAiContext::Introspectors::ActiveSupportIntrospector do
       ])
     end
 
+    it "reads attach_to called on the class after it, one event per public method the file defines" do
+      result = subscriptions(
+        "app/subscribers/ar_subscriber.rb" => <<~RUBY,
+          class ArSubscriber < ActiveSupport::LogSubscriber
+            def sql(event); end
+            def instantiation(event); end
+          end
+          ArSubscriber.attach_to :active_record
+        RUBY
+        "config/initializers/remote.rb" => "Audit::RemoteSubscriber.attach_to :action_mailer\n"
+      )
+
+      expect(result).to eq([
+        { event: "instantiation.active_record", via: "ArSubscriber.attach_to", file: "app/subscribers/ar_subscriber.rb", line: 5 },
+        { event: "sql.active_record", via: "ArSubscriber.attach_to", file: "app/subscribers/ar_subscriber.rb", line: 5 },
+        { event: "every public method of Audit::RemoteSubscriber, as <method>.action_mailer", via: "Audit::RemoteSubscriber.attach_to", file: "config/initializers/remote.rb", line: 1 }
+      ])
+    end
+
     it "ignores a subscribe call on anything but Notifications, and survives a file it cannot parse" do
       result = subscriptions(
         "app/models/newsletter.rb" => "class Newsletter\n  def go = Mailchimp.subscribe(\"x\")\nend\n",
