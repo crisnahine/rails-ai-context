@@ -460,6 +460,26 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
 
       expect(described_class.new(double("app", root: @root)).call[:fixture_names]).to eq("users" => %w[bob])
     end
+
+    it "reads spec/fixtures when the RSpec helper sets fixture_path in a form no listener reads" do
+      FileUtils.mkdir_p(File.join(@root, "spec", "fixtures"))
+      File.write(File.join(@root, "spec", "fixtures", "users.yml"), "bob:\n  name: B\n")
+      File.write(File.join(@root, "spec", "rails_helper.rb"),
+                 "RSpec.configure do |config|\n  config.fixture_path = File.expand_path(\"../fixtures\", __FILE__)\nend\n")
+
+      expect(described_class.new(double("app", root: @root)).call[:fixture_names]).to eq("users" => %w[bob])
+    end
+
+    it "reads no sets from spec/fixtures when only test/test_helper.rb sets fixture_paths" do
+      FileUtils.mkdir_p(File.join(@root, "spec", "fixtures"))
+      FileUtils.mkdir_p(File.join(@root, "test", "shared"))
+      File.write(File.join(@root, "spec", "fixtures", "users.yml"), "bob:\n  name: B\n")
+      File.write(File.join(@root, "test", "shared", "orders.yml"), "one:\n  ref: A\n")
+      File.write(File.join(@root, "spec", "rails_helper.rb"), "RSpec.configure do |config|\nend\n")
+      File.write(File.join(@root, "test", "test_helper.rb"), "self.fixture_paths << \"test/shared\"\n")
+
+      expect(described_class.new(double("app", root: @root)).call[:fixture_names]).to eq("orders" => %w[one])
+    end
   end
 
   # Consul defines a comment factory per model in a loop,

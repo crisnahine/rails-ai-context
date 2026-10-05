@@ -163,9 +163,10 @@ module RailsAiContext
       def fixture_dirs
         @fixture_dirs ||= begin
           real_root = File.realpath(root)
-          configured = (HELPER_FILES.map { |rel| File.join(root, rel) } + support_files)
-            .flat_map { |path| Array(helper_walk(path)&.dig(:fixture_paths)) }
-          defaults = DEFAULT_FIXTURE_DIRS.reject { |rel| rel == "spec/fixtures" && rspec_without_fixture_paths?(configured) }
+          writes = (HELPER_FILES.map { |rel| File.join(root, rel) } + support_files)
+            .to_h { |path| [ path, Array(helper_walk(path)&.dig(:fixture_paths)) ] }
+          configured = writes.values.flatten.grep(String)
+          defaults = DEFAULT_FIXTURE_DIRS.reject { |rel| rel == "spec/fixtures" && rspec_without_fixture_paths?(writes) }
           candidates = [ defaults.find { |rel| fixture_sets?(rel, real_root) } ] +
                        configured.map { |rel| Pathname.new(rel).cleanpath.to_s }
           candidates.compact.uniq.select { |rel| fixture_sets?(rel, real_root) }
@@ -174,8 +175,11 @@ module RailsAiContext
 
       # rspec-rails gives fixture_paths no default, so an RSpec suite whose helpers set
       # none loads no fixture sets; its spec/fixtures holds files for file_fixture.
-      def rspec_without_fixture_paths?(configured)
-        configured.empty? && %w[spec/rails_helper.rb spec/spec_helper.rb].any? { |rel| File.file?(File.join(root, rel)) }
+      # Any write under spec/ counts, a path the listener cannot read included.
+      def rspec_without_fixture_paths?(writes)
+        spec_dir = File.join(root, "spec/")
+        %w[spec/rails_helper.rb spec/spec_helper.rb].any? { |rel| File.file?(File.join(root, rel)) } &&
+          writes.none? { |path, found| path.start_with?(spec_dir) && found.any? }
       end
 
       def support_files
