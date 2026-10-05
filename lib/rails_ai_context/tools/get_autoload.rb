@@ -40,9 +40,10 @@ module RailsAiContext
             end
           end
 
-          render_paths(lines, "Autoload paths", autoload[:autoload_paths])
-          render_paths(lines, "Autoload-once paths", autoload[:autoload_once_paths])
-          render_paths(lines, "Eager-load paths", autoload[:eager_load_paths])
+          namespaces = autoload[:autoload_namespaces] || {}
+          render_paths(lines, "Autoload paths", autoload[:autoload_paths], namespaces)
+          render_paths(lines, "Autoload-once paths", autoload[:autoload_once_paths], namespaces)
+          render_paths(lines, "Eager-load paths", autoload[:eager_load_paths], namespaces)
 
           inflections = autoload[:custom_inflections] || []
           if inflections.any?
@@ -60,12 +61,15 @@ module RailsAiContext
         # Custom autoload paths (beyond Rails' defaults) matter most, but the
         # full list is what AI needs for "where can this constant live" - cap
         # long framework lists rather than hiding them.
-        def render_paths(lines, title, paths)
+        def render_paths(lines, title, paths, namespaces)
           paths = Array(paths)
           return if paths.empty?
 
           lines << "" << "## #{title} (#{paths.size})"
-          paths.first(MAX_PATHS_SHOWN).each { |p| lines << "- `#{p}`" }
+          paths.first(MAX_PATHS_SHOWN).each do |p|
+            namespace = namespaces[p] || namespaces[p.to_sym]
+            lines << "- `#{p}`#{" (namespace `#{namespace}`)" if namespace}"
+          end
           lines << "_... #{paths.size - MAX_PATHS_SHOWN} more_" if paths.size > MAX_PATHS_SHOWN
         end
       end

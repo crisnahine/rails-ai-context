@@ -192,6 +192,8 @@ RSpec.describe RailsAiContext::Introspectors::AutoloadIntrospector do
 
       let(:introspector) { described_class.new(double(root: Rails.root, config: config)) }
 
+      before { allow(Rails).to receive(:autoloaders).and_return(double("autoloaders", main: nil, once: nil)) }
+
       it "reports each autoload path once" do
         expect(result[:autoload_paths]).to eq([ "lib", "app/services" ])
       end
@@ -220,6 +222,8 @@ RSpec.describe RailsAiContext::Introspectors::AutoloadIntrospector do
 
       let(:introspector) { described_class.new(double(root: Rails.root, config: config)) }
 
+      before { allow(Rails).to receive(:autoloaders).and_return(double("autoloaders", main: nil, once: nil)) }
+
       it "reports it once, as autoload-once and not under the main autoload paths" do
         expect(result[:autoload_once_paths]).to eq([ "app/middleware" ])
         expect(result[:autoload_paths]).to eq([ "lib", "app/models" ])
@@ -247,6 +251,38 @@ RSpec.describe RailsAiContext::Introspectors::AutoloadIntrospector do
         main = result[:autoloaders].find { |l| l[:name] == "main" }
 
         expect(main[:not_eager_loaded]).to eq([ "tmp/autoload_exclusion_spec/app_lib" ])
+      end
+    end
+
+    # An in-repo engine's app/* and an initializer's push_dir reach the loader
+    # without passing through the application's config paths.
+    context "when the main loader roots a directory the app's config does not list" do
+      let(:base) { Rails.root.join("tmp", "autoload_roots_spec").to_s }
+      let(:engine_dir) { File.join(base, "engines", "catalog", "app", "models") }
+      let(:components_dir) { File.join(base, "app", "views", "components") }
+      let(:loader) do
+        stub_const("AutoloadRootsSpecComponents", Module.new)
+        Zeitwerk::Loader.new.tap do |l|
+          l.push_dir(engine_dir)
+          l.push_dir(components_dir, namespace: AutoloadRootsSpecComponents)
+        end
+      end
+
+      before do
+        FileUtils.mkdir_p([ engine_dir, components_dir ])
+        allow(Rails).to receive(:autoloaders).and_return(double("autoloaders", main: loader, once: nil))
+      end
+
+      after { FileUtils.rm_rf(base) }
+
+      it "lists it under the autoload paths with the namespace it autoloads under" do
+        expect(result[:autoload_paths]).to include(
+          "tmp/autoload_roots_spec/engines/catalog/app/models",
+          "tmp/autoload_roots_spec/app/views/components"
+        )
+        expect(result[:autoload_namespaces]).to eq(
+          "tmp/autoload_roots_spec/app/views/components" => "AutoloadRootsSpecComponents"
+        )
       end
     end
   end

@@ -42,6 +42,14 @@ RSpec.describe RailsAiContext::Tools::GetAutoload do
       expect(text).to include("collapsed: app/models/concerns")
     end
 
+    it "names the namespace a root autoloads under when it is not Object" do
+      autoload_data[:autoload_paths] += [ "app/views/components" ]
+      autoload_data[:autoload_namespaces] = { "app/views/components" => "Components" }
+      text = described_class.call.content.first[:text]
+      expect(text).to include("- `app/views/components` (namespace `Components`)")
+      expect(text).to include("- `lib`\n")
+    end
+
     it "names a directory kept out of eager loading" do
       autoload_data[:autoloaders][0][:not_eager_loaded] = [ "app/lib" ]
       text = described_class.call.content.first[:text]
