@@ -100,10 +100,8 @@ module RailsAiContext
       end
 
       def extract_initializers
-        dir = File.join(root, "config/initializers")
-        return [] unless Dir.exist?(dir)
-
-        Dir.glob(File.join(dir, "*.rb")).map { |f| File.basename(f) }.sort
+        dir = File.join(root, "config/initializers/")
+        PathResolver.initializer_paths(root).map { |path| path.delete_prefix(dir) }
       end
 
       # Returns whether credentials are configured (boolean).

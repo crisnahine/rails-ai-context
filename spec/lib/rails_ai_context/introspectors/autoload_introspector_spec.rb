@@ -65,6 +65,26 @@ RSpec.describe RailsAiContext::Introspectors::AutoloadIntrospector do
       end
     end
 
+    context "when the inflections live in a subdirectory of config/initializers" do
+      let(:init_path) { File.join(Rails.root, "config/initializers/inflect/nested_acronyms.rb") }
+
+      before do
+        FileUtils.mkdir_p(File.dirname(init_path))
+        File.write(init_path, <<~RUBY)
+          ActiveSupport::Inflector.inflections(:en) do |inflect|
+            inflect.acronym "NESTEDQ"
+          end
+        RUBY
+      end
+
+      after { FileUtils.rm_rf(File.dirname(init_path)) }
+
+      it "extracts the acronym rule with its nested path" do
+        hit = result[:custom_inflections].find { |i| i[:rule] == "acronym: NESTEDQ" }
+        expect(hit).to include(file: "config/initializers/inflect/nested_acronyms.rb")
+      end
+    end
+
     context "when an initializer is formatted awkwardly" do
       let(:init_path) { File.join(Rails.root, "config/initializers/inflection_odd_test.rb") }
 

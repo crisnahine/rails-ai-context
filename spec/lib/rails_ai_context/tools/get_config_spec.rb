@@ -423,9 +423,11 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
       File.write(File.join(tmpdir, "config", "initializers", "assets.rb"), "")
       File.write(File.join(tmpdir, "config", "initializers", "view_annotations.rb"),
                  "# Be sure to restart your server when you modify this file.\n#\n# config.x = true\n")
+      FileUtils.mkdir_p(File.join(tmpdir, "config", "initializers", "i18n"))
+      File.write(File.join(tmpdir, "config", "initializers", "i18n", "locale.rb"), "# config.i18n.default_locale = :de\n")
       allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
       allow(described_class).to receive(:cached_context).and_return(
-        config: { initializers: %w[assets.rb view_annotations.rb] }
+        config: { initializers: %w[assets.rb i18n/locale.rb view_annotations.rb] }
       )
     end
 
@@ -441,6 +443,12 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
       text = described_class.call.content.first[:text]
 
       expect(text).to include("- `view_annotations.rb` - all commented out")
+    end
+
+    it "reads a nested initializer at its path under config/initializers" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("- `i18n/locale.rb` - all commented out")
     end
   end
 end

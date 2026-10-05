@@ -117,6 +117,21 @@ RSpec.describe RailsAiContext::Introspectors::ConfigIntrospector do
     end
   end
 
+  describe "initializers in a subdirectory" do
+    let(:init_path) { File.join(Rails.root, "config/initializers/i18n_nested/locale.rb") }
+
+    before do
+      FileUtils.mkdir_p(File.dirname(init_path))
+      File.write(init_path, "Rails.application.config.i18n.default_locale = :en\n")
+    end
+
+    after { FileUtils.rm_rf(File.dirname(init_path)) }
+
+    it "lists them by their path under config/initializers" do
+      expect(described_class.new(Rails.application).call[:initializers]).to include("i18n_nested/locale.rb")
+    end
+  end
+
   describe "#detect_error_monitoring" do
     around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
 

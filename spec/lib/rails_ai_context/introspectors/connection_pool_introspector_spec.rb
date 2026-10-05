@@ -72,6 +72,22 @@ RSpec.describe RailsAiContext::Introspectors::ConnectionPoolIntrospector do
       expect(result[:pool_handlers]).to eq([ { role: "writing", pool_count: 1 } ])
     end
 
+    context "when a nested initializer wires the ShardSelector" do
+      let(:init_path) { File.join(Rails.root, "config/initializers/db/shards_nested.rb") }
+
+      before do
+        FileUtils.mkdir_p(File.dirname(init_path))
+        File.write(init_path, "Rails.application.config.middleware.use ActiveRecord::Middleware::ShardSelector\n")
+      end
+
+      after { FileUtils.rm_rf(File.dirname(init_path)) }
+
+      it "reports the selector" do
+        allow(Rails.application.middleware).to receive(:any?).and_return(false)
+        expect(result[:automatic_shard_selector]).to be(true)
+      end
+    end
+
     it "automatic_shard_selector is boolean" do
       expect(result[:automatic_shard_selector]).to eq(true).or(eq(false))
     end

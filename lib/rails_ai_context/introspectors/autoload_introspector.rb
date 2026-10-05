@@ -101,13 +101,10 @@ module RailsAiContext
       end
 
       # Collect `inflect` blocks and `Zeitwerk::Inflector` customizations
-      # declared in config/initializers/*.rb.
+      # declared in the app's initializers.
       def extract_custom_inflections
-        dir = File.join(root, "config/initializers")
-        return [] unless Dir.exist?(dir)
-
         inflections = []
-        Dir.glob(File.join(dir, "*.rb")).sort.each do |path|
+        PathResolver.initializer_paths(root).each do |path|
           rel = path.sub("#{root}/", "")
           ast = SourceIntrospector.walk(path, {
             directives: -> { Listeners::ChainedCallListener.new(INFLECTION_DIRECTIVES, receiver: :inflect) },

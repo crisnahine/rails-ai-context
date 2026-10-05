@@ -104,10 +104,7 @@ module RailsAiContext
       # Detect via the middleware stack + initializer references.
       def detect_automatic_shard_selector
         return true if app.middleware.any? { |m| (m.name || m.klass.to_s).include?("ShardSelector") }
-        init_dir = File.join(root, "config/initializers")
-        return false unless Dir.exist?(init_dir)
-
-        Dir.glob(File.join(init_dir, "*.rb")).any? do |path|
+        PathResolver.initializer_paths(root).any? do |path|
           content = RailsAiContext::SafeFile.read(path) or next false
           content.include?("ShardSelector") || content.include?("connected_to role:")
         end
