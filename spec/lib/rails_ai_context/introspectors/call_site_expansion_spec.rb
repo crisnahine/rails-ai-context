@@ -414,6 +414,13 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
       expect(filters(method_source, "has_orders %w[new old]")).to eq([ [ :before_action, {} ] ])
     end
 
+    it "passes a named rest on with the trailing options the call gave it" do
+      method_source = "def guard_all(*names)\n  before_action(*names) { head :forbidden }\nend\n"
+
+      expect(filters(method_source, "guard_all only: :index")).to eq([ [ :before_action, { only: :index } ] ])
+      expect(filters(method_source, "guard_all :a, except: :show")).to eq([ [ :before_action, { except: :show } ] ])
+    end
+
     # OpenProject's authorize_with_permission, called with an `only:` list over three lines.
     it "keeps the block on the method's line when the call's arguments span several" do
       definition = Prism.parse("def guard(**args)\n  before_action(**args) do\n    head :ok\n  end\nend\n").value.statements.body.first

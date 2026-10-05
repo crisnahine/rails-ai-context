@@ -343,7 +343,9 @@ module RailsAiContext
         end
         changed_names = changed(definition.body, kept)
         kept.each { |node| bindings[node.name] = unknown if node.is_a?(Prism::LocalVariableWriteNode) && changed_names.include?(node.name) }
-        list = nil if !list || changed_names.include?(rest.name) || list.any? { |item| !literal_source?(item) }
+        # A trailing keyword hash no statement took stays in the rest, as Ruby leaves it.
+        items = list && (symbol_keyed?(list.last) ? list[0...-1] : list)
+        list = nil if !list || changed_names.include?(rest.name) || items.any? { |item| !literal_source?(item) }
         bindings[rest.name] = list ? list_binding(list) : unknown
         bindings
       end
