@@ -122,6 +122,17 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
             app/api/v0/openapi.json doc/api/openapi.yaml openapi/v1.yaml public/openapi.yml swagger/v2/api.json
           ])
         end
+
+        it "lists a spec over the per-file read limit by its head" do
+          allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(1_000)
+          paths = (1..2_000).to_h { |i| [ "/items/#{i}", { "get" => { "summary" => "Item #{i}" } } ] }
+          write("swagger/v1/big.json", JSON.generate({ "openapi" => "3.0.0", "paths" => paths }))
+          write("swagger/v1/big.yaml", "openapi: 3.0.0\npaths:\n" + paths.keys.map { |key| "  #{key}: {}\n" }.join)
+          write("swagger/v1/nested_big.json", JSON.generate({ "x" => { "openapi" => "3.0.0" }, "info" => paths }))
+
+          expect(result[:openapi_spec]).to include("swagger/v1/big.json", "swagger/v1/big.yaml")
+          expect(result[:openapi_spec]).not_to include("swagger/v1/nested_big.json")
+        end
       end
     end
 

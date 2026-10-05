@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "json"
+require "strscan"
 
 module RailsAiContext
   module Introspectors
@@ -270,14 +271,38 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "detect_openapi_specs")
       end
 
-      def openapi_document?(relative)
-        source = SafePath.read(relative, under: root.to_s).first
-        return false unless source&.match?(/openapi|swagger/)
-        return source.match?(OPENAPI_YAML_KEY) unless relative.end_with?(".json")
+      OPENAPI_KEYS = %w[openapi swagger].freeze
+      OPENAPI_HEAD = 65_536
 
-        parsed = JSON.parse(source)
-        parsed.is_a?(Hash) && (parsed.key?("openapi") || parsed.key?("swagger"))
-      rescue JSON::ParserError
+      # The key sits at the top, so a bounded head decides it: a spec over the
+      # per-file read limit is still listed, and no file is read whole for one key.
+      def openapi_document?(relative)
+        resolution = SafePath.locate(relative, under: root.to_s, max_size: Float::INFINITY)
+        return false unless resolution.ok?
+
+        head = File.read(resolution.realpath, OPENAPI_HEAD).to_s.force_encoding(Encoding::UTF_8).scrub("?")
+        return false unless head.match?(/openapi|swagger/)
+        return head.match?(OPENAPI_YAML_KEY) unless relative.end_with?(".json")
+        return json_top_level_key?(head) if File.size(resolution.realpath) > OPENAPI_HEAD
+
+        parsed = JSON.parse(head)
+        parsed.is_a?(Hash) && OPENAPI_KEYS.any? { |key| parsed.key?(key) }
+      rescue JSON::ParserError, SystemCallError
+        false
+      end
+
+      # A key one object deep in a JSON prefix that may stop mid-token.
+      def json_top_level_key?(head)
+        depth = 0
+        scanner = StringScanner.new(head)
+        until scanner.eos?
+          if scanner.scan(/"((?:[^"\\]|\\.)*)"/)
+            return true if depth == 1 && OPENAPI_KEYS.include?(scanner[1]) && scanner.match?(/\s*:/)
+          elsif scanner.scan(/[\[{]/) then depth += 1
+          elsif scanner.scan(/[\]}]/) then depth -= 1
+          else scanner.scan(/[^"\[\]{}]+/) || scanner.getch
+          end
+        end
         false
       end
 
