@@ -47,7 +47,9 @@ module RailsAiContext
         parts = []
         parts << "Devise" if auth.dig(:authentication, :devise)&.any?
         parts << "Rails 8 auth" if auth.dig(:authentication, :rails_auth)
+        parts << "Rodauth" if auth.dig(:authentication, :rodauth)
         parts << "Pundit" if auth.dig(:authorization, :pundit)&.any?
+        parts << "Action Policy" if auth.dig(:authorization, :action_policy)&.any?
         parts << "CanCanCan" if auth.dig(:authorization, :cancancan)
         # No gem behind it, so it is named as a directory, not a framework.
         parts << "policies in app/policies" if auth.dig(:authorization, :policies)&.any?

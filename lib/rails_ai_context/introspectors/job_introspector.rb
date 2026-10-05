@@ -19,6 +19,7 @@ module RailsAiContext
       # the class, never from the directory.
       JOB_DIRS = %w[app/jobs app/workers app/sidekiq].freeze
       ACTIVE_JOB_BASES = %w[ActiveJob::Base ApplicationJob ActionMailer::MailDeliveryJob].freeze
+      QUE_JOB_BASES = %w[Que::Job].freeze
       JOB_MACROS = %i[
         queue_as retry_on discard_on
         sidekiq_options sidekiq_throttle include
@@ -38,7 +39,8 @@ module RailsAiContext
           mailers: booted_mailers[:mailers],
           mailer_bases: booted_mailers[:bases],
           channels: extract_channels,
-          recurring_jobs: extract_solid_queue_recurring,
+          connections: extract_connections,
+          recurring_jobs: recurring_jobs,
           sidekiq_config: extract_sidekiq_config
         }
       end
@@ -55,7 +57,8 @@ module RailsAiContext
           mailers: source_mailers[:mailers],
           mailer_bases: source_mailers[:bases],
           channels: extract_channels_from_source,
-          recurring_jobs: extract_solid_queue_recurring,
+          connections: extract_connections,
+          recurring_jobs: recurring_jobs,
           sidekiq_config: extract_sidekiq_config
         }
       end
@@ -142,7 +145,7 @@ module RailsAiContext
       end
 
       def inherited_queue(name)
-        chain_of(name).lazy.filter_map { |link| queue_as(job_candidates[link].ast) }.first
+        chain_of(name).each_with_index.lazy.filter_map { |link, depth| queue_as(job_candidates[link].ast, own: depth.zero?) }.first
       end
 
       def labelled(label, source)
@@ -193,14 +196,15 @@ module RailsAiContext
 
       QUEUE_AS_LISTENERS = {
         macros: -> { Listeners::GenericMacroListener.new(*JOB_MACROS, block_source: [ :queue_as ]) },
-        procs:  Listeners::ProcLiteralListener
+        procs:  Listeners::ProcLiteralListener,
+        queue_assignments: Listeners::QueueAssignmentListener
       }.freeze
 
       # A literal queue by name; one picked at enqueue time by the source that
       # picks it, the way other computed values read.
-      def queue_as(ast)
-        hit = ast[:macros].find { |m| m[:macro] == :queue_as } or return nil
-        return hit[:args].first.to_s if hit[:args].any?
+      def queue_as(ast, own: true)
+        hit = ast[:macros].find { |m| m[:macro] == :queue_as } or return assigned_queue(ast, own)
+        return queue_name_from_part(hit[:args].first.to_s) if hit[:args].any?
         return labelled(COMPUTED_QUEUE, hit[:block]) if hit[:block]
 
         source = hit[:values].first.to_s.gsub(/\s+/, " ").strip
@@ -212,6 +216,66 @@ module RailsAiContext
         source.match?(PROC_LITERAL) ? labelled(PROC_QUEUE, source) : "`#{source}` (computed)"
       end
 
+      # Resque reads @queue off the class itself, so a subclass does not inherit it;
+      # Que resolves self.queue up the superclass chain.
+      def assigned_queue(ast, own)
+        hit = Array(ast[:queue_assignments]).reverse.find { |a| own || a[:form] == :self } or return nil
+        hit[:queue] || "`#{hit[:source]}` (computed)"
+      end
+
+      # ActiveJob's queue_name_from_part, with the queue settings the app's config assigns.
+      # A setting the static tier cannot evaluate reads as its source, with a note why.
+      def queue_name_from_part(part)
+        settings = active_job_queue_settings
+        name = part || settings.dig(:default_queue_name, :text) || "default"
+        used = [ (settings[:default_queue_name] unless part) ]
+        prefix = settings[:queue_name_prefix]
+        if prefix && !prefix[:text].empty?
+          delimiter = settings[:queue_name_delimiter]
+          name = [ prefix[:text], name ].join(delimiter ? delimiter[:text] : "_")
+          used.push(prefix, delimiter)
+        end
+
+        notes = used.compact.filter_map { |setting| setting[:note] }.uniq
+        notes.empty? ? name : "#{name} (#{notes.join("; ")})"
+      end
+
+      QUEUE_SETTINGS = %i[queue_name_prefix queue_name_delimiter default_queue_name].freeze
+
+      # config/application.rb, then this environment's file over it.
+      def active_job_queue_settings
+        @active_job_queue_settings ||= [ "config/application.rb", "config/environments/#{RailsAiContext.environment_name}.rb" ]
+          .each_with_object({}) do |file, settings|
+            config_assignments(file).each do |hit|
+              path = hit[:path]
+              next unless hit[:assignment] && path.size == 2 && path.first == :active_job && QUEUE_SETTINGS.include?(path.last)
+
+              settings[path.last] = queue_setting(path.last, hit)
+            end
+          end
+      rescue StandardError, ScriptError => e
+        @active_job_queue_settings = RailsAiContext.debug_fail(e, {}, label: "active_job_queue_settings")
+      end
+
+      # The listener turns a constant into its name and anything computed into a
+      # marker, so only a string or symbol written as one is the value Rails sees.
+      def queue_setting(key, hit)
+        value = hit[:value]
+        literal = value.is_a?(Symbol) ||
+          (value.is_a?(String) && value != RailsAiContext::Confidence::INFERRED && !hit[:source].to_s.match?(/\A(?:::)?[A-Z]/))
+        text = literal ? value.to_s : "`#{hit[:source]}`"
+        note = if hit[:condition] then "#{key} set only when `#{hit[:condition]}`"
+        elsif !literal then "computed"
+        end
+        { text: text, note: note }
+      end
+
+      # One walk of a config file per run, shared by the queue settings and the GoodJob cron.
+      def config_assignments(file)
+        @config_walks ||= {}
+        RecurringSchedules.config_assignments(app.root, file, @config_walks)
+      end
+
       def sidekiq_options(macros)
         hit = macros.find { |m| m[:macro] == :sidekiq_options }
         hit ? (hit[:option_values] || {}).transform_keys(&:to_s) : {}
@@ -221,7 +285,7 @@ module RailsAiContext
       # that reaches neither ActiveJob nor a Sidekiq mixin is no job and no job base.
       def base?(name)
         SuperclassChain.abstract_base?(name, inherited: inherited_names.include?(name)) &&
-          (worker?(name) || active_job?(name))
+          (worker?(name) || active_job?(name) || que_job?(name))
       end
 
       def reflected_bases
@@ -283,12 +347,14 @@ module RailsAiContext
           next if name == "ApplicationJob" || worker?(name) || base?(name)
 
           ast = candidate.ast
-          unknown_base = !active_job?(name)
+          active = active_job?(name)
+          que = !active && que_job?(name)
+          unknown_base = !active && !que
           next if unknown_base && !performs?(ActionResolver.own_methods(ast[:methods], candidate.declared))
 
-          queue = inherited_queue(name)
+          queue = inherited_queue(name) || (queue_name_from_part(nil) if active)
 
-          perform_method = ast[:methods].find { |m| m[:name] == "perform" && m[:scope] == :instance }
+          perform_method = ActionResolver.entry_point(ast[:methods], names: que ? ActionResolver::QUE_ENTRY_POINTS : ActionResolver::ENTRY_POINTS)
           perform_signature = ActionResolver.parameter_list(perform_method) if perform_method && perform_method[:params]&.any?
 
           # Extract job callbacks
@@ -305,6 +371,7 @@ module RailsAiContext
           job[:queue] = queue if queue
           job[:retries] = retries if retries.any?
           job[:perform_signature] = perform_signature if perform_signature
+          job[:entry_point] = perform_method[:name] if perform_method && perform_method[:name] != "perform"
           job[:callbacks] = callbacks if callbacks.any?
           job
         end.sort_by { |j| j[:name] }
@@ -336,7 +403,7 @@ module RailsAiContext
             options: inherited_options(name),
             inherited_from: option_sources(name).presence,
             throttle: throttle && throttle_summary(throttle),
-            entry_point: entry && entry[:name] == "execute" ? "execute" : nil,
+            entry_point: entry && entry[:name] != "perform" ? entry[:name] : nil,
             perform_signature: entry && entry[:params]&.any? ? ActionResolver.parameter_list(entry) : nil,
             retries: retries.any? ? retries : nil,
             calls: calls.any? ? calls : nil
@@ -405,18 +472,27 @@ module RailsAiContext
 
       # Whether the chain reaches ActiveJob. The job directories answer first, since a base
       # there is often namespace-relative; anything else goes through the autoload roots.
-      def active_job?(name, seen = [])
+      def active_job?(name)
+        reaches?(name, ACTIVE_JOB_BASES)
+      end
+
+      # Que jobs subclass Que::Job and define run rather than perform.
+      def que_job?(name)
+        reaches?(name, QUE_JOB_BASES)
+      end
+
+      def reaches?(name, bases, seen = [])
         return false if seen.include?(name)
 
         candidate = job_candidates[name] or return false
         parent = candidate.superclass or return false
-        return true if ACTIVE_JOB_BASES.include?(parent)
+        return true if bases.include?(parent)
 
         resolved = superclass_of(name)
-        return active_job?(resolved, seen + [ name ]) if resolved
+        return reaches?(resolved, bases, seen + [ name ]) if resolved
 
         @superclass_lookup ||= SuperclassChain.lookup_for(app.root)
-        SuperclassChain.to(candidate.source, bases: ACTIVE_JOB_BASES,
+        SuperclassChain.to(candidate.source, bases: bases,
                            lookup: @superclass_lookup, only: candidate.declared).any?
       end
 
@@ -458,23 +534,10 @@ module RailsAiContext
         worker?(parent, seen + [ name ])
       end
 
-      def extract_solid_queue_recurring
-        paths = [
-          File.join(app.root, "config", "recurring.yml"),
-          File.join(app.root, "config", "solid_queue.yml")
-        ]
-        path = paths.find { |p| File.exist?(p) }
-        return [] unless path
-
-        content = RailsAiContext::SafeFile.read(path)
-        return [] unless content
-        jobs = []
-        content.scan(/(\w+):\s*\n\s+class:\s*(\w+).*?(?:schedule:\s*["']?([^"'\n]+))?/m) do |name, klass, schedule|
-          jobs << { name: name, class: klass, schedule: schedule&.strip }.compact
-        end
-        jobs
+      def recurring_jobs
+        RecurringSchedules.read(app.root, @config_walks ||= {})
       rescue => e
-        RailsAiContext.debug_fail(e, [], label: "extract_solid_queue_recurring")
+        RailsAiContext.debug_fail(e, [], label: "recurring_jobs")
       end
 
       # Read as YAML so a path in a comment is no queue. Sidekiq's keys may be symbols or
@@ -806,16 +869,36 @@ module RailsAiContext
       def extract_channels_from_source
         # ApplicationCable holds the base Channel and Connection, neither of
         # which is a channel of the app's own.
-        source_classes("app/channels").filter_map do |klass|
+        channel_sources.filter_map do |klass|
           next if klass.name.start_with?("ApplicationCable::")
 
-          stream_methods = ActionResolver.own_methods(klass.methods, klass.name)
-                                         .select { |m| m[:scope] == :instance }
-                                         .map { |m| m[:name] }
-                                         .select { |m| m.start_with?("stream_") || m == "subscribed" }
-          { name: klass.name, file: klass.file, stream_methods: stream_methods,
-            confidence: RailsAiContext::Confidence::STATIC }
+          own = ActionResolver.own_methods(klass.methods, klass.name).select { |m| m[:scope] == :instance }
+          names = own.map { |m| m[:name] }
+          actions = own.select { |m| m[:visibility] == :public }.map { |m| m[:name] }
+                       .reject { |m| CHANNEL_LIFECYCLE.include?(m) || m.start_with?("stream_") }
+          { name: klass.name, file: klass.file,
+            stream_methods: names.select { |m| m.start_with?("stream_") || m == "subscribed" },
+            streams: extract_channel_streams(klass.macros),
+            periodic: extract_channel_periodic(klass.macros),
+            actions: actions.empty? ? nil : actions.uniq.sort,
+            confidence: RailsAiContext::Confidence::STATIC }.compact
         end.sort_by { |c| c[:name] }
+      end
+
+      CHANNEL_LIFECYCLE = %w[subscribed unsubscribed].freeze
+
+      # `identified_by` is a Connection macro: what every channel reads as its own
+      # `current_user`. Read from source in both tiers, so both give one answer.
+      def extract_connections
+        channel_sources.filter_map do |klass|
+          ids = extract_identified_by(klass.macros) or next
+          { name: klass.name, file: klass.file, identified_by: ids }
+        end.sort_by { |c| c[:name] }
+      end
+
+      # One walk of app/channels, shared by channels, connections and the booted tier.
+      def channel_sources
+        @channel_sources ||= source_classes("app/channels", macros: CHANNEL_MACROS)
       end
 
       # Class name, method list and file for every .rb of a kind, read from
@@ -885,11 +968,13 @@ module RailsAiContext
         ActionCable::Channel::Base.descendants.filter_map do |channel|
           next if channel.name.nil? || channel.name == "ApplicationCable::Channel"
 
-          macros = channel_macros(channel_source(channel))
+          file = source_file_for(channel)
+          macros = channel_sources.find { |klass| klass.file == file }&.macros ||
+                   channel_macros(channel_source(channel))
 
           {
             name:           channel.name,
-            file:           source_file_for(channel),
+            file:           file,
             stream_methods: channel.instance_methods(false)
               .select { |m| m.to_s.start_with?("stream_") || m == :subscribed }
               .map(&:to_s),
@@ -945,22 +1030,22 @@ module RailsAiContext
         result.empty? ? nil : result
       end
 
-      # `periodically :method_name, every: 3.seconds`. The interval keeps its
-      # source form so lambdas like `-> { current_user.interval }` survive whole.
+      # `periodically :method_name, every: 3.seconds` or `periodically every: 3.seconds do`.
+      # The interval keeps its source form so lambdas like `-> { current_user.interval }`
+      # survive whole.
       def extract_channel_periodic(macros)
-        timers = macros.select { |hit| hit[:macro] == :periodically }.filter_map do |hit|
+        timers = macros.select { |hit| hit[:macro] == :periodically }.map do |hit|
           method_name = hit[:args].first
-          next unless method_name
-          { method: method_name.to_s, every: hit[:option_values][:every].to_s }
+          timer = method_name ? { method: method_name.to_s } : { block: true }
+          timer.merge(every: hit[:option_values][:every].to_s)
         end
         timers.any? ? timers : nil
       end
 
       # RPC actions = public instance methods that aren't lifecycle hooks or stream helpers.
       def extract_channel_actions(channel)
-        ignored = %i[subscribed unsubscribed]
         actions = channel.instance_methods(false).reject do |m|
-          ignored.include?(m) || m.to_s.start_with?("stream_")
+          CHANNEL_LIFECYCLE.include?(m.to_s) || m.to_s.start_with?("stream_")
         end
         actions.empty? ? nil : actions.map(&:to_s).sort
       end

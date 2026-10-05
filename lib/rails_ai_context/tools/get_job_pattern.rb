@@ -50,9 +50,10 @@ module RailsAiContext
 
         sidekiq_line = sidekiq_queues_line(jobs_data)
         workers = (jobs_data.is_a?(Hash) ? jobs_data[:workers] : nil) || []
+        schedules = Array(jobs_data.is_a?(Hash) ? jobs_data[:recurring_jobs] : nil).select { |task| task.is_a?(Hash) }
 
         if job
-          return format_single_job(job, jobs, real_root, sidekiq_line, workers, job_bases(jobs_data), enqueue_helpers)
+          return format_single_job(job, jobs, real_root, sidekiq_line, workers, job_bases(jobs_data), enqueue_helpers, schedules)
         end
 
         # No jobs and no channels - bail out. Channel absence is only a real
@@ -71,7 +72,15 @@ module RailsAiContext
         end
         if channels.any?
           lines << "" if lines.any?
-          lines.concat(format_channels_section(channels))
+          lines.concat(format_channels_section(channels, jobs_data[:connections]))
+        end
+        if detail == "full" && schedules.any?
+          lines << "" if lines.any?
+          lines << "## Recurring Tasks"
+          schedules.each do |task|
+            label = task[:name] ? "`#{task[:name]}`: " : ""
+            lines << "- #{label}`#{task[:class] || task[:command]}` #{schedule_text(task)}"
+          end
         end
         bases = bases_note("jobs", job_bases(jobs_data).map { |base| base[:name] })
         if bases
@@ -185,7 +194,7 @@ module RailsAiContext
         (jobs_data.is_a?(Hash) ? jobs_data[:job_bases] : nil).then { |list| Array(list).select { |b| b.is_a?(Hash) } }
       end
 
-      private_class_method def self.format_single_job(job, jobs, root, sidekiq_line, workers, bases = [], helpers = [])
+      private_class_method def self.format_single_job(job, jobs, root, sidekiq_line, workers, bases = [], helpers = [], schedules = [])
         names = jobs.map { |j| j[:name] }
         worker_names = workers.map { |w| w[:name] }.compact
         # A base answers by name because every listing, the empty one too,
@@ -251,7 +260,8 @@ module RailsAiContext
         end
 
         # A worker or base declares its queue in `sidekiq_options`, which the introspector read.
-        queue = extract_queue(source) || (record && (record[:queue] || (record[:options] || {})["queue"]))
+        # The record's queue carries the app's prefix and delimiter, which the source line does not.
+        queue = (record && (record[:queue] || (record[:options] || {})["queue"])) || extract_queue(source)
         lines << "**Queue:** #{queue_text(queue)}" if queue
         lines << "**Throttle:** #{worker[:throttle]}" if worker && worker[:throttle]
         if base && (declares = Array(base[:declares])).any?
@@ -266,11 +276,11 @@ module RailsAiContext
         end
 
         # Perform method signature
-        perform_sig = extract_perform_signature(source)
+        perform_sig = extract_perform_signature(source, record)
         lines << "**Perform:** `#{perform_sig}`" if perform_sig
 
         # Guard clauses
-        guards = extract_guard_clauses(source)
+        guards = extract_guard_clauses(source, record)
         if guards.any?
           lines << "" << "## Guard Clauses"
           guards.each { |g| lines << "- `#{g}`" }
@@ -290,9 +300,8 @@ module RailsAiContext
           broadcasts.each { |b| lines << "- `#{b}`" }
         end
 
-        # Sidekiq-cron / recurring schedule
-        schedule = extract_schedule(source, class_name, root)
-        lines << "**Schedule:** #{schedule}" if schedule
+        scheduled = schedules.select { |task| task[:class] == class_name }
+        lines << "**Schedule:** #{scheduled.map { |task| schedule_text(task) }.join('; ')}" if scheduled.any?
 
         # Side effects
         side_effects = extract_side_effects(source)
@@ -336,7 +345,8 @@ module RailsAiContext
             # No ActiveJob or Sidekiq ancestry found, and the bracket says so.
             unknown_base: job[:unknown_base],
             retry_config: Array(job[:retries]),
-            perform_sig: source ? extract_perform_signature(source) : job[:perform_signature],
+            entry_point: job[:entry_point],
+            perform_sig: source ? extract_perform_signature(source, job) : job[:perform_signature],
             dependencies: source ? Introspectors::SourceCalls.calls(source, own: class_name) : []
           }
         end
@@ -382,7 +392,7 @@ module RailsAiContext
             # Read source for additional detail
             source = j[:file] && safe_read(File.join(root, j[:file]))
             if source
-              guards = extract_guard_clauses(source)
+              guards = extract_guard_clauses(source, j)
               lines << "- **Guards:** #{guards.join('; ')}" if guards.any?
 
               broadcasts = extract_broadcasts(source)
@@ -406,16 +416,18 @@ module RailsAiContext
       end
 
       private_class_method def self.queue_label(job)
-        return " [#{job[:queue]}]" if job[:queue]
-
-        job[:unknown_base] ? " [unknown base]" : ""
+        [ (" [#{job[:queue]}]" if job[:queue]), (" [unknown base]" if job[:unknown_base]) ].join
       end
 
       # Renders the v5.8.0 enriched Action Cable channel detail produced by
       # JobIntrospector#extract_channels (identified_by, streams, periodic, actions).
       # Returns lines, not a Response - caller composes.
-      private_class_method def self.format_channels_section(channels)
+      private_class_method def self.format_channels_section(channels, connections = nil)
         lines = [ "# Action Cable Channels (#{channels.size})", "" ]
+        Array(connections).each do |c|
+          lines << "**Connection:** `#{c[:name]}` identified by #{Array(c[:identified_by]).map { |i| "`#{i}`" }.join(', ')}"
+        end
+        lines << "" if Array(connections).any?
 
         channels.each do |c|
           lines << "## `#{c[:name]}`"
@@ -436,7 +448,7 @@ module RailsAiContext
           if (periodic = c[:periodic]) && periodic.any?
             lines << "- **Periodic timers:**"
             periodic.each do |t|
-              lines << "  - `#{t[:method]}` every `#{t[:every]}`"
+              lines << "  - #{t[:method] ? "`#{t[:method]}`" : "a block"} every `#{t[:every]}`"
             end
           end
 
@@ -459,18 +471,21 @@ module RailsAiContext
         match[1] if match
       end
 
-      private_class_method def self.perform_method(source)
-        Introspectors::ActionResolver.entry_point(Introspectors::ActionResolver.methods_in(source))
+      # The introspector named the entry point when it is not perform: Que's run, or a base's execute.
+      private_class_method def self.perform_method(source, record = nil)
+        entry = record && record[:entry_point]
+        Introspectors::ActionResolver.entry_point(Introspectors::ActionResolver.methods_in(source),
+          names: entry ? [ entry ] : Introspectors::ActionResolver::ENTRY_POINTS)
       end
 
-      private_class_method def self.extract_perform_signature(source)
-        perform = perform_method(source)
+      private_class_method def self.extract_perform_signature(source, record = nil)
+        perform = perform_method(source, record)
         Introspectors::ActionResolver.signature(perform) if perform
       end
 
       # The `return` lines inside perform's own body, first ten.
-      private_class_method def self.extract_guard_clauses(source)
-        perform = perform_method(source)
+      private_class_method def self.extract_guard_clauses(source, record = nil)
+        perform = perform_method(source, record)
         body = perform && Introspectors::ActionResolver.body_of(source, perform)
         return [] unless body
 
@@ -509,44 +524,8 @@ module RailsAiContext
         effects.to_a.sort
       end
 
-      private_class_method def self.extract_schedule(source, class_name, root)
-        # Check for sidekiq-cron in config/sidekiq.yml or config/schedule.yml
-        schedule_files = %w[config/sidekiq.yml config/sidekiq_cron.yml config/schedule.yml config/recurring.yml]
-        schedule_files.each do |file|
-          path = File.join(root, file)
-          content = safe_read(path)
-          next unless content
-          next unless content.include?(class_name)
-
-          # Extract the cron expression near the class name
-          content.each_line do |line|
-            if line.include?("cron:") && content_near_class?(content, class_name, line)
-              cron = line.match(/cron:\s*["']?([^"'\n]+)/)
-              return "#{cron[1].strip} (from #{file})" if cron
-            end
-          end
-
-          return "scheduled (found in #{file})"
-        end
-
-        # Check for inline Sidekiq::Cron or recurring
-        if source.match?(/sidekiq_options\s+.*cron:|recurring\b/)
-          match = source.match(/cron:\s*["']([^"']+)["']/)
-          return match[1] if match
-        end
-
-        nil
-      end
-
-      private_class_method def self.content_near_class?(content, class_name, target_line)
-        lines = content.lines
-        target_idx = lines.index(target_line)
-        return false unless target_idx
-
-        # Check surrounding lines (within 5 lines) for the class name
-        start_idx = [ target_idx - 5, 0 ].max
-        end_idx = [ target_idx + 5, lines.size - 1 ].min
-        lines[start_idx..end_idx].any? { |l| l.include?(class_name) }
+      private_class_method def self.schedule_text(task)
+        "#{task[:schedule]} (#{"#{task[:env]}, " if task[:env]}from #{task[:file]})"
       end
 
       # Read off call nodes, so a call inside a comment does not count. The app's own enqueue

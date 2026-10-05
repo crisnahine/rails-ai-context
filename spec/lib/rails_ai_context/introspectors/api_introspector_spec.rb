@@ -95,30 +95,43 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
       end
 
       context "with OpenAPI spec files" do
-        let(:openapi_dir) { File.join(Rails.root, "openapi") }
-        let(:swagger_dir) { File.join(Rails.root, "swagger") }
-        let(:docs_dir) { File.join(Rails.root, "docs") }
+        let(:dirs) { %w[openapi swagger docs public doc app/api].map { |d| File.join(Rails.root, d) } }
+
+        def write(relative, content)
+          path = File.join(Rails.root, relative)
+          FileUtils.mkdir_p(File.dirname(path))
+          File.write(path, content)
+        end
 
         before do
-          FileUtils.mkdir_p(openapi_dir)
-          FileUtils.mkdir_p(File.join(swagger_dir, "v2"))
-          FileUtils.mkdir_p(docs_dir)
-          File.write(File.join(openapi_dir, "v1.yaml"), "openapi: 3.0.0")
-          File.write(File.join(swagger_dir, "v2", "api.json"), "{}")
-          File.write(File.join(docs_dir, "schema.yml"), "---")
+          write("openapi/v1.yaml", "openapi: 3.0.0\ninfo: { title: A, version: '1' }\n")
+          write("swagger/v2/api.json", '{"swagger": "2.0", "info": {}}')
+          write("docs/_config.yml", "title: My docs site\n")
+          write("docs/locales/en.yml", "en: { hello: Hi }\n")
+          write("docs/nested.yml", "components:\n  openapi: 3.0.0\n")
+          write("public/openapi.yml", "# the public spec\nopenapi: 3.0.0\n")
+          write("doc/api/openapi.yaml", "openapi: 3.0.0\n")
+          write("app/api/v0/openapi.json", '{"openapi":"3.0.0", "paths": {}}')
+          write("public/broken.json", '{"openapi": ')
         end
 
-        after do
-          FileUtils.rm_rf(openapi_dir)
-          FileUtils.rm_rf(swagger_dir)
-          FileUtils.rm_rf(docs_dir)
+        after { dirs.each { |dir| FileUtils.rm_rf(dir) } }
+
+        it "lists the files whose top-level key is openapi or swagger, wherever they live" do
+          expect(result[:openapi_spec]).to eq(%w[
+            app/api/v0/openapi.json doc/api/openapi.yaml openapi/v1.yaml public/openapi.yml swagger/v2/api.json
+          ])
         end
 
-        it "detects OpenAPI spec files across all search paths" do
-          specs = result[:openapi_spec]
-          expect(specs).to include("openapi/v1.yaml")
-          expect(specs).to include("swagger/v2/api.json")
-          expect(specs).to include("docs/schema.yml")
+        it "lists a spec over the per-file read limit by its head" do
+          allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(1_000)
+          paths = (1..2_000).to_h { |i| [ "/items/#{i}", { "get" => { "summary" => "Item #{i}" } } ] }
+          write("swagger/v1/big.json", JSON.generate({ "openapi" => "3.0.0", "paths" => paths }))
+          write("swagger/v1/big.yaml", "openapi: 3.0.0\npaths:\n" + paths.keys.map { |key| "  #{key}: {}\n" }.join)
+          write("swagger/v1/nested_big.json", JSON.generate({ "x" => { "openapi" => "3.0.0" }, "info" => paths }))
+
+          expect(result[:openapi_spec]).to include("swagger/v1/big.json", "swagger/v1/big.yaml")
+          expect(result[:openapi_spec]).not_to include("swagger/v1/nested_big.json")
         end
       end
     end
@@ -700,6 +713,44 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
         static = described_class.new(RailsAiContext::StaticApp.new(root)).static_call
         expect(static[:serializers][:serializer_classes]).to eq([ "PostSerializer", "SharedFields" ])
       end
+    end
+
+    def static_serializers(files)
+      Dir.mktmpdir do |root|
+        files.each do |relative, content|
+          FileUtils.mkdir_p(File.dirname(File.join(root, relative)))
+          File.write(File.join(root, relative), content)
+        end
+        return described_class.new(RailsAiContext::StaticApp.new(root)).static_call[:serializers]
+      end
+    end
+
+    it "reads Blueprinter blueprints, Alba resources and RABL templates as the serialization layer" do
+      serializers = static_serializers(
+        "app/blueprints/account_blueprint.rb" => "class AccountBlueprint < Blueprinter::Base\n  identifier :id\n  fields :email\nend\n",
+        "app/resources/account_resource.rb" => "class AccountResource\n  include Alba::Resource\n  attributes :id, :email\nend\n",
+        "app/resources/admin_resource.rb" => "class AdminResource < AccountResource\nend\n",
+        "app/resources/plain.rb" => "class Plain\nend\n",
+        "app/views/accounts/show.json.rabl" => "object @account\nattributes :id, :email\n"
+      )
+
+      expect(serializers[:serializer_classes]).to eq(%w[AccountBlueprint AccountResource AdminResource])
+      expect(serializers[:rabl]).to eq(1)
+    end
+
+    it "does not count an Active Job argument serializer as a response serializer" do
+      serializers = static_serializers(
+        "app/serializers/money_serializer.rb" => <<~RUBY,
+          class MoneySerializer < ActiveJob::Serializers::ObjectSerializer
+            def serialize(money) = super("cents" => money.cents)
+            def deserialize(hash) = hash["cents"]
+            def klass = Integer
+          end
+        RUBY
+        "app/serializers/post_serializer.rb" => "class PostSerializer < ActiveModel::Serializer\nend\n"
+      )
+
+      expect(serializers[:serializer_classes]).to eq(%w[PostSerializer])
     end
 
     it "answers every key the booted tier answers, since only the mode needs a runtime" do

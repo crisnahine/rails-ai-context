@@ -63,6 +63,8 @@ module RailsAiContext
         rails_auth = detect_rails_auth
         auth[:rails_auth] = rails_auth if rails_auth
 
+        auth[:rodauth] = { classes: rodauth_classes } if gem_present?("rodauth-rails")
+
         # has_secure_password
         secure_pw = scan_models_for_macro(:has_secure_password)
         auth[:has_secure_password] = secure_pw.map { |m| m[:model] } if secure_pw.any?
@@ -134,6 +136,16 @@ module RailsAiContext
         end
       end
 
+      # rodauth-rails generates its auth class into app/misc.
+      def rodauth_classes
+        SourceScan.each(root, kind: "app/misc").flat_map { |record|
+          DeclaredConstant.declarations(record.source)
+            .select { |d| d.superclass.to_s.delete_prefix("::") == "Rodauth::Rails::Auth" }.map(&:name)
+        }.uniq.sort
+      rescue => e
+        RailsAiContext.debug_fail(e, [], label: "rodauth_classes")
+      end
+
       # A gem is named only when the app bundles it: an app can have app/policies without pundit.
       def detect_authorization
         authz = {}
@@ -148,7 +160,11 @@ module RailsAiContext
           policies = Dir.glob(File.join(policies_dir, "**/*.rb")).map do |f|
             f.sub("#{policies_dir}/", "").delete_suffix(".rb").camelize
           end.sort
-          authz[gem_present?("pundit") ? :pundit : :policies] = policies if policies.any?
+          key = if gem_present?("pundit") then :pundit
+          elsif gem_present?("action_policy") then :action_policy
+          else :policies
+          end
+          authz[key] = policies if policies.any?
         end
 
         if file_exists?("app/models/ability.rb")

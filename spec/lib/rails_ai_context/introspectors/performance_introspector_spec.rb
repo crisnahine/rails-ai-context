@@ -583,6 +583,37 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
         expect(missing).to contain_exactly(a_hash_including(association: "tokens"))
       end
 
+      def counter_culture_missing(post_body)
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "models"))
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "app", "models", "user.rb"), "class User < ApplicationRecord\n  has_many :posts\nend\n")
+          File.write(File.join(dir, "app", "models", "post.rb"), "class Post < ApplicationRecord\n  belongs_to :user\n#{post_body}end\n")
+          File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+            create_table "users" do |t|
+              t.integer "posts_count", default: 0
+            end
+            create_table "posts" do |t|
+              t.integer "user_id"
+            end
+          RUBY
+          described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_counter_cache]
+        end
+      end
+
+      # counter_culture keeps the column; counter_cache: true on top counts every create twice.
+      it "says nothing about a column counter_culture keeps" do
+        expect(counter_culture_missing("  counter_culture :user\n")).to eq([])
+        expect(counter_culture_missing("  counter_culture :user, column_name: \"posts_count\"\n")).to eq([])
+        expect(counter_culture_missing("  counter_culture :user, column_name: proc { |p| p.live? ? \"posts_count\" : nil }\n")).to eq([])
+      end
+
+      it "still flags a column counter_culture does not keep" do
+        expect(counter_culture_missing("  counter_culture :user, column_name: \"live_posts_count\"\n"))
+          .to contain_exactly(a_hash_including(model: "User", column: "posts_count"))
+        expect(counter_culture_missing("")).to contain_exactly(a_hash_including(model: "User", column: "posts_count"))
+      end
+
       # Following the hint on a counter the app maintains itself double-counts
       # every create and makes a reset stick only until the next destroy.
       it "says nothing about a counter the app writes itself" do

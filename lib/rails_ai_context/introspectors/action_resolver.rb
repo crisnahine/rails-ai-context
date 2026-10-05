@@ -136,11 +136,14 @@ module RailsAiContext
           .map { |m| signature(m) }.uniq
       end
 
-      # `perform`, or `execute` where a base class owns perform and calls it.
-      # ponytail: those two names only; another base's entry point reads as no signature.
-      def entry_point(methods)
+      ENTRY_POINTS = %w[perform execute].freeze
+      QUE_ENTRY_POINTS = %w[run].freeze
+
+      # `perform`, or `execute` where a base class owns perform and calls it; a Que job passes `run`.
+      # ponytail: those names only; another base's entry point reads as no signature.
+      def entry_point(methods, names: ENTRY_POINTS)
         instance = methods.select { |m| m[:scope] == :instance }
-        instance.find { |m| m[:name] == "perform" } || instance.find { |m| m[:name] == "execute" }
+        names.lazy.filter_map { |name| instance.find { |m| m[:name] == name } }.first
       end
 
       # The method as written, minus a `self.` receiver: `build(attrs)`.

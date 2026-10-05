@@ -285,6 +285,19 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
         expect(text).to include("speak")
       end
 
+      it "names a block timer and the connection's identifiers" do
+        payload = channel_payload.merge(
+          connections: [ { name: "ApplicationCable::Connection", file: "app/channels/application_cable/connection.rb",
+                           identified_by: %w[current_user] } ]
+        )
+        payload[:channels].first[:periodic] << { block: true, every: "10.seconds" }
+        allow(described_class).to receive(:cached_context).and_return(jobs: payload)
+
+        text = described_class.call.content.first[:text]
+        expect(text).to include("  - a block every `10.seconds`")
+        expect(text).to include("**Connection:** `ApplicationCable::Connection` identified by `current_user`")
+      end
+
       it "still works when no jobs exist but channels do" do
         result = described_class.call
         text = result.content.first[:text]
@@ -429,6 +442,171 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
     end
   end
 
+  describe "schedules" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    def write(relative, content)
+      path = File.join(tmpdir, relative)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, content)
+    end
+
+    before do
+      %w[CleanupJob RecordsJob NightlyJob].each do |name|
+        write("app/jobs/#{name.underscore}.rb", "class #{name} < ApplicationJob\n  def perform; end\nend\n")
+      end
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    def text_for(**args)
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+      described_class.call(**args).content.first[:text]
+    end
+
+    it "names a single job's queue with the configured prefix" do
+      write("config/application.rb", "config.active_job.queue_name_prefix = \"myapp\"\n")
+      write("app/jobs/cleanup_job.rb", "class CleanupJob < ApplicationJob\n  queue_as :low\n  def perform; end\nend\n")
+      expect(text_for(job: "CleanupJob")).to include("**Queue:** `myapp_low`")
+    end
+
+    it "reads an interpolated queue_name_prefix as computed, never as a made-up queue name" do
+      write("config/application.rb", "config.active_job.queue_name_prefix = \"myapp_\#{Rails.env}\"\n")
+      write("app/jobs/cleanup_job.rb", "class CleanupJob < ApplicationJob\n  queue_as :low\n  def perform; end\nend\n")
+      text = text_for(job: "CleanupJob")
+      expect(text).to include("**Queue:** `\"myapp_\#{Rails.env}\"`_low (computed)")
+      expect(text_for).not_to include("[INFERRED]")
+    end
+
+    it "reads a constant queue_name_prefix as its source, not as a literal name" do
+      write("config/application.rb", "config.active_job.queue_name_prefix = PREFIX\n")
+      write("app/jobs/cleanup_job.rb", "class CleanupJob < ApplicationJob\n  queue_as :low\n  def perform; end\nend\n")
+      expect(text_for(job: "CleanupJob")).to include("**Queue:** `PREFIX`_low (computed)")
+    end
+
+    it "names the condition a queue_name_prefix is set under" do
+      write("config/application.rb", "config.active_job.queue_name_prefix = \"myapp\" if ENV[\"PREFIXED\"]\n")
+      write("app/jobs/cleanup_job.rb", "class CleanupJob < ApplicationJob\n  queue_as :low\n  def perform; end\nend\n")
+      expect(text_for(job: "CleanupJob")).to include("**Queue:** myapp_low (queue_name_prefix set only when `ENV[\"PREFIXED\"]`)")
+    end
+
+    it "walks config/application.rb once for the queue settings and the GoodJob cron" do
+      write("config/application.rb", <<~RUBY)
+        config.active_job.queue_name_prefix = "myapp"
+        config.good_job.cron = { nightly: { cron: "0 3 * * *", class: "NightlyJob" } }
+      RUBY
+      allow(RailsAiContext::Introspectors::Listeners::ConfigAssignmentListener).to receive(:new).and_call_original
+      text_for(detail: "full")
+      expect(RailsAiContext::Introspectors::Listeners::ConfigAssignmentListener).to have_received(:new).once
+    end
+
+    context "with a Solid Queue recurring.yml" do
+      before do
+        write("config/recurring.yml", <<~YAML)
+          # examples:
+          #   periodic_cleanup:
+          #     class: CleanSoftDeletedRecordsJob
+          #     schedule: every hour
+
+          production:
+            clear_solid_queue_finished_jobs:
+              command: "SolidQueue::Job.clear_finished_in_batches(sleep_between_batches: 0.3)"
+              schedule: every hour at minute 12
+            nightly_cleanup:
+              class: CleanupJob
+              schedule: every day at 3am
+        YAML
+      end
+
+      it "gives the task's schedule and environment" do
+        expect(text_for(job: "CleanupJob")).to include("**Schedule:** every day at 3am (production, from config/recurring.yml)")
+      end
+
+      it "does not count a name inside a comment as scheduled" do
+        expect(text_for(job: "RecordsJob")).not_to include("**Schedule:**")
+      end
+
+      it "lists every recurring task, a command task included, in the full listing" do
+        text = text_for(detail: "full")
+        expect(text).to include("## Recurring Tasks")
+        expect(text).to include("- `clear_solid_queue_finished_jobs`: `SolidQueue::Job.clear_finished_in_batches(sleep_between_batches: 0.3)` " \
+                                "every hour at minute 12 (production, from config/recurring.yml)")
+        expect(text).to include("- `nightly_cleanup`: `CleanupJob` every day at 3am (production, from config/recurring.yml)")
+      end
+    end
+
+    it "reads GoodJob cron from config/application.rb" do
+      write("config/application.rb", <<~RUBY)
+        module App
+          class Application < Rails::Application
+            config.good_job.enable_cron = true
+            config.good_job.cron = {
+              nightly: { cron: "0 3 * * *", class: "NightlyJob" }
+            }
+          end
+        end
+      RUBY
+      expect(text_for(job: "NightlyJob")).to include("**Schedule:** 0 3 * * * (from config/application.rb)")
+    end
+
+    it "reads a whenever config/schedule.rb runner" do
+      write("config/schedule.rb", <<~RUBY)
+        every 1.day, at: "4:30 am" do
+          runner "CleanupJob.perform_later"
+        end
+      RUBY
+      expect(text_for(job: "CleanupJob")).to include("**Schedule:** every 1.day at 4:30 am (from config/schedule.rb)")
+    end
+
+    it "reads a sidekiq-cron schedule.yml by class, not by substring" do
+      write("config/schedule.yml", <<~YAML)
+        records_cleanup:
+          cron: "*/5 * * * *"
+          class: "CleanSoftDeletedRecordsJob"
+        nightly:
+          cron: "0 3 * * *"
+          class: "NightlyJob"
+      YAML
+      expect(text_for(job: "NightlyJob")).to include("**Schedule:** 0 3 * * * (from config/schedule.yml)")
+      expect(text_for(job: "RecordsJob")).not_to include("**Schedule:**")
+    end
+
+    it "reads a sidekiq-scheduler entry in config/sidekiq.yml, named for its job when no class is given" do
+      write("config/sidekiq.yml", <<~YAML)
+        :scheduler:
+          :schedule:
+            NightlyJob:
+              every: "1h"
+      YAML
+      expect(text_for(job: "NightlyJob")).to include("**Schedule:** 1h (from config/sidekiq.yml)")
+    end
+
+    it "reads a computed GoodJob cron schedule as computed, not as a marker" do
+      write("config/initializers/good_job.rb", <<~RUBY)
+        Rails.application.configure do
+          config.good_job.cron = { nightly: { cron: ENV.fetch("NIGHTLY_CRON"), class: "NightlyJob" } }
+        end
+      RUBY
+      text = text_for(job: "NightlyJob")
+      expect(text).to include("**Schedule:** computed (from config/initializers/good_job.rb)")
+      expect(text).not_to include("[INFERRED]")
+    end
+
+    it "reads a GoodJob cron held in a constant as no schedule" do
+      write("config/initializers/good_job.rb", "Rails.application.configure { config.good_job.cron = CRON }\n")
+      expect(text_for(job: "NightlyJob")).not_to include("**Schedule:**")
+    end
+
+    it "reads a malformed schedule file as no schedule" do
+      write("config/recurring.yml", "production: [unclosed\n")
+      write("config/schedule.yml", "--- just a string\n")
+      write("config/schedule.rb", "every do\n")
+      expect(text_for(job: "CleanupJob")).not_to include("**Schedule:**")
+    end
+  end
+
   # The job's name does not rebuild its path: a pack job lives where the
   # introspector found it, and the tool reads that file through the payload.
   describe "a job in a pack" do
@@ -540,21 +718,61 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
     it "marks it in the listing" do
       text = described_class.call.content.first[:text]
 
-      expect(text).to include("**Archive** [unknown base]")
+      expect(text).to include("**Archive** [file_serve] [unknown base]")
       expect(text).to include("**SendEmailJob** [default]")
     end
 
     it "counts it under its own heading in the queue summary" do
       text = described_class.call(detail: "summary").content.first[:text]
 
-      expect(text).to include("- Archive [unknown base]")
-      expect(text).to include("**Queues:** unknown(1), default(1)")
+      expect(text).to include("- Archive [file_serve] [unknown base]")
+      expect(text).to include("**Queues:** file_serve(1), default(1)")
     end
 
     it "says so on the job's own page" do
       text = described_class.call(job: "Archive").content.first[:text]
 
       expect(text).to include("no ActiveJob or Sidekiq ancestry")
+      expect(text).to include("**Queue:** `file_serve`")
+    end
+  end
+
+  describe "a Que job" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    before do
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "jobs"))
+      File.write(File.join(tmpdir, "app", "jobs", "mail_job.rb"), <<~RUBY)
+        class MailJob < Que::Job
+          self.queue = "mail"
+          def run(account_id)
+            Account.find(account_id)
+          end
+        end
+      RUBY
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "is listed on its queue, and answers by name with its run signature" do
+      expect(described_class.call(detail: "full").content.first[:text]).to include("**Queues:** mail(1)", "## MailJob")
+
+      text = described_class.call(job: "MailJob").content.first[:text]
+      expect(text).to include("**Queue:** `mail`", "**Perform:** `run(account_id)`")
+      expect(text).not_to include("not found")
+    end
+
+    it "does not take run as the entry point of an ActiveJob job" do
+      File.write(File.join(tmpdir, "app", "jobs", "sync_job.rb"), "class SyncJob < ApplicationJob\n  def run(step)\n    return if step.nil?\n  end\nend\n")
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+      expect(described_class.call(job: "SyncJob").content.first[:text]).not_to include("run(step)", "Guard")
+      expect(described_class.call(job: "MailJob").content.first[:text]).to include("**Perform:** `run(account_id)`")
+      expect(described_class.call(detail: "full").content.first[:text]).to include("- **Perform:** `run(account_id)`")
     end
   end
 

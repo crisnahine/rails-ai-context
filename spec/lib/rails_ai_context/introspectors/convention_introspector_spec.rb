@@ -199,6 +199,36 @@ RSpec.describe RailsAiContext::Introspectors::ConventionIntrospector do
       end
     end
 
+    context "gem macros by the names the gems define" do
+      it "detects pg_search, ancestry, closure_tree, Discard and activerecord-multi-tenant" do
+        patterns = patterns_for(models: {
+          "article.rb" => "class Article < ApplicationRecord\n  include PgSearch::Model\n  pg_search_scope :search_by_title, against: :title\nend\n",
+          "node.rb" => "class Node < ApplicationRecord\n  has_ancestry\nend\n",
+          "post.rb" => "class Post < ApplicationRecord\n  include Discard::Model\nend\n",
+          "account.rb" => "class Account < ApplicationRecord\n  multi_tenant :customer\nend\n"
+        })
+
+        expect(patterns).to include("searchable", "nested_set", "soft_delete", "multi_tenancy")
+      end
+
+      it "detects has_closure_tree and multisearchable" do
+        patterns = patterns_for(models: {
+          "tag.rb" => "class Tag < ApplicationRecord\n  has_closure_tree\n  multisearchable against: :name\nend\n"
+        })
+
+        expect(patterns).to include("searchable", "nested_set")
+      end
+
+      it "reads a discarded_at column in the dump as soft delete" do
+        patterns = patterns_for(
+          models: { "post.rb" => "class Post < ApplicationRecord\nend\n" },
+          schema: %(create_table "posts" do |t|\n  t.datetime "discarded_at"\nend\n)
+        )
+
+        expect(patterns).to include("soft_delete")
+      end
+    end
+
     context "when a model file declares more than one class" do
       it "reads past a first class that names no superclass" do
         patterns = patterns_for(

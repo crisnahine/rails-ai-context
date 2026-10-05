@@ -95,6 +95,7 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
                   pundit (2.4.0)
                   stimulus-rails (1.3.4)
                   mongoid (9.0.2)
+                  rswag-api (2.17.0)
 
               PLATFORMS
                 ruby
@@ -104,9 +105,23 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
             LOCK
           end
 
+          it "names action_policy and rolify as auth gems, so onboard can fall back to them" do
+            File.write(File.join(tmpdir, "Gemfile.lock"), lockfile_content.sub(/^(\s*)pundit \(2\.4\.0\)/, "\\1action_policy (0.7.3)\n\\1rolify (6.0.1)"))
+            auth = introspector.call[:notable_gems].select { |gem| gem[:category] == "auth" }.map { |gem| gem[:name] }
+            expect(auth).to include("action_policy", "rolify")
+          end
+
           it "drops the path clause and keeps what the gem is" do
             expect(note_for("pundit")).to eq("Authorization via Pundit policies.")
             expect(note_for("stimulus-rails")).to eq("Stimulus.js controllers.")
+          end
+
+          it "says rswag-api serves from its openapi_root, swagger/ as rswag's installer sets it" do
+            expect(note_for("rswag-api")).to eq("Serves OpenAPI specs from its openapi_root, swagger/ as rswag's installer sets it.")
+
+            FileUtils.mkdir_p(File.join(tmpdir, "config/initializers"))
+            File.write(File.join(tmpdir, "config/initializers/rswag_api.rb"), "")
+            expect(note_for("rswag-api")).to end_with("Set in config/initializers/rswag_api.rb.")
           end
 
           it "keeps a path the note names because the app does not have it" do

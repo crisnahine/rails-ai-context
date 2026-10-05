@@ -16,6 +16,8 @@ module RailsAiContext
         "omniauth"        => { category: :auth, note: "OAuth integration via OmniAuth." },
         "pundit"          => { category: :auth, note: "Authorization via Pundit policies in app/policies/." },
         "cancancan"       => { category: :auth, note: "Authorization via CanCanCan abilities." },
+        "action_policy"   => { category: :auth, note: "Authorization via Action Policy policies in app/policies/." },
+        "rolify"          => { category: :auth, note: "Role management via Rolify." },
         "rodauth-rails"   => { category: :auth, note: "Authentication via Rodauth." },
         "authentication-zero" => { category: :auth, note: "Zero-dependency authentication generator for Rails." },
         "doorkeeper"      => { category: :auth, note: "OAuth 2 provider via Doorkeeper." },
@@ -57,7 +59,7 @@ module RailsAiContext
         "lookbook"        => { category: :frontend, note: "UI component preview and documentation via Lookbook." },
 
         # API
-        "rswag-api"       => { category: :api, note: "Serves OpenAPI specs from openapi/ directory." },
+        "rswag-api"       => { category: :api, note: "Serves OpenAPI specs from its openapi_root, swagger/ as rswag's installer sets it. Set in config/initializers/rswag_api.rb." },
         "rswag-ui"        => { category: :api, note: "Swagger UI for API documentation." },
         "grape-swagger"   => { category: :api, note: "Swagger docs for Grape APIs." },
         "apipie-rails"    => { category: :api, note: "API documentation DSL for Rails." },

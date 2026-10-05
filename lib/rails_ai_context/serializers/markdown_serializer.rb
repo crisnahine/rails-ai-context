@@ -291,10 +291,15 @@ module RailsAiContext
           authn[:devise].each { |d| lines << "- `#{d[:model]}`: #{d[:matches].join(', ')}" }
         end
         lines << "- Rails 8 built-in auth detected" if authn[:rails_auth]
+        lines << "- Rodauth: #{Array(authn.dig(:rodauth, :classes)).join(', ').presence || 'rodauth-rails'}" if authn[:rodauth]
         lines << "- has_secure_password: #{authn[:has_secure_password].join(', ')}" if authn[:has_secure_password]
         if authz[:pundit]
           lines << "### Pundit Policies"
           authz[:pundit].each { |p| lines << "- `#{p}`" }
+        end
+        if authz[:action_policy]
+          lines << "### Action Policy Policies"
+          authz[:action_policy].each { |p| lines << "- `#{p}`" }
         end
         if authz[:policies]
           lines << "### Policy Classes (app/policies)"
@@ -315,6 +320,7 @@ module RailsAiContext
         end
         if data[:serializers]&.any?
           lines << "- Jbuilder templates: #{data[:serializers][:jbuilder]}" if data[:serializers][:jbuilder]
+          lines << "- RABL templates: #{data[:serializers][:rabl]}" if data[:serializers][:rabl]
           if data[:serializers][:serializer_classes]&.any?
             lines << "- Serializers: #{data[:serializers][:serializer_classes].join(', ')}"
           end

@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require "json"
+require "strscan"
+
 module RailsAiContext
   module Introspectors
     # Discovers API layer setup: api_only mode, serializers, GraphQL,
@@ -48,17 +51,14 @@ module RailsAiContext
       def detect_serializers
         result = {}
 
-        # Jbuilder templates
-        jbuilder = PathResolver.view_dirs(root).sum { |dir| ViewFile.glob(root, dir, "**/*.jbuilder").size }
-        result[:jbuilder] = jbuilder if jbuilder > 0
+        PathResolver.view_dirs(root).each do |dir|
+          { jbuilder: "**/*.jbuilder", rabl: "**/*.rabl" }.each do |key, pattern|
+            count = ViewFile.glob(root, dir, pattern).size
+            result[key] = result.fetch(key, 0) + count if count > 0
+          end
+        end
 
-        # Serializer classes (Alba, Blueprinter, JSONAPI, etc.). Named by the
-        # class each file declares: camelizing the path asks the global
-        # inflector, which the static tier never loaded the app's acronyms into.
-        # A file that declares no class (a mixin, or one that did not parse) is
-        # still a serializer file, so it keeps the name its path spells.
-        names = SourceScan.each(root, kind: "app/serializers")
-          .map { |record| DeclaredConstant.resolve(record.source, record.path_name) }.uniq.sort
+        names = serializer_class_names
         result[:serializer_classes] = names if names.any?
 
         # An app that keeps its own serializer layer somewhere else still has
@@ -68,6 +68,59 @@ module RailsAiContext
         result[:serializer_dirs] = other if other.any?
 
         result
+      end
+
+      # Where Blueprinter's generator and Alba's README put their classes; jsonapi-resources
+      # uses app/resources too. A class there counts by what it is, since app/resources
+      # is also a common home for unrelated code.
+      SERIALIZER_KINDS = %w[app/serializers app/blueprints app/resources].freeze
+      SERIALIZER_BASES = %w[
+        Blueprinter::Base ActiveModel::Serializer Panko::Serializer JSONAPI::Resource
+        JSONAPI::Serializable::Resource
+      ].freeze
+      SERIALIZER_MIXINS = %w[Alba::Resource JSONAPI::Serializer FastJsonapi::ObjectSerializer].freeze
+      # Active Job's argument serializers live in app/serializers by the guide's own advice.
+      JOB_ARGUMENT_SERIALIZER = "ActiveJob::Serializers::"
+
+      # Named by the class each file declares: camelizing the path asks the global
+      # inflector, which the static tier never loaded the app's acronyms into. A file
+      # that declares no class (a mixin, or one that did not parse) is still a
+      # serializer file in app/serializers, so it keeps the name its path spells.
+      def serializer_class_names
+        classes = SERIALIZER_KINDS.flat_map do |kind|
+          SourceScan.each(root, kind: kind).map { |record| serializer_candidate(kind, record) }
+        end
+        framework = descendants_of(classes) do |c|
+          SERIALIZER_BASES.include?(c[:superclass]) || (c[:includes] & SERIALIZER_MIXINS).any?
+        end
+        job_arguments = descendants_of(classes) { |c| c[:superclass].to_s.start_with?(JOB_ARGUMENT_SERIALIZER) }
+
+        classes.filter_map { |c|
+          next if job_arguments.include?(c[:name])
+
+          c[:name] if c[:kind] == "app/serializers" || framework.include?(c[:name])
+        }.uniq.sort
+      end
+
+      def serializer_candidate(kind, record)
+        name = DeclaredConstant.resolve(record.source, record.path_name)
+        own = DeclaredConstant.declarations(record.source).find { |d| d.name == name }
+        includes = SourceIntrospector.walk_source(record.source, {
+          includes: -> { Listeners::GenericMacroListener.new(:include) }
+        })[:includes].flat_map { |hit| hit[:values].map { |v| v.to_s.delete_prefix("::") } }
+        { kind: kind, name: name, superclass: own&.superclass&.delete_prefix("::"), includes: includes }
+      end
+
+      # The names the block picks, and every class that inherits one of them.
+      def descendants_of(classes, &picks)
+        found = classes.select(&picks).map { |c| c[:name] }.to_set
+        loop do
+          added = classes.select { |c| !found.include?(c[:name]) && found.include?(c[:superclass]) }
+          break if added.empty?
+
+          added.each { |c| found << c[:name] }
+        end
+        found
       end
 
       # Any `serializers` directory in any app tree the app has, other than
@@ -200,21 +253,57 @@ module RailsAiContext
         dirs.map { |path| path.chomp("/").sub("#{root}/", "") }.uniq.sort
       end
 
-      def detect_openapi_specs
-        globs = %w[
-          openapi/**/*.json openapi/**/*.yaml openapi/**/*.yml
-          swagger/**/*.json swagger/**/*.yaml swagger/**/*.yml
-          public/api-docs/**/*
-          docs/**/*.json docs/**/*.yaml docs/**/*.yml
-        ]
+      # Where apps keep a spec: rswag's swagger/, a docs site, public/ for a served spec,
+      # and app/ beside a Grape or versioned API.
+      OPENAPI_GLOBS = %w[
+        *.{json,yaml,yml} {openapi,swagger,doc,docs,public,app,config}/**/*.{json,yaml,yml}
+      ].freeze
+      OPENAPI_YAML_KEY = /^["']?(?:openapi|swagger)["']?[ \t]*:/
+      OPENAPI_SKIP = %r{(?:\A|/)(?:node_modules|packs|assets|vite)/}
 
-        globs.flat_map { |pattern| Dir.glob(File.join(root, pattern)) }
-             .select { |path| File.file?(path) }
-             .map { |path| path.sub("#{root}/", "") }
-             .sort
-             .uniq
+      # A file is a spec by its top-level `openapi` or `swagger` key, never by where it is.
+      def detect_openapi_specs
+        OPENAPI_GLOBS.flat_map { |pattern| Dir.glob(pattern, base: root.to_s) }
+          .uniq.reject { |relative| relative.match?(OPENAPI_SKIP) }
+          .select { |relative| openapi_document?(relative) }
+          .sort
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "detect_openapi_specs")
+      end
+
+      OPENAPI_KEYS = %w[openapi swagger].freeze
+      OPENAPI_HEAD = 65_536
+
+      # The key sits at the top, so a bounded head decides it: a spec over the
+      # per-file read limit is still listed, and no file is read whole for one key.
+      def openapi_document?(relative)
+        resolution = SafePath.locate(relative, under: root.to_s, max_size: Float::INFINITY)
+        return false unless resolution.ok?
+
+        head = File.read(resolution.realpath, OPENAPI_HEAD).to_s.force_encoding(Encoding::UTF_8).scrub("?")
+        return false unless head.match?(/openapi|swagger/)
+        return head.match?(OPENAPI_YAML_KEY) unless relative.end_with?(".json")
+        return json_top_level_key?(head) if File.size(resolution.realpath) > OPENAPI_HEAD
+
+        parsed = JSON.parse(head)
+        parsed.is_a?(Hash) && OPENAPI_KEYS.any? { |key| parsed.key?(key) }
+      rescue JSON::ParserError, SystemCallError
+        false
+      end
+
+      # A key one object deep in a JSON prefix that may stop mid-token.
+      def json_top_level_key?(head)
+        depth = 0
+        scanner = StringScanner.new(head)
+        until scanner.eos?
+          if scanner.scan(/"((?:[^"\\]|\\.)*)"/)
+            return true if depth == 1 && OPENAPI_KEYS.include?(scanner[1]) && scanner.match?(/\s*:/)
+          elsif scanner.scan(/[\[{]/) then depth += 1
+          elsif scanner.scan(/[\]}]/) then depth -= 1
+          else scanner.scan(/[^"\[\]{}]+/) || scanner.getch
+          end
+        end
+        false
       end
 
       # Per `allow` block, because that is the unit rack-cors applies: one

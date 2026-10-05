@@ -81,7 +81,8 @@ module RailsAiContext
             associations: Listeners::AssociationsListener,
             includes: -> { Listeners::ChainedCallListener.new(:includes) },
             tree: TREE_LISTENER,
-            mixins: Listeners::MixinsListener
+            mixins: Listeners::MixinsListener,
+            counter_culture: -> { Listeners::GenericMacroListener.new(:counter_culture) }
           })
 
           # The listener names the class node alone, so the qualified name is
@@ -111,6 +112,7 @@ module RailsAiContext
             has_many: has_many,
             belongs_to: belongs_to,
             tree_parent_keys: tree_parent_keys(ast, class_name),
+            counter_cultures: ast[:counter_culture].map { |c| counter_culture_record(c) },
             includes_calls: includes_calls
           }
         rescue => e
@@ -343,8 +345,8 @@ module RailsAiContext
             belongs_to_model = association_model(model_data, assoc, model[:name])
             next unless belongs_to_model
             next if belongs_to_model[:belongs_to].any? { |b| b[:options].key?(:counter_cache) }
-
             inverse_name = options[:as] || model[:name].demodulize.underscore
+            next if counter_culture_keeps?(belongs_to_model, inverse_name, count_col)
 
             missing << {
               model: model[:name],
@@ -357,6 +359,25 @@ module RailsAiContext
         end
 
         missing
+      end
+
+      # counter_culture names its column `<child table>_count` unless column_name says
+      # otherwise; a column_name it computes may be this column, so it is not flagged.
+      def counter_culture_keeps?(child, relation, column)
+        Array(child[:counter_cultures]).any? do |culture|
+          next false unless culture[:relation] == relation.to_s
+
+          named = culture.fetch(:column) { "#{child[:name].demodulize.tableize}_count" }
+          named == :computed || named == column
+        end
+      end
+
+      # A multi-level `counter_culture [:a, :b]` counts on a further model and has no relation here.
+      def counter_culture_record(call)
+        node = call[:option_nodes][:column_name]
+        record = { relation: call[:args].first&.to_s }
+        record[:column] = node.is_a?(Prism::StringNode) || node.is_a?(Prism::SymbolNode) ? node.unescaped : :computed if node
+        record
       end
 
       # The class an association declares is the one the app has;

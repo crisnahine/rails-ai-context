@@ -211,7 +211,7 @@ module RailsAiContext
             result = "<%= render #{name}.new#{init == ".new" ? "" : init} do |c| %>"
             slots.each do |slot|
               if slot[:type] == :many
-                result += "\n  <% c.with_#{slot[:name]} do %>item<% end %>"
+                result += "\n  <% c.with_#{slot[:name].to_s.singularize} do %>item<% end %>"
               else
                 result += "\n  <% c.with_#{slot[:name]} do %>content<% end %>"
               end

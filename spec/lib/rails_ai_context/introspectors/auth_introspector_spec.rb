@@ -536,6 +536,41 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
     end
   end
 
+  describe "Rodauth and Action Policy" do
+    it "reads the Rodauth auth class and the Action Policy policies" do
+      Dir.mktmpdir do |dir|
+        root = File.realpath(dir)
+        FileUtils.mkdir_p(File.join(root, "app/misc"))
+        FileUtils.mkdir_p(File.join(root, "app/policies"))
+        File.write(File.join(root, "app/misc/rodauth_main.rb"), <<~RUBY)
+          class RodauthMain < Rodauth::Rails::Auth
+            configure do
+              enable :login
+            end
+          end
+        RUBY
+        File.write(File.join(root, "app/misc/rodauth_app.rb"), "class RodauthApp < Rodauth::Rails::App\nend\n")
+        File.write(File.join(root, "app/policies/application_policy.rb"), "class ApplicationPolicy < ActionPolicy::Base\nend\n")
+        File.write(File.join(root, "Gemfile.lock"), <<~LOCK)
+          GEM
+            remote: https://rubygems.org/
+            specs:
+              action_policy (0.7.7)
+              rodauth-rails (2.2.2)
+
+          DEPENDENCIES
+            action_policy
+            rodauth-rails
+        LOCK
+
+        result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+
+        expect(result[:authentication][:rodauth]).to eq(classes: [ "RodauthMain" ])
+        expect(result[:authorization]).to eq(action_policy: [ "ApplicationPolicy" ])
+      end
+    end
+  end
+
   describe "#gem_present?" do
     around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
 

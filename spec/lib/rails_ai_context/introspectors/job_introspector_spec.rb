@@ -162,6 +162,60 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
     end
   end
 
+  def write_cable_app(dir)
+    FileUtils.mkdir_p(File.join(dir, "app", "channels", "application_cable"))
+    File.write(File.join(dir, "app", "channels", "application_cable", "connection.rb"), <<~RUBY)
+      module ApplicationCable
+        class Connection < ActionCable::Connection::Base
+          identified_by :current_user
+        end
+      end
+    RUBY
+    File.write(File.join(dir, "app", "channels", "chat_channel.rb"), <<~'RUBY')
+      class ChatChannel < ApplicationCable::Channel
+        periodically :ping, every: 30.seconds
+        periodically every: 10.seconds do
+          transmit({ t: Time.now })
+        end
+        def subscribed
+          stream_from "chat_#{params[:room]}"
+          stream_for current_user
+        end
+        def speak(data); end
+        private
+        def ping; end
+      end
+    RUBY
+  end
+
+  # The booted tier reads the same files the static tier does, so both give one answer.
+  describe "channels when booted" do
+    it "reads a block timer and the connection's identifiers" do
+      Dir.mktmpdir do |dir|
+        write_cable_app(dir)
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(dir))
+        base = Class.new
+        stub_const("ActionCable::Channel::Base", base)
+        channel = Class.new(base) do
+          def subscribed; end
+          def speak(data); end
+          private def ping; end
+        end
+        stub_const("ChatChannel", channel)
+        allow(base).to receive(:descendants).and_return([ channel ])
+        allow(Object).to receive(:const_source_location).and_call_original
+        allow(Object).to receive(:const_source_location).with("ChatChannel")
+          .and_return([ File.join(dir, "app", "channels", "chat_channel.rb"), 1 ])
+
+        result = described_class.new(Rails.application).call
+        booted = result[:channels].find { |c| c[:name] == "ChatChannel" }
+        expect(booted[:periodic]).to eq([ { method: "ping", every: "30.seconds" }, { block: true, every: "10.seconds" } ])
+        expect(booted[:actions]).to eq([ "speak" ])
+        expect(result[:connections].map { |c| c[:identified_by] }).to eq([ [ "current_user" ] ])
+      end
+    end
+  end
+
   describe "#extract_channel_actions" do
     let(:channel_class) do
       Class.new do
@@ -398,6 +452,50 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       # Asserting only that the base class is absent passed while the names
       # were unqualified: "Channel" and "Connection" were both counted.
       expect(result[:channels].map { |c| c[:name] }).to eq(%w[ChatChannel])
+    end
+
+    it "reads a channel's streams, timers and actions, and the connection's identifiers" do
+      result = static_result { |dir| write_cable_app(dir) }
+
+      channel = result[:channels].find { |c| c[:name] == "ChatChannel" }
+      expect(channel[:streams]).to eq(stream_from: [ "\"chat_\#{params[:room]}\"" ], stream_for: [ "current_user" ])
+      expect(channel[:periodic]).to eq([ { method: "ping", every: "30.seconds" }, { block: true, every: "10.seconds" } ])
+      expect(channel[:actions]).to eq([ "speak" ])
+      expect(result[:connections]).to eq([ { name: "ApplicationCable::Connection",
+                                             file: "app/channels/application_cable/connection.rb",
+                                             identified_by: [ "current_user" ] } ])
+    end
+
+    # ActiveJob's queue_name_from_part: prefix and name joined by the delimiter,
+    # and a job with no queue_as on the default queue name.
+    it "names queues with the configured prefix, delimiter and default queue name" do
+      result = static_result do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "jobs"))
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "application.rb"), <<~RUBY)
+          module App
+            class Application < Rails::Application
+              config.active_job.queue_name_prefix = "myapp"
+              config.active_job.queue_name_delimiter = "."
+              config.active_job.default_queue_name = "normal"
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "jobs", "cleanup_job.rb"), "class CleanupJob < ApplicationJob\n  queue_as :low\n  def perform; end\nend\n")
+        File.write(File.join(dir, "app", "jobs", "digest_job.rb"), "class DigestJob < ApplicationJob\n  def perform; end\nend\n")
+      end
+
+      queues = result[:jobs].to_h { |job| [ job[:name], job[:queue] ] }
+      expect(queues).to eq("CleanupJob" => "myapp.low", "DigestJob" => "myapp.normal")
+    end
+
+    it "names a job with no queue_as and no queue config the default queue, as the booted app does" do
+      result = static_result do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "jobs"))
+        File.write(File.join(dir, "app", "jobs", "digest_job.rb"), "class DigestJob < ApplicationJob\n  def perform; end\nend\n")
+      end
+
+      expect(result[:jobs].map { |job| job[:queue] }).to eq([ "default" ])
     end
 
     it "names namespaced classes the way the booted app does" do
@@ -1219,6 +1317,52 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
         expect(result[:jobs].map { |j| j[:name] }).to eq(%w[Archive LegacyJob SendEmailJob])
         expect(result[:jobs].map { |j| j[:unknown_base] })
           .to eq([ true, true, nil ])
+      end
+
+      it "reads a Resque job's @queue and lists a Que job, which defines run, with its queue" do
+        result = static_result do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "jobs"))
+          File.write(File.join(dir, "app", "jobs", "archive_job.rb"), <<~RUBY)
+            class ArchiveJob
+              @queue = :archive
+              def self.perform(id)
+                @queue = :other
+              end
+            end
+          RUBY
+          File.write(File.join(dir, "app", "jobs", "mail_job.rb"), <<~RUBY)
+            class MailJob < Que::Job
+              self.queue = "mail"
+              def run(account_id); end
+            end
+          RUBY
+          File.write(File.join(dir, "app", "jobs", "digest_job.rb"), <<~RUBY)
+            class DigestJob < MailJob
+              def run; end
+            end
+          RUBY
+        end
+
+        expect(result[:jobs].map { |j| [ j[:name], j[:queue], j[:unknown_base] ] })
+          .to eq([ [ "ArchiveJob", "archive", true ], [ "DigestJob", "mail", nil ], [ "MailJob", "mail", nil ] ])
+      end
+
+      it "takes run as the entry point of a Que job only, never of an ActiveJob job or a worker" do
+        result = static_result do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "jobs"))
+          FileUtils.mkdir_p(File.join(dir, "app", "workers"))
+          File.write(File.join(dir, "app", "jobs", "mail_job.rb"), "class MailJob < Que::Job\n  def run(account_id); end\nend\n")
+          File.write(File.join(dir, "app", "jobs", "sync_job.rb"), "class SyncJob < ApplicationJob\n  def run(step); end\nend\n")
+          File.write(File.join(dir, "app", "workers", "base_worker.rb"),
+                     "class BaseWorker\n  include Sidekiq::Job\n  def perform(id); run(id); end\nend\n")
+          File.write(File.join(dir, "app", "workers", "sync_worker.rb"), "class SyncWorker < BaseWorker\n  def run(step); end\nend\n")
+        end
+
+        jobs = result[:jobs].to_h { |j| [ j[:name], j[:perform_signature] ] }
+        expect(jobs).to include("MailJob" => "account_id")
+        expect(jobs["SyncJob"]).to be_nil
+        worker = result[:workers].find { |w| w[:name] == "SyncWorker" }
+        expect(worker.slice(:entry_point, :perform_signature)).to eq({})
       end
 
       # The walk already read every file; reading each one again to render it

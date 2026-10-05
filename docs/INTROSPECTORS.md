@@ -220,6 +220,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 | ModelReferenceListener | Model constants used in controllers: `Post.find`, `params.require(:post)`, ivar writes |
 | VariantCallListener | `variant` calls (ChainedCallListener with `:variant` preset) |
 | ProcLiteralListener | Proc literals: line, source, assigned constant |
+| QueueAssignmentListener | A queue a class body assigns outside any method: Resque's `@queue = :name` and Que's `self.queue = "name"`, a literal as its value, anything else as source |
 | MethodCallListener | Call sites by name or pattern anywhere in a file, inside a `def`, a lambda or a block included, with arguments, options, receiver, line and offset. Used by the Turbo introspector for broadcast calls and by `ActionFilters` for the skip macros |
 
 `GenericMacroListener.new(*names, block_source: [:name])` adds `block`, the

@@ -193,60 +193,49 @@ module RailsAiContext
 
         def section_auth(ctx)
           auth = Payload.section(ctx, :auth)
-          lines = [ "## Authentication & Authorization", "" ]
-          has_content = false
+          found = auth ? auth_lines(auth) : []
+          found = auth_gem_lines(ctx) if found.empty?
+          return [] if found.empty?
 
-          if auth
-            authentication = auth[:authentication] || {}
-            authorization = auth[:authorization] || {}
-            if authentication[:method]
-              lines << "Authentication is handled by #{authentication[:method]}."
-              has_content = true
-            end
-            if authentication[:model]
-              lines << "The #{authentication[:model]} model handles user accounts."
-              has_content = true
-            end
-            if authorization[:method]
-              lines << "Authorization uses #{authorization[:method]}."
-              has_content = true
-            end
+          [ "## Authentication & Authorization", "", *found, "" ]
+        end
+
+        # What the auth introspector writes, one sentence per finding.
+        def auth_lines(auth)
+          authn = auth[:authentication] || {}
+          authz = auth[:authorization] || {}
+          modules = auth[:devise_modules_per_model] || {}
+          lines = Array(authn[:devise]).map do |entry|
+            used = Array(modules[entry[:model]])
+            "Authentication via Devise on #{entry[:model]}#{" (#{used.join(', ')})" if used.any?}."
           end
-
-          # Fallback: detect auth from gems if introspector didn't provide data
-          unless has_content
-            notable = Payload.notable_gems(ctx)
-            if notable.any?
-              auth_gem_names = %w[devise omniauth rodauth sorcery clearance authlogic]
-              auth_gems = notable.select { |g| g.is_a?(Hash) && auth_gem_names.include?(g[:name].to_s) }
-              if auth_gems.any?
-                lines << "Authentication via #{auth_gems.map { |g| "#{g[:name]}#{g[:version] ? " (#{g[:version]})" : ""}" }.join(', ')}."
-                has_content = true
-              end
-              authz_gem_names = %w[pundit cancancan action_policy rolify]
-              authz_gems = notable.select { |g| g.is_a?(Hash) && authz_gem_names.include?(g[:name].to_s) }
-              if authz_gems.any?
-                lines << "Authorization via #{authz_gems.map { |g| g[:name] }.join(', ')}."
-                has_content = true
-              end
-            end
+          lines << "Authentication via the Rails authentication generator (Session and Current models)." if authn[:rails_auth]
+          if (rodauth = authn[:rodauth])
+            classes = Array(rodauth[:classes])
+            lines << "Authentication via Rodauth#{" (#{classes.join(', ')})" if classes.any?}."
           end
-
-          # Fallback: detect from conventions (global before_actions like authenticate_user!)
-          unless has_content
-            conv = Payload.section(ctx, :conventions)
-            if conv
-              before_acts = Array(conv[:before_actions]).select { |a| a.to_s.match?(/authenticat|authorize/) }
-              auth_checks = Array(conv[:authorization_checks]) + before_acts
-              if auth_checks.any?
-                lines << "Auth checks detected: #{auth_checks.first(5).join(', ')}."
-                has_content = true
-              end
-            end
+          lines << "has_secure_password on #{authn[:has_secure_password].join(', ')}." if Array(authn[:has_secure_password]).any?
+          lines << "OmniAuth providers: #{authn[:omniauth_providers].join(', ')}." if Array(authn[:omniauth_providers]).any?
+          { pundit: "Pundit", action_policy: "Action Policy" }.each do |key, label|
+            lines << "Authorization via #{label} (#{count_phrase(authz[key].size, "policy")})." if Array(authz[key]).any?
           end
+          lines << "#{count_phrase(authz[:policies].size, "policy class")} in app/policies." if Array(authz[:policies]).any?
+          lines << "Authorization via CanCanCan (app/models/ability.rb)." if authz[:cancancan]
+          lines << "An Ability class in #{authz[:ability_class]}." if authz[:ability_class]
+          lines
+        end
 
-          return [] unless has_content
-          lines << ""
+        AUTH_GEMS = %w[devise omniauth rodauth-rails sorcery clearance authlogic].freeze
+        AUTHZ_GEMS = %w[pundit cancancan action_policy rolify].freeze
+
+        # With no auth section to read, the notable gems still name the framework.
+        def auth_gem_lines(ctx)
+          notable = Payload.notable_gems(ctx).select { |g| g.is_a?(Hash) }
+          authn = notable.select { |g| AUTH_GEMS.include?(g[:name].to_s) }
+          authz = notable.select { |g| AUTHZ_GEMS.include?(g[:name].to_s) }
+          lines = []
+          lines << "Authentication via #{authn.map { |g| "#{g[:name]}#{" (#{g[:version]})" if g[:version]}" }.join(', ')}." if authn.any?
+          lines << "Authorization via #{authz.map { |g| g[:name] }.join(', ')}." if authz.any?
           lines
         end
 
@@ -514,9 +503,8 @@ module RailsAiContext
           if api[:endpoints]&.any?
             lines << "#{count_phrase(api[:endpoints].size, "API endpoint")}."
           end
-          if api[:serializers]&.any?
-            lines << "Serializers: #{api[:serializers].size}."
-          end
+          classes = Array(api.dig(:serializers, :serializer_classes))
+          lines << "Serializers: #{classes.size}." if classes.any?
           lines << ""
           lines
         end
