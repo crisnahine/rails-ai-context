@@ -27,7 +27,14 @@ module RailsAiContext
         Frame = Struct.new(:kind, :visibility, :marks)
 
         CLASS_SCOPE_FRAMES = %i[singleton class_methods].freeze
-        BLOCK_FRAMES = { class_methods: :class_methods, included: :body, concerning: :body }.freeze
+        # A scope's or an association's block extends the relation, and
+        # `concern` builds a module the class does not include: a def in
+        # one is no method of the class.
+        BLOCK_FRAMES = {
+          class_methods: :class_methods, included: :body, concerning: :body,
+          scope: :extension, has_many: :extension, has_and_belongs_to_many: :extension,
+          has_one: :extension, belongs_to: :extension, concern: :extension
+        }.freeze
 
         def on_class_node_enter(node)
           open_frame(:body)
@@ -102,6 +109,7 @@ module RailsAiContext
           scope = def_scope(node)
           method_name = node.name.to_s
           return unless scope
+          return if @frames.last.kind == :extension
           return if method_name == "initialize" && scope == :instance && !@include_initialize
 
           frame = @frames.last

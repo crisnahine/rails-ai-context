@@ -429,4 +429,24 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener, "visib
     )
     expect(methods.find { |m| m[:name] == "total" && m[:scope] == :class }[:signature]).to eq("self.total(items)")
   end
+
+  it "leaves methods in a scope or association extension block out of the model" do
+    source = <<~RUBY
+      class User
+        scope :recent, -> { order(created_at: :desc) } do
+          def first_two = limit(2)
+        end
+        has_many :ext_users, class_name: "User" do
+          def newest; end
+        end
+        has_one :profile do
+          def ignored; end
+        end
+        with_options presence: true do
+          def kept; end
+        end
+      end
+    RUBY
+    expect(rows(source)).to eq([ [ "kept", :instance, :public ] ])
+  end
 end
