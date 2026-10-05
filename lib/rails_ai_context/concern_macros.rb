@@ -687,7 +687,7 @@ module RailsAiContext
           candidates = ConcernPaths.candidate_names(name, within)
           candidate, path = candidates.map { |each| [ each, File.join(dir, "#{each.underscore}.rb") ] }.find { |_, each| File.file?(each) }
           # The file can sit under a shorter path than the constant it declares.
-          declared = path && Introspectors::DeclaredConstant.named(File.read(path), candidate)
+          declared = path && Introspectors::DeclaredConstant.named(SafeFile.read(path), candidate)
           [ candidates.include?(declared) ? declared : candidate, path ] if path
         end
       end

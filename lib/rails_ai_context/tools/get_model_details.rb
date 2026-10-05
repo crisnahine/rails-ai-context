@@ -410,9 +410,9 @@ module RailsAiContext
           lines << "_#{count_phrase(hidden, "concern")} hidden by `excluded_concerns`._" if hidden.positive?
         end
 
-        # Declared only under a condition the source does not decide, or by a
-        # called method on another receiver: named, and left out of every count above.
-        { conditional_declarations: "Only under a condition the source does not decide",
+        # A declaration whose method name or condition the source does not decide, or one
+        # a called method makes on another receiver: named, and left out of every count above.
+        { conditional_declarations: "Not decided from the source (the method name or a condition)",
           foreign_declarations: "Declared on another class" }.each do |key, heading|
           next unless data[key]&.any?
 

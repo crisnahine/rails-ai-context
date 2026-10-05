@@ -125,7 +125,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   place of the macro's own row and one on a computed `field`. An options
   hash, list or parameter the method changes in place (`options[:x] = 1`,
   `options[:x] ||= 1`, `reverse_merge!`, `delete`) is not read as the call's
-  value, so what it decides stays a conditional declaration.
+  value. A declaration it decides, the method name included (`before_save
+  name` after `name.strip!`), is held back and listed under "Not decided from
+  the source (the method name or a condition)", the heading that was "Only
+  under a condition the source does not decide".
 - **A `load_defaults` written after `belongs_to_required_by_default = false`
   turns the default back on** in the static tier, as Rails does, so the
   implicit presence of a required `belongs_to` is listed. A literal assignment

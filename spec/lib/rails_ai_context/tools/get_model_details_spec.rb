@@ -805,9 +805,22 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
 
     text = described_class.call(model: "WorkPackage", detail: "full").content.first[:text]
 
-    expect(text).to include("## Only under a condition the source does not decide")
+    expect(text).to include("## Not decided from the source (the method name or a condition)")
     expect(text).to include("- `has_many :custom_comments` if `can_have_custom_comments?` _(Redmine::Acts::Customizable)_")
     expect(text).not_to include("custom_comments (computed)")
+  end
+
+  it "names a callback whose method name the source does not decide, without claiming a condition" do
+    described_class.reset_cache!
+    allow(described_class).to receive(:cached_context).and_return(
+      models: { "Post" => { table_name: "posts",
+                            conditional_declarations: [ { declaration: "before_save name", from_concern: "Stamped" } ] } }
+    )
+
+    text = described_class.call(model: "Post", detail: "full").content.first[:text]
+
+    expect(text).to include("## Not decided from the source (the method name or a condition)\n- `before_save name` _(Stamped)_")
+    expect(text).not_to include("Only under a condition")
   end
 
   # The footer promises runtime-only data is marked; a concern whose file
