@@ -911,6 +911,64 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     end
   end
 
+  describe "Kamal's config/deploy.yml env" do
+    around do |example|
+      Dir.mktmpdir do |dir|
+        @root = dir
+        example.run
+      end
+    end
+
+    before do
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(@root)))
+      FileUtils.mkdir_p(File.join(@root, "config"))
+    end
+
+    def write_deploy(yaml)
+      File.write(File.join(@root, "config", "deploy.yml"), yaml)
+    end
+
+    it "lists the secret names and the clear values it sets, at every detail level" do
+      write_deploy(<<~YAML)
+        service: app
+        env:
+          secret:
+            - RAILS_MASTER_KEY
+            - DB_PASSWORD:MAIN_DB_PASSWORD
+          clear:
+            SOLID_QUEUE_IN_PUMA: true
+            <% if true %>
+            JOB_CONCURRENCY: 3
+            <% end %>
+      YAML
+
+      text = described_class.call.content.first[:text]
+      expect(text).to include("## Set by Kamal (`config/deploy.yml`)")
+      expect(text).to include("- `RAILS_MASTER_KEY` - secret, from `.kamal/secrets`")
+      expect(text).to include("- `DB_PASSWORD` - secret, from `.kamal/secrets` (`MAIN_DB_PASSWORD`)")
+      expect(text).to include("- `SOLID_QUEUE_IN_PUMA` = `true`")
+      expect(text).to include("- `JOB_CONCURRENCY` = `3`")
+      expect(described_class.call(detail: "full").content.first[:text]).to include("- `RAILS_MASTER_KEY` - secret, from `.kamal/secrets`")
+      expect(described_class.call(detail: "summary").content.first[:text]).to include("- `RAILS_MASTER_KEY`")
+    end
+
+    it "reads an env hash with no clear or secret key as clear values, and redacts a secret-looking one" do
+      write_deploy("env:\n  DATABASE_HOST: db1\n  API_TOKEN: Zx9kQ2mW7pL4vB8nR3tY6uH1\n")
+
+      text = described_class.call.content.first[:text]
+      expect(text).to include("- `DATABASE_HOST` = `db1`")
+      expect(text).not_to include("Zx9kQ2mW7pL4vB8nR3tY6uH1")
+    end
+
+    it "adds nothing for a deploy file that is not valid YAML or has no env" do
+      write_deploy("env: [unclosed\n")
+      expect(described_class.call.content.first[:text]).not_to include("Set by Kamal")
+
+      write_deploy("service: app\n")
+      expect(described_class.call.content.first[:text]).not_to include("Set by Kamal")
+    end
+  end
+
   describe ".scan_env_example" do
     before { allow(described_class).to receive(:scan_env_example).and_call_original }
 

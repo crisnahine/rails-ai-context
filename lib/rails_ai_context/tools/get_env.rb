@@ -6,7 +6,7 @@ module RailsAiContext
       tool_name "rails_get_env"
       description "Discover environment variables, external service dependencies, and credentials keys used by the app. " \
         "Use when: setting up a development environment, debugging missing config, or auditing external dependencies. " \
-        "Scans .rb, .rake, ERB views and config YAML for ENV[], plus .env.example, Dockerfile, external HTTP calls, and credentials keys (never values)."
+        "Scans .rb, .rake, ERB views and config YAML for ENV[], plus .env.example, Dockerfile, the env Kamal's config/deploy.yml sets, external HTTP calls, and credentials keys (never values)."
 
       input_schema(
         properties: {
@@ -35,6 +35,7 @@ module RailsAiContext
         env_vars = scan_env_vars(root)
         env_example = scan_env_example(root)
         dockerfile_vars = scan_dockerfile(root)
+        kamal_env = scan_kamal_env(root)
         external_services = detect_external_services(root, env_vars.values.flatten.map { |v| v[:name] }.uniq)
         credentials_keys = detect_credentials_keys
         encrypted_columns = detect_encrypted_columns
@@ -44,6 +45,7 @@ module RailsAiContext
         env_vars.each { |_file, vars| vars.each { |v| all_var_names << v[:name] } }
         env_example.each { |v| all_var_names << v[:name] }
         dockerfile_vars.each { |v| all_var_names << v[:name] if v[:type] == "ENV" }
+        kamal_env.each { |v| all_var_names << v[:name] }
 
         if all_var_names.empty? && external_services.empty? && credentials_keys.empty?
           return text_response("No environment variables, external services, or credentials keys detected.")
@@ -53,9 +55,9 @@ module RailsAiContext
         when "summary"
           format_summary(all_var_names, external_services, credentials_keys)
         when "standard"
-          format_standard(env_vars, env_example, external_services, credentials_keys, encrypted_columns)
+          format_standard(env_vars, env_example, kamal_env, external_services, credentials_keys, encrypted_columns)
         when "full"
-          format_full(env_vars, env_example, dockerfile_vars, external_services, credentials_keys, encrypted_columns, root)
+          format_full(env_vars, env_example, kamal_env, dockerfile_vars, external_services, credentials_keys, encrypted_columns, root)
         end
       end
 
@@ -84,7 +86,7 @@ module RailsAiContext
         "Config YAML on `sensitive_patterns` (config/database.yml) is read for the ENV names in its ERB tags only; " \
         "credentials, keys and the rest are never read._"
 
-      private_class_method def self.format_standard(env_vars, env_example, external_services, credentials_keys, encrypted_columns)
+      private_class_method def self.format_standard(env_vars, env_example, kamal_env, external_services, credentials_keys, encrypted_columns)
         lines = [ "# Environment Configuration", "" ]
 
         # ENV vars from code, grouped by purpose
@@ -131,6 +133,8 @@ module RailsAiContext
             lines << ""
           end
         end
+
+        lines.concat(kamal_lines(kamal_env))
 
         # External services
         if external_services.any?
@@ -180,7 +184,7 @@ module RailsAiContext
         lines
       end
 
-      private_class_method def self.format_full(env_vars, env_example, dockerfile_vars, external_services, credentials_keys, encrypted_columns, root)
+      private_class_method def self.format_full(env_vars, env_example, kamal_env, dockerfile_vars, external_services, credentials_keys, encrypted_columns, root)
         lines = [ "# Environment Configuration (Full Detail)", "" ]
 
         # ENV vars grouped by category with file annotations
@@ -252,6 +256,8 @@ module RailsAiContext
           lines << ""
         end
 
+        lines.concat(kamal_lines(kamal_env))
+
         # Dockerfile ENV/ARG
         if dockerfile_vars.any?
           lines << "## Dockerfile Variables"
@@ -284,6 +290,39 @@ module RailsAiContext
 
       private_class_method def self.scan_env_vars(root)
         Introspectors::EnvReferences.scan(root)
+      end
+
+      KAMAL_DEPLOY = "config/deploy.yml"
+
+      private_class_method def self.kamal_lines(kamal_env)
+        return [] if kamal_env.empty?
+
+        lines = [ "## Set by Kamal (`#{KAMAL_DEPLOY}`)" ]
+        kamal_env.each do |v|
+          lines << if v[:secret]
+            alias_note = v[:secret] == v[:name] ? "" : " (`#{v[:secret]}`)"
+            "- `#{v[:name]}` - secret, from `.kamal/secrets`#{alias_note}"
+          else
+            "- `#{v[:name]}` = `#{v[:value]}`"
+          end
+        end
+        lines << ""
+      end
+
+      # The app container's env as Kamal::Configuration::Env reads it: `clear`
+      # and `secret` keys, or a bare hash that is all clear values.
+      private_class_method def self.scan_kamal_env(root)
+        env = Introspectors::RecurringSchedules.yaml(root, KAMAL_DEPLOY)
+        env = env["env"] if env.is_a?(Hash)
+        return [] unless env.is_a?(Hash)
+
+        clear = env.fetch("clear", env.key?("secret") || env.key?("tags") ? {} : env)
+        clear = {} unless clear.is_a?(Hash)
+        secrets = Array(env["secret"]).filter_map do |key|
+          name, aliased = key.to_s.split(":", 2)
+          { name: name, secret: aliased || name } unless name.to_s.empty?
+        end
+        secrets + clear.map { |name, value| { name: name.to_s, value: RailsAiContext::Redaction.value(name, value.to_s) } }
       end
 
       private_class_method def self.scan_env_example(root)
