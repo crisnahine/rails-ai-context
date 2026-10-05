@@ -40,10 +40,10 @@ RSpec.describe RailsAiContext::Tools::Validate do
 
       after { FileUtils.rm_f(grid) }
 
-      def validate_as(ruby, static:)
+      def validate_as(ruby, static:, interpreter: ruby)
         allow(RailsAiContext).to receive(:static_tier?).and_return(static)
         allow(described_class).to receive(:rails_app).and_return(Rails.application)
-        stub_const("RUBY_VERSION", ruby) unless static
+        stub_const("RUBY_VERSION", interpreter) if interpreter
         lock = instance_double(RailsAiContext::GemLock::Spec, ruby_version: ruby)
         allow(RailsAiContext::GemLock).to receive(:for).and_call_original
         allow(RailsAiContext::GemLock).to receive(:for).with(Rails.root.to_s).and_return(lock)
@@ -53,6 +53,11 @@ RSpec.describe RailsAiContext::Tools::Validate do
       it "passes it statically for an app that declares Ruby 3.1 or 3.3" do
         expect(validate_as("3.1.6", static: true)).to include("1/1 files passed")
         expect(validate_as("3.3.9", static: true)).to include("1/1 files passed")
+      end
+
+      it "parses statically with the running Ruby's grammar when the app declares none, as booted does" do
+        expect(validate_as(nil, static: true, interpreter: "3.3.9")).to include("1/1 files passed")
+        expect(validate_as(nil, static: false, interpreter: "3.3.9")).to include("1/1 files passed")
       end
 
       it "passes it booted on Ruby 3.3, and fails it for an app on Ruby 3.4" do

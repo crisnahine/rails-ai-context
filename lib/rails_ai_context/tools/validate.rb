@@ -175,9 +175,9 @@ module RailsAiContext
         validate_ruby_subprocess(full_path)
       end
 
-      # Booted, the interpreter running this is the app's own; statically the app's declared Ruby.
+      # Booted, the interpreter running this is the app's own; statically the app's declared Ruby, else this one.
       private_class_method def self.app_ruby_version
-        RailsAiContext.static_tier? ? GemLock.for(rails_app.root.to_s).ruby_version : RUBY_VERSION
+        (GemLock.for(rails_app.root.to_s).ruby_version if RailsAiContext.static_tier?) || RUBY_VERSION
       end
 
       private_class_method def self.validate_ruby_subprocess(full_path)
