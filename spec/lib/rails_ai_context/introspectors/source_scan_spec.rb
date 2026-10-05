@@ -107,7 +107,8 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
         "app/domain/billing/a_invoice.rb" => "module Billing\n  class AInvoice < Billing::Document\n  end\nend\n",
         "app/domain/billing/document.rb" => "module Billing\n  class Document < ::ActiveRecord::Base\n  end\nend\n",
         "app/domain/admin_user.rb" => "class AdminUser < User\nend\n",
-        "app/domain/report.rb" => "class Report < ApplicationService\nend\n"
+        "app/domain/report.rb" => "class Report < ApplicationService\nend\n",
+        "app/domain/notes.rb" => "# subclass Note < ApplicationRecord\nx = \"class Memo < ApplicationRecord\"\n"
       }.each do |name, source|
         FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
         File.write(File.join(dir, name), source)

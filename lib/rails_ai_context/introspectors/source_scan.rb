@@ -108,7 +108,7 @@ module RailsAiContext
         end.each(&block)
       end
 
-      CLASS_WITH_SUPERCLASS = /^[^\S\n]*class[^\S\n]+([\w:]+)[^\S\n]*<[^\S\n]*(?:::)?([\w:]+)/
+      CLASS_WITH_SUPERCLASS = /class[^\S\n]+([\w:]+)[^\S\n]*<[^\S\n]*(?:::)?([\w:]+)/
       MODEL_BASES = %w[ActiveRecord::Base ApplicationRecord].freeze
 
       # Rails autoloads every app/* directory and the roots config/application.rb
@@ -142,13 +142,25 @@ module RailsAiContext
             next unless seen.add?(record.path)
             next if ignored.any? { |ignored_dir| SafePath.contained?(record.path, ignored_dir) }
 
-            pairs = SafeFile.read(record.path)&.scan(CLASS_WITH_SUPERCLASS)
-            found << [ record, pairs ] if pairs&.any?
+            pairs = class_declarations(SafeFile.read(record.path).to_s)
+            found << [ record, pairs ] if pairs.any?
           end
         end
       end
 
-      private_class_method :scan, :scan_dir, :ruby_files, :walk_dir, :within?, :extra_model_candidates, :extra_model_declarations
+      # [name, superclass] of each `class X < Y` that starts its line. A `^` anchor
+      # makes Onigmo try every offset, ten times slower over a service tree.
+      def class_declarations(source)
+        pairs = []
+        source.scan(CLASS_WITH_SUPERCLASS) do |name, base|
+          start = Regexp.last_match.begin(0)
+          line_start = start.zero? ? 0 : (source.rindex("\n", start - 1) || -1) + 1
+          pairs << [ name, base ] if source[line_start...start].match?(/\A[^\S\n]*\z/)
+        end
+        pairs
+      end
+
+      private_class_method :scan, :scan_dir, :ruby_files, :walk_dir, :within?, :extra_model_candidates, :extra_model_declarations, :class_declarations
 
       def each(root, kind:, skip_concerns: true)
         return enum_for(:each, root, kind: kind, skip_concerns: skip_concerns) unless block_given?
