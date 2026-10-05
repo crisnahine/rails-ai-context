@@ -393,7 +393,7 @@ module RailsAiContext
         return info unless Dir.exist?(locales_dir)
 
         real_root = File.realpath(rails_app.root).to_s
-        locale_files = safe_glob(locales_dir, "**/*.{yml,yaml,rb}", real_root)
+        locale_files = safe_glob(locales_dir, Introspectors::I18nIntrospector::RAILS_LOCALE_GLOB, real_root)
         # The locales each file declares, as the i18n section read them; a
         # file's name gives the locale only as its last part (devise.en.yml).
         read = RailsAiContext::Payload.section(cached_context, :i18n)&.dig(:locale_files)
