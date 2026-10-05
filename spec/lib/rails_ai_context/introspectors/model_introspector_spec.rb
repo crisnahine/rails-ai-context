@@ -2727,6 +2727,36 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  # Kaminari includes its extension into the app's abstract base from an
+  # inherited hook, so every model has it and no file of the app says so.
+  describe "what a gem puts into the app's abstract base" do
+    it "is neither a concern nor a class method of the model" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "category.rb"), "class Category < AppBase\n  acts_as_widget\nend\n")
+        stub_const("PagerGem::ModelExtension", Module.new)
+        stub_const("WidgetGem::Widget", Module.new)
+        base = Class.new(ActiveRecord::Base) { self.abstract_class = true }
+        stub_const("AppBase", base)
+        base.include(PagerGem::ModelExtension)
+        base.define_singleton_method(:page) { |*| all }
+        model = Class.new(base) do
+          self.table_name = "posts"
+          include WidgetGem::Widget
+        end
+        model.define_singleton_method(:name) { "Category" }
+        model.define_singleton_method(:featured) { all }
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+
+        booted = introspector.send(:extract_model_details, model)
+
+        expect(booted[:concerns]).to eq([ "WidgetGem::Widget" ])
+        expect(booted[:class_methods]).to include("featured")
+        expect(booted[:class_methods]).not_to include("page")
+      end
+    end
+  end
+
   describe "a custom validate method with a condition" do
     it "keeps the condition in both tiers" do
       Dir.mktmpdir do |dir|

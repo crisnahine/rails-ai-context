@@ -514,8 +514,8 @@ module RailsAiContext
           # hold no block callbacks, so both tiers read the model's source.
           callbacks:        group_callbacks_by_type(source_data[:callbacks]),
           callback_conditions: callback_conditions(source_data[:callbacks]),
-          concerns:         booted_concerns(model),
-          concern_sources:  concern_sources(booted_concerns(model), source_data[:mixins], booted: true),
+          concerns:         booted_concerns(model, source_data[:mixins]),
+          concern_sources:  concern_sources(booted_concerns(model, source_data[:mixins]), source_data[:mixins], booted: true),
           concerns_hidden:  (hidden.size if hidden.any?),
           concern_callbacks: concern_callbacks(source_data[:callbacks]),
           concerns_unread:  (unread if unread.any?),
@@ -785,9 +785,23 @@ module RailsAiContext
       # ActiveRecord::Base's chain, which is what a gem (or an initializer)
       # puts into all models. A module a gem macro includes into this model
       # alone (`devise :lockable`) stays.
-      def booted_concerns(model)
-        own = (model.ancestors - every_model_modules).reject { |mod| mod.is_a?(Class) }.filter_map(&:name).reverse
+      def booted_concerns(model, mixins = [])
+        own = (model.ancestors - every_model_modules - base_gem_modules(model, mixins)).reject { |mod| mod.is_a?(Class) }.filter_map(&:name).reverse
         ConcernMembership.payload(own)
+      end
+
+      # A gem can mix a module into the app's abstract base (Kaminari's
+      # inherited hook): every model then has it and no file of the app names
+      # it. A module the source includes, or one the app defines, stays.
+      def base_gem_modules(model, mixins)
+        written = ConcernMembership.from_mixins(mixins)
+        abstract_bases(model).flat_map { |base| base.ancestors - every_model_modules }.uniq.select do |mod|
+          !mod.is_a?(Class) && mod.name && !written.include?(mod.name) && !ConcernPaths.find_file(app.root.to_s, mod.name)
+        end
+      end
+
+      def abstract_bases(model)
+        model.ancestors.select { |klass| klass.is_a?(Class) && klass < ActiveRecord::Base && klass != model && klass.abstract_class? }
       end
 
       def every_model_modules
@@ -1046,7 +1060,10 @@ module RailsAiContext
           .reject { |m| scope_names.include?(m) }
 
         # Reflection-discovered class methods (for completeness)
-        all_methods = (model.methods - ActiveRecord::Base.methods - Object.methods)
+        # The abstract bases' class methods reach every model, the static tier reads none of
+        # them, and a gem's (Kaminari's `page`) would otherwise be listed on each model.
+        base_methods = abstract_bases(model).flat_map(&:methods)
+        all_methods = (model.methods - ActiveRecord::Base.methods - Object.methods - base_methods)
           .reject { |m|
             ms = m.to_s
             ms == "self" ||
