@@ -174,10 +174,9 @@ module RailsAiContext
 
       private_class_method def self.detect_frontend_stack
         root = rails_app.root.to_s
-        return [] unless File.exist?(File.join(root, "package.json"))
-
+        css = Introspectors::AssetPipelineIntrospector.css_framework_label(root)
         stack = STACK_MARKERS.filter_map do |label, packages|
-          label if packages.any? { |pkg| RailsAiContext::PackageJson.present?(root, pkg) }
+          label if label == css || packages.any? { |pkg| RailsAiContext::PackageJson.present?(root, pkg) }
         end
 
         pm = Introspectors::FrontendFrameworkIntrospector.package_manager(root)

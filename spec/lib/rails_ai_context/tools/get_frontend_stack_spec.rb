@@ -418,6 +418,30 @@ RSpec.describe RailsAiContext::Tools::GetFrontendStack do
         expect(text).to include("- **Asset pipeline:** Sprockets, serving app/assets")
         expect(text).to include("- **Sprockets manifest:** `link_tree ../images`, `link_directory ../stylesheets .css`, `link_tree ../../javascript .js`")
       end
+      it "names Tailwind CSS from tailwindcss-rails at every detail level" do
+        File.write(File.join(@root, "Gemfile.lock"), "GEM\n  specs:\n    propshaft (1.1.0)\n    tailwindcss-rails (4.4.0)\n")
+        allow(described_class).to receive(:cached_context).and_return(
+          frontend_frameworks: no_js_data, stimulus: {},
+          gems: { notable_gems: [ { name: "propshaft" }, { name: "turbo-rails" }, { name: "tailwindcss-rails" } ] }
+        )
+
+        %w[standard full].each do |detail|
+          expect(described_class.call(detail: detail).content.first[:text]).to include("- **CSS framework:** Tailwind CSS")
+        end
+        expect(described_class.call(detail: "summary").content.first[:text]).to include("Tailwind CSS")
+      end
+
+      it "names Bootstrap from a cssbundling package.json, in the summary of a JavaScript framework app too" do
+        File.write(File.join(@root, "Gemfile.lock"), "GEM\n  specs:\n    cssbundling-rails (1.4.3)\n")
+        File.write(File.join(@root, "package.json"), JSON.generate("dependencies" => { "bootstrap" => "^5.3.8" }))
+        allow(described_class).to receive(:cached_context).and_return(
+          frontend_frameworks: no_js_data.merge(frameworks: { react: "^19.0.0" }), stimulus: {}, gems: { notable_gems: [] }
+        )
+
+        expect(described_class.call(detail: "standard").content.first[:text]).to include("- **CSS framework:** Bootstrap")
+        expect(described_class.call(detail: "summary").content.first[:text]).to eq("React 19.0.0 + Bootstrap")
+      end
+
       it "reads a manifest.js with bytes that are not UTF-8" do
         FileUtils.mkdir_p(File.join(@root, "app/assets/config"))
         File.binwrite(File.join(@root, "app/assets/config/manifest.js"), "//= link_tree ../images\n\xFF\xFE\n".b)

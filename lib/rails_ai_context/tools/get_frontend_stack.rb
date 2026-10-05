@@ -64,13 +64,14 @@ module RailsAiContext
 
           # If no JS framework data, try building a Hotwire summary from cached context
           pipeline = asset_pipeline
+          css = css_framework
           if parts.empty?
             hotwire = build_hotwire_summary
-            return [ hotwire, pipeline ].compact.join(", ") if hotwire
-            return "#{pipeline} (no JavaScript build)" if pipeline
+            return [ hotwire, css, pipeline ].compact.join(", ") if hotwire
+            return [ "#{pipeline} (no JavaScript build)", css ].compact.join(", ") if pipeline
           end
 
-          return parts.join(" + ") if parts.any?
+          return [ *parts, css ].compact.join(" + ") if parts.any?
 
           api_only_note("a frontend") || "No frontend framework detected."
         end
@@ -81,7 +82,6 @@ module RailsAiContext
           has_turbo = notable.any? { |g| g[:name] == "turbo-rails" }
           has_stimulus = notable.any? { |g| g[:name] == "stimulus-rails" }
           has_importmap = notable.any? { |g| g[:name] == "importmap-rails" }
-          has_tailwind = notable.any? { |g| g[:name] == "tailwindcss-rails" }
 
           return nil unless has_turbo || has_stimulus
 
@@ -96,8 +96,6 @@ module RailsAiContext
             count = stimulus[:total_controllers] || stimulus[:controllers]&.size || 0
             parts << count_phrase(count, "Stimulus controller") if count > 0
           end
-
-          parts << "Tailwind CSS" if has_tailwind
 
           parts.join(", ")
         end
@@ -117,6 +115,7 @@ module RailsAiContext
           lines << "- **State management:** #{state_management}" if state_management.present?
           lines << "- **Package manager:** #{data[:package_manager]}" if data[:package_manager]
           pipeline_lines = asset_pipeline_lines
+          pipeline_lines << "- **CSS framework:** #{css_framework}" if css_framework
           lines.concat(pipeline_lines)
 
           # TypeScript
@@ -233,6 +232,11 @@ module RailsAiContext
           return "Propshaft" if Payload.gem?(cached_context, "propshaft")
 
           "Sprockets" if Payload.gem?(cached_context, "sprockets-rails") || Payload.gem?(cached_context, "sprockets")
+        end
+
+        def css_framework
+          Introspectors::AssetPipelineIntrospector.css_framework_label(rails_app.root) ||
+            ("Tailwind CSS" if Payload.gem?(cached_context, "tailwindcss-rails"))
         end
 
         def asset_pipeline_lines
