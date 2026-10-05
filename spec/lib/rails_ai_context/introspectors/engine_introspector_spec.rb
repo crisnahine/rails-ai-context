@@ -218,6 +218,23 @@ RSpec.describe RailsAiContext::Introspectors::EngineIntrospector do
     end
   end
 
+  describe "a loaded engine's route count" do
+    it "counts the table as the routes section lists it, PATCH and PUT as one" do
+      set = ActionDispatch::Routing::RouteSet.new.tap do |routes|
+        routes.draw do
+          resources :widgets
+          mount ->(_env) { [ 200, {}, [] ] }, at: "/raw"
+        end
+      end
+      engine = double("engine", name: "Shop::Engine", root: Pathname.new(Dir.tmpdir), routes: set)
+      allow(Rails::Engine).to receive(:subclasses).and_return([ engine ])
+
+      loaded = described_class.new(Rails.application).send(:discover_rails_engines)
+
+      expect(loaded.first[:route_count]).to eq(7)
+    end
+  end
+
   # .ai-context.json is committed: an engine's root is carried relative to
   # the app or to its gem, and never as this machine's absolute path.
   describe "an engine's root" do

@@ -511,6 +511,9 @@ module RailsAiContext
         end
       end
 
+      # The engines section counts an engine's table with these same rows.
+      public :table_routes
+
       # What `bin/rails routes` prints beside the route, written alike on every Ruby.
       def extract_constraints(route)
         shown = route.requirements.except(:controller, :action)
