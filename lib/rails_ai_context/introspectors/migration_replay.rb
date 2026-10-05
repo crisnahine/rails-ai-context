@@ -8,7 +8,7 @@ module RailsAiContext
     module MigrationReplay
       Counts = Struct.new(:unnamed, :unnamed_columns, :helper_calls, :failed_files)
       Result = Struct.new(:tables, :counts)
-      Run = Struct.new(:pk_type, :root, :db_dirs, :read, :helpers, :counts, keyword_init: true)
+      Run = Struct.new(:pk_type, :root, :real_root, :db_dirs, :read, :helpers, :counts, keyword_init: true)
 
       module_function
 
@@ -36,7 +36,12 @@ module RailsAiContext
 
       def new_run(dirs, pk_type:, root: nil)
         root = File.expand_path((root || File.join(dirs.first.to_s, "..", "..")).to_s)
-        Run.new(pk_type: pk_type, root: root, db_dirs: db_dirs(root, dirs), read: [], helpers: Set.new,
+        real_root = begin
+          File.realpath(root)
+        rescue SystemCallError
+          root
+        end
+        Run.new(pk_type: pk_type, root: root, real_root: real_root, db_dirs: db_dirs(root, dirs), read: [], helpers: Set.new,
                 counts: Counts.new(0, 0, 0, 0))
       end
 
@@ -86,7 +91,7 @@ module RailsAiContext
         rescue SystemCallError
           return
         end
-        return if run.read.include?(real)
+        return if run.read.include?(real) || !SafePath.contained?(real, run.real_root)
 
         run.read << real
         content = RailsAiContext::SafeFile.read(real, max_size: RailsAiContext.configuration.max_schema_file_size)

@@ -1973,4 +1973,15 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(described_class.tables(dir, pk_type: "bigint").keys).to contain_exactly("posts", "comments")
     end
   end
+
+  it "does not read a migration file symlinked from outside the app" do
+    Dir.mktmpdir do |dir|
+      app = File.join(dir, "app")
+      FileUtils.mkdir_p([ File.join(app, "db/migrate"), File.join(dir, "outside") ])
+      File.write(File.join(dir, "outside/secrets.rb"), "create_table :secrets do |t|\n  t.string :token\nend\n")
+      File.symlink(File.join(dir, "outside/secrets.rb"), File.join(app, "db/migrate/20240101000001_link.rb"))
+
+      expect(described_class.tables(File.join(app, "db/migrate"), pk_type: "bigint", root: app)).not_to have_key("secrets")
+    end
+  end
 end
