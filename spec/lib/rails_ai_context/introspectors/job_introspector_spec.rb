@@ -1347,6 +1347,24 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
           .to eq([ [ "ArchiveJob", "archive", true ], [ "DigestJob", "mail", nil ], [ "MailJob", "mail", nil ] ])
       end
 
+      it "takes run as the entry point of a Que job only, never of an ActiveJob job or a worker" do
+        result = static_result do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "jobs"))
+          FileUtils.mkdir_p(File.join(dir, "app", "workers"))
+          File.write(File.join(dir, "app", "jobs", "mail_job.rb"), "class MailJob < Que::Job\n  def run(account_id); end\nend\n")
+          File.write(File.join(dir, "app", "jobs", "sync_job.rb"), "class SyncJob < ApplicationJob\n  def run(step); end\nend\n")
+          File.write(File.join(dir, "app", "workers", "base_worker.rb"),
+                     "class BaseWorker\n  include Sidekiq::Job\n  def perform(id); run(id); end\nend\n")
+          File.write(File.join(dir, "app", "workers", "sync_worker.rb"), "class SyncWorker < BaseWorker\n  def run(step); end\nend\n")
+        end
+
+        jobs = result[:jobs].to_h { |j| [ j[:name], j[:perform_signature] ] }
+        expect(jobs).to include("MailJob" => "account_id")
+        expect(jobs["SyncJob"]).to be_nil
+        worker = result[:workers].find { |w| w[:name] == "SyncWorker" }
+        expect(worker.slice(:entry_point, :perform_signature)).to eq({})
+      end
+
       # The walk already read every file; reading each one again to render it
       # made a job disappear if anything touched the tree in between, and the
       # listing said nothing about the one it lost.

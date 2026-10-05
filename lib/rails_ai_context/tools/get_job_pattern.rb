@@ -276,11 +276,11 @@ module RailsAiContext
         end
 
         # Perform method signature
-        perform_sig = extract_perform_signature(source)
+        perform_sig = extract_perform_signature(source, record)
         lines << "**Perform:** `#{perform_sig}`" if perform_sig
 
         # Guard clauses
-        guards = extract_guard_clauses(source)
+        guards = extract_guard_clauses(source, record)
         if guards.any?
           lines << "" << "## Guard Clauses"
           guards.each { |g| lines << "- `#{g}`" }
@@ -345,7 +345,8 @@ module RailsAiContext
             # No ActiveJob or Sidekiq ancestry found, and the bracket says so.
             unknown_base: job[:unknown_base],
             retry_config: Array(job[:retries]),
-            perform_sig: source ? extract_perform_signature(source) : job[:perform_signature],
+            entry_point: job[:entry_point],
+            perform_sig: source ? extract_perform_signature(source, job) : job[:perform_signature],
             dependencies: source ? Introspectors::SourceCalls.calls(source, own: class_name) : []
           }
         end
@@ -391,7 +392,7 @@ module RailsAiContext
             # Read source for additional detail
             source = j[:file] && safe_read(File.join(root, j[:file]))
             if source
-              guards = extract_guard_clauses(source)
+              guards = extract_guard_clauses(source, j)
               lines << "- **Guards:** #{guards.join('; ')}" if guards.any?
 
               broadcasts = extract_broadcasts(source)
@@ -470,18 +471,21 @@ module RailsAiContext
         match[1] if match
       end
 
-      private_class_method def self.perform_method(source)
-        Introspectors::ActionResolver.entry_point(Introspectors::ActionResolver.methods_in(source))
+      # The introspector named the entry point when it is not perform: Que's run, or a base's execute.
+      private_class_method def self.perform_method(source, record = nil)
+        entry = record && record[:entry_point]
+        Introspectors::ActionResolver.entry_point(Introspectors::ActionResolver.methods_in(source),
+          names: entry ? [ entry ] : Introspectors::ActionResolver::ENTRY_POINTS)
       end
 
-      private_class_method def self.extract_perform_signature(source)
-        perform = perform_method(source)
+      private_class_method def self.extract_perform_signature(source, record = nil)
+        perform = perform_method(source, record)
         Introspectors::ActionResolver.signature(perform) if perform
       end
 
       # The `return` lines inside perform's own body, first ten.
-      private_class_method def self.extract_guard_clauses(source)
-        perform = perform_method(source)
+      private_class_method def self.extract_guard_clauses(source, record = nil)
+        perform = perform_method(source, record)
         body = perform && Introspectors::ActionResolver.body_of(source, perform)
         return [] unless body
 

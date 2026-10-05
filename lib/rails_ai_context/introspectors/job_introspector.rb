@@ -348,12 +348,13 @@ module RailsAiContext
 
           ast = candidate.ast
           active = active_job?(name)
-          unknown_base = !active && !que_job?(name)
+          que = !active && que_job?(name)
+          unknown_base = !active && !que
           next if unknown_base && !performs?(ActionResolver.own_methods(ast[:methods], candidate.declared))
 
           queue = inherited_queue(name) || (queue_name_from_part(nil) if active)
 
-          perform_method = ActionResolver.entry_point(ast[:methods])
+          perform_method = ActionResolver.entry_point(ast[:methods], names: que ? ActionResolver::QUE_ENTRY_POINTS : ActionResolver::ENTRY_POINTS)
           perform_signature = ActionResolver.parameter_list(perform_method) if perform_method && perform_method[:params]&.any?
 
           # Extract job callbacks
@@ -370,6 +371,7 @@ module RailsAiContext
           job[:queue] = queue if queue
           job[:retries] = retries if retries.any?
           job[:perform_signature] = perform_signature if perform_signature
+          job[:entry_point] = perform_method[:name] if perform_method && perform_method[:name] != "perform"
           job[:callbacks] = callbacks if callbacks.any?
           job
         end.sort_by { |j| j[:name] }

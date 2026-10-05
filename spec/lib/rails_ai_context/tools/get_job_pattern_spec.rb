@@ -764,6 +764,16 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text).to include("**Queue:** `mail`", "**Perform:** `run(account_id)`")
       expect(text).not_to include("not found")
     end
+
+    it "does not take run as the entry point of an ActiveJob job" do
+      File.write(File.join(tmpdir, "app", "jobs", "sync_job.rb"), "class SyncJob < ApplicationJob\n  def run(step)\n    return if step.nil?\n  end\nend\n")
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+      expect(described_class.call(job: "SyncJob").content.first[:text]).not_to include("run(step)", "Guard")
+      expect(described_class.call(job: "MailJob").content.first[:text]).to include("**Perform:** `run(account_id)`")
+      expect(described_class.call(detail: "full").content.first[:text]).to include("- **Perform:** `run(account_id)`")
+    end
   end
 
   # The job's own file was skipped by a substring of its underscored name: a
