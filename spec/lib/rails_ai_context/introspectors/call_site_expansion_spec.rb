@@ -161,6 +161,25 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
     end
   end
 
+  describe "a fetch on a hash parameter" do
+    let(:method_source) do
+      <<~RUBY
+        def fileable(name, opts = {})
+          accepts_nested_attributes_for name, allow_destroy: opts.fetch(:allow_destroy, true)
+        end
+      RUBY
+    end
+
+    def nested(call_source)
+      expand(method_source, call_source)[:macros].select { |m| m[:macro] == :accepts_nested_attributes_for }.map { |m| m[:options] }
+    end
+
+    it "reads the default when the call leaves the key out, and the call's value when it passes one" do
+      expect(nested("fileable :screenshot, has_one: true, owned_by: nil")).to eq([ { allow_destroy: true } ])
+      expect(nested("fileable :screenshot, allow_destroy: false")).to eq([ { allow_destroy: false } ])
+    end
+  end
+
   # Consul's validates_translation validates on translation_class inside
   # `translation_class.instance_eval { }`: that block declares on the
   # translation class, not on the model the method is called in.
