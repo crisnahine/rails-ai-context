@@ -487,5 +487,32 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       expect(text).not_to include("not found in current schema")
       expect(text).not_to include("does not exist on")
     end
+
+    def shard_context
+      tables = { tables: { "orders" => { columns: [ { name: "total_cents", type: "integer" } ] } } }
+      { models: {}, schema: { tables: {}, secondary_databases: { "analytics" => { tables: { "page_views" => { columns: [] } } }, "shard_one" => tables, "shard_two" => tables } } }
+    end
+
+    it "generates the migration into the database that holds the table" do
+      allow(described_class).to receive(:cached_context).and_return(shard_context)
+      text = described_class.call(action: "add_column", table: "page_views", column: "referrer", type: "string").content.first[:text]
+      expect(text).to include("`page_views` is in analytics, not the primary database",
+                              "**Run:** `bin/rails generate migration AddReferrerToPageViews referrer:string --database analytics`")
+    end
+
+    it "names every database a table is in, and one command when they share migrations_paths" do
+      allow(described_class).to receive(:cached_context).and_return(shard_context)
+      allow(RailsAiContext::DatabaseYml).to receive(:entry).and_return({ "migrations_paths" => "db/shard_migrate" })
+      text = described_class.call(action: "add_index", table: "orders", column: "total_cents").content.first[:text]
+      expect(text).to include("`orders` is in shard_one and shard_two", "`--database shard_one`")
+      expect(text).not_to include("once per database")
+    end
+
+    it "asks for one migration per database when their migrations_paths differ" do
+      allow(described_class).to receive(:cached_context).and_return(shard_context)
+      allow(RailsAiContext::DatabaseYml).to receive(:entry) { |_, name| { "migrations_paths" => "db/#{name}_migrate" } }
+      text = described_class.call(action: "remove_column", table: "orders", column: "total_cents").content.first[:text]
+      expect(text).to include("generate it once per database: `--database shard_one`, `--database shard_two`")
+    end
   end
 end

@@ -98,14 +98,16 @@ module RailsAiContext
           lines << ""
         end
 
-        # Check if table exists
-        table_exists = !RailsAiContext::Payload.schema_table(schema, table).nil?
+        databases = RailsAiContext::Payload.schema_databases(schema, table)
+        table_exists = databases.any?
+        database_lines, database_flag = database_option(table, databases)
+        lines.concat(database_lines)
 
         case action
         when "add_column"
-          lines.concat(generate_add_column(table, column, type, options, table_exists))
+          lines.concat(generate_add_column(table, column, type, options, table_exists, database_flag))
         when "remove_column"
-          lines.concat(generate_remove_column(table, column, type, schema, models))
+          lines.concat(generate_remove_column(table, column, type, schema, models, database_flag))
         when "rename_column"
           rename_to = new_name&.to_s&.strip
           rename_to = type if rename_to.nil? || rename_to.empty?
@@ -141,7 +143,22 @@ module RailsAiContext
           parts.join
         end
 
-        def generate_add_column(table, column, type, options, table_exists)
+        # A table only a secondary database holds needs its migration in that database's migrations_paths.
+        def database_option(table, databases)
+          return [ [], nil ] if databases.empty? || databases.include?("primary")
+
+          flag = " --database #{databases.first}"
+          note = "**Database:** `#{table}` is in #{[ databases[0..-2].join(", "), databases.last ].reject(&:empty?).join(" and ")}, not the primary database: generate with `#{flag.strip}` " \
+                 "so the migration lands in that database's migrations_paths and `bin/rails db:migrate` runs it there."
+          groups = databases.group_by { |db| Array(RailsAiContext::DatabaseYml.entry(rails_app.root, db)&.fetch("migrations_paths", nil)) }
+          if groups.size > 1
+            note += " Those databases read different migrations_paths, so generate it once per database: " \
+                    "#{groups.values.map { |dbs| "`--database #{dbs.first}`" }.join(', ')}."
+          end
+          [ [ note, "" ], flag ]
+        end
+
+        def generate_add_column(table, column, type, options, table_exists, database_flag = nil)
           return [ "**Error:** column name is required for add_column" ] unless column
           type ||= "string"
 
@@ -159,10 +176,10 @@ module RailsAiContext
           opts = options ? ", #{options}" : ""
           class_name = migration_class_name("add", table, column)
 
-          lines << "**Run:** `bin/rails generate migration #{class_name} #{column}:#{type}`"
+          lines << "**Run:** `bin/rails generate migration #{class_name} #{column}:#{type}#{database_flag}`"
           lines << ""
           lines << "```ruby"
-          lines << "# rails generate migration #{class_name} #{column}:#{type}"
+          lines << "# rails generate migration #{class_name} #{column}:#{type}#{database_flag}"
           lines << "class #{class_name} < ActiveRecord::Migration[#{rails_version}]"
           lines << "  def change"
           lines << "    add_column :#{table}, :#{column}, :#{type}#{opts}"
@@ -175,7 +192,7 @@ module RailsAiContext
           lines
         end
 
-        def generate_remove_column(table, column, type, schema, models)
+        def generate_remove_column(table, column, type, schema, models, database_flag = nil)
           return [ "**Error:** column name is required for remove_column" ] unless column
 
           lines = []
@@ -196,7 +213,7 @@ module RailsAiContext
           # Check if column is referenced
           col_type = find_column_type(table, column, schema) || type || "string"
 
-          lines << "**Run:** `bin/rails generate migration #{class_name} #{column}:#{col_type}`"
+          lines << "**Run:** `bin/rails generate migration #{class_name} #{column}:#{col_type}#{database_flag}`"
           lines << ""
           lines << "**Warning:** `remove_column` is irreversible without specifying the column type."
           lines << ""

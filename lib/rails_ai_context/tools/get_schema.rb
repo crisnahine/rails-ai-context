@@ -65,9 +65,11 @@ module RailsAiContext
             # "Post" and "Admin::ActionLog" are model names here, and the model
             # tier knows the table each of them reads.
             table_as_table = RailsAiContext::Introspectors::TableName.for_model_name(table, models_data)
-            database, table_key, table_data = Payload.schema_tables(schema).find { |_, k, _|
+            _, table_key, table_data = Payload.schema_tables(schema).find { |_, k, _|
               k.downcase == table_down || k == table_as_table || k == table.underscore
             }
+            databases = table_data ? Payload.schema_databases(schema, table_key) : []
+            database = databases.join(", ") unless databases == [ "primary" ]
             table_key ||= table
             unless table_data
               # A table db/schema.rb declares and the connection does not have

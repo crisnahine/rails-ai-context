@@ -1057,6 +1057,15 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(described_class.call(table: "PageView").content.first[:text]).to include("## Table: page_views")
     end
 
+    it "names every database that holds the table" do
+      orders = { tables: { "orders" => { columns: [ { name: "total_cents", type: "integer" } ] } } }
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { tables: { "users" => { columns: [] } }, secondary_databases: { "shard_one" => orders, "shard_two" => orders } }, models: {}
+      })
+      expect(described_class.call(table: "orders").content.first[:text]).to include("**Database:** shard_one, shard_two")
+      expect(JSON.parse(described_class.call(table: "orders", format: "json").content.first[:text])["database"]).to eq("shard_one, shard_two")
+    end
+
     it "lists it among the tables a miss names" do
       expect(described_class.call(table: "nope").content.first[:text]).to include("page_views")
     end
