@@ -180,18 +180,10 @@ module RailsAiContext
           label if packages.any? { |pkg| RailsAiContext::PackageJson.present?(root, pkg) }
         end
 
-        pm = detect_package_manager
+        pm = Introspectors::FrontendFrameworkIntrospector.package_manager(root)
         stack << "#{pm} (package manager)" if pm
 
         stack
-      end
-
-      private_class_method def self.detect_package_manager
-        return "pnpm" if File.exist?(rails_app.root.join("pnpm-lock.yaml"))
-        return "yarn" if File.exist?(rails_app.root.join("yarn.lock"))
-        return "bun" if File.exist?(rails_app.root.join("bun.lockb"))
-        return "npm" if File.exist?(rails_app.root.join("package-lock.json"))
-        nil
       end
 
       # Scan controllers for app-specific authorization, flash, and error-handling patterns

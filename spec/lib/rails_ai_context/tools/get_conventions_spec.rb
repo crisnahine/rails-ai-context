@@ -507,6 +507,11 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
       result = stack("devDependencies" => { "@tailwindcss/vite" => "^4.0.0", "@hotwired/turbo-rails" => "^8.0.0" })
       expect(result).to contain_exactly("Tailwind CSS", "Turbo")
     end
+
+    it "names bun from the text bun.lock that bun 1.2 writes" do
+      File.write(File.join(@root, "bun.lock"), "{}")
+      expect(stack({})).to include("bun (package manager)")
+    end
   end
 
   describe "the not-found handling line" do

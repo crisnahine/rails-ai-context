@@ -56,12 +56,8 @@ module RailsAiContext
 
       def detect_js_bundler
         return "importmap" if File.exist?(File.join(root, "config/importmap.rb"))
-        return "bun" if File.exist?(File.join(root, "bun.lockb")) || File.exist?(File.join(root, "bunfig.toml"))
-        return "esbuild" if package_json_has?("esbuild")
-        return "webpack" if File.exist?(File.join(root, "config/webpack")) || package_json_has?("webpack")
-        return "vite" if Dir.glob(File.join(root, "vite.config.*")).any?
-        return "rollup" if package_json_has?("rollup")
-        nil
+
+        FrontendFrameworkIntrospector.build_tool(root)
       end
 
       def detect_manifests

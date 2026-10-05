@@ -48,7 +48,35 @@ RSpec.describe RailsAiContext::Introspectors::FrontendFrameworkIntrospector do
       end
     end
 
-    describe "frontend roots" do
+    describe "a jsbundling-rails app" do
+    {
+      "webpack" => [ "webpack.config.js", { "webpack" => "^5.0.0", "webpack-cli" => "^5.0.0" } ],
+      "rollup" => [ "rollup.config.js", { "rollup" => "^4.0.0", "@rollup/plugin-node-resolve" => "^15.0.0" } ],
+      "bun" => [ "bun.config.js", {} ]
+    }.each do |tool, (config, dev_deps)|
+      it "names #{tool} as the build tool from the config jsbundling writes" do
+        Dir.mktmpdir do |tmp|
+          root = File.realpath(tmp)
+          File.write(File.join(root, config), "")
+          File.write(File.join(root, "package.json"), JSON.generate("devDependencies" => dev_deps))
+          result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+
+          expect(result[:build_tool]).to eq(tool)
+        end
+      end
+    end
+
+    it "names bun as the package manager from the text bun.lock" do
+      Dir.mktmpdir do |tmp|
+        root = File.realpath(tmp)
+        File.write(File.join(root, "bun.lock"), "{}")
+
+        expect(described_class.package_manager(root)).to eq("bun")
+      end
+    end
+  end
+
+  describe "frontend roots" do
       it "reads sourceCodeDir from vite.json" do
         roots = result[:frontend_roots]
         # vite.json points to app/frontend, but the dir may not exist in test app;
