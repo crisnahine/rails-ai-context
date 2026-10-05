@@ -128,9 +128,14 @@ module RailsAiContext
           source_paths.each do |path|
             content = RailsAiContext::SafeFile.read(path) or next
             relative = path.sub("#{root}/", "")
-            encryptor = content.match?(ENCRYPTOR_USE)
-            verifies = content.match?(VERIFIER_USE)
-            verifier << { file: relative, encryptor: encryptor, verifier: verifies } if (encryptor || verifies) && !relative.start_with?("config/")
+            # A literal check first: these patterns have no literal prefix, so each scans the whole file.
+            if content.include?("MessageEncryptor") || content.include?("MessageVerifier") || content.include?("message_verifier")
+              encryptor = content.match?(ENCRYPTOR_USE)
+              verifies = content.match?(VERIFIER_USE)
+              verifier << { file: relative, encryptor: encryptor, verifier: verifies } if (encryptor || verifies) && !relative.start_with?("config/")
+            end
+            next unless content.include?("subscribe") || content.include?("attach_to")
+
             subscriptions.concat(subscriptions_in(content, relative)) if content.match?(SUBSCRIPTION_HINT)
           end
           { message_verifier_usage: verifier, notification_subscriptions: subscriptions.sort_by { |s| [ s[:file], s[:line], s[:event] ] } }
