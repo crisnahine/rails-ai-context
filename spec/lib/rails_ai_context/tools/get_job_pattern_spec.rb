@@ -70,9 +70,11 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
     context "with Solid Queue workers declared in config/queue.yml" do
       let(:tmpdir) { Dir.mktmpdir }
 
-      def answer(queue_yml, **args)
+      def answer(queue_yml, gemfile: "gem \"solid_queue\"\n", production: nil, **args)
         FileUtils.mkdir_p(File.join(tmpdir, "app/jobs"))
-        FileUtils.mkdir_p(File.join(tmpdir, "config"))
+        FileUtils.mkdir_p(File.join(tmpdir, "config/environments"))
+        File.write(File.join(tmpdir, "Gemfile"), gemfile)
+        File.write(File.join(tmpdir, "config/environments/production.rb"), production) if production
         File.write(File.join(tmpdir, "app/jobs/cleanup_job.rb"), "class CleanupJob < ApplicationJob\n  queue_as :maintenance\nend\n")
         File.write(File.join(tmpdir, "app/jobs/mail_job.rb"), "class MailJob < ApplicationJob\n  queue_as :mailers\nend\n")
         File.write(File.join(tmpdir, "config/queue.yml"), queue_yml)
@@ -97,6 +99,15 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       it "says so on the page of a job whose queue no worker polls" do
         expect(answer(queue_yml, job: "CleanupJob")).to include("**Queue:** `maintenance` (no worker in config/queue.yml polls it)")
         expect(answer(queue_yml, job: "MailJob")).to include("**Queue:** `mailers`\n")
+      end
+
+      it "leaves the line out when the app runs another queue adapter" do
+        sidekiq = "Rails.application.configure do\n  config.active_job.queue_adapter = :sidekiq\nend\n"
+
+        expect(answer(queue_yml, gemfile: "gem \"sidekiq\"\n")).not_to include("config/queue.yml")
+        expect(answer(queue_yml, production: sidekiq)).not_to include("config/queue.yml")
+        expect(answer(queue_yml, gemfile: "gem \"sidekiq\"\n", production: sidekiq.sub("sidekiq", "solid_queue")))
+          .to include("No worker polls maintenance (CleanupJob).")
       end
 
       it "leaves the line out when config/queue.yml is not YAML" do

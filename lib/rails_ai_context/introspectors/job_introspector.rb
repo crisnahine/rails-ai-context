@@ -616,8 +616,7 @@ module RailsAiContext
       end
 
       def recurring_jobs
-        MAILER_CONFIG_GLOBS.flat_map { |glob| Dir.glob(File.join(app.root.to_s, glob)).sort }
-                           .each { |path| config_walk(path.delete_prefix("#{app.root}/")) }
+        app_config_files.each { |relative| config_walk(relative) }
         RecurringSchedules.read(app.root, @config_walks ||= {})
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "recurring_jobs")
@@ -644,6 +643,8 @@ module RailsAiContext
       # The queues Solid Queue's workers poll, from this environment's section or the
       # whole file; a worker that names none polls every queue.
       def extract_solid_queue_config
+        return nil unless solid_queue_adapter?
+
         data = RecurringSchedules.yaml(app.root, SOLID_QUEUE_FILE)
         return nil unless data.is_a?(Hash)
 
@@ -655,6 +656,15 @@ module RailsAiContext
         { file: SOLID_QUEUE_FILE, queues: queues.uniq }
       rescue StandardError => e
         RailsAiContext.debug_fail(e, nil, label: "extract_solid_queue_config")
+      end
+
+      # Read from source in both tiers: production's adapter is the one queue.yml is for,
+      # whatever the running environment uses. With no adapter in the config, the Gemfile decides.
+      def solid_queue_adapter?
+        adapters = app_config_files.flat_map do |relative|
+          config_assignments(relative).select { |hit| hit[:assignment] && hit[:path] == %i[active_job queue_adapter] }
+        end.map { |hit| hit[:value].to_s }
+        adapters.any? ? adapters.include?("solid_queue") : GemfileGems.names(app.root).include?("solid_queue")
       end
 
       def sidekiq_yml
@@ -899,9 +909,12 @@ module RailsAiContext
         end
       end
 
+      def app_config_files
+        @app_config_files ||= MAILER_CONFIG_GLOBS.flat_map { |glob| Dir.glob(File.join(app.root.to_s, glob)).sort }.map { |path| path.delete_prefix("#{app.root}/") }
+      end
+
       def mailer_config_files
-        @mailer_config_files ||= MAILER_CONFIG_GLOBS.flat_map { |glob| Dir.glob(File.join(app.root.to_s, glob)).sort } +
-                                 PathResolver.initializer_paths(app.root)
+        @mailer_config_files ||= app_config_files.map { |relative| File.join(app.root.to_s, relative) } + PathResolver.initializer_paths(app.root)
       end
 
       # Only a file that mentions mail settings is walked; one walked already for another reader is reused.
