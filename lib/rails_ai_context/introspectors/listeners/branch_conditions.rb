@@ -96,6 +96,24 @@ module RailsAiContext
           branch_conditions.map { |c| c[:text] || condition_text(c) }.join(" and ").then { |text| text unless text.empty? }
         end
 
+        # [chain offset, arm, arms] when every open branch is an arm of one if/unless chain that ends
+        # in else, so copies on every arm add up to no condition at all.
+        def chain_arm
+          stack = branch_conditions
+          return nil if stack.empty? || stack.any? { |c| c[:text] }
+          return nil unless stack.each_cons(2).all? { |outer, inner| outer[:other].equal?(inner[:node]) }
+
+          arms = 1
+          other = stack.first[:other]
+          while other.is_a?(Prism::IfNode)
+            arms += 1
+            other = other.subsequent
+          end
+          return nil unless other.is_a?(Prism::ElseNode)
+
+          [ stack.first[:node].location.start_offset, stack.size - (stack.last[:negated] ? 0 : 1), arms + 1 ]
+        end
+
         # Built only when a record asks, since most branches a walk passes hold nothing it records.
         def condition_text(branch)
           keyword = branch[:keyword]

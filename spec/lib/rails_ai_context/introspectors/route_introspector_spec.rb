@@ -365,6 +365,23 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
               mount GoodJob::Engine => "good_job"
             end
             mount Sidekiq::Web => "/sidekiq" unless Rails.env.test?
+            if Rails.env.test?
+              mount Flipper::UI.app => "/flipper"
+            elsif ENV["FLIPPER"]
+              mount Flipper::UI.app => "/flipper"
+            end
+            unless ENV["A"]
+              mount PgHero::Engine => "/pghero"
+            else
+              mount PgHero::Engine => "/pghero"
+            end
+            if ENV["B"]
+              mount Blazer::Engine => "/blazer"
+            elsif ENV["C"]
+              mount Blazer::Engine => "/blazer"
+            else
+              mount Blazer::Engine => "/blazer"
+            end
           end
         RUBY
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
@@ -372,7 +389,11 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
         expect(result[:mounted_engines]).to contain_exactly(
           { engine: "LetterOpenerWeb::Engine", path: "/letter_opener", condition: "if Rails.env.development?" },
           { engine: "GoodJob::Engine", path: "/good_job" },
-          { engine: "Sidekiq::Web", path: "/sidekiq", condition: "unless Rails.env.test?" }
+          { engine: "Sidekiq::Web", path: "/sidekiq", condition: "unless Rails.env.test?" },
+          { engine: "Flipper::UI.app", path: "/flipper",
+            condition: "if Rails.env.test? or unless Rails.env.test? and if ENV[\"FLIPPER\"]" },
+          { engine: "PgHero::Engine", path: "/pghero" },
+          { engine: "Blazer::Engine", path: "/blazer" }
         )
       end
     end

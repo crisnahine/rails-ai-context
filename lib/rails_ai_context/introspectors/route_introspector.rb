@@ -287,13 +287,23 @@ module RailsAiContext
         [ records, distinct_mounts(mounts + added_mounts), files.uniq ]
       end
 
-      # Both arms of an if/else can mount one app at one path; a mount is
-      # named once per app and path, and under no condition when the arms differ.
-      # ponytail: an if/elsif with no else reads as unconditional too; join the conditions if that matters.
+      # Both arms of an if/else can mount one app at one path; a mount is named once per app and
+      # path, under no condition when a copy has none or the copies fill every arm of one chain.
       def distinct_mounts(mounts)
         mounts.group_by { |mount| [ mount[:engine], mount[:path] ] }.map do |_, same|
-          same.map { |mount| mount[:condition] }.uniq.size == 1 ? same.first : same.first.except(:condition)
+          mount = same.first.except(:condition, :arm)
+          conditions = same.map { |copy| copy[:condition] }.uniq
+          next mount if conditions.include?(nil) || every_arm?(same.map { |copy| copy[:arm] })
+
+          mount.merge(condition: conditions.join(" or "))
         end
+      end
+
+      def every_arm?(arms)
+        return false if arms.include?(nil)
+
+        chain = arms.first.first(2)
+        arms.all? { |arm| arm.first(2) == chain } && arms.map { |arm| arm[2] }.uniq.size == arms.first.last
       end
 
       # Initializers that add to the app's table with `routes.prepend` or
@@ -337,7 +347,7 @@ module RailsAiContext
           mounts: -> { Listeners::MountListener.new(prefix: draw[:prefix], name_prefix: draw[:name_prefix]) }
         })
         records = ast[:routes] || []
-        mounts = ast[:mounts] || []
+        mounts = (ast[:mounts] || []).map { |m| m[:arm] ? m.merge(arm: [ path, *m[:arm] ]) : m }
         files = [ path ]
 
         records.select { |r| r[:type] == :dynamic && r[:macro] == :draw }.each do |record|

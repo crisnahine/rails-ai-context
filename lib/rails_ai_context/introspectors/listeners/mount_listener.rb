@@ -45,7 +45,11 @@ module RailsAiContext
 
           record = { engine: engine, path: prefixed_path(path), location: node.location.start_line }
           condition = current_condition
-          record[:condition] = condition if condition
+          if condition
+            record[:condition] = condition
+            arm = chain_arm
+            record[:arm] = arm if arm
+          end
           # The mount's route name, which names an engine's route proxy.
           if node.name == :mount
             as = extract_keyword_nodes(node)[:as]
