@@ -169,6 +169,15 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
         expect(text).to include("- `use Rack::ContentLength` (line 2)")
         expect(text).to include("- `map \"/health\"` (line 3) - its own Rack app; requests under it never reach Rails' router")
       end
+
+      it "still lists them when the static tier cannot answer the rest" do
+        allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("[UNAVAILABLE")
+        expect(text).to include("## config.ru (runs before the Rails middleware stack)\n- `use Rack::ContentLength` (line 2)")
+        expect(text).not_to include("## Initializers")
+      end
     end
 
     context "with no custom middleware of the app's own" do

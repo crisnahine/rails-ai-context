@@ -19,6 +19,11 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(server_context: nil)
+        # config.ru is read from source, so the static tier still shows it under the refusal.
+        if static_refusal_for(:config) && (rackup = rackup_lines).any?
+          return text_response(([ unavailable_text ] + rackup).join("\n"))
+        end
+
         fetch_section(:config, subject: "Config introspection", remedy: "Add :config to introspectors or use `config.preset = :full`.") do |data|
           lines = [ "# Application Configuration", "" ]
 
