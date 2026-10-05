@@ -231,6 +231,70 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
     end
   end
 
+  describe "fixtures at full detail" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def write(rel, body)
+      path = File.join(@root, rel)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, body)
+    end
+
+    def full_text
+      tests = RailsAiContext::Introspectors::TestIntrospector.new(double("app", root: @root)).call
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(@root)))
+      allow(described_class).to receive(:cached_context).and_return({ tests: tests })
+      described_class.call(detail: "full").content.first[:text]
+    end
+
+    it "reads a set whose first line is an ERB tag beside one that is plain YAML" do
+      write("test/fixtures/users.yml", <<~YAML)
+        <% password_digest = BCrypt::Password.create("password") %>
+
+        one:
+          email_address: one@example.com
+          password_digest: <%= password_digest %>
+      YAML
+      write("test/fixtures/posts.yml", "one: { title: A, user: one }\n")
+
+      text = full_text
+
+      expect(text).to include("- **users:**\n  - `one`: email_address: one@example.com, password_digest: erb_value")
+      expect(text).to include("- **posts:**\n  - `one`: title: A, user: one")
+    end
+
+    it "follows DEFAULTS, keeps subfolder sets apart and leaves out _fixture and ignored labels" do
+      write("test/fixtures/users.yml", "DEFAULTS: &DEFAULTS\n  name: Default\nalice:\n  <<: *DEFAULTS\n  email: alice@example.com\n")
+      write("test/fixtures/admin/posts.yml", "pinned:\n  title: Admin pinned\n")
+      write("test/fixtures/posts.yml", "_fixture:\n  model_class: Post\n  ignore: base\nbase:\n  title: Base\nfirst:\n  title: Hello\n")
+
+      text = full_text
+
+      expect(text).to include("- **admin/posts:**\n  - `pinned`: title: Admin pinned")
+      expect(text).to include("- **posts:**\n  - `first`: title: Hello")
+      expect(text).to include("- **users:**\n  - `alice`: name: Default, email: alice@example.com")
+      expect(text).not_to include("_fixture")
+      expect(text).not_to include("`base`")
+    end
+
+    it "picks no label _fixture ignores when it reads the file itself" do
+      write("test/fixtures/posts.yml", "_fixture:\n  ignore: base\nbase:\n  title: Base\nfirst:\n  title: Hello\n")
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(@root)))
+
+      expect(described_class.send(:fixture_key_for, "posts", {})).to eq("first")
+    end
+
+    it "lists the labels of a set it cannot parse and says so" do
+      write("test/fixtures/users.yml", "bob:\n  name: B\n")
+      write("test/fixtures/broken.yml", "one:\n  title: [unclosed\n")
+
+      text = full_text
+
+      expect(text).to include("- **users:**\n  - `bob`: name: B")
+      expect(text).to include("- **broken:** one _(not parsed as YAML; labels only)_")
+    end
+  end
+
   describe ".call with unknown detail level" do
     it "reads an invalid detail level as the default, and says so" do
       text = described_class.call(detail: "invalid").content.first[:text]

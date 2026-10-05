@@ -101,28 +101,26 @@ module RailsAiContext
 
             if data[:fixture_names]&.any?
               lines << "" << "## Fixtures"
-              parsed_fixtures = parse_all_fixture_contents
-              if parsed_fixtures.any?
-                parsed_fixtures.each do |file, entries|
-                  lines << "- **#{file}:**"
-                  entries.each do |entry_name, attrs|
-                    attr_str = attrs.map { |k, v| "#{k}: #{v}" }.join(", ")
-                    lines << "  - `#{entry_name}`: #{attr_str}"
-                  end
+              parsed_fixtures = parse_all_fixture_contents(data[:fixtures])
+              data[:fixture_names].each do |set, labels|
+                entries = parsed_fixtures[set.to_s]
+                unless entries
+                  lines << "- **#{set}:** #{Array(labels).join(', ')} _(not parsed as YAML; labels only)_"
+                  next
                 end
 
-                # Fixture relationships section
-                relationships = extract_fixture_relationships(parsed_fixtures)
-                if relationships.any?
-                  lines << "" << "## Fixture Relationships"
-                  relationships.each do |parent, children|
-                    lines << "- **#{parent}** ← #{children.join(', ')}"
-                  end
+                lines << "- **#{set}:**"
+                entries.each do |entry_name, attrs|
+                  attr_str = attrs.map { |k, v| "#{k}: #{v}" }.join(", ")
+                  lines << (attr_str.empty? ? "  - `#{entry_name}`" : "  - `#{entry_name}`: #{attr_str}")
                 end
-              else
-                # Fallback to simple names if parsing fails
-                data[:fixture_names].each do |file, names|
-                  lines << "- **#{file}:** #{names.join(', ')}"
+              end
+
+              relationships = extract_fixture_relationships(parsed_fixtures.compact)
+              if relationships.any?
+                lines << "" << "## Fixture Relationships"
+                relationships.each do |parent, children|
+                  lines << "- **#{parent}** ← #{children.join(', ')}"
                 end
               end
             end
@@ -473,62 +471,40 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, nil, label: "parse_factory_details")
       end
 
-      # Parse a single fixture YAML file, returning a hash of entry_name => filtered attributes
+      FIXTURE_SKIP_KEYS = %w[created_at updated_at id].freeze
+
+      # A fixture file's labels and their short attributes, or nil when it
+      # was not read or does not parse.
       private_class_method def self.parse_fixture_contents(file_path)
-        return {} unless File.exist?(file_path)
-        return {} if File.size(file_path) > max_test_file_size
+        content = RailsAiContext::SafeFile.read(file_path, max_size: max_test_file_size) or return nil
+        parsed = RailsAiContext::FixtureKeys.parse(content) or return nil
 
-        require "yaml"
-        content = RailsAiContext::SafeFile.read(file_path)
-        return {} unless content
-        # Handle ERB-templated fixtures: replace "<%=...%>" (with surrounding quotes) and bare <%...%>
-        content = content.gsub(/"<%=.*?%>"/, '"erb_value"')
-        content = content.gsub(/'<%=.*?%>'/, "'erb_value'")
-        content = content.gsub(/<%.*?%>/, "erb_value")
-        parsed = YAML.safe_load(content, permitted_classes: [ Date, Time, Symbol ]) rescue nil
-        return {} unless parsed.is_a?(Hash)
-
-        skip_keys = %w[created_at updated_at id]
-        entries = {}
-
-        parsed.each do |entry_name, attributes|
-          next unless attributes.is_a?(Hash)
-          filtered = {}
-          attributes.each do |key, value|
-            next if skip_keys.include?(key.to_s)
-            str_value = value.to_s
-            next if str_value.length > 100
-            filtered[key] = value
-          end
-          entries[entry_name] = filtered if filtered.any?
+        parsed.transform_values do |attributes|
+          attributes.reject { |key, value| FIXTURE_SKIP_KEYS.include?(key.to_s) || value.to_s.length > 100 }
         end
-
-        entries
-      rescue => e
-        {}
       end
 
-      # Parse all fixture files, returning { "fixture_file" => { entry => attrs } }
-      private_class_method def self.parse_all_fixture_contents
-        fixture_dirs = [
-          rails_app.root.join("test", "fixtures").to_s,
-          rails_app.root.join("spec", "fixtures").to_s
-        ]
-        real_root = File.realpath(rails_app.root).to_s
+      # { set => entries, or nil when unparsed } over the fixture directories
+      # the introspector found, each set named by its path under its directory.
+      private_class_method def self.parse_all_fixture_contents(fixtures)
+        return {} unless fixtures.is_a?(Hash)
 
+        root = rails_app.root.to_s
+        real_root = File.realpath(root)
         results = {}
-        fixture_dirs.each do |dir|
-          next unless Dir.exist?(dir)
+        fixtures[:location].to_s.split(", ").each do |rel|
+          dir = File.join(root, rel)
+          next unless File.directory?(dir)
+
+          real_dir = File.realpath(dir)
           safe_glob(dir, "**/*.yml", real_root).sort.each do |path|
-            rel_name = File.basename(path, ".yml")
-            entries = parse_fixture_contents(path)
-            results[rel_name] = entries if entries.any?
+            set = path.delete_prefix("#{real_dir}/").delete_suffix(".yml")
+            results[set] = parse_fixture_contents(path) unless results.key?(set)
           end
         end
-
         results
-      rescue => e
-        {}
+      rescue SystemCallError => e
+        RailsAiContext.debug_fail(e, {}, label: "parse_all_fixture_contents")
       end
 
       # Extract relationships: find foreign key references between fixtures

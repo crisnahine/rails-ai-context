@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "pathname"
+
 module RailsAiContext
   module Introspectors
     # Discovers test infrastructure: framework, factories/fixtures,
@@ -64,11 +66,38 @@ module RailsAiContext
       # a fixtures directory holds for file_fixture: an app can keep one YAML file
       # beside hundreds of JSON, XML and binary ones.
       def detect_fixtures
-        found = first_dir_with("*.yml", "spec/fixtures", "test/fixtures") or return nil
+        rows = fixture_dirs.map { |rel| [ rel, Dir.glob(File.join(root, rel, "**", "*")).select { |path| File.file?(path) } ] }
+        return nil if rows.empty?
 
-        dir = File.join(root, found[:location])
-        others = Dir.glob(File.join(dir, "**", "*")).count { |path| File.file?(path) && File.extname(path) != ".yml" }
+        sets = rows.sum { |_, files| files.count { |path| File.extname(path) == ".yml" } }
+        others = rows.sum { |_, files| files.count { |path| File.extname(path) != ".yml" } }
+        found = { location: rows.map(&:first).join(", "), count: sets }
         others.positive? ? found.merge(other_files: others) : found
+      end
+
+      DEFAULT_FIXTURE_DIRS = %w[spec/fixtures test/fixtures].freeze
+
+      # The first default directory that holds a set (an app with both reports
+      # one, as for factories), then each directory a test helper adds to
+      # fixture_paths that holds one and stays inside the app.
+      def fixture_dirs
+        @fixture_dirs ||= begin
+          real_root = File.realpath(root)
+          configured = HELPER_FILES.flat_map { |rel| Array(helper_walk(File.join(root, rel))&.dig(:fixture_paths)) }
+          candidates = [ DEFAULT_FIXTURE_DIRS.find { |rel| fixture_sets?(rel, real_root) } ] +
+                       configured.map { |rel| Pathname.new(rel).cleanpath.to_s }
+          candidates.compact.uniq.select { |rel| fixture_sets?(rel, real_root) }
+        end
+      end
+
+      def fixture_sets?(rel, real_root)
+        return false if RailsAiContext::SafePath.traversal?(rel)
+
+        real = File.realpath(File.join(root, rel))
+        RailsAiContext::SafePath.contained?(real, real_root) && File.directory?(real) &&
+          Dir.glob(File.join(real, "**", "*.yml")).any?
+      rescue SystemCallError
+        false
       end
 
       # Both bases are summed: an app that keeps system tests under spec/ and
@@ -133,29 +162,33 @@ module RailsAiContext
         end
       end
 
+      # Each set named as Rails names it, by its path under its directory,
+      # with the labels ActiveRecord loads. A file that does not read as YAML
+      # still gives the labels its top-level keys spell.
       def detect_fixture_names
-        %w[spec/fixtures test/fixtures].each do |dir_rel|
-          dir = File.join(root, dir_rel)
-          next unless Dir.exist?(dir)
+        names = {}
+        fixture_dirs.each do |rel|
+          dir = File.join(root, rel)
+          Dir.glob(File.join(dir, "**/*.yml")).sort.each do |path|
+            set = path.delete_prefix("#{dir}/").delete_suffix(".yml")
+            next if names.key?(set)
 
-          names = {}
-          Dir.glob(File.join(dir, "**/*.yml")).each do |path|
-            # The set's name, as Rails reads it: its path under the directory.
-            file = path.delete_prefix("#{dir}/").delete_suffix(".yml")
             content = RailsAiContext::SafeFile.read(path) or next
-            keys = content.scan(/^(\w+):/).flatten.select { |key| RailsAiContext::FixtureKeys.name?(key) }
-            names[file] = keys if keys.any?
+            labels = RailsAiContext::FixtureKeys.parse(content)&.keys ||
+                     content.scan(/^(\w+):/).flatten.select { |key| RailsAiContext::FixtureKeys.name?(key) }
+            names[set] = labels if labels.any?
           end
-          return names if names.any?
         end
-        nil
+        names.presence
       end
 
       # Calls that configure every test or every system test, shown as written.
       SETUP_MACROS = %i[parallelize fixtures driven_by].freeze
 
+      HELPER_FILES = %w[spec/rails_helper.rb spec/spec_helper.rb test/test_helper.rb].freeze
+
       def detect_test_helper_setup
-        helpers = %w[spec/rails_helper.rb spec/spec_helper.rb test/test_helper.rb test/application_system_test_case.rb].map { |rel| File.join(root, rel) }
+        helpers = (HELPER_FILES + %w[test/application_system_test_case.rb]).map { |rel| File.join(root, rel) }
         # Apps also configure helpers in support files (Errbit's spec/support/devise.rb). A bare
         # include there is usually a support module's own mixin, so only config.include counts.
         support = HELPER_DIRS.flat_map { |rel| Dir.glob(File.join(root, rel, "**", "*.rb")).sort }
@@ -163,12 +196,7 @@ module RailsAiContext
         setup = []
         calls = []
         (helpers + support).each do |path|
-          next unless File.file?(path)
-          ast = SourceIntrospector.walk(path, {
-            bare:    -> { Listeners::GenericMacroListener.new(:include) },
-            chained: -> { Listeners::ChainedCallListener.new(:include, receiver: :config) },
-            setup:   -> { Listeners::GenericMacroListener.new(*SETUP_MACROS) }
-          })
+          ast = helper_walk(path) or next
           hits = helpers.include?(path) ? ast[:bare] + ast[:chained] : ast[:chained]
           # `config.include Helpers, :js` scopes Helpers to tagged examples; the tag is no helper.
           hits.each { |hit| setup.concat(hit[:values].map(&:to_s).grep(/\A[A-Z]\w*(?:::[A-Z]\w*)*\z/)) }
@@ -176,6 +204,20 @@ module RailsAiContext
           ast[:setup].each { |hit| calls << source.slice(hit[:offset], hit[:end_offset] - hit[:offset]).squish }
         end
         (setup + calls).uniq
+      end
+
+      # One walk per helper file serves every reader of it.
+      def helper_walk(path)
+        @helper_walks ||= {}
+        return @helper_walks[path] if @helper_walks.key?(path)
+
+        @helper_walks[path] = File.file?(path) ? SourceIntrospector.walk(path, {
+          bare:          -> { Listeners::GenericMacroListener.new(:include) },
+          chained:       -> { Listeners::ChainedCallListener.new(:include, receiver: :config) },
+          setup:         -> { Listeners::GenericMacroListener.new(*SETUP_MACROS) },
+          fixture_paths: Listeners::FixturePathsListener,
+          cleaner:       -> { Listeners::ConfigAssignmentListener.new(:DatabaseCleaner) }
+        }) : nil
       end
 
       def detect_vcr
@@ -244,12 +286,8 @@ module RailsAiContext
         # complete signal; the unsuffixed name is the pre-2.0 single gem.
         if RailsAiContext::GemLock.for(root).any?("database_cleaner", "database_cleaner-core")
           strategy = nil
-          %w[spec/rails_helper.rb spec/spec_helper.rb test/test_helper.rb].each do |helper|
-            path = File.join(root, helper)
-            next unless File.exist?(path)
-            ast = SourceIntrospector.walk(path, {
-              cleaner: -> { Listeners::ConfigAssignmentListener.new(:DatabaseCleaner) }
-            })
+          HELPER_FILES.each do |helper|
+            ast = helper_walk(File.join(root, helper)) or next
             hit = ast[:cleaner].find { |h| h[:assignment] && h[:path] == [ :strategy ] }
             strategy = hit[:value].to_s if hit
           end

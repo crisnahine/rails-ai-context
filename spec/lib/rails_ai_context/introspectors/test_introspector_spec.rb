@@ -552,6 +552,50 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
     end
   end
 
+  describe "fixture sets read the way ActiveRecord reads them" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def write(rel, body = "")
+      path = File.join(@root, rel)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, body)
+    end
+
+    def payload
+      described_class.new(double("app", root: @root)).call
+    end
+
+    it "keeps subfolder sets apart and drops the labels _fixture ignores" do
+      write("test/fixtures/users.yml", "DEFAULTS: &DEFAULTS\n  name: Default\nalice:\n  <<: *DEFAULTS\n  email: alice@example.com\n")
+      write("test/fixtures/admin/posts.yml", "pinned:\n  title: Admin pinned\n")
+      write("test/fixtures/posts.yml", "_fixture:\n  model_class: Post\n  ignore: base\nbase:\n  title: Base\nfirst:\n  title: Hello\n")
+
+      expect(payload[:fixture_names]).to eq("admin/posts" => %w[pinned], "posts" => %w[first], "users" => %w[alice])
+    end
+
+    it "reads the sets under a directory the test helper adds to fixture_paths" do
+      write("test/test_helper.rb", "class ActiveSupport::TestCase\n  self.fixture_paths << Rails.root.join(\"test/shared_fixtures\")\nend\n")
+      write("test/fixtures/users.yml", "bob:\n  name: B\n")
+      write("test/shared_fixtures/plans.yml", "free:\n  price: 0\n")
+
+      result = payload
+      expect(result[:fixture_names]).to eq("users" => %w[bob], "plans" => %w[free])
+      expect(result[:fixtures]).to eq(location: "test/fixtures, test/shared_fixtures", count: 2)
+    end
+
+    it "does not follow a fixture path out of the app or into a missing directory" do
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "secrets.yml"), "leak:\n  key: x\n")
+        FileUtils.mkdir_p(File.join(@root, "test"))
+        File.symlink(outside, File.join(@root, "test", "linked"))
+        write("test/test_helper.rb", "self.fixture_paths += [\"test/linked\", \"test/nowhere\", \"../up\"]\n")
+        write("test/fixtures/users.yml", "bob:\n  name: B\n")
+
+        expect(payload[:fixture_names]).to eq("users" => %w[bob])
+      end
+    end
+  end
+
   describe "#detect_framework" do
     around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
 

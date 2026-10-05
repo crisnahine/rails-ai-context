@@ -84,7 +84,7 @@ module RailsAiContext
           push_path(File.join(*segments)) if segments.any?
         end
 
-        APP_ROOT = /\A(?:(?:Rails|config)\.)?root\z/
+        APP_ROOT = /\A(?:(?:::)?Rails\.|config\.)?root\z/
 
         def app_root?(node)
           node = node.statements if node.is_a?(Prism::EmbeddedStatementsNode)

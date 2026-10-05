@@ -639,12 +639,9 @@ module RailsAiContext
           fixture_file = File.join(rails_app.root, "test", "fixtures", "#{table}.yml")
           return nil unless File.exist?(fixture_file)
 
-          # The disk read keeps its own filter: it reads raw YAML that no
-          # introspector has been through.
-          content = RailsAiContext::SafeFile.read(fixture_file)
-          content&.scan(/^([a-z_]\w*):/i)
-                 &.flatten
-                 &.find { |key| RailsAiContext::FixtureKeys.name?(key) }
+          content = RailsAiContext::SafeFile.read(fixture_file) or return nil
+          labels = RailsAiContext::FixtureKeys.parse(content)&.keys || content.scan(/^([a-z_]\w*):/i).flatten
+          labels.find { |key| RailsAiContext::FixtureKeys.name?(key) }
         end
 
         # Fixture set from `set_fixture_class`, then the table name, then the pluralized class
