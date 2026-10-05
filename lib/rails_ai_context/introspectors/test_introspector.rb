@@ -126,13 +126,16 @@ module RailsAiContext
       end
 
       # The files a glob under the root matches, sorted, leaving out any whose
-      # real path leaves the app or names a sensitive file.
-      def app_files(pattern)
+      # real path leaves the app or names a sensitive file. A count (`read: false`)
+      # keeps a sensitive-named file that sits where it is listed, since it opens nothing.
+      def app_files(pattern, read: true)
         real_root = (@real_root ||= File.realpath(root))
         Dir.glob(File.join(root, pattern)).sort.select do |path|
           real = File.realpath(path)
+          relative = real.delete_prefix("#{real_root}/")
+          linked = relative != path.delete_prefix("#{root}/")
           File.file?(real) && RailsAiContext::SafePath.contained?(real, real_root) &&
-            !RailsAiContext::SafePath.sensitive?(real.delete_prefix("#{real_root}/"))
+            !((read || linked) && RailsAiContext::SafePath.sensitive?(relative))
         rescue SystemCallError
           false
         end
@@ -142,7 +145,7 @@ module RailsAiContext
       # a fixtures directory holds for file_fixture: an app can keep one YAML file
       # beside hundreds of JSON, XML and binary ones.
       def detect_fixtures
-        rows = fixture_dirs.map { |rel| [ rel, app_files(File.join(rel, "**", "*")) ] }
+        rows = fixture_dirs.map { |rel| [ rel, app_files(File.join(rel, "**", "*"), read: false) ] }
         return nil if rows.empty?
 
         sets = rows.sum { |_, files| files.count { |path| File.extname(path) == ".yml" } }
@@ -160,11 +163,23 @@ module RailsAiContext
       def fixture_dirs
         @fixture_dirs ||= begin
           real_root = File.realpath(root)
-          configured = HELPER_FILES.flat_map { |rel| Array(helper_walk(File.join(root, rel))&.dig(:fixture_paths)) }
-          candidates = [ DEFAULT_FIXTURE_DIRS.find { |rel| fixture_sets?(rel, real_root) } ] +
+          configured = (HELPER_FILES.map { |rel| File.join(root, rel) } + support_files)
+            .flat_map { |path| Array(helper_walk(path)&.dig(:fixture_paths)) }
+          defaults = DEFAULT_FIXTURE_DIRS.reject { |rel| rel == "spec/fixtures" && rspec_without_fixture_paths?(configured) }
+          candidates = [ defaults.find { |rel| fixture_sets?(rel, real_root) } ] +
                        configured.map { |rel| Pathname.new(rel).cleanpath.to_s }
           candidates.compact.uniq.select { |rel| fixture_sets?(rel, real_root) }
         end
+      end
+
+      # rspec-rails gives fixture_paths no default, so an RSpec suite whose helpers set
+      # none loads no fixture sets; its spec/fixtures holds files for file_fixture.
+      def rspec_without_fixture_paths?(configured)
+        configured.empty? && %w[spec/rails_helper.rb spec/spec_helper.rb].any? { |rel| File.file?(File.join(root, rel)) }
+      end
+
+      def support_files
+        @support_files ||= HELPER_DIRS.flat_map { |rel| Dir.glob(File.join(root, rel, "**", "*.rb")).sort }
       end
 
       def fixture_sets?(rel, real_root)
@@ -257,7 +272,7 @@ module RailsAiContext
         helpers = (HELPER_FILES + %w[test/application_system_test_case.rb]).map { |rel| File.join(root, rel) }
         # Apps also configure helpers in support files (Errbit's spec/support/devise.rb). A bare
         # include there is usually a support module's own mixin, so only config.include counts.
-        support = HELPER_DIRS.flat_map { |rel| Dir.glob(File.join(root, rel, "**", "*.rb")).sort }
+        support = support_files
 
         setup = []
         calls = []

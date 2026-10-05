@@ -429,6 +429,37 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
 
       expect(fixtures).to eq(location: "spec/fixtures", locations: %w[spec/fixtures], count: 1, other_files: 3)
     end
+
+    it "counts a sensitive-named file too, since counting reads nothing" do
+      FileUtils.mkdir_p(File.join(@root, "spec", "fixtures", "ldap"))
+      File.write(File.join(@root, "spec", "fixtures", "users.yml"), "bob:\n  name: B\n")
+      File.write(File.join(@root, "spec", "fixtures", "ldap", "snakeoil.pem"), "x")
+
+      fixtures = described_class.new(double("app", root: @root)).call[:fixtures]
+
+      expect(fixtures[:other_files]).to eq(1)
+    end
+
+    # rspec-rails gives fixture_paths no default, so without one spec/fixtures holds no fixture sets.
+    it "reads no fixture sets from spec/fixtures when the RSpec helper sets no fixture_paths" do
+      FileUtils.mkdir_p(File.join(@root, "spec", "fixtures", "sidekiq"))
+      File.write(File.join(@root, "spec", "fixtures", "sidekiq", "invalid.yml"), "hello\n")
+      File.write(File.join(@root, "spec", "rails_helper.rb"), "RSpec.configure do |config|\n  # config.fixture_path = \"spec/fixtures\"\nend\n")
+
+      result = described_class.new(double("app", root: @root)).call
+
+      expect(result[:fixtures]).to be_nil
+      expect(result[:fixture_names]).to be_nil
+    end
+
+    it "reads spec/fixtures when the RSpec helper sets fixture_paths to it" do
+      FileUtils.mkdir_p(File.join(@root, "spec", "fixtures"))
+      File.write(File.join(@root, "spec", "fixtures", "users.yml"), "bob:\n  name: B\n")
+      File.write(File.join(@root, "spec", "rails_helper.rb"),
+                 "RSpec.configure do |config|\n  config.fixture_paths = [Rails.root.join(\"spec/fixtures\")]\nend\n")
+
+      expect(described_class.new(double("app", root: @root)).call[:fixture_names]).to eq("users" => %w[bob])
+    end
   end
 
   # Consul defines a comment factory per model in a loop,
