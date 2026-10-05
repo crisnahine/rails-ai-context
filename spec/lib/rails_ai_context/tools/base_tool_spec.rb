@@ -227,14 +227,14 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
 
   # The stub stands in for Rails 7.0's activesupport, left on the load path by a failed boot.
   describe "loading on an activesupport that does not require logger itself" do
-    it "loads the tool classes" do
+    it "loads the tool classes, and any later full require of activesupport" do
       Dir.mktmpdir do |dir|
         File.write(File.join(dir, "active_support.rb"), <<~RUBY)
           Logger::Severity
           load File.join(Gem.loaded_specs["activesupport"].full_gem_path, "lib", "active_support.rb")
         RUBY
         lib = File.expand_path("../../../../lib", __dir__)
-        script = 'require "rails_ai_context"; RailsAiContext::Tools::BaseTool; print "loaded"'
+        script = 'require "rails_ai_context"; require "active_support"; RailsAiContext::Tools::BaseTool; print "loaded"'
 
         out, err, status = Open3.capture3(RbConfig.ruby, "-I", dir, "-I", lib, "-e", script)
 

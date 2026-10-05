@@ -3,9 +3,6 @@
 require "did_you_mean"
 
 require "mcp"
-# Rails 7.0's activesupport names Logger without requiring it; after a failed
-# boot that copy is the one on the load path.
-require "logger"
 require "active_support"
 require "active_support/number_helper"
 

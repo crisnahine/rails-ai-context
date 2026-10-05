@@ -2,6 +2,10 @@
 
 require "zeitwerk"
 
+# Rails 7.0's activesupport names Logger without requiring it; after a failed
+# boot that copy is the one on the load path.
+require "logger"
+
 # Introspectors and tools lean on ActiveSupport's core extensions (camelize,
 # underscore, deep_dup, presence, ...) without requiring them individually.
 # In runtime tier that's harmless - booting the host Rails app loads all of
