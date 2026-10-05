@@ -129,7 +129,8 @@ module RailsAiContext
             content = RailsAiContext::SafeFile.read(path) or next
             relative = path.sub("#{root}/", "")
             # A literal check first: these patterns have no literal prefix, so each scans the whole file.
-            if content.include?("MessageEncryptor") || content.include?("MessageVerifier") || content.include?("message_verifier")
+            if content.include?("MessageEncryptor") || content.include?("MessageVerifier") ||
+               content.include?("message_verifier") || content.include?("ActiveStorage.verifier")
               encryptor = content.match?(ENCRYPTOR_USE)
               verifies = content.match?(VERIFIER_USE)
               verifier << { file: relative, encryptor: encryptor, verifier: verifies } if (encryptor || verifies) && !relative.start_with?("config/")
