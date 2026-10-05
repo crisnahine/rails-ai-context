@@ -624,8 +624,9 @@ module RailsAiContext
       # count says how many names came from the file instead.
       def replay_note(tables, counts)
         inferred = tables.count { |_, data| data[:inferred_name] }
+        _, dump = SchemaDumpPath.present(app.root.to_s)
         note = "Reconstructed from #{CountPhrase.call(migration_files.size, "migration file")} " \
-               "(#{connection_state}, no schema.rb)"
+               "(#{connection_state}, #{dump ? "#{relative_dump_path(dump)} declares no tables" : "no schema.rb"})"
         note += ", #{CountPhrase.call(inferred, "table name")} read from the file rather than the create_table call" if inferred.positive?
         note += ", #{CountPhrase.call(counts.unnamed, "create_table call")} left unnamed" if counts.unnamed.positive?
         note += ", #{CountPhrase.call(counts.unnamed_columns, "added column")} left unnamed" if counts.unnamed_columns.positive?

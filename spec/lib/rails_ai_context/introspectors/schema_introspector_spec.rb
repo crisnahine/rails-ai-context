@@ -680,6 +680,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         result = introspector.call
         expect(result[:adapter]).to eq("static_parse")
         expect(result[:note]).to include("migration")
+        expect(result[:note]).to end_with("(no DB connection, db/schema.rb declares no tables)")
       end
 
       it "says nothing about unnamed tables when every create_table named one" do
@@ -1055,6 +1056,23 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
         expect(result[:unavailable]).to eq("this app does not load Active Record; ActiveRecord schema introspection does not apply")
+      end
+    end
+  end
+
+  describe "a sequel-rails app" do
+    it "says the app uses Sequel instead of replaying its migrations as Active Record" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "db/migrate"))
+        File.write(File.join(dir, "config/application.rb"), "require \"rails\"\n# require \"active_record/railtie\"\nrequire \"sequel_rails\"\nrequire \"action_controller/railtie\"\n")
+        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    sequel-rails (1.2.4)\n\nDEPENDENCIES\n  sequel-rails\n")
+        File.write(File.join(dir, "db/schema.rb"), "Sequel.migration do\n  change do\n    create_table(:artists) do\n      primary_key :id\n    end\n  end\nend\n")
+        File.write(File.join(dir, "db/migrate/20260101000001_create_artists.rb"), "Sequel.migration do\n  change do\n    create_table(:artists) do\n      String :name\n    end\n  end\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result).to eq(unavailable: "this app uses Sequel; ActiveRecord schema introspection does not apply")
       end
     end
   end

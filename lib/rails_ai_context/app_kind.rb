@@ -7,16 +7,19 @@ module RailsAiContext
     module_function
 
     def mongoid?(root)
-      root = root.to_s
-      return true if File.exist?(File.join(root, "config", "mongoid.yml"))
+      File.exist?(File.join(root.to_s, "config", "mongoid.yml")) || uses_gem?(root, "mongoid")
+    end
 
-      lock = RailsAiContext::GemLock.for(root)
-      return lock.present?("mongoid") unless lock.missing?
+    def sequel?(root)
+      uses_gem?(root, "sequel-rails", "sequel")
+    end
 
-      # No lockfile yet (fresh checkout, bare directory): fall back to the
-      # Gemfile's own declaration so the app still gets Mongoid treatment
-      # instead of misleading ActiveRecord answers.
-      RailsAiContext::Introspectors::GemfileGems.names(root).include?("mongoid")
+    def uses_gem?(root, *names)
+      lock = RailsAiContext::GemLock.for(root.to_s)
+      return names.any? { |name| lock.present?(name) } unless lock.missing?
+
+      # No lockfile yet (fresh checkout, bare directory): the Gemfile's own declaration.
+      RailsAiContext::Introspectors::GemfileGems.names(root.to_s).intersect?(names)
     end
 
     ACTIVE_RECORD_REQUIRES = %w[rails/all active_record/railtie active_record].freeze
@@ -42,7 +45,10 @@ module RailsAiContext
     def without_active_record(root)
       return nil if active_record?(root)
 
-      mongoid?(root) ? "this app uses Mongoid" : "this app does not load Active Record"
+      return "this app uses Mongoid" if mongoid?(root)
+      return "this app uses Sequel" if sequel?(root)
+
+      "this app does not load Active Record"
     end
 
     # The development database config/mongoid.yml names, by `database:` or the
