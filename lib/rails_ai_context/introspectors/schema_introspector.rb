@@ -410,9 +410,7 @@ module RailsAiContext
       def static_column(column)
         options = column[:options]
         entry = { name: column[:name], type: column[:type] }
-        # t.virtual names the generated column's own type in type:.
-        if column[:type] == "virtual"
-          entry[:type] = options[:type].to_s if options[:type].is_a?(Symbol) || options[:type].is_a?(String)
+        if column[:virtual]
           entry[:generated] = options[:as].is_a?(String) ? options[:as] : ""
           entry[:stored] = options[:stored] == true
         end

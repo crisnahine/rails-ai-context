@@ -245,8 +245,9 @@ module RailsAiContext
           name:    column_name(event),
           type:    event[:column_type],
           default: default_for(event, options),
-          options: options
-        }
+          options: options,
+          virtual: event[:virtual]
+        }.compact
       end
 
       def index_entry(event)

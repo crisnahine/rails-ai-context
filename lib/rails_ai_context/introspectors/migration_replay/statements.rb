@@ -119,6 +119,10 @@ module RailsAiContext
           default = declared_default(opts, entry)
           col[:default] = SchemaConventions.format_default(default) if opts.key?(:default) && default != RailsAiContext::Confidence::INFERRED
           col[:array] = true if opts[:array] == true
+          if entry[:virtual]
+            col[:generated] = opts[:as].is_a?(String) ? opts[:as] : ""
+            col[:stored] = opts[:stored] == true
+          end
           tables[current_table][:columns] << col
           return unless opts[:index] && opts[:index] != false
 

@@ -250,6 +250,9 @@ module RailsAiContext
           return unread_call(node) if names.empty? || names.any?(&:nil?) || column_type.nil?
 
           options = braced.map { |hash| hash_node_to_hash(hash) }.reduce(extract_keyword_options(node), :merge)
+          virtual = node.name == :virtual
+          # A generated column takes its own type from type: (each adapter's virtual, 7.0 to 8.1).
+          column_type = options[:type].to_s if virtual && (options[:type].is_a?(Symbol) || options[:type].is_a?(String))
           names.each do |col_name|
             @results << {
               type:        :column,
@@ -263,6 +266,7 @@ module RailsAiContext
               default_proc: proc_default?(node),
               location:    node.location.start_line
             }
+            @results.last[:virtual] = true if virtual
           end
         end
 
