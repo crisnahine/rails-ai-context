@@ -100,8 +100,7 @@ module RailsAiContext
 
       # The filters the class body declares itself: one inside a `def` runs only when the method is called.
       def class_level(walked)
-        bodies = Array(walked[:methods]).filter_map { |m| m[:location]..m[:end_location] if m[:location] && m[:end_location] }
-        Array(walked[:filters]).reject { |entry| bodies.any? { |range| range.cover?(entry[:location].to_i) } }
+        SourceIntrospector.outside_defs(walked[:filters], walked[:methods])
       end
 
       # What the class methods `source` defines itself (`def self.x`, `class << self`) declare at
@@ -131,8 +130,8 @@ module RailsAiContext
 
       # Whether the method's body holds a filter macro the walk saw.
       def declares_filters?(walked, method)
-        range = method[:location]..method[:end_location].to_i
-        Array(walked[:filters]).any? { |entry| range.cover?(entry[:location].to_i) }
+        range = method[:offset].to_i...method[:end_offset].to_i
+        Array(walked[:filters]).any? { |entry| range.cover?(entry[:offset].to_i) }
       end
 
       # What a class method an app-defined base or one of its concerns defines declares at

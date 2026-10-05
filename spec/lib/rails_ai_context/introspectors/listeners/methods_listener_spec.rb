@@ -346,7 +346,9 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener do
       [ "name", :instance, :public ], [ "service_code", :instance, :public ], [ "queue_size", :instance, :public ],
       [ "token", :instance, :private ], [ "helper", :instance, :private ]
     ])
-    expect(methods.first).to include(signature: "run", location: 3, end_location: 3)
+    expect(methods.first).to include(signature: "run", location: 3)
+    expect(methods.first).not_to have_key(:end_location)
+    expect(source[methods.last[:offset]...methods.last[:end_offset]]).to eq("def helper\n    delegate :inside, to: :service\n  end")
   end
 
   it "reads Forwardable's hash form and a delegation in class << self" do

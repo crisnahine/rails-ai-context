@@ -448,8 +448,7 @@ module RailsAiContext
         skips: -> { Introspectors::Listeners::MethodCallListener.new(names: SKIP_MACROS) },
         methods: Introspectors::Listeners::MethodsListener
       })
-      bodies = Array(walked[:methods]).filter_map { |m| m[:location]..m[:end_location] if m[:location] && m[:end_location] }
-      Array(walked[:skips]).reject { |call| bodies.any? { |range| range.cover?(call[:line]) } }
+      Introspectors::SourceIntrospector.outside_defs(walked[:skips], walked[:methods])
     end
 
     private_class_method :default_root, :split, :applies?, :parent_filters, :skip_source_records, :carried_source,

@@ -60,6 +60,13 @@ module RailsAiContext
         walk_dispatch(result, listener_map)
       end
 
+      # The calls a class body makes itself, out of what one walk found: a call
+      # inside a `def` runs only when the method is called.
+      def self.outside_defs(calls, methods)
+        bodies = Array(methods).filter_map { |m| m[:offset]...m[:end_offset] if m[:offset] && m[:end_offset] }
+        Array(calls).reject { |call| call[:offset] && bodies.any? { |range| range.cover?(call[:offset]) } }
+      end
+
       # Walk a parse result the caller already holds, so a second reader of the
       # same source does not parse it again.
       def self.walk_dispatch(parse_result, listener_map)

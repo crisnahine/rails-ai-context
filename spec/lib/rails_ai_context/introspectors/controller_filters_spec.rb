@@ -83,6 +83,16 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
                  [ "before", "block (line 6)", [ "index" ] ], [ "after", "block (line 7)", [ "index" ] ] ])
     end
 
+    it "keeps a filter that shares a line with a def or follows a delegation" do
+      expect(described_class.from_source("class C < ApplicationController; def index; end; before_action :x; end").map { |f| f[:name] })
+        .to eq([ "x" ])
+      expect(described_class.from_source("class C < ApplicationController\n  before_action :a; def index = head(:ok)\nend\n").map { |f| f[:name] })
+        .to eq([ "a" ])
+      expect(described_class.from_source("class C < ApplicationController\n  delegate :x, to: :y; before_action :b\nend\n").map { |f| f[:name] })
+        .to eq([ "b" ])
+      expect(described_class.from_source("class C < ApplicationController; def index; before_action :c; end; end")).to eq([])
+    end
+
     # request_forgery_protection.rb: `skip_before_action :verify_authenticity_token, options.reverse_merge(raise: false)`.
     it "reads skip_forgery_protection as the skip of verify_authenticity_token it is" do
       source = "class WebhooksController < ApplicationController\n  skip_forgery_protection only: :create\nend\n"

@@ -148,6 +148,9 @@ module RailsAiContext
             signature:    signature_source(node, is_class_method),
             location:     node.location.start_line,
             end_location: node.location.end_line,
+            # Offsets, unlike lines, tell a call that shares a line with a def from one inside it.
+            offset:       node.location.start_offset,
+            end_offset:   node.location.end_offset,
             confidence:   RailsAiContext::Confidence::VERIFIED
           }
         end
@@ -200,8 +203,8 @@ module RailsAiContext
             params:       [],
             owner:        @owner_stack.dup,
             signature:    name,
+            # No end: a delegation has no body for a call to sit inside.
             location:     node.location.start_line,
-            end_location: node.location.end_line,
             confidence:   confidence_for(node)
           }
         end

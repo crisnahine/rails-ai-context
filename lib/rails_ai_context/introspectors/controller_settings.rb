@@ -20,8 +20,7 @@ module RailsAiContext
           calls: -> { Listeners::GenericMacroListener.new(:layout, *MACROS) },
           methods: Listeners::MethodsListener
         })
-        bodies = Array(walked[:methods]).filter_map { |m| m[:location]..m[:end_location] if m[:location] && m[:end_location] }
-        calls = Array(walked[:calls]).reject { |call| bodies.any? { |range| range.cover?(call[:location].to_i) } }
+        calls = SourceIntrospector.outside_defs(walked[:calls], walked[:methods])
         layout_call, settings = calls.partition { |call| call[:macro] == :layout }
         {
           layout: layout_call.last && layout_of(layout_call.last),

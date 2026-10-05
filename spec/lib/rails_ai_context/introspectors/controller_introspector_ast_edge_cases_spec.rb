@@ -689,6 +689,14 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
     end
   end
 
+  describe "rate_limit on a line a def shares" do
+    it "is still the class body's" do
+      source = "class C < ApplicationController; def create; end; rate_limit to: 1, within: 1.hour; end"
+
+      expect(introspector.send(:extract_rate_limits, source).map { |r| r[:to] }).to eq([ 1 ])
+    end
+  end
+
   describe "action_name filter conditions" do
     it "names the action its condition compares against" do
       source = <<~RUBY

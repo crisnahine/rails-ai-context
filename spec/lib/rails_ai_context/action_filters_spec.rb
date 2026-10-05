@@ -41,6 +41,14 @@ RSpec.describe RailsAiContext::ActionFilters do
   # every chain - so the walk ended on the first hop for most of an app's
   # controllers, while the generated files read the same file directly and
   # printed its filters. One run, two answers.
+  describe "a skip on a line a def shares" do
+    it "is the class body's, while one inside the def is not" do
+      calls = described_class.send(:skip_calls, "class C < ApplicationController; def index; end; skip_before_action :x; def a; skip_before_action :y; end; end")
+
+      expect(calls.map { |call| call[:arguments] }).to eq([ [ :x ] ])
+    end
+  end
+
   describe "the base controller the listing leaves out" do
     def app_with_base(dir)
       FileUtils.mkdir_p(File.join(dir, "app", "controllers"))

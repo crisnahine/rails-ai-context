@@ -24,6 +24,11 @@ RSpec.describe RailsAiContext::Introspectors::ControllerSettings do
       )
     end
 
+    it "keeps a setting that shares a line with a def" do
+      expect(described_class.from_source("class C < ApplicationController; def index; end; layout \"admin\"; end"))
+        .to eq(layout: { name: "admin" })
+    end
+
     it "reads a layout method, a block, false, and leaves nil to the lookup Rails does" do
       expect(described_class.from_source("class A\n  layout :pick\nend\n")).to eq(layout: { method: "pick" })
       expect(described_class.from_source("class A\n  layout ->(c) { 'x' }\nend\n")).to eq(layout: { block: 2 })

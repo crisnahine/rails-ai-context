@@ -736,8 +736,7 @@ module RailsAiContext
           rate_limit: -> { Listeners::GenericMacroListener.new(:rate_limit) },
           methods: Listeners::MethodsListener
         })
-        bodies = Array(walked[:methods]).filter_map { |m| m[:location]..m[:end_location] if m[:location] && m[:end_location] }
-        Array(walked[:rate_limit]).reject { |entry| bodies.any? { |range| range.cover?(entry[:location].to_i) } }.map do |entry|
+        SourceIntrospector.outside_defs(walked[:rate_limit], walked[:methods]).map do |entry|
           options = entry[:options] || {}
           sources = entry[:option_values] || {}
           text = options.map { |key, value| "#{key}: #{inferred?(value) ? sources[key] : value.inspect}" }.join(", ")
