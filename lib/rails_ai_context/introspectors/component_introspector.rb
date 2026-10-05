@@ -34,13 +34,19 @@ module RailsAiContext
       # File breaks the tie: `sort_by` is not stable, so a name two files
       # declare would otherwise swap places between runs.
       def extract_components
-        paths = components_dirs.flat_map { |dir| Dir.glob(File.join(dir, "**/*.rb")) }
+        dirs = components_dirs
+        namespaced = PathResolver.namespaced_roots(root).map(&:first) - dirs.map { |dir| File.expand_path(dir) }
+        paths = (dirs + namespaced).flat_map { |dir| Dir.glob(File.join(dir, "**/*.rb")) }
 
         components = paths.filter_map do |path|
           next if path.end_with?("_preview.rb")
           next if File.basename(path) == "application_component.rb"
 
-          parse_component(path)
+          component = parse_component(path)
+          # A push_dir root (Phlex's app/views/components) holds helpers and kits too.
+          next if component && component[:type] == :unknown && namespaced.any? { |dir| path.start_with?("#{dir}/") }
+
+          component
         rescue => e
           { file: path.sub("#{root}/", ""), error: e.message }
         end.sort_by { |c| [ c[:name] || "", c[:file] || "" ] }
