@@ -48,6 +48,15 @@ module RailsAiContext
       source.to_s.gsub(TAG) { "\n" * Regexp.last_match(0).count("\n") }
     end
 
+    # Like without_tags, but an output tag (`<%= %>`) becomes `marker`, so a value
+    # it builds, whole or in part, reads as computed rather than as the text around it.
+    def with_output_marked(source, marker)
+      source.to_s.gsub(TAG) do
+        tag = Regexp.last_match(0)
+        tag.start_with?("<%=") ? marker : "\n" * tag.count("\n")
+      end
+    end
+
     def blank(text)
       text.gsub(/[^\n]/, " ")
     end

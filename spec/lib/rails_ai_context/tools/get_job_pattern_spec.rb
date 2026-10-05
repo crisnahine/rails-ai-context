@@ -803,6 +803,19 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text_for(job: "NightlyJob")).to include("**Schedule:** 1h (from config/sidekiq.yml)")
     end
 
+    it "reads a schedule an ERB tag builds as computed, and every: with options as written" do
+      write("config/sidekiq.yml", <<~YAML)
+        :scheduler:
+          :schedule:
+            NightlyJob:
+              cron: '<%= Random.rand(0..59) %> <%= Random.rand(3..5) %> * * *'
+            CleanupJob:
+              every: ['5m', first_in: '4m']
+      YAML
+      expect(text_for(job: "NightlyJob")).to include("**Schedule:** computed (from config/sidekiq.yml)")
+      expect(text_for(job: "CleanupJob")).to include("**Schedule:** 5m, first_in: 4m (from config/sidekiq.yml)")
+    end
+
     it "reads a computed GoodJob cron schedule as computed, not as a marker" do
       write("config/initializers/good_job.rb", <<~RUBY)
         Rails.application.configure do

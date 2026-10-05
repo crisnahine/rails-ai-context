@@ -108,15 +108,25 @@ module RailsAiContext
       def task(file, name, options, kind, env: nil)
         return nil unless options.is_a?(Hash)
 
-        options = options.transform_values { |value| value == RailsAiContext::Confidence::INFERRED ? :computed : value }
+        options = options.transform_values { |value| computed?(value) ? :computed : value }
         schedule = options[kind.to_s]
         return nil if schedule.nil?
+
+        # sidekiq-scheduler's `every: ['5m', first_in: '4m']`: the interval, then its options.
+        schedule = Array(schedule).flat_map { |part| part.is_a?(Hash) ? part.map { |key, value| "#{key}: #{value}" } : [ part ] }.join(", ")
 
         klass = options["class"] || options["klass"]
         klass = nil if klass == :computed
         command = options["command"] unless options["command"] == :computed
         { name: name.to_s, class: klass&.to_s&.delete_prefix("::"), command: command&.to_s,
           schedule: schedule.to_s, env: env&.to_s, file: file }.compact
+      end
+
+      ERB_OUTPUT = "RAC_ERB_OUTPUT"
+
+      def computed?(value)
+        value == RailsAiContext::Confidence::INFERRED || (value.is_a?(String) && value.include?(ERB_OUTPUT)) ||
+          (value.is_a?(Array) && value.any? { |part| computed?(part) })
       end
 
       # sidekiq-cron accepts a hash keyed by name or a list of hashes that carry it.
@@ -134,7 +144,7 @@ module RailsAiContext
 
       def yaml(root, file)
         content = read_file(root, file) or return nil
-        stringify_keys(YAML.safe_load(ErbSource.without_tags(content), aliases: true, permitted_classes: [ Symbol ]))
+        stringify_keys(YAML.safe_load(ErbSource.with_output_marked(content, ERB_OUTPUT), aliases: true, permitted_classes: [ Symbol ]))
       rescue StandardError, ScriptError => e
         RailsAiContext.debug_fail(e, nil, label: "schedule #{file}")
       end
