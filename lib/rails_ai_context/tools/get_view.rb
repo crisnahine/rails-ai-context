@@ -82,7 +82,13 @@ module RailsAiContext
             all_dirs = view_directories(templates, partials)
             suggestion = find_closest_match(ctrl_lower, all_dirs)
             hint = suggestion ? " Did you mean '#{suggestion}'?" : ""
-            dirs_note = all_dirs.any? ? " Directories with views: #{all_dirs.join(', ')}" : " No view directories found (API-only apps typically have none)."
+            dirs_note = if all_dirs.any?
+              " Directories with views: #{all_dirs.join(', ')}"
+            elsif layout_files.any?
+              " The app has only layouts, listed by `controller:\"layouts\"`."
+            else
+              " No view directories found (API-only apps typically have none)."
+            end
             return empty_response("No views for '#{controller}'.#{hint}#{dirs_note}")
           end
 
