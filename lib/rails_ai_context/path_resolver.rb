@@ -33,7 +33,13 @@ module RailsAiContext
 
     def controller_dirs(root) = dirs_for(root, "app/controllers")
 
-    def view_dirs(root) = dirs_for(root, "app/views")
+    # Rails searches config.paths["app/views"] in order, so a root the app
+    # unshifts wins over app/views even when it is nested inside it.
+    def view_dirs(root)
+      prepended, appended = declared(root)[:views].partition { |direction, _dir| direction == :prepend }
+      spelled = ->(list) { list.map { |_direction, dir| File.join(root.to_s, dir) } }
+      (spelled.(prepended) + dirs_for(root, "app/views") + spelled.(appended)).uniq.freeze
+    end
 
     # The initializers an app spells for `name`, however it spells them: a
     # load-order prefix (`009-omniauth.rb`), a hyphen where the gem uses an
@@ -100,20 +106,33 @@ module RailsAiContext
     # The roots config/application.rb adds by hand, such as lib_static.
     def declared_roots(root)
       key = File.expand_path(root.to_s)
-      DECLARED_ROOTS.compute_if_absent(key) { read_declared_roots(key) }
+      declared(key)[:autoload].map { |relative| File.join(key, relative) }
     end
 
-    def read_declared_roots(root)
-      path = File.join(root, "config", "application.rb")
-      return [] unless File.file?(path)
+    # One walk of config/application.rb for the autoload and view roots it adds,
+    # app-relative and kept only when they exist inside the app.
+    def declared(root)
+      key = File.expand_path(root.to_s)
+      DECLARED_ROOTS.compute_if_absent(key) { read_declared(key) }
+    end
 
-      declared = Introspectors::SourceIntrospector.walk(
-        path, { autoload: Introspectors::Listeners::AutoloadPathsListener }
-      )[:autoload]
+    NONE_DECLARED = { autoload: [].freeze, views: [].freeze }.freeze
+
+    def read_declared(root)
+      path = File.join(root, "config", "application.rb")
+      return NONE_DECLARED unless File.file?(path)
+
+      found = Introspectors::SourceIntrospector.walk(
+        path, { autoload: Introspectors::Listeners::AutoloadPathsListener, views: Introspectors::Listeners::ViewPathsListener }
+      )
       real_root = File.realpath(root)
-      declared.uniq.map { |relative| File.join(root, relative) }.select { |dir| contained_dir?(dir, real_root) }
+      inside = ->(relative) { contained_dir?(File.join(root, relative), real_root) }
+      {
+        autoload: found[:autoload].uniq.select(&inside).freeze,
+        views: found[:views].uniq.select { |_direction, relative| inside.(relative) }.freeze
+      }.freeze
     rescue StandardError => e
-      RailsAiContext.debug_fail(e, [], label: "PathResolver.declared_roots")
+      RailsAiContext.debug_fail(e, NONE_DECLARED, label: "PathResolver.declared_roots")
     end
 
     # A declared root is still a path the file wrote: `#{config.root}/../shared`

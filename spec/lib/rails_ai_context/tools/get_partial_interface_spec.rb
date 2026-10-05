@@ -56,6 +56,18 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       expect(rendered_from("admin/posts/post")).to be_nil
       expect(rendered_from("posts/post")).to include("app/views/admin/posts/index.html.erb:1", "app/views/posts/show.html.erb:3")
     end
+
+    it "counts a partial under a view root declared inside app/views once" do
+      FileUtils.mkdir_p(File.join(@root, "config"))
+      File.write(File.join(@root, "config/application.rb"), "config.paths[\"app/views\"].unshift(\"app/views/custom\")\n")
+      FileUtils.mkdir_p(File.join(@root, "app/views/custom/notes"))
+      File.write(File.join(@root, "app/views/custom/notes/_badge.html.erb"), "<%= badge %>\n")
+      File.write(File.join(@root, "app/views/custom/notes/index.html.erb"), "<%= render \"notes/badge\", badge: 1 %>\n")
+
+      text = described_class.call(partial: "badge").content.first[:text]
+      expect(text).not_to include("matches 2 files")
+      expect(rendered_from("notes/badge")).to eq("## Rendered From (1)\n- `app/views/custom/notes/index.html.erb:1` - locals: badge")
+    end
   end
 
   describe "a strict locals comment in each form Rails accepts" do

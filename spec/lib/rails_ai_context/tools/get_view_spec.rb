@@ -479,6 +479,30 @@ RSpec.describe RailsAiContext::Tools::GetView do
       end
     end
 
+    context "when the app puts a view path before app/views, inside it" do
+      around do |example|
+        Dir.mktmpdir("declared-view-path") do |dir|
+          FileUtils.mkdir_p(File.join(dir, "config"))
+          File.write(File.join(dir, "config/application.rb"), "config.paths[\"app/views\"].unshift(Rails.root.join(\"app/views/custom\").to_s)\n")
+          FileUtils.mkdir_p(File.join(dir, "app/views/custom/posts"))
+          File.write(File.join(dir, "app/views/custom/posts/show.html.erb"), "<h1>Post</h1>\n")
+          File.write(File.join(dir, "app/views/posts/index.html.erb").tap { |f| FileUtils.mkdir_p(File.dirname(f)) }, "<h1>Posts</h1>\n")
+          @root = dir
+          example.run
+        end
+      end
+
+      before do
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+        allow(described_class).to receive(:cached_context).and_return({})
+      end
+
+      it "files its template under the controller that renders it" do
+        expect(described_class.call(controller: "posts").content.first[:text]).to include("- posts/index.html.erb", "- posts/show.html.erb")
+        expect(described_class.call.content.first[:text]).not_to include("custom/")
+      end
+    end
+
     context "list_layouts hardening" do
       let(:views_dir) { Rails.root.join("app", "views") }
       let(:layouts_dir) { views_dir.join("layouts") }

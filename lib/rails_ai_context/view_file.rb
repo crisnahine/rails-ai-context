@@ -38,13 +38,20 @@ module RailsAiContext
     def each(root, glob = "**/*")
       seen = {}
       PathResolver.view_dirs(root).each do |dir|
-        Dir.glob(File.join(dir, glob)).sort.each do |path|
+        glob(root, dir, glob).each do |path|
           next if File.directory?(path)
 
           seen[path.sub("#{dir}/", "")] ||= path
         end
       end
       seen.map { |relative, path| [ path, relative ] }
+    end
+
+    # The paths under one views root, less those of a root declared inside it:
+    # app/views/custom/posts/show is posts/show when app/views/custom is a root.
+    def glob(root, dir, pattern)
+      nested = PathResolver.view_dirs(root).select { |other| other.start_with?("#{dir}/") }
+      Dir.glob(File.join(dir, pattern)).sort.reject { |path| nested.any? { |other| path.start_with?("#{other}/") } }
     end
 
     # @return [Array<String>] the template handler extensions this app has

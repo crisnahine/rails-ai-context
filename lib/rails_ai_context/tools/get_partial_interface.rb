@@ -85,7 +85,7 @@ module RailsAiContext
         return text_response("Could not read partial file.") unless source
 
         relative_path = located.relative
-        partial_name = relative_path.sub(%r{\A.*app/views/}, "")
+        partial_name = view_relative(File.join(root, relative_path), view_dirs)
 
         # Parse the partial's interface
         magic_locals = extract_magic_comment_locals(source)
@@ -224,10 +224,10 @@ module RailsAiContext
         located.ok? || located.refusal == :too_large ? located : nil
       end
 
-      # A view file's name as the app renders it: its path under whichever
-      # views root holds it.
+      # A view file's name as the app renders it: its path under the innermost
+      # views root that holds it.
       private_class_method def self.view_relative(path, view_dirs)
-        dir = view_dirs.find { |d| path.start_with?(d + File::SEPARATOR) }
+        dir = view_dirs.select { |d| path.start_with?(d + File::SEPARATOR) }.max_by(&:length)
         dir ? path.delete_prefix(dir + File::SEPARATOR) : path
       end
 
@@ -238,7 +238,7 @@ module RailsAiContext
         return [] if name.include?("/")
 
         name = "_#{name}" unless name.start_with?("_")
-        Dir.glob(File.join(views_dir, "**", "#{name}.*")).sort.select { |c| File.file?(c) }
+        RailsAiContext::ViewFile.glob(rails_app.root.to_s, views_dir, File.join("**", "#{name}.*")).select { |c| File.file?(c) }
       end
 
       # ActionView::Template::STRICT_LOCALS_REGEX as of Rails 8.0, held here so
@@ -357,7 +357,7 @@ module RailsAiContext
         prefixed = prefix_partial_paths?(root)
         object_paths = {}
 
-        view_files = Dir.glob(File.join(views_dir, RailsAiContext::ViewFile::MARKUP_GLOB)).sort
+        view_files = RailsAiContext::ViewFile.glob(root, views_dir, RailsAiContext::ViewFile::MARKUP_GLOB)
 
         view_files.each do |file|
           content = safe_read(file)
@@ -545,7 +545,7 @@ module RailsAiContext
 
       # Find available partials for fuzzy matching in not_found_response.
       private_class_method def self.find_available_partials(views_dir, root)
-        Dir.glob(File.join(views_dir, "**", "_*")).select { |f| File.file?(f) && RailsAiContext::ViewFile.template?(f) }.map do |f|
+        RailsAiContext::ViewFile.glob(root, views_dir, File.join("**", "_*")).select { |f| File.file?(f) && RailsAiContext::ViewFile.template?(f) }.map do |f|
           relative = f.sub("#{views_dir}/", "")
           # Strip underscore prefix and extension for display
           parts = relative.split("/")

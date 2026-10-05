@@ -204,6 +204,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 | AutoloadPathsListener | Autoload roots `config/application.rb` adds by hand: `autoload_paths`/`eager_load_paths`/`autoload_once_paths` appends, `autoload_lib`, and `config.paths.add` with `eager_load:`. Literal paths under the app root only |
 | PreviewPathsListener | ViewComponent preview directories the config sets: `view_component.previews.paths`, `preview_paths`, `preview_path`, in the same literal forms as AutoloadPathsListener |
 | FixturePathsListener | Fixture directories a test helper sets: `fixture_paths =`/`<<`/`+=`/`push` and the older `fixture_path =`, on `self`, `config` or no receiver, in the same literal forms as AutoloadPathsListener |
+| ViewPathsListener | View roots `config/application.rb` adds to `config.paths["app/views"]`: `unshift` puts one before app/views, `<<`/`push`/`concat` after it, in the same literal forms as AutoloadPathsListener |
 | SchemaDslListener | `schema.rb`: `create_table`, `t.string`, `t.column`, `t.index`, `add_foreign_key`, `create_enum`, `create_view`, `create_virtual_table`, and the comment the dumper writes for a table it could not describe |
 | MigrationDslListener | Migration DSL: `create_table`, `add_column`, `add_index`, `add_reference`, and friends |
 | MigrationReplayListener | What a replay needs beside the DSL: `def down`, `down`/`revert` blocks, and `t.timestamps` |

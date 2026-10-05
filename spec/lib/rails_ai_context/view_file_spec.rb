@@ -18,6 +18,38 @@ RSpec.describe RailsAiContext::ViewFile do
     end
   end
 
+  describe ".each with a view path the app declares" do
+    before do
+      FileUtils.mkdir_p(File.join(@root, "config"))
+      File.write(File.join(@root, "config/application.rb"), <<~RUBY)
+        class Application < Rails::Application
+          config.paths["app/views"].unshift(Rails.root.join("app/views/custom").to_s)
+          config.paths["app/views"] << "enterprise/app/views"
+        end
+      RUBY
+      FileUtils.mkdir_p(File.join(@root, "app/views/custom/posts"))
+      File.write(File.join(@root, "app/views/custom/posts/show.html.erb"), "<h1>Post</h1>\n")
+      File.write(File.join(@root, "app/views/custom/posts/index.html.erb"), "<h1>Custom</h1>\n")
+      FileUtils.mkdir_p(File.join(@root, "enterprise/app/views/reports"))
+      File.write(File.join(@root, "enterprise/app/views/reports/index.html.erb"), "<h1>Reports</h1>\n")
+    end
+
+    it "names a template by the root Rails finds it under, the prepended root first" do
+      listed = described_class.each(@root).to_h { |path, relative| [ relative, path ] }
+
+      expect(listed["posts/show.html.erb"]).to eq(File.join(@root, "app/views/custom/posts/show.html.erb"))
+      expect(listed["posts/index.html.erb"]).to eq(File.join(@root, "app/views/custom/posts/index.html.erb"))
+      expect(listed["reports/index.html.erb"]).to eq(File.join(@root, "enterprise/app/views/reports/index.html.erb"))
+      expect(listed.keys.grep(%r{\Acustom/})).to be_empty
+    end
+
+    it "ignores a declared root outside the app" do
+      File.write(File.join(@root, "config/application.rb"), "config.paths[\"app/views\"] << \"\#{config.root}/../shared/views\"\n")
+
+      expect(RailsAiContext::PathResolver.view_dirs(@root)).to eq([ File.join(@root, "app/views") ])
+    end
+  end
+
   describe ".locate" do
     it "resolves an app/views-relative path with its extension" do
       result = described_class.locate(@root, "posts/index.html.erb")

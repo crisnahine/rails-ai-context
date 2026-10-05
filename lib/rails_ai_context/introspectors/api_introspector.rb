@@ -49,7 +49,7 @@ module RailsAiContext
         result = {}
 
         # Jbuilder templates
-        jbuilder = PathResolver.view_dirs(root).sum { |dir| Dir.glob(File.join(dir, "**/*.jbuilder")).size }
+        jbuilder = PathResolver.view_dirs(root).sum { |dir| ViewFile.glob(root, dir, "**/*.jbuilder").size }
         result[:jbuilder] = jbuilder if jbuilder > 0
 
         # Serializer classes (Alba, Blueprinter, JSONAPI, etc.). Named by the
