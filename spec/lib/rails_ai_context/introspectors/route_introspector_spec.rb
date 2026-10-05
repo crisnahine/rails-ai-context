@@ -242,6 +242,22 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
   end
 
   describe "#static_call" do
+    it "keeps the condition a route is drawn under" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            get "dev_only", to: "posts#index" if Rails.env.development?
+          end
+        RUBY
+
+        posts = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:by_controller]["posts"]
+
+        expect(posts).to eq([ { verb: "GET", path: "/dev_only", action: "index", name: "dev_only", restful: true,
+                                condition: "if Rails.env.development?" } ])
+      end
+    end
+
     it "builds the runtime output shape from config/routes.rb without booting" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))

@@ -47,11 +47,46 @@ module RailsAiContext
           # arguments or lambda bodies: only those can draw a route.
           @statements = {}.compare_by_identity
           @global_path_names = {}
+          @methods = {}
+          @conditions = []
           @routing_calls = 0
         end
 
         def on_program_node_enter(node)
           register_statements(node.statements)
+        end
+
+        # Ruby runs a method's body where it is called, so it is replayed there.
+        def on_def_node_enter(node)
+          @methods[node.name] = node if @statements.key?(node) && node.receiver.nil?
+          push_frame(node, suppress: true)
+        end
+
+        def on_def_node_leave(node)
+          @stack.pop if @stack.last && @stack.last[:node].equal?(node)
+        end
+
+        # A route under `if`/`unless` is drawn only when it holds, which source
+        # cannot tell; the route carries the condition instead.
+        def on_if_node_enter(node)
+          enter_condition(node, "if", node.subsequent)
+        end
+
+        def on_unless_node_enter(node)
+          enter_condition(node, "unless", node.else_clause)
+        end
+
+        def on_else_node_enter(node)
+          current = @conditions.last
+          current[:text] = current[:else] if current && current[:other].equal?(node)
+        end
+
+        def on_if_node_leave(node)
+          @conditions.pop if @conditions.last && @conditions.last[:node].equal?(node)
+        end
+
+        def on_unless_node_leave(node)
+          on_if_node_leave(node)
         end
 
         def on_call_node_enter(node)
@@ -87,9 +122,8 @@ module RailsAiContext
             if statement && node.block
               # An empty block (a commented-out `constraints do`) configures nothing.
               push_frame(node, unknown_block: @routing_calls) if node.block.body
-            elsif statement && !NON_ROUTING.include?(node.name) && @stack.none? { |f| f[:unknown_block] }
-              # Inside a gem macro's block a call is its configuration.
-              emit_dynamic(node)
+            elsif statement && !NON_ROUTING.include?(node.name)
+              call_method_or_count(node)
             end
           end
         end
@@ -109,6 +143,46 @@ module RailsAiContext
         # A receiver's block (`Sidekiq::Web.use ... do`) is plain Ruby; only a draw holds routes.
         def route_body?(node)
           node.block.is_a?(Prism::BlockNode) && (node.receiver.nil? || %i[draw append prepend].include?(node.name))
+        end
+
+        def call_method_or_count(node)
+          definition = @methods[node.name]
+          key = "def #{node.name}"
+          # Inside a gem macro's block a call is its configuration.
+          return if definition.nil? && @stack.any? { |f| f[:unknown_block] }
+          return emit_dynamic(node) if definition.nil? || node.arguments || @replaying.include?(key) || takes_arguments?(definition)
+          return if suppressed?
+
+          @replaying.push(key)
+          begin
+            register_statements(definition.body)
+            replay_dispatcher.dispatch(definition.body) if definition.body
+          ensure
+            @replaying.pop
+          end
+        end
+
+        def takes_arguments?(definition)
+          params = definition.parameters
+          !params.nil? && (params.requireds.any? || params.posts.any? || params.keywords.any? { |k| k.is_a?(Prism::RequiredKeywordParameterNode) })
+        end
+
+        def enter_condition(node, keyword, other)
+          return unless @statements.key?(node)
+
+          register_statements(node.statements)
+          @statements[other] = true if other.is_a?(Prism::IfNode)
+          register_statements(other.statements) if other.is_a?(Prism::ElseNode)
+          # An elsif runs only when the condition before it failed.
+          outer = @conditions.last
+          outer[:text] = outer[:else] if outer && outer[:other].equal?(node)
+          predicate = node.predicate.slice.gsub(/\s+/, " ")
+          negated = keyword == "if" ? "unless" : "if"
+          @conditions << { node: node, other: other, text: "#{keyword} #{predicate}", else: "#{negated} #{predicate}" }
+        end
+
+        def current_condition
+          @conditions.map { |c| c[:text] }.join(" and ").then { |text| text unless text.empty? }
         end
 
         def register_statements(statements)
@@ -665,6 +739,8 @@ module RailsAiContext
           # An engine's table keeps its own names.
           record[:name] = name if name && !name.empty? && @taken_names.add?([ engine, name ])
           record[:engine] = engine if engine
+          condition = current_condition
+          record[:condition] = condition if condition
           params = path.scan(/:(\w+)/).flatten
           record[:params] = params if params.any?
           record[:restful] = RESTFUL_ACTIONS.include?(record[:action])

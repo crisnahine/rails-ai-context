@@ -355,6 +355,20 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
     end
   end
 
+  describe "a route drawn under a condition" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({ routes: { total_routes: 1, api_namespaces: [], by_controller: {
+        "posts" => [ { verb: "GET", path: "/dev_only", action: "index", name: "dev_only", condition: "if a || b" } ]
+      } } })
+    end
+
+    it "names the condition at every listing level" do
+      expect(described_class.call.content.first[:text]).to include("- `GET` `/dev_only` → index `dev_only_path` (`if a || b`)")
+      expect(described_class.call(detail: "full").content.first[:text])
+        .to include("| GET | `/dev_only` (`if a \\|\\| b`) | posts#index | dev_only |")
+    end
+  end
+
   describe "PUT/PATCH deduplication" do
     it "combines PUT and PATCH into a single entry" do
       result = described_class.call(controller: "posts", detail: "full")

@@ -924,4 +924,70 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
       expect(records.map { |r| r[:path] }).to eq([ "/cars/neu" ])
     end
   end
+
+  describe "methods and conditions in a route file" do
+    it "draws a method's routes where it is called, not where it is defined" do
+      records = route_records(<<~RUBY)
+        Rails.application.routes.draw do
+          def admin_routes
+            resources :reports, only: :index
+          end
+          namespace :admin do
+            admin_routes
+          end
+          scope "/v1", module: "api" do
+            admin_routes
+          end
+        end
+      RUBY
+
+      expect(records.map { |r| [ r[:name], r[:path], "#{r[:controller]}##{r[:action]}" ] }).to eq([
+        [ "admin_reports", "/admin/reports", "admin/reports#index" ],
+        [ "reports", "/v1/reports", "api/reports#index" ]
+      ])
+    end
+
+    it "counts a call to a method that takes arguments, or that calls itself, as not expanded" do
+      results = routes_for(<<~RUBY)
+        Rails.application.routes.draw do
+          def versioned(v)
+            get "v\#{v}/ping", to: "ping#show"
+          end
+          def loop_routes
+            loop_routes
+          end
+          versioned 1
+          loop_routes
+        end
+      RUBY
+
+      expect(results.select { |r| r[:type] == :route }).to be_empty
+      expect(results.select { |r| r[:type] == :dynamic }.map { |r| r[:macro] }).to eq(%i[versioned loop_routes])
+    end
+
+    it "says which condition a route is drawn under" do
+      records = route_records(<<~RUBY)
+        Rails.application.routes.draw do
+          if Rails.env.development?
+            get "dev_only", to: "posts#index"
+          else
+            get "prod_only", to: "posts#index"
+          end
+          unless ENV["ENABLE_BETA"]
+            get "stable", to: "posts#index"
+          end
+          get "beta", to: "posts#index" if ENV["ENABLE_BETA"]
+          get "always", to: "posts#index"
+        end
+      RUBY
+
+      expect(records.to_h { |r| [ r[:path], r[:condition] ] }).to eq(
+        "/dev_only" => "if Rails.env.development?",
+        "/prod_only" => "unless Rails.env.development?",
+        "/stable" => 'unless ENV["ENABLE_BETA"]',
+        "/beta" => 'if ENV["ENABLE_BETA"]',
+        "/always" => nil
+      )
+    end
+  end
 end

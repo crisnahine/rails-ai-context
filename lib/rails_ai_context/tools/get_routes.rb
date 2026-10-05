@@ -280,7 +280,8 @@ module RailsAiContext
               else
                 ""
               end
-              lines << "- `#{r[:verb]}` `#{r[:path]}` → #{r[:action]}#{helper_part}#{params_part}"
+              condition = r[:condition] ? " (`#{r[:condition]}`)" : ""
+              lines << "- `#{r[:verb]}` `#{r[:path]}` → #{r[:action]}#{helper_part}#{params_part}#{condition}"
             end
 
             lines.concat(mounted_apps_lines(mounted_apps, controller ? [] : routes[:engine_routes]))
@@ -302,7 +303,8 @@ module RailsAiContext
             lines << "| Verb | Path | Controller#Action | Name |"
             lines << "|------|------|-------------------|------|"
             page[:items].each do |r|
-              cells = [ r[:verb], "`#{r[:path]}`", "#{r[:_ctrl]}##{r[:action]}", r[:name] || "-" ]
+              path = r[:condition] ? "`#{r[:path]}` (`#{r[:condition]}`)" : "`#{r[:path]}`"
+              cells = [ r[:verb], path, "#{r[:_ctrl]}##{r[:action]}", r[:name] || "-" ]
               # A merged verb is `PATCH|PUT`, and a bare pipe splits the row.
               lines << "| #{cells.map { |cell| cell.to_s.gsub("|", "\\|") }.join(' | ')} |"
             end

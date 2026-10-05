@@ -483,6 +483,7 @@ module RailsAiContext
             entry = { verb: r[:verb], path: r[:path], action: r[:action], name: r[:name] }
             entry[:params] = r[:params] if r[:params]
             entry[:restful] = r[:restful] unless r[:restful].nil?
+            entry[:condition] = r[:condition] if r[:condition]
             entry.compact
           end
         end
