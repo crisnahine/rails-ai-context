@@ -807,6 +807,21 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     end
   end
 
+  describe "a table a renamed dump declares and the database does not have" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "sqlite3", tables: tables, total_tables: 3,
+                  declared_tables: tables.keys + [ "order_comments" ], declared_in: "db/schema_sqlite.rb" },
+        models: {}
+      })
+    end
+
+    it "names the file database.yml's schema_dump gives" do
+      expect(described_class.call(table: "order_comments").content.first[:text]).to include("declared in db/schema_sqlite.rb")
+      expect(described_class.call(detail: "summary").content.first[:text]).to include("db/schema_sqlite.rb declares 4")
+    end
+  end
+
   describe ".call with model name normalization" do
     it "resolves model name to pluralized table name" do
       result = described_class.call(table: "User")

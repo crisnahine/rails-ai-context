@@ -884,6 +884,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
         expect(result[:declared_tables]).to contain_exactly("users", "order_comments")
         expect(result[:tables].keys).to eq([ "users" ])
+        expect(result[:declared_in]).to eq("db/schema.rb")
       ensure
         FileUtils.rm_rf(db_dir)
       end

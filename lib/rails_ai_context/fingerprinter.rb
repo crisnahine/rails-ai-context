@@ -6,10 +6,8 @@ module RailsAiContext
   # Computes a SHA256 fingerprint of key application files to detect changes.
   # Used by BaseTool to invalidate cached introspection when files change.
   class Fingerprinter
-    # The root manifests, plus the one file under a watched directory whose
-    # extension WATCHED_EXTENSIONS does not name.
+    # The root manifests.
     WATCHED_FILES = %w[
-      db/structure.sql
       Gemfile
       Gemfile.lock
       package.json
@@ -46,7 +44,8 @@ module RailsAiContext
 
     # The file kinds a change can hide in. One list, so a walk that reports
     # a change and a walk that names it read the same tree.
-    WATCHED_EXTENSIONS = "**/*.{rb,rake,js,ts,erb,haml,slim,yml}"
+    # sql: a structure dump, under whatever name database.yml's schema_dump gives it.
+    WATCHED_EXTENSIONS = "**/*.{rb,rake,js,ts,erb,haml,slim,yml,sql}"
 
     # What a reader holds so it can ask later whether the app moved. Taken
     # before the read it protects: a mark taken after introspection records

@@ -57,6 +57,15 @@ RSpec.describe RailsAiContext::AppCommands do
       expect(described_class.setup(@root)).to eq("bin/rails db:create db:schema:load")
     end
 
+    it "loads the dump database.yml's schema_dump names" do
+      touch("bin/rails")
+      touch("config/database.yml")
+      File.write(File.join(@root, "config/database.yml"), "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  schema_dump: primary_schema.rb\n")
+      touch("db/migrate/1_init.rb")
+      touch("db/primary_schema.rb")
+      expect(described_class.setup(@root)).to eq("bin/rails db:create db:schema:load")
+    end
+
     it "migrates an app that keeps only migrations" do
       touch("bin/rails")
       touch("config/database.yml")

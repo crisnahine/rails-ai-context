@@ -92,6 +92,17 @@ RSpec.describe RailsAiContext::Fingerprinter do
       expect(before).not_to eq(after)
     end
 
+    it "detects a change to any SQL dump in db/, a configured schema_dump included" do
+      %w[primary_structure.sql structure.sql queue_structure.sql].each do |name|
+        path = File.join(app.root, "db", name)
+        File.write(path, "CREATE TABLE \"a\" (\"id\" integer);\n")
+
+        before = described_class.compute(app)
+        File.utime(Time.now + 5, Time.now + 5, path)
+        expect(described_class.compute(app)).not_to eq(before), name
+      end
+    end
+
     it "includes package.json in WATCHED_FILES" do
       expect(described_class::WATCHED_FILES).to include("package.json")
     end

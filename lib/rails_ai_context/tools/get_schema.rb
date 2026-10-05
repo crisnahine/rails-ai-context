@@ -80,7 +80,7 @@ module RailsAiContext
               declared = table_key.to_s.underscore
               if declared_not_connected(schema).include?(declared)
                 return text_response(
-                  "Table '#{declared}' is declared in db/schema.rb and missing from the connected database. " \
+                  "Table '#{declared}' is declared in #{schema[:declared_in] || "db/schema.rb"} and missing from the connected database. " \
                   "#{pending_for_table(schema, declared)}" \
                   "Run `rails db:migrate`, or pass `--no-boot` to read the declaration instead."
                 )
@@ -375,7 +375,7 @@ module RailsAiContext
         missing = declared_not_connected(schema)
         if missing.any?
           declared_total = Array(schema[:declared_tables]).size
-          lines << "_db/schema.rb declares #{count_phrase(declared_total, "table")}; the connected database has " \
+          lines << "_#{schema[:declared_in] || "db/schema.rb"} declares #{count_phrase(declared_total, "table")}; the connected database has " \
                    "#{(schema[:tables] || {}).size}. Missing: #{missing.sort.first(5).join(', ')}" \
                    "#{missing.size > 5 ? " (+#{missing.size - 5} more)" : ""}. Run `rails db:migrate`._"
         end

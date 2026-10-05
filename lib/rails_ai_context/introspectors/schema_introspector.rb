@@ -30,6 +30,7 @@ module RailsAiContext
           # dump declares are what lets a consumer say so rather than call a
           # declared table a typo.
           declared_tables: declared_table_names,
+          declared_in: (relative_dump_path(schema_file_path) if schema_file_path),
           check_constraints: SchemaConventions.check_constraints_of(tables),
           enum_types: enum_types,
           generated_columns: SchemaConventions.generated_columns_of(tables),
