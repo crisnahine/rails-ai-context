@@ -122,7 +122,7 @@ module RailsAiContext
       # all its workers use.
       def base_record(name, candidate)
         macros = candidate.ast[:macros]
-        declares = class_body(macros, candidate.source).select { |m| JOB_BASE_DECLARATIONS.include?(m[:macro]) }
+        declares = candidate_body(name).select { |m| JOB_BASE_DECLARATIONS.include?(m[:macro]) }
                          .sort_by { |m| m[:offset] }.map { |m| written(candidate.source, m) }
         heirs = job_candidates.keys.select { |other| other != name && chain_of(other).include?(name) }
         { name: name, file: candidate.file, queue: inherited_queue(name),
@@ -412,7 +412,7 @@ module RailsAiContext
       # What decides when a job runs, as its class (or the nearest base setting it) writes it.
       def run_settings(name)
         candidate = job_candidates[name]
-        macros = class_body(candidate.ast[:macros], candidate.source)
+        macros = candidate_body(name)
         settings = {}
         priority = nearest_macro(name, :queue_with_priority)
         settings[:priority] = priority[:block] ? labelled(COMPUTED_PRIORITY, priority[:block]) : priority[:values].first if priority
@@ -431,8 +431,7 @@ module RailsAiContext
       # unfinished step, so the steps perform runs, in order, decide what runs again.
       def continuation(name)
         continuable = chain_of(name).any? do |link|
-          candidate = job_candidates[link]
-          class_body(candidate.ast[:macros], candidate.source).any? { |m| m[:macro] == :include && m[:values].map { |v| v.to_s.delete_prefix("::") }.include?(CONTINUABLE) }
+          candidate_body(link).any? { |m| m[:macro] == :include && m[:values].map { |v| v.to_s.delete_prefix("::") }.include?(CONTINUABLE) }
         end
         return {} unless continuable
 
@@ -455,8 +454,7 @@ module RailsAiContext
 
       def nearest_macro(name, macro)
         chain_of(name).each do |link|
-          candidate = job_candidates[link]
-          hit = class_body(candidate.ast[:macros], candidate.source).reverse.find { |m| m[:macro] == macro }
+          hit = candidate_body(link).reverse.find { |m| m[:macro] == macro }
           return hit.merge(owner: link) if hit
         end
         nil
@@ -1009,6 +1007,12 @@ module RailsAiContext
           text = text.byteslice(0, loc.start_offset - from) + text.byteslice((loc.end_offset - from)..).to_s
         end
         text.gsub(/\s+/, " ").gsub(/\(\s+/, "(").sub(/,?\s*\)\z/, ")").strip
+      end
+
+      # Every job below a base reads its body, so each candidate's is traversed once.
+      def candidate_body(name)
+        @candidate_bodies ||= {}
+        @candidate_bodies[name] ||= class_body(job_candidates[name].ast[:macros], job_candidates[name].source)
       end
 
       # A declaration is a call in the class body; the same name inside a

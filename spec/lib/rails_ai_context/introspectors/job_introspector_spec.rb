@@ -269,6 +269,23 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       end
     end
 
+    it "reads a base's class body once however many jobs inherit it" do
+      base = "class ApplicationJob < ActiveJob::Base\n  queue_with_priority 5\n  before_perform :log\nend\n"
+      traversals = 0
+      allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:calls_outside_methods).and_wrap_original do |original, root, *rest, **opts|
+        traversals += 1 if rest.empty? && root.slice.strip == base.strip
+        original.call(root, *rest, **opts)
+      end
+      jobs = static_result do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/jobs"))
+        File.write(File.join(dir, "app/jobs/application_job.rb"), base)
+        3.times { |i| File.write(File.join(dir, "app/jobs/job#{i}_job.rb"), "class Job#{i}Job < ApplicationJob\n  def perform; end\nend\n") }
+      end[:jobs]
+
+      expect(jobs.map { |job| job[:priority] }.uniq).to eq([ 5 ])
+      expect(traversals).to eq(1)
+    end
+
     # The worker's calls came from a second walk of a tree the candidate walk
     # had just dispatched, and an app can have 500 workers.
     it "walks a worker once for its macros, methods and calls" do
