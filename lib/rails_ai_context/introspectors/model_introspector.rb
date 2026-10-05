@@ -1050,7 +1050,7 @@ module RailsAiContext
           .flat_map { |v| v[:attributes] }
       end
 
-      # `validate do ... end` names no method, so it is listed by what it runs.
+      # A validate block is listed by what it runs; Rails registers it next to any methods named.
       def custom_validate_blocks(source_data)
         found = Array(source_data[:validations]).select { |v| v[:kind] == "custom" && v[:block] }.map do |v|
           { body: v[:block], conditions: (v[:options] || {}).slice(*CONDITION_KEYS, :on).presence }.compact
