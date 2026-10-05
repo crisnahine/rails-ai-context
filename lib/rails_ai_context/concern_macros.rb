@@ -25,10 +25,14 @@ module RailsAiContext
       PREPENDED = 0
       OWN = 1
       MIXED = 2
+      # The lookup order of the defs that join with a module, by how it is added.
+      JOINS = { prepended: PREPENDED, mixed: MIXED }.freeze
+      # The defs a module gives that run with code, by group: [run by a hook?, lookup order].
+      RAN = { block: [ false, OWN ], hook: [ true, OWN ], hook_mixed: [ true, MIXED ], hook_prepended: [ true, PREPENDED ] }.freeze
 
       # A class method; `owner` is a class file's rank or a module's label, `alias_of` the name an alias copies,
       # `at` its place in the owner's lookup when not its line (a base body's, after the base's file),
-      # `joined` the line of the hook's call adding the nested module it is in.
+      # `joined` [line, argument index] of the hook's call adding the nested module it is in.
       Def = Struct.new(:owner, :name, :line, :super_line, :calls, :alias_of, :at, :joined) do
         def key = at ? [ owner, *at ] : [ owner, line ]
       end
@@ -123,7 +127,7 @@ module RailsAiContext
           name = short_name(arg, short)
           given[group(added)].concat(body_defs(own.body)) if name == short
           nested_modules(own).select { |node| module_name(node) == name }.each do |node|
-            given[:"hook_#{group(added)}"].concat(body_defs(node.body).map { |inner| definition(label, inner).tap { |found| found.joined = call.location.start_line } })
+            given[RAN.key([ true, JOINS[group(added)] ])].concat(body_defs(node.body).map { |inner| definition(label, inner).tap { |found| found.joined = [ call.location.start_line, call.arguments.arguments.index(arg) ] } })
           end
         end
         given[:hook] = hook_defs.flat_map { |hook| singleton_defs(hook, label) }
@@ -387,9 +391,14 @@ module RailsAiContext
         end
       end
 
+      # Defs one hook call adds share its place: as in Ruby, its earlier argument wins, then the later def in one module.
       def lookup(name, rank, at)
+        place = lambda do |provider|
+          found = provider.defs[name]
+          [ provider.at, -found.joined.to_a.last.to_i, found.line, found.owner.to_s ]
+        end
         @providers.select { |provider| provider.defs.key?(name) && provider.rank >= rank && (provider.rank > rank || (provider.at <=> at) <= 0) }
-                  .sort { |a, b| ([ a.rank, a.group ] <=> [ b.rank, b.group ]).nonzero? || (b.at <=> a.at) }
+                  .sort { |a, b| ([ a.rank, a.group ] <=> [ b.rank, b.group ]).nonzero? || (place.call(b) <=> place.call(a)) }
                   .flat_map { |provider| resolved(provider.defs[name], provider) }
       end
 
@@ -445,17 +454,17 @@ module RailsAiContext
           mixin = walk && @walks[walk].mixins[label]
           next [] unless mixin
 
-          { prepended: PREPENDED, mixed: MIXED }.filter_map do |kind, group|
+          JOINS.filter_map do |kind, group|
             Provider.new(rank, group, at, by_name(mixin.defs[kind])) if mixin.defs[kind].any?
           end
         end
         ran_defs = @walks.flat_map do |rank, walk|
           walk.mixins.each_value.flat_map do |mixin|
-            { block: [ false, OWN ], hook: [ true, OWN ], hook_mixed: [ true, MIXED ], hook_prepended: [ true, PREPENDED ] }.flat_map do |kind, (hook, group)|
+            RAN.flat_map do |kind, (hook, group)|
               next [] if mixin.defs[kind].empty?
 
               ran(rank, mixin, hook).flat_map do |_, run, at|
-                mixin.defs[kind].map { |definition| Provider.new(run, group, [ *at, definition.joined || definition.line ], by_name([ definition ])) }
+                mixin.defs[kind].map { |definition| Provider.new(run, group, [ *at, definition.joined&.first || definition.line ], by_name([ definition ])) }
               end
             end
           end
@@ -497,6 +506,9 @@ module RailsAiContext
     # fixed for the run and `seen`, `collected` and `unresolved` accumulate
     # across it, so they belong to the run rather than to every call.
     class Run
+      # Each runs its block with the class as self.
+      EVALS = %i[class_eval class_exec instance_eval instance_exec].freeze
+
       attr_reader :unresolved, :hidden, :included_calls, :skipped_methods, :placement, :block_sites, :mixins
 
       # The default block belongs to the walk. Once the entries leave it, a
@@ -517,6 +529,7 @@ module RailsAiContext
       def initialize(root, dirs, keys, cache, listeners, calls = nil, extra = [], file = nil, known: nil)
         # The class's own file, which can declare a module it includes.
         @own_file = file
+        # Written at the top level, so each name is the constant it resolves to.
         @paths = extra.to_h { |mixin| [ mixin.name, mixin.path ] }
         @root = root
         @dirs = dirs
@@ -653,6 +666,16 @@ module RailsAiContext
         nil
       rescue StandardError => e
         RailsAiContext.debug_fail(e, nil, label: "nested module #{name} in #{file}")
+      end
+
+      # The first candidate Ruby would find, a base module or a file.
+      def named(name, within)
+        found = ConcernPaths.find_named(@root, name, within: within, dirs: @dirs)
+        candidates = ConcernPaths.candidate_names(name, within)
+        extra = candidates.find { |candidate| @paths.key?(candidate) }
+        return found unless extra && (found.nil? || candidates.index(extra) <= candidates.index(found.first))
+
+        [ extra, @paths[extra] ]
       end
 
       # A plugin's lib is on the load path, so a module it names can sit under the
@@ -844,9 +867,6 @@ module RailsAiContext
           evals << (call.location.start_line..call.location.end_line) if EVALS.include?(call.name) && call.block
         end
       end
-
-      # Each runs its block with the class as self.
-      EVALS = %i[class_eval class_exec instance_eval instance_exec].freeze
 
       # Asked only once a mixin declares something inside a method, which
       # few do, so most classes never pay for the look.

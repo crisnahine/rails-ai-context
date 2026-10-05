@@ -3495,6 +3495,23 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         end
       end
 
+      # Runtime: TieRedefM :first, :b; TwoArgM :first, :a; TwoArgRevM :first, :b.
+      it "runs the later of two defs of one name in a module a hook extends with, and the earlier argument's" do
+        Dir.mktmpdir do |dir|
+          stampy(dir)
+          twice = "  module ClassMethods\n    def stamp\n      before_save :a\n    end\n\n    def stamp\n      before_save :b\n    end\n  end\nend\n"
+          write_model(dir, "Concerns::TRedef", "module TRedef\n  def self.included(base)\n    base.extend ClassMethods\n  end\n#{twice}")
+          two = "  module CmA\n    def stamp\n      before_save :a\n    end\n  end\n\n  module CmB\n    def stamp\n      before_save :b\n    end\n  end\nend\n"
+          write_model(dir, "Concerns::TTwoArg", "module TTwoArg\n  def self.included(base)\n    base.extend CmA, CmB\n  end\n#{two}")
+          write_model(dir, "Concerns::TTwoArgRev", "module TTwoArgRev\n  def self.included(base)\n    base.extend CmB, CmA\n  end\n#{two}")
+          { "TieRedefM" => "TRedef", "TwoArgM" => "TTwoArg", "TwoArgRevM" => "TTwoArgRev" }.each do |name, mod|
+            write_model(dir, name, "class #{name} < ApplicationRecord\n  include Stampy\n  include #{mod}\n  before_save :first\n  stamp\nend\n")
+          end
+
+          expect(static_save(dir).slice("TieRedefM", "TwoArgM", "TwoArgRevM")).to eq("TieRedefM" => %w[first b], "TwoArgM" => %w[first a], "TwoArgRevM" => %w[first b])
+        end
+      end
+
       # Runtime: QExtM, QActsM, QOuterM :first, :s; QExt2M :first, :t.
       it "runs a module's extended hook, and the hooks of a module a hook includes" do
         Dir.mktmpdir do |dir|
