@@ -332,7 +332,8 @@ module RailsAiContext
               options = enum_options[attr.to_s] || enum_options[attr.to_sym] || {}
               lines << "- `#{attr}`: #{entries} [#{backing}]#{enum_options_text(attr, values.keys, options)}"
             else
-              lines << "- `#{attr}`: #{Serializers::SectionFacts.enum_values(values)}"
+              options = enum_options[attr.to_s] || enum_options[attr.to_sym] || {}
+              lines << "- `#{attr}`: #{Serializers::SectionFacts.enum_values(values)}#{enum_options_text(attr, nil, options)}"
             end
           end
         end
@@ -595,6 +596,7 @@ module RailsAiContext
         if [ prefix, suffix ].include?(Confidence::INFERRED)
           return "#{text} methods: #{Confidence::INFERRED} (the prefix or suffix is computed)"
         end
+        return "#{text} methods: #{Confidence::INFERRED} (the values are computed)" unless labels
 
         prefix = "#{prefix == true ? attr : prefix}_" if prefix
         suffix = "_#{suffix == true ? attr : suffix}" if suffix

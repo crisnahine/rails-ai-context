@@ -125,6 +125,56 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  it "prints the foreign key a has_many or has_one declares" do
+    text = details_for("Person", "person.rb" => <<~RUBY)
+      class Person < ApplicationRecord
+        has_many :photos, :foreign_key => :author_id, :dependent => :destroy
+        has_one :profile, foreign_key: "owner_id"
+        has_many :posts
+      end
+    RUBY
+
+    expect(text).to include("- `has_many` **photos** dependent: destroy (foreign_key: :author_id)")
+    expect(text).to include("- `has_one` **profile** (foreign_key: owner_id)")
+    expect(text).to include("- `has_many` **posts**\n")
+  end
+
+  it "lists the block of a validate that names a method too, since Rails runs both" do
+    text = details_for("Override", "override.rb" => <<~RUBY)
+      class Override < ApplicationRecord
+        validate :set_id, unless: :concrete? do |record|
+          record.errors.add(:set_id, "must be nil") if record.set_id
+        end
+      end
+    RUBY
+
+    expect(text).to include("- **Custom:** block (unless: :concrete?) → record.errors.add(:set_id, \"must be nil\") if record.set_id")
+    expect(text).to include("- **Custom:** `set_id` (unless: :concrete?)")
+  end
+
+  it "prints the default of an enum whose values are a constant" do
+    text = details_for("Amendment", "amendment.rb" => <<~RUBY)
+      class Amendment < ApplicationRecord
+        STATES = { draft: 0, accepted: 20 }.freeze
+        enum :state, STATES, default: "draft"
+      end
+    RUBY
+
+    expect(text).to include("- `state`: `STATES` (computed) default: draft")
+  end
+
+  it "prints the prefixed methods of a legacy array enum" do
+    text = details_for("Ticket", "ticket.rb" => <<~RUBY)
+      class Ticket < ApplicationRecord
+        enum status: [:open, :closed], _prefix: true, _default: :open
+      end
+    RUBY
+
+    expect(text).to include("status_open?, status_closed?")
+    expect(text).to include("- `status`: open(0), closed(1) [integer]")
+    expect(text).not_to include("values are computed")
+  end
+
   it "lists a validate block as a custom validation" do
     text = details_for("User", "user.rb" => <<~RUBY)
       class User < ApplicationRecord

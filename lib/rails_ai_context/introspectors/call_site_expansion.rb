@@ -537,16 +537,24 @@ module RailsAiContext
         bound(bindings, argument.expression, depth)&.items&.join(", ")
       end
 
-      # `options[:length]` on a hash parameter the call passed as a literal:
-      # the value's own source, or `nil` for a key the call left out.
+      # `options[:length]` or `options.fetch(:length, default)` on a hash
+      # parameter the call passed as a literal: the value's own source, or for
+      # a key the call left out, `nil` or the default.
       def hash_lookup(node, bindings, depth)
-        return unless node.name == :[] && node.receiver.is_a?(Prism::LocalVariableReadNode)
+        return unless %i[[] fetch].include?(node.name) && node.receiver.is_a?(Prism::LocalVariableReadNode) && node.block.nil?
 
         sources = bound(bindings, node.receiver, depth)&.value_sources
-        key = Array(node.arguments&.arguments)
-        return unless sources && key.one? && key.first.is_a?(Prism::SymbolNode)
+        key, default, *rest = Array(node.arguments&.arguments)
+        return unless sources && rest.empty? && key.is_a?(Prism::SymbolNode)
 
-        sources.fetch(key.first.unescaped.to_sym, "nil")
+        name = key.unescaped.to_sym
+        if node.name == :[]
+          sources.fetch(name, "nil") unless default
+        elsif sources.key?(name)
+          sources[name]
+        elsif default
+          emit(default, bindings, Output.new, [], depth, []).text
+        end
       end
 
       # A hash parameter passed as a call's last argument reads as the keywords
