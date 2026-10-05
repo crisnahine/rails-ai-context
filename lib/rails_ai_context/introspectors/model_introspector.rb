@@ -537,6 +537,7 @@ module RailsAiContext
 
         sti_info = extract_sti_info(model)
         details[:sti] = sti_info if sti_info
+
         parent = model.superclass
         details[:parent_model] = parent.name if parent < ActiveRecord::Base && !parent.abstract_class?
 
@@ -551,6 +552,7 @@ module RailsAiContext
         # AST-based detailed macros (replaces regex)
         detailed = extract_detailed_macros_from_ast(source_data)
         details.merge!(detailed)
+        details[:ignored_columns] = model.ignored_columns.map(&:to_s).presence
 
         details.compact
       end
@@ -1116,6 +1118,8 @@ module RailsAiContext
             (macros[key] ||= []) << m[:attribute]
           elsif STORE_MACROS.include?(macro)
             add_store_accessors(macros, m)
+          elsif macro == :ignored_columns
+            macros[:ignored_columns] = apply_ignored_columns(macros[:ignored_columns] || [], m)
           elsif macro == :delegate
             (macros[:delegations] ||= []) << delegation_entry(m)
           elsif macro == :delegate_missing_to
@@ -1136,6 +1140,18 @@ module RailsAiContext
         macros[:constants] = constants if constants&.any?
 
         macros.reject { |_, v| v.is_a?(Array) && v.empty? }
+      end
+
+      # Declarations arrive bases first, so `=` replaces what a base set and
+      # `+=` adds to it; a list the source computes cannot be read.
+      def apply_ignored_columns(current, macro)
+        return [ RailsAiContext::Confidence::INFERRED ] if macro[:columns].nil? || current.include?(RailsAiContext::Confidence::INFERRED)
+
+        case macro[:op]
+        when :assign then macro[:columns].uniq
+        when :add then (current + macro[:columns]).uniq
+        else current - macro[:columns]
+        end
       end
 
       # Rails names a store accessor "#{prefix}_#{key}_#{suffix}", where true
@@ -1804,7 +1820,8 @@ module RailsAiContext
         # the consumers read it as a list of attributes. The key is the
         # declaration: the line it was read at differs between two files, and
         # the concern tag differs between two ways of reaching one file.
-        merged[:macros] = dedup(merged[:macros]) { |m| m.except(:from_concern, :location) }
+        # Bases first, the order Rails runs them: a child's `ignored_columns +=` adds to its base's list.
+        merged[:macros] = dedup(Array(inherited[:macros]) + Array(mine[:macros])) { |m| m.except(:from_concern, :location) }
         merged[:callbacks] = Array(inherited[:callbacks]) + Array(mine[:callbacks])
         # One source line read twice is still one declaration: a concern the
         # model and one of its bases both include is walked once per class, and

@@ -237,4 +237,55 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     expect(text).to include("- `store` :settings (theme, locale), :preferences (pref_color, pref_font, size_preferences), " \
                             ":meta (meta_a), :blob, :odd ([INFERRED]: the prefix or suffix is computed)\n")
   end
+
+  describe "ignored_columns" do
+    def details_with_schema(model, files, columns)
+      Dir.mktmpdir do |dir|
+        files.each do |name, source|
+          path = File.join(dir, "app", "models", name)
+          FileUtils.mkdir_p(File.dirname(path))
+          File.write(path, source)
+        end
+        models = RailsAiContext::Introspectors::ModelIntrospector.new(RailsAiContext::StaticApp.new(dir)).static_call
+        schema = { tables: { "users" => { columns: columns.map { |c| { name: c, type: "string" } } } } }
+        allow(described_class).to receive(:cached_context).and_return({ models: models, schema: schema })
+        described_class.call(model: model).content.first[:text]
+      end
+    end
+
+    it "leaves an ignored column out of Columns and says the model drops it" do
+      text = details_with_schema("User", { "user.rb" => <<~RUBY }, %w[name legacy_col])
+        class User < ApplicationRecord
+          self.ignored_columns += ["legacy_col"]
+        end
+      RUBY
+
+      expect(text).to include("- **name** | string")
+      expect(text).not_to include("- **legacy_col**")
+      expect(text).to include("**Ignored columns:** `legacy_col` _(the model cannot read or write them)_")
+    end
+
+    it "applies a base's assignment before a subclass adds to it" do
+      files = {
+        "application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\n  self.ignored_columns = %w[old]\nend\n",
+        "user.rb" => "class User < ApplicationRecord\n  self.ignored_columns += %i[legacy_col]\nend\n"
+      }
+      text = details_with_schema("User", files, %w[name old legacy_col])
+
+      expect(text).to include("**Ignored columns:** `old`, `legacy_col`")
+      expect(text).not_to include("- **old**")
+    end
+
+    it "says when the ignored list is computed" do
+      text = details_with_schema("User", { "user.rb" => <<~RUBY }, %w[name legacy_col])
+        class User < ApplicationRecord
+          self.ignored_columns = LEGACY
+          self.ignored_columns +=
+        end
+      RUBY
+
+      expect(text).to include("- **legacy_col** | string")
+      expect(text).to include("**Ignored columns:** [INFERRED] (computed in the source)")
+    end
+  end
 end

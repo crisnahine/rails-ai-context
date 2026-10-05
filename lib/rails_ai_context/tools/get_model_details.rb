@@ -165,7 +165,8 @@ module RailsAiContext
           schema = Payload.section(cached_context, :schema)
           if schema && schema[:tables]&.key?(data[:table_name])
             table_data = schema[:tables][data[:table_name]]
-            cols = table_data[:columns] || []
+            ignored = Array(data[:ignored_columns])
+            cols = (table_data[:columns] || []).reject { |c| ignored.include?(c[:name].to_s) }
             if table_data[:primary_key]
               lines << "**Primary key:** `#{Introspectors::SchemaConventions.primary_key_label(table_data[:primary_key])}`"
             end
@@ -180,6 +181,7 @@ module RailsAiContext
                 lines << "- #{parts.join(' | ')}"
               end
             end
+            lines << ignored_columns_line(ignored) if ignored.any?
           end
         end
 
@@ -534,6 +536,13 @@ module RailsAiContext
         suffix = "_#{suffix == true ? attr : suffix}" if suffix
         methods = labels.map { |label| "#{prefix}#{label.to_s.gsub(/[\W&&[:ascii:]]+/, '_')}#{suffix}?" }
         "#{text} methods: #{methods.join(', ')}"
+      end
+
+      private_class_method def self.ignored_columns_line(ignored)
+        inferred = RailsAiContext::Confidence::INFERRED
+        return "\n**Ignored columns:** #{inferred} (computed in the source)" if ignored.include?(inferred)
+
+        "\n**Ignored columns:** #{ignored.map { |c| "`#{c}`" }.join(', ')} _(the model cannot read or write them)_"
       end
 
       private_class_method def self.store_column_text(column, accessors)

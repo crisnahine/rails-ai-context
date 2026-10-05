@@ -26,6 +26,7 @@ module RailsAiContext
         ].to_set.freeze
 
         def on_call_node_enter(node)
+          return record_ignored_columns(node, :assign) if node.name == :ignored_columns= && node.receiver.is_a?(Prism::SelfNode)
           return unless in_scope?(node)
 
           if SIMPLE_MACROS.include?(node.name)
@@ -51,7 +52,27 @@ module RailsAiContext
           end
         end
 
+        # self.ignored_columns += [...] and -= [...]
+        def on_call_operator_write_node_enter(node)
+          return unless node.read_name == :ignored_columns && node.receiver.is_a?(Prism::SelfNode)
+
+          op = { :+ => :add, :- => :remove }[node.binary_operator]
+          record_ignored_columns(node, op) if op
+        end
+
         private
+
+        def record_ignored_columns(node, op)
+          value = node.is_a?(Prism::CallNode) ? node.arguments&.arguments&.first : node.value
+          columns = value.is_a?(Prism::ArrayNode) && value.elements.all? { |e| literal_string(e) } ? literal_strings(value) : nil
+          @results << {
+            macro:      :ignored_columns,
+            op:         op,
+            columns:    columns,
+            location:   node.location.start_line,
+            confidence: columns ? RailsAiContext::Confidence::VERIFIED : RailsAiContext::Confidence::INFERRED
+          }
+        end
 
         def extract_attribute_macro(node)
           attrs   = extract_symbol_args(node)
