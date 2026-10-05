@@ -217,7 +217,12 @@ Proof sources:
    partition marker, and Discourse, Mastodon, OpenFoodNetwork and Forem
    answering as before. In the v5.30.2 release QA: 14 real apps answered by
    v5.30.1 and by the release branch side by side, and the lab regressions on
-   SQLite in all three tiers, PostgreSQL and MySQL.
+   SQLite in all three tiers, PostgreSQL and MySQL. In the v5.31.0 release QA:
+   a private Rails 8.0 API app booted and static, and Discourse, Mastodon,
+   Forem, OpenFoodNetwork, OpenProject, Consul, Canvas and Errbit answered by
+   v5.30.2 and by the release branch side by side, every changed answer
+   checked against the app's source; the lab regressions on SQLite in all three
+   tiers, PostgreSQL and MySQL; and the unit suite on Ruby 3.1 with Rails 7.0.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified
