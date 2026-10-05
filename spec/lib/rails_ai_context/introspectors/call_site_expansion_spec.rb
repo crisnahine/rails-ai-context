@@ -378,4 +378,25 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
       expect([ Array(data[:callbacks]), data[:conditional].map { |c| c[:condition] } ]).to eq([ [], [ "options[:allow_nil]" ] ])
     end
   end
+
+  # Ruby registers "a" for the first and :a, :b for the second: `map` returns a copy, so `uniq!` leaves `names` alone.
+  describe "a parameter the body changes with a bang method" do
+    it "holds back a declaration naming it, since what it names is no longer the call's argument" do
+      data = expand("def vl(name)\n  x = 1\n  name.strip!\n  before_save name\nend\n", "vl 'a'")
+
+      expect([ Array(data[:callbacks]), data[:conditional].map { |c| c[:declaration] } ]).to eq([ [], [ "before_save name" ] ])
+    end
+
+    it "reads a list it splats as the list's items when only a copy changes" do
+      data = expand("def vl(*names)\n  x = 1\n  names.map(&:to_sym).uniq!\n  before_save(*names)\nend\n", "vl :a, :b")
+
+      expect(Array(data[:callbacks]).map { |cb| cb[:method] }).to eq(%w[a b])
+    end
+
+    it "holds back a splat of a list it cannot bind" do
+      data = expand("def vl(*names)\n  names.uniq!\n  before_save(*names)\nend\n", "vl :a, :b")
+
+      expect([ Array(data[:callbacks]), data[:conditional].map { |c| c[:declaration] } ]).to eq([ [], [ "before_save(*names)" ] ])
+    end
+  end
 end

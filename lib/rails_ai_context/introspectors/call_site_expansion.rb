@@ -80,6 +80,16 @@ module RailsAiContext
             [ key, kept ]
           end
         end
+        unbound = bindings.filter_map { |name, binding| name if name.is_a?(Symbol) && binding.source.nil? }
+        if unbound.any?
+          data = data.transform_values do |found|
+            Array(found).reject do |entry|
+              held = names_unbound?(entry, out, unbound)
+              conditional << declaration(entry, out, []) if held
+              held
+            end
+          end
+        end
         data = data.transform_values { |found| Array(found).map { |entry| relocated(entry, out) } }
         data.merge(conditional: conditional, foreign: foreign_entries(out, listeners))
       end
@@ -129,12 +139,28 @@ module RailsAiContext
       # The call written at the entry's line, less any block, with the
       # conditions it runs under.
       def declaration(entry, out, conditions)
-        call = AstWalk.each(AstCache.parse_string(out.text).value).find do |node|
-          node.is_a?(Prism::CallNode) && node.location.start_line == entry[:location]
-        end
+        call = call_at(out, entry[:location])
         { declaration: call ? call_source(call) : out.text.lines[entry[:location] - 1].to_s.strip,
           condition: (conditions.join(" and ") if conditions.any?),
           location: out.source_line(entry[:location]) || entry[:location] }.compact
+      end
+
+      def call_at(out, line)
+        AstWalk.each(AstCache.parse_string(out.text).value).find do |node|
+          node.is_a?(Prism::CallNode) && node.location.start_line == line
+        end
+      end
+
+      # A parameter the expansion cannot bind is written as its bare name, which a
+      # listener would read as what the call declares.
+      def names_unbound?(entry, out, names)
+        return false unless entry.is_a?(Hash) && entry[:location]
+
+        Array(call_at(out, entry[:location])&.arguments&.arguments).any? do |argument|
+          argument = argument.expression if argument.is_a?(Prism::SplatNode)
+          (argument.is_a?(Prism::LocalVariableReadNode) || (argument.is_a?(Prism::CallNode) && argument.variable_call?)) &&
+            names.include?(argument.name)
+        end
       end
 
       def call_source(call)
@@ -465,7 +491,7 @@ module RailsAiContext
       def emit_arguments(node, bindings, out, undecided, depth, conditions)
         written = false
         node.arguments.each do |argument|
-          pairs = keyword_argument(node, argument, bindings, depth)
+          pairs = keyword_argument(node, argument, bindings, depth) || splatted_items(argument, bindings, depth)
           next if pairs&.empty?
 
           out.append(", ", argument.location.start_line) if written
@@ -473,6 +499,13 @@ module RailsAiContext
           written = true
         end
         out
+      end
+
+      # `*names` over a bound list of literals is its items.
+      def splatted_items(argument, bindings, depth)
+        return unless argument.is_a?(Prism::SplatNode) && argument.expression.is_a?(Prism::LocalVariableReadNode)
+
+        bound(bindings, argument.expression, depth)&.items&.join(", ")
       end
 
       # `options[:length]` on a hash parameter the call passed as a literal:
