@@ -309,8 +309,6 @@ module RailsAiContext
         result
       end
 
-      # The flag a stray word was most likely meant for: a required param
-      # first, since that is the one a caller must supply.
       # ARGV (here and in the rake task) carries the locale's encoding, BINARY
       # under LANG=C; MCP values are always UTF-8.
       def utf8(arg)
@@ -324,6 +322,8 @@ module RailsAiContext
         end
       end
 
+      # The flag a stray word was most likely meant for: a required param
+      # first, since that is the one a caller must supply.
       def suggested_flag
         schema = tool_schema
         properties = (schema[:properties] || {})
