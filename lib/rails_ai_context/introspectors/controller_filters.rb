@@ -13,8 +13,12 @@ module RailsAiContext
       MACROS = %i[
         before_action after_action around_action
         prepend_before_action append_before_action
-        skip_before_action skip_after_action skip_around_action append_after_action
+        prepend_after_action prepend_around_action append_after_action append_around_action
+        skip_before_action skip_after_action skip_around_action skip_forgery_protection
       ].freeze
+
+      # actionpack's request_forgery_protection.rb defines it as this skip.
+      FORGERY_SKIP = { macro: :skip_before_action, args: [ :verify_authenticity_token ] }.freeze
 
       LISTENERS = {
         filters: -> { Listeners::GenericMacroListener.new(*MACROS) },
@@ -41,7 +45,7 @@ module RailsAiContext
       # @param source [String] one controller's Ruby source
       # @return [Array<Hash>] { name:, kind:, skipped:/declared:, only:, except:, if:, unless: }
       def from_source(source)
-        class_level(walk(source)).filter_map { |entry| record(entry) }
+        class_level(walk(source)).flat_map { |entry| record(entry) }
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "controller filter read")
       end
@@ -77,10 +81,9 @@ module RailsAiContext
                    top, order = placement[entry[:from_concern]]
                    [ line_of[top].to_i, order.to_i, entry ]
                  end
-        filters = placed.each_with_index.sort_by { |(line, order, _), index| [ line, order, index ] }
-                        .filter_map do |(_, _, entry), _|
-          filter = record(entry)
-          filter && entry[:from_concern] ? filter.merge(from_concern: entry[:from_concern]) : filter
+        entries = placed.each_with_index.sort_by { |(line, order, _), index| [ line, order, index ] }.map { |(_, _, entry), _| entry }
+        filters = entries.flat_map do |entry|
+          record(entry).map { |filter| entry[:from_concern] ? filter.merge(from_concern: entry[:from_concern]) : filter }
         end
         [ filters, unread ]
       rescue => e
@@ -184,23 +187,26 @@ module RailsAiContext
         nil
       end
 
+      # One filter per callback the call adds: each name, then each block or lambda, named by its line.
       def record(entry)
-        name = entry[:args]&.first
-        return nil unless name
-
+        entry = entry.merge(FORGERY_SKIP) if entry[:macro] == :skip_forgery_protection
         macro = entry[:macro].to_s
         skipped = macro.start_with?("skip_")
+        names = Array(entry[:args]).map(&:to_s)
+        names += Array(entry[:proc_lines]).map { |line| "block (line #{line})" } unless skipped
         # An excluded name is framework noise only while it runs. A skip of it
         # is the app's own decision, which the per-action answer reports.
-        return nil if !skipped && RailsAiContext.configuration.excluded_filters.include?(name.to_s)
+        names -= RailsAiContext.configuration.excluded_filters.map(&:to_s) unless skipped
+        return [] if names.empty?
 
-        filter = { name: name.to_s, kind: macro.sub(/_action\z/, "").sub(/\A(?:prepend|append|skip)_/, "") }
+        kind = macro.sub(/_action\z/, "").sub(/\A(?:prepend|append|skip)_/, "")
         # A skip states the opposite of what the plain kind says, so it has to
         # survive the fold into `before`/`after`/`around`. A declaration marks
         # the body that made it, so an ancestor's skip of the same name does
         # not reach it.
-        skipped ? filter[:skipped] = true : filter[:declared] = true
-        filter.merge(constraints(entry))
+        mark = skipped ? { skipped: true } : { declared: true }
+        tail = constraints(entry)
+        names.map { |name| { name: name, kind: kind, **mark, **tail } }
       end
 
       def constraints(entry)

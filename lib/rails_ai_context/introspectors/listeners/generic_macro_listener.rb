@@ -23,6 +23,8 @@ module RailsAiContext
             option_values: extract_keyword_sources(node),
             option_nodes:  extract_keyword_nodes(node),
             block:         (one_line_source(node.block) if node.block.is_a?(Prism::BlockNode) && @block_source.include?(node.name)),
+            # Where a block or a lambda argument opens: the line Proc#source_location gives.
+            proc_lines:    proc_lines(node),
             # Offsets, not line numbers: a one-line block puts the parent and
             # its nested calls on one line, and a consumer pairing them by
             # line then attaches the second child to the first.
@@ -41,6 +43,14 @@ module RailsAiContext
 
         def on_call_node_leave(node)
           @enclosing.pop if @enclosing.last.equal?(node)
+        end
+
+        private
+
+        def proc_lines(node)
+          procs = Array(node.arguments&.arguments).grep(Prism::LambdaNode)
+          procs << node.block if node.block.is_a?(Prism::BlockNode)
+          procs.map { |found| found.location.start_line }
         end
       end
     end

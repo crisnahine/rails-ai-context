@@ -309,9 +309,9 @@ module RailsAiContext
       def extract_filters(ctrl, source = nil)
         if ctrl.respond_to?(:_process_action_callbacks)
           reflection_filters = ctrl._process_action_callbacks.filter_map do |cb|
-            next if cb.filter.is_a?(Proc) || cb.filter.to_s.start_with?("_")
-            next if excluded_filters.include?(cb.filter.to_s)
-            { name: cb.filter.to_s, kind: cb.kind.to_s }
+            name = callback_name(cb.filter)
+            next if name.nil? || excluded_filters.include?(name)
+            { name: name, kind: cb.kind.to_s }
           end
 
           # Collect only/except constraints from source files in the inheritance chain
@@ -336,6 +336,19 @@ module RailsAiContext
         source ? extract_filters_from_source(source) : []
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "extract_filters")
+      end
+
+      # A block the app wrote is named by its line, as the static tier names it; a
+      # framework's or a gem's block (`allow_browser`) is not the app's filter.
+      def callback_name(filter)
+        unless filter.is_a?(Proc)
+          name = filter.to_s
+          return name.start_with?("_") ? nil : name
+        end
+
+        path, line = filter.source_location
+        root = "#{app.root.to_s.chomp("/")}/"
+        "block (line #{line})" if path&.start_with?(root) && !path.delete_prefix(root).start_with?("vendor/")
       end
 
       # A compiled callback keeps only:/except: in private ivars, so the

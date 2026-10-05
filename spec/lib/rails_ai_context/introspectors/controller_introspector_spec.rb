@@ -640,6 +640,31 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
     end
 
+    # actionpack turns a block into a callback of its own; the static tier names it by its line.
+    it "names a block filter the app wrote by its line, and leaves a framework block out" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "app/controllers/users_controller.rb")
+        FileUtils.mkdir_p(File.dirname(path))
+        source = <<~RUBY
+          class UsersController < ApplicationController
+            prepend_around_action :par
+            before_action(only: :index) { |c| c.head(:forbidden) }
+          end
+        RUBY
+        File.write(path, source)
+        ctrl = Class.new(ActionController::Base) { before_action { head :ok } }
+        ctrl.define_singleton_method(:name) { "UsersController" }
+        ctrl.class_eval(source.lines[1..2].join, path, 2)
+        in_dir = described_class.new(double("app", root: Pathname.new(dir)))
+
+        booted = in_dir.send(:extract_filters, ctrl, source).map { |f| [ f[:kind], f[:name], f[:only] ] }
+        static = in_dir.send(:extract_filters_from_source, source).map { |f| [ f[:kind], f[:name], f[:only] ] }
+
+        expect(booted).to eq([ [ "around", "par", nil ], [ "before", "block (line 3)", [ "index" ] ] ])
+        expect(static).to eq(booted)
+      end
+    end
+
     def with_concern(body)
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app/controllers/concerns"))
