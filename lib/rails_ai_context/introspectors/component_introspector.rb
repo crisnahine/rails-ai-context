@@ -35,7 +35,11 @@ module RailsAiContext
       # declare would otherwise swap places between runs.
       def extract_components
         dirs = components_dirs
-        namespaced = PathResolver.namespaced_roots(root).map(&:first) - dirs.map { |dir| File.expand_path(dir) }
+        views = PathResolver.view_dirs(root).map { |dir| File.expand_path(dir) }
+        # phlex:install pushes app/views itself under Views: a page view is a Phlex class, not a component.
+        namespaced = PathResolver.namespaced_roots(root).map(&:first).reject do |dir|
+          views.any? { |view| view == dir || view.start_with?("#{dir}/") }
+        end - dirs.map { |dir| File.expand_path(dir) }
         paths = (dirs + namespaced).flat_map { |dir| Dir.glob(File.join(dir, "**/*.rb")) }
 
         components = paths.filter_map do |path|

@@ -229,6 +229,40 @@ RSpec.describe RailsAiContext::Introspectors::ComponentIntrospector do
         expect(result[:bases].map { |c| c[:file] }).to eq([ "app/views/components/base.rb" ])
       end
     end
+
+    it "never reads the views root phlex-rails installs under the Views namespace as components" do
+      Dir.mktmpdir do |dir|
+        components = File.join(dir, "app", "components")
+        posts = File.join(dir, "app", "views", "posts")
+        FileUtils.mkdir_p([ components, posts, File.join(dir, "config", "initializers") ])
+        File.write(File.join(dir, "config", "initializers", "phlex.rb"), <<~RUBY)
+          module Views
+          end
+
+          module Components
+            extend Phlex::Kit
+          end
+
+          Rails.autoloaders.main.push_dir(
+            Rails.root.join("app/views"), namespace: Views
+          )
+
+          Rails.autoloaders.main.push_dir(
+            Rails.root.join("app/components"), namespace: Components
+          )
+        RUBY
+        File.write(File.join(components, "base.rb"), "class Components::Base < Phlex::HTML\nend\n")
+        File.write(File.join(components, "button.rb"), "class Components::Button < Components::Base\nend\n")
+        File.write(File.join(dir, "app", "views", "base.rb"), "class Views::Base < Components::Base\nend\n")
+        File.write(File.join(posts, "index.rb"), "class Views::Posts::Index < Views::Base\nend\n")
+        File.write(File.join(posts, "show.rb"), "class Views::Posts::Show < Views::Base\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:components].map { |c| c[:file] }).to eq([ "app/components/button.rb" ])
+        expect(result[:bases].map { |c| c[:file] }).to eq([ "app/components/base.rb" ])
+      end
+    end
   end
 
   describe "a compact component whose bare superclass names a top-level base" do
