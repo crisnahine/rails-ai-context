@@ -5,6 +5,56 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Tools::GetPartialInterface do
   before { described_class.reset_cache! }
 
+  describe "a strict locals comment in each form Rails accepts" do
+    around do |example|
+      Dir.mktmpdir("strict-locals") do |dir|
+        @root = dir
+        notes = File.join(dir, "app/views/notes")
+        FileUtils.mkdir_p(notes)
+        File.write(File.join(notes, "_dash.html.erb"), %(<%# locals: (title:, tone: "plain") -%>\n<p class="<%= tone %>"><%= title %></p>\n))
+        File.write(File.join(notes, "_paren.html.erb"), %(<%# locals: (title: t(".heading"), tone: "plain") %>\n<p class="<%= tone %>"><%= title %></p>\n))
+        File.write(File.join(notes, "_none.html.erb"), "<%# locals: () %>\n<p>static</p>\n")
+        example.run
+      end
+    end
+
+    before do
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    def interface(name)
+      described_class.call(partial: "notes/#{name}").content.first[:text]
+    end
+
+    it "reads a comment that ends in -%>" do
+      expect(interface("dash")).to include("**Declared locals** (Rails 7.1+ magic comment): title, tone")
+    end
+
+    it "reads a default that has parentheses" do
+      expect(interface("paren")).to include("**Declared locals** (Rails 7.1+ magic comment): title, tone")
+    end
+
+    it "names a keyword rest, which lets any other local through" do
+      File.write(File.join(@root, "app/views/notes/_rest.html.erb"), "<%# locals: (title:, **opts) %>\n<%= title %>\n")
+
+      expect(interface("rest")).to include("**Declared locals** (Rails 7.1+ magic comment): title, **opts")
+    end
+
+    it "degrades on a partial whose bytes are not valid UTF-8" do
+      File.binwrite(File.join(@root, "app/views/notes/_bad.html.erb"), "<%# locals: (title:) %>\n\xFF\xFE<%= title %>\n".b)
+
+      expect { interface("bad") }.not_to raise_error
+    end
+
+    it "says an empty list rejects every local" do
+      text = interface("none")
+
+      expect(text).to include("**Declared locals** (Rails 7.1+ magic comment): none, so passing any local raises")
+      expect(text).not_to include("No local variables detected")
+    end
+  end
+
   # Two of the app's three partials are `.text.erb`, and the resolver's fixed
   # extension list refused the name its own Available list had just printed.
   describe "a partial outside the html.erb extension list" do

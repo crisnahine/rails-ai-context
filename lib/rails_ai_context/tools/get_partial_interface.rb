@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "prism"
+
 module RailsAiContext
   module Tools
     class GetPartialInterface < BaseTool
@@ -98,8 +100,8 @@ module RailsAiContext
 
         # Combine: render-site locals first, then source-detected locals
         # Filter out noise: single chars, capitalized words, known helpers
-        all_locals = (magic_locals + render_locals + source_locals).uniq
-          .reject { |l| l.length <= 1 || l.match?(/\A[A-Z]/) || l.match?(/\Arender_/) }
+        all_locals = (Array(magic_locals) + render_locals + source_locals).uniq
+          .reject { |l| l.length <= 1 || l.match?(/\A[A-Z*]/) || l.match?(/\Arender_/) }
           .sort
 
         # Extract method calls only for confirmed locals
@@ -118,7 +120,7 @@ module RailsAiContext
         lines = [ "# Partial: #{partial_name}", "" ]
 
         if all_locals.any?
-          magic_note = magic_locals.any? ? " (#{magic_locals.size} declared via magic comment)" : ""
+          magic_note = magic_locals&.any? ? " (#{magic_locals.size} declared via magic comment)" : ""
           lines << "**Locals:** #{all_locals.join(', ')}#{magic_note}"
         else
           lines << "**Locals:** none detected"
@@ -135,8 +137,9 @@ module RailsAiContext
         lines = [ "# Partial: #{partial_name}", "" ]
         lines << "**File:** `#{relative_path}` (#{count_phrase(source.lines.size, "line")})"
 
-        if magic_locals.any?
-          lines << "**Declared locals** (Rails 7.1+ magic comment): #{magic_locals.join(', ')}"
+        if magic_locals
+          declared = magic_locals.any? ? magic_locals.join(", ") : "none, so passing any local raises"
+          lines << "**Declared locals** (Rails 7.1+ magic comment): #{declared}"
         end
 
         if all_locals.any?
@@ -151,7 +154,7 @@ module RailsAiContext
               lines << "- **#{local}**"
             end
           end
-        elsif !full
+        elsif !full && !magic_locals
           lines << "" << "_No local variables detected in this partial._"
         end
 
@@ -236,23 +239,26 @@ module RailsAiContext
         Dir.glob(File.join(views_dir, "**", "#{name}.*")).sort.select { |c| File.file?(c) }
       end
 
-      # Extract locals declared via Rails 7.1+ magic comment: <%# locals: (name:, title: "default") %>
+      # ActionView::Template::STRICT_LOCALS_REGEX as of Rails 8.0, held here so
+      # the static tier reads the comment the same way.
+      STRICT_LOCALS = /\#\s+locals:\s+\((.*?)\)(?=\s*-?%>|\s*$)/m
+
+      # The names a strict locals comment declares; nil without one, [] for
+      # `()`, which allows no locals at all.
       private_class_method def self.extract_magic_comment_locals(source)
-        locals = []
+        list = source[STRICT_LOCALS, 1]
+        return nil unless list
 
-        source.each_line do |line|
-          if (match = line.match(/<%#\s*locals:\s*\(([^)]+)\)\s*%>/))
-            params_str = match[1]
-            # Parse Ruby-style keyword params: name:, title: "default", count: 0
-            params_str.scan(/([\w]+):/) do |param_match|
-              locals << param_match[0]
-            end
-          end
-        end
+        result = RailsAiContext::AstCache.parse_string("def _(#{list}); end")
+        return list.scan(/(\w+):/).flatten.uniq unless result.success?
 
-        locals.uniq
+        params = result.value.statements.body.first.parameters
+        return [] unless params
+
+        rest = params.keyword_rest
+        params.keywords.map { |p| p.name.to_s } + (rest.is_a?(Prism::KeywordRestParameterNode) ? [ "**#{rest.name}" ] : [])
       rescue => e
-        RailsAiContext.debug_fail(e, [], label: "extract_magic_comment_locals")
+        RailsAiContext.debug_fail(e, nil, label: "extract_magic_comment_locals")
       end
 
       # Extract local variable references from ERB source.
