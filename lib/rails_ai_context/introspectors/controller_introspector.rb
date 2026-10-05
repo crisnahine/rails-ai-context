@@ -423,9 +423,17 @@ module RailsAiContext
         # `before_action :audit` is still the ancestor's.
         by_key = filters.group_by { |f| [ f[:kind], f[:name] ] }
         effective_declarations(own).each do |key, declared|
-          Array(by_key[key]).each do |f|
+          rows = Array(by_key[key])
+          # Each block is a callback of its own: the body's are the last ones of that name, in its order.
+          pairs = if ControllerFilters.block?(key.last)
+            mine = own.select { |f| !f[:skipped] && [ f[:kind], f[:name] ] == key }
+            rows.last(mine.size).zip(mine)
+          else
+            rows.map { |f| [ f, declared ] }
+          end
+          pairs.each do |f, source_record|
             f[:declared] = true
-            declared[:from_concern] ? f[:from_concern] = declared[:from_concern] : f.delete(:from_concern)
+            source_record[:from_concern] ? f[:from_concern] = source_record[:from_concern] : f.delete(:from_concern)
           end
         end
         skips = own.select { |f| f[:skipped] }

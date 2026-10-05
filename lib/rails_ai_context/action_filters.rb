@@ -42,9 +42,10 @@ module RailsAiContext
       skips = own_skips(ctx, controller_name, info, action, root: root, source: source)
       skipped = absolute_names(skips, action)
       # A skip record states what does not run, so it is never a filter.
-      declared = Array(info[:filters]).grep(Hash).reject { |f| f[:skipped] }
+      offsets = Hash.new(0)
+      declared = number_blocks(Array(info[:filters]).grep(Hash).reject { |f| f[:skipped] }, offsets)
       parent, dropped, inherited_conditions, declares = parent_filters(ctx, info[:parent_class], action, skipped,
-                                                                       root: root, within: controller_name.to_s)
+                                                                       root: root, within: controller_name.to_s, offsets: offsets)
       conditions = merge_conditions(inherited_conditions, conditions_by_name(skips, action))
       # The runtime tier's list is the whole chain, so an ancestor's skip
       # applies here too - except to what this body declares again, which
@@ -79,10 +80,33 @@ module RailsAiContext
             .map { |f| f.except(:from, :from_concern, :provenance).merge(attribution_of[entry_key(f)]) }, conditions, action
       )
 
-      { own: own,
-        inherited: inherited + unplaced_conditional_skips(own + inherited, conditions, action,
-                                                          declares | declared.map { |f| f[:name].to_s }.to_set),
+      { own: unnumbered(own),
+        inherited: unnumbered(inherited) + unplaced_conditional_skips(own + inherited, conditions, action,
+                                                                      declares | declared.map { |f| f[:name].to_s }.to_set),
         skipped: skipped }
+    end
+
+    BLOCK_NUMBER = /#\d+\z/
+
+    # Each block is a callback of its own, so one name can stand for several. Numbered from the
+    # end of a class's chain, past the ones its descendants declare (`offsets`, counted as the walk
+    # goes up), a block reads the same in a class's list and in every descendant's.
+    def number_blocks(filters, offsets)
+      seen = Hash.new(0)
+      numbered = filters.reverse.map do |filter|
+        next filter unless Introspectors::ControllerFilters.block?(filter[:name])
+
+        key = entry_key(filter)
+        number = offsets[key] + seen[key]
+        seen[key] += 1
+        filter.merge(name: "#{filter[:name]}##{number}")
+      end.reverse
+      filters.each { |filter| offsets[entry_key(filter)] += 1 if filter[:declared] && Introspectors::ControllerFilters.block?(filter[:name]) }
+      numbered
+    end
+
+    def unnumbered(filters)
+      filters.map { |filter| filter[:name].to_s.match?(BLOCK_NUMBER) ? filter.merge(name: filter[:name].to_s.sub(BLOCK_NUMBER, "")) : filter }
     end
 
     # A skip of a name no ancestor in the payload declares is the only
@@ -181,7 +205,7 @@ module RailsAiContext
     # ends it: reconstructing a path from a class name breaks on every app
     # inflection. A bare superclass is resolved against the enclosing namespace
     # first, the way Ruby does.
-    def parent_filters(ctx, parent_class, action, skipped, root:, within: nil)
+    def parent_filters(ctx, parent_class, action, skipped, root:, within: nil, offsets: Hash.new(0))
       controllers = Payload.controllers(ctx)
       seen = Set.new
       found = {}
@@ -217,7 +241,8 @@ module RailsAiContext
         # is the one the child inherits.
         conditions = merge_conditions(conditions_by_name(skips, action), conditions)
         # The child's chain names this class's own blocks by the file they are in.
-        carried = Introspectors::ControllerFilters.in_file(Array(info[:filters]).grep(Hash).reject { |f| f[:skipped] }, info[:file])
+        carried = number_blocks(Introspectors::ControllerFilters.in_file(Array(info[:filters]).grep(Hash).reject { |f| f[:skipped] }, info[:file]),
+                                offsets)
         # Counted before the rejects below, so a conditional skip of a name
         # the walk did see is never mistaken for a skip of a declaration it
         # could not. A skip record is not a sighting, hence the reject above.
@@ -462,6 +487,6 @@ module RailsAiContext
                          :skip_calls, :base_filters, :skip_flag_records, :redeclared_names, :last_records, :own_skips,
                          :record_attribution, :conditional?, :partial?, :absolute_names, :conditions_by_name,
                          :merge_conditions, :mark_conditional_skips, :skip_tail, :action_names, :condition_text,
-                         :unplaced_conditional_skips, :evidence_skips, :configured_base, :runs_once?, :base_controller_path
+                         :unplaced_conditional_skips, :evidence_skips, :configured_base, :runs_once?, :base_controller_path, :number_blocks, :unnumbered
   end
 end

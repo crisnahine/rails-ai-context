@@ -756,6 +756,47 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
     end
 
+    # Mastodon's StatusesController: vary_by from ApplicationController's chain, from WebAppControllerConcern, and its own.
+    it "credits each of a body's blocks that share a name to the concern or body that declared it" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/controllers/concerns"))
+        cache_path = File.join(dir, "app/controllers/concerns/cache_concern.rb")
+        File.write(cache_path, <<~RUBY)
+          module CacheConcern
+            extend ActiveSupport::Concern
+            class_methods do
+              def vary_by(value)
+                before_action { response.headers["Vary"] = value }
+              end
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app/controllers/concerns/web_app.rb"),
+                   "module WebApp\n  extend ActiveSupport::Concern\n  included do\n    vary_by \"Accept\"\n  end\nend\n")
+        File.write(File.join(dir, "app/controllers/application_controller.rb"),
+                   "class ApplicationController < ActionController::Base\n  include CacheConcern\n  vary_by \"Authorization\"\nend\n")
+        source = "class PostsController < ApplicationController\n  include WebApp\n  vary_by \"Cookie\"\nend\n"
+        File.write(File.join(dir, "app/controllers/posts_controller.rb"), source)
+        base = Class.new(ActionController::Base)
+        base.singleton_class.class_eval(<<~RUBY, cache_path, 4)
+          def vary_by(value)
+            before_action { response.headers["Vary"] = value }
+          end
+        RUBY
+        base.vary_by("Authorization")
+        base.define_singleton_method(:name) { "ApplicationController" }
+        ctrl = Class.new(base)
+        ctrl.vary_by("Accept")
+        ctrl.vary_by("Cookie")
+        ctrl.define_singleton_method(:name) { "PostsController" }
+        in_dir = described_class.new(double("app", root: Pathname.new(dir)))
+
+        booted = in_dir.send(:extract_filters, ctrl, source).map { |f| f.slice(:declared, :from_concern) }
+
+        expect(booted).to eq([ {}, { declared: true, from_concern: "WebApp" }, { declared: true } ])
+      end
+    end
+
     it "lists a call's lambdas and names in argument order, in both tiers" do
       Dir.mktmpdir do |dir|
         path = File.join(dir, "app/controllers/users_controller.rb")
