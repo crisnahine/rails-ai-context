@@ -42,6 +42,8 @@ module RailsAiContext
             extract_delegate_missing_to(node)
           elsif node.name == :attribute
             extract_attribute_api(node)
+          elsif node.name == :alias_attribute
+            extract_alias_attribute(node)
           end
         end
 
@@ -109,13 +111,27 @@ module RailsAiContext
           when Prism::SymbolNode then type_arg.unescaped
           end
 
-          options = extract_keyword_options(node)
+          # Sources, so `default: "anon"` prints as the file writes it.
+          options = extract_keyword_sources(node).merge(extract_keyword_nodes(node).slice(:default).transform_values(&:slice))
 
           @results << {
             macro:      :attribute,
             attribute:  name_arg.unescaped,
             type:       type,
             options:    options,
+            location:   node.location.start_line,
+            confidence: confidence_for(node)
+          }
+        end
+
+        def extract_alias_attribute(node)
+          new_name, old_name = extract_symbol_args(node)
+          return unless new_name && old_name
+
+          @results << {
+            macro:      :alias_attribute,
+            attribute:  new_name.to_s,
+            target:     old_name.to_s,
             location:   node.location.start_line,
             confidence: confidence_for(node)
           }

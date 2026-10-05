@@ -344,6 +344,13 @@ module RailsAiContext
         if data[:has_many_attached]&.any?
           macro_lines << "- `has_many_attached` #{data[:has_many_attached].map { |f| ":#{f}" }.join(', ')}"
         end
+        macro_lines << "- `has_rich_text` #{data[:has_rich_text].map { |f| ":#{f}" }.join(', ')}" if data[:has_rich_text]&.any?
+        if data[:attributes]&.any?
+          macro_lines << "- `attribute` #{data[:attributes].map { |a| attribute_api_text(a) }.join(', ')}"
+        end
+        if data[:alias_attributes]&.any?
+          macro_lines << "- `alias_attribute` #{data[:alias_attributes].map { |a| ":#{a[:name]} → :#{a[:target]}" }.join(', ')}"
+        end
         if macro_lines.any?
           lines << "" << "## Macros"
           lines.concat(macro_lines)
@@ -495,6 +502,11 @@ module RailsAiContext
         end
 
         pairs.any? ? "**#{ed[:field]}** (#{pairs.join(', ')})" : "**#{ed[:field]}**"
+      end
+
+      private_class_method def self.attribute_api_text(attribute)
+        facts = [ attribute[:type], ("default: #{attribute[:default]}" if attribute[:default]) ].compact
+        ":#{attribute[:name]}#{" (#{facts.join(', ')})" if facts.any?}"
       end
 
       # A transformation the parser could not resolve is a marker, not the

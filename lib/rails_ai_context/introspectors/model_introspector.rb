@@ -1092,7 +1092,9 @@ module RailsAiContext
           elsif macro == :delegate_missing_to
             macros[:delegate_missing_to] = m[:to]
           elsif macro == :attribute
-            (macros[:attributes] ||= []) << { name: m[:attribute], type: m[:type] }.compact
+            (macros[:attributes] ||= []) << { name: m[:attribute], type: m[:type], default: m.dig(:options, :default) }.compact
+          elsif macro == :alias_attribute
+            (macros[:alias_attributes] ||= []) << { name: m[:attribute], target: m[:target] }
           end
 
           if BROADCAST_MACROS.include?(macro)
