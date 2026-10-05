@@ -166,7 +166,7 @@ module RailsAiContext
         end
 
         # Parse method signatures
-        methods = Introspectors::ActionResolver.public_methods_from_source(source)
+        methods = view_callable(source)
         if methods.any?
           lines << "" << "## Methods (#{methods.size})"
           methods.each { |m| lines << "- `#{m}`" }
@@ -216,7 +216,7 @@ module RailsAiContext
           module_name = module_name_for(file_path, helper_dirs)
 
           source = RailsAiContext::SafeFile.read(file_path)
-          methods = source ? Introspectors::ActionResolver.public_methods_from_source(source) : []
+          methods = source ? view_callable(source) : []
 
           {
             name: module_name,
@@ -289,6 +289,13 @@ module RailsAiContext
         lines << "## Declared in controllers with helper_method (#{declared.size})"
         declared.each { |d| lines << "- `#{d[:name]}` (#{d[:owner]}, `#{d[:path]}`)" }
         lines << ""
+      end
+
+      # A module_function method's instance copy is private, but a view calls it like any helper.
+      private_class_method def self.view_callable(source)
+        Introspectors::ActionResolver.own_methods_in(source, nil)
+          .select { |m| m[:scope] == :instance && (m[:visibility] == :public || m[:module_function]) && !m[:name].start_with?("_") }
+          .map { |m| Introspectors::ActionResolver.signature(m) }.uniq
       end
 
       # What `helper_method` in a controller, or in a module a controller includes, hands the

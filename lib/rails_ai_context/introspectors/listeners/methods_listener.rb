@@ -174,6 +174,7 @@ module RailsAiContext
           visibility = frame.marks[[ scope, method_name ]] || (node.receiver ? :public : frame.visibility)
           if visibility == :module_function
             record(node, method_name, :instance, :private, prefixed: false)
+            @results.last[:module_function] = true
             record(node, method_name, :class, :public, prefixed: true)
           else
             record(node, method_name, scope, visibility, prefixed: !node.receiver.nil?)
@@ -274,7 +275,8 @@ module RailsAiContext
           return entry[:visibility] = visibility unless visibility == :module_function
 
           entry[:visibility] = :private
-          @results << entry.merge(scope: :class, visibility: :public, signature: "self.#{entry[:signature]}")
+          entry[:module_function] = true
+          @results << entry.merge(scope: :class, visibility: :public, signature: "self.#{entry[:signature]}").except(:module_function)
         end
 
         def record(node, method_name, scope, visibility, prefixed:)

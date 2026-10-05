@@ -511,5 +511,35 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
         expect(text).not_to include("never")
       end
     end
+
+    # module_function leaves a private instance copy, which a view calls like any helper.
+    it "lists a module_function helper with the others" do
+      Dir.mktmpdir("helper-mf") do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/helpers"))
+        File.write(File.join(dir, "app/helpers/database_helper.rb"), <<~RUBY)
+          module DatabaseHelper
+            def replica_enabled?
+              true
+            end
+            module_function :replica_enabled?
+
+            def with_primary(&block); end
+
+            private
+
+            def internal; end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(dir))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        listing = described_class.call(detail: "standard").content.first[:text]
+        shown = described_class.call(helper: "DatabaseHelper").content.first[:text]
+
+        expect(listing).to include("- `replica_enabled?`\n- `with_primary(&block)`")
+        expect(listing).not_to include("internal")
+        expect(shown).to include("## Methods (2)")
+      end
+    end
   end
 end
