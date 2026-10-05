@@ -3,8 +3,8 @@
 module RailsAiContext
   module Introspectors
     module Listeners
-      # Detects schema.rb DSL patterns via Prism AST:
-      # create_table, t.string, t.index, add_foreign_key, create_enum
+      # Detects schema.rb DSL patterns via Prism AST: create_table, t.string, t.index,
+      # add_foreign_key, create_enum, create_view, create_virtual_table, and a table the dumper skipped
       class SchemaDslListener < BaseListener
         # Whether a `t` receiver is a table: `Tag.find_each { |t| t.update! }` binds
         # `t` to a record. A receiverless block is a table helper's, a def's `t` a helper's argument.
@@ -48,6 +48,19 @@ module RailsAiContext
           spatial geography geometry geometry_collection line_string multi_line_string multi_point
           multi_polygon st_point st_polygon
         ].to_set.freeze
+
+        # The dumper writes a comment, not a create_table, for a table it could not describe.
+        NOT_DUMPED = /\A#\s*Could not dump table "([^"]+)" because of following (\S+)/
+
+        def on_program_node_enter(_node)
+          comments = Array(@comments)
+          comments.each_with_index do |comment, i|
+            match = NOT_DUMPED.match(comment.location.slice) or next
+            message = comments[i + 1]&.location&.slice.to_s[/\A#\s+(\S.*)/, 1]
+            @results << { type: :not_dumped, table: SchemaConventions.local_name(match[1]),
+                          reason: [ match[2], message ].compact.join(": "), location: comment.location.start_line }
+          end
+        end
 
         def on_call_node_enter(node)
           note_block(node)
@@ -98,7 +111,29 @@ module RailsAiContext
           when :enable_extension
             name = literal_string(node.arguments&.arguments&.first)
             @results << { type: :extension, name: name, location: node.location.start_line } if name
+          when :create_view
+            extract_view(node)
+          when :create_virtual_table
+            extract_virtual_table(node)
           end
+        end
+
+        # scenic's dump: create_view "name", [materialized: true,] sql_definition: <<-SQL.
+        def extract_view(node)
+          name = literal_string(node.arguments&.arguments&.first) or return
+          options = keyword_hash(node) { |value| value }
+          @results << {
+            type: :view, name: SchemaConventions.local_name(name), materialized: options[:materialized].is_a?(Prism::TrueNode),
+            sql: literal_string(options[:sql_definition])&.strip, location: node.location.start_line
+          }.compact
+        end
+
+        # SQLite's dump (8.0+): create_virtual_table "name", "fts5", ["title", "body"].
+        def extract_virtual_table(node)
+          name, mod, arguments = node.arguments&.arguments
+          name = literal_string(name) or return
+          @results << { type: :virtual_table, name: name, module: literal_string(mod), arguments: literal_strings(arguments),
+                        location: node.location.start_line }
         end
 
         def extract_create_table(node)

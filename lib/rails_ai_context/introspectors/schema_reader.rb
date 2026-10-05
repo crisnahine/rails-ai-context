@@ -99,6 +99,21 @@ module RailsAiContext
         parse[:extensions]
       end
 
+      # @return [Hash] view name => { materialized:, sql: }
+      def views
+        parse[:views]
+      end
+
+      # @return [Hash] virtual table name => { module:, arguments: }
+      def virtual_tables
+        parse[:virtual_tables]
+      end
+
+      # @return [Hash] table name => why the dumper wrote a comment in its place
+      def not_dumped
+        parse[:not_dumped]
+      end
+
       # Declared defaults for one table, as source text. Callers report these
       # verbatim when the live database returns no default.
       def defaults_for(table)
@@ -133,7 +148,10 @@ module RailsAiContext
           end,
           enums: [],
           check_constraints: [],
-          extensions: []
+          extensions: [],
+          views: {},
+          virtual_tables: {},
+          not_dumped: {}
         }
       end
 
@@ -146,7 +164,7 @@ module RailsAiContext
       end
 
       def empty_schema
-        { tables: {}, foreign_keys: [], enums: [], check_constraints: [], extensions: [] }
+        { tables: {}, foreign_keys: [], enums: [], check_constraints: [], extensions: [], views: {}, virtual_tables: {}, not_dumped: {} }
       end
 
       def build
@@ -234,6 +252,12 @@ module RailsAiContext
           schema[:check_constraints] << { table: current, **event.slice(:name, :expression) } if current
         when :add_check_constraint
           schema[:check_constraints] << event.slice(:table, :name, :expression)
+        when :view
+          schema[:views][event[:name]] = { materialized: event[:materialized], sql: event[:sql] }
+        when :virtual_table
+          schema[:virtual_tables][event[:name]] = event.slice(:module, :arguments)
+        when :not_dumped
+          schema[:not_dumped][event[:table]] = event[:reason]
         end
 
         current

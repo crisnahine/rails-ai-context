@@ -117,7 +117,7 @@ module RailsAiContext
               data = tables[name]
               col_count = data[:columns]&.size || 0
               idx_count = data[:indexes]&.size || 0
-              lines << "- **#{name}** - #{count_phrase(col_count, "column")}, #{count_phrase(idx_count, "index", plural: "indexes")}"
+              lines << "- **#{name}**#{relation_suffix(data)} - #{count_phrase(col_count, "column")}, #{count_phrase(idx_count, "index", plural: "indexes")}"
             end
             coverage = model_coverage_lines(tables, models_data)
             lines.concat([ "" ] + coverage) if coverage.any?
@@ -222,8 +222,8 @@ module RailsAiContext
                 ""
               end
               key = data[:primary_key] && data[:primary_key] != "id" ? " (primary key: #{RailsAiContext::Introspectors::SchemaConventions.primary_key_label(data[:primary_key])})" : ""
-              lines << "### #{name}#{key}#{model_info}"
-              lines << cols
+              lines << "### #{name}#{key}#{relation_suffix(data)}#{model_info}"
+              lines << cols unless cols.empty? && data[:columns].blank?
               lines << ""
             end
 
@@ -475,18 +475,38 @@ module RailsAiContext
         parts.any? ? " - #{parts.join('; ')}" : ""
       end
 
+      RELATION_KINDS = { "view" => "View", "materialized_view" => "Materialized view", "virtual_table" => "Virtual table" }.freeze
+
+      # What a listed name is when it is not a plain table.
+      private_class_method def self.relation_suffix(data)
+        label = case data[:kind]
+        when "virtual_table" then "#{data[:module]} virtual table".strip
+        when "view", "materialized_view" then RELATION_KINDS[data[:kind]].downcase
+        else "not dumped" if data[:not_dumped]
+        end
+        label ? " (#{label})" : ""
+      end
+
       private_class_method def self.format_table_markdown(name, data, models, enum_types = nil)
         columns = data[:columns] || []
         # Always show Nullable and Default - agents need these for migrations and validations
         has_defaults = columns.any? { |c| c.key?(:default) && !c[:default].nil? }
 
         model_refs = models_for_table(name, models)
-        lines = [ "## Table: #{name}", "" ]
+        lines = [ "## #{RELATION_KINDS.fetch(data[:kind].to_s, "Table")}: #{name}", "" ]
         lines << "**Models:** #{model_refs.join(', ')}" if model_refs.any?
+        lines << "**Module:** #{data[:module]}" if data[:module]
         lines << "**Primary key:** #{RailsAiContext::Introspectors::SchemaConventions.primary_key_label(data[:primary_key])}" if data[:primary_key]
         lines << "**Comment:** #{data[:comment]}" if data[:comment]
+        if data[:not_dumped]
+          lines << "The schema dumper could not describe this table (#{data[:not_dumped]}), so the dump holds no columns for it."
+        elsif data[:sql] && columns.empty?
+          lines << "A view's columns are read from the database, and this answer has no connection: boot the app to list them."
+        end
         # A table right after a paragraph line would read as part of it.
         lines << "" if lines.size > 2
+        definition = data[:sql] ? [ "### Definition", "```sql", data[:sql], "```" ] : []
+        return lines.concat(definition).join("\n").rstrip if columns.empty? && (data[:sql] || data[:not_dumped])
 
         has_comments = columns.any? { |c| c[:comment] && !c[:comment].to_s.empty? }
         header = "| Column | Type | Null"
@@ -562,6 +582,7 @@ module RailsAiContext
           end
         end
 
+        lines.concat([ "" ] + definition) if definition.any?
         lines.join("\n")
       end
     end

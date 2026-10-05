@@ -23,7 +23,7 @@ module RailsAiContext
         attach_secondary_databases({
           adapter: adapter_name,
           tables: tables,
-          total_tables: table_names.size,
+          total_tables: tables.size,
           schema_version: current_schema_version,
           # The version stamp is read off db/schema.rb and the tables off the
           # connection, so the two can be one migration apart. The tables the
@@ -87,7 +87,7 @@ module RailsAiContext
       end
 
       def extract_tables
-        table_names.each_with_object({}) do |table, hash|
+        tables = table_names.each_with_object({}) do |table, hash|
           hash[table] = {
             columns: extract_columns(table),
             indexes: extract_indexes(table),
@@ -99,6 +99,31 @@ module RailsAiContext
           }.compact
           SchemaConventions.mark_primary_key(hash[table])
         end
+        add_live_relations(tables)
+      end
+
+      # connection.tables leaves out views and SQLite's virtual tables; a view's SQL is the dump's.
+      def add_live_relations(tables)
+        materialized = materialized_view_names
+        (connection.views - tables.keys).each do |view|
+          tables[view] = SchemaConventions.view_entry(schema_reader.views.dig(view, :sql), materialized: materialized.include?(view),
+                                                      columns: extract_columns(view))
+        end
+        return tables unless connection.respond_to?(:virtual_tables)
+
+        connection.virtual_tables.each do |name, (mod, arguments)|
+          tables[name] ||= SchemaConventions.virtual_table_entry(mod, arguments.to_s.split(", "))
+        end
+        tables
+      end
+
+      # PostgreSQL lists a materialized view among the views; pg_matviews tells them apart.
+      def materialized_view_names
+        return [] unless adapter_name.to_s.match?(/postg/i)
+
+        connection.select_values("SELECT matviewname FROM pg_matviews WHERE schemaname = ANY (current_schemas(false))")
+      rescue => e
+        RailsAiContext.debug_fail(e, [], label: "materialized_view_names")
       end
 
       def table_comment(table)
@@ -481,6 +506,7 @@ module RailsAiContext
           table = tables[constraint[:table]] or next
           (table[:check_constraints] ||= []) << constraint.slice(:name, :expression)
         end
+        SchemaConventions.add_relations(tables, views: schema.views, virtual_tables: schema.virtual_tables, not_dumped: schema.not_dumped)
 
         version = schema_version_for(path)
 
@@ -514,6 +540,7 @@ module RailsAiContext
         dialect = parsed[:dialect]
         tables = parsed[:tables]
         tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
+        SchemaConventions.add_relations(tables, views: parsed[:views], virtual_tables: parsed[:virtual_tables])
 
         applied = RailsAiContext::SchemaVersion.applied_versions(content)
 

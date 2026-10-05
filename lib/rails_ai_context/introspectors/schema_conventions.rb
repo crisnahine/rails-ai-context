@@ -241,6 +241,27 @@ module RailsAiContext
         end
       end
 
+      # Views, virtual tables and tables the dumper skipped, listed beside the tables
+      # under the names Rails gives them. A view replaces a table of its name: mysqldump
+      # writes a placeholder table before the view it stands in for.
+      def add_relations(tables, views: {}, virtual_tables: {}, not_dumped: {})
+        views.each { |name, view| tables[name] = view_entry(view[:sql], materialized: view[:materialized]) }
+        virtual_tables.each { |name, table| tables[name] = virtual_table_entry(table[:module], table[:arguments]) }
+        not_dumped.each { |name, reason| tables[name] ||= { columns: [], indexes: [], foreign_keys: [], not_dumped: reason } }
+        tables
+      end
+
+      # A dump holds a view's SQL, not its columns; only a connection lists those.
+      def view_entry(sql, materialized:, columns: [])
+        { kind: materialized ? "materialized_view" : "view", columns: columns, indexes: [], foreign_keys: [], sql: sql }.compact
+      end
+
+      # A virtual table's columns are its module arguments that set no option (fts5's tokenize=...).
+      def virtual_table_entry(mod, arguments)
+        columns = Array(arguments).filter_map { |arg| arg.strip[/\A["`]?(\w+)["`]?(?:\s+UNINDEXED)?\z/i, 1] }
+        { kind: "virtual_table", module: mod, columns: columns.map { |name| { name: name } }, indexes: [], foreign_keys: [] }.compact
+      end
+
       # How a primary key reads to a person: `id`, or `tag_id, account_id`.
       def primary_key_label(key)
         Array(key || "id").join(", ")

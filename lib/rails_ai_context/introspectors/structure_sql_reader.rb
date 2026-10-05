@@ -79,7 +79,22 @@ module RailsAiContext
           tables.delete(shown_name(name)) if name.start_with?("public.")
         end
 
-        { dialect: dialect, tables: tables, enums: enums.map { |name, values| { name: name, values: values } } }
+        { dialect: dialect, tables: tables, enums: enums.map { |name, values| { name: name, values: values } },
+          views: views(content), virtual_tables: virtual_tables(content) }
+      end
+
+      # Each view by the name the app reads it under, a later definition of a name replacing a placeholder.
+      def views(content)
+        content.scan(VIEW).each_with_object({}) do |(materialized, name, sql), found|
+          name = qualified_name(name)
+          found[shown_name(name)] = { materialized: !materialized.nil?, sql: sql.strip } if shown_name(name).match?(/\A\w+\z/)
+        end
+      end
+
+      def virtual_tables(content)
+        content.scan(VIRTUAL_TABLE).to_h do |name, mod, arguments|
+          [ shown_name(qualified_name(name)), { module: mod, arguments: split_top_level(arguments.to_s) } ]
+        end
       end
 
       # PostgreSQL's enum types, by the name schema.rb gives them, with their labels.
@@ -147,6 +162,9 @@ module RailsAiContext
       # The optional INHERITS list after a CREATE TABLE body.
       INHERITS = /(?:#{INHERITS_KEYWORD}\s*\(([^)]*)\))?/
       CREATE_TABLE = /CREATE TABLE\s+(?:IF NOT EXISTS\s+)?#{QUALIFIED_NAME}\s*(?=\()/i
+      # mysqldump wraps the statement in version comments and names an algorithm, definer and security first.
+      VIEW = /\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:ALGORITHM|DEFINER|SQL\s+SECURITY)\b[^;]*?\s)?(?:TEMP(?:ORARY)?\s+)?(MATERIALIZED\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?#{QUALIFIED_NAME}(?:\s*\([^)]*\))?\s+AS\s+(.*?)(?:\s+WITH\s+(?:NO\s+)?DATA)?\s*(?:\*\/)?\s*;/im
+      VIRTUAL_TABLE = /CREATE\s+VIRTUAL\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?#{QUALIFIED_NAME}\s+USING\s+(\w+)\s*(?:\(([^)]*)\))?/i
 
       # "schema.name" with quotes removed; an unqualified name is in public.
       def qualified_name(text)

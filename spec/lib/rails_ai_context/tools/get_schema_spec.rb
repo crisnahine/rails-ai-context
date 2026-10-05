@@ -1067,4 +1067,44 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
 
     expect(text).to include("Inherits from `elsewhere.gone`, which the structure.sql dump does not define: its columns are not shown.")
   end
+
+  describe "views, virtual tables and a table the dumper could not write" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "static_parse", total_tables: 4, tables: {
+          "users" => { columns: [ { name: "email", type: "string" } ], indexes: [], foreign_keys: [] },
+          "active_users" => { kind: "view", sql: "SELECT id FROM users", columns: [], indexes: [], foreign_keys: [] },
+          "docs_fts" => { kind: "virtual_table", module: "fts5", columns: [ { name: "title" } ], indexes: [], foreign_keys: [] },
+          "boxes" => { columns: [], indexes: [], foreign_keys: [], not_dumped: "StandardError: Unknown type 'virtual'" }
+        } },
+        models: {}
+      })
+    end
+
+    it "labels each in the listing" do
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("### active_users (view)", "### docs_fts (fts5 virtual table)", "### boxes (not dumped)")
+    end
+
+    it "shows a view's SQL and says its columns need a connection" do
+      text = described_class.call(table: "active_users").content.first[:text]
+
+      expect(text).to include("## View: active_users", "```sql\nSELECT id FROM users\n```")
+      expect(text).to include("A view's columns are read from the database")
+      expect(text).not_to include("| Column |")
+    end
+
+    it "says why a table has no columns when the dumper could not write it" do
+      text = described_class.call(table: "boxes").content.first[:text]
+
+      expect(text).to include("The schema dumper could not describe this table (StandardError: Unknown type 'virtual')")
+    end
+
+    it "names a virtual table's module" do
+      text = described_class.call(table: "docs_fts").content.first[:text]
+
+      expect(text).to include("## Virtual table: docs_fts", "**Module:** fts5", "| title |")
+    end
+  end
 end

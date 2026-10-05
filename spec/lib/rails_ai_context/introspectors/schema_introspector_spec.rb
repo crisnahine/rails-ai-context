@@ -1459,4 +1459,131 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
   end
+
+  describe "views, virtual tables and a table the dumper could not write" do
+    def static_of(file, content)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", file), content)
+        described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+      end
+    end
+
+    it "lists scenic's views from schema.rb with their SQL" do
+      tables = static_of("schema.rb", <<~RUBY)[:tables]
+        ActiveRecord::Schema[8.1].define(version: 2026_01_01_000002) do
+          create_table "users", force: :cascade do |t|
+            t.string "email", null: false
+          end
+
+          create_view "active_users", sql_definition: <<-SQL
+              SELECT users.id, users.email FROM users WHERE users.active;
+          SQL
+          create_view "user_stats", materialized: true, sql_definition: <<-SQL
+              SELECT count(*) AS total FROM users;
+          SQL
+        end
+      RUBY
+
+      expect(tables.keys).to eq(%w[users active_users user_stats])
+      expect(tables["active_users"]).to include(kind: "view", sql: "SELECT users.id, users.email FROM users WHERE users.active;", columns: [])
+      expect(tables["user_stats"]).to include(kind: "materialized_view", sql: "SELECT count(*) AS total FROM users;")
+    end
+
+    it "lists a SQLite virtual table from schema.rb with its columns" do
+      tables = static_of("schema.rb", <<~RUBY)[:tables]
+        ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+          create_table "docs", force: :cascade do |t|
+            t.string "title"
+          end
+          create_virtual_table "docs_fts", "fts5", ["title", "body", "tokenize='porter'"]
+        end
+      RUBY
+
+      expect(tables["docs_fts"]).to include(kind: "virtual_table", module: "fts5", columns: [ { name: "title" }, { name: "body" } ])
+    end
+
+    it "lists a table the dumper could not describe, with its reason" do
+      tables = static_of("schema.rb", <<~RUBY)[:tables]
+        ActiveRecord::Schema[7.0].define(version: 2026_01_01_000001) do
+          create_table "docs", force: :cascade do |t|
+            t.string "title"
+          end
+
+        # Could not dump table "boxes" because of following StandardError
+        #   Unknown type 'virtual' for column 'area'
+
+        end
+      RUBY
+
+      expect(tables["boxes"]).to include(columns: [], not_dumped: "StandardError: Unknown type 'virtual' for column 'area'")
+    end
+
+    it "reads views and virtual tables from structure.sql" do
+      tables = static_of("structure.sql", <<~SQL)[:tables]
+        CREATE TABLE IF NOT EXISTS "users" ("id" integer PRIMARY KEY AUTOINCREMENT NOT NULL, "active" boolean);
+        CREATE VIEW active_users AS SELECT id FROM users WHERE active;
+        CREATE VIRTUAL TABLE docs_fts USING fts5 (title, body)
+        /* docs_fts(title,body) */;
+        CREATE TABLE IF NOT EXISTS 'docs_fts_data'(id INTEGER PRIMARY KEY, block BLOB);
+      SQL
+
+      expect(tables.keys).to eq(%w[users active_users docs_fts])
+      expect(tables["active_users"]).to include(kind: "view", sql: "SELECT id FROM users WHERE active")
+      expect(tables["docs_fts"]).to include(kind: "virtual_table", module: "fts5", columns: [ { name: "title" }, { name: "body" } ])
+    end
+
+    it "reads a PostgreSQL materialized view from structure.sql" do
+      tables = static_of("structure.sql", <<~SQL)[:tables]
+        CREATE TABLE public.users (
+            id bigint NOT NULL
+        );
+        CREATE MATERIALIZED VIEW public.user_stats AS
+         SELECT count(*) AS total
+           FROM public.users
+          WITH NO DATA;
+      SQL
+
+      expect(tables["user_stats"]).to include(kind: "materialized_view", sql: "SELECT count(*) AS total\n   FROM public.users")
+    end
+
+    it "skips a view or virtual table it cannot read instead of failing" do
+      rb = static_of("schema.rb", <<~RUBY)[:tables]
+        ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+          create_table "docs", force: :cascade do |t|
+            t.string "title"
+          end
+          create_view view_name, sql_definition: sql
+          create_view "bare"
+          create_virtual_table "loose", "fts5"
+        end
+      RUBY
+      sql = static_of("structure.sql", <<~SQL)[:tables]
+        CREATE TABLE "docs" ("id" integer PRIMARY KEY);
+        CREATE VIRTUAL TABLE plain USING rtree;
+        CREATE VIEW broken AS SELECT
+      SQL
+
+      expect(rb.keys).to eq(%w[docs bare loose])
+      expect(rb["bare"]).to eq(kind: "view", columns: [], indexes: [], foreign_keys: [])
+      expect(rb["loose"][:columns]).to eq([])
+      expect(sql.keys).to eq(%w[docs plain])
+    end
+
+    it "lists a booted view with the connection's columns and the dump's SQL" do
+      connection = ActiveRecord::Base.connection
+      connection.create_table(:pa_v_users, force: true) { |t| t.string :email }
+      connection.execute("CREATE VIEW pa_v_active AS SELECT id, email FROM pa_v_users")
+      connection.execute("CREATE VIRTUAL TABLE pa_v_fts USING fts5 (title, body)")
+
+      tables = introspector.call[:tables]
+      expect(tables["pa_v_active"]).to include(kind: "view")
+      expect(tables["pa_v_active"][:columns].map { |c| c[:name] }).to eq(%w[id email])
+      expect(tables["pa_v_fts"]).to include(kind: "virtual_table", module: "fts5", columns: [ { name: "title" }, { name: "body" } ])
+    ensure
+      connection.execute("DROP VIEW IF EXISTS pa_v_active")
+      connection.execute("DROP TABLE IF EXISTS pa_v_fts")
+      connection.drop_table(:pa_v_users, if_exists: true)
+    end
+  end
 end
