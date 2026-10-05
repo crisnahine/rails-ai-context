@@ -488,15 +488,16 @@ module RailsAiContext
           text = Payload.section(ctx, :action_text)
           return [] unless storage || text
 
-          lines = [ "## File Storage & Rich Text", "" ]
+          lines = []
           if storage && storage[:attachments]&.any?
             lines << "Active Storage: #{count_phrase(storage[:attachments].size, "attachment")} across models."
           end
           if text && text[:models]&.any?
             lines << "Action Text: #{count_phrase(text[:models].size, "model")} with rich text fields."
           end
-          lines << ""
-          lines
+          return [] if lines.empty?
+
+          [ "## File Storage & Rich Text", "", *lines, "" ]
         end
 
         def section_api(ctx)
@@ -524,9 +525,9 @@ module RailsAiContext
           has_content = false
 
           if devops
-            lines << "Dockerfile: #{devops[:dockerfile] ? 'present' : 'not found'}."
-            lines << "Procfile: #{devops[:procfile] ? 'present' : 'not found'}." if devops.key?(:procfile)
-            deploy = devops[:deployment_method]
+            lines << "Dockerfile: #{devops[:docker] ? 'present' : 'not found'}."
+            lines << "Procfile: #{devops[:procfile].present? ? 'present' : 'not found'}."
+            deploy = devops[:deployment]
             lines << "Deployment: #{deploy}." if deploy
             has_content = true
           end

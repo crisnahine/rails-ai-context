@@ -22,6 +22,26 @@ RSpec.describe RailsAiContext::Tools::Onboard do
     end
   end
 
+  describe "the Deployment & DevOps section of a default Rails 8 app" do
+    it "reads the devops introspector's keys: Dockerfile present, no Procfile, Kamal" do
+      Dir.mktmpdir do |dir|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+        allow(described_class).to receive(:cached_context).and_return(
+          { app_name: "App", models: {},
+            devops: { puma: nil, procfile: [], health_check: true, docker: { base_images: [ "ruby" ], multi_stage: true, compose: false }, deployment: "kamal" },
+            active_storage: { attachments: [] }, action_text: { models: [] } }
+        )
+
+        text = described_class.call(detail: "full").content.first[:text]
+
+        expect(text).to include("Dockerfile: present.")
+        expect(text).not_to include("Procfile: present.")
+        expect(text).to include("Deployment: kamal.")
+        expect(text).not_to include("## File Storage & Rich Text")
+      end
+    end
+  end
+
   describe ".call" do
     it "returns an MCP::Tool::Response" do
       result = described_class.call
@@ -524,7 +544,7 @@ RSpec.describe RailsAiContext::Tools::Onboard do
     it "renders the full walkthrough in FULL_SECTIONS order" do
       expect(headings("full")).to eq(
         [ "Stack", "Data Model", "Key Flows", "Background Jobs & Async", "Frontend", "Real-Time Features",
-          "File Storage & Rich Text", "API", "Deployment & DevOps", "Testing", "Getting Started" ]
+          "API", "Deployment & DevOps", "Testing", "Getting Started" ]
       )
     end
   end
