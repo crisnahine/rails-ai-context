@@ -349,6 +349,15 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(full).to include('- Rate limit: to: 10, within: 3.minutes, only: :create; to: 100, within: 1.hour, name: "long"')
     end
 
+    it "summarizes a strong params method's nested keys and arrays beside its permits" do
+      params = [ { name: "user_params", requires: "user", permits: [ "name" ], nested: { "preferences" => [ "color" ] }, arrays: [ "tags" ] } ]
+      stub_controllers({ "UsersController" => { actions: %w[update], filters: [], parent_class: "ApplicationController", strong_params: params } })
+
+      text = described_class.call(controller: "UsersController").content.first[:text]
+
+      expect(text).to include("- `user_params` (requires: :user) permits: :name, preferences: [:color], tags: []")
+    end
+
     it "names both strong params methods of a controller under an app parent" do
       stub_controllers({
         "Admin::AccountsController" => {

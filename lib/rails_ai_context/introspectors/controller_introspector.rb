@@ -592,6 +592,7 @@ module RailsAiContext
         result = {}
         permits = []
         nested = {}
+        arrays = []
 
         args = expect_call.arguments&.arguments || []
         args.each do |arg|
@@ -604,7 +605,7 @@ module RailsAiContext
               key = extract_ast_value(assoc.key).to_s
               if assoc.value.is_a?(Prism::ArrayNode)
                 result[:requires] ||= key
-                collect_expect_array(assoc.value, key, permits, nested)
+                collect_expect_array(assoc.value, key, permits, nested, arrays)
               else
                 permits << key
               end
@@ -614,10 +615,11 @@ module RailsAiContext
 
         result[:permits] = permits if permits.any?
         result[:nested] = nested if nested.any?
+        result[:arrays] = arrays if arrays.any?
         result
       end
 
-      def collect_expect_array(array_node, key, permits, nested)
+      def collect_expect_array(array_node, key, permits, nested, arrays)
         array_node.elements.each do |el|
           case el
           when Prism::SymbolNode
@@ -629,7 +631,9 @@ module RailsAiContext
             el.elements.each do |inner|
               next unless inner.is_a?(Prism::AssocNode)
               inner_key = extract_ast_value(inner.key).to_s
-              if inner.value.is_a?(Prism::ArrayNode)
+              if inner.value.is_a?(Prism::ArrayNode) && inner.value.elements.empty?
+                arrays << inner_key
+              elsif inner.value.is_a?(Prism::ArrayNode)
                 nested[inner_key] = expect_symbol_values(inner.value)
               else
                 permits << inner_key

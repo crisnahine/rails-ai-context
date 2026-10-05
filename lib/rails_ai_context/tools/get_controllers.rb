@@ -463,7 +463,9 @@ module RailsAiContext
           lines << "" << "## Strong Params"
           info[:strong_params].each do |sp|
             if sp.is_a?(Hash)
-              permits_summary = sp[:permits]&.map { |p| ":#{p}" }&.join(", ") || ""
+              permits_summary = (Array(sp[:permits]).map { |p| ":#{p}" } +
+                                 Array(sp[:nested]).map { |key, fields| "#{key}: [#{fields.map { |f| ":#{f}" }.join(', ')}]" } +
+                                 Array(sp[:arrays]).map { |key| "#{key}: []" }).join(", ")
               lines << "- `#{sp[:name]}`#{sp[:requires] ? " (requires: :#{sp[:requires]})" : ""}#{permits_summary.empty? ? "" : " permits: #{permits_summary}"}"
             else
               lines << "- `#{sp}`"

@@ -306,6 +306,16 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(result[:nested]).to eq({ "comments" => [ "body" ] })
     end
 
+    # `tags: []` permits an array of scalars, in expect as in permit.
+    it "reads an empty list inside params.expect as an array of scalars" do
+      source = "def user_params = params.expect(user: [:name, { preferences: [:color] }, tags: []])\n"
+
+      result = introspector.send(:extract_strong_params, source).first
+
+      expect(result).to eq(name: "user_params", requires: "user", permits: [ "name" ],
+                           nested: { "preferences" => [ "color" ] }, arrays: [ "tags" ])
+    end
+
     it "returns name only when method has no permit call" do
       source = <<~RUBY
         def post_params
