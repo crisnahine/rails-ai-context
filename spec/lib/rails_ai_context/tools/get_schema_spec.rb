@@ -1117,6 +1117,17 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(described_class.call(detail: "full").content.first[:text]).to include("# Schema Full Detail (2 of 1 table and 1 view)")
     end
 
+    it "counts a secondary database's views apart from its tables" do
+      view = { kind: "view", columns: [], indexes: [], foreign_keys: [], sql: "SELECT 1" }
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "postgresql", total_tables: 1, tables: { "users" => tables["users"] },
+                  secondary_databases: { "reporting" => { total_tables: 1, tables: { "users" => tables["users"], "my_view" => view }, note: "Parsed" } } },
+        models: {}
+      })
+
+      expect(described_class.call(detail: "summary").content.first[:text]).to include("- **reporting**: 1 table and 1 view (users, my_view)")
+    end
+
     it "lists the indexes on a view whose columns the dump does not hold" do
       allow(described_class).to receive(:cached_context).and_return({
         schema: { adapter: "static_parse", total_tables: 0, tables: {

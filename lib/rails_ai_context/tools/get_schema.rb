@@ -405,8 +405,7 @@ module RailsAiContext
 
         lines = [ "", "## Secondary databases", "" ]
         secondary.each do |name, db|
-          count = db[:total_tables]
-          lines << "- **#{name}**: #{count_phrase(count, "table")} (#{db[:tables].keys.join(', ')}) - #{db[:note]}"
+          lines << "- **#{name}**: #{relations_phrase(db[:tables])} (#{db[:tables].keys.join(', ')}) - #{db[:note]}"
         end
         lines
       end
@@ -486,13 +485,11 @@ module RailsAiContext
 
       RELATION_KINDS = { "view" => "View", "materialized_view" => "Materialized view", "virtual_table" => "Virtual table" }.freeze
 
-      # What a listed name is when it is not a plain table.
       private_class_method def self.relations_phrase(tables)
-        views = tables.count { |_, data| RailsAiContext::Introspectors::SchemaConventions.view?(data) }
-        phrase = count_phrase(tables.size - views, "table")
-        views.positive? ? "#{phrase} and #{count_phrase(views, "view")}" : phrase
+        RailsAiContext::Introspectors::SchemaConventions.relations_phrase(tables)
       end
 
+      # What a listed name is when it is not a plain table.
       private_class_method def self.relation_suffix(data)
         label = case data[:kind]
         when "virtual_table" then "#{data[:module]} virtual table".strip

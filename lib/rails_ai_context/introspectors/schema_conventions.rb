@@ -270,6 +270,15 @@ module RailsAiContext
         tables.count { |_, table| !view?(table) }
       end
 
+      # How a header counts the listed entries: "116 tables and 2 views".
+      def relations_phrase(tables)
+        tables ||= {}
+        count = table_count(tables)
+        phrase = CountPhrase.call(count, "table")
+        views = tables.size - count
+        views.positive? ? "#{phrase} and #{CountPhrase.call(views, "view")}" : phrase
+      end
+
       # A dump holds a view's SQL, not its columns; only a connection lists those.
       def view_entry(sql, materialized:, columns: [], indexes: [])
         { kind: materialized ? "materialized_view" : "view", columns: columns, indexes: Array(indexes), foreign_keys: [], sql: sql }.compact

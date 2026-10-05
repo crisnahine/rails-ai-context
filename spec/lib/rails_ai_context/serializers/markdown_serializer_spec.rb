@@ -293,6 +293,12 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
       expect(output).to include("## Database Schema")
     end
 
+    it "counts the views apart from the tables it lists" do
+      ctx = { app_name: "App", schema: { total_tables: 1, tables: { "users" => { columns: [] }, "user_stats" => { kind: "view", columns: [] } } } }
+
+      expect(described_class.new(ctx).call).to include("## Database Schema (1 table and 1 view)")
+    end
+
     it "lists a virtual table's columns by name alone" do
       ctx = { app_name: "App", schema: { total_tables: 1, tables: { "docs_fts" => { kind: "virtual_table", columns: [ { name: "title" }, { name: "body" } ] } } } }
 
