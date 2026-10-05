@@ -111,7 +111,7 @@ Method-aware code extraction with surrounding class context. Every line returned
 
 ### `rails_analyze_feature`
 
-Full-stack feature analysis: models + controllers + routes + services + jobs + views + tests in one call.
+Full-stack feature analysis: models + controllers + routes + services + admin resources + jobs + views + tests in one call.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -376,7 +376,7 @@ API layer: api_only mode, serialization strategy (Jbuilder, serializers), GraphQ
 
 ### `rails_get_conventions`
 
-Auth checks, flash messages, create action template, test patterns.
+Auth checks, flash messages, create action template, test patterns, and the admin resources ActiveAdmin, Administrate, Avo, Madmin and Trestle register (with ActiveAdmin's permitted params).
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|

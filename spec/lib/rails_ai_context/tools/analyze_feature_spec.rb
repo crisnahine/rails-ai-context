@@ -219,6 +219,25 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       end
     end
 
+    it "lists the admin resources that expose the feature's model, with ActiveAdmin's permitted params" do
+      Dir.mktmpdir("rac_admin") do |tmp|
+        FileUtils.mkdir_p([ File.join(tmp, "app", "admin"), File.join(tmp, "app", "dashboards") ])
+        File.write(File.join(tmp, "app", "admin", "users.rb"), "ActiveAdmin.register User do\n  permit_params :email, :name\nend\n")
+        File.write(File.join(tmp, "app", "admin", "posts.rb"), "ActiveAdmin.register Post do\nend\n")
+        File.write(File.join(tmp, "app", "dashboards", "user_dashboard.rb"), "class UserDashboard < Administrate::BaseDashboard\nend\n")
+
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        text = described_class.call(feature: "user").content.first[:text]
+
+        expect(text).to include("## Admin Resources (2)")
+        expect(text).to include("- ActiveAdmin `User` (`app/admin/users.rb`) - permits email, name")
+        expect(text).to include("- Administrate `User` (`app/dashboards/user_dashboard.rb`)")
+        expect(text).not_to include("`Post`")
+      end
+    end
+
     it "names an untested job and service in the gap list" do
       Dir.mktmpdir("rac_gap_js") do |tmp|
         FileUtils.mkdir_p(File.join(tmp, "app", "controllers"))

@@ -81,6 +81,18 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
       expect(text).to include("Service objects")
     end
 
+    it "lists admin resources by gem" do
+      Dir.mktmpdir do |tmp|
+        FileUtils.mkdir_p(File.join(tmp, "app", "avo", "resources"))
+        File.write(File.join(tmp, "app", "avo", "resources", "user.rb"), "class Avo::Resources::User < Avo::BaseResource\nend\n")
+        allow(RailsAiContext).to receive(:default_app).and_return(double("app", root: Pathname.new(tmp)))
+
+        text = described_class.call.content.first[:text]
+        expect(text).to include("## Admin Resources")
+        expect(text).to include("- Avo `User` (`app/avo/resources/user.rb`)")
+      end
+    end
+
     it "shows notable config files, filtering obvious ones" do
       result = described_class.call
       text = result.content.first[:text]

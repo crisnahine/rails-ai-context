@@ -64,6 +64,12 @@ module RailsAiContext
             end
           end
 
+          admin = Introspectors::AdminResources.call(rails_app.root)
+          if admin.any?
+            lines << "" << "## Admin Resources"
+            admin.each { |resource| lines << "- #{Introspectors::AdminResources.line(resource)}" }
+          end
+
           # Config files - only show non-obvious ones (skip files every Rails app has)
           if conventions[:config_files]&.any?
             obvious = %w[

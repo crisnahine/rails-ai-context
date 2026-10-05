@@ -58,6 +58,7 @@ module RailsAiContext
         discover_controllers(ctx, pattern, lines)
         discover_routes(ctx, pattern, lines)
         discover_services(root, pattern, lines)
+        discover_admin(root, pattern, lines)
         discover_jobs(ctx, pattern, lines)
         discover_views(ctx, root, pattern, lines)
         discover_stimulus(ctx, pattern, lines)
@@ -124,6 +125,15 @@ module RailsAiContext
           text_words.each_cons(pattern_words.size).any? do |window|
             window.zip(pattern_words).all? { |w, p| w == p || w.singularize == p.singularize }
           end
+        end
+
+        def discover_admin(root, pattern, lines)
+          matched = Introspectors::AdminResources.call(root).select { |r| feature_word_match?(r[:model], pattern) }
+          return if matched.empty?
+
+          lines << "## Admin Resources (#{matched.size})"
+          matched.each { |resource| lines << "- #{Introspectors::AdminResources.line(resource)}" }
+          lines << ""
         end
 
         # --- AF: Models ---
