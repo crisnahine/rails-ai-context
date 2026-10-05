@@ -323,4 +323,45 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener do
       [ "import", :class, :public ], [ "parse", :class, :private ], [ "own", :instance, :public ]
     ])
   end
+
+  it "records the methods a delegation defines, public whatever section it sits in" do
+    source = <<~RUBY
+      class WorkersController < ApplicationController
+        extend Forwardable
+        def_delegators :@service, :run, :stop
+        private
+        def_delegator :@service, :pause, :halt
+        delegate :name, to: :service
+        delegate :code, to: :service, prefix: true
+        delegate :size, to: :service, prefix: :queue
+        delegate :token, to: :service, private: true
+        def helper
+          delegate :inside, to: :service
+        end
+      end
+    RUBY
+    methods = parse_and_dispatch(source)
+    expect(methods.map { |m| [ m[:name], m[:scope], m[:visibility] ] }).to eq([
+      [ "run", :instance, :public ], [ "stop", :instance, :public ], [ "halt", :instance, :public ],
+      [ "name", :instance, :public ], [ "service_code", :instance, :public ], [ "queue_size", :instance, :public ],
+      [ "token", :instance, :private ], [ "helper", :instance, :private ]
+    ])
+    expect(methods.first).to include(signature: "run", location: 3, end_location: 3)
+  end
+
+  it "reads Forwardable's hash form and a delegation in class << self" do
+    source = <<~RUBY
+      class Box
+        extend Forwardable
+        delegate [:first, :last] => :@items, :count => :@items
+        class << self
+          def_delegators :registry, :lookup
+        end
+      end
+    RUBY
+    methods = parse_and_dispatch(source)
+    expect(methods.map { |m| [ m[:name], m[:scope] ] }).to eq([
+      [ "first", :instance ], [ "last", :instance ], [ "count", :instance ], [ "lookup", :class ]
+    ])
+  end
 end

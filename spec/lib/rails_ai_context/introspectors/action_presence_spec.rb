@@ -55,4 +55,11 @@ RSpec.describe RailsAiContext::Introspectors::ActionPresence do
       expect(described_class.template?(root, chain, "edit")).to be false
     end
   end
+
+  it "counts an action a delegation defines" do
+    files = app_base.merge(
+      "app/controllers/orders_controller.rb" => "class OrdersController < ApplicationController\n  extend Forwardable\n  def_delegators :@service, :run, :stop\n  delegate :ship, to: :@service\n  def index; end\nend\n"
+    )
+    chain_for(files) { |chain| expect(%w[run stop ship].map { |name| chain.defines?(name) }).to eq([ true, true, true ]) }
+  end
 end

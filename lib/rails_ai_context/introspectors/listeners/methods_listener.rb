@@ -23,6 +23,7 @@ module RailsAiContext
           @concern_blocks = {}.compare_by_identity
           @open_blocks = []
           @scope_stack = []
+          @def_depth = 0
         end
 
         # Reset visibility when entering a new class/module scope
@@ -91,6 +92,8 @@ module RailsAiContext
             end
           when :class_methods, :included
             @concern_blocks[node.block] = node.name if node.block.is_a?(Prism::BlockNode)
+          when *DELEGATORS
+            record_delegated(node) if @def_depth.zero?
           end
         end
 
@@ -115,7 +118,12 @@ module RailsAiContext
           @inline_visibility_stack.pop
         end
 
+        def on_def_node_leave(node)
+          @def_depth -= 1
+        end
+
         def on_def_node_enter(node)
+          @def_depth += 1
           is_class_method = @in_singleton_class || node.receiver&.is_a?(Prism::SelfNode) || @scope_stack.last == :class_methods
           method_name = node.name.to_s
 
@@ -144,7 +152,59 @@ module RailsAiContext
           }
         end
 
+        # Each defines a public method whatever `private` section it sits in;
+        # only Rails' `private: true` makes one private.
+        DELEGATORS = %i[delegate def_delegators def_instance_delegators def_delegator def_instance_delegator instance_delegate].freeze
+
         private
+
+        def record_delegated(node)
+          args = node.arguments&.arguments || []
+          positional = args.reject { |a| a.is_a?(Prism::KeywordHashNode) }
+          options = extract_keyword_options(node)
+          visibility = :public
+          names = case node.name
+          when :def_delegators, :def_instance_delegators
+            positional.drop(1).filter_map { |a| literal_string(a) } - %w[__send__ __id__]
+          when :def_delegator, :def_instance_delegator
+            Array(literal_string(positional[2] || positional[1]))
+          else
+            if options.key?(:to)
+              visibility = :private if options[:private] == true
+              prefix = delegation_prefix(options)
+              return unless prefix
+
+              positional.filter_map { |a| literal_string(a) }.map { |name| "#{prefix}#{name}" }
+            else
+              # Forwardable's `delegate [:a, :b] => :@x`.
+              args.grep(Prism::KeywordHashNode).flat_map(&:elements).grep(Prism::AssocNode).flat_map { |assoc| literal_strings(assoc.key) }
+            end
+          end
+          names.each { |name| record_delegated_name(node, name, visibility) }
+        end
+
+        def delegation_prefix(options)
+          case options[:prefix]
+          # Rails raises on `prefix: true` with an ivar target, so nothing is defined.
+          when true then options[:to].to_s.start_with?("@") ? nil : "#{options[:to]}_"
+          when Symbol, String then "#{options[:prefix]}_"
+          else ""
+          end
+        end
+
+        def record_delegated_name(node, name, visibility)
+          @results << {
+            name:         name,
+            scope:        @in_singleton_class || @scope_stack.last == :class_methods ? :class : :instance,
+            visibility:   @inline_visibility_stack.last[name] || visibility,
+            params:       [],
+            owner:        @owner_stack.dup,
+            signature:    name,
+            location:     node.location.start_line,
+            end_location: node.location.end_line,
+            confidence:   confidence_for(node)
+          }
+        end
 
         # `class << self` members carry no receiver of their own, so they read
         # as the bare name, which is how they are written.
