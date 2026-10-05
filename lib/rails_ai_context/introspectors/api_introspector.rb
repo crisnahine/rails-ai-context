@@ -283,8 +283,11 @@ module RailsAiContext
         resolution = SafePath.locate(relative, under: root.to_s, max_size: Float::INFINITY, listed: true)
         return false unless resolution.ok?
 
-        head = File.read(resolution.realpath, OPENAPI_HEAD).to_s.force_encoding(Encoding::UTF_8).scrub("?")
-        return false unless head.match?(/openapi|swagger/)
+        raw = File.read(resolution.realpath, OPENAPI_HEAD).to_s
+        # Bytewise include? before any transcoding: most candidates are locale files.
+        return false unless raw.include?("openapi") || raw.include?("swagger")
+
+        head = raw.force_encoding(Encoding::UTF_8).scrub("?")
         return head.match?(OPENAPI_YAML_KEY) unless relative.end_with?(".json")
         return json_top_level_key?(head) if File.size(resolution.realpath) > OPENAPI_HEAD
 
