@@ -61,6 +61,21 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
     end
   end
 
+  describe "a default Rails 8 production config" do
+    it "reads the cable config Action Cable loaded for this environment and the primary database's adapter" do
+      server = double(config: double(cable: { "adapter" => "solid_cable", "connects_to" => { "database" => { "writing" => "cable" } } }))
+      stub_const("ActionCable", Module.new { define_singleton_method(:server) { server } })
+      allow(Rails.configuration).to receive(:database_configuration).and_return(
+        Rails.env => { "primary" => { "adapter" => "sqlite3" }, "cable" => { "adapter" => "sqlite3" } }
+      )
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("- **Action Cable:** solid_cable")
+      expect(text).to include("- **Database:** sqlite3")
+    end
+  end
+
   describe ".call" do
     it "returns application configuration" do
       result = described_class.call

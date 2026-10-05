@@ -155,9 +155,11 @@ module RailsAiContext
       end
 
       private_class_method def self.detect_database
-        adapter = Rails.configuration.database_configuration&.dig(Rails.env, "adapter") rescue nil
-        return nil unless adapter
-        adapter
+        env = Rails.configuration.database_configuration&.dig(Rails.env) rescue nil
+        return nil unless env.is_a?(Hash)
+
+        # A multi-database environment nests one block per database; primary is the app's own.
+        env["adapter"] || (env["primary"] || env.values.find { |v| v.is_a?(Hash) })&.dig("adapter")
       end
 
       private_class_method def self.detect_auth_framework
@@ -214,23 +216,16 @@ module RailsAiContext
         parts.any? ? parts.join(", ") : nil
       end
 
+      # Action Cable's railtie loads the current environment's cable.yml block into
+      # the server config; config.action_cable has no adapter of its own.
       private_class_method def self.detect_action_cable
-        # Try Rails config API first
-        if defined?(ActionCable) && Rails.application.config.respond_to?(:action_cable)
-          cable_config = Rails.application.config.action_cable
-          adapter = cable_config.adapter if cable_config.respond_to?(:adapter)
-          return adapter.to_s if adapter && !adapter.to_s.empty?
-        end
+        return nil unless defined?(ActionCable) && ActionCable.respond_to?(:server)
 
-        # YAML fallback for older Rails or when config API isn't available
-        cable_yml = rails_app.root.join("config/cable.yml")
-        return nil unless File.exist?(cable_yml)
+        cable = ActionCable.server.config.cable
+        return nil unless cable
 
-        content = RailsAiContext::SafeFile.read(cable_yml)
-        return nil unless content
-
-        adapter = content.match(/adapter:\s*(\w+)/)&.captures&.first
-        adapter || "configured"
+        adapter = cable[:adapter] || cable["adapter"]
+        adapter.to_s.empty? ? "configured" : adapter.to_s
       rescue StandardError
         nil
       end
