@@ -110,6 +110,26 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
     end
   end
 
+  it "names a file by its real directory when a link in app/models reaches the same one, in any listing order" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "app/models/admin"))
+      FileUtils.mkdir_p(File.join(dir, "app/models/zone/deep"))
+      File.write(File.join(dir, "app/models/admin/report.rb"), "class Admin::Report < ApplicationRecord\nend\n")
+      File.write(File.join(dir, "app/models/zone/deep/note.rb"), "class Zone::Deep::Note < ApplicationRecord\nend\n")
+      File.symlink("admin", File.join(dir, "app/models/aa_admin"))
+      File.symlink("admin", File.join(dir, "app/models/zz_admin"))
+      File.symlink("zone/deep", File.join(dir, "app/models/a_deep"))
+
+      [ :sort, :reverse ].each do |order|
+        RailsAiContext::PathResolver.clear_code_roots
+        allow(Dir).to receive(:children).and_wrap_original { |original, path| original.call(path).sort.then { |names| order == :sort ? names : names.reverse } }
+
+        names = described_class.paths(dir, kind: "app/models").map(&:path_name)
+        expect(names).to contain_exactly("Admin::Report", "Zone::Deep::Note")
+      end
+    end
+  end
+
   it "skips the lib subdirectories autoload_lib ignores, as Zeitwerk does" do
     Dir.mktmpdir do |dir|
       files = {

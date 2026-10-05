@@ -58,21 +58,37 @@ module RailsAiContext
 
       # Zeitwerk follows symlinks, so the walk does too, as far as the app's
       # own tree; a directory reached twice (a link back up) is walked once.
+      # Linked directories wait until the real tree is done, so a directory
+      # both spell is named by its real path whatever order the disk lists.
       def ruby_files(dir, bounds, visited)
+        pending = [ dir ]
+        found = []
+        found.concat(walk_dir(pending.shift, bounds, visited, pending)) while pending.any?
+        found
+      end
+
+      def walk_dir(dir, bounds, visited, links)
         return [] unless visited.add?(File.realpath(dir))
 
-        Dir.children(dir).flat_map do |name|
+        Dir.children(dir).sort.flat_map do |name|
           next [] if name.start_with?(".")
 
           path = File.join(dir, name)
-          if File.directory?(path)
-            within?(File.realpath(path), *bounds) ? ruby_files(path, bounds, visited) : []
-          else
+          if !File.directory?(path)
             name.end_with?(".rb") ? [ path ] : []
+          elsif !within?(File.realpath(path), *bounds)
+            []
+          elsif File.symlink?(path)
+            links << path
+            []
+          else
+            walk_dir(path, bounds, visited, links)
           end
         rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
           []
         end
+      rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
+        []
       end
 
       def within?(real, real_dir, real_root)
@@ -99,7 +115,7 @@ module RailsAiContext
         end
       end
 
-      private_class_method :scan, :scan_dir, :ruby_files, :within?, :scan_extra_model_roots
+      private_class_method :scan, :scan_dir, :ruby_files, :walk_dir, :within?, :scan_extra_model_roots
 
       def each(root, kind:, skip_concerns: true)
         return enum_for(:each, root, kind: kind, skip_concerns: skip_concerns) unless block_given?
