@@ -70,12 +70,17 @@ module RailsAiContext
         classes.map { |c| c[:name] }.select { |name| name.end_with?(suffix) && name != suffix }.map { |name| name.delete_suffix(suffix) }
       end
 
-      # `self.model_class = ::Account` names the model; otherwise the resource's own name.
+      # `self.model_class = ::Account` names the model; otherwise the resource's
+      # own name, less the Resource suffix Avo 2 (top-level UserResource) drops.
       def avo(classes, calls)
         resource = classes.first or return []
         override = calls.find { |c| c[:name] == "model_class=" }&.dig(:arguments)&.first
-        model = override.is_a?(String) ? override.delete_prefix("::") : resource[:name].delete_prefix("Avo::Resources::")
-        [ [ "Avo", model, [] ] ]
+        name = resource[:name]
+        model = if override.is_a?(String) then override.delete_prefix("::")
+        elsif name.start_with?("Avo::Resources::") then name.demodulize
+        else name.demodulize.delete_suffix("Resource")
+        end
+        model.empty? ? [] : [ [ "Avo", model, [] ] ]
       end
       private_class_method :resources, :registered, :trestle, :named, :avo
     end

@@ -40,6 +40,7 @@ RSpec.describe RailsAiContext::Introspectors::AdminResources do
         self.model_class = ::Account
       end
     RUBY
+    write("app/avo/resources/team_resource.rb", "class TeamResource < Avo::BaseResource\nend\n")
     write("app/madmin/resources/post_resource.rb", "class PostResource < Madmin::Resource\n  attribute :id\nend\n")
     write("app/admin/comments_admin.rb", "Trestle.resource(:comments) do\nend\n")
     write("app/admin/people_admin.rb", "Trestle.resource(:people, model: Person) do\nend\n")
@@ -51,6 +52,7 @@ RSpec.describe RailsAiContext::Introspectors::AdminResources do
       [ "Administrate", "User", "app/dashboards/user_dashboard.rb", [] ],
       [ "Avo", "User", "app/avo/resources/user.rb", [] ],
       [ "Avo", "Account", "app/avo/resources/member.rb", [] ],
+      [ "Avo", "Team", "app/avo/resources/team_resource.rb", [] ],
       [ "Madmin", "Post", "app/madmin/resources/post_resource.rb", [] ],
       [ "Trestle", "Comment", "app/admin/comments_admin.rb", [] ],
       [ "Trestle", "Person", "app/admin/people_admin.rb", [] ]
