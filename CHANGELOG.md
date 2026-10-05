@@ -110,8 +110,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Canvas's `Role::AssociationHelper` lives in role.rb, and its `included`
   hook adds `before_save :resolve_cross_account_role` to Enrollment and its
   subclasses, AccountUser and RoleOverride; the static tier called the
-  module unread and missed the callback. Every tool that looks a concern up
-  by name finds it there, and reads that module alone, not the outer class.
+  module unread and missed the callback. `rails_get_callbacks`,
+  `rails_get_model_details` and the controller filters and actions find it
+  there and read that module, not the outer class.
 - **`rails_get_callbacks` lists models of one callback count by name**, so a
   model gaining a callback no longer moves the sections around it.
 - **A model macro written over `*args` reads each call's own arguments.**

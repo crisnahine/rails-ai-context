@@ -541,7 +541,6 @@ module RailsAiContext
         @seen = Set.new
         @collected = Hash.new { |hash, key| hash[key] = [] }
         @unresolved = []
-        # Written at the top level, so each name is the constant it resolves to.
         @hidden = []
         @included_calls = {}
         @block_sites = {}
@@ -691,16 +690,6 @@ module RailsAiContext
           declared = path && Introspectors::DeclaredConstant.named(File.read(path), candidate)
           [ candidates.include?(declared) ? declared : candidate, path ] if path
         end
-      end
-
-      # The first candidate Ruby would find, a base module or a file.
-      def named(name, within)
-        found = ConcernPaths.find_named(@root, name, within: within, dirs: @dirs)
-        candidates = ConcernPaths.candidate_names(name, within)
-        extra = candidates.find { |candidate| @paths.key?(candidate) }
-        return found unless extra && (found.nil? || candidates.index(extra) <= candidates.index(found.first))
-
-        [ extra, @paths[extra] ]
       end
 
       # `Outer::Inner` with no file of its own, from Outer's file, which Zeitwerk loads it with.
