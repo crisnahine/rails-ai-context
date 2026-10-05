@@ -247,14 +247,26 @@ module RailsAiContext
                   add_foreign_key: :remove_foreign_key }.freeze
 
       # Migration#revert runs its block's statements inverted and last first.
-      def invert_reverts(entries, ranges)
+      # CommandRecorder#revert flips reverting, so a revert inside one runs forward.
+      def invert_reverts(entries, ranges, reverting = false)
         outermost = ranges.reject { |range| ranges.any? { |other| other != range && other.cover?(range.first) && other.cover?(range.last) } }
-        outermost.reduce(entries) do |list, range|
-          first = list.index { |e| range.cover?(e[:location]) } or next list
-          last = list.rindex { |e| range.cover?(e[:location]) }
-          groups = list[first..last].slice_before { |e| e.key?(:action) && !e[:block] }
-          list[0...first] + groups.reverse_each.flat_map { |group| inverted(group) } + list[(last + 1)..]
+        units = []
+        entries.each do |entry|
+          range = outermost.find { |r| r.cover?(entry[:location]) }
+          if range ? units.last&.first == range : (reverting && units.last && !units.last.first && !(entry.key?(:action) && !entry[:block]))
+            units.last.last << entry
+          else
+            units << [ range, [ entry ] ]
+          end
         end
+        units = units.map do |range, group|
+          if range
+            invert_reverts(group, ranges.select { |o| o != range && range.cover?(o.first) && range.cover?(o.last) }, !reverting)
+          else
+            reverting ? inverted(group) : group
+          end
+        end
+        (reverting ? units.reverse : units).flatten(1)
       end
 
       # A statement with its block, inverted; one CommandRecorder cannot invert is not replayed.

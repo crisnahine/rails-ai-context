@@ -515,6 +515,38 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(tables["posts"][:columns].map { |c| c[:name] }).to eq(%w[id title slug draft])
       expect(tables["posts"][:indexes]).to be_empty
     end
+
+    it "runs a revert nested in a revert forward, as Rails flips it back" do
+      tables = replay([ create_posts, <<~RUBY ])
+        class Twice < ActiveRecord::Migration[8.1]
+          def change
+            revert do
+              add_column :posts, :body, :text
+              revert do
+                add_column :posts, :summary, :text
+                add_column :posts, :lede, :text
+              end
+            end
+          end
+        end
+      RUBY
+
+      expect(tables["posts"][:columns].map { |c| c[:name] }).to eq(%w[id title slug summary lede])
+    end
+
+    it "counts the class form it cannot see into as not replayed" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "20240101000000_create_posts.rb"), create_posts)
+        File.write(File.join(dir, "20240101000001_undo_posts.rb"), <<~RUBY)
+          class UndoPosts < ActiveRecord::Migration[8.1]
+            def change
+              revert CreatePosts
+            end
+          end
+        RUBY
+        expect(described_class.replayed(dir, pk_type: "bigint").counts.helper_calls).to eq(1)
+      end
+    end
   end
 
   # Canvas has a migration that calls `create_table table_name do |t|`, where

@@ -27,6 +27,9 @@ module RailsAiContext
           args = node.arguments&.arguments || []
           if %i[down revert].include?(node.name) && node.block
             @results << { kind: node.name, range: node.location.start_line..node.location.end_line }
+          elsif node.name == :revert && node.receiver.nil? && args.any?
+            # `revert SomeMigration` runs another file's statements inverted, which this file does not hold.
+            @results << { kind: :not_replayed, location: node.location.start_line }
           elsif TABLE_OPS[node.name] == :remove_reference && block_column?(node.receiver)
             # Table#remove_references drops each name it is given.
             args.reject { |arg| arg.is_a?(Prism::KeywordHashNode) }.each do |arg|
