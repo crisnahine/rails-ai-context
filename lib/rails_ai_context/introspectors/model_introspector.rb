@@ -52,7 +52,7 @@ module RailsAiContext
 
         unloadable_models.each { |class_name, details| result[class_name] ||= details }
 
-        result
+        tag_tenancy(result)
       end
 
       # Models the static scan finds, abstract bases left out. excluded_models is the app's
@@ -80,7 +80,7 @@ module RailsAiContext
         candidates = static_candidates
         sti_parents = candidates.keys.to_h { |name| [ name, sti_parent(name, candidates, []) ] }
         bases = declared_bases(candidates)
-        candidates.each_with_object({}) do |(class_name, candidate), result|
+        models = candidates.each_with_object({}) do |(class_name, candidate), result|
           # Hidden from the listing, kept in the walk: its children still
           # inherit its table and its declarations.
           next if config.excluded_models.include?(class_name)
@@ -123,9 +123,34 @@ module RailsAiContext
           # not have.
           result[class_name] = { error: e.message, file: candidate[:file], table_name: table }.compact
         end
+        tag_tenancy(models)
       end
 
       private
+
+      # Apartment keeps an excluded model, and an STI subclass sharing its table, in the
+      # shared schema; every other ActiveRecord model has a table in each tenant's schema.
+      def tag_tenancy(models)
+        config = ApartmentConfig.read(app.root) or return models
+        excluded = config[:excluded_models]
+        models.each do |name, data|
+          next if data[:error] || data[:mongoid]
+
+          scope = if excluded.nil? then "unknown"
+          elsif apartment_shared?(name, models, excluded) then "shared"
+          else "per_tenant"
+          end
+          data[:tenancy] = { gem: "apartment", scope: scope, declared_in: config[:file], excluded_models: config[:excluded_models_source] }.compact
+        end
+      end
+
+      def apartment_shared?(name, models, excluded, seen = [])
+        return true if excluded.include?(name)
+        return false if seen.include?(name)
+
+        parent = models.dig(name, :sti, :sti_parent)
+        parent ? apartment_shared?(parent, models, excluded, seen + [ name ]) : false
+      end
 
       # The same shape the booted tier reports under :sti, off the chain the
       # static tier already resolves to share the base's table. A model that

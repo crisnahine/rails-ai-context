@@ -543,6 +543,29 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    it "says which models Apartment keeps in the shared schema and which per tenant" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "config/initializers/apartment.rb" => "Apartment.configure do |config|\n  config.excluded_models = %w[Organization]\nend\n",
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/organization.rb" => "class Organization < ApplicationRecord\nend\n",
+          "app/models/partner.rb" => "class Partner < Organization\nend\n",
+          "app/models/ticket.rb" => "class Ticket < ApplicationRecord\nend\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        shared = { gem: "apartment", scope: "shared", declared_in: "config/initializers/apartment.rb" }
+
+        expect(models["Organization"][:tenancy]).to eq(shared)
+        expect(models["Partner"][:tenancy]).to eq(shared)
+        expect(models["Ticket"][:tenancy]).to eq(shared.merge(scope: "per_tenant"))
+      end
+    end
+
     describe "pluralize_table_names" do
       def tables_with(files)
         Dir.mktmpdir do |dir|

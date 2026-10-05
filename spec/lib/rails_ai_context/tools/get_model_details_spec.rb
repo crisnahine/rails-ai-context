@@ -338,6 +338,27 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  describe ".call in an Apartment app" do
+    let(:apartment_models) do
+      file = "config/initializers/apartment.rb"
+      {
+        "Organization" => { table_name: "organizations", tenancy: { gem: "apartment", scope: "shared", declared_in: file } },
+        "Ticket" => { table_name: "tickets", tenancy: { gem: "apartment", scope: "per_tenant", declared_in: file } },
+        "Plan" => { table_name: "plans", tenancy: { gem: "apartment", scope: "unknown", declared_in: file, excluded_models: "SHARED.map(&:name)" } }
+      }
+    end
+
+    before { allow(described_class).to receive(:cached_context).and_return({ models: apartment_models }) }
+
+    it "says which schema holds the model's table" do
+      text = ->(name) { described_class.call(model: name).content.first[:text] }
+
+      expect(text.("Organization")).to include("**Tenancy:** shared schema: Apartment's `excluded_models` lists it (`config/initializers/apartment.rb`)")
+      expect(text.("Ticket")).to include("**Tenancy:** one table in each tenant's schema: Apartment's `excluded_models` does not list it (`config/initializers/apartment.rb`)")
+      expect(text.("Plan")).to include("**Tenancy:** [INFERRED] Apartment computes `excluded_models` (`SHARED.map(&:name)` in `config/initializers/apartment.rb`), so whether this table is per tenant is not read")
+    end
+  end
+
   describe ".call with a Mongoid model" do
     let(:mongoid_models) do
       {

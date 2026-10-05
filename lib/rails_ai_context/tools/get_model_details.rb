@@ -139,6 +139,15 @@ module RailsAiContext
         "**STI:** #{place}#{", type column `#{sti[:type_column]}`" if sti[:type_column]}"
       end
 
+      private_class_method def self.tenancy_line(tenancy)
+        file = tenancy[:declared_in]
+        case tenancy[:scope]
+        when "shared" then "**Tenancy:** shared schema: Apartment's `excluded_models` lists it (`#{file}`)"
+        when "per_tenant" then "**Tenancy:** one table in each tenant's schema: Apartment's `excluded_models` does not list it (`#{file}`)"
+        else "**Tenancy:** [INFERRED] Apartment computes `excluded_models` (`#{tenancy[:excluded_models]}` in `#{file}`), so whether this table is per tenant is not read"
+        end
+      end
+
       private_class_method def self.unavailable_row(name, data)
         Serializers::SectionFacts.unread_row("- **#{name}**", data)
       end
@@ -158,6 +167,7 @@ module RailsAiContext
         if (database = data[:database])
           lines << "**Database:** `#{database[:connects_to]}`#{", inherited from `#{database[:declared_in]}`" if database[:declared_in]}"
         end
+        lines << tenancy_line(data[:tenancy]) if data[:tenancy].is_a?(Hash)
         lines << sti_line(data[:sti]) if data[:sti].is_a?(Hash) && (data[:sti][:sti_parent] || data[:sti][:sti_children])
         # A base class is not a concern, and the child may have no concerns at
         # all, so this stands outside that section.
