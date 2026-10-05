@@ -16,6 +16,13 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::I18nLoadPathListener do
     RUBY
   end
 
+  it "reads a load path replaced with =" do
+    expect(paths(<<~RUBY)).to eq(%w[config/locales/**/*.yml lib/locales/de.yml])
+      config.i18n.load_path = Dir[Rails.root.join("config/locales/**/*.yml")]
+      I18n.load_path = ["\#{Rails.root}/lib/locales/de.yml"]
+    RUBY
+  end
+
   it "leaves out other load paths and removals" do
     expect(paths(<<~RUBY)).to eq([])
       $LOAD_PATH << Rails.root.join("lib").to_s

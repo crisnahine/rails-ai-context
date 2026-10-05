@@ -240,6 +240,14 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
         expect(result[:locale_files]).to include(file: "pl.rb", key_count: 2, locales: %w[pl])
       end
 
+      it "marks a .rb locale file it cannot parse and carries on" do
+        result = static_result("en.yml" => "en:\n  hello: Hello\n", "pl.rb" => "{ pl: { hello: \"\xFF\" \n")
+        broken = result[:locale_files].find { |f| f[:file] == "pl.rb" }
+
+        expect(broken[:parse_error]).to be true
+        expect(result[:available_locales]).to eq(%w[en])
+      end
+
       it "leaves out a .yaml file under config/locales, which Rails' glob does not load" do
         result = static_result("en.yml" => "en:\n  hello: Hello\n", "extra.yaml" => "en:\n  extra_yaml_key: x\n")
 

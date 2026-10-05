@@ -7,13 +7,16 @@ module RailsAiContext
       #
       #   config.i18n.load_path += Dir[Rails.root.join("my/locales/*.{rb,yml}")] → "my/locales/*.{rb,yml}"
       #   I18n.load_path << "#{Rails.root}/lib/locales/de.yml"                   → "lib/locales/de.yml"
+      #   config.i18n.load_path = Dir[Rails.root.join("x/*.yml")]                → "x/*.yml"
       #
       # The path forms are the autoload listener's, plus the Dir[] / Dir.glob wrapper.
       class I18nLoadPathListener < AutoloadPathsListener
         def on_call_node_enter(node)
-          return unless APPENDING.include?(node.name) && load_path?(node.receiver)
-
-          Array(node.arguments&.arguments).each { |argument| collect_paths(argument) }
+          if node.name == :load_path= && i18n?(node.receiver)
+            collect_paths(node.arguments&.arguments&.first)
+          elsif APPENDING.include?(node.name) && load_path?(node.receiver)
+            Array(node.arguments&.arguments).each { |argument| collect_paths(argument) }
+          end
         end
 
         def on_call_operator_write_node_enter(node)
