@@ -1360,4 +1360,65 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       RailsAiContext.configuration.sensitive_patterns = original
     end
   end
+  describe "definitions written in every form Ruby allows" do
+    let(:files) do
+      {
+        "app/services/token_issuer.rb" => "class TokenIssuer\n  def call = sign(payload)\n\n  private def sign(data) = data.to_s\nend\n",
+        "app/services/stamp_service.rb" => "class StampService\n  def call = stamp_now(1)\n\n  def run\n    stamp_now(2)\n  end\n\n  def stamp_now(n) = n\nend\n",
+        "lib/billing/money.rb" => "module Billing\n  Money = Data.define(:amount, :currency)\nend\n\nclass Billing::Ledger\nend\n\nclass ::TopLevelThing\nend\n",
+        "app/models/widget.rb" => "class Widget < ApplicationRecord\n  def Widget.legacy_finder(id) = find(id)\n  ruby2_keywords def kw_pass(*args); end\nend\n"
+      }
+    end
+
+    [ true, false ].each do |rg|
+      context(rg ? "with ripgrep" : "with the Ruby fallback") do
+        before do
+          allow(RailsAiContext).to receive(:tier).and_return(:static)
+          skip "requires ripgrep" if rg && !described_class.send(:ripgrep_available?)
+          allow(described_class).to receive(:ripgrep_available?).and_return(false) unless rg
+        end
+
+        def text(**args)
+          described_class.call(**args).content.first[:text]
+        end
+
+        it "traces a private endless def and its endless caller" do
+          with_search_app(files) do
+            traced = text(pattern: "sign", match_type: "trace")
+
+            expect(traced).to include("**app/services/token_issuer.rb:4**")
+            expect(traced).to include("## Called from (1 site)")
+            expect(traced).to include("  2: def call = sign(payload)")
+            expect(traced).not_to include("  4: private def sign")
+          end
+        end
+
+        it "counts an endless body as a call site" do
+          with_search_app(files) do
+            traced = text(pattern: "stamp_now", match_type: "trace")
+
+            expect(traced).to include("## Called from (2 sites)")
+            expect(traced).to include("  2: def call = stamp_now(1)", "  5: stamp_now(2)")
+          end
+        end
+
+        it "finds a def behind a modifier or a constant receiver" do
+          with_search_app(files) do
+            expect(text(pattern: "sign", match_type: "definition")).to include("app/services/token_issuer.rb:4")
+            expect(text(pattern: "legacy_finder", match_type: "definition")).to include("app/models/widget.rb:2")
+            expect(text(pattern: "kw_pass", match_type: "definition")).to include("app/models/widget.rb:3")
+          end
+        end
+
+        it "finds a compact class name, a rooted one and a Data.define constant" do
+          with_search_app(files) do
+            expect(text(pattern: "Ledger", match_type: "class")).to include("lib/billing/money.rb:5")
+            expect(text(pattern: "TopLevelThing", match_type: "class")).to include("lib/billing/money.rb:8")
+            expect(text(pattern: "Money", match_type: "class")).to include("lib/billing/money.rb:2")
+            expect(text(pattern: "Money", match_type: "class", exact_match: true)).to include("lib/billing/money.rb:2")
+          end
+        end
+      end
+    end
+  end
 end

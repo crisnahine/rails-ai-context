@@ -28,6 +28,12 @@ module RailsAiContext
       JS_COMMENT = Regexp.union(JS_COMMENT_OPEN, /\A\s*\*\s/)
       CSS_NOT_A_CALL = %r{\A\s*(?:/\*|\*\s|#)}
       STYLESHEET_LINE = Regexp.union(CSS_NOT_A_CALL, %r{\A\s*//})
+      # A def behind a modifier (`private def x`, `ruby2_keywords def x`) and
+      # one on a receiver (`def self.x`, `def Widget.x`) are definitions too.
+      DEF_HEAD = "^\\s*(?:[a-z_]\\w*\\s+)*def\\s+(?:(?:self|[A-Z]\\w*(?:::[A-Z]\\w*)*)\\.)?"
+      DEF_LINE = /\A\s*(?:[a-z_]\w*\s+)*def\s/
+      # Constant forms that define a class without the keyword.
+      CLASS_BUILDERS = "(?:::)?(?:Data\\.define|Struct\\.new|Class\\.new|Module\\.new)\\b"
       NOT_A_CALL_LINE = {
         ".erb" => Regexp.union(HASH_COMMENT, JS_COMMENT_OPEN),
         ".haml" => %r{\A\s*(?:-#|/)},
@@ -128,12 +134,13 @@ module RailsAiContext
           cleaned = pattern.sub(/\A\s*def\s+/, "")
           escaped = literal(cleaned)
           # `def\s+` already anchors the left edge, so only a trailing boundary.
-          exact_match ? "^\\s*def\\s+(self\\.)?#{escaped}#{RailsAiContext::MethodName.definition_end(cleaned)}" : "^\\s*def\\s+(self\\.)?#{escaped}"
+          exact_match ? "#{DEF_HEAD}#{escaped}#{RailsAiContext::MethodName.definition_end(cleaned)}" : "#{DEF_HEAD}#{escaped}"
         when "class"
           cleaned = pattern.sub(/\A\s*(class|module)\s+/, "")
-          escaped = literal(cleaned)
+          name = "(?:\\w+::)*\\w*#{literal(cleaned)}"
           # `\w*` stays unbounded so a CamelCase prefix still resolves.
-          exact_match ? "^\\s*(class|module)\\s+\\w*#{escaped}#{trailing_boundary(cleaned)}" : "^\\s*(class|module)\\s+\\w*#{escaped}"
+          tail = exact_match ? trailing_boundary(cleaned) : "\\w*"
+          "^\\s*(?:(?:class|module)\\s+(?:::)?#{name}#{exact_match ? tail : ""}|#{name}#{tail}\\s*=\\s*#{CLASS_BUILDERS})"
         when "call"
           exact_match ? method_call_pattern(pattern) : pattern
         else
@@ -190,7 +197,8 @@ module RailsAiContext
 
         # A definition or comment line stays as context, never as a call site.
         if match_type == "call"
-          all_results.map! { |r| match_row?(r) && not_a_call_site?(r) ? r.merge(match: false) : r }
+          call_regex = build_regexp(search_pattern, timeout: 1)
+          all_results.map! { |r| match_row?(r) && not_a_call_site?(r, call_regex) ? r.merge(match: false) : r }
         end
         all_results = confirmed_rows(all_results, root, build_regexp(search_pattern, timeout: 1), context_lines)
 
@@ -501,16 +509,35 @@ module RailsAiContext
         row[:match] != false
       end
 
-      # A definition or a comment line names a method without calling it.
-      private_class_method def self.not_a_call_site?(row)
+      # A definition or a comment line names a method without calling it,
+      # except in the body of an endless def (`def call = sign(payload)`).
+      private_class_method def self.not_a_call_site?(row, call_regex)
         content = row[:content].to_s
-        return true if content.match?(/\A\s*def\s/)
+        return !endless_body(content).match?(call_regex) if content.match?(DEF_LINE)
 
         ext = File.extname(row[:file].to_s)
         # A live ERB tag runs whatever comment surrounds it.
         return false if ext == ".erb" && content.match?(/<%(?!#)/)
 
         content.match?(NOT_A_CALL_LINE.fetch(ext, HASH_COMMENT))
+      end
+
+      # The expression after `=` in a one-line endless def, "" for any other def line.
+      private_class_method def self.endless_body(line)
+        node = first_def(RailsAiContext::AstCache.parse_string(line.strip).value)
+        node&.equal_loc && node.body ? node.body.slice : ""
+      rescue StandardError, Regexp::TimeoutError
+        ""
+      end
+
+      private_class_method def self.first_def(node)
+        return node if node.is_a?(Prism::DefNode)
+
+        node.compact_child_nodes.each do |child|
+          found = first_def(child)
+          return found if found
+        end
+        nil
       end
 
       private_class_method def self.match_count(rows)
@@ -566,7 +593,7 @@ module RailsAiContext
         lines = [ "# Trace: `#{cleaned}`", "" ]
 
         # 1. Find the definition
-        def_pattern = "^\\s*def\\s+(self\\.)?#{literal(cleaned)}#{RailsAiContext::MethodName.definition_end(cleaned)}"
+        def_pattern = "#{DEF_HEAD}#{literal(cleaned)}#{RailsAiContext::MethodName.definition_end(cleaned)}"
         def_results, = quick_search(def_pattern, search_path, root, 10, exclude_tests)
 
         if def_results.any?
@@ -615,7 +642,8 @@ module RailsAiContext
         call_pattern = method_call_pattern(cleaned)
         call_rows, = quick_search(call_pattern, search_path, root, max_results_cap + 1, exclude_tests)
         call_results, call_truncated = cap_results(call_rows)
-        callers = call_results.reject { |r| not_a_call_site?(r) }
+        call_regex = build_regexp(call_pattern, timeout: 1)
+        callers = call_results.reject { |r| not_a_call_site?(r, call_regex) }
 
         # Exclude the definition file+line to avoid self-reference
         def_locations = def_results.map { |r| "#{r[:file]}:#{r[:line_number]}" }.to_set
