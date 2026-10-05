@@ -150,6 +150,15 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       expect(text).to include("# TODO: sign in a user built from this app's own test data")
     end
 
+    it "does not read the app's own sign_in_as as Devise's sign_in" do
+      File.write(File.join(@root, "test", "controllers", "posts_controller_test.rb"),
+                 "class PostsControllerTest < ActionDispatch::IntegrationTest\n" \
+                 "  include Devise::Test::IntegrationHelpers\n" \
+                 "  test \"x\" do\n    sign_in_as users(:admin)\n  end\nend\n")
+
+      expect(call_with(minitest_data)).not_to include("sign_in users(")
+    end
+
     it "does not hand fixture syntax to an app with no fixtures" do
       text = call_with(minitest_data.merge(fixtures: nil, fixture_names: nil))
 

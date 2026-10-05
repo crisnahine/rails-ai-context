@@ -379,7 +379,7 @@ module RailsAiContext
             safe_glob(test_dir, "**/*_test.rb", real_root).first(5).each do |path|
               content = RailsAiContext::SafeFile.read(path) or next
               has_devise = true if content.include?("Devise::Test")
-              has_sign_in = true if content.include?("sign_in")
+              has_sign_in = true if content.match?(/\bsign_in\b/)
             end
           end
 

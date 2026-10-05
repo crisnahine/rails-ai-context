@@ -205,6 +205,50 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
       expect(text).to include("Detected from: PostsController")
     end
 
+    it "signs in with the helper the tests call, not Devise's sign_in" do
+      File.write(File.join(tests_dir, "sessions_controller_test.rb"), <<~RUBY)
+        require "test_helper"
+
+        class SessionsControllerTest < ActionDispatch::IntegrationTest
+          setup { @user = User.take }
+
+          test "destroy" do
+            sign_in_as(User.take)
+
+            delete session_path
+
+            assert_redirected_to new_session_path
+          end
+
+          test "new" do
+            get new_session_path
+            assert_response :success
+          end
+        end
+      RUBY
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("  test \"[action] renders page\" do\n    sign_in_as(User.take)\n    get [path]")
+      expect(text).not_to include("sign_in users(:one)")
+    end
+
+    it "reads no sign-in from a test name that mentions one" do
+      File.write(File.join(tests_dir, "pages_controller_test.rb"), <<~RUBY)
+        class PagesControllerTest < ActionDispatch::IntegrationTest
+          test "shows sign_in link" do
+            get root_path
+            assert_response :success
+          end
+        end
+      RUBY
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("### Controller Test Pattern")
+      expect(text).not_to include("    sign_in")
+    end
+
     it "renders no skeleton when no test asserts a response" do
       File.write(File.join(tests_dir, "quiet_controller_test.rb"), <<~RUBY)
         require "test_helper"
