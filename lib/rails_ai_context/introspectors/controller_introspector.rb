@@ -840,13 +840,8 @@ module RailsAiContext
 
       # --- AST helpers ---
 
-      # The declaration naming this file's superclass. A file may declare more
-      # than one class, so the one matching the resolved constant answers
-      # first; anything else in the file only answers when it does not.
       def parent_declaration(source, class_name)
-        declarations = DeclaredConstant.declarations(source)
-        named = declarations.find { |d| d.name == class_name }
-        named&.superclass ? named : declarations.find(&:superclass)
+        DeclaredConstant.parent_declaration(source, class_name)
       end
 
       # Only a nesting the class name does not already imply is carried: the

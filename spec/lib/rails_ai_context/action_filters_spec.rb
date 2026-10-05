@@ -1031,7 +1031,7 @@ RSpec.describe RailsAiContext::ActionFilters do
                      { kind: "before", name: "set_request_locale" },
                      { kind: "before", name: "a_one", declared: true } ]
       ctx = { controllers: { controllers: {
-        "ApplicationController" => { filters: [ reflection[1].merge(declared: true) ] },
+        "ApplicationController" => { filters: [ reflection[1].merge(declared: true) ], parent_class: "ActionController::Base" },
         "KitchensController" => { parent_class: "ApplicationController", filters: reflection }
       } } }
 
@@ -1041,6 +1041,60 @@ RSpec.describe RailsAiContext::ActionFilters do
       expect(result[:chain].map { |f| f[:name] }).to eq(%w[set_paper_trail_enabled_for_controller set_request_locale a_one])
       expect(result[:own].map { |f| f[:name] }).to eq(%w[a_one])
       expect(paper_trail).to include(name: "set_paper_trail_enabled_for_controller", provenance: "not declared in the controller chain")
+    end
+
+    # An ancestor that could not be read ends the walk early, so a name no read
+    # class declares may still be that ancestor's own.
+    it "labels nothing as undeclared when an ancestor could not be read" do
+      ctx = { controllers: { controllers: {
+        "Admin::BaseController" => { error: "boom" },
+        "Admin::UsersController" => { parent_class: "Admin::BaseController",
+                                      filters: [ { kind: "before", name: "require_admin" },
+                                                 { kind: "before", name: "set_user", declared: true } ] }
+      } } }
+
+      result = described_class.for_controller(ctx, "Admin::UsersController")
+
+      expect(result[:chain].map { |f| f[:name] }).to eq(%w[require_admin set_user])
+      expect(result[:chain]).to all(satisfy { |f| !f.key?(:provenance) })
+    end
+
+    # The booted listing leaves ApplicationController out, so the walk reads its
+    # file; the superclass that file names carries the walk on to the framework.
+    it "labels a gem callback when the walk reads the base from its file" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"), <<~RUBY)
+          class ApplicationController < ActionController::Base
+            before_action :set_request_locale
+          end
+        RUBY
+        ctx = { controllers: { controllers: {
+          "KitchensController" => { parent_class: "ApplicationController",
+                                    filters: [ { kind: "before", name: "set_paper_trail_enabled_for_controller" },
+                                               { kind: "before", name: "set_request_locale" },
+                                               { kind: "before", name: "a_one", declared: true } ] }
+        } } }
+
+        chain = described_class.for_controller(ctx, "KitchensController", root: dir)[:chain]
+
+        expect(chain.first).to include(name: "set_paper_trail_enabled_for_controller",
+                                       provenance: "not declared in the controller chain")
+      end
+    end
+
+    it "labels nothing as undeclared when the walk stops short of ActionController" do
+      ctx = { controllers: { controllers: {
+        "ApplicationController" => { filters: [ { kind: "before", name: "set_locale", declared: true } ] },
+        "UsersController" => { parent_class: "ApplicationController",
+                               filters: [ { kind: "before", name: "set_locale" },
+                                          { kind: "before", name: "require_admin" },
+                                          { kind: "before", name: "set_user", declared: true } ] }
+      } } }
+
+      result = described_class.for_controller(ctx, "UsersController")
+
+      expect(result[:chain]).to all(satisfy { |f| !f.key?(:provenance) })
     end
 
     it "keeps the concern an ancestor's filter came from on the booted tier's copy" do

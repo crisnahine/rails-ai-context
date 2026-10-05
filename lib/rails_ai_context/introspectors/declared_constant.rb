@@ -136,6 +136,15 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "DeclaredConstant")
       end
 
+      # The declaration naming this file's superclass. A file may declare more
+      # than one class, so the one matching class_name answers first; anything
+      # else in the file only answers when it does not.
+      def parent_declaration(source, class_name)
+        found = declarations(source)
+        named = found.find { |d| d.name == class_name }
+        named&.superclass ? named : found.find(&:superclass)
+      end
+
       # Every class the source declares, with the superclass it names -
       # nil for a class with no superclass or a computed one. A module
       # declares no class and so appears here not at all.

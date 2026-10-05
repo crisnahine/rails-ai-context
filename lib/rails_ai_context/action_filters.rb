@@ -219,7 +219,10 @@ module RailsAiContext
       evidence = {}
       depth = 0
       dropped = skipped.map(&:to_s).to_set
+      # Whole only when every class up to ActionController was read: a walk that
+      # stops early may have missed the class that declares a name.
       whole = true
+      reached = false
       name = Introspectors::ActionResolver.resolve_entry_name(controllers, parent_class, within)
 
       while name && !seen.include?(name)
@@ -227,12 +230,18 @@ module RailsAiContext
         depth += 1
         info = controllers[name]
         source = info.is_a?(Hash) ? nil : base_controller_source(name, root)
-        info ||= { filters: base_filters(source, name, root) } if source
+        if source
+          info ||= { filters: base_filters(source, name, root),
+                     parent_class: Introspectors::DeclaredConstant.parent_declaration(source, name.to_s)&.superclass }
+        end
         unless info.is_a?(Hash)
-          whole &&= name.to_s.delete_prefix("::").start_with?("ActionController::")
+          framework = name.to_s.delete_prefix("::").start_with?("ActionController::")
+          reached ||= framework
+          whole &&= framework
           name = gem_controller_base(name, root)
           next
         end
+        whole = false if info[:error]
 
         # The class that skips a filter must not contribute it either: in the
         # booted tier its own list is the reflection list, which carries every
@@ -260,7 +269,7 @@ module RailsAiContext
         name = Introspectors::ActionResolver.resolve_entry_name(controllers, info[:parent_class], name)
       end
 
-      [ run_order(found, attributed, positions, evidence), dropped, conditions, declares, whole ]
+      [ run_order(found, attributed, positions, evidence), dropped, conditions, declares, whole && reached ]
     end
 
     # The closest ancestor carrying a filter keeps its constraints, but a
