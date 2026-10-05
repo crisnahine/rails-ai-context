@@ -16,8 +16,10 @@ module RailsAiContext
 
         ATTRIBUTE_MACROS = %i[
           encrypts normalizes has_one_attached has_many_attached
-          has_rich_text generates_token_for serialize store store_accessor
+          has_rich_text generates_token_for serialize
         ].to_set.freeze
+
+        STORE_MACROS = %i[store store_accessor].to_set.freeze
 
         BROADCAST_MACROS = %i[
           broadcasts broadcasts_to broadcasts_refreshes_to
@@ -34,6 +36,8 @@ module RailsAiContext
             }
           elsif ATTRIBUTE_MACROS.include?(node.name)
             extract_attribute_macro(node)
+          elsif STORE_MACROS.include?(node.name)
+            extract_store(node)
           elsif BROADCAST_MACROS.include?(node.name)
             extract_broadcast_macro(node)
           elsif node.name == :delegate
@@ -62,6 +66,27 @@ module RailsAiContext
               confidence: confidence_for(node)
             }
           end
+        end
+
+        # store :col, accessors: [...] and store_accessor :col, *keys both name
+        # the column first; the keys follow it, positionally or as accessors:.
+        def extract_store(node)
+          args = node.arguments&.arguments || []
+          column = args.first && literal_string(args.first)
+          return unless column
+
+          keys = args.drop(1).reject { |a| a.is_a?(Prism::KeywordHashNode) }.flat_map { |a| literal_strings(a) }
+          keys_node = extract_keyword_nodes(node)[:accessors]
+          keys += literal_strings(keys_node) if keys_node
+
+          @results << {
+            macro:      node.name,
+            attribute:  column,
+            keys:       keys,
+            options:    extract_keyword_options(node).slice(:prefix, :suffix),
+            location:   node.location.start_line,
+            confidence: confidence_for(node)
+          }
         end
 
         def extract_broadcast_macro(node)

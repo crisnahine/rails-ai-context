@@ -221,4 +221,20 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     expect(text).to include("- delegate :size to: :owner → [INFERRED] (the prefix is computed)\n")
     expect(text).not_to include("_lost")
   end
+
+  it "groups store keys under their column with the accessor names Rails defines" do
+    text = details_for("User", "user.rb" => <<~RUBY)
+      class User < ApplicationRecord
+        store :settings, accessors: [:theme, :locale], coder: JSON
+        store_accessor :preferences, :color, :font, prefix: :pref
+        store_accessor :preferences, :size, suffix: true
+        store_accessor :meta, [:a], prefix: true
+        store :blob
+        store_accessor :odd, :x, prefix: compute_prefix
+      end
+    RUBY
+
+    expect(text).to include("- `store` :settings (theme, locale), :preferences (pref_color, pref_font, size_preferences), " \
+                            ":meta (meta_a), :blob, :odd ([INFERRED]: the prefix or suffix is computed)\n")
+  end
 end

@@ -1098,10 +1098,10 @@ module RailsAiContext
         has_many_attached: :has_many_attached,
         has_rich_text: :has_rich_text,
         generates_token_for: :generates_token_for,
-        serialize: :serialize,
-        store: :store,
-        store_accessor: :store
+        serialize: :serialize
       }.freeze
+
+      STORE_MACROS = %i[store store_accessor].to_set.freeze
 
       BROADCAST_MACROS = %i[broadcasts broadcasts_to broadcasts_refreshes_to].to_set.freeze
 
@@ -1114,6 +1114,8 @@ module RailsAiContext
             macros[:has_secure_password] = true
           elsif (key = ATTRIBUTE_MACRO_MAP[macro])
             (macros[key] ||= []) << m[:attribute]
+          elsif STORE_MACROS.include?(macro)
+            add_store_accessors(macros, m)
           elsif macro == :delegate
             (macros[:delegations] ||= []) << delegation_entry(m)
           elsif macro == :delegate_missing_to
@@ -1134,6 +1136,29 @@ module RailsAiContext
         macros[:constants] = constants if constants&.any?
 
         macros.reject { |_, v| v.is_a?(Array) && v.empty? }
+      end
+
+      # Rails names a store accessor "#{prefix}_#{key}_#{suffix}", where true
+      # stands for the column name (ActiveRecord::Store.store_accessor).
+      def add_store_accessors(macros, macro)
+        column = macro[:attribute]
+        (macros[:store] ||= []) << column unless macros[:store]&.include?(column)
+        keys = macro[:keys] || []
+        return if keys.empty?
+
+        options = macro[:options] || {}
+        accessors = (macros[:store_accessors] ||= {})[column] ||= []
+        affixes = options.values_at(:prefix, :suffix)
+        if affixes.include?(RailsAiContext::Confidence::INFERRED)
+          accessors << RailsAiContext::Confidence::INFERRED unless accessors.include?(RailsAiContext::Confidence::INFERRED)
+          return
+        end
+
+        prefix, suffix = affixes.map { |affix| affix == true ? column : (affix.is_a?(Symbol) || affix.is_a?(String) ? affix : nil) }
+        keys.each do |key|
+          name = [ prefix, key, suffix ].compact.join("_")
+          accessors << name unless accessors.include?(name)
+        end
       end
 
       # ActiveSupport names a prefixed delegate "#{prefix == true ? to : prefix}_#{method}".

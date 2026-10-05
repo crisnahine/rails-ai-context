@@ -348,7 +348,7 @@ module RailsAiContext
         macro_lines << "- `normalizes` #{data[:normalizes].map { |f| ":#{f}" }.join(', ')}" if data[:normalizes]&.any?
         macro_lines << "- `generates_token_for` #{data[:generates_token_for].map { |f| ":#{f}" }.join(', ')}" if data[:generates_token_for]&.any?
         macro_lines << "- `serialize` #{data[:serialize].map { |f| ":#{f}" }.join(', ')}" if data[:serialize]&.any?
-        macro_lines << "- `store` #{data[:store].map { |f| ":#{f}" }.join(', ')}" if data[:store]&.any?
+        macro_lines << "- `store` #{data[:store].map { |f| store_column_text(f, data[:store_accessors]) }.join(', ')}" if data[:store]&.any?
         macro_lines << "- `broadcasts` #{data[:broadcasts].join(', ')}" if data[:broadcasts]&.any?
         if data[:has_one_attached]&.any?
           macro_lines << "- `has_one_attached` #{data[:has_one_attached].map { |f| ":#{f}" }.join(', ')}"
@@ -534,6 +534,15 @@ module RailsAiContext
         suffix = "_#{suffix == true ? attr : suffix}" if suffix
         methods = labels.map { |label| "#{prefix}#{label.to_s.gsub(/[\W&&[:ascii:]]+/, '_')}#{suffix}?" }
         "#{text} methods: #{methods.join(', ')}"
+      end
+
+      private_class_method def self.store_column_text(column, accessors)
+        names = Array(accessors&.dig(column))
+        return ":#{column}" if names.empty?
+
+        inferred = RailsAiContext::Confidence::INFERRED
+        names = names.map { |n| n == inferred ? "#{inferred}: the prefix or suffix is computed" : n }
+        ":#{column} (#{names.join(', ')})"
       end
 
       private_class_method def self.attribute_api_text(attribute)
