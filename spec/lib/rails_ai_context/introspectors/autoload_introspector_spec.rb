@@ -173,11 +173,60 @@ RSpec.describe RailsAiContext::Introspectors::AutoloadIntrospector do
       let(:introspector) { described_class.new(double(root: Rails.root, config: config)) }
 
       it "reports each autoload path once" do
-        expect(result[:autoload_paths]).to eq([ "lib" ])
+        expect(result[:autoload_paths]).to eq([ "lib", "app/services" ])
       end
 
       it "reports each eager-load path once, in declaration order" do
         expect(result[:eager_load_paths]).to eq([ "lib", "app/services" ])
+      end
+    end
+
+    # config.autoload_paths holds only hand-added entries; Rails adds the
+    # app/* roots from config.paths.
+    it "lists the app/* directories Rails autoloads from" do
+      expect(result[:autoload_paths]).to include("app/models", "app/controllers")
+      expect(result[:eager_load_paths]).to include("app/models")
+    end
+
+    context "when a path is added as autoload-once through config.paths" do
+      let(:config) do
+        double(
+          all_autoload_paths: [ Rails.root.join("lib").to_s ],
+          all_autoload_once_paths: [ Rails.root.join("app/middleware").to_s ],
+          all_eager_load_paths: [ Rails.root.join("app/models").to_s, Rails.root.join("app/middleware").to_s ],
+          eager_load: false
+        )
+      end
+
+      let(:introspector) { described_class.new(double(root: Rails.root, config: config)) }
+
+      it "reports it once, as autoload-once and not under the main autoload paths" do
+        expect(result[:autoload_once_paths]).to eq([ "app/middleware" ])
+        expect(result[:autoload_paths]).to eq([ "lib", "app/models" ])
+        expect(result[:eager_load_paths]).to eq([ "app/models", "app/middleware" ])
+      end
+    end
+
+    context "when a directory is kept out of eager loading" do
+      let(:dir) { Rails.root.join("tmp", "autoload_exclusion_spec", "app_lib").to_s }
+      let(:loader) do
+        Zeitwerk::Loader.new.tap do |l|
+          l.push_dir(dir)
+          l.do_not_eager_load(dir)
+        end
+      end
+
+      before do
+        FileUtils.mkdir_p(dir)
+        allow(Rails).to receive(:autoloaders).and_return(double("autoloaders", main: loader, once: nil))
+      end
+
+      after { FileUtils.rm_rf(File.dirname(dir)) }
+
+      it "names it on the loader" do
+        main = result[:autoloaders].find { |l| l[:name] == "main" }
+
+        expect(main[:not_eager_loaded]).to eq([ "tmp/autoload_exclusion_spec/app_lib" ])
       end
     end
   end
