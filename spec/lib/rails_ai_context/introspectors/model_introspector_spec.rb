@@ -5671,6 +5671,28 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  describe "a database a base class connects to" do
+    it "names it on the model that inherits it, with the class that declares it" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "analytics_record.rb"), <<~RUBY)
+          class AnalyticsRecord < ApplicationRecord
+            self.abstract_class = true
+            connects_to database: { writing: :analytics, reading: :analytics }
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "page_view.rb"), "class PageView < AnalyticsRecord\nend\n")
+        File.write(File.join(dir, "app", "models", "post.rb"), "class Post < ApplicationRecord\nend\n")
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["PageView"][:database]).to eq(connects_to: "connects_to database: { writing: :analytics, reading: :analytics }",
+                                                    declared_in: "AnalyticsRecord")
+        expect(models["Post"]).not_to have_key(:database)
+      end
+    end
+  end
+
   describe "STI on the booted tier" do
     it "reads the type column the model names, not a fixed one" do
       parent = Class.new { def self.name = "Vehicle" }

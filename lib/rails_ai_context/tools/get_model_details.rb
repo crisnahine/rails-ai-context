@@ -155,6 +155,9 @@ module RailsAiContext
         end
         lines = [ "# #{name}#{header_tag}", "" ]
         lines << "**Table:** `#{data[:table_name]}`" if data[:table_name]
+        if (database = data[:database])
+          lines << "**Database:** `#{database[:connects_to]}`#{", inherited from `#{database[:declared_in]}`" if database[:declared_in]}"
+        end
         lines << sti_line(data[:sti]) if data[:sti].is_a?(Hash) && (data[:sti][:sti_parent] || data[:sti][:sti_children])
         # A base class is not a concern, and the child may have no concerns at
         # all, so this stands outside that section.

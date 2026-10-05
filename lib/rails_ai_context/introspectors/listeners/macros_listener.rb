@@ -51,6 +51,8 @@ module RailsAiContext
             open_aasm(node)
           elsif GEM_MACROS.include?(node.name)
             record_gem_macro(node)
+          elsif node.name == :connects_to
+            @results << { macro: :connects_to, text: one_line_source(node), location: node.location.start_line, confidence: confidence_for(node) }
           elsif SIMPLE_MACROS.include?(node.name)
             # Rails defaults the attribute to :password.
             @results << {

@@ -1190,6 +1190,8 @@ module RailsAiContext
           elsif macro == :model_setting
             # Bases arrive first, so the class's own assignment wins.
             (macros[:model_settings] ||= {})[m[:setting]] = m[:value]
+          elsif macro == :connects_to
+            macros[:database] = { connects_to: m[:text], declared_in: m[:declared_in] }.compact
           elsif macro == :gem_macro
             (macros[:gem_macros] ||= []) << m.slice(:text, :adds)
           elsif macro == :aasm
@@ -1828,7 +1830,9 @@ module RailsAiContext
             next
           end
 
-          data = merge_inherited(data, base.slice(*WALKED_KEYS))
+          # A connection is declared on an abstract base, so the child says which one.
+          macros = Array(base[:macros]).map { |m| m[:macro] == :connects_to ? m.merge(declared_in: name) : m }
+          data = merge_inherited(data, base.slice(*WALKED_KEYS).merge(macros: macros))
           # A base's concerns are the child's too: the child's record already
           # carries what they declared, and its callbacks credit them by name.
           data[:mixins] = Array(data[:mixins]) | Array(own[:mixins])

@@ -206,3 +206,17 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "option
     ])
   end
 end
+
+RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "connects_to" do
+  it "records the call as written" do
+    results = parse_and_dispatch(<<~RUBY)
+      class ShardRecord < ApplicationRecord
+        self.abstract_class = true
+        connects_to shards: {
+          shard_one: { writing: :shard_one }
+        }
+      end
+    RUBY
+    expect(results.map { |r| r.slice(:macro, :text) }).to eq([ { macro: :connects_to, text: "connects_to shards: { shard_one: { writing: :shard_one } }" } ])
+  end
+end

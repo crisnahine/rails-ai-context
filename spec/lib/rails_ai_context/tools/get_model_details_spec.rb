@@ -616,6 +616,21 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  describe "a model whose base connects to another database" do
+    it "names the connects_to call and the class that declares it" do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "PageView" => { table_name: "page_views",
+                                  database: { connects_to: "connects_to database: { writing: :analytics, reading: :analytics }",
+                                              declared_in: "AnalyticsRecord" } } }
+      )
+
+      text = described_class.call(model: "PageView").content.first[:text]
+
+      expect(text).to include("**Database:** `connects_to database: { writing: :analytics, reading: :analytics }`, inherited from `AnalyticsRecord`")
+    end
+  end
+
   describe "callbacks" do
     before do
       described_class.reset_cache!
