@@ -220,6 +220,7 @@ module RailsAiContext
             detail += (a[:optional] == true ? " [optional]" : " [optional: #{a[:optional]}]") if a[:optional]
             detail += " dependent: #{a[:dependent]}" if a[:dependent]
             detail += " (#{a[:declared_options].map { |k, v| "#{k}: #{v}" }.join(', ')})" if a[:declared_options]&.any?
+            detail += " (delegated types: #{a[:delegated_types].join(', ')})" if a[:delegated_types]&.any?
             detail += " extension methods: #{a[:extension_methods].join(', ')}" if a[:extension_methods]&.any?
             detail += " (fk: #{Introspectors::SchemaConventions.key_text(a[:foreign_key])})" if a[:foreign_key] && a[:type] == "belongs_to"
             detail += " [UNAVAILABLE: #{a[:unavailable]}]" if a[:unavailable]
@@ -346,6 +347,11 @@ module RailsAiContext
         # Macros - surface hidden introspector data
         macro_lines = []
         macro_lines << "- `has_secure_password`" if data[:has_secure_password]
+        macro_lines << "- `has_secure_token` #{data[:has_secure_token].map { |f| ":#{f}" }.join(', ')}" if data[:has_secure_token]&.any?
+        Array(data[:nested_attributes]).each do |nested|
+          options = nested[:options]&.any? ? " (#{nested[:options].map { |k, v| "#{k}: #{v}" }.join(', ')})" : ""
+          macro_lines << "- `accepts_nested_attributes_for` #{nested[:names].map { |n| ":#{n}" }.join(', ')}#{options}"
+        end
         macro_lines << "- `encrypts` #{data[:encrypts].map { |f| ":#{f}" }.join(', ')}" if data[:encrypts]&.any?
         macro_lines << "- `normalizes` #{data[:normalizes].map { |f| ":#{f}" }.join(', ')}" if data[:normalizes]&.any?
         macro_lines << "- `generates_token_for` #{data[:generates_token_for].map { |f| ":#{f}" }.join(', ')}" if data[:generates_token_for]&.any?

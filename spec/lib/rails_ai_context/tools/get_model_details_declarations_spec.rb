@@ -288,4 +288,23 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).to include("**Ignored columns:** [INFERRED] (computed in the source)")
     end
   end
+
+  it "reads delegated_type as the polymorphic belongs_to it declares, and lists has_secure_token and nested attributes" do
+    text = details_for("Note", "note.rb" => <<~RUBY)
+      class Note < ApplicationRecord
+        delegated_type :noteable, types: %w[Memo Reminder], dependent: :destroy
+        has_secure_token :share_token
+        has_secure_token
+        has_many :comments
+        has_many :tags
+        accepts_nested_attributes_for :comments, :tags, allow_destroy: true
+        delegated_type
+        accepts_nested_attributes_for
+      end
+    RUBY
+
+    expect(text).to include("- `belongs_to` **noteable** [polymorphic] dependent: destroy (delegated types: Memo, Reminder) (fk: noteable_id)\n")
+    expect(text).to include("- `has_secure_token` :share_token, :token\n")
+    expect(text).to include("- `accepts_nested_attributes_for` :comments, :tags (allow_destroy: true)\n")
+  end
 end

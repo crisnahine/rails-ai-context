@@ -842,7 +842,7 @@ module RailsAiContext
       def with_declared_options(detail, assoc, source)
         options = declared_association_options(detail[:type], source ? source[:options] : assoc.options)
         extensions = source&.dig(:extension_methods)
-        detail.merge({ declared_options: options, extension_methods: extensions }.compact)
+        detail.merge({ declared_options: options, extension_methods: extensions, delegated_types: source&.dig(:delegated_types) }.compact)
       end
 
       # One reflection that cannot resolve costs that reflection, not the
@@ -1100,7 +1100,8 @@ module RailsAiContext
         has_many_attached: :has_many_attached,
         has_rich_text: :has_rich_text,
         generates_token_for: :generates_token_for,
-        serialize: :serialize
+        serialize: :serialize,
+        has_secure_token: :has_secure_token
       }.freeze
 
       STORE_MACROS = %i[store store_accessor].to_set.freeze
@@ -1118,6 +1119,8 @@ module RailsAiContext
             (macros[key] ||= []) << m[:attribute]
           elsif STORE_MACROS.include?(macro)
             add_store_accessors(macros, m)
+          elsif macro == :accepts_nested_attributes_for
+            (macros[:nested_attributes] ||= []) << { names: m[:names], options: m[:options] }.compact
           elsif macro == :ignored_columns
             macros[:ignored_columns] = apply_ignored_columns(macros[:ignored_columns] || [], m)
           elsif macro == :delegate

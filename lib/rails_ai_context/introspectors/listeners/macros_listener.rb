@@ -49,6 +49,10 @@ module RailsAiContext
             extract_attribute_api(node)
           elsif node.name == :alias_attribute
             extract_alias_attribute(node)
+          elsif node.name == :has_secure_token
+            extract_secure_token(node)
+          elsif node.name == :accepts_nested_attributes_for
+            extract_nested_attributes(node)
           end
         end
 
@@ -105,6 +109,33 @@ module RailsAiContext
             attribute:  column,
             keys:       keys,
             options:    extract_keyword_options(node).slice(:prefix, :suffix),
+            location:   node.location.start_line,
+            confidence: confidence_for(node)
+          }
+        end
+
+        # Rails defaults the attribute to :token.
+        def extract_secure_token(node)
+          args = node.arguments&.arguments || []
+          first = args.first
+          return if first && !first.is_a?(Prism::KeywordHashNode) && literal_string(first).nil?
+
+          @results << {
+            macro:      :has_secure_token,
+            attribute:  first && literal_string(first) || "token",
+            location:   node.location.start_line,
+            confidence: confidence_for(node)
+          }
+        end
+
+        def extract_nested_attributes(node)
+          names = extract_symbol_args(node).map(&:to_s)
+          return if names.empty?
+
+          @results << {
+            macro:      :accepts_nested_attributes_for,
+            names:      names,
+            options:    extract_keyword_sources(node),
             location:   node.location.start_line,
             confidence: confidence_for(node)
           }

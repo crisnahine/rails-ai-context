@@ -4,7 +4,8 @@ module RailsAiContext
   module Introspectors
     module Listeners
       # Detects association macro calls via Prism AST:
-      # belongs_to, has_many, has_one, has_and_belongs_to_many
+      # belongs_to, has_many, has_one, has_and_belongs_to_many, and the
+      # belongs_to delegated_type declares
       class AssociationsListener < BaseListener
         include WithOptionsScope
 
@@ -13,21 +14,26 @@ module RailsAiContext
         ].to_set.freeze
 
         def on_call_node_enter(node)
-          return unless ASSOCIATION_METHODS.include?(node.name)
+          delegated = node.name == :delegated_type
+          return unless delegated || ASSOCIATION_METHODS.include?(node.name)
           return unless in_scope?(node)
 
           name, literal = first_name_and_literal(node)
+          options = scope_options(receiver_name(node)).merge(extract_keyword_sources(node))
+          # delegated_type passes its options to `belongs_to role, polymorphic: true`.
+          options = options.except(:types).merge(polymorphic: true) if delegated
           # The booted tier reads the macro off `assoc.macro.to_s`, so a
           # static record spells it the same way or no consumer can compare
           # the two.
           @results << {
-            type:          node.name.to_s,
+            type:          delegated ? "belongs_to" : node.name.to_s,
             name:          name,
             computed_name: (true unless literal),
             computed_foreign_key: (true if computed_key?(node)),
             # Sources, not literals: `class_name: Organisation.name` names a
             # class, and the marker names nothing.
-            options:       scope_options(receiver_name(node)).merge(extract_keyword_sources(node)),
+            options:       options,
+            delegated_types: (delegated_types(node) if delegated),
             extension_methods: extension_methods(node),
             location:      node.location.start_line,
             confidence:    confidence_for(node)
@@ -35,6 +41,11 @@ module RailsAiContext
         end
 
         private
+
+        def delegated_types(node)
+          types = extract_keyword_nodes(node)[:types]
+          types && literal_strings(types).presence
+        end
 
         # `has_many :sessions do def active ... end end` adds `user.sessions.active`.
         def extension_methods(node)

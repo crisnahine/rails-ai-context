@@ -179,12 +179,12 @@ It runs a single-pass Dispatcher that walks the AST once and feeds events to all
 
 | Listener | What it detects |
 |:---------|:---------------|
-| AssociationsListener | `belongs_to`, `has_many`, `has_one`, `has_and_belongs_to_many`, under the options of an enclosing `with_options` block |
+| AssociationsListener | `belongs_to`, `has_many`, `has_one`, `has_and_belongs_to_many`, the polymorphic `belongs_to` of `delegated_type`, under the options of an enclosing `with_options` block |
 | ValidationsListener | `validates`, `validates_*_of`, custom `validate :method`, under the options of an enclosing `with_options` block |
 | ScopesListener | `scope :name, -> { ... }`, `lambda { ... }` and the block form |
 | EnumsListener | Rails 7+ and legacy enum syntax, prefix/suffix options |
 | CallbacksListener | All AR callback types including `around_*`, `after_touch`, `after_initialize` and `after_find`; `after_commit` with `on:` resolution; a callback object by its constant, a block as `[inline_block]`; `if:`/`unless:` kept as the source wrote them, and the options of an enclosing `with_options` block |
-| MacrosListener | `encrypts`, `normalizes`, `delegate`, `has_secure_password`, `serialize`, `store`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `generates_token_for`, `attribute`, `alias_attribute`, `store_accessor`, `self.ignored_columns` |
+| MacrosListener | `encrypts`, `normalizes`, `delegate`, `has_secure_password`, `serialize`, `store`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `generates_token_for`, `attribute`, `alias_attribute`, `store_accessor`, `self.ignored_columns`, `has_secure_token`, `accepts_nested_attributes_for` |
 | MethodsListener | `def`/`def self.`, visibility tracking, parameter extraction, `class << self`, the methods `delegate` and Forwardable's `def_delegators`/`def_delegator` define (public unless `private: true`, and with no `end_location`, since a delegation has no body); each `def` carries `offset`/`end_offset`, which `SourceIntrospector.outside_defs` pairs against a call's `offset` to tell a call on the same line as a def from one inside it; `include_initialize: true` adds the constructor a caller reports on its own |
 | MixinsListener | `include`, `prepend`, `extend`, `singleton_class.include` and `singleton_class.prepend` (`singleton_class.extend` is not read), flagging the ones that reach the ancestor chain, as reflection reports them |
 
