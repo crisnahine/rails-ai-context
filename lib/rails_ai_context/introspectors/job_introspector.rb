@@ -1014,17 +1014,13 @@ module RailsAiContext
               queue_set = true
               queue = hit[:value]&.to_s
             end
-            Array(hit[:value]).each { |name| settings[key] << registered(name, relative) } if settings.key?(key)
+            settings[key].concat(registered_all(hit, relative)) if settings.key?(key)
           end
           Array(walked[:calls]).each do |call|
             if call[:name] == "load_defaults"
               version = defaults_version(call[:arguments].first) if relative == "config/application.rb"
             else
-              computed = Array(call[:computed])
-              constants = call[:constants] || {}
-              call[:arguments].flatten.each do |name|
-                settings[REGISTER_CALLS[call[:name]]] << registered(name, relative, computed: computed, constants: constants)
-              end
+              settings[REGISTER_CALLS[call[:name]]].concat(registered_all(call, relative))
             end
           end
         end
@@ -1038,6 +1034,13 @@ module RailsAiContext
         settings.merge(deliver_later_queue: queue, preview_paths: mailer_preview_dirs)
       end
 
+      # Each argument of a register call or element of a config list, read off the listener's node facts.
+      def registered_all(hit, relative)
+        computed = Array(hit[:computed])
+        constants = hit[:constants] || {}
+        Array(hit[:arguments]).flatten.map { |name| registered(name, relative, computed: computed, constants: constants) }
+      end
+
       # A symbol, string or constant name is the class ActionMailer camelizes it to.
       def registered(name, relative, computed: [], constants: {})
         text = name.to_s
@@ -1049,7 +1052,7 @@ module RailsAiContext
 
       # A string value's characters, not Ruby source.
       def literal_name?(text)
-        text.match?(%r{\A\w+(?:(?:/|::)\w+)*\z})
+        text.match?(%r{\A\w+(?:/\w+)*\z})
       end
 
       # A version that is not a literal is the running Rails's, past every cutoff.

@@ -173,6 +173,22 @@ RSpec.describe RailsAiContext::Tools::GetMailers do
       expect(text).not_to include("special", "x@y.z")
     end
 
+    it "names each constant a config list builds and quotes the rest, never an internal marker" do
+      write("config/application.rb", <<~RUBY)
+        module App
+          class Application < Rails::Application
+            config.action_mailer.interceptors = [Admin::Sandbox.new, interceptor_var, "audit_log"]
+            config.action_mailer.observers = Ops::Log.new
+          end
+        end
+      RUBY
+      text = static_text
+      expect(text).to include("**Interceptors:** Admin::Sandbox (`config/application.rb`), " \
+                              "`interceptor_var`, not read (`config/application.rb`), AuditLog (`config/application.rb`)")
+      expect(text).to include("**Observers:** Ops::Log (`config/application.rb`)")
+      expect(text).not_to include("INFERRED")
+    end
+
     it "gives no deliver_later queue to an app with no mailers" do
       FileUtils.rm_rf(File.join(tmpdir, "app/mailers"))
       expect(static_text).not_to include("deliver_later queue")
