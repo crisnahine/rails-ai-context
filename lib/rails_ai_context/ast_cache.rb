@@ -33,9 +33,7 @@ module RailsAiContext
     def self.parse(path, ruby: nil)
       version = prism_version(ruby)
       seen_key = version ? [ path, version ] : path
-      # An unchanged file answers from its stat: the same concern file reaches
-      # every model's walk, and reading and hashing it each time dominated the
-      # model tier on Canvas. Within one run the stat is asked once.
+      # An unchanged file answers from its stat; one concern file reaches every model's walk.
       signature = RunCache.fetch([ :stat_signature, path.to_s ]) { stat_signature(path) }
       seen = SEEN[seen_key]
       if seen && seen[2] && seen.first == signature && (cached = STORE[seen[1]])

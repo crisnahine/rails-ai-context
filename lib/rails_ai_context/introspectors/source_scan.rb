@@ -113,11 +113,8 @@ module RailsAiContext
       CLASS_WITH_SUPERCLASS = /class[^\S\n]+([\w:]+)[^\S\n]*<[^\S\n]*(?:::)?([\w:]+)/
       MODEL_BASES = %w[ActiveRecord::Base ApplicationRecord].freeze
 
-      # Rails autoloads every app/* directory and the roots config/application.rb
-      # adds, so a model can live outside app/models. A class there is kept when
-      # its superclass, looked up from the namespace its path names, is a model base,
-      # a model or a class already kept; the listing still decides modelhood, but a
-      # thousand services are not parsed.
+      # A model can live in any autoload root; a class there is kept when its superclass is a model base,
+      # a model or a class already kept, so a thousand services are not parsed.
       def extra_model_candidates(root, model_records, base_model = nil)
         pending, declared = RunCache.fetch([ :source_scan_model_declarations, root ]) { extra_model_declarations(root, File.realpath(root)) }
         known = model_records.to_set(&:path_name).merge(MODEL_BASES)

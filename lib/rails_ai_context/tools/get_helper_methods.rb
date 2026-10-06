@@ -336,9 +336,7 @@ module RailsAiContext
         names.map { |helper| { name: helper, owner: owner, path: path.delete_prefix("#{real_root}/") } }
       end
 
-      # The modules in lib the controllers include, as [path, constant, range]: a controller
-      # helper module there is required rather than autoloaded, and app/controllers/concerns
-      # is read as a controller already.
+      # The lib modules the controllers include, as [path, constant, range]; concerns are read as controllers already.
       # ponytail: one level, lib only; a module those modules include is not followed.
       class LibModules
         attr_reader :found
