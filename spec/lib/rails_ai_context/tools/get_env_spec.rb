@@ -837,6 +837,8 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
             def j = Typhoeus.get("https://api.rho.example/x")
             def k = Net::HTTP.get(URI("http://10.0.0.5:9200/x"))
             def l = Net::HTTP.get(URI("http://8.8.8.8/x"))
+            def n = URI.open("report.pdf")
+            def o = HTTP.get("index.html")
             # response = Net::HTTP.start('api.commented.example', :use_ssl => true)
           end
         RUBY

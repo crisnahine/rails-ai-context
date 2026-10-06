@@ -581,6 +581,7 @@ module RailsAiContext
         "URI.open" => /URI\.open#{HTTP_URL_ARG.source}/
       }.freeze
       # Net::HTTP.start("api.example.com", 443) takes a host, not a URL.
+      NET_HTTP_HOST_ARG = /Net::HTTP\.(?:start|new)\s*\(?\s*["']([^"']+)["']/
       BARE_HOST = /\A[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\z/i
       HTTP_CLIENT_NAME = Regexp.union(HTTP_CLIENT_CALLS.keys)
 
@@ -604,6 +605,10 @@ module RailsAiContext
                 services << { name: name, detection: detection, file: relative } if name
               end
             end
+            code.scan(NET_HTTP_HOST_ARG).each do |(host)|
+              name = host.match?(BARE_HOST) && service_name_from_host(host)
+              services << { name: name, detection: "Net::HTTP", file: relative } if name
+            end
           end
         end
 
@@ -616,22 +621,23 @@ module RailsAiContext
         return nil if url.start_with?("ENV") || url.include?("#" + "{")
 
         begin
-          host = URI.parse(url).host || url[BARE_HOST]
-          return nil unless host
-
-          # An address names no service; a loopback or private one is not external at all.
-          if (ip = (IPAddr.new(host.delete("[]")) rescue nil))
-            return ip.loopback? || ip.private? || ip.link_local? ? nil : host
-          end
-
-          # Remove common TLDs and subdomains
-          parts = host.split(".")
-          return nil if parts.size < 2
-          # Use the main domain part
-          parts[-2]&.capitalize
+          host = URI.parse(url).host
+          host && service_name_from_host(host)
         rescue => e
           RailsAiContext.debug_fail(e, nil, label: "extract_service_name_from_url")
         end
+      end
+
+      private_class_method def self.service_name_from_host(host)
+        # An address names no service; a loopback or private one is not external at all.
+        if (ip = (IPAddr.new(host.delete("[]")) rescue nil))
+          return ip.loopback? || ip.private? || ip.link_local? ? nil : host
+        end
+
+        parts = host.split(".")
+        return nil if parts.size < 2
+
+        parts[-2]&.capitalize
       end
 
       # An encrypted credentials file the tool could not open is a different
