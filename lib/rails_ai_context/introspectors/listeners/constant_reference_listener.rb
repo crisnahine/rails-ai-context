@@ -6,7 +6,7 @@ module RailsAiContext
       # References to constants by their last name (`MessageVerifier`, `ActiveSupport::MessageVerifier`).
       # A constant that only qualifies a nested one (`MessageVerifier::InvalidSignature`) is no reference to it.
       class ConstantReferenceListener < BaseListener
-        def initialize(names:)
+        def initialize(names: [])
           super()
           @names = names.map(&:to_sym).to_set
           @qualifiers = {}.compare_by_identity
