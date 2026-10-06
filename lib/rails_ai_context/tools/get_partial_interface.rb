@@ -469,18 +469,24 @@ module RailsAiContext
       end
 
       # Rails prefixes a record's partial with the controller namespace unless
-      # config.action_view.prefix_partial_path_with_controller_namespace is false.
+      # ActionView::Base.prefix_partial_path_with_controller_namespace is false.
+      PREFIX_SETTER = :prefix_partial_path_with_controller_namespace=
+
       private_class_method def self.prefix_partial_paths?(root)
+        booted = !RailsAiContext.static_tier? && !rails_app.is_a?(RailsAiContext::StaticApp)
+        return ActionView::Base.prefix_partial_path_with_controller_namespace != false if booted && defined?(ActionView::Base)
+
         env = ENV["RAILS_ENV"] || "development"
         files = [ "config/application.rb", "config/environments/#{env}.rb" ] +
           Dir.glob("config/initializers/**/*.rb", base: root).sort
-        setting = [ :action_view, :prefix_partial_path_with_controller_namespace ]
         last = nil
+        # The setter name is ActionView's own, so config.action_view, ActionView::Base and an on_load `self.` all match.
+        listener = -> { Introspectors::Listeners::MethodCallListener.new(names: [ PREFIX_SETTER ]) }
         files.each do |relative|
           next unless RailsAiContext::SafePath.locate(relative, under: root).ok?
 
-          walked = Introspectors::SourceIntrospector.walk(File.join(root, relative), { config: Introspectors::Listeners::ConfigAssignmentListener })
-          walked[:config].each { |entry| last = entry[:value] if entry[:assignment] && entry[:path] == setting }
+          walked = Introspectors::SourceIntrospector.walk(File.join(root, relative), { setting: listener })
+          walked[:setting].each { |call| last = call[:arguments].first if [ true, false ].include?(call[:arguments].first) }
         end
         last != false
       rescue => e

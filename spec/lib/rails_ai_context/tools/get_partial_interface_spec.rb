@@ -67,7 +67,25 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
 
       expect(rendered_from("posts/post")).to include("app/views/admin/posts/index.html.erb:1")
       expect(RailsAiContext::Introspectors::SourceIntrospector).to have_received(:walk)
-        .with(File.join(@root, "config/application.rb"), { config: RailsAiContext::Introspectors::Listeners::ConfigAssignmentListener }).once
+        .with(File.join(@root, "config/application.rb"), hash_including(:setting)).once
+    end
+
+    it "reads the prefix set on ActionView::Base, directly or in an on_load(:action_view) block" do
+      FileUtils.mkdir_p(File.join(@root, "config/initializers"))
+      File.write(File.join(@root, "config/initializers/pp.rb"), "ActionView::Base.prefix_partial_path_with_controller_namespace = false\n")
+      expect(rendered_from("admin/posts/post")).to be_nil
+
+      File.write(File.join(@root, "config/initializers/pp.rb"),
+                 "ActiveSupport.on_load(:action_view) { self.prefix_partial_path_with_controller_namespace = false }\n")
+      expect(rendered_from("admin/posts/post")).to be_nil
+    end
+
+    it "asks ActionView::Base when the app is booted" do
+      allow(RailsAiContext).to receive(:default_app).and_return(Struct.new(:root).new(Pathname.new(@root)))
+      allow(ActionView::Base).to receive(:prefix_partial_path_with_controller_namespace).and_return(false)
+
+      expect(rendered_from("admin/posts/post")).to be_nil
+      expect(rendered_from("posts/post")).to include("app/views/admin/posts/index.html.erb:1")
     end
 
     it "counts a partial under a view root declared inside app/views once" do
