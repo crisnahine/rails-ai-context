@@ -544,7 +544,7 @@ module RailsAiContext
       end
 
       def extract_filters_from_source(source)
-        ControllerFilters.from_source(source)
+        ControllerFilters.from_source(source, root: app.root.to_s)
       end
 
       # Statically evaluate known runtime conditions to exclude inapplicable filters.

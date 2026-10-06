@@ -12,17 +12,17 @@ module RailsAiContext
     # `before_action` in ApplicationController reached the generated overview
     # through its own file read and reached no tool at all.
     module ControllerFilters
-      # Macros a gem defines to add one callback: cancancan's controller_additions.rb
+      # Macros a gem defines to add one callback, with the gem: cancancan's controller_additions.rb
       # (load and authorize blocks, check_authorization after) and acts_as_tenant's
       # controller extensions, which add a named before_action.
       GEM_FILTERS = {
-        load_and_authorize_resource: [ :before_action, :load_and_authorize_resource ],
-        load_resource: [ :before_action, :load_resource ],
-        authorize_resource: [ :before_action, :authorize_resource ],
-        check_authorization: [ :after_action, :check_authorization ],
-        skip_authorization_check: [ :before_action, :skip_authorization_check ],
-        set_current_tenant_by_subdomain: [ :before_action, :find_tenant_by_subdomain ],
-        set_current_tenant_by_subdomain_or_domain: [ :before_action, :find_tenant_by_subdomain_or_domain ]
+        load_and_authorize_resource: [ :before_action, :load_and_authorize_resource, "cancancan" ],
+        load_resource: [ :before_action, :load_resource, "cancancan" ],
+        authorize_resource: [ :before_action, :authorize_resource, "cancancan" ],
+        check_authorization: [ :after_action, :check_authorization, "cancancan" ],
+        skip_authorization_check: [ :before_action, :skip_authorization_check, "cancancan" ],
+        set_current_tenant_by_subdomain: [ :before_action, :find_tenant_by_subdomain, "acts_as_tenant" ],
+        set_current_tenant_by_subdomain_or_domain: [ :before_action, :find_tenant_by_subdomain_or_domain, "acts_as_tenant" ]
       }.freeze
 
       # cancancan's controller_resource.rb adds these with prepend_before_action when passed `prepend: true`.
@@ -77,8 +77,8 @@ module RailsAiContext
 
       # @param source [String] one controller's Ruby source
       # @return [Array<Hash>] { name:, kind:, skipped:/declared:, only:, except:, if:, unless: }
-      def from_source(source)
-        class_level(walk(source)).flat_map { |entry| record(entry) }
+      def from_source(source, root: nil)
+        class_level(walk(source)).flat_map { |entry| record(entry, root) }
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "controller filter read")
       end
@@ -97,7 +97,8 @@ module RailsAiContext
         cache ||= RunCache.fetch([ :controller_concern_walks ]) { {} }
         walked = SourceIntrospector.walk_source(source, LISTENERS)
         mixins = Array(walked[:mixins])
-        calls = CallSites.new(source, -> { class_method_defs(source, mixins, within, root, cache) })
+        chain_defs = nil
+        calls = CallSites.new(source, -> { chain_defs ||= class_method_defs(source, mixins, within, root, cache) })
         # One walk, so a concern two includes reach is added once, as Ruby does.
         collected, unread, _hidden, block_calls, placement, _skipped, block_sites = ConcernMacros.collect(
           root, mixins, keys: [ :filters ], prefer: "controller", within: within, cache: cache, calls: calls, listeners: LISTENERS
@@ -120,7 +121,13 @@ module RailsAiContext
         # A base's method a concern's block calls declares where that concern is included.
         from_blocks, inherited = inherited.partition { |entry| block_sites.key?(entry[:site].__id__) }
         by_concern += from_blocks.map { |entry| entry.merge(from_concern: block_sites[entry[:site].__id__].first) }
-        placed = class_level(walked).map { |entry| [ entry[:location].to_i, -1, 0, entry ] } +
+        # A class method the chain defines answers the call, not the gem's macro of that name.
+        own_level = class_level(walked)
+        if own_level.any? { |entry| GEM_FILTERS.key?(entry[:macro]) }
+          shadowed = calls.defs.call.keys.to_set(&:to_s)
+          own_level = own_level.reject { |entry| GEM_FILTERS.key?(entry[:macro]) && shadowed.include?(entry[:macro].to_s) }
+        end
+        placed = own_level.map { |entry| [ entry[:location].to_i, -1, 0, entry ] } +
                  (own_defs + called + inherited).map { |entry| [ ConcernMacros::Relayed.root(entry[:site]).location.start_line, -1, 0, entry.except(:site, :definer, :from_concern) ] } +
                  by_concern.map do |entry|
                    top, order = placement[entry[:from_concern]]
@@ -128,7 +135,7 @@ module RailsAiContext
                  end
         entries = placed.each_with_index.sort_by { |(line, order, at, _), index| [ line, order, at, index ] }.map { |(_, _, _, entry), _| entry }
         filters = entries.flat_map do |entry|
-          record(entry).map { |filter| entry[:from_concern] ? filter.merge(from_concern: entry[:from_concern]) : filter }
+          record(entry, root).map { |filter| entry[:from_concern] ? filter.merge(from_concern: entry[:from_concern]) : filter }
         end
         [ filters, unread ]
       rescue => e
@@ -317,10 +324,12 @@ module RailsAiContext
       end
 
       # One filter per callback the call adds, a block or lambda named by its line.
-      def record(entry)
+      def record(entry, root = nil)
         entry = entry.merge(FORGERY_SKIP) if entry[:macro] == :skip_forgery_protection
         entry = entry.merge(BASIC_AUTH) if entry[:macro] == :http_basic_authenticate_with
-        if (macro, name = GEM_FILTERS[entry[:macro]])
+        if (macro, name, gem = GEM_FILTERS[entry[:macro]])
+          return [] unless bundled?(gem, root)
+
           macro = :prepend_before_action if GEM_PREPENDABLE.include?(entry[:macro]) && (entry[:options] || {})[:prepend] == true
           entry = entry.merge(macro: macro, args: [ name ], callbacks: nil, proc_lines: [])
         end
@@ -342,6 +351,14 @@ module RailsAiContext
         mark[:prepend] = true if macro.start_with?("prepend_")
         tail = constraints(entry)
         names.map { |name| { name: name, kind: kind, **mark, **tail } }
+      end
+
+      # Whether the app's lockfile resolves the gem; an app whose gems are unknown is given the benefit.
+      def bundled?(gem, root)
+        return true unless root
+
+        lock = GemLock.for(root)
+        lock.missing? || lock.present?(gem)
       end
 
       # Each callback the call gives, in the order Rails adds them: positional arguments as written,
@@ -419,7 +436,7 @@ module RailsAiContext
 
       private_class_method :walk, :class_level, :singleton_expansions, :declares_filters?, :base_expansions, :each_base,
                            :class_method_defs,
-                           :superclass_of, :base_source, :constant_source, :with_file, :body_call?, :record, :positional_names, :constraints, :condition_text, :normalize, :action_condition, :lambda_body
+                           :superclass_of, :base_source, :constant_source, :with_file, :body_call?, :record, :bundled?, :positional_names, :constraints, :condition_text, :normalize, :action_condition, :lambda_body
     end
   end
 end

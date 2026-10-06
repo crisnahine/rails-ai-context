@@ -335,5 +335,28 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
         { name: "skip_authorization_check", kind: "before", declared: true, only: [ "index" ] }
       ])
     end
+
+    it "reads no gem callback for a macro the lockfile lacks the gem for, or a class method the chain defines" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (8.1.0)\n\nDEPENDENCIES\n  rails\n")
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"), <<~RUBY)
+          class ApplicationController < ActionController::Base
+            def self.authorize_resource(**opts)
+              before_action :require_admin, **opts
+            end
+          end
+        RUBY
+        source = "class CommentsController < ApplicationController\n  authorize_resource only: :show\nend\n"
+
+        expect(described_class.from_source("class C < ApplicationController\n  check_authorization\nend\n", root: dir)).to eq([])
+        filters, = described_class.with_concerns(source, root: dir, within: "CommentsController")
+        expect(filters.map { |f| [ f[:name], f[:only] ] }).to eq([ [ "require_admin", [ "show" ] ] ])
+
+        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    cancancan (3.6.1)\n\nDEPENDENCIES\n  cancancan\n")
+        filters, = described_class.with_concerns(source, root: dir, within: "CommentsController")
+        expect(filters.map { |f| f[:name] }).to eq([ "require_admin" ])
+      end
+    end
   end
 end
