@@ -468,6 +468,22 @@ RSpec.describe RailsAiContext::GemLock do
       end
     end
 
+    it "reads an engine keyword written on the line after the version" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile"), %(ruby "3.1.4",\n     engine: "jruby", engine_version: "9.4.8.0"\ngem "rails"\n))
+
+        expect(described_class.for(dir).ruby_engine).to eq("JRuby 9.4.8.0")
+      end
+    end
+
+    it "does not read a ruby call in a comment or a string" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile"), %(# ruby "2.7.1"\nx = "\nruby '2.6.0'"\ngem "rails"\n))
+
+        expect(described_class.for(dir).ruby_version).to be_nil
+      end
+    end
+
     it "reads an engine in .tool-versions" do
       Dir.mktmpdir do |dir|
         File.write(File.join(dir, ".tool-versions"), "ruby truffleruby-24.1.1\n")
