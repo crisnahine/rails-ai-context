@@ -925,6 +925,26 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         expect(static).to eq(booted)
       end
 
+      it "names an anonymous class filter and an anonymous struct's instance the way the static tier does" do
+        source = <<~RUBY
+          class WidgetsController < ApplicationController
+            after_action Class.new { def self.after(c); end }
+            before_action Struct.new(:x) { def before(c); end }.new(1)
+          end
+        RUBY
+        ctrl = Class.new(ActionController::Base) do
+          after_action Class.new { def self.after(c); end }
+          before_action Struct.new(:x) { def before(c); end }.new(1)
+        end
+        ctrl.define_singleton_method(:name) { "WidgetsController" }
+
+        booted = introspector.send(:extract_filters, ctrl, source).map { |f| [ f[:kind], f[:name], f[:declared] ] }
+        static = introspector.send(:extract_filters_from_source, source).map { |f| [ f[:kind], f[:name], f[:declared] ] }
+
+        expect(static).to eq([ [ "after", "Class (object)", true ], [ "before", "Struct (object)", true ] ])
+        expect(booted.sort).to eq(static.sort)
+      end
+
       # http_authentication.rb: `before_action(options) { http_basic_authenticate_or_request_with ... }`.
       it "names the filter http_basic_authenticate_with adds, in both tiers, password left out" do
         source = <<~RUBY

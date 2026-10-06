@@ -363,10 +363,12 @@ module RailsAiContext
       def callback_name(filter, own_file = nil)
         case filter
         when Symbol, String then return filter.to_s.start_with?("_") ? nil : filter.to_s
-        when Module then return filter.name
+        # An anonymous class is the object `Class.new` made; an anonymous class's instance is
+        # named by its nearest named ancestor (`Struct.new(...).new`), as the static tier reads it.
+        when Module then return filter.name || "#{filter.class.name} (object)"
         when Proc then nil
         # An object's to_s is its inspect string, with an address that changes every run.
-        else return "#{filter.class.name || 'anonymous class'} (object)"
+        else return "#{filter.class.ancestors.find { |a| a.is_a?(Class) && a.name }.name} (object)"
         end
 
         path, line = filter.source_location
