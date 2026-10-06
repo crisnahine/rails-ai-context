@@ -146,10 +146,8 @@ module RailsAiContext
       # A view's body runs on to a SELECT line, so only another statement's keyword ends it.
       NEXT_DDL = /\n\s*(?:CREATE\s+(?:(?:OR\s+REPLACE|UNIQUE|TEMP(?:ORARY)?|MATERIALIZED|VIRTUAL)\s+)*(?:TABLE|VIEW|INDEX|TRIGGER|SEQUENCE|TYPE|FUNCTION|EXTENSION|SCHEMA)\b|ALTER\s+(?:TABLE|SEQUENCE|TYPE|VIEW|INDEX)\b|COMMENT\s+ON\b|INSERT\s+INTO\b|DROP\s+(?:TABLE|VIEW|INDEX|TRIGGER)\b|SET\s+[\w.]+\s*(?:=|TO\b))/i
 
-      # Each CREATE TABLE's name, body and INHERITS list. The body ends at the
-      # parenthesis that closes it, whatever the line layout or terminator: SQLite
-      # closes mid-line after a multi-line foreign key, MySQL adds ENGINE=, and
-      # a Rails 7 SQLite dump through sqlite_master writes no semicolon.
+      # Each CREATE TABLE's name, body and INHERITS list. The body ends at its closing
+      # parenthesis, since SQLite, MySQL and a semicolon-less dump each end the line differently.
       def each_create_table(content)
         scanner = StringScanner.new(content)
         while scanner.skip_until(CREATE_TABLE)

@@ -878,9 +878,7 @@ module RailsAiContext
         ConcernMembership.payload(own)
       end
 
-      # A gem can mix a module into the app's abstract base (Kaminari's
-      # inherited hook): every model then has it and no file of the app names
-      # it. A module the source includes, or one the app defines, stays.
+      # A module a gem's inherited hook mixes into every model (Kaminari) is left out; one the app includes or defines stays.
       def base_gem_modules(model, mixins)
         written = ConcernMembership.from_mixins(mixins)
         gem_bases(model).flat_map { |base| base.ancestors - every_model_modules }.uniq.select do |mod|
@@ -892,9 +890,7 @@ module RailsAiContext
         model.ancestors.select { |klass| klass.is_a?(Class) && klass < ActiveRecord::Base && klass != model && klass.abstract_class? }
       end
 
-      # The bases a gem's inherited hook reaches as it reaches the model. Kaminari's
-      # reaches every direct ActiveRecord::Base child, so a model that is one is
-      # measured against the app's abstract bases that are one too.
+      # The app's bases a gem's inherited hook reaches as it reaches the model (Kaminari: each direct ActiveRecord::Base child).
       def gem_bases(model)
         bases = abstract_bases(model)
         return bases unless model.superclass == ActiveRecord::Base
@@ -1509,9 +1505,8 @@ module RailsAiContext
       ].freeze
       BOOLEAN_ASSOCIATION_OPTIONS = %i[polymorphic optional].freeze
 
-      # What the record already says another way, or what Rails keeps for itself.
-      # A has_many's foreign key (or query_constraints, its 7.1 spelling) stays listed: its
-      # record carries reflection's default key too, so only the declaration says it is not the default.
+      # What the record already says another way, or what Rails keeps for itself. A has_many's declared
+      # foreign key stays: its record carries reflection's default key too.
       UNLISTED_ASSOCIATION_OPTIONS = [ *(LIFTED_ASSOCIATION_OPTIONS - [ :foreign_key ]), :anonymous_class ].freeze
 
       # Every other option the association declares, each as display text:
@@ -1573,9 +1568,7 @@ module RailsAiContext
         with_default_foreign_key(declared ? lifted.merge(declared_options: declared) : lifted)
       end
 
-      # What Rails does with two options: `required:` on a belongs_to sets
-      # `optional:` to its negation, and Rails 7.1 takes `query_constraints:`
-      # as the foreign key (7.2 deprecates it, 8.0 refuses it).
+      # `required:` on a belongs_to sets `optional:` to its negation; Rails 7.1 takes `query_constraints:` as the foreign key.
       def with_rails_option_rules(assoc, options)
         required = literal_boolean(options[:required]) if options.key?(:required)
         assoc = assoc.merge(optional: !required) if assoc[:type] == "belongs_to" && !required.nil?
@@ -2077,9 +2070,7 @@ module RailsAiContext
           mongoid_model_details(entry[:source], class_name, entry[:path], parent: parent && parent[:mongoid] ? [ parent_name, parent ] : nil)
             .merge(file: relative_to_root(entry[:path]))
         else
-          # This walk keeps no candidate hash, so an AR model in a
-          # hybrid app gets the table it assigns itself and the derived
-          # stem otherwise - no namespace prefix, no STI parent.
+          # A hybrid app's AR model gets only its own or the derived table here: no namespace prefix, no STI parent.
           static_model_details(entry[:path], class_name, table_name: TableName.explicit(entry[:source], class_name, app.root))
         end
       rescue => e

@@ -2,9 +2,8 @@
 
 module RailsAiContext
   module Introspectors
-    # What the app's config and initializers set on Active Record: the table
-    # affixes, pluralize_table_names and schema_format. Cached per process, and
-    # dropped at the start of every introspection run.
+    # The table affixes, pluralize_table_names and schema_format the app's config and initializers
+    # set on Active Record. Cached per process and dropped at the start of each introspection run.
     module ActiveRecordSettings
       module_function
 
