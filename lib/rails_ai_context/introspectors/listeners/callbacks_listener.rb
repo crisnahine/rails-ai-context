@@ -69,10 +69,7 @@ module RailsAiContext
 
         KINDS = %w[before after around].freeze
 
-        # `skip_callback :save, :before, :stamp_audit` takes a callback the
-        # class inherited (or declared above) out of its chain; the model
-        # tier applies it where the chain is assembled. The kind defaults to
-        # :before, as Rails' normalize_callback_params does.
+        # Rails' skip_callback; the kind defaults to :before, as normalize_callback_params does.
         def record_skip(node)
           positional = (node.arguments&.arguments || []).reject { |a| a.is_a?(Prism::KeywordHashNode) }
           event, *rest = positional.map { |a| literal_string(a) || one_line_source(a) }

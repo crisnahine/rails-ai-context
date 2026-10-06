@@ -114,10 +114,7 @@ module RailsAiContext
           end
         end
 
-        # A block call this walk does not know is read through when it holds
-        # routes (`constraints`, `devise_scope`), and the unknown calls in it
-        # count one each; one that holds none is a gem macro configured by its
-        # block (`use_doorkeeper do controllers ... end`) and counts once.
+        # An unknown block that draws no route is a gem macro (`use_doorkeeper do`), counted once.
         def on_call_node_leave(node)
           return unless @stack.last && @stack.last[:node].equal?(node)
 
@@ -289,9 +286,7 @@ module RailsAiContext
         MAPPER_OPTIONS = %w[as via to controller action on defaults constraints anchor format path internal shallow_path
                             shallow_prefix module path_names shallow blocks options only except param concerns].freeze
 
-        # What `bin/rails routes` prints beside a route: its defaults, then the
-        # constraints on its path segments. Scope URL options win over the
-        # route's own, as Mapping merges them.
+        # `bin/rails routes`' defaults then segment constraints; scope options win, as Mapping merges them.
         def route_constraints(node, path)
           route_level = ROUTE_LEVEL.include?(node.name)
           scopes = @stack.reject { |f| f[:node].equal?(node) }.filter_map { |f| f[:route_constraints] }
@@ -632,9 +627,7 @@ module RailsAiContext
           end
         end
 
-        # Rails draws a shallow resource's member routes in the shallow scope: the
-        # namespace and scope paths and names around it, none of its parents'.
-        # A singleton resource is never shallow. `new` and `edit` come from path_names.
+        # Shallow member routes drop the parents' paths and names; a singleton is never shallow.
         def resource_layout(name, opts, singular:)
           path = (opts[:path] || name).to_s
           base = join_path(current_prefix, path)
@@ -689,9 +682,7 @@ module RailsAiContext
           joined unless joined.empty?
         end
 
-        # Options Rails reads that the source does not spell out: a positional
-        # variable (`resources :x, opts`), a `**splat`, or an only:/except: list
-        # held in a constant or a call.
+        # Options the source does not spell out: `resources :x, opts`, `**splat`, a computed only:/except:.
         def opaque_options?(node)
           (node.arguments&.arguments || []).any? do |arg|
             case arg
