@@ -44,25 +44,22 @@ module RailsAiContext
         # gives us the v5.8.0 fields (identified_by, streams, periodic, actions)
         # that JobIntrospector#extract_channels populates.
         jobs_data = cached_context[:jobs]
-        channels = (jobs_data.is_a?(Hash) ? jobs_data[:channels] : nil) || []
-        channels = channels.reject { |c| c.is_a?(Hash) && c[:error] }
+        data = jobs_data.is_a?(Hash) ? jobs_data : {}
+        channels = Array(data[:channels]).reject { |c| c.is_a?(Hash) && c[:error] }
         channels_note = unavailable_note(jobs_data)
 
-        queue_line = [ sidekiq_queues_line(jobs_data), solid_queue_line(jobs_data, jobs) ].compact.join(" ").presence
-        workers = (jobs_data.is_a?(Hash) ? jobs_data[:workers] : nil) || []
-        schedules = Array(jobs_data.is_a?(Hash) ? jobs_data[:recurring_jobs] : nil).select { |task| task.is_a?(Hash) }
+        queue_line = [ sidekiq_queues_line(data), solid_queue_line(data, jobs) ].compact.join(" ").presence
+        return format_single_job(job, jobs, real_root, queue_line, data) if job
 
-        if job
-          return format_single_job(job, jobs, real_root, queue_line, workers, job_bases(jobs_data), enqueue_helpers, schedules)
-        end
+        workers = Array(data[:workers])
 
         # No jobs and no channels - bail out. Channel absence is only a real
         # negative when the :jobs section actually ran - if it's unavailable
         # (static tier), say so instead of claiming "no channels detected".
-        async_methods = Array(jobs_data.is_a?(Hash) ? jobs_data[:async_methods] : nil)
-        recurring = detail == "full" ? recurring_lines(schedules) : []
+        async_methods = Array(data[:async_methods])
+        recurring = detail == "full" ? recurring_lines(schedules(data)) : []
         if jobs.empty? && channels.empty? && workers.empty? && async_methods.empty?
-          message = with_bases_note(no_jobs_or_channels_message(channels_note, queue_line), jobs_data)
+          message = with_bases_note(no_jobs_or_channels_message(channels_note, queue_line), data)
           return text_response([ message, *("\n#{recurring.join("\n")}" if recurring.any?) ].join("\n"))
         end
 
@@ -82,13 +79,13 @@ module RailsAiContext
         end
         if channels.any?
           lines << "" if lines.any?
-          lines.concat(format_channels_section(channels, jobs_data[:connections]))
+          lines.concat(format_channels_section(channels, data[:connections]))
         end
         if recurring.any?
           lines << "" if lines.any?
           lines.concat(recurring)
         end
-        bases = bases_note("jobs", job_bases(jobs_data).map { |base| base[:name] })
+        bases = bases_note("jobs", job_bases(data).map { |base| base[:name] })
         if bases
           lines << "" if lines.any?
           lines << bases
@@ -161,8 +158,8 @@ module RailsAiContext
 
       # An empty answer still names the bases it left out, as every listing
       # does, so the name it offers can be asked for.
-      private_class_method def self.with_bases_note(message, jobs_data)
-        [ message, bases_note("jobs", job_bases(jobs_data).map { |base| base[:name] }) ].compact.join("\n\n")
+      private_class_method def self.with_bases_note(message, data)
+        [ message, bases_note("jobs", job_bases(data).map { |base| base[:name] }) ].compact.join("\n\n")
       end
 
       HEIRS_SHOWN = 12
@@ -186,8 +183,8 @@ module RailsAiContext
       # JobIntrospector#extract_sidekiq_config already read this file, and on an
       # app that runs everything through Sidekiq workers it is the only evidence
       # in reach that async work happens at all.
-      private_class_method def self.sidekiq_queues_line(jobs_data)
-        config = jobs_data.is_a?(Hash) ? jobs_data[:sidekiq_config] : nil
+      private_class_method def self.sidekiq_queues_line(data)
+        config = data[:sidekiq_config]
         return nil unless config.is_a?(Hash)
 
         queues = Array(config[:queues])
@@ -198,21 +195,21 @@ module RailsAiContext
         "#{line}."
       end
 
-      private_class_method def self.solid_queue_line(jobs_data, jobs)
-        config = jobs_data.is_a?(Hash) ? jobs_data[:solid_queue_config] : nil
+      private_class_method def self.solid_queue_line(data, jobs)
+        config = data[:solid_queue_config]
         return nil unless config.is_a?(Hash)
 
         queues = Array(config[:queues])
         line = "#{config[:file]} workers poll #{count_phrase(queues.size, "queue")}: #{queues.join(', ')}."
-        missed = unpolled_queues(jobs_data, jobs).group_by { |job| job[:queue] }
+        missed = unpolled_queues(data, jobs).group_by { |job| job[:queue] }
         return line if missed.empty?
 
         "#{line} No worker polls #{missed.map { |queue, held| "#{queue} (#{held.filter_map { |j| j[:name] }.join(', ')})" }.join(', ')}."
       end
 
       # A plain queue name no worker pattern matches: "*" polls all, "name*" a prefix.
-      private_class_method def self.unpolled_queues(jobs_data, jobs)
-        config = jobs_data.is_a?(Hash) ? jobs_data[:solid_queue_config] : nil
+      private_class_method def self.unpolled_queues(data, jobs)
+        config = data[:solid_queue_config]
         return [] unless config.is_a?(Hash)
 
         patterns = Array(config[:queues])
@@ -224,11 +221,17 @@ module RailsAiContext
 
       # The name never rebuilds the path: the file is the one the introspector
       # recorded, which is the only place a pack job's path is written down.
-      private_class_method def self.job_bases(jobs_data)
-        (jobs_data.is_a?(Hash) ? jobs_data[:job_bases] : nil).then { |list| Array(list).select { |b| b.is_a?(Hash) } }
+      private_class_method def self.job_bases(data)
+        Array(data[:job_bases]).select { |b| b.is_a?(Hash) }
       end
 
-      private_class_method def self.format_single_job(job, jobs, root, queue_line, workers, bases = [], helpers = [], schedules = [])
+      private_class_method def self.schedules(data)
+        Array(data[:recurring_jobs]).select { |task| task.is_a?(Hash) }
+      end
+
+      private_class_method def self.format_single_job(job, jobs, root, queue_line, data)
+        workers = Array(data[:workers])
+        bases = job_bases(data)
         names = jobs.map { |j| j[:name] }
         worker_names = workers.map { |w| w[:name] }.compact
         # A base answers by name because every listing, the empty one too,
@@ -296,7 +299,7 @@ module RailsAiContext
         # A worker or base declares its queue in `sidekiq_options`, which the introspector read.
         # The record's queue carries the app's prefix and delimiter, which the source line does not.
         queue = (record && (record[:queue] || (record[:options] || {})["queue"])) || extract_queue(source)
-        unpolled = queue && !worker && unpolled_queues(cached_context[:jobs], [ { queue: queue.to_s } ]).any?
+        unpolled = queue && !worker && unpolled_queues(data, [ { queue: queue.to_s } ]).any?
         lines << "**Queue:** #{queue_text(queue)}#{" (no worker in #{Introspectors::JobIntrospector::SOLID_QUEUE_FILE} polls it)" if unpolled}" if queue
         lines << "**Throttle:** #{worker[:throttle]}" if worker && worker[:throttle]
         lines << "**Priority:** #{record[:priority]}" if record && !record[:priority].nil?
@@ -355,7 +358,7 @@ module RailsAiContext
           broadcasts.each { |b| lines << "- `#{b}`" }
         end
 
-        scheduled = schedules.select { |task| task[:class] == class_name }
+        scheduled = schedules(data).select { |task| task[:class] == class_name }
         lines << "**Schedule:** #{scheduled.map { |task| schedule_text(task) }.join('; ')}" if scheduled.any?
 
         # Side effects
@@ -368,7 +371,7 @@ module RailsAiContext
         # Cross-reference: who enqueues this job
         # The section always prints: missing, it would read as "nothing enqueues it".
         known = (names + worker_names + base_names).uniq
-        enqueuers = find_enqueuers(class_name, root, relative, helpers, known)
+        enqueuers = find_enqueuers(class_name, root, relative, enqueue_helpers, known)
         lines << "" << "## Enqueued By"
         if enqueuers.any?
           enqueuers.first(ENQUEUERS_SHOWN).each { |e| lines << "- `#{e}`" }
