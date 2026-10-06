@@ -610,22 +610,9 @@ module RailsAiContext
         services.uniq { |s| s[:name] }
       end
 
-      # The same quoted URL, bare or wrapped in URI(...)/URI.parse(...).
-      HTTP_URL_ARG = /\s*\(?\s*(?:url:\s*)?(?:URI(?:\.parse)?\s*\(?\s*)?["']([^"']+)["']/
-      HTTP_CLIENT_CALLS = {
-        "Faraday" => /Faraday\.\w+#{HTTP_URL_ARG.source}/,
-        "Net::HTTP" => /Net::HTTP\.\w+#{HTTP_URL_ARG.source}/,
-        "HTTParty" => /HTTParty\.\w+#{HTTP_URL_ARG.source}/,
-        "RestClient" => /RestClient\.\w+#{HTTP_URL_ARG.source}/,
-        "HTTP" => /(?<![\w:])HTTP\.\w+#{HTTP_URL_ARG.source}/,
-        "Excon" => /Excon\.\w+#{HTTP_URL_ARG.source}/,
-        "Typhoeus" => /Typhoeus\.\w+#{HTTP_URL_ARG.source}/,
-        "URI.open" => /URI\.open#{HTTP_URL_ARG.source}/
-      }.freeze
-      # Net::HTTP.start("api.example.com", 443) takes a host, not a URL.
-      NET_HTTP_HOST_ARG = /Net::HTTP\.(?:start|new)\s*\(?\s*["']([^"']+)["']/
+      # Prefilter: the AST decides, on the files that name a client at all.
+      HTTP_CLIENT_NAME = /(?:#{Regexp.union(Introspectors::Listeners::HttpClientCallListener::CLIENTS).source})\.|URI\.open/
       BARE_HOST = /\A[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\z/i
-      HTTP_CLIENT_NAME = Regexp.union(HTTP_CLIENT_CALLS.keys)
 
       private_class_method def self.detect_http_clients(root)
         services = []
@@ -640,16 +627,14 @@ module RailsAiContext
             next unless source&.match?(HTTP_CLIENT_NAME)
 
             relative = file.sub("#{real_root}/", "")
-            code = source.gsub(/^[ \t]*#.*$/, "")
-            HTTP_CLIENT_CALLS.each do |detection, pattern|
-              code.scan(pattern).each do |(url)|
-                name = extract_service_name_from_url(url)
-                services << { name: name, detection: detection, file: relative } if name
+            calls = Introspectors::SourceIntrospector.walk_source(source, { http: Introspectors::Listeners::HttpClientCallListener })[:http]
+            calls.each do |call|
+              name = if call[:url]
+                extract_service_name_from_url(call[:url])
+              else
+                call[:host].match?(BARE_HOST) && service_name_from_host(call[:host])
               end
-            end
-            code.scan(NET_HTTP_HOST_ARG).each do |(host)|
-              name = host.match?(BARE_HOST) && service_name_from_host(host)
-              services << { name: name, detection: "Net::HTTP", file: relative } if name
+              services << { name: name, detection: call[:client], file: relative } if name
             end
           end
         end

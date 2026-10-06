@@ -853,6 +853,26 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     end
   end
 
+  describe "an HTTP client named only in a trailing comment or a string" do
+    it "is not a service the app calls" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/services"))
+        File.write(File.join(dir, "app/services/x.rb"), <<~RUBY)
+          class X
+            def a = run # was HTTParty.get("https://api.oldvendor.com/v1")
+            def b = "Use Faraday.get('https://docs.example.org') to test"
+            def c = ::Faraday.get("https://api.kept.example/x")
+          end
+        RUBY
+        allow(described_class).to receive(:detect_external_services).and_call_original
+
+        names = described_class.send(:detect_external_services, dir, []).map { |s| s[:name] }
+
+        expect(names).to eq(%w[Kept])
+      end
+    end
+  end
+
   describe "a service the Gemfile only names in a comment" do
     it "is not detected" do
       Dir.mktmpdir do |dir|
