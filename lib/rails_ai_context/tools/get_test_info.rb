@@ -121,7 +121,7 @@ module RailsAiContext
                 lines << "- **#{set}:**"
                 entries.each do |entry_name, attrs|
                   attr_str = attrs.map { |k, v| "#{k}: #{erb_shown(v)}" }.join(", ")
-                  label = if entry_name.to_s.include?(RailsAiContext::FixtureKeys::ERB_VALUE)
+                  label = if RailsAiContext::ConfigYaml.marked?(entry_name.to_s)
                     "`#{erb_shown(entry_name)}` _(label set by ERB)_"
                   else
                     "`#{entry_name}`"
@@ -188,7 +188,7 @@ module RailsAiContext
       end
 
       private_class_method def self.erb_shown(text)
-        text.to_s.gsub(RailsAiContext::FixtureKeys::ERB_VALUE, "<%= ... %>")
+        text.to_s.gsub(RailsAiContext::ConfigYaml::ERB_OUTPUT, "<%= ... %>")
       end
 
       private_class_method def self.shown(rel)

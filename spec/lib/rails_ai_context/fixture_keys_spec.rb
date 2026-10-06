@@ -16,7 +16,7 @@ RSpec.describe RailsAiContext::FixtureKeys do
 
   # Rails renders ERB first, so `row_<%= i %>` loads as row_0, row_1 and so on.
   it "does not read a label ERB computes as a fixture name" do
-    expect(described_class.name?("row_#{described_class::ERB_VALUE}")).to be(false)
+    expect(described_class.name?("row_#{RailsAiContext::ConfigYaml::ERB_OUTPUT}")).to be(false)
     expect(described_class.name?("erb_value_one")).to be(true)
   end
 
@@ -39,7 +39,13 @@ RSpec.describe RailsAiContext::FixtureKeys do
           password_digest: <%= password_digest %>
       YAML
 
-      expect(parsed).to eq("one" => { "email_address" => "one@example.com", "password_digest" => described_class::ERB_VALUE })
+      expect(parsed).to eq("one" => { "email_address" => "one@example.com", "password_digest" => RailsAiContext::ConfigYaml::ERB_OUTPUT })
+    end
+
+    it "drops an output tag alone on its line, which writes lines it cannot see" do
+      parsed = described_class.parse("one:\n  name: a\n<%= extra_fixtures %>\ntwo:\n  name: b\n")
+
+      expect(parsed.keys).to eq(%w[one two])
     end
 
     it "follows the DEFAULTS alias and drops the anchor, _fixture and the labels it ignores" do

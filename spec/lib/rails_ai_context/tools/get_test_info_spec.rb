@@ -269,7 +269,7 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
 
       expect(text).to include("- **users:**\n  - `one`: email_address: one@example.com, password_digest: <%= ... %>")
       expect(text).to include("`note_<%= ... %>` _(label set by ERB)_: title: T<%= ... %>")
-      expect(text).not_to include(RailsAiContext::FixtureKeys::ERB_VALUE)
+      expect(text).not_to include(RailsAiContext::ConfigYaml::ERB_OUTPUT)
       expect(text).to include("- **posts:**\n  - `one`: title: A, user: one")
     end
 
@@ -306,9 +306,9 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       write("test/fixtures/users.yml", "<% 2.times do |i| %>\nuser_<%= i %>:\n  n: <%= i %>\n<% end %>\n")
       text = full_text
 
-      expect(described_class.send(:fixture_key_for, "users", { fixture_names: { "users" => [ "user_#{RailsAiContext::FixtureKeys::ERB_VALUE}" ] } })).to be_nil
+      expect(described_class.send(:fixture_key_for, "users", { fixture_names: { "users" => [ "user_#{RailsAiContext::ConfigYaml::ERB_OUTPUT}" ] } })).to be_nil
       expect(text).to include("- **users:**\n  - `user_<%= ... %>` _(label set by ERB)_")
-      expect(text).not_to include("users(:user_#{RailsAiContext::FixtureKeys::ERB_VALUE})")
+      expect(text).not_to include("users(:user_#{RailsAiContext::ConfigYaml::ERB_OUTPUT})")
     end
 
     it "lists a label that starts with an underscore as written, with no ERB note" do
