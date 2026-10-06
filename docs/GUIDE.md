@@ -914,7 +914,7 @@ rails_get_job_pattern(detail: "full")
 
 ### rails_get_env
 
-Discover environment variables, external service dependencies, and credentials keys used by the app. Scans Ruby files for ENV[], .env.example, Dockerfile, the env Kamal's config/deploy.yml sets (secret names, clear values), config gem setting keys, Anyway::Config attributes with their env names, external HTTP calls, and credentials keys (never values).
+Discover environment variables, external service dependencies, and credentials keys used by the app. Scans Ruby files for ENV[], .env.example, Dockerfile, the env Kamal's config/deploy.yml sets (secret names; clear values, except one holding a URL or a key-like token, or under a secret-named variable, which shows as hidden, and one an ERB tag sets, which says so), config gem setting keys, Anyway::Config attributes with their env names, external HTTP calls, and credentials keys (never values).
 
 **Parameters:**
 

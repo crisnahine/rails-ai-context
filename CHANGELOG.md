@@ -76,8 +76,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`env` lists environment variables from more places**: the env Kamal's
   `config/deploy.yml` sets at the top level, for each role
   (`servers.<role>.env`) and for each `env.tags` tag (secret names, never
-  values, and clear values, except one holding a URL or a key-like token, which
-  shows as hidden, and one an ERB tag sets, which says so; a
+  values, and clear values, except one holding a URL or a key-like token, or
+  under a secret-named variable, which shows as hidden, and one an ERB tag sets, which says so; a
   `config/deploy.<destination>.yml` is named as not read), the setting keys in
   the config gem's `config/settings.yml` and `config/settings/<env>.yml` when
   the bundle has the config gem, each `Anyway::Config` class's attributes with
