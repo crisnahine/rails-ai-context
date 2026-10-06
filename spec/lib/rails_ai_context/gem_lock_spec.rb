@@ -316,6 +316,21 @@ RSpec.describe RailsAiContext::GemLock do
       end
     end
 
+    it "reads the bundle a plain = or a __FILE__-relative path names, as Rails' older plugin template writes it" do
+      [ %(ENV['BUNDLE_GEMFILE'] ||= File.expand_path('../../../../Gemfile', __FILE__)\n),
+        %(ENV["BUNDLE_GEMFILE"] = File.expand_path("../../../Gemfile", __dir__)\n) ].each do |boot_rb|
+        Dir.mktmpdir do |engine|
+          FileUtils.mkdir_p(File.join(engine, ".git"))
+          File.write(File.join(engine, "Gemfile.lock"), "GEM\n  specs:\n    rails (8.1.4)\n")
+          dummy = File.join(engine, "test/dummy")
+          FileUtils.mkdir_p(File.join(dummy, "config"))
+          File.write(File.join(dummy, "config/boot.rb"), boot_rb)
+
+          expect(described_class.for(dummy).version("rails")).to eq("8.1.4")
+        end
+      end
+    end
+
     it "never reads a bundle above the git root, nor a lockfile that links out of its directory" do
       Dir.mktmpdir do |engine|
         File.write(File.join(engine, "Gemfile.lock"), "GEM\n  specs:\n    rails (8.1.4)\n")
