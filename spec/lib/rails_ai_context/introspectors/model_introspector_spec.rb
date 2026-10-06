@@ -2185,7 +2185,6 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         write_models(dir,
           "principal.rb" => "class Principal < ApplicationRecord\n  self.table_name = \"\#{table_name_prefix}users\#{table_name_suffix}\"\nend\n",
           "group.rb" => "class Group < Principal\nend\n")
-        RailsAiContext::Introspectors::ActiveRecordSettings.clear
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
@@ -2218,7 +2217,6 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
             has_and_belongs_to_many :projects, join_table: "\#{table_name_prefix}custom_fields_projects\#{table_name_suffix}"
           end
         RUBY
-        RailsAiContext::Introspectors::ActiveRecordSettings.clear
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
@@ -2238,7 +2236,6 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         File.write(File.join(dir, "config/application.rb"),
                    "module Op\n  class Application < Rails::Application\n    config.active_record.table_name_prefix = \"op_\"\n" \
                    "    config.active_record.table_name_suffix = \"_v2\"\n  end\nend\n")
-        RailsAiContext::Introspectors::ActiveRecordSettings.clear
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 

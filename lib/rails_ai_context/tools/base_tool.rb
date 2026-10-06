@@ -188,8 +188,6 @@ module RailsAiContext
           session_reset!
           AstCache.clear
           PathResolver.clear_code_roots
-          Introspectors::TableName.clear_namespace_prefixes
-          Introspectors::ActiveRecordSettings.clear
         end
 
         # ── Session context helpers ──────────────────────────────────────

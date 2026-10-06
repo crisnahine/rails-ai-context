@@ -50,7 +50,6 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
         Dir.mktmpdir do |dir|
           FileUtils.mkdir_p(File.join(dir, "config"))
           File.write(File.join(dir, "config/application.rb"), body) if body
-          RailsAiContext::Introspectors::ActiveRecordSettings.clear
           return yield(dir)
         end
       end
@@ -300,6 +299,18 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
       end
 
       expect(result).to eq({})
+    end
+
+    it "sees an engine added after an earlier run" do
+      result = app_with("plugins/rss/plugin.rb" => "", "plugins/rss/app/models/thing.rb" => "class Thing; end\n") do |dir|
+        expect(RailsAiContext::RunCache.around { described_class.namespace_prefixes(dir) }).to eq({})
+        engine = File.join(dir, "plugins", "rss", "lib", "rss", "engine.rb")
+        FileUtils.mkdir_p(File.dirname(engine))
+        File.write(engine, "module Rss\n  class Engine < ::Rails::Engine\n    isolate_namespace Rss\n  end\nend\n")
+        RailsAiContext::RunCache.around { described_class.namespace_prefixes(dir) }
+      end
+
+      expect(result).to eq({ "Rss" => "rss_" })
     end
   end
 

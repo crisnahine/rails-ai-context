@@ -20,13 +20,11 @@ module RailsAiContext
 
       NONE = { table_name: nil, table_name_prefix: nil, table_name_suffix: nil, pluralize_table_names: nil, primary_key: nil }.freeze
 
-      PREFIX_INDEX = Concurrent::Map.new
-
       # {"RssPolling" => "rss_polling_"}: the engine prefix no model file says.
       # ponytail: reads `lib/**/engine.rb` only; walk lib wholesale if an app needs more.
       def namespace_prefixes(root)
         root = File.expand_path(root.to_s)
-        PREFIX_INDEX.compute_if_absent(root) { read_namespace_prefixes(root) }
+        RunCache.fetch([ :namespace_prefixes, root ]) { read_namespace_prefixes(root) }
       end
 
       # A table an option writes as that source (a habtm join_table), read the
@@ -34,10 +32,6 @@ module RailsAiContext
       def affixed(expression, own, root)
         statements = AstCache.parse_string(expression.to_s)&.value&.statements&.body
         statements&.size == 1 ? affixed_node(statements.first, own, root) : nil
-      end
-
-      def clear_namespace_prefixes
-        PREFIX_INDEX.clear
       end
 
       # All four declarations of one class body, read in one walk.

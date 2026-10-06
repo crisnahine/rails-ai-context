@@ -3,11 +3,10 @@
 module RailsAiContext
   module Introspectors
     # The table affixes, pluralize_table_names and schema_format the app's config and initializers
-    # set on Active Record. Cached per process and dropped at the start of each introspection run.
+    # set on Active Record. Read once per run, so a long-lived server sees the app's edits.
     module ActiveRecordSettings
       module_function
 
-      CACHE = Concurrent::Map.new
       SETTINGS = { table_name_prefix: String, table_name_suffix: String, pluralize_table_names: [ true, false ], schema_format: %i[ruby sql] }.freeze
       # Rails copies these from config.active_record onto the ActiveRecord module in an after_initialize hook, so the config wins.
       MODULE_SETTINGS = %i[schema_format].freeze
@@ -19,11 +18,7 @@ module RailsAiContext
         return {} unless root
 
         root = File.expand_path(root.to_s)
-        CACHE.compute_if_absent(root) { read(root) }
-      end
-
-      def clear
-        CACHE.clear
+        RunCache.fetch([ :active_record_settings, root ]) { read(root) }
       end
 
       # Files in Rails' load order, the last assignment of each kind winning. A Base

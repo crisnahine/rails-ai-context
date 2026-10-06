@@ -10,7 +10,6 @@ RSpec.describe RailsAiContext::Introspectors::ActiveRecordSettings do
         FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
         File.write(File.join(dir, path), body)
       end
-      described_class.clear
       return described_class.for(dir)
     end
   end
