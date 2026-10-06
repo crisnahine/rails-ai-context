@@ -6,7 +6,7 @@ module RailsAiContext
       # The class or module a record is written in, so a nested class's
       # declarations stay its own. `Sib = Class.new(Base) do` opens Sib.
       module OwnerScope
-        def initialize
+        def initialize(...)
           super
           @owner_stack = []
           @class_new_writes = []

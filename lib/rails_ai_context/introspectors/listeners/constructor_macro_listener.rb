@@ -10,6 +10,8 @@ module RailsAiContext
       # Whether the macro is that library's is the consumer's call: `attribute`
       # is also ActiveModel's.
       class ConstructorMacroListener < GenericMacroListener
+        include OwnerScope
+
         STRUCT_MACROS = %i[const prop attribute attribute?].freeze
         DRY_INITIALIZER_MACROS = %i[param option].freeze
         ATTR_EXTRAS_MACROS = %i[
@@ -20,23 +22,6 @@ module RailsAiContext
 
         def initialize
           super(STRUCT_MACROS + DRY_INITIALIZER_MACROS + ATTR_EXTRAS_MACROS + %i[extend])
-          @owner_stack = []
-        end
-
-        def on_class_node_enter(node)
-          @owner_stack.push(constant_path_string(node.constant_path))
-        end
-
-        def on_class_node_leave(_node)
-          @owner_stack.pop
-        end
-
-        def on_module_node_enter(node)
-          @owner_stack.push(constant_path_string(node.constant_path))
-        end
-
-        def on_module_node_leave(_node)
-          @owner_stack.pop
         end
 
         def on_call_node_enter(node)
