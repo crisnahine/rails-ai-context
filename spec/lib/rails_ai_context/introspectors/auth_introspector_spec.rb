@@ -129,6 +129,55 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
       end
     end
 
+    # One class can be written in several files (app/models and a pack); a file without the macro must not hide it.
+    context "with a has_secure_password class reopened in a pack" do
+      let(:files) do
+        { "app/models/vault.rb" => "class Vault < ApplicationRecord\n  has_secure_password\n  has_secure_password :recovery_code\nend\n",
+          "packs/billing/app/models/vault.rb" => "class Vault < ApplicationRecord\n  def extra; end\nend\n" }
+      end
+
+      before do
+        files.each do |path, body|
+          full = File.join(Rails.root, path)
+          FileUtils.mkdir_p(File.dirname(full))
+          File.write(full, body)
+        end
+      end
+
+      after do
+        files.each_key { |path| FileUtils.rm_f(File.join(Rails.root, path)) }
+        FileUtils.rm_rf(File.join(Rails.root, "packs"))
+      end
+
+      it "keeps the password and digest from the file that declares them" do
+        expect(result[:authentication][:has_secure_password]).to include("Vault")
+        expect(result[:authentication][:secure_password_digests]).to include("Vault" => [ "recovery_code" ])
+      end
+    end
+
+    # A nested class's macros are its own.
+    context "with a has_secure_password in a nested class" do
+      let(:fixture_model) { File.join(Rails.root, "app/models/locker.rb") }
+
+      before do
+        File.write(fixture_model, <<~RUBY)
+          class Locker < ApplicationRecord
+            has_secure_password :recovery_password
+
+            class Token < ApplicationRecord
+              has_secure_password :code
+            end
+          end
+        RUBY
+      end
+
+      after { FileUtils.rm_f(fixture_model) }
+
+      it "does not credit the nested class's digest to the outer model" do
+        expect(result[:authentication][:secure_password_digests]["Locker"]).to eq([ "recovery_password" ])
+      end
+    end
+
     context "with Devise in a model" do
       let(:fixture_model) { File.join(Rails.root, "app/models/admin.rb") }
 

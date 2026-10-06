@@ -366,8 +366,10 @@ module RailsAiContext
       end
 
       def secure_password_attributes
-        attributes = model_asts.to_h do |model_name, ast|
-          [ model_name, ast[:macros].select { |m| m[:macro] == :has_secure_password }.map { |m| m[:attribute] } ]
+        # One class can span several files, and a nested class's macros are its own.
+        attributes = model_asts.each_with_object(Hash.new { |h, k| h[k] = [] }) do |(model_name, ast), acc|
+          own = ConcernMembership.owned_by(ast[:macros], model_name)
+          acc[model_name] |= own.select { |m| m[:macro] == :has_secure_password }.map { |m| m[:attribute] }
         end
         login = attributes.select { |_, attrs| attrs.include?("password") }.keys.sort
         digests = attributes.transform_values { |attrs| attrs - [ "password" ] }.reject { |_, attrs| attrs.empty? }
