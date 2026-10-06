@@ -152,6 +152,16 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       expect(interface("bad")).to include("**Declared locals** (Rails 7.1+ magic comment): title")
     end
 
+    # `+` sorts before `.`, and Rails renders the plain file for a request with no variant.
+    it "reads the plain partial ahead of a variant beside it" do
+      File.write(File.join(@root, "app/views/notes/_post.html+mobile.erb"), "<%# locals: (compact:) %>\n<%= compact %>\n")
+      File.write(File.join(@root, "app/views/notes/_post.html.erb"), "<%# locals: (title:) %>\n<%= title %>\n")
+
+      text = interface("post")
+      expect(text).to include("app/views/notes/_post.html.erb", "**Declared locals** (Rails 7.1+ magic comment): title")
+      expect(text).not_to include("# Partial: notes/_post.html+mobile.erb")
+    end
+
     it "says an empty list rejects every local" do
       text = interface("none")
 

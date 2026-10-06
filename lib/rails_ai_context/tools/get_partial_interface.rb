@@ -209,9 +209,11 @@ module RailsAiContext
         # A fixed extension list refused `.text.erb`, which the Available
         # list built by globbing had just offered. Rails names a partial by
         # its directory and basename, whatever format and handler follow.
+        # The plain file before a locale or variant one: Rails renders it for a request that asks for neither.
+        plain_first = ->(paths) { paths.sort_by { |path| [ RailsAiContext::ViewFile.alternate_of(path) ? 1 : 0, path ] } }
         candidates = [
-          *Dir.glob(File.join(views_dir, *dir_parts, "#{prefixed_basename}.*")).sort,
-          *Dir.glob(File.join(views_dir, *dir_parts, "#{unprefixed_basename}.*")).sort,
+          *plain_first.call(Dir.glob(File.join(views_dir, *dir_parts, "#{prefixed_basename}.*"))),
+          *plain_first.call(Dir.glob(File.join(views_dir, *dir_parts, "#{unprefixed_basename}.*"))),
           File.join(views_dir, partial)
         ]
 
