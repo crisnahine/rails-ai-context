@@ -1908,7 +1908,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       sql = static_of("structure.sql", <<~SQL)[:tables]
         CREATE TABLE "docs" ("id" integer PRIMARY KEY);
         CREATE VIRTUAL TABLE plain USING rtree;
-        CREATE VIEW broken AS SELECT
+        CREATE VIEW broken
       SQL
 
       expect(rb.keys).to eq(%w[docs bare loose])
