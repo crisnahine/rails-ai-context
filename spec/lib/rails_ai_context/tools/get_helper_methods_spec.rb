@@ -550,6 +550,19 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
         expect(text).not_to include("never")
       end
 
+      it "parses a lib module kept in its outer constant's file once" do
+        FileUtils.mkdir_p(File.join(@root, "lib"))
+        source = "module OuterKit\n  module Helpers\n    extend ActiveSupport::Concern\n    included do\n      helper_method :kit_title\n    end\n  end\nend\n"
+        File.write(File.join(@root, "lib/outer_kit.rb"), source)
+        File.write(File.join(@root, "app/controllers/kit_controller.rb"), "class KitController < ApplicationController\n  include OuterKit::Helpers\nend\n")
+        allow(Prism).to receive(:parse).and_call_original
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("- `kit_title` (OuterKit::Helpers, `lib/outer_kit.rb`)")
+        expect(Prism).to have_received(:parse).with(source).once
+      end
+
       it "lists the ones a module kept in its outer constant's lib file declares" do
         FileUtils.mkdir_p(File.join(@root, "lib"))
         File.write(File.join(@root, "lib/canonical.rb"), <<~RUBY)

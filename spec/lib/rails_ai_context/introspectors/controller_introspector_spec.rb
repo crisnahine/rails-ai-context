@@ -975,6 +975,18 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         expect(booted.sort).to eq(static.sort)
       end
 
+      it "lists a filter argument it cannot name statically, marked as not read" do
+        source = <<~RUBY
+          class GadgetsController < ApplicationController
+            before_action :authenticate, AuditFilter.build(:x), only: :show
+          end
+        RUBY
+
+        static = introspector.send(:extract_filters_from_source, source).map { |f| [ f[:kind], f[:name], f[:only] ] }
+
+        expect(static).to eq([ [ "before", "authenticate", [ "show" ] ], [ "before", "AuditFilter.build(:x) (not read)", [ "show" ] ] ])
+      end
+
       # http_authentication.rb: `before_action(options) { http_basic_authenticate_or_request_with ... }`.
       it "names the filter http_basic_authenticate_with adds, in both tiers, password left out" do
         source = <<~RUBY

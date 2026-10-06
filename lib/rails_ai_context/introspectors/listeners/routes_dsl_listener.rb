@@ -29,15 +29,15 @@ module RailsAiContext
         # Statement-level calls that draw nothing into the table.
         NON_ROUTING = %i[require require_relative puts p pp print warn raise default_url_options extend include].freeze
 
-        # `scope` is the frames a `draw` of this file sits in, as its record carries them.
-        # `route_set` answers { prefix:, name_prefix: } for an app class that draws routes.
-        # `names` is the set of route names taken so far, shared by every file of one table.
-        # `multi_path`: the app's Rails draws every path of `get "/a", "/b"`; 8.1 raises instead.
         # ponytail: an engine's namespace is its first segment; read isolate_namespace if one differs.
         def self.engine_namespace(engine)
           engine.split("::").first.underscore
         end
 
+        # `scope` is the frames a `draw` of this file sits in, as its record carries them.
+        # `route_set` answers { prefix:, name_prefix: } for an app class that draws routes.
+        # `names` is the set of route names taken so far, shared by every file of one table.
+        # `multi_path`: the app's Rails draws every path of `get "/a", "/b"`; 8.1 raises instead.
         def initialize(scope: [], route_set: nil, names: Set.new, multi_path: false)
           super()
           @multi_path = multi_path

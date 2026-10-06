@@ -14,8 +14,8 @@ module RailsAiContext
       #
       # A path built from __dir__ or __FILE__ is read only when the walk is given the helper's
       # `file`, relative to the app root.
-      # The path forms are the autoload listener's, so both read one way. A write
-      # whose path it cannot read records :unread, so a caller still knows the setting is set.
+      # The path forms are LiteralPaths'. A write whose path it cannot read records :unread,
+      # so a caller still knows the setting is set.
       class FixturePathsListener < BaseListener
         include LiteralPaths
 

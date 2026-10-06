@@ -22,6 +22,8 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
       config.api_token_settings = Rails.application.config_for("tokens", env: "production")
       config.x.stripe = config_for(Rails.root.join("config", "stripe.yml"), env: Rails.env)
       config.other = config_for(Rails.root.join(dir, "x.yml"), env: ENV["DEPLOY_ENV"])
+      config.rooted = config_for(config.root.join("config", "rooted.yml"))
+      config.gem = config_for(Gem.root.join("config", "gem.yml"))
       config.plain = 3
     RUBY
 
@@ -30,6 +32,8 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
       { argument: '"tokens"', file: "config/tokens.yml", env: "production" },
       { argument: 'Rails.root.join("config", "stripe.yml")', file: "config/stripe.yml" },
       { argument: 'Rails.root.join(dir, "x.yml")', env: :expression },
+      { argument: 'config.root.join("config", "rooted.yml")', file: "config/rooted.yml" },
+      { argument: 'Gem.root.join("config", "gem.yml")' },
       nil
     ])
   end
@@ -67,6 +71,28 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
 
     expect(results.map { |r| [ r[:path], r[:value] ] }).to eq([ [ [ :table_name_prefix ], "app_" ] ])
     expect(assignments(source)).to eq([])
+  end
+
+  it "reads a rooted ActiveSupport receiver and a block parameter in the on_load hook as its root" do
+    source = <<~RUBY
+      ::ActiveSupport.on_load(:active_record) { self.table_name_prefix = "x_" }
+      ActiveSupport.on_load(:active_record) { |base| base.pluralize_table_names = false }
+      ActiveSupport.on_load(:active_record) { _1.primary_key_prefix_type = :table_name }
+      ActiveSupport.on_load(:active_record) { it.table_name_suffix = "_y" }
+      ActiveSupport.on_load(:active_record) { |(a, b)| a.skipped = 1 }
+      ActiveSupport.on_load(:active_record) do |base|
+        other = base
+        def self.helper(base)
+          base.ignored = 1
+        end
+      end
+      base.outside = 3
+    RUBY
+
+    results = assignments(source, "on_load(:active_record)")
+
+    expect(results.map { |r| [ r[:path], r[:value] ] }).to eq([ [ [ :table_name_prefix ], "x_" ], [ [ :pluralize_table_names ], false ],
+                                                                    [ [ :primary_key_prefix_type ], :table_name ], [ [ :table_name_suffix ], "_y" ] ])
   end
 
   it "reads a nested config assignment" do

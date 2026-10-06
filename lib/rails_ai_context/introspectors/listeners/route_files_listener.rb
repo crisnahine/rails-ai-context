@@ -12,6 +12,8 @@ module RailsAiContext
       # Literal paths and literal globs only; a list the app computes is
       # recorded as computed so the answer can say routes are missing.
       class RouteFilesListener < BaseListener
+        include LiteralPaths
+
         ROUTES_KEY = "config/routes.rb"
         APPENDING = { :<< => :append, push: :append, append: :append, concat: :append,
                       unshift: :prepend, prepend: :prepend }.freeze
@@ -63,25 +65,16 @@ module RailsAiContext
           when :map then node.receiver.is_a?(Prism::ArrayNode) && collect(node.receiver, paths, globs)
           when :to_s then collect(node.receiver, paths, globs)
           when :join
-            segments = rails_root_join(node)
+            segments = app_root_join(node)
             segments ? (paths << File.join(*segments)) : false
           when :[], :glob
             return false unless dir_constant?(node.receiver)
 
             pattern = Array(node.arguments&.arguments).first
-            literal = pattern.is_a?(Prism::StringNode) ? [ pattern.unescaped ] : (pattern.is_a?(Prism::CallNode) && rails_root_join(pattern))
+            literal = pattern.is_a?(Prism::StringNode) ? [ pattern.unescaped ] : (pattern.is_a?(Prism::CallNode) && app_root_join(pattern))
             literal ? (globs << File.join(*literal)) : false
           else false
           end
-        end
-
-        def rails_root_join(node)
-          return nil unless node.is_a?(Prism::CallNode) && node.name == :join && node.receiver&.slice == "Rails.root"
-
-          segments = Array(node.arguments&.arguments)
-          return nil unless segments.all? { |segment| segment.is_a?(Prism::StringNode) }
-
-          segments.map(&:unescaped)
         end
 
         def dir_constant?(node)

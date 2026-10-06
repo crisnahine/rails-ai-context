@@ -10,7 +10,7 @@ module RailsAiContext
       #   config.view_component.preview_paths << "#{Rails.root}/spec/previews"
       #   config.action_mailer.preview_paths << "#{root}/lib/mailer_previews"
       #
-      # The path forms are the autoload listener's, so both read one way.
+      # The path forms are LiteralPaths'.
       class PreviewPathsListener < BaseListener
         include LiteralPaths
 

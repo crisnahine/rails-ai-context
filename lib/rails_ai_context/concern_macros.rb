@@ -10,7 +10,7 @@ module RailsAiContext
   module ConcernMacros
     MAX_DEPTH = 3
 
-    # What `collect` found, by name; it still destructures in this order.
+    # What collect found; to_ary keeps positional destructuring in field order.
     Collected = Struct.new(:collected, :unread, :hidden, :included_calls, :placement, :skipped, :block_sites, :mixins) do
       def to_ary = to_a
     end
@@ -1013,7 +1013,7 @@ module RailsAiContext
     #   the kind from outside its file, read from the file they name
     # @param listeners [Hash] the listener map each concern file is walked
     #   with; it must carry `mixins` for the walk to follow nested concerns
-    # @return [Collected] (Hash, Array<String>, Array<String>, Hash, Hash, Set, Hash, Array):
+    # @return [Collected] its fields, in order:
     #   the collected entries per key, the names whose file could not be read,
     #   the names `excluded_concerns` hid that the walk would otherwise have
     #   read, the methods `included` blocks call with their call sites, and for

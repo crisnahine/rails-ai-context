@@ -231,11 +231,14 @@ RSpec.describe RailsAiContext::Introspectors::RakeTaskIntrospector do
       end
     end
 
-    it "leaves the keys out for an app with none, and survives a generator file that does not parse" do
+    it "leaves the keys out for an app with none" do
       expect(result).not_to include(:generators, :generator_templates, :railties)
+    end
 
+    it "survives a generator file that does not parse, and still lists the class it declares" do
       write("lib/generators/bad/bad_generator.rb", "class BadGenerator < (((\n\xFF")
-      expect { result }.not_to raise_error
+
+      expect(result[:generators]).to eq([ { command: "bin/rails generate bad", file: "lib/generators/bad/bad_generator.rb" } ])
     end
   end
 end
