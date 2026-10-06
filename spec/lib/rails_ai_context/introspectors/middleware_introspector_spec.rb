@@ -512,7 +512,7 @@ RSpec.describe RailsAiContext::Introspectors::MiddlewareIntrospector do
       File.write(rackup, "use (((\n\xFF\n")
 
       expect { introspector.call }.not_to raise_error
-      expect(Array(introspector.call[:rackup])).to all(include(:call, :target))
+      expect(introspector.call[:rackup]).to be_blank
     end
   end
 
