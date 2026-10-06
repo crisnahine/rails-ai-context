@@ -133,15 +133,15 @@ RSpec.describe RailsAiContext::Introspectors::ControllerSettings do
         .to eq(name: "admin", from: "Admin::BaseController")
     end
 
-    # actionview's _write_layout_method: an action the condition leaves out runs the name clause,
-    # layouts/<controller_path> and then `super`, the parent's own `_layout`.
-    it "gives the other actions of a conditional layout the ancestor's declared layout" do
+    # Every ancestor's `_layout` checks the same inherited conditions, so the left-out actions
+    # never reach an ancestor's declared layout, only each class's layouts/<controller_path>.
+    it "gives the other actions of a conditional layout the name lookup over the whole chain" do
       context = ctx("Admin::BaseController" => { parent_class: "ApplicationController", layout: { method: "choose" } },
                     "Admin::CondController" => { parent_class: "Admin::BaseController", layout: { name: "special", only: [ "index" ] } })
 
       expect(described_class.resolve(context, "Admin::CondController", root: @root)[:layout])
         .to eq(name: "special", only: [ "index" ], from: "Admin::CondController",
-               otherwise: { method: "choose", from: "Admin::BaseController" })
+               otherwise: { name: "application", implied: true })
     end
 
     it "reads `layout nil` as the name lookup from this class, then the parent's layout" do
@@ -151,8 +151,16 @@ RSpec.describe RailsAiContext::Introspectors::ControllerSettings do
                     "Admin::OtherController" => { parent_class: "Admin::BaseController", layout: { by_name: true } })
       File.write(File.join(@root, "app/views/layouts/admin/things.html.erb"), "")
 
-      expect(described_class.resolve(context, "Admin::ThingsController", root: @root)[:layout]).to eq(name: "admin/things", implied: true)
+      expect(described_class.resolve(context, "Admin::ThingsController", root: @root)[:layout])
+        .to eq(name: "admin/things", implied: true, from: "Admin::ThingsController")
       expect(described_class.resolve(context, "Admin::OtherController", root: @root)[:layout]).to eq(method: "choose", from: "Admin::BaseController")
+    end
+
+    it "names the `layout nil` line when the name lookup finds the layout" do
+      phrase = described_class.layout_phrase(name: "application", implied: true, from: "CommentsController")
+
+      expect(phrase).to eq("`application` (`layout nil` in CommentsController; found as layouts/application)")
+      expect(described_class.layout_phrase(name: "application", implied: true)).to eq("`application` (none declared; found as layouts/application)")
     end
 
     it "says which ancestor it could not read instead of guessing" do
