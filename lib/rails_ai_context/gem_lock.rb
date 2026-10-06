@@ -308,7 +308,7 @@ module RailsAiContext
       require "prism"
       content = SafeFile.read(path, max_size: MAX_SIZE)
       content && Prism.parse(content)
-    rescue SystemCallError, ArgumentError
+    rescue SystemCallError, ArgumentError, LoadError
       nil
     end
     private_class_method :gemfile_parse
