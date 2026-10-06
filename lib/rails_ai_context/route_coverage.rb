@@ -82,7 +82,7 @@ module RailsAiContext
     end
 
     # What a table read from source leaves out; `routes` words it as a note instead of a clause.
-    GEM_DRAWN = "routes Rails' engines and gems draw at boot not read without booting"
+    GEM_DRAWN = "routes Rails' engines and gems draw at boot"
 
     # A suffix rather than a predicate, so no call site needs a conditional of
     # its own - that shape is what let nine of them forget.
@@ -102,7 +102,7 @@ module RailsAiContext
       parts << "#{CountPhrase.call(unread, 'in-repo engine route file')} not read" if unread.positive?
       in_engines = Array(routes[:engine_routes]).sum { |group| Array(group[:routes]).size }
       parts << "#{in_engines} more in engine tables" if in_engines.positive?
-      parts << GEM_DRAWN if gem_drawn && routes[:confidence] == Confidence::STATIC
+      parts << "#{GEM_DRAWN} not read without booting" if gem_drawn && routes[:confidence] == Confidence::STATIC
       return "" if parts.empty?
 
       ", #{parts.join(', ')}"

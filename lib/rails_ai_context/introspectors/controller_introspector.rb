@@ -186,7 +186,7 @@ module RailsAiContext
       end
 
       def own_class_declarations(name, source, walked)
-        declared = class_declarations(source, walked).merge(block_formats: block_formats(source))
+        declared = class_declarations(source, walked).merge(block_formats: block_formats(source, walked))
         (@class_declarations ||= {})[name] = declared
         declared.merge(respond_to_formats: (fold_formats(Set.new, declared[:formats]).to_a | declared[:block_formats]).sort)
       end
@@ -271,9 +271,9 @@ module RailsAiContext
           filters: filters,
           concerns: concerns,
           concerns_unread: unread.presence,
-          strong_params: extract_strong_params(source),
+          strong_params: extract_strong_params(source, walked),
           respond_to_formats: declared[:respond_to_formats],
-          rescue_from: extract_rescue_from(source),
+          rescue_from: extract_rescue_from(source, walked),
           rate_limits: declared[:rate_limits].presence,
           turbo_stream_actions: extract_turbo_stream_actions(source),
           **ControllerSettings.from_source(source, walked, root: app.root.to_s, within: class_name),
@@ -308,9 +308,9 @@ module RailsAiContext
           inherited_actions: (actions - own).presence,
           filters: filters,
           concerns: concerns,
-          strong_params: extract_strong_params(source),
+          strong_params: extract_strong_params(source, walked),
           respond_to_formats: declared[:respond_to_formats],
-          rescue_from: extract_rescue_from(source),
+          rescue_from: extract_rescue_from(source, walked),
           rate_limits: declared[:rate_limits].presence,
           turbo_stream_actions: extract_turbo_stream_actions(source),
           **ControllerSettings.from_source(source, walked, root: app.root.to_s, within: ctrl.name),
@@ -618,13 +618,17 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "extract_concerns_from_source AST")
       end
 
-      def extract_strong_params(source)
+      def extract_strong_params(source, walked = class_body_walk(source))
         return [] if source.nil?
 
         parse_result = AstCache.parse_string(source)
         param_methods = []
         find_param_methods(parse_result.value, param_methods)
-        param_methods
+        nested = nested_ranges(walked)
+        param_methods.reject do |entry|
+          offset = entry.delete(:offset)
+          nested.any? { |range| range.cover?(offset) }
+        end
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "extract_strong_params AST")
       end
@@ -632,8 +636,7 @@ module RailsAiContext
       def find_param_methods(node, results)
         return unless node.respond_to?(:child_nodes)
         if node.is_a?(Prism::DefNode) && node.name.to_s.end_with?("_params")
-          details = extract_permit_from_def(node)
-          results << details
+          results << extract_permit_from_def(node).merge(offset: node.location.start_offset)
         end
         node.child_nodes.compact.each { |child| find_param_methods(child, results) }
       end
@@ -831,13 +834,15 @@ module RailsAiContext
         end
       end
 
-      def block_formats(source)
+      def block_formats(source, walked = class_body_walk(source))
         return [] if source.nil?
 
         parse_result = AstCache.parse_string(source)
         respond_to_blocks = []
         formats = []
         find_respond_to_blocks(parse_result.value, respond_to_blocks)
+        nested = nested_ranges(walked)
+        respond_to_blocks.reject! { |block| nested.any? { |range| range.cover?(block.location.start_offset) } }
         respond_to_blocks.each { |block| find_format_calls(block, formats) }
         formats.uniq
       rescue => e
@@ -864,14 +869,10 @@ module RailsAiContext
         node.child_nodes.compact.each { |child| find_format_calls(child, formats) }
       end
 
-      def extract_rescue_from(source)
-        return [] if source.nil?
+      def extract_rescue_from(source, walked = class_body_walk(source))
+        return [] if source.nil? || walked.nil?
 
-        ast_result = SourceIntrospector.walk_source(source, {
-          rescue_from: -> { Listeners::GenericMacroListener.new(:rescue_from) }
-        })
-        raw = ast_result[:rescue_from] || []
-        raw.flat_map do |entry|
+        SourceIntrospector.class_level(walked[:rescue_from], walked).flat_map do |entry|
           handler = entry[:options][:with]&.to_s
           # The exception classes are the listener's positional values; `args`
           # is symbols only, so a constant reaches this line through `values`.
@@ -883,16 +884,22 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "extract_rescue_from AST")
       end
 
-      # One walk of the class body serves the rate limits, the respond_to formats and the settings.
+      # One walk of the class body serves the rate limits, the respond_to formats, rescue_from and the settings.
       def class_body_walk(source)
         return nil if source.nil?
 
         SourceIntrospector.walk_source(source, ControllerSettings::LISTENERS.merge(
           rate_limit: -> { Listeners::GenericMacroListener.new(:rate_limit) },
+          rescue_from: -> { Listeners::GenericMacroListener.new(:rescue_from) },
           respond_to: -> { Listeners::GenericMacroListener.new(:respond_to, :clear_respond_to) }
         ))
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "class_body_walk")
+      end
+
+      # A class or module nested in the controller declares and defines only for itself.
+      def nested_ranges(walked)
+        Array(walked && walked[:nested])
       end
 
       # Each `rate_limit` the class body declares (`name:` lets one controller declare

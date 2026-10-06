@@ -142,28 +142,14 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
         File.write(File.join(root, "app/models/post.rb"), "class Post < ApplicationRecord\n  has_many :replies, class_name: \"Comment\"\n  belongs_to :starter, class_name: \"Comment\"\n  has_many :staff, class_name: \"Employee\"\nend\n")
         File.write(File.join(root, "app/models/comment.rb"), "class Comment < ApplicationRecord; end\n")
         File.write(File.join(root, "app/models/employee.rb"), "class Employee < ApplicationRecord; end\n")
-        refs = described_class.new(RailsAiContext::StaticApp.new(root)).send(:extract_partial_refs, "<%= render @post.replies %>\n<%= render @post.starter %>\n<%= render @post.staff %>")
-        expect(refs).to contain_exactly("comments", "comment", "employees")
+        refs = described_class.new(RailsAiContext::StaticApp.new(root)).send(:extract_partial_refs, "<%= render @post.replies %>\n<%= render @post.starter %>\n<%= render @post.staff %>\n<%= render @posts %>")
+        expect(refs).to contain_exactly("comments", "comment", "employees", "posts")
       end
     end
 
     it "reads a chain on a receiver that is no model from the records it names, when the app has that model" do
       expect(introspector.send(:extract_partial_refs, "<%= render current_user.comments.recent %>")).to eq([ "comments" ])
       expect(introspector.send(:extract_partial_refs, "<%= render current_account.widgets %>")).to be_empty
-    end
-
-    it "names the records of an association named apart from its class by that class" do
-      Dir.mktmpdir("rendered") do |dir|
-        FileUtils.mkdir_p(File.join(dir, "app/models"))
-        File.write(File.join(dir, "app/models/post.rb"),
-                   "class Post < ApplicationRecord\n  has_many :replies, class_name: \"Comment\"\n  belongs_to :writer, class_name: \"User\"\nend\n")
-        File.write(File.join(dir, "app/models/comment.rb"), "class Comment < ApplicationRecord\nend\n")
-        File.write(File.join(dir, "app/models/user.rb"), "class User < ApplicationRecord\nend\n")
-        allow(introspector).to receive(:root).and_return(dir)
-
-        refs = introspector.send(:extract_partial_refs, "<%= render @post.replies %>\n<%= render @post.writer %>\n<%= render @posts %>")
-        expect(refs).to eq(%w[comments user posts])
-      end
     end
 
     it "still detects render @ivar" do

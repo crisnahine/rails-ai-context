@@ -1349,6 +1349,44 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
     end
 
+    it "leaves out the formats, strong params and rescue_from of a class nested in the body" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "admin"))
+        File.write(File.join(dir, "app", "controllers", "admin", "reports_controller.rb"), <<~RUBY)
+          module Admin
+            class ReportsController < ApplicationController
+              class Exporter < ActionController::Base
+                rescue_from ArgumentError, with: :oops
+                def index
+                  respond_to { |format| format.csv { head :ok } }
+                end
+
+                private
+
+                def export_params = params.permit(:a)
+              end
+
+              rescue_from KeyError, with: :missing
+
+              def index
+                respond_to { |format| format.html }
+              end
+
+              private
+
+              def report_params = params.permit(:b)
+            end
+          end
+        RUBY
+
+        entry = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:controllers]["Admin::ReportsController"]
+
+        expect(entry[:respond_to_formats]).to eq([ "html" ])
+        expect(entry[:strong_params].map { |sp| sp[:name] }).to eq([ "report_params" ])
+        expect(entry[:rescue_from]).to eq([ { exception: "KeyError", handler: "missing" } ])
+      end
+    end
+
     # The path is the only thing carrying the namespace when the source does
     # not, so it stays the answer there.
     it "falls back to the path when the source declares a bare name" do

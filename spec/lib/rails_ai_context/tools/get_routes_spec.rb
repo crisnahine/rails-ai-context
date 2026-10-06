@@ -369,6 +369,13 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
       end
     end
 
+    it "names the engines right after the routes they draw" do
+      expect(described_class.call.content.first[:text]).to include(
+        "_Read from source: routes Rails' engines and gems draw at boot (Active Storage, Action Mailbox, conductor) " \
+        "are read only with the app booted, so no count here includes them._"
+      )
+    end
+
     it "says so even when the app's files draw no framework route" do
       static_routes[:by_controller].delete("rails/health")
 
