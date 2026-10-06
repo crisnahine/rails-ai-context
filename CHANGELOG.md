@@ -140,8 +140,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Read from `app/api` and `lib/api` in both tiers; an edit there refreshes the
   MCP server's cached answer. (#411)
 - **`service_pattern` reads more service shapes.** It reads `app/interactions`
-  and `app/interactors` as well as `app/services`, lists an interactor
-  organizer's steps in order, and shows an Initialize line and an Inputs section
+  and `app/interactors` as well as `app/services` (so does the generated files'
+  Services line), lists an interactor organizer's steps in order, and shows an Initialize line and an Inputs section
   for a service whose constructor comes from T::Struct `const`/`prop`,
   Dry::Struct `attribute`, dry-initializer `param`/`option` or the attr_extras
   initializers. Dry::Struct attributes and dry-initializer params and options an

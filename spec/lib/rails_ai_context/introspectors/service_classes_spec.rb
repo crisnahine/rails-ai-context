@@ -248,6 +248,16 @@ RSpec.describe RailsAiContext::Introspectors::ServiceClasses do
     end
   end
 
+  it "names the interactors and interactions the tool lists" do
+    Dir.mktmpdir do |root|
+      %w[services interactors interactions].each { |dir| FileUtils.mkdir_p(File.join(root, "app", dir)) }
+      File.write(File.join(root, "app", "services", "charge_card.rb"), "class ChargeCard\n  def self.call; end\nend\n")
+      File.write(File.join(root, "app", "interactors", "place_order.rb"), "class PlaceOrder\n  include Interactor\nend\n")
+      File.write(File.join(root, "app", "interactions", "sign_up.rb"), "class SignUp < ActiveInteraction::Base; end\n")
+      expect(described_class.names(root)).to eq(%w[ChargeCard PlaceOrder SignUp])
+    end
+  end
+
   it "answers nothing for an app with no service directory" do
     Dir.mktmpdir { |root| expect(described_class.names(root)).to eq([]) }
   end
