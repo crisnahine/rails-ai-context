@@ -90,4 +90,12 @@ RSpec.describe "Tool inventory drift" do
     expect(offenders).to be_empty,
       "Doc lines stating a tool total other than #{count}:\n#{offenders.join("\n")}"
   end
+
+  it "states the listener count on the architecture page as the listener files hold it" do
+    listeners = Dir.glob(File.join(repo_root, "lib/rails_ai_context/introspectors/listeners/*_listener.rb"))
+      .reject { |path| File.basename(path) == "base_listener.rb" }
+    stated = File.read(File.join(repo_root, "docs", "ARCHITECTURE.md")).scan(/(\d+) [Ll]isteners/).flatten.map(&:to_i)
+
+    expect(stated).to eq([ listeners.size ])
+  end
 end

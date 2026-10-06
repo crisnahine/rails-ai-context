@@ -26,7 +26,7 @@ graph TD
         subgraph engine["Introspection Engine"]
             direction LR
             I["Introspectors\n40 modules\nPresets\nCached"]
-            AST["AST Engine\nPrism\n40 listeners\nConfidence tags"]
+            AST["AST Engine\nPrism\n44 listeners\nConfidence tags"]
             H["Hydration Layer\nSchema hints\ninjected into\ntool responses"]
         end
 
@@ -134,7 +134,7 @@ Two more answer a question a tool asks:
 
 - **AstCache** - Thread-safe parse cache (`Concurrent::Map`), keyed by path + SHA256 + mtime; a stat match answers without a read for a file already two seconds older than the read that recorded it
 - **SourceIntrospector** - Single-pass Prism Dispatcher walks the AST once, feeding every registered listener simultaneously
-- **26 Listeners** - Associations, Validations, Scopes, Enums, Callbacks, Macros and Methods are the default map for model analysis; the rest are used through targeted walks over schema dumps, migrations, Gemfiles, rake tasks and initializers, and `MethodCallListener` reports a named call with its arguments and options wherever one is asked for
+- **Listeners** - Associations, Validations, Scopes, Enums, Callbacks, Macros and Methods are the default map for model analysis; the rest are used through targeted walks over schema dumps, migrations, Gemfiles, rake tasks and initializers, and `MethodCallListener` reports a named call with its arguments and options wherever one is asked for
 - **Confidence** - Every result carries `[VERIFIED]` (static literals) or `[INFERRED]` (dynamic expressions), and a record in a static-tier entry is capped at `[STATIC]`, since no record can claim more than the tier that carries it
 
 ### Tool Registry (`lib/rails_ai_context/tools/base_tool.rb`)
