@@ -49,8 +49,9 @@ module RailsAiContext
       end
 
       # Walk a file with a custom listener map. Returns { key => results_array }.
-      def self.walk(path, listener_map = LISTENER_MAP)
-        result = AstCache.parse(path)
+      # A caller that already read the file passes `source`, so its other reads share the parse.
+      def self.walk(path, listener_map = LISTENER_MAP, source: nil)
+        result = source ? AstCache.parse_string(source) : AstCache.parse(path)
         walk_dispatch(result, listener_map)
       end
 
