@@ -143,6 +143,16 @@ RSpec.describe RailsAiContext::Introspectors::ActiveSupportIntrospector do
     it "still reads the concerns off disk" do
       expect(result[:concerns]).to be_a(Hash)
     end
+
+    it "reads a TaggedLogging initializer in a subfolder and marks the tags unavailable" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config/initializers/log"))
+        File.write(File.join(dir, "config/initializers/log/tagged.rb"), "Rails.logger = ActiveSupport::TaggedLogging.new(Logger.new(STDOUT))\n")
+        tagged = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:tagged_logging]
+        expect(tagged).to eq(configured: true, initializer: "config/initializers/log/tagged.rb",
+                             tags: { unavailable: RailsAiContext::Introspectors::StaticTier.unavailable_reason })
+      end
+    end
   end
 
   describe "message verifier usage" do

@@ -33,7 +33,7 @@ module RailsAiContext
           deprecators: unavailable,
           message_verifier_usage: extract_message_verifier_usage,
           notification_subscriptions: scan_sources[:notification_subscriptions],
-          tagged_logging: detect_tagged_logging,
+          tagged_logging: detect_tagged_logging(static: true),
           on_load_hooks: unavailable,
           cache_usage: unavailable
         }
@@ -195,10 +195,12 @@ module RailsAiContext
         (defs.find { |m| m[:offset] > call[:offset] } || defs.last)&.dig(:owner)&.last
       end
 
-      def detect_tagged_logging
+      # config.log_tags is evaluated at boot, so a static run reads only the initializer.
+      def detect_tagged_logging(static: false)
         result = { configured: false }
-        config_logger = app.config.log_tags
-        if config_logger.is_a?(Array) && config_logger.any?
+        if static
+          result[:tags] = { unavailable: StaticTier.unavailable_reason }
+        elsif (config_logger = app.config.log_tags).is_a?(Array) && config_logger.any?
           result[:configured] = true
           result[:tags] = config_logger.map(&:to_s)
         end

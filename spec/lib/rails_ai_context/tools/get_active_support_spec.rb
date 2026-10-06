@@ -92,6 +92,12 @@ RSpec.describe RailsAiContext::Tools::GetActiveSupport do
       expect(text).to include("**Tags:** request_id")
     end
 
+    it "says the tags are unavailable when a static run cannot read config.log_tags" do
+      active_support_data[:tagged_logging] = { configured: false, tags: { unavailable: "booted only" } }
+      text = described_class.call.content.first[:text]
+      expect(text).to include("## Tagged Logging", "- **Tags:** [UNAVAILABLE: booted only]")
+    end
+
     it "renders subscribed on_load hooks" do
       text = described_class.call.content.first[:text]
       expect(text).to include("## Subscribed on_load Hooks")

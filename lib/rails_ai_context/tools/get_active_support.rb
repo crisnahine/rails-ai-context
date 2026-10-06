@@ -120,10 +120,16 @@ module RailsAiContext
 
         def render_tagged_logging(lines, tagged)
           tagged = tagged || {}
-          return unless tagged[:configured]
+          tags = tagged[:tags]
+          unavailable = tags[:unavailable] if tags.is_a?(Hash)
+          return unless tagged[:configured] || unavailable
 
           lines << "" << "## Tagged Logging"
-          lines << "- **Tags:** #{Array(tagged[:tags]).join(', ')}" if tagged[:tags]&.any?
+          if unavailable
+            lines << "- **Tags:** #{RailsAiContext::Confidence.unavailable(unavailable)}"
+          elsif tags&.any?
+            lines << "- **Tags:** #{Array(tags).join(', ')}"
+          end
           lines << "- **Configured in:** `#{tagged[:initializer]}`" if tagged[:initializer]
         end
 
