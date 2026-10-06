@@ -149,7 +149,7 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
     it "degrades on a partial whose bytes are not valid UTF-8" do
       File.binwrite(File.join(@root, "app/views/notes/_bad.html.erb"), "<%# locals: (title:) %>\n\xFF\xFE<%= title %>\n".b)
 
-      expect { interface("bad") }.not_to raise_error
+      expect(interface("bad")).to include("**Declared locals** (Rails 7.1+ magic comment): title")
     end
 
     it "says an empty list rejects every local" do
