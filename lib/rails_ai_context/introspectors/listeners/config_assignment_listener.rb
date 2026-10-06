@@ -312,20 +312,34 @@ module RailsAiContext
           # which names the secret: `smtp_settings[:password] = ...`.
           key = literal_string(args.first) if args&.size == 2
           value = extract_value(args.last) if args&.size == 1 || key
+          # An index read names the element written through it: `mail["password"] << ...`.
+          named = key || (index_key(receiver) if prefix.include?(:[]))
+          # An operator write's value only decides the redaction; the record keeps none.
+          judged_value = kind == :operator ? extract_value(node.value) : value
           # The written setting's own name counts too (`config.x.mail.password << ...`): the call's name may be an operator.
-          judged = if key then setting + [ key.to_sym ]
+          judged = if named then setting + [ named.to_sym ]
           elsif RailsAiContext::Redaction.secret_name?(setting) then setting
           else path
           end
-          redacted = RailsAiContext::Redaction.redact_assignment(judged, value: value, source: NodeSource.text(head || node))
+          redacted = RailsAiContext::Redaction.redact_assignment(judged, value: judged_value, source: NodeSource.text(head || node))
           @results << {
             path:       path,
             assignment: false,
             write:      kind,
-            value:      (redacted[:value] unless key),
+            value:      (redacted[:value] unless key || kind == :operator),
             source:     redacted[:source],
             location:   node.location.start_line
           }
+        end
+
+        # The literal key of the first `[]` read after the setting, the element a write goes through.
+        def index_key(node)
+          key = nil
+          while node.is_a?(Prism::CallNode)
+            key = literal_string(node.arguments&.arguments&.first) if node.name == :[]
+            node = node.receiver
+          end
+          key
         end
 
         # Returns the path segments after the root, or nil when the chain is not
