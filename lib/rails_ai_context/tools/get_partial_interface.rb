@@ -376,7 +376,7 @@ module RailsAiContext
 
             covered = at + args.length
             line_num = content[0...at].count("\n") + 1
-            line = "render #{args.gsub(/\s+/, " ").strip}"
+            line = Introspectors::ViewTemplateIntrospector.render_line(args)
             spanned = lines[(line_num - 1)..(line_num - 1 + args.chomp.count("\n"))]
             snippet = spanned.size > 1 ? spanned.join(" ").squish : lines[line_num - 1].strip
 
@@ -407,7 +407,7 @@ module RailsAiContext
 
             next if matched_line
 
-            var = line[IMPLICIT_RENDER, 1]
+            var = line[Introspectors::ViewTemplateIntrospector::IMPLICIT_RENDER, 1]
             next unless var && !line.include?("partial:")
 
             view_dir = File.dirname(file.delete_prefix(views_dir + File::SEPARATOR))
@@ -421,11 +421,6 @@ module RailsAiContext
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "find_render_sites")
       end
-
-      # `render @posts`, `render(post)`, `render @posts, cached: true`: a bare
-      # record or collection, which names no partial of its own. In `render
-      # @post.comments` the association names the records.
-      IMPLICIT_RENDER = /\Arender\s*\(?\s*@?(?:[a-z_]\w*\.)*([a-z_]\w*)\s*(?:[,)]|-?\s*\z)/
 
       # The partial Rails renders for a record named `var` from a view in
       # view_dir, which stands in for the controller's path; nil when the
