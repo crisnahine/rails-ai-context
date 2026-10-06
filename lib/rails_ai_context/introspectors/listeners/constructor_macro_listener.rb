@@ -39,18 +39,17 @@ module RailsAiContext
         def params_for(node)
           args = Array(node.arguments&.arguments)
           case node.name
-          when :const, :prop then struct_param(args)
+          when :const, :prop then struct_param(args, extract_keyword_nodes(node))
           when :attribute, :attribute? then dry_struct_param(node.name, args)
-          when :param, :option then dry_initializer_param(node.name, args)
+          when :param, :option then dry_initializer_param(node.name, args, extract_keyword_nodes(node))
           when :extend then []
           else attr_extras_params(node.name == :static_facade ? args.drop(1) : args)
           end
         end
 
         # A T::Struct prop is optional with a default, a factory, or a nilable type.
-        def struct_param(args)
+        def struct_param(args, options)
           name = literal_string(args.first) or return []
-          options = keyword_nodes(args)
           default = options[:default] || options[:factory]
           return [ [ :key, name, default_text(default) ] ] if default
           return [ [ :key, name, "nil" ] ] if args[1] && !args[1].is_a?(Prism::KeywordHashNode) && args[1].slice.start_with?("T.nilable(")
@@ -76,9 +75,8 @@ module RailsAiContext
           nil
         end
 
-        def dry_initializer_param(macro, args)
+        def dry_initializer_param(macro, args, options)
           name = literal_string(args.first) or return []
-          options = keyword_nodes(args)
           default = (default_text(options[:default]) if options[:default]) ||
                     ("nil" if options[:optional].is_a?(Prism::TrueNode))
           positional = macro == :param
@@ -108,11 +106,6 @@ module RailsAiContext
 
           name = literal_string(element) or return []
           name.end_with?("!") ? [ [ :keyreq, name.delete_suffix("!"), nil ] ] : [ [ :key, name, "nil" ] ]
-        end
-
-        def keyword_nodes(args)
-          args.grep(Prism::KeywordHashNode).flat_map(&:elements).grep(Prism::AssocNode)
-              .each_with_object({}) { |assoc, found| found[extract_key(assoc.key)] = assoc.value }
         end
 
         # A lambda default reads as the value it returns.
