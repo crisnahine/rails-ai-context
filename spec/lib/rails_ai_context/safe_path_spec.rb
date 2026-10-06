@@ -274,4 +274,17 @@ RSpec.describe RailsAiContext::SafePath do
       end
     end
   end
+
+  describe ".git_root" do
+    it "finds the nearest .git above a directory, a worktree's .git file included, and nil outside one" do
+      Dir.mktmpdir do |dir|
+        nested = File.join(dir, "repo", "test", "dummy")
+        FileUtils.mkdir_p(nested)
+        expect(described_class.git_root(nested)).to be_nil
+
+        File.write(File.join(dir, "repo", ".git"), "gitdir: /elsewhere\n")
+        expect(described_class.git_root(nested)).to eq(File.join(dir, "repo"))
+      end
+    end
+  end
 end

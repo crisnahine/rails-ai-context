@@ -48,16 +48,16 @@ module RailsAiContext
           Dir.glob(File.join(root, "app", "**", "*.rb")).any?
       end
 
-      # A Sinatra MVC tree keeps config/environment.rb and app/ too, so
-      # without config/application.rb a lockfile that resolved no Rails decides.
-      # GemLock loads only on that path, keeping the stdlib it pulls in out of
-      # every Rails app's pre-boot window.
+      # Sinatra MVC trees have config/environment.rb too; without application.rb the lockfile, else the Gemfile, decides.
       def self.other_framework?(root)
         return false if File.exist?(File.join(root, "config", "application.rb"))
 
         require_relative "../gem_lock"
         lock = GemLock.for(root)
-        !lock.missing? && !lock.any?("rails", "railties")
+        return !lock.any?("rails", "railties") unless lock.missing?
+
+        names = lock.gemfile_gems
+        !names.nil? && (names & %w[rails railties]).empty?
       end
       private_class_method :other_framework?
 

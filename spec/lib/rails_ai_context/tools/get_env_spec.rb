@@ -853,6 +853,26 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     end
   end
 
+  describe "an HTTP client named only in a trailing comment or a string" do
+    it "is not a service the app calls" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/services"))
+        File.write(File.join(dir, "app/services/x.rb"), <<~RUBY)
+          class X
+            def a = run # was HTTParty.get("https://api.oldvendor.com/v1")
+            def b = "Use Faraday.get('https://docs.example.org') to test"
+            def c = ::Faraday.get("https://api.kept.example/x")
+          end
+        RUBY
+        allow(described_class).to receive(:detect_external_services).and_call_original
+
+        names = described_class.send(:detect_external_services, dir, []).map { |s| s[:name] }
+
+        expect(names).to eq(%w[Kept])
+      end
+    end
+  end
+
   describe "a service the Gemfile only names in a comment" do
     it "is not detected" do
       Dir.mktmpdir do |dir|
@@ -991,12 +1011,66 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       expect(text).not_to include("Zx9kQ2mW7pL4vB8nR3tY6uH1")
     end
 
-    it "never prints the ERB marker for a clear value an ERB tag sets" do
-      write_deploy("env:\n  clear:\n    DB_HOST: <%= ENV[\"DB_HOST\"] %>\n")
+    it "says an ERB tag sets a clear value at deploy time, never printing it as empty" do
+      write_deploy("env:\n  clear:\n    RAILS_LOG_LEVEL: <%= ENV.fetch(\"LOG_LEVEL\", \"info\") %>\n    HOST: app-<%= ENV[\"N\"] %>\n")
 
       text = described_class.call.content.first[:text]
-      expect(text).to include("- `DB_HOST` = ``")
+      expect(text).to include("- `RAILS_LOG_LEVEL` - set by ERB at deploy time")
+      expect(text).to include("- `HOST` - set by ERB at deploy time")
+      expect(text).not_to include("= ``")
       expect(text).not_to include("RAC_ERB_OUTPUT")
+    end
+
+    it "hides a clear value that holds a URL or an opaque token, unless the name is on the safe list" do
+      write_deploy(<<~YAML)
+        env:
+          clear:
+            SLACK_WEBHOOK: https://hooks.slack.com/services/T000/B000/XXXXsecretXXXX
+            SENTRY_DSN: https://abc123def@o1.ingest.sentry.io/1
+            OPAQUE: a8f3k29dk3ls02kd93ks
+            RAILS_RELATIVE_URL_ROOT: /app
+            WEB_CONCURRENCY: 2
+      YAML
+
+      text = described_class.call.content.first[:text]
+      expect(text).to include("- `SLACK_WEBHOOK` - value hidden")
+      expect(text).to include("- `SENTRY_DSN` - value hidden")
+      expect(text).to include("- `OPAQUE` - value hidden")
+      expect(text).to include("- `RAILS_RELATIVE_URL_ROOT` = `/app`")
+      expect(text).to include("- `WEB_CONCURRENCY` = `2`")
+      expect(text).not_to include("XXXXsecretXXXX")
+      expect(text).not_to include("abc123def")
+    end
+
+    it "lists the env a role and a tag add, and names the destination files it did not read" do
+      write_deploy(<<~YAML)
+        servers:
+          web:
+            - 1.1.1.1
+          job:
+            hosts:
+              - 1.1.1.2: eu
+            env:
+              clear:
+                JOB_CONCURRENCY: 5
+              secret:
+                - JOB_TOKEN
+        env:
+          clear:
+            WEB_CONCURRENCY: 2
+          tags:
+            eu:
+              REGION: eu
+      YAML
+      File.write(File.join(@root, "config", "deploy.staging.yml"), "env:\n  clear:\n    STAGE: 1\n")
+
+      text = described_class.call.content.first[:text]
+      expect(text).to include("- `WEB_CONCURRENCY` = `2`")
+      expect(text).to include("- `JOB_CONCURRENCY` = `5` (role `job`)")
+      expect(text).to include("- `JOB_TOKEN` - secret, from `.kamal/secrets` (role `job`)")
+      expect(text).to include("- `REGION` = `eu` (tag `eu`)")
+      expect(text).to include("`config/deploy.staging.yml` merges over this per destination and is not read")
+      expect(described_class.call(detail: "summary").content.first[:text]).to include("- `JOB_TOKEN`")
     end
 
     it "adds nothing for a deploy file that is not valid YAML or has no env" do
@@ -1005,6 +1079,23 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
 
       write_deploy("service: app\n")
       expect(described_class.call.content.first[:text]).not_to include("Set by Kamal")
+    end
+  end
+
+  describe "an app whose config/boot.rb points Bundler outside its git repository" do
+    it "says the gem-based answers did not read that bundle, at every detail level" do
+      Dir.mktmpdir do |engine|
+        File.write(File.join(engine, "Gemfile"), %(gem "stripe"\n))
+        dummy = File.join(engine, "test/dummy")
+        FileUtils.mkdir_p(File.join(dummy, "config"))
+        File.write(File.join(dummy, "config/boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n))
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dummy)))
+
+        note = "Gem-based services and config gem settings not read: config/boot.rb points Bundler at `../../Gemfile`, outside the app's git repository."
+        %w[summary standard full].each do |detail|
+          expect(described_class.call(detail: detail).content.first[:text]).to include(note)
+        end
+      end
     end
   end
 

@@ -53,20 +53,28 @@ module RailsAiContext
         kamal_env.each { |v| all_var_names << v[:name] }
 
         anyway_configs.each { |c| c[:attributes].each { |a| all_var_names << a[:env] if a[:env] } }
-        deploy_and_settings = kamal_lines(kamal_env) + settings_lines(settings) + anyway_lines(anyway_configs)
+        deploy_and_settings = kamal_lines(kamal_env, root) + settings_lines(settings) + anyway_lines(anyway_configs)
 
-        if all_var_names.empty? && external_services.empty? && credentials_keys.empty? && deploy_and_settings.empty?
-          return text_response("No environment variables, external services, or credentials keys detected.")
+        text = if all_var_names.empty? && external_services.empty? && credentials_keys.empty? && deploy_and_settings.empty?
+          "No environment variables, external services, or credentials keys detected."
+        else
+          case detail
+          when "summary"
+            format_summary(all_var_names, external_services, credentials_keys)
+          when "standard"
+            format_standard(env_vars, env_example, deploy_and_settings, external_services, credentials_keys, encrypted_columns)
+          when "full"
+            format_full(env_vars, env_example, deploy_and_settings, dockerfile_vars, external_services, credentials_keys, encrypted_columns, root)
+          end
         end
+        text_response([ text, unread_bundle_note(root) ].compact.join("\n\n"))
+      end
 
-        case detail
-        when "summary"
-          format_summary(all_var_names, external_services, credentials_keys)
-        when "standard"
-          format_standard(env_vars, env_example, deploy_and_settings, external_services, credentials_keys, encrypted_columns)
-        when "full"
-          format_full(env_vars, env_example, deploy_and_settings, dockerfile_vars, external_services, credentials_keys, encrypted_columns, root)
-        end
+      # Without it, an unread bundle reads as an app that declares no service gems.
+      private_class_method def self.unread_bundle_note(root)
+        outside = RailsAiContext::GemLock.for(root).outside_gemfile or return nil
+
+        "_Gem-based services and config gem settings not read: config/boot.rb points Bundler at `#{outside}`, outside the app's git repository._"
       end
 
       private_class_method def self.format_summary(all_var_names, external_services, credentials_keys)
@@ -85,7 +93,7 @@ module RailsAiContext
         end
 
         lines << "" << "_Use `detail:\"standard\"` for sources and external services, or `detail:\"full\"` for per-file locations._"
-        text_response(lines.join("\n"))
+        lines.join("\n")
       end
 
       # Named in the answer, because a name missing from it is otherwise
@@ -159,7 +167,7 @@ module RailsAiContext
         lines.concat(credentials_and_encrypted_lines(credentials_keys, encrypted_columns))
 
         lines << SCAN_NOTE
-        text_response(lines.join("\n"))
+        lines.join("\n")
       end
 
       # Both `standard` and `full` end with these two sections, so a wording
@@ -293,7 +301,7 @@ module RailsAiContext
         lines.concat(credentials_and_encrypted_lines(credentials_keys, encrypted_columns))
 
         lines << SCAN_NOTE
-        text_response(lines.join("\n"))
+        lines.join("\n")
       end
 
       private_class_method def self.scan_env_vars(root)
@@ -302,47 +310,75 @@ module RailsAiContext
 
       KAMAL_DEPLOY = "config/deploy.yml"
 
-      private_class_method def self.kamal_lines(kamal_env)
+      private_class_method def self.kamal_lines(kamal_env, root)
         return [] if kamal_env.empty?
 
         lines = [ "## Set by Kamal (`#{KAMAL_DEPLOY}`)" ]
         kamal_env.each do |v|
+          scope = v[:scope] ? " (#{v[:scope]})" : ""
           lines << if v[:secret]
             alias_note = v[:secret] == v[:name] ? "" : " (`#{v[:secret]}`)"
-            "- `#{v[:name]}` - secret, from `.kamal/secrets`#{alias_note}"
+            "- `#{v[:name]}` - secret, from `.kamal/secrets`#{alias_note}#{scope}"
+          elsif v[:value] == :computed
+            "- `#{v[:name]}` - set by ERB at deploy time#{scope}"
+          elsif v[:value] == :hidden
+            "- `#{v[:name]}` - value hidden#{scope}"
           else
-            "- `#{v[:name]}` = `#{v[:value]}`"
+            "- `#{v[:name]}` = `#{v[:value]}`#{scope}"
           end
+        end
+        Dir.glob("config/deploy.*.yml", base: root).sort.each do |file|
+          lines << "- `#{file}` merges over this per destination and is not read"
         end
         lines << ""
       end
 
-      # The app container's env as Kamal::Configuration::Env reads it: `clear`
-      # and `secret` keys, or a bare hash that is all clear values.
+      # As Kamal's Role#env merges it: top-level env, `servers.<role>.env`, then each `env.tags.<tag>`.
       private_class_method def self.scan_kamal_env(root)
-        env = Introspectors::RecurringSchedules.yaml(root, KAMAL_DEPLOY)
-        env = env["env"] if env.is_a?(Hash)
-        return [] unless env.is_a?(Hash)
+        config = RailsAiContext::ConfigYaml.read(root, KAMAL_DEPLOY, label: "Kamal", marker: RailsAiContext::ConfigYaml::ERB_OUTPUT)
+        return [] unless config.is_a?(Hash)
 
+        env = config["env"].is_a?(Hash) ? config["env"] : {}
+        servers = config["servers"].is_a?(Hash) ? config["servers"] : {}
+        roles = servers.filter_map { |role, options| [ "role `#{role}`", options["env"] ] if options.is_a?(Hash) && options["env"].is_a?(Hash) }
+        tags = env["tags"].is_a?(Hash) ? env["tags"].filter_map { |tag, tag_env| [ "tag `#{tag}`", tag_env ] if tag_env.is_a?(Hash) } : []
+        [ [ nil, env ], *roles, *tags ].flat_map { |scope, scoped| kamal_env_entries(scoped, scope) }
+      end
+
+      # Kamal::Configuration::Env's shape: `clear` and `secret` keys, or a bare hash that is all clear values.
+      private_class_method def self.kamal_env_entries(env, scope)
         clear = env.fetch("clear", env.key?("secret") || env.key?("tags") ? {} : env)
         clear = {} unless clear.is_a?(Hash)
         secrets = Array(env["secret"]).filter_map do |key|
           name, aliased = key.to_s.split(":", 2)
-          { name: name, secret: aliased || name } unless name.to_s.empty?
+          { name: name, secret: aliased || name, scope: scope }.compact unless name.to_s.empty?
         end
-        secrets + clear.map { |name, value| { name: name.to_s, value: RailsAiContext::Redaction.value(name, value.to_s) } }
+        secrets + clear.map { |name, value| { name: name.to_s, value: kamal_clear_value(name.to_s, value), scope: scope }.compact }
       end
 
-      # The config gem merges config/settings.yml, then config/settings/<env>.yml
-      # and config/environments/<env>.yml over it; *.local.yml is on sensitive_patterns.
-      # Without the gem a config/settings.yml is the app's own file and no Settings constant exists.
+      SAFE_ENV_NAMES = Introspectors::EnvIntrospector::KNOWN_ENV_VARS.select { |spec| spec[:safe] }.to_set { |spec| spec[:name] }.freeze
+      # A run of letters and digits this long is a key or token, whatever the variable is called.
+      OPAQUE_TOKEN = /(?=[A-Za-z0-9+\/=_-]*\d)(?=[A-Za-z0-9+\/=_-]*[A-Za-z])[A-Za-z0-9+\/=_-]{16,}/
+
+      # Webhook URLs and DSNs hide their secret in the path or user part, where Redaction does not look.
+      private_class_method def self.kamal_clear_value(name, value)
+        return :computed if RailsAiContext::ConfigYaml.marked?(value)
+
+        text = value.to_s
+        return RailsAiContext::Redaction.value(name, text) if SAFE_ENV_NAMES.include?(name)
+        return :hidden if text.include?("://") || text.match?(OPAQUE_TOKEN) || RailsAiContext::Redaction.value(name, text) != text
+
+        text
+      end
+
+      # Without the config gem, config/settings.yml is the app's own file and no Settings constant exists.
       private_class_method def self.scan_settings(root)
         return [] unless RailsAiContext::GemLock.for(root).present?("config")
 
         files = [ "config/settings.yml" ] +
           %w[settings environments].flat_map { |dir| Dir.glob(File.join(root, "config", dir, "*.yml")).sort.map { |path| path.delete_prefix("#{root}/") } }
         files.filter_map do |file|
-          data = Introspectors::RecurringSchedules.yaml(root, file)
+          data = RailsAiContext::ConfigYaml.read(root, file, label: "config gem settings")
           next unless data.is_a?(Hash) && data.any?
 
           { file: file, keys: setting_keys(data) }
@@ -366,9 +402,7 @@ module RailsAiContext
       ANYWAY_CONFIG_DIRS = %w[config/configs app/configs].freeze
       ANYWAY_BASES = %w[Anyway::Config ApplicationConfig].freeze
 
-      # Each Anyway::Config class's attributes, with the env name anyway_config
-      # reads: "#{env_prefix}_#{ATTR}", the prefix defaulting to the class name
-      # before `Config`, downcased (PaymentConfig reads PAYMENT_*).
+      # anyway_config reads "#{env_prefix}_#{ATTR}"; the prefix defaults to the class name before `Config` (PAYMENT_*).
       private_class_method def self.scan_anyway_configs(root)
         ANYWAY_CONFIG_DIRS.flat_map { |dir| Dir.glob(File.join(root, dir, "**", "*.rb")).sort }.filter_map do |path|
           file = path.delete_prefix("#{root}/")
@@ -569,22 +603,9 @@ module RailsAiContext
         services.uniq { |s| s[:name] }
       end
 
-      # The same quoted URL, bare or wrapped in URI(...)/URI.parse(...).
-      HTTP_URL_ARG = /\s*\(?\s*(?:url:\s*)?(?:URI(?:\.parse)?\s*\(?\s*)?["']([^"']+)["']/
-      HTTP_CLIENT_CALLS = {
-        "Faraday" => /Faraday\.\w+#{HTTP_URL_ARG.source}/,
-        "Net::HTTP" => /Net::HTTP\.\w+#{HTTP_URL_ARG.source}/,
-        "HTTParty" => /HTTParty\.\w+#{HTTP_URL_ARG.source}/,
-        "RestClient" => /RestClient\.\w+#{HTTP_URL_ARG.source}/,
-        "HTTP" => /(?<![\w:])HTTP\.\w+#{HTTP_URL_ARG.source}/,
-        "Excon" => /Excon\.\w+#{HTTP_URL_ARG.source}/,
-        "Typhoeus" => /Typhoeus\.\w+#{HTTP_URL_ARG.source}/,
-        "URI.open" => /URI\.open#{HTTP_URL_ARG.source}/
-      }.freeze
-      # Net::HTTP.start("api.example.com", 443) takes a host, not a URL.
-      NET_HTTP_HOST_ARG = /Net::HTTP\.(?:start|new)\s*\(?\s*["']([^"']+)["']/
+      # Prefilter: the AST decides, on the files that name a client at all.
+      HTTP_CLIENT_NAME = /(?:#{Regexp.union(Introspectors::Listeners::HttpClientCallListener::CLIENTS).source})\.|URI\.open/
       BARE_HOST = /\A[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\z/i
-      HTTP_CLIENT_NAME = Regexp.union(HTTP_CLIENT_CALLS.keys)
 
       private_class_method def self.detect_http_clients(root)
         services = []
@@ -599,16 +620,14 @@ module RailsAiContext
             next unless source&.match?(HTTP_CLIENT_NAME)
 
             relative = file.sub("#{real_root}/", "")
-            code = source.gsub(/^[ \t]*#.*$/, "")
-            HTTP_CLIENT_CALLS.each do |detection, pattern|
-              code.scan(pattern).each do |(url)|
-                name = extract_service_name_from_url(url)
-                services << { name: name, detection: detection, file: relative } if name
+            calls = Introspectors::SourceIntrospector.walk_source(source, { http: Introspectors::Listeners::HttpClientCallListener })[:http]
+            calls.each do |call|
+              name = if call[:url]
+                extract_service_name_from_url(call[:url])
+              else
+                call[:host].match?(BARE_HOST) && service_name_from_host(call[:host])
               end
-            end
-            code.scan(NET_HTTP_HOST_ARG).each do |(host)|
-              name = host.match?(BARE_HOST) && service_name_from_host(host)
-              services << { name: name, detection: "Net::HTTP", file: relative } if name
+              services << { name: name, detection: call[:client], file: relative } if name
             end
           end
         end

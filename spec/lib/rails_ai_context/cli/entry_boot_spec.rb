@@ -75,6 +75,43 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
     end
   end
 
+  # With no lockfile, the Gemfile decides before anything boots: loading the tree's
+  # environment.rb runs its bundler/setup, which writes a lockfile into the user's tree.
+  describe "a tree with no lockfile whose Gemfile names no Rails" do
+    def unlocked_tree(dir, gemfile)
+      FileUtils.mkdir_p(File.join(dir, "config"))
+      File.write(File.join(dir, "config/environment.rb"), "raise 'environment.rb was loaded'\n")
+      File.write(File.join(dir, "Gemfile"), gemfile)
+    end
+
+    it "answers No Rails app found without loading config/environment.rb" do
+      Dir.mktmpdir do |dir|
+        unlocked_tree(dir, %(source "https://rubygems.org"\ngroup :test do\n  gem "rack-test"\nend\ngem "sinatra"\n))
+        outcome = described_class.call(root: dir, allow_static: true)
+        expect([ outcome.tier, outcome.messages.first ]).to eq([ :absent, "Error: No Rails app found in #{dir}" ])
+      end
+    end
+
+    it "is an app when the Gemfile names rails, or names its gems through a gemspec" do
+      Dir.mktmpdir do |dir|
+        unlocked_tree(dir, %(gem "rails", "~> 8.0"\n))
+        expect(described_class.app_present?(dir)).to be true
+        File.write(File.join(dir, "Gemfile"), %(source "https://rubygems.org"\ngemspec\n))
+        expect(described_class.app_present?(dir)).to be true
+      end
+    end
+
+    it "decides before the gem is loaded, as the binary's entry does" do
+      Dir.mktmpdir do |dir|
+        unlocked_tree(dir, %(gem "sinatra"\n))
+        lib = File.expand_path("../../../../lib", __dir__)
+        script = %(require "rails_ai_context/cli/entry_boot"; p RailsAiContext::CLI::EntryBoot.app_present?(#{dir.inspect}))
+        out = `ruby -I #{lib.shellescape} -e #{script.shellescape} 2>&1`
+        expect(out.strip).to eq("false")
+      end
+    end
+  end
+
   # The binstub activates the gem's whole dependency tree before the app's
   # Bundler.setup runs, and Bundler adds its own paths behind the ones already
   # in $LOAD_PATH. A gem left there keeps winning over the version the app

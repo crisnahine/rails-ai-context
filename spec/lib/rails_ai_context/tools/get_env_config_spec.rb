@@ -151,8 +151,12 @@ RSpec.describe RailsAiContext::Tools::GetEnvConfig do
   describe "config/application.rb" do
     let(:application) do
       { file: "config/application.rb", config_keys: %w[active_job.queue_name_prefix payment x.payments.provider],
-        config_for: [ { key: "payment", file: "config/payment.yml", keys: %w[currency key] },
-                      { key: "mail", file: "config/mail.yml", missing: true } ] }
+        config_for: [ { key: "payment", call: ":payment", file: "config/payment.yml", keys: %w[currency key] },
+                      { key: "mail", call: ":mail", file: "config/mail.yml", missing: true },
+                      { key: "x.stripe", call: 'Rails.root.join(dir, "x.yml")', path_unread: true },
+                      { key: "redis", call: ":redis", file: "config/redis.yml", withheld: true },
+                      { key: "up", call: ":up", file: "../up.yml", outside: true },
+                      { key: "big", call: ":big", file: "config/big.yml", too_large: true } ] }
     end
 
     before do
@@ -166,6 +170,10 @@ RSpec.describe RailsAiContext::Tools::GetEnvConfig do
         expect(text).to include("**Config keys set (3):** `active_job.queue_name_prefix`, `payment`, `x.payments.provider`")
         expect(text).to include("- `payment` = config_for(:payment), `config/payment.yml` keys for development: currency, key")
         expect(text).to include("- `mail` = config_for(:mail), `config/mail.yml` does not exist")
+        expect(text).to include("- `x.stripe` = config_for(Rails.root.join(dir, \"x.yml\")), keys not read: its path is not a literal")
+        expect(text).to include("- `redis` = config_for(:redis), `config/redis.yml` on sensitive_patterns, keys not read")
+        expect(text).to include("- `up` = config_for(:up), `../up.yml` outside the app, not read")
+        expect(text).to include("- `big` = config_for(:big), `config/big.yml` over max_file_size, keys not read")
         expect(text.index("## Every environment")).to be < text.index("## production")
       end
     end

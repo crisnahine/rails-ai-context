@@ -414,8 +414,8 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
       )
 
       expect(result[:config_for]).to eq([
-        { key: "payment", file: "config/payment.yml", keys: %w[currency key] },
-        { key: "mail", file: "config/mail.yml", missing: true }
+        { key: "payment", call: ":payment", file: "config/payment.yml", keys: %w[currency key] },
+        { key: "mail", call: '"mail"', file: "config/mail.yml", missing: true }
       ])
     end
 
@@ -434,10 +434,16 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
       )
 
       expect(result[:config_for]).to eq([
-        { key: "feature", file: "config/feature.yml", environment: "production", keys: %w[flag_a prod_only] },
-        { key: "other", file: "config/feature.yml", environment_unread: true },
-        { key: "same", file: "config/feature.yml", keys: %w[dev_only flag_a] }
+        { key: "feature", call: ":feature", file: "config/feature.yml", environment: "production", keys: %w[flag_a prod_only] },
+        { key: "other", call: ":feature", file: "config/feature.yml", environment_unread: true },
+        { key: "same", call: ":feature", file: "config/feature.yml", keys: %w[dev_only flag_a] }
       ])
+    end
+
+    it "lets a failure reading config/application.rb raise, for the introspector loop to record" do
+      allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk).and_raise(ArgumentError, "File too large")
+
+      expect { application("config/application.rb" => application_rb) }.to raise_error(ArgumentError, "File too large")
     end
 
     it "is nil for an app without config/application.rb" do
@@ -447,7 +453,67 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
     it "reads a config_for file that is not YAML as unreadable rather than failing" do
       result = application("config/application.rb" => application_rb, "config/payment.yml" => "shared: [unclosed\n")
 
-      expect(result[:config_for].first).to eq({ key: "payment", file: "config/payment.yml", unreadable: true })
+      expect(result[:config_for].first).to eq({ key: "payment", call: ":payment", file: "config/payment.yml", unreadable: true })
+    end
+
+    it "reads a config_for under a secret-shaped key, and a Pathname path, off the node" do
+      result = application(
+        "config/application.rb" => <<~RUBY,
+          module App
+            class Application < Rails::Application
+              config.secret_store = config_for(:vault)
+              config.x.stripe = config_for(Rails.root.join("config", "stripe.yml"))
+              config.other = config_for(Rails.root.join(dir, "x.yml"))
+            end
+          end
+        RUBY
+        "config/vault.yml" => "shared:\n  address: x\n",
+        "config/stripe.yml" => "test:\n  publishable_key: x\n"
+      )
+
+      expect(result[:config_for]).to eq([
+        { key: "secret_store", call: ":vault", file: "config/vault.yml", keys: %w[address] },
+        { key: "x.stripe", call: 'Rails.root.join("config", "stripe.yml")', file: "config/stripe.yml", keys: %w[publishable_key] },
+        { key: "other", call: 'Rails.root.join(dir, "x.yml")', path_unread: true }
+      ])
+    end
+
+    it "does not read a config_for file on sensitive_patterns, and says so" do
+      result = application(
+        "config/application.rb" => "module App\n  class Application < Rails::Application\n    config.redis = config_for(:redis)\n  end\nend\n",
+        "config/redis.yml" => "shared:\n  url: redis://x\n"
+      )
+
+      expect(result[:config_for]).to eq([ { key: "redis", call: ":redis", file: "config/redis.yml", withheld: true } ])
+    end
+
+    it "names the refusal of a config_for path outside the app, behind a symlink to a secret, or too large" do
+      Dir.mktmpdir do |outer|
+        dir = File.join(outer, "app")
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(outer, "outside.yml"), "shared:\n  a: 1\n")
+        File.write(File.join(dir, "config/redis.yml"), "shared:\n  url: x\n")
+        File.symlink(File.join(dir, "config/redis.yml"), File.join(dir, "config/cache.yml"))
+        File.write(File.join(dir, "config/big.yml"), "shared:\n  a: #{'x' * 64}\n")
+        File.write(File.join(dir, "config/application.rb"), <<~RUBY)
+          module App
+            class Application < Rails::Application
+              config.up = config_for(Rails.root.join("..", "outside.yml"))
+              config.cache = config_for(:cache)
+              config.big = config_for(:big)
+            end
+          end
+        RUBY
+        allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(40)
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:application]
+
+        expect(result[:config_for]).to eq([
+          { key: "up", call: 'Rails.root.join("..", "outside.yml")', file: "../outside.yml", outside: true },
+          { key: "cache", call: ":cache", file: "config/cache.yml", withheld: true },
+          { key: "big", call: ":big", file: "config/big.yml", too_large: true }
+        ])
+      end
     end
   end
 end

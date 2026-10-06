@@ -20,9 +20,6 @@ module RailsAiContext
     # Bundler writes a non-CRuby engine after the version: "ruby 3.1.4p0 (jruby 9.4.8.0)".
     RUBY_LINE = /\A\s+ruby (\S+)(?: \((\S+) ([^)]+)\))?/
     REMOTE_LINE = /\A {2}remote: (.+?)\s*\z/
-    GEMFILE_RUBY_LINE = /^\s*ruby\s+(["'])([^"']+)\1(.*)$/
-    GEMFILE_ENGINE = /(?:\bengine:|:engine\s*=>)\s*["':]?([\w+]+)/
-    GEMFILE_ENGINE_VERSION = /(?:\bengine_version:|:engine_version\s*=>)\s*["']([^"']+)/
     PLAIN_VERSION = /\A\d+(?:\.\d+)*\S*\z/
     TOOL_VERSIONS_RUBY = /^ruby[ \t]+(\S+)/
     # Version managers write another engine as "<engine>-<version>", as ruby-build names it.
@@ -42,15 +39,15 @@ module RailsAiContext
     MISE_RUBY = /^[ \t]*["']?ruby["']?[ \t]*=[ \t]*(?:\[[ \t]*|\{[^}\n]*?version[ \t]*=[ \t]*)?["']([^"'\n]+)["']/
 
     class Spec
-      # `remote:` of each PATH section, as the lockfile writes it.
-      # `ruby_engine` names a non-CRuby engine and its own version ("JRuby 9.4.8.0"), else nil.
-      # The Gemfile config/boot.rb names outside the app root and its git repository,
-      # relative to the root; never read.
+      # `ruby_engine` is a non-CRuby engine with its own version ("JRuby 9.4.8.0"); `outside_gemfile` is never read.
       attr_reader :ruby_versions, :ruby_engine, :reason, :path_remotes, :outside_gemfile
+      # With no lockfile, the gems the Gemfile names; nil when it names only some of them.
+      attr_reader :gemfile_gems
 
       def initialize(versions, ruby_versions: {}, ruby_engine: nil, reason: nil, absent: false, direct: nil, path_remotes: [],
-                     outside_gemfile: nil)
+                     outside_gemfile: nil, gemfile_gems: nil)
         @versions = versions
+        @gemfile_gems = gemfile_gems
         @outside_gemfile = outside_gemfile
         @path_remotes = path_remotes
         @ruby_versions = ruby_versions
@@ -171,7 +168,7 @@ module RailsAiContext
       label = ->(file) { Pathname.new(File.join(dir, file)).relative_path_from(Pathname.new(real_root)).to_s }
       gemfile = File.basename(target)
       lockfile = gemfile == "gems.rb" ? "gems.locked" : "#{gemfile}.lock"
-      repo = git_root(real_root)
+      repo = SafePath.git_root(real_root)
       unless repo && File.directory?(dir) && SafePath.contained?(File.realpath(dir), repo)
         return own.merge(lockfile: nil, outside: label.(gemfile))
       end
@@ -196,17 +193,6 @@ module RailsAiContext
     end
     private_class_method :boot_gemfile
 
-    def git_root(dir)
-      until File.exist?(File.join(dir, ".git"))
-        parent = File.dirname(dir)
-        return nil if parent == dir
-
-        dir = parent
-      end
-      dir
-    end
-    private_class_method :git_root
-
     # The file's real path when it exists and does not link out of its directory.
     def inside_file(dir, name)
       real = File.realpath(File.join(dir, name))
@@ -223,7 +209,9 @@ module RailsAiContext
       else
         "No #{bundle[:lock_label]} found"
       end
-      Spec.new({}, **declared_ruby(nil, root, bundle), reason: reason, absent: true, outside_gemfile: outside)
+      facts = bundle[:gemfile] ? gemfile(bundle[:gemfile]) : { gems: nil }
+      Spec.new({}, **declared_ruby(nil, root, bundle, facts), reason: reason, absent: true, outside_gemfile: outside,
+               gemfile_gems: facts[:gems])
     end
     private_class_method :absent_spec
 
@@ -273,33 +261,70 @@ module RailsAiContext
       # and answering it as an app with no gems denies every gem it holds.
       return Spec.new({}, reason: "#{File.basename(path)} has no specs section") unless specs_section
 
-      Spec.new(versions, **declared_ruby(ruby_version, root, bundle), direct: direct, path_remotes: path_remotes)
+      facts = bundle[:gemfile] ? gemfile(bundle[:gemfile]) : {}
+      Spec.new(versions, **declared_ruby(ruby_version, root, bundle, facts), direct: direct, path_remotes: path_remotes)
     end
     private_class_method :parse
 
-    # A lockfile without a RUBY VERSION section leaves the Gemfile as the only
-    # statement of the version. A requirement such as `ruby ">= 3.3.0"` names a
-    # range, not a version, so it is left unanswered rather than reported as one.
-    def gemfile_ruby(path)
-      match = SafeFile.read(path, max_size: MAX_SIZE)&.match(GEMFILE_RUBY_LINE)
-      return nil unless match && match[2].match?(PLAIN_VERSION)
+    # `gems` is nil when `gemspec` or `eval_gemfile` adds gems the file does not name.
+    def gemfile(path)
+      result = gemfile_parse(path) or return { ruby: nil, gems: nil }
 
-      [ match[2], engine_name(match[3][GEMFILE_ENGINE, 1], match[3][GEMFILE_ENGINE_VERSION, 1]) ]
+      facts = { ruby: nil, gems: [] }
+      pending = [ result.value ]
+      while (node = pending.shift)
+        pending.concat(node.compact_child_nodes)
+        next unless node.is_a?(Prism::CallNode) && node.receiver.nil?
+
+        case node.name
+        when :ruby then facts[:ruby] ||= gemfile_ruby(node)
+        when :gem then (name = literal(node.arguments&.arguments&.first)) && facts[:gems]&.push(name)
+        when :gemspec, :eval_gemfile then facts[:gems] = nil
+        end
+      end
+      facts
+    end
+
+    # AstCache once the gem is loaded, so GemfileGems' walk shares the parse; before the boot, Prism alone.
+    def gemfile_parse(path)
+      return AstCache.parse(File.realpath(path)) if defined?(AstCache)
+
+      require "prism"
+      content = SafeFile.read(path, max_size: MAX_SIZE)
+      content && Prism.parse(content)
+    rescue SystemCallError, ArgumentError, LoadError
+      nil
+    end
+    private_class_method :gemfile_parse
+
+    # A requirement such as `ruby ">= 3.3.0"` names a range, not a version, so it is left unanswered.
+    def gemfile_ruby(node)
+      args = node.arguments&.arguments || []
+      version = literal(args.first)
+      return nil unless version&.match?(PLAIN_VERSION)
+
+      options = args.grep(Prism::KeywordHashNode).flat_map(&:elements).grep(Prism::AssocNode).to_h { |pair| [ literal(pair.key), literal(pair.value) ] }
+      [ version, engine_name(options["engine"], options["engine_version"]) ]
     end
     private_class_method :gemfile_ruby
 
-    # Each source answers [version, engine], in Bundler's order: what the lockfile
-    # resolved, what the Gemfile asked for, then the version-manager files, mise's last.
-    # The engine comes from the first source that declares anything.
-    def declared_ruby(locked, root, bundle)
+    def literal(node)
+      node.unescaped if node.is_a?(Prism::StringNode) || node.is_a?(Prism::SymbolNode)
+    end
+    private_class_method :literal
+
+    # Sources in Bundler's order; an engine's Ruby version comes only from its own source (JRuby 9.4 runs Ruby 3.1).
+    def declared_ruby(locked, root, bundle, facts)
       declared = {
         bundle[:lock_label] => locked,
-        bundle[:gemfile_label] => bundle[:gemfile] && gemfile_ruby(bundle[:gemfile]),
+        bundle[:gemfile_label] => facts[:ruby],
         ".ruby-version" => version_string(SafeFile.read(File.join(root, ".ruby-version"), max_size: MAX_SIZE)&.strip),
         ".tool-versions" => version_string(SafeFile.read(File.join(root, ".tool-versions"), max_size: MAX_SIZE)&.[](TOOL_VERSIONS_RUBY, 1)),
         **mise_ruby(root)
       }.compact
-      { ruby_versions: declared.transform_values(&:first).compact, ruby_engine: declared.values.first&.last }
+      engine = declared.values.first&.last
+      declared = declared.first(1).to_h if engine
+      { ruby_versions: declared.transform_values(&:first).compact, ruby_engine: engine }
     end
     private_class_method :declared_ruby
 
