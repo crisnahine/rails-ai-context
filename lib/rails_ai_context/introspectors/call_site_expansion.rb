@@ -63,11 +63,7 @@ module RailsAiContext
       def entries(definition, call, listeners, includer: nil)
         return {} unless definition.body
 
-        bound = includer_bound(bind(definition.parameters, call), definition.parameters, call, includer)
-        bindings = derived_bindings(rest_bindings(unwritten(bound, definition.body), definition, call), definition.body)
-        out = Output.new
-        undecided = []
-        emit(definition.body, bindings, out, undecided, 0, [])
+        out, undecided, bindings = rewrite(definition, call, includer)
         data = SourceIntrospector.walk_source(out.text, listeners)
         conditional = []
         if undecided.any?
@@ -91,6 +87,23 @@ module RailsAiContext
         end
         data = data.transform_values { |found| Array(found).map { |entry| relocated(entry, out) } }
         data.merge(conditional: conditional, foreign: foreign_entries(out, listeners))
+      end
+
+      # The body as this call runs it; nil when a condition the call cannot decide holds part of it back.
+      def rewritten(definition, call)
+        return nil unless definition.body
+
+        out, undecided, = rewrite(definition, call, nil)
+        out.text if undecided.empty?
+      end
+
+      def rewrite(definition, call, includer)
+        bound = includer_bound(bind(definition.parameters, call), definition.parameters, call, includer)
+        bindings = derived_bindings(rest_bindings(unwritten(bound, definition.body), definition, call), definition.body)
+        out = Output.new
+        undecided = []
+        emit(definition.body, bindings, out, undecided, 0, [])
+        [ out, undecided, bindings ]
       end
 
       EVALS = %i[instance_eval class_eval class_exec instance_exec module_eval module_exec].freeze

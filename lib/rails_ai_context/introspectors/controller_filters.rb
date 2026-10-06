@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "set"
+
 module RailsAiContext
   module Introspectors
     # One reader for the filter macros a controller body declares.
@@ -51,13 +53,28 @@ module RailsAiContext
       # How deep the walk follows a class's app-defined bases for a class method its body calls.
       MAX_BASES = 8
 
+      # How many class methods deep a call the class body makes is followed.
+      MAX_NESTING = 3
+
       # The class body's receiverless calls by name, read only once a mixin's class method declares a filter.
-      CallSites = Struct.new(:source) do
+      # A class method of the chain the body calls makes its own calls where the body calls it
+      # (`def self.public_page = allow_unauthenticated_access only: :show`): each is listed too, and
+      # `at` gives the body's call it stands for.
+      CallSites = Struct.new(:source, :walked, :within, :root, :cache) do
         def sites_by_name
           @sites_by_name ||= begin
             tree = AstCache.parse_string(source)&.value
-            tree ? SourceIntrospector.calls_outside_methods(tree, self_receiver: true) : {}
+            sites = tree ? SourceIntrospector.calls_outside_methods(tree, self_receiver: true) : {}
+            walked ? ControllerFilters.nested_sites(sites, self) : sites
           end
+        end
+
+        def outer
+          @outer ||= {}.compare_by_identity
+        end
+
+        def at(site)
+          outer.fetch(site, site)
         end
       end
 
@@ -92,7 +109,7 @@ module RailsAiContext
         cache ||= RunCache.fetch([ :controller_concern_walks ]) { {} }
         walked = SourceIntrospector.walk_source(source, LISTENERS)
         mixins = Array(walked[:mixins])
-        calls = CallSites.new(source)
+        calls = CallSites.new(source, walked, within, root, cache)
         # One walk, so a concern two includes reach is added once, as Ruby does.
         collected, unread, _hidden, block_calls, placement, _skipped, block_sites = ConcernMacros.collect(
           root, mixins, keys: [ :filters ], prefer: "controller", within: within, cache: cache, calls: calls, listeners: LISTENERS
@@ -116,7 +133,7 @@ module RailsAiContext
         from_blocks, inherited = inherited.partition { |entry| block_sites.key?(entry[:site].__id__) }
         by_concern += from_blocks.map { |entry| entry.merge(from_concern: block_sites[entry[:site].__id__].first) }
         placed = class_level(walked).map { |entry| [ entry[:location].to_i, -1, 0, entry ] } +
-                 (own_defs + called + inherited).map { |entry| [ entry[:site].location.start_line, -1, 0, entry.except(:site, :definer, :from_concern) ] } +
+                 (own_defs + called + inherited).map { |entry| [ calls.at(entry[:site]).location.start_line, -1, 0, entry.except(:site, :definer, :from_concern) ] } +
                  by_concern.map do |entry|
                    top, order = placement[entry[:from_concern]]
                    [ line_of[top].to_i, order.to_i, entry[:site] ? entry[:site].location.start_line : entry[:location].to_i, entry ]
@@ -185,9 +202,7 @@ module RailsAiContext
           label, base, path, file = base_source(root, name, scope)
           break unless base && seen.add?(path)
 
-          # Every controller reaches ApplicationController, so its walk is read once per run.
-          key = [ :controller_base_walk, path, base ]
-          walked = cache ? (cache[key] ||= SourceIntrospector.walk_source(base, LISTENERS)) : RunCache.fetch(key) { SourceIntrospector.walk_source(base, LISTENERS) }
+          walked = base_walk(path, base, cache)
           own = singleton_expansions(base, walked, calls, taken).map { |entry| entry.merge(file: file) }
           taken.merge(own.map { |entry| entry[:site].name })
           collected, _, _, _, placement = ConcernMacros.collect(root, Array(walked[:mixins]), keys: [ :filters ], prefer: "controller",
@@ -199,6 +214,64 @@ module RailsAiContext
           name, scope = RunCache.fetch([ :controller_base_superclass, path, label ]) { superclass_of(base, label) }
         end
         found
+      end
+
+      # Every controller reaches ApplicationController, so its walk is read once per run.
+      def base_walk(path, base, cache)
+        key = [ :controller_base_walk, path, base ]
+        cache ? (cache[key] ||= SourceIntrospector.walk_source(base, LISTENERS)) : RunCache.fetch(key) { SourceIntrospector.walk_source(base, LISTENERS) }
+      end
+
+      # `sites` with the calls each class method of the chain it names makes in turn, as `calls` runs them.
+      def nested_sites(sites, calls)
+        frontier = sites.flat_map { |name, nodes| nodes.map { |node| [ name, node ] } }
+        MAX_NESTING.times do
+          break if frontier.empty?
+
+          frontier = frontier.flat_map do |name, node|
+            definition = !MACROS.include?(name.to_sym) && class_method_def(calls, name)
+            text = definition && CallSiteExpansion.rewritten(definition, node)
+            tree = text && AstCache.parse_string(text)&.value
+            next [] unless tree
+
+            SourceIntrospector.calls_outside_methods(tree, self_receiver: true).flat_map do |inner, nodes|
+              next [] if MACROS.include?(inner.to_sym)
+
+              nodes.each { |inner_node| calls.outer[inner_node] = calls.at(node) }
+              (sites[inner] ||= []).concat(nodes)
+              nodes.map { |inner_node| [ inner, inner_node ] }
+            end
+          end
+        end
+        sites
+      end
+
+      # The class method `name` as Ruby finds it for the class: its own, then each app-defined base's.
+      def class_method_def(calls, name)
+        found = def_in(calls.source, calls.walked, name)
+        return found if found
+
+        base_name, scope = superclass_of(calls.source, calls.within)
+        seen = Set.new
+        MAX_BASES.times do
+          break unless base_name && calls.root
+
+          label, base, path, = base_source(calls.root, base_name, scope)
+          break unless base && seen.add?(path)
+
+          found = def_in(base, base_walk(path, base, calls.cache), name)
+          return found if found
+
+          base_name, scope = RunCache.fetch([ :controller_base_superclass, path, label ]) { superclass_of(base, label) }
+        end
+        nil
+      end
+
+      def def_in(source, walked, name)
+        method = Array(walked[:methods]).reverse.find { |m| m[:scope] == :class && m[:name].to_s == name }
+        method && AstWalk.each(AstCache.parse_string(source).value).find do |node|
+          node.is_a?(Prism::DefNode) && node.name.to_s == name && node.location.start_line == method[:location]
+        end
       end
 
       # Whether the entry is what a method declares at a call the class body makes.
@@ -368,7 +441,8 @@ module RailsAiContext
         statements.body.first
       end
 
-      private_class_method :walk, :class_level, :singleton_expansions, :declares_filters?, :base_expansions,
+      private_class_method :walk, :class_level, :singleton_expansions, :declares_filters?, :base_expansions, :base_walk,
+                           :class_method_def, :def_in,
                            :superclass_of, :base_source, :constant_source, :with_file, :body_call?, :record, :positional_names, :constraints, :condition_text, :normalize, :action_condition, :lambda_body
     end
   end
