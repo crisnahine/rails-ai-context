@@ -210,6 +210,19 @@ module RailsAiContext
         ranked.filter_map { |_, bare, name| name unless first[bare] == name }.to_set
       end
 
+      # An enum list as the connection's enum_types gives it, sorted: the types on the search path,
+      # bare in the current schema; before 7.1 every type, by its bare name.
+      def enum_list(enums, search_path, legacy: false)
+        listed = enums.filter_map do |name, values|
+          schema, dot, bare = name.rpartition(".")
+          shown = if dot.empty? || legacy then bare
+          elsif search_path.include?(schema) then schema == search_path.first ? bare : name
+          end
+          { name: shown, values: values } if shown
+        end
+        listed.uniq { |enum| enum[:name] }.sort_by { |enum| enum[:name] }
+      end
+
       # The configured search path less the schemas the dump never creates, as PostgreSQL
       # skips a schema that does not exist. public is assumed, since pg_dump does not create it.
       def existing_search_path(search_path, created)

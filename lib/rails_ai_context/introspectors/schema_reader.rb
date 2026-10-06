@@ -184,6 +184,7 @@ module RailsAiContext
         end
         # The connection lists a name once, from the first schema on the search path holding it.
         schema[:tables].reject! { |name, _| @shadowed.include?(name) } if @shadowed
+        name_enums(schema)
 
         drop_partitions(schema)
       rescue => e
@@ -234,14 +235,28 @@ module RailsAiContext
 
       # The search path less schemas the dump never creates, and the names an earlier schema hides.
       def naming
+        @existing_path = @search_path
         return [ @search_path, nil ] if @search_path == SchemaConventions::DEFAULT_SEARCH_PATH
 
         source = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size).to_s
+        @existing_path = SchemaConventions.existing_search_path(@search_path, source.scan(/^\s*create_schema\s+"([^"]+)"/).flatten)
+        if @existing_path.size > 1
+          @shadowed = SchemaConventions.shadowed_names(source.scan(/^\s*create_(?:table|view|virtual_table)\s+"([^"]+\.[^"]+)"/).flatten, @existing_path)
+          @shadowed_types = SchemaConventions.shadowed_names(source.scan(/^\s*create_enum\s+"([^"]+\.[^"]+)"/).flatten, @existing_path)
+        end
+        [ @existing_path, @shadowed ]
+      end
 
-        path = SchemaConventions.existing_search_path(@search_path, source.scan(/^\s*create_schema\s+"([^"]+)"/).flatten)
-        relations = source.scan(/^\s*create_(?:table|view|virtual_table)\s+"([^"]+\.[^"]+)"/).flatten
-        @shadowed = SchemaConventions.shadowed_names(relations, path) if path.size > 1
-        [ path, @shadowed ]
+      # Enum names as the connection gives them; the listener keeps each as the dump wrote it.
+      def name_enums(schema)
+        path = @existing_path || @search_path
+        schema[:enums] = SchemaConventions.enum_list(schema[:enums].to_h { |enum| [ enum[:name], enum[:values] ] }, path)
+        schema[:tables].each_value do |table|
+          table[:columns].each do |column|
+            type = column.dig(:options, :enum_type)
+            column[:options] = column[:options].merge(enum_type: SchemaConventions.local_name(type, path, @shadowed_types)) if type.is_a?(String)
+          end
+        end
       end
 
       # Returns the table each subsequent column and index belongs to.

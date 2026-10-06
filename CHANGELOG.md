@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Extensions are listed in name order, with or without a boot.** The booted
   app listed them in the order the database created them and the static tier
   in the order the dump wrote them, so the same app gave two orders.
+- **Enum types are named the way the booted app names them.** The enum list
+  holds the types in a schema on the search path, bare in the current schema
+  and schema-qualified otherwise, or every type by its bare name before Rails
+  7.1. A column's enum type is bare when the search path finds that type first,
+  and qualified otherwise. Both tiers list enum types in name order.
 
 ## [5.32.0] - 2026-10-06
 

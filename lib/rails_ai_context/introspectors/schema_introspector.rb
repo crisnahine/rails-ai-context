@@ -326,7 +326,7 @@ module RailsAiContext
 
         connection.enum_types.map do |name, values|
           { name: name.to_s, values: values.is_a?(String) ? values.delete("{}").split(",") : Array(values).map(&:to_s) }
-        end
+        end.sort_by { |enum| enum[:name] }
       rescue => e
         RailsAiContext.debug_fail(e, schema_reader.enums, label: "enum_types")
       end
@@ -639,7 +639,7 @@ module RailsAiContext
         content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
         return { error: "#{relative_dump_path(path)} too large (#{File.size(path)} bytes, over max_schema_file_size)" } unless content
 
-        parsed = StructureSqlReader.parse(content, search_path: search_path_for(path), bare_extensions: bare_extensions?)
+        parsed = StructureSqlReader.parse(content, search_path: search_path_for(path), rails_version: locked_rails_version)
         dialect = parsed[:dialect]
         tables = parsed[:tables]
         tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
@@ -666,11 +666,9 @@ module RailsAiContext
         result
       end
 
-      # Rails before 8.0 reads extname alone, so its connection names every extension bare.
-      def bare_extensions?
+      def locked_rails_version
         lock = GemLock.for(app.root)
-        version = lock.version("rails") || lock.version("railties")
-        !version.nil? && Gem::Version.new(version) < Gem::Version.new("8.0")
+        lock.version("rails") || lock.version("railties")
       end
 
       def search_path_for(dump_path)

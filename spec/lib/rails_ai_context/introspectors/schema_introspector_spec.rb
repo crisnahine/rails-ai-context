@@ -1738,6 +1738,18 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       connection.drop_table(:pa_e_posts, if_exists: true)
     end
 
+    it "lists the connection's enum types sorted by name" do
+      connection = ActiveRecord::Base.connection
+      connection.create_table(:pa_e_posts, force: true)
+      without_partial_double_verification do
+        allow(connection).to receive(:enum_types).and_return([ [ "status", %w[on] ], [ "public.mood", %w[happy] ] ])
+      end
+
+      expect(introspector.call[:enum_types].map { |e| e[:name] }).to eq(%w[public.mood status])
+    ensure
+      connection.drop_table(:pa_e_posts, if_exists: true)
+    end
+
     it "reads a booted table's check constraints from the connection" do
       connection = ActiveRecord::Base.connection
       connection.create_table(:pa_c_posts, force: true) { |t| t.string :title }
@@ -2053,6 +2065,86 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
       it "adds nothing to a dump from another database" do
         expect(extensions_of("CREATE TABLE IF NOT EXISTS \"users\" (\"id\" integer PRIMARY KEY AUTOINCREMENT NOT NULL);\n")).to be_nil
+      end
+    end
+
+    describe "enum type names against the search path" do
+      def enums_of(file, content, database_yml, rails: nil)
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          FileUtils.mkdir_p(File.join(dir, "config"))
+          File.write(File.join(dir, "db", file), content)
+          File.write(File.join(dir, "config", "database.yml"), "#{RailsAiContext.environment_name}:\n  adapter: postgresql\n#{database_yml}")
+          if rails
+            File.write(File.join(dir, "Gemfile"), "gem \"rails\"\n")
+            File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (#{rails})\n\nDEPENDENCIES\n  rails\n")
+          end
+          result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+          columns = result[:tables].values.flat_map { |t| t[:columns] }.select { |c| c[:type] == "enum" }
+          [ result[:enum_types].map { |e| e[:name] }, columns.to_h { |c| [ c[:name], c[:enum_type] ] } ]
+        end
+      end
+
+      let(:structure) do
+        <<~SQL
+          CREATE SCHEMA app;
+          CREATE SCHEMA audit;
+          CREATE TYPE app.status AS ENUM ('on', 'off');
+          CREATE TYPE public.mood AS ENUM ('happy', 'sad');
+          CREATE TYPE public.status AS ENUM ('x');
+          CREATE TYPE audit.level AS ENUM ('low');
+          CREATE TABLE public.widgets (
+              id bigint NOT NULL,
+              status app.status,
+              mood public.mood,
+              pstatus public.status,
+              level audit.level
+          );
+        SQL
+      end
+
+      it "lists a structure.sql's enums on the search path, bare in the current schema, and names a column's by visibility" do
+        list, columns = enums_of("structure.sql", structure, "  schema_search_path: \"app,public\"\n")
+
+        expect(list).to eq(%w[public.mood public.status status])
+        expect(columns).to eq("status" => "status", "mood" => "mood", "pstatus" => "public.status", "level" => "audit.level")
+      end
+
+      it "lists only public's enums bare with no search path" do
+        list, columns = enums_of("structure.sql", structure, "")
+
+        expect(list).to eq(%w[mood status])
+        expect(columns).to eq("status" => "app.status", "mood" => "mood", "pstatus" => "status", "level" => "audit.level")
+      end
+
+      it "lists every enum bare before Rails 7.1, whose connection reads typname alone" do
+        dump = "CREATE SCHEMA app;\nCREATE TYPE app.status AS ENUM ('on');\nCREATE TYPE public.mood AS ENUM ('happy');\n" \
+               "CREATE TABLE public.widgets (\n    id bigint NOT NULL,\n    mood public.mood\n);\n"
+        list, = enums_of("structure.sql", dump, "", rails: "7.0.8")
+
+        expect(list).to eq(%w[mood status])
+      end
+
+      it "names a schema.rb's enums the same way" do
+        rb = <<~RUBY
+          ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+            create_schema "app"
+
+            create_enum "app.status", ["on", "off"]
+            create_enum "public.mood", ["happy", "sad"]
+            create_enum "public.status", ["x"]
+
+            create_table "public.widgets", force: :cascade do |t|
+              t.enum "status", enum_type: "app.status"
+              t.enum "mood", enum_type: "public.mood"
+              t.enum "pstatus", enum_type: "public.status"
+            end
+          end
+        RUBY
+        list, columns = enums_of("schema.rb", rb, "  schema_search_path: \"app,public\"\n")
+
+        expect(list).to eq(%w[public.mood public.status status])
+        expect(columns).to eq("status" => "status", "mood" => "mood", "pstatus" => "public.status")
       end
     end
 

@@ -11,9 +11,9 @@ module RailsAiContext
       module_function
 
       # @return [Hash] { dialect: Symbol, tables: { name => { columns:, indexes:, foreign_keys: } } }
-      # search_path: the database's configured schema_search_path. bare_extensions: name
-      # every extension bare, as a connection before Rails 8.0 does.
-      def parse(content, search_path: SchemaConventions::DEFAULT_SEARCH_PATH, bare_extensions: false)
+      # search_path: the database's configured schema_search_path. rails_version: the app's,
+      # whose connection names extensions and enum types differently before 8.0 and 7.1.
+      def parse(content, search_path: SchemaConventions::DEFAULT_SEARCH_PATH, rails_version: nil)
         tables = {}
         dialect = detect_sql_dialect(content)
         enums = enum_types(content)
@@ -80,6 +80,7 @@ module RailsAiContext
         end
         resolved = {}
         all.each_key { |name| resolve_columns(name, all, alters, resolved, local) }
+        name_enum_columns(all, enums, path)
 
         content.scan(/^COMMENT ON TABLE #{QUALIFIED_NAME} IS '((?:[^']|'')*)';/) do |table, text|
           table = all.dig(qualified_name(table), :table)
@@ -97,9 +98,23 @@ module RailsAiContext
           tables.delete(shown) unless shown.include?(".")
         end
 
-        { dialect: dialect, tables: tables, enums: enums.map { |name, values| { name: name, values: values } },
+        { dialect: dialect, tables: tables, enums: SchemaConventions.enum_list(enums, path, legacy: before_rails?(rails_version, "7.1")),
           views: found_views, virtual_tables: virtual_tables(content, local),
-          extensions: extensions(content, (path.first || "public" unless bare_extensions), dialect) }
+          extensions: extensions(content, (path.first || "public" unless before_rails?(rails_version, "8.0")), dialect) }
+      end
+
+      def before_rails?(version, release)
+        !version.nil? && Gem::Version.new(version) < Gem::Version.new(release)
+      end
+
+      # A column's enum type as format_type gives it: bare when the search path finds it first.
+      def name_enum_columns(all, enums, path)
+        shadowed = SchemaConventions.shadowed_names(enums.keys, path) if path.size > 1
+        all.each_value do |entry|
+          entry[:table][:columns].each do |column|
+            column[:enum_type] = SchemaConventions.local_name(column[:enum_type], path, shadowed) if column[:enum_type]
+          end
+        end
       end
 
       # As PostgreSQL's connection names them: qualified unless in its current schema.
@@ -135,10 +150,10 @@ module RailsAiContext
         end
       end
 
-      # PostgreSQL's enum types, by the name schema.rb gives them, with their labels.
+      # PostgreSQL's enum types by schema-qualified name, with their labels.
       def enum_types(content)
         content.scan(/CREATE TYPE\s+#{QUALIFIED_NAME}\s+AS\s+ENUM\s*\(([^;]*)\)\s*;/i).to_h do |name, labels|
-          [ shown_name(qualified_name(name)), split_top_level(labels).map { |label| label.delete_prefix("'").delete_suffix("'").gsub("''", "'") } ]
+          [ qualified_name(name), split_top_level(labels).map { |label| label.delete_prefix("'").delete_suffix("'").gsub("''", "'") } ]
         end
       end
 
@@ -220,10 +235,6 @@ module RailsAiContext
         parts = text.strip.scan(/"([^"]+)"|`([^`]+)`|(\w+)/).map { |groups| groups.compact.first }
         parts.unshift("public") if parts.size == 1
         parts.join(".")
-      end
-
-      def shown_name(name)
-        SchemaConventions.local_name(name)
       end
 
       # Each parent's columns, then the child's own. pg_dump writes only local
@@ -451,7 +462,7 @@ module RailsAiContext
             nullable = !rest.match?(/\bNOT\s+NULL\b|\bPRIMARY\s+KEY\b/i)
             # An array is its element type with the flag, as schema.rb dumps it.
             type = normalize_sql_type(col_type.delete_suffix("[]"), dialect)
-            enum_type = shown_name(qualified_name(col_type.delete_suffix("[]"))) if col_type.match?(/\A(?:"[^"]+"|[\w.]+)(?:\[\])?\z/)
+            enum_type = qualified_name(col_type.delete_suffix("[]")) if col_type.match?(/\A(?:"[^"]+"|[\w.]+)(?:\[\])?\z/)
             type = "enum" if enum_type && enums.key?(enum_type)
             raw_types[col_name] = col_type
             column = { name: col_name, type: type, null: nullable }
