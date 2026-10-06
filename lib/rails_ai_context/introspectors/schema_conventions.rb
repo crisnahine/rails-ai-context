@@ -173,9 +173,7 @@ module RailsAiContext
       # primary, sqlite queue) and each dump must be typed by its own. dump_path
       # names a secondary database's dump; nil is the primary's.
       def implicit_pk_type(root, dump_path = nil)
-        db_name = File.basename(dump_path.to_s).sub(/\.(rb|sql)\z/, "").sub(/_?(schema|structure)\z/, "")
-        db_name = "primary" if db_name.empty?
-
+        db_name = SchemaDumpPath.database_name(root, dump_path)
         adapter = database_adapter_for(root, db_name)
         adapter&.start_with?("sqlite") ? "integer" : "bigint"
       end

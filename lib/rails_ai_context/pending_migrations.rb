@@ -35,10 +35,10 @@ module RailsAiContext
     # database.yml entry names, else db/migrate or db/<name>_migrate. The
     # schema replay reads the same list.
     def migrate_dirs_for(root, dump_path = nil)
-      base = dump_path ? File.basename(dump_path.to_s).sub(/\.(rb|sql)\z/, "").sub(/_?(schema|structure)\z/, "") : ""
-      entry = RailsAiContext::DatabaseYml.entry(root, base.empty? ? "primary" : base)
+      name = Introspectors::SchemaDumpPath.database_name(root, dump_path)
+      entry = RailsAiContext::DatabaseYml.entry(root, name)
       Introspectors::MigrationReplay.configured_dirs(root, entry) ||
-        [ File.join(root.to_s, "db", base.empty? ? "migrate" : "#{base}_migrate") ]
+        [ File.join(root.to_s, "db", name == "primary" ? "migrate" : "#{name}_migrate") ]
     end
 
     # Every versioned migration file under the directory or directories. One file scan behind

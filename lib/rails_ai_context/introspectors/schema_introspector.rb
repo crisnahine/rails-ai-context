@@ -444,10 +444,19 @@ module RailsAiContext
       def read_secondary_database_dumps
         dumps = {}
         primary = dump_candidates.map(&:last)
-        Dir.glob(File.join(app.root.to_s, "db", "*_schema.rb")).sort.each do |path|
-          next if primary.include?(path)
+        SchemaDumpPath.secondaries(app.root).each do |name, (format, path)|
+          next if primary.include?(path) || !File.exist?(path)
 
+          parsed = format == :ruby ? parse_schema_rb(path) : parse_structure_sql(path)
+          next if parsed[:tables].blank?
+
+          parsed[:note] = "Parsed from #{relative_dump_path(path)} (from committed dump, not a live connection)"
+          dumps[name] = parsed
+        end
+        Dir.glob(File.join(app.root.to_s, "db", "*_schema.rb")).sort.each do |path|
           name = File.basename(path, ".rb").sub(/_schema\z/, "")
+          next if dumps.key?(name) || primary.include?(path)
+
           parsed = parse_schema_rb(path)
           next if parsed[:tables].blank?
 
@@ -482,9 +491,10 @@ module RailsAiContext
           next if tables.empty?
 
           tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
+          _, dump = SchemaDumpPath.secondaries(app.root)[name]
           dumps[name] = {
             adapter: "static_parse", tables: tables, total_tables: SchemaConventions.table_count(tables),
-            note: "Reconstructed from the migrations in #{dirs.map { |dir| relative_dump_path(dir) }.join(', ')} (#{connection_state}, no #{name}_schema.rb)"
+            note: "Reconstructed from the migrations in #{dirs.map { |dir| relative_dump_path(dir) }.join(', ')} (#{connection_state}, no #{dump ? relative_dump_path(dump) : "#{name}_schema.rb"})"
           }
         end
         dumps

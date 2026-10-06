@@ -1164,6 +1164,33 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
+    it "reads a secondary database's dump under the name its schema_dump gives" do
+      Dir.mktmpdir do |dir|
+        write_app(dir, "config/database.yml" => <<~YAML,
+                    #{RailsAiContext.environment_name}:
+                      primary:
+                        adapter: sqlite3
+                        database: db/dev.sqlite3
+                      analytics:
+                        adapter: sqlite3
+                        database: db/analytics.sqlite3
+                        migrations_paths: db/analytics_migrate
+                        schema_dump: analytics_custom.rb
+                  YAML
+                       "db/schema.rb" => "ActiveRecord::Schema[8.1].define(version: 1) do\n  create_table \"users\" do |t|\n  end\nend\n",
+                       "db/analytics_custom.rb" => "ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do\n  create_table \"page_views\" do |t|\n    t.string \"path\", null: false\n  end\nend\n",
+                       "db/analytics_migrate/20260101000001_create_page_views.rb" => create_posts,
+                       "db/analytics_migrate/20260101000002_add_x.rb" => create_posts.sub("CreatePosts", "AddX"))
+
+        analytics = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:secondary_databases]["analytics"]
+
+        expect(analytics[:tables].keys).to eq([ "page_views" ])
+        expect(analytics[:tables]["page_views"][:columns].first).to include(name: "id", type: "integer")
+        expect(analytics[:note]).to include("db/analytics_custom.rb")
+        expect(analytics[:pending_migrations].map { |m| m[:version] }).to eq([ "20260101000002" ])
+      end
+    end
+
     it "reads no migrations_paths outside the app" do
       Dir.mktmpdir do |outside|
         write_app(outside, "20240101000000_create_posts.rb" => create_posts)
