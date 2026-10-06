@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "ipaddr"
+
 module RailsAiContext
   module Tools
     class GetEnv < BaseTool
@@ -571,8 +573,15 @@ module RailsAiContext
       HTTP_CLIENT_CALLS = {
         "Faraday" => /Faraday\.\w+#{HTTP_URL_ARG.source}/,
         "Net::HTTP" => /Net::HTTP\.\w+#{HTTP_URL_ARG.source}/,
-        "HTTParty" => /HTTParty\.\w+#{HTTP_URL_ARG.source}/
+        "HTTParty" => /HTTParty\.\w+#{HTTP_URL_ARG.source}/,
+        "RestClient" => /RestClient\.\w+#{HTTP_URL_ARG.source}/,
+        "HTTP" => /(?<![\w:])HTTP\.\w+#{HTTP_URL_ARG.source}/,
+        "Excon" => /Excon\.\w+#{HTTP_URL_ARG.source}/,
+        "Typhoeus" => /Typhoeus\.\w+#{HTTP_URL_ARG.source}/,
+        "URI.open" => /URI\.open#{HTTP_URL_ARG.source}/
       }.freeze
+      # Net::HTTP.start("api.example.com", 443) takes a host, not a URL.
+      BARE_HOST = /\A[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\z/i
       HTTP_CLIENT_NAME = Regexp.union(HTTP_CLIENT_CALLS.keys)
 
       private_class_method def self.detect_http_clients(root)
@@ -588,8 +597,9 @@ module RailsAiContext
             next unless source&.match?(HTTP_CLIENT_NAME)
 
             relative = file.sub("#{real_root}/", "")
+            code = source.gsub(/^[ \t]*#.*$/, "")
             HTTP_CLIENT_CALLS.each do |detection, pattern|
-              source.scan(pattern).each do |(url)|
+              code.scan(pattern).each do |(url)|
                 name = extract_service_name_from_url(url)
                 services << { name: name, detection: detection, file: relative } if name
               end
@@ -606,10 +616,14 @@ module RailsAiContext
         return nil if url.start_with?("ENV") || url.include?("#" + "{")
 
         begin
-          uri = URI.parse(url)
-          return nil unless uri&.host
-          # Extract meaningful service name from hostname
-          host = uri.host
+          host = URI.parse(url).host || url[BARE_HOST]
+          return nil unless host
+
+          # An address names no service; a loopback or private one is not external at all.
+          if (ip = (IPAddr.new(host.delete("[]")) rescue nil))
+            return ip.loopback? || ip.private? || ip.link_local? ? nil : host
+          end
+
           # Remove common TLDs and subdomains
           parts = host.split(".")
           return nil if parts.size < 2

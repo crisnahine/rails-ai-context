@@ -822,6 +822,34 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     end
   end
 
+  describe "HTTP clients beyond Faraday, Net::HTTP and HTTParty, and hosts that are not names" do
+    it "detects RestClient, http.rb, Excon, Typhoeus, URI.open and a Net::HTTP host argument, and skips a local or private IP" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/clients"))
+        FileUtils.mkdir_p(File.join(dir, "config/initializers"))
+        File.write(File.join(dir, "app/clients/sibling_client.rb"), <<~RUBY)
+          class SiblingClient
+            def c = RestClient.get("https://api.kappa.example/x")
+            def d = HTTP.get("https://api.lambda.example/x")
+            def g = Excon.get("https://api.xi.example")
+            def h = Net::HTTP.start("api.omicron.example", 443) { }
+            def i = URI.open("https://api.pi.example/feed")
+            def j = Typhoeus.get("https://api.rho.example/x")
+            def k = Net::HTTP.get(URI("http://10.0.0.5:9200/x"))
+            def l = Net::HTTP.get(URI("http://8.8.8.8/x"))
+            # response = Net::HTTP.start('api.commented.example', :use_ssl => true)
+          end
+        RUBY
+        File.write(File.join(dir, "config/initializers/health.rb"), 'HEALTH = -> { Net::HTTP.get(URI("http://127.0.0.1:9200/_cluster/health")) }' + "\n")
+        allow(described_class).to receive(:detect_external_services).and_call_original
+
+        services = described_class.send(:detect_external_services, dir, [])
+
+        expect(services.map { |s| s[:name] }).to contain_exactly(*%w[Kappa Lambda Xi Omicron Pi Rho 8.8.8.8])
+      end
+    end
+  end
+
   describe "a service the Gemfile only names in a comment" do
     it "is not detected" do
       Dir.mktmpdir do |dir|
