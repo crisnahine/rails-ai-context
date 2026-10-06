@@ -262,11 +262,11 @@ module RailsAiContext
         *.{json,yaml,yml} {openapi,swagger,doc,docs,public,app,config}/**/*
       ].freeze
       OPENAPI_EXTENSIONS = %w[.json .yaml .yml].freeze
-      OPENAPI_YAML_KEY = /^["']?(?:openapi|swagger)["']?[ \t]*:/
+      OPENAPI_YAML_KEY = /^["']?(?:openapi|swagger)["']?[ \t]*:[ \t]*["']?\d/
       # Locale files are most of the YAML under config/ and app/, and none is a spec.
       OPENAPI_SKIP = %r{(?:\A|/)(?:node_modules|packs|assets|vite|locales)/}
 
-      # A file is a spec by its top-level `openapi` or `swagger` key, never by where it is.
+      # A file is a spec by its top-level `openapi` or `swagger` version, never by where it is.
       # Braces expand to one glob each, so the extension is checked after a single walk per tree.
       def detect_openapi_specs
         OPENAPI_GLOBS.flat_map { |pattern| Dir.glob(pattern, base: root.to_s) }
@@ -296,18 +296,18 @@ module RailsAiContext
         return json_top_level_key?(head) if File.size(resolution.realpath) > OPENAPI_HEAD
 
         parsed = JSON.parse(head)
-        parsed.is_a?(Hash) && OPENAPI_KEYS.any? { |key| parsed.key?(key) }
+        parsed.is_a?(Hash) && OPENAPI_KEYS.any? { |key| parsed[key].to_s.match?(/\A\d/) }
       rescue JSON::ParserError, SystemCallError
         false
       end
 
-      # A key one object deep in a JSON prefix that may stop mid-token.
+      # A version key one object deep in a JSON prefix that may stop mid-token.
       def json_top_level_key?(head)
         depth = 0
         scanner = StringScanner.new(head)
         until scanner.eos?
           if scanner.scan(/"((?:[^"\\]|\\.)*)"/)
-            return true if depth == 1 && OPENAPI_KEYS.include?(scanner[1]) && scanner.match?(/\s*:/)
+            return true if depth == 1 && OPENAPI_KEYS.include?(scanner[1]) && scanner.match?(/\s*:\s*"?\d/)
           elsif scanner.scan(/[\[{]/) then depth += 1
           elsif scanner.scan(/[\]}]/) then depth -= 1
           else scanner.scan(/[^"\[\]{}]+/) || scanner.getch
