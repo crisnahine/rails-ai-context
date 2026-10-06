@@ -276,10 +276,10 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
         expect(text).to include("- sidekiq_retries_exhausted { |msg, ex| Rails.logger.warn(msg) }")
       end
 
-      it "names a worker's retry block by its macro in the listing, keeping the line short" do
+      it "names each of a worker's retry blocks by its macro in the listing, keeping the line short" do
         line = described_class.call(detail: "standard").content.first[:text].lines.find { |l| l.include?("**HardWorker**") }
 
-        expect(line).to include(" - sidekiq_retry_in (block)")
+        expect(line).to include(" - sidekiq_retry_in (block), sidekiq_retries_exhausted (block)")
         expect(line).not_to include("10 * count")
       end
     end

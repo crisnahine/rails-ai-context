@@ -108,7 +108,7 @@ module RailsAiContext
           size = detailed && worker[:line_count] ? " (#{count_phrase(worker[:line_count], "line")})" : ""
           retries = detailed ? own_retries(worker) : []
           calls = detailed ? Array(worker[:calls]) : []
-          retry_label = retries.any? ? " - #{retries.first}" : ""
+          retry_label = retries.any? ? " - #{retries.uniq.join(", ")}" : ""
           calls_label = calls.any? ? " → #{calls.join(', ')}" : ""
           lines << "- **#{worker[:name]}**#{label}#{size}#{retry_label}#{calls_label}"
           next unless detailed
