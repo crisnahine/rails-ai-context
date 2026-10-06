@@ -311,7 +311,8 @@ module RailsAiContext
       KAMAL_DEPLOY = "config/deploy.yml"
 
       private_class_method def self.kamal_lines(kamal_env, root)
-        return [] if kamal_env.empty?
+        destinations = Dir.glob("config/deploy.*.yml", base: root).sort
+        return [] if kamal_env.empty? && destinations.empty?
 
         lines = [ "## Set by Kamal (`#{KAMAL_DEPLOY}`)" ]
         kamal_env.each do |v|
@@ -332,9 +333,7 @@ module RailsAiContext
             "- `#{v[:name]}` = `#{v[:value]}`#{scope}"
           end
         end
-        Dir.glob("config/deploy.*.yml", base: root).sort.each do |file|
-          lines << "- `#{file}` merges over this per destination and is not read"
-        end
+        destinations.each { |file| lines << "- `#{file}` merges over this per destination and is not read" }
         lines << ""
       end
 

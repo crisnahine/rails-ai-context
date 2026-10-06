@@ -1094,6 +1094,15 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       expect(text).to include("- `HEXKEY` - value hidden")
     end
 
+    it "names a destination file it did not read when the base file sets no env" do
+      write_deploy("service: app\nimage: app\nservers:\n  - 1.1.1.1\n")
+      File.write(File.join(@root, "config", "deploy.staging.yml"), "env:\n  secret:\n    - STAGING_TOKEN\n")
+
+      text = described_class.call(detail: "full").content.first[:text]
+      expect(text).to include("## Set by Kamal (`config/deploy.yml`)")
+      expect(text).to include("`config/deploy.staging.yml` merges over this per destination and is not read")
+    end
+
     it "adds nothing for a deploy file that is not valid YAML or has no env" do
       write_deploy("env: [unclosed\n")
       expect(described_class.call.content.first[:text]).not_to include("Set by Kamal")
