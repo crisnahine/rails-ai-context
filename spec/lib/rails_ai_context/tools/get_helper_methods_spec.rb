@@ -478,6 +478,20 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
         expect(text).to include("- `odd` (OddController")
       end
 
+      it "names a helper_method def by the method it defines, a setter included" do
+        File.write(File.join(@root, "app/controllers/widgets_controller.rb"), <<~RUBY)
+          class WidgetsController < ApplicationController
+            helper_method def current_widget=(widget)
+              @widget = widget
+            end
+          end
+        RUBY
+
+        text = described_class.call(detail: "full").content.first[:text]
+
+        expect(text).to include("- `current_widget=` (WidgetsController")
+      end
+
       it "counts them in the summary" do
         text = described_class.call(detail: "summary").content.first[:text]
 

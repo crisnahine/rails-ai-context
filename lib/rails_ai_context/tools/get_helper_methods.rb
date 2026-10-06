@@ -331,9 +331,7 @@ module RailsAiContext
         lib&.note(result[:mixins])
         calls = Array(result[:calls])
         calls = calls.select { |call| call[:offset] && range.cover?(call[:offset]) } if range
-        names = calls.flat_map do |call|
-          Array(call[:args]).map(&:to_s) + Array(call[:values]).grep(String).filter_map { |v| v[/\Adef\s+([\w?!]+)/, 1] }
-        end.uniq
+        names = calls.flat_map { |call| Array(call[:args]).map(&:to_s) }.uniq
         owner = range ? name : Introspectors::DeclaredConstant.named(source, name)
         names.map { |helper| { name: helper, owner: owner, path: path.delete_prefix("#{real_root}/") } }
       end
