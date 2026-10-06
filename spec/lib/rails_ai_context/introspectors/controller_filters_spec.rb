@@ -91,8 +91,6 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
       end
     end
 
-    # Ruby adds a module to the ancestors once, where it is first included,
-    # so a concern reached through two includes runs its filters once.
     # Ruby: `include Alpha, Beta` appends Beta first, so Beta's block runs before Alpha's; a hook's `base.include` too.
     it "runs the blocks of one multi-argument include last argument first" do
       Dir.mktmpdir do |dir|
@@ -107,6 +105,8 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
       end
     end
 
+    # Ruby adds a module to the ancestors once, where it is first included,
+    # so a concern reached through two includes runs its filters once.
     it "adds a concern reached through two includes once, at its first include" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
