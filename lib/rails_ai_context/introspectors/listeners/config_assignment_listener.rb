@@ -165,9 +165,13 @@ module RailsAiContext
           @results << entry
         end
 
+        # One value pulled out of the result still names the file: `config_for(:redis)[:url]`.
+        CONFIG_FOR_READERS = %i[[] fetch dig].freeze
+
         # `config_for(:name, env: "production")`: the YAML file it reads, nil for a path
         # that is not a literal, and its env:, :expression when that is not a literal.
         def config_for(node)
+          node = node.receiver while node.is_a?(Prism::CallNode) && CONFIG_FOR_READERS.include?(node.name) && node.receiver
           return nil unless node.is_a?(Prism::CallNode) && node.name == :config_for
           return nil unless node.receiver.nil? || rails_call?(node.receiver, "Rails.application")
 

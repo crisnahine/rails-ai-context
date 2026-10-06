@@ -469,6 +469,24 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
       expect(result[:config_for].first).to eq({ key: "payment", call: ":payment", file: "config/payment.yml", keys: %w[host port], erb_keys: 1 })
     end
 
+    it "lists a config_for whose result is chained, as with [], fetch or dig" do
+      result = application(
+        "config/application.rb" => <<~RUBY,
+          module App
+            class Application < Rails::Application
+              config.x.c = config_for(:payment).fetch(:api)
+              config.x.r = config_for(:payment)[:url]
+              config.x.d = Rails.application.config_for(:payment).dig(:a, :b)
+            end
+          end
+        RUBY
+        "config/payment.yml" => "test:\n  api: x\n"
+      )
+
+      expect(result[:config_for].map { |entry| entry[:key] }).to eq(%w[x.c x.r x.d])
+      expect(result[:config_for].map { |entry| entry[:keys] }.uniq).to eq([ %w[api] ])
+    end
+
     it "reads a config_for under a secret-shaped key, and a Pathname path, off the node" do
       result = application(
         "config/application.rb" => <<~RUBY,
