@@ -317,7 +317,17 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       result = introspector.send(:extract_strong_params, source).find { |h| h[:name] == "post_params" }
       expect(result[:requires]).to eq("post")
       expect(result[:permits]).to eq([ "title" ])
-      expect(result[:nested]).to eq({ "comments" => [ "body" ] })
+      expect(result[:nested]).to eq({ "comments" => [ [ "body" ] ] })
+    end
+
+    # In expect, `key: [:a]` is one hash and `key: [[:a]]` an array of them.
+    it "keeps a doubly-wrapped list apart from a single hash, at the top and nested" do
+      source = "def thing_params = params.expect(thing: [:name, items: [[:sku, :qty]], one: [:a]])\ndef list_params = params.expect(rows: [[:x]])\n"
+
+      thing, list = introspector.send(:extract_strong_params, source)
+
+      expect(thing[:nested]).to eq("items" => [ %w[sku qty] ], "one" => [ "a" ])
+      expect(list[:nested]).to eq("rows" => [ [ "x" ] ])
     end
 
     # `tags: []` permits an array of scalars, in expect as in permit.

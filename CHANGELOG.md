@@ -185,6 +185,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `from_concern`.** With `include ActiveStorage::SetBlob`, `set_blob` reads
   `(from ActiveStorage::SetBlob)` and is never labelled as not declared in the
   controller chain; an `on_load` filter beside it still is. (#293)
+- **A strong params entry's `nested` list keeps a doubly-wrapped list as an
+  inner array.** `params.expect(thing: [items: [[:sku, :qty]]])` carries
+  `"items" => [["sku", "qty"]]`, where it was flattened to the single-hash
+  `["sku", "qty"]`, and the `controllers` summary prints it as
+  `items: [[:sku, :qty]]`. (#333)
 - **The views payload no longer carries `conditional_layouts`.** Each controller
   entry carries `layout` and `settings` instead. (#337)
 - **The mailboxes payload drops each mailbox's `routing` list** (`{pattern,

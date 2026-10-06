@@ -485,6 +485,15 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(text).to include("permits: :hide, filters: [:module_id, { module_ids: [] }, { range: [:from, :to] }, { opts: {} }], colors: {}")
     end
 
+    it "prints an array of hashes doubly wrapped, as params.expect spells it" do
+      params = [ { name: "thing_params", requires: "thing", permits: [ "name" ], nested: { "items" => [ %w[sku qty] ] } } ]
+      stub_controllers({ "ThingsController" => { actions: %w[update], filters: [], parent_class: "ApplicationController", strong_params: params } })
+
+      text = described_class.call(controller: "ThingsController").content.first[:text]
+
+      expect(text).to include("permits: :name, items: [[:sku, :qty]]")
+    end
+
     it "prints a hash filter with keys as the keys it permits" do
       params = [ { name: "s_params", requires: "s", nested: { "prefs" => { "theme" => [], "extra" => {} } } } ]
       stub_controllers({ "SController" => { actions: %w[update], filters: [], parent_class: "ApplicationController", strong_params: params } })

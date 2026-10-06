@@ -371,8 +371,9 @@ module RailsAiContext
         end
       end
 
-      # One field of a permit list as Ruby spells it: `:name`, `key: [...]`, `key: {}` or `key: { ... }`, braced inside a list.
+      # One field of a permit list as Ruby spells it: `:name`, `[...]`, `key: [...]`, `key: {}` or `key: { ... }`, braced inside a list.
       private_class_method def self.permit_field_text(field, braced: false)
+        return "[#{field.map { |f| permit_field_text(f, braced: true) }.join(', ')}]" if field.is_a?(Array)
         return ":#{field}" unless field.is_a?(Hash)
 
         key, value = field.first
