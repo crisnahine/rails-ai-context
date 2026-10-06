@@ -126,9 +126,12 @@ module RailsAiContext
         return [] unless Dir.exist?(dir)
 
         Dir.glob(File.join(dir, "**/*.rb")).filter_map do |path|
+          source = RailsAiContext::SafeFile.read(path)
+          next if source && !HelperNames.view_helper?(source, path, dir)
+
           relative = path.sub("#{dir}/", "")
           module_name = relative.sub(/\.rb\z/, "").camelize
-          ast_data = SourceIntrospector.walk(path, { methods: Listeners::MethodsListener })
+          ast_data = HelperNames.walk(path, source, { methods: Listeners::MethodsListener })
           methods = ActionResolver.own_methods(ast_data[:methods], module_name).map { |m| m[:name] }
           {
             file: relative,

@@ -119,6 +119,16 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
         expect(described_class.call(detail: "full").content.first[:text]).to include("**Devise:** current_user")
       end
 
+      it "leaves out a class kept under app/helpers, which no view mixes in" do
+        FileUtils.mkdir_p(File.join(@root, "app/helpers/wiki_pages"))
+        File.write(File.join(@root, "app/helpers/wiki_pages/at_version.rb"),
+                   "module WikiPages\n  class AtVersion < SimpleDelegator\n    def latest_version = 1\n  end\nend\n")
+
+        text = described_class.call(detail: "standard").content.first[:text]
+        expect(text).to include("# Helpers (1)", "ApplicationHelper")
+        expect(text).not_to include("AtVersion")
+      end
+
       it "skips a view in it that links out of the app or loops" do
         Dir.mktmpdir("outside") do |outside|
           File.write(File.join(outside, "leak.html.erb"), "<%= page_title %>\n")

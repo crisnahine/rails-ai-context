@@ -16,7 +16,10 @@ module RailsAiContext
         included = []
         PathResolver.dirs_for(root, "app/helpers").each do |dir|
           FileWalk.each_file(dir).select { |path| path.end_with?(".rb") }.each do |path|
-            walked = SourceIntrospector.walk(path, { methods: Listeners::MethodsListener, mixins: Listeners::MixinsListener })
+            source = RailsAiContext::SafeFile.read(path)
+            next if source && !view_helper?(source, path, dir)
+
+            walked = walk(path, source, { methods: Listeners::MethodsListener, mixins: Listeners::MixinsListener })
             names.merge(Array(walked[:methods]).map { |m| m[:name].to_s })
             included.concat(Array(walked[:mixins]).select { |m| m[:macro] == :include && m[:ancestor] }.map { |m| m[:name] })
           end
@@ -29,6 +32,17 @@ module RailsAiContext
         names
       rescue => e
         RailsAiContext.debug_fail(e, Set.new, label: "HelperNames")
+      end
+
+      # `helper :all` mixes in modules; a class kept under app/helpers reaches no view.
+      def view_helper?(source, path, dir)
+        path_name = path.delete_prefix("#{dir}/").delete_prefix("concerns/").delete_suffix(".rb").camelize
+        !DeclaredConstant.declared_names(source).include?(DeclaredConstant.named(source, path_name))
+      end
+
+      # The source already read when there is one, so the class check and the walk share a parse.
+      def walk(path, source, listeners)
+        source ? SourceIntrospector.walk_source(source, listeners) : SourceIntrospector.walk(path, listeners)
       end
 
       # The instance methods `owner` defines in a file: what including it gives a view.

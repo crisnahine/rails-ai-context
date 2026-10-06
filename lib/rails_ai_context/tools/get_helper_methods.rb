@@ -81,7 +81,10 @@ module RailsAiContext
 
         real_root = File.realpath(root).to_s
         real_helper_dirs = helper_dirs.map { |d| File.realpath(d).to_s }
-        helper_files = helper_dirs.flat_map { |d| safe_glob(d, "**/*.rb", real_root) }.uniq.sort
+        helper_files = helper_dirs.flat_map { |d| safe_glob(d, "**/*.rb", real_root) }.uniq.sort.select do |path|
+          source = RailsAiContext::SafeFile.read(path)
+          source.nil? || Introspectors::HelperNames.view_helper?(source, path, real_helper_dirs.find { |d| path.start_with?("#{d}/") } || File.dirname(path))
+        end
 
         if helper_files.empty?
           return text_response("No helper files found in app/helpers/, packs/*/app/helpers/ or engines/*/app/helpers/.")
