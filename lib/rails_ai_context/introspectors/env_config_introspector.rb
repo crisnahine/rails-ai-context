@@ -42,6 +42,7 @@ module RailsAiContext
       private
 
       APPLICATION = "config/application.rb"
+      REFUSALS = { traversal: :outside, outside: :outside, sensitive: :withheld, missing: :missing, too_large: :too_large }.freeze
 
       def summarize_application
         path = File.join(root, APPLICATION)
@@ -64,8 +65,8 @@ module RailsAiContext
           when :expression then next entry.merge(environment_unread: true)
           when String then environment = entry[:environment] = call[:env]
           end
-          next entry.merge(missing: true) unless File.file?(File.join(root, call[:file]))
-          next entry.merge(withheld: true) if SafePath.sensitive?(call[:file])
+          refusal = SafePath.locate(call[:file], under: root).refusal
+          next entry.merge(REFUSALS.fetch(refusal) => true) if refusal
 
           data = ConfigYaml.read(root, call[:file], label: "config_for")
           next entry.merge(unreadable: true) unless data.is_a?(Hash)

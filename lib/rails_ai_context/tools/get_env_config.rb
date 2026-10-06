@@ -79,7 +79,9 @@ module RailsAiContext
           config_for.each do |entry|
             found = if entry[:path_unread] then "keys not read: its path is not a literal"
             elsif entry[:missing] then "does not exist"
+            elsif entry[:outside] then "outside the app, not read"
             elsif entry[:withheld] then "on sensitive_patterns, keys not read"
+            elsif entry[:too_large] then "over max_file_size, keys not read"
             elsif entry[:unreadable] then "could not be read as YAML"
             elsif entry[:environment_unread] then "keys not read: its env: is not a literal"
             else "keys for #{entry[:environment] || current}: #{Array(entry[:keys]).join(', ').presence || 'none'}"

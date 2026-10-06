@@ -486,5 +486,34 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
 
       expect(result[:config_for]).to eq([ { key: "redis", call: ":redis", file: "config/redis.yml", withheld: true } ])
     end
+
+    it "names the refusal of a config_for path outside the app, behind a symlink to a secret, or too large" do
+      Dir.mktmpdir do |outer|
+        dir = File.join(outer, "app")
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(outer, "outside.yml"), "shared:\n  a: 1\n")
+        File.write(File.join(dir, "config/redis.yml"), "shared:\n  url: x\n")
+        File.symlink(File.join(dir, "config/redis.yml"), File.join(dir, "config/cache.yml"))
+        File.write(File.join(dir, "config/big.yml"), "shared:\n  a: #{'x' * 64}\n")
+        File.write(File.join(dir, "config/application.rb"), <<~RUBY)
+          module App
+            class Application < Rails::Application
+              config.up = config_for(Rails.root.join("..", "outside.yml"))
+              config.cache = config_for(:cache)
+              config.big = config_for(:big)
+            end
+          end
+        RUBY
+        allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(40)
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:application]
+
+        expect(result[:config_for]).to eq([
+          { key: "up", call: 'Rails.root.join("..", "outside.yml")', file: "../outside.yml", outside: true },
+          { key: "cache", call: ":cache", file: "config/cache.yml", withheld: true },
+          { key: "big", call: ":big", file: "config/big.yml", too_large: true }
+        ])
+      end
+    end
   end
 end
