@@ -1022,6 +1022,37 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       expect(text).not_to include("abc123def")
     end
 
+    it "lists the env a role and a tag add, and names the destination files it did not read" do
+      write_deploy(<<~YAML)
+        servers:
+          web:
+            - 1.1.1.1
+          job:
+            hosts:
+              - 1.1.1.2: eu
+            env:
+              clear:
+                JOB_CONCURRENCY: 5
+              secret:
+                - JOB_TOKEN
+        env:
+          clear:
+            WEB_CONCURRENCY: 2
+          tags:
+            eu:
+              REGION: eu
+      YAML
+      File.write(File.join(@root, "config", "deploy.staging.yml"), "env:\n  clear:\n    STAGE: 1\n")
+
+      text = described_class.call.content.first[:text]
+      expect(text).to include("- `WEB_CONCURRENCY` = `2`")
+      expect(text).to include("- `JOB_CONCURRENCY` = `5` (role `job`)")
+      expect(text).to include("- `JOB_TOKEN` - secret, from `.kamal/secrets` (role `job`)")
+      expect(text).to include("- `REGION` = `eu` (tag `eu`)")
+      expect(text).to include("`config/deploy.staging.yml` merges over this per destination and is not read")
+      expect(described_class.call(detail: "summary").content.first[:text]).to include("- `JOB_TOKEN`")
+    end
+
     it "adds nothing for a deploy file that is not valid YAML or has no env" do
       write_deploy("env: [unclosed\n")
       expect(described_class.call.content.first[:text]).not_to include("Set by Kamal")

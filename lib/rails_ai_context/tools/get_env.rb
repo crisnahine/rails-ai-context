@@ -53,7 +53,7 @@ module RailsAiContext
         kamal_env.each { |v| all_var_names << v[:name] }
 
         anyway_configs.each { |c| c[:attributes].each { |a| all_var_names << a[:env] if a[:env] } }
-        deploy_and_settings = kamal_lines(kamal_env) + settings_lines(settings) + anyway_lines(anyway_configs)
+        deploy_and_settings = kamal_lines(kamal_env, root) + settings_lines(settings) + anyway_lines(anyway_configs)
 
         if all_var_names.empty? && external_services.empty? && credentials_keys.empty? && deploy_and_settings.empty?
           return text_response("No environment variables, external services, or credentials keys detected.")
@@ -302,39 +302,51 @@ module RailsAiContext
 
       KAMAL_DEPLOY = "config/deploy.yml"
 
-      private_class_method def self.kamal_lines(kamal_env)
+      private_class_method def self.kamal_lines(kamal_env, root)
         return [] if kamal_env.empty?
 
         lines = [ "## Set by Kamal (`#{KAMAL_DEPLOY}`)" ]
         kamal_env.each do |v|
+          scope = v[:scope] ? " (#{v[:scope]})" : ""
           lines << if v[:secret]
             alias_note = v[:secret] == v[:name] ? "" : " (`#{v[:secret]}`)"
-            "- `#{v[:name]}` - secret, from `.kamal/secrets`#{alias_note}"
+            "- `#{v[:name]}` - secret, from `.kamal/secrets`#{alias_note}#{scope}"
           elsif v[:value] == :computed
-            "- `#{v[:name]}` - set by ERB at deploy time"
+            "- `#{v[:name]}` - set by ERB at deploy time#{scope}"
           elsif v[:value] == :hidden
-            "- `#{v[:name]}` - value hidden"
+            "- `#{v[:name]}` - value hidden#{scope}"
           else
-            "- `#{v[:name]}` = `#{v[:value]}`"
+            "- `#{v[:name]}` = `#{v[:value]}`#{scope}"
           end
+        end
+        Dir.glob("config/deploy.*.yml", base: root).sort.each do |file|
+          lines << "- `#{file}` merges over this per destination and is not read"
         end
         lines << ""
       end
 
-      # The app container's env as Kamal::Configuration::Env reads it: `clear`
-      # and `secret` keys, or a bare hash that is all clear values.
+      # The app container's env as Kamal::Configuration::Role#env merges it: the
+      # top-level env, then a role's own `servers.<role>.env`, then each `env.tags.<tag>`.
       private_class_method def self.scan_kamal_env(root)
-        env = Introspectors::RecurringSchedules.yaml(root, KAMAL_DEPLOY, marker: Introspectors::RecurringSchedules::ERB_OUTPUT)
-        env = env["env"] if env.is_a?(Hash)
-        return [] unless env.is_a?(Hash)
+        config = Introspectors::RecurringSchedules.yaml(root, KAMAL_DEPLOY, marker: Introspectors::RecurringSchedules::ERB_OUTPUT)
+        return [] unless config.is_a?(Hash)
 
+        env = config["env"].is_a?(Hash) ? config["env"] : {}
+        servers = config["servers"].is_a?(Hash) ? config["servers"] : {}
+        roles = servers.filter_map { |role, options| [ "role `#{role}`", options["env"] ] if options.is_a?(Hash) && options["env"].is_a?(Hash) }
+        tags = env["tags"].is_a?(Hash) ? env["tags"].filter_map { |tag, tag_env| [ "tag `#{tag}`", tag_env ] if tag_env.is_a?(Hash) } : []
+        [ [ nil, env ], *roles, *tags ].flat_map { |scope, scoped| kamal_env_entries(scoped, scope) }
+      end
+
+      # Kamal::Configuration::Env's shape: `clear` and `secret` keys, or a bare hash that is all clear values.
+      private_class_method def self.kamal_env_entries(env, scope)
         clear = env.fetch("clear", env.key?("secret") || env.key?("tags") ? {} : env)
         clear = {} unless clear.is_a?(Hash)
         secrets = Array(env["secret"]).filter_map do |key|
           name, aliased = key.to_s.split(":", 2)
-          { name: name, secret: aliased || name } unless name.to_s.empty?
+          { name: name, secret: aliased || name, scope: scope }.compact unless name.to_s.empty?
         end
-        secrets + clear.map { |name, value| { name: name.to_s, value: kamal_clear_value(name.to_s, value) } }
+        secrets + clear.map { |name, value| { name: name.to_s, value: kamal_clear_value(name.to_s, value), scope: scope }.compact }
       end
 
       SAFE_ENV_NAMES = Introspectors::EnvIntrospector::KNOWN_ENV_VARS.select { |spec| spec[:safe] }.to_set { |spec| spec[:name] }.freeze
