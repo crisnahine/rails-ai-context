@@ -496,6 +496,34 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
     end
   end
 
+  describe "a key the body deletes from a hash parameter into a local" do
+    def filter_args(call_source)
+      definition = Prism.parse(<<~RUBY).value.statements.body.first
+        def kguard3(options = {})
+          kind = options.delete(:kind)
+          before_action :kw_three, options
+          before_action kind if kind
+        end
+      RUBY
+      call = Prism.parse(call_source).value.statements.body.first
+      described_class.entries(definition, call, RailsAiContext::Introspectors::ControllerFilters::LISTENERS)[:filters]
+                     .map { |f| [ f[:args], f[:options] ] }
+    end
+
+    # Ruby: `kind` holds the deleted value, nil when the call left the key out.
+    it "binds the local to the value the call gave the key" do
+      expect(filter_args("kguard3 kind: :kw_kind, only: :edit")).to eq([ [ [ :kw_three ], { only: :edit } ], [ [ :kw_kind ], {} ] ])
+      expect(filter_args("kguard3 only: :edit")).to eq([ [ [ :kw_three ], { only: :edit } ] ])
+    end
+
+    it "leaves the local unbound when the body writes it again" do
+      definition = Prism.parse("def kguard4(options = {})\n  kind = options.delete(:kind)\n  kind = :other if rand > 1\n  before_action kind\nend\n").value.statements.body.first
+      call = Prism.parse("kguard4 kind: :kw_kind").value.statements.body.first
+
+      expect(described_class.entries(definition, call, RailsAiContext::Introspectors::ControllerFilters::LISTENERS)[:filters]).to be_empty
+    end
+  end
+
   describe "a hash parameter the body changes in place" do
     it "is bound to nothing" do
       data = expand("def vl(name, options = {})\n  options[:allow_nil] = true\n  before_save :x if options[:allow_nil]\nend\n", "vl :a")

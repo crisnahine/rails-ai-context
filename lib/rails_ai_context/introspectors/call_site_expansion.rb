@@ -273,7 +273,8 @@ module RailsAiContext
         bindings
       end
 
-      # Leading `options.delete(:key)` on a literal hash parameter leave it bound to the other keys.
+      # Leading `options.delete(:key)` on a literal hash parameter leave it bound to the other keys,
+      # and `local = options.delete(:key)` binds the local to that key's value, nil when the call left it out.
       def deleted_keys(bindings, body)
         return [] unless body.is_a?(Prism::StatementsNode)
 
@@ -288,6 +289,13 @@ module RailsAiContext
           next false if node.is_a?(Prism::LocalVariableWriteNode) && node.name == receiver.name
 
           key = key.first.unescaped.to_sym
+          if node.is_a?(Prism::LocalVariableWriteNode)
+            bindings[node.name] =
+              if !binding.value.is_a?(Hash) then unknown
+              elsif binding.value.key?(key) then Binding.new(binding.value[key], binding.value_sources[key])
+              else Binding.new(nil, "nil")
+              end
+          end
           value = binding.value.is_a?(Hash) ? binding.value.except(key) : binding.value
           bindings[receiver.name] = hash_binding(value, binding.value_sources.except(key))
         end
