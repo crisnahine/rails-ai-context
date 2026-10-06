@@ -1852,4 +1852,38 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(described_class.send(:extract_side_effects, "# SyncJob.perform_later\nx = 1")).not_to include("job enqueue")
     end
   end
+
+  describe "a job whose file assigns Class.new(ApplicationJob)" do
+    let(:tmpdir) { Dir.mktmpdir }
+    let(:source) { "SyncJob = Class.new(ApplicationJob) do\n  queue_as :sync\n\n  def perform(id)\n  end\nend\n" }
+
+    before do
+      FileUtils.mkdir_p(File.join(tmpdir, "app/jobs"))
+      File.write(File.join(tmpdir, "app/jobs/sync_job.rb"), source)
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    def job_text(jobs)
+      allow(described_class).to receive(:cached_context).and_return(jobs: jobs)
+      described_class.call(job: "SyncJob").content.first[:text]
+    end
+
+    it "is listed with its queue and perform in the static tier" do
+      text = job_text(RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call)
+
+      expect(text).to include("sync").and include("perform(id)")
+    end
+
+    it "is listed with its queue and perform in the booted tier" do
+      stub_const("ApplicationJob", Class.new(ActiveJob::Base))
+      load File.join(tmpdir, "app/jobs/sync_job.rb")
+      text = job_text(RailsAiContext::Introspectors::JobIntrospector.new(Rails.application).call)
+
+      expect(text).to include("sync").and include("perform(id)")
+    ensure
+      Object.send(:remove_const, :SyncJob) if Object.const_defined?(:SyncJob, false)
+    end
+  end
 end

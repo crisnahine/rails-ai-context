@@ -44,7 +44,7 @@ module RailsAiContext
       def to(source, bases:, lookup: nil, seen: [], only: nil)
         return [] if source.nil? || seen.size >= MAX_DEPTH
 
-        declarations = DeclaredConstant.declarations(source)
+        declarations = DeclaredConstant.declarations(source, assignments: true)
         declarations = [ DeclaredConstant.declaration_named(declarations, only) ].compact if only
         return [] if declarations.empty?
 

@@ -2095,7 +2095,7 @@ module RailsAiContext
               class_name = DeclaredConstant.resolve(source, relative.camelize)
               next if found.key?(class_name) || config.excluded_models.include?(class_name)
 
-              declaration = DeclaredConstant.declaration_for(DeclaredConstant.declarations(source), class_name)
+              declaration = DeclaredConstant.file_declaration(source, class_name)
               found[class_name] = { path: path, source: source, superclass: declaration&.superclass, nesting: declaration&.nesting }
             rescue => e
               found[relative.camelize] ||= { error: e.message }

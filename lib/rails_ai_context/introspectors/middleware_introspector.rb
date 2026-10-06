@@ -132,7 +132,7 @@ module RailsAiContext
       end
 
       def declared_name(content, own_name)
-        DeclaredConstant.declared_names(content).find { |declared| declared.split("::").last.casecmp?(own_name) } || own_name
+        DeclaredConstant.declared_names(content, assignments: true).find { |declared| declared.split("::").last.casecmp?(own_name) } || own_name
       end
 
       # config.ru's own `use` and `map` run before Rails.application, so

@@ -70,6 +70,12 @@ module RailsAiContext
         declaration_named(declarations, path_name) || only_own_class(declarations, path_name)
       end
 
+      # The same over a source, a Class.new class included; class statements answer
+      # first, so an error constant assigned beside the class never stands for the file.
+      def file_declaration(source, path_name)
+        declaration_for(declarations(source), path_name) || declaration_for(declarations(source, assignments: true), path_name)
+      end
+
       # The file's one class, when the file can be named for it: not a class reopened with
       # no superclass (an override or a namespace), nor one nested in the path's constant.
       def only_own_class(declarations, path_name)

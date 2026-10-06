@@ -39,7 +39,7 @@ module RailsAiContext
         return false unless path.end_with?("_helper.rb")
 
         path_name = path.delete_prefix("#{dir}/").delete_prefix("concerns/").delete_suffix(".rb").camelize
-        !DeclaredConstant.declared_names(source).include?(DeclaredConstant.named(source, path_name))
+        !DeclaredConstant.declared_names(source, assignments: true).include?(DeclaredConstant.named(source, path_name))
       end
 
       # The instance methods `owner` defines in a file: what including it gives a view.

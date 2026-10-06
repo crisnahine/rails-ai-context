@@ -462,7 +462,7 @@ module RailsAiContext
           seen << parent
           entry = walks[parent] ||= begin
             source = lookup.call(parent)
-            declared = source && Introspectors::DeclaredConstant.declaration_named(Introspectors::DeclaredConstant.declarations(source), parent)
+            declared = source && Introspectors::DeclaredConstant.declaration_named(Introspectors::DeclaredConstant.declarations(source, assignments: true), parent)
             declared ? { name: declared.name, superclass: declared.superclass, macros: class_interface(source, declared.name)[1] } : {}
           end
           break unless entry[:name]

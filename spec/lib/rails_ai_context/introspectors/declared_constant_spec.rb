@@ -310,6 +310,16 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
     end
   end
 
+  describe ".file_declaration" do
+    it "takes a Class.new class the path names, and never an error constant over a class statement" do
+      only_assigned = "SyncJob = Class.new(ApplicationJob) do\nend\n"
+      error_first = "Missing = Class.new(StandardError)\nclass Current < ActiveSupport::CurrentAttributes\nend\n"
+
+      expect(described_class.file_declaration(only_assigned, "SyncJob").superclass).to eq("ApplicationJob")
+      expect(described_class.file_declaration(error_first, "Tenancy").name).to eq("Current")
+    end
+  end
+
   describe ".class_bodies of a Class.new assignment" do
     it "is the block body, under the name the assignment writes" do
       source = <<~RUBY

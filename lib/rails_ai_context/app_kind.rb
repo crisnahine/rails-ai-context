@@ -95,7 +95,7 @@ module RailsAiContext
       source = RailsAiContext::SafeFile.read(File.join(root.to_s, "config", "application.rb"))
       return nil unless source
 
-      Introspectors::DeclaredConstant.declarations(source)
+      Introspectors::DeclaredConstant.declarations(source, assignments: true)
         .find { |entry| entry.superclass == "Rails::Application" }&.name
     rescue StandardError, ScriptError
       nil

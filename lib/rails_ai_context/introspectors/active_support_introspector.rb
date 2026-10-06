@@ -67,7 +67,7 @@ module RailsAiContext
             # An app/models/concerns directory holds classes too - every
             # validator in some apps - and a class is not a concern, let
             # alone a "plain module".
-            declarations = DeclaredConstant.declarations(content)
+            declarations = DeclaredConstant.declarations(content, assignments: true)
             declared = declarations.find { |d| d.name.split("::").last.casecmp?(mod_name.split("::").last) }
             if declared
               entry[:kind] = "class"

@@ -16,7 +16,7 @@ module RailsAiContext
       #
       # @return [Array(String, String, Array<String>)] name, superclass, the nesting it is read in
       def declaration(source, path_name)
-        own = DeclaredConstant.declaration_for(DeclaredConstant.declarations(source), path_name)
+        own = DeclaredConstant.file_declaration(source, path_name)
         [ own&.name || DeclaredConstant.resolve(source, path_name), own&.superclass, own&.nesting ]
       end
 

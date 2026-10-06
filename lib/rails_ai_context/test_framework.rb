@@ -203,7 +203,7 @@ module RailsAiContext
           rel = "#{name.underscore}.rb"
           paths = BASES.flat_map { |base| Dir.glob(File.join(root.to_s, base, "**", rel)) }.sort
           sources[name] = paths.lazy.filter_map { |path| SafeFile.read(path) }
-                               .find { |source| Introspectors::DeclaredConstant.declarations(source).any? { |d| d.name == name } }
+                               .find { |source| Introspectors::DeclaredConstant.declarations(source, assignments: true).any? { |d| d.name == name } }
         end
       end
     end

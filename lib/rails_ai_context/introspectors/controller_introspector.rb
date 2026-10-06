@@ -217,7 +217,7 @@ module RailsAiContext
       # A file not named *_controller.rb is a controller only if it subclasses one: a mixin,
       # a plain helper class or a Grape API is not.
       def subclasses_a_controller?(source)
-        DeclaredConstant.declarations(source).any? { |d| d.superclass.to_s.split("::").last.to_s.end_with?("Controller") }
+        DeclaredConstant.declarations(source, assignments: true).any? { |d| d.superclass.to_s.split("::").last.to_s.end_with?("Controller") }
       end
 
       def discover_controllers

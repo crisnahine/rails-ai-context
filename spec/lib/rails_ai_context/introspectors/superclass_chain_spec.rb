@@ -83,6 +83,15 @@ RSpec.describe RailsAiContext::Introspectors::SuperclassChain do
       expect(chain.map(&:superclass)).to eq(%w[ApplicationValidator ActiveModel::EachValidator])
     end
 
+    it "follows a parent that a Class.new assignment declares" do
+      base = "Base = Class.new(ApplicationRecord) do\n  self.abstract_class = true\nend\n"
+      chain = described_class.to("class Widget < Base\nend\n",
+                                 bases: %w[ApplicationRecord],
+                                 lookup: ->(name) { base if name == "Base" })
+
+      expect(chain.map(&:name)).to eq(%w[Widget Base])
+    end
+
     it "gives up past the depth cap rather than walking forever" do
       sources = (1..20).to_h { |i| [ "Level#{i}", "class Level#{i} < Level#{i + 1}\nend\n" ] }
       chain = described_class.to("class Deep < Level1\nend\n",

@@ -298,7 +298,7 @@ module RailsAiContext
 
           relative = File.join(dir.delete_prefix(prefix), file)
           source, resolution = SafePath.read(relative, under: root.to_s)
-          next unless source && (file == underscored || DeclaredConstant.declarations(source).any? { |d| d.name == candidate })
+          next unless source && (file == underscored || DeclaredConstant.declarations(source, assignments: true).any? { |d| d.name == candidate })
 
           return [ candidate, source, resolution.realpath, relative ]
         end

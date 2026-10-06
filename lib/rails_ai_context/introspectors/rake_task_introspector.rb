@@ -48,7 +48,7 @@ module RailsAiContext
       # The command Rails::Generators::Base.namespace gives the class:
       # Admin::PageGenerator answers to `admin:page`.
       def generator_entry(record)
-        declared = DeclaredConstant.declarations(record.source).map(&:name).find { |name| name.end_with?("Generator") } or return nil
+        declared = DeclaredConstant.declarations(record.source, assignments: true).map(&:name).find { |name| name.end_with?("Generator") } or return nil
         entry = { command: "bin/rails generate #{declared.delete_suffix('Generator').underscore.tr('/', ':')}", file: record.file }
         usage = SafeFile.read(File.join(File.dirname(record.path), "USAGE"))
         line = usage&.lines&.map(&:strip)&.find { |text| !text.empty? && text != "Description:" }
@@ -56,7 +56,7 @@ module RailsAiContext
       end
 
       def railties_in(record)
-        railties = DeclaredConstant.declarations(record.source).select { |d| RAILTIE_BASES.include?(d.superclass.to_s.delete_prefix("::")) }
+        railties = DeclaredConstant.declarations(record.source, assignments: true).select { |d| RAILTIE_BASES.include?(d.superclass.to_s.delete_prefix("::")) }
         return [] if railties.empty?
 
         calls = SourceIntrospector.walk_source(record.source, { calls: -> { Listeners::GenericMacroListener.new(:initializer, :rake_tasks) } })[:calls]

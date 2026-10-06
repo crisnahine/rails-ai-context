@@ -35,7 +35,7 @@ module RailsAiContext
         unread_parent = nil
         name = class_name
         SuperclassChain::MAX_DEPTH.times do
-          declaration = source && DeclaredConstant.declarations(source).find { |d| d.name == name }
+          declaration = source && DeclaredConstant.declarations(source, assignments: true).find { |d| d.name == name }
           # A file the walk cannot match to the class leaves the class unread.
           break unread << name unless declaration
 
