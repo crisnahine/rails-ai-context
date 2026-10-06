@@ -737,7 +737,7 @@ module RailsAiContext
         def callback_declaration(callback)
           if callback[:skip]
             kind, event = callback[:type].to_s.split("_", 2)
-            return "skip_callback :#{event}, :#{kind}, :#{callback[:method]}#{callback_options_tail(callback[:options])}"
+            return "skip_callback :#{event}, :#{kind}, #{callback_target(callback[:method])}#{callback_options_tail(callback[:options])}"
           end
 
           name = callback[:name] || callback[:type]

@@ -10,6 +10,7 @@ module RailsAiContext
       class MacrosListener < BaseListener
         include WithOptionsScope
         include OwnerScope
+        include BranchConditions
 
         SIMPLE_MACROS = %i[
           has_secure_password
@@ -95,7 +96,11 @@ module RailsAiContext
           elsif GEM_MACROS.include?(node.name)
             record_gem_macro(node)
           elsif node.name == :connects_to
-            @results << { macro: :connects_to, text: one_line_source(node), location: node.location.start_line, confidence: confidence_for(node) }
+            # Under a condition the app may never call it, so no table is routed to its database.
+            condition = current_condition
+            @results << { macro: :connects_to, text: one_line_source(node), condition: condition,
+                          writing: (writing_database(node) unless condition),
+                          location: node.location.start_line, confidence: confidence_for(node) }.compact
           elsif SIMPLE_MACROS.include?(node.name)
             # Rails defaults the attribute to :password.
             @results << {
@@ -139,7 +144,7 @@ module RailsAiContext
         end
 
         def record_gem_macro(node)
-          text = node.block ? node.slice[0, node.block.location.start_offset - node.location.start_offset] : node.slice
+          text = one_line_source(node, upto: node.block&.location&.start_offset)
           text = text.gsub(/\s+/, " ").strip
           adds = monetized_names(node) if node.name == :monetize
           @results << { macro: :gem_macro, name: node.name, text: text, adds: adds.presence,
@@ -295,6 +300,15 @@ module RailsAiContext
           }
         end
 
+        # The database `connects_to database: { writing: :analytics }` writes to, which names its schema dump.
+        def writing_database(node)
+          roles = extract_keyword_nodes(node)[:database]
+          return unless roles.is_a?(Prism::HashNode)
+
+          pair = roles.elements.find { |element| element.is_a?(Prism::AssocNode) && literal_string(element.key) == "writing" }
+          pair && literal_string(pair.value)
+        end
+
         def extract_attribute_api(node)
           args    = node.arguments&.arguments || []
           return if args.empty?
@@ -305,6 +319,8 @@ module RailsAiContext
           type_arg = args[1]
           type = case type_arg
           when Prism::SymbolNode then type_arg.unescaped
+          when nil, Prism::KeywordHashNode then nil
+          else one_line_source(type_arg)
           end
 
           # Sources, so `default: "anon"` prints as the file writes it.

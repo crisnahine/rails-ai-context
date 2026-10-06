@@ -112,6 +112,7 @@ module RailsAiContext
           table = resolve_table_name(class_name, candidates)
           result[class_name] = static_model_details(candidate[:path], class_name, file: candidate[:file],
                                                     table_name: table,
+                                                    primary_key: resolve_primary_key(class_name, candidates),
                                                     inherited_from: declaring_bases(class_name, candidates),
                                                     sti: static_sti_info(class_name, sti_parents),
                                                     parent_model: sti_parents[class_name])
@@ -153,9 +154,8 @@ module RailsAiContext
       end
 
       # The same shape the booted tier reports under :sti, off the chain the
-      # static tier already resolves to share the base's table. A model that
-      # inherits from another model IS the STI relation, so no type column has
-      # to be read to name it.
+      # static tier already resolves to share the base's table. The caller
+      # drops it when the schema shows that table has no type column.
       def static_sti_info(class_name, sti_parents)
         parent = sti_parents[class_name]
         children = sti_parents.select { |_name, other_parent| other_parent == class_name }.keys.sort
@@ -167,6 +167,12 @@ module RailsAiContext
           sti_parent: parent,
           sti_children: (children unless children.empty?)
         }.compact
+      end
+
+      # Rails runs no STI on a table without the type column; a table the dump does not hold is not known to lack it.
+      def lacks_column?(table, column)
+        reader = SchemaReader.for(app.root)
+        reader.tables.key?(table) && column != RailsAiContext::Confidence::INFERRED && !reader.column?(table, column)
       end
 
       # The value as written, read the way Rails reads it: a symbol or a string names the column.
@@ -332,6 +338,27 @@ module RailsAiContext
           contained_prefix(class_name, candidates, seen),
           TableName.stem(candidate[:path], pluralize_tables?(class_name, candidates)),
           namespace_affix(class_name, candidates, :table_name_suffix) ].join
+      end
+
+      # A key the class does not assign is read through a new connection, which an
+      # unreachable host can hold for a full connect timeout per model; unconnected, read the source.
+      def model_primary_key(model)
+        return model.primary_key if model.connected?
+
+        base = model.respond_to?(:base_class) ? model.base_class : model
+        path = model_source_path(base)
+        path && TableName.declarations(model_source(path), base.name, app.root)[:primary_key]
+      rescue StandardError => e
+        RailsAiContext.debug_fail(e, nil, label: "model_primary_key")
+      end
+
+      # Rails reads an STI child's key off its base class; an abstract base's assignment reaches no model.
+      def resolve_primary_key(class_name, candidates, seen = [])
+        own = candidates.dig(class_name, :primary_key)
+        return own if own
+
+        parent = sti_parent(class_name, candidates, seen)
+        parent && resolve_primary_key(parent, candidates, seen + [ class_name ])
       end
 
       # A class attribute: the class's own assignment, else its superclass chain's, else the app's.
@@ -515,9 +542,10 @@ module RailsAiContext
           # The path does not name the class: an app inflection only changes
           # case, so activitypub/activity.rb camelizes to a constant the app
           # does not have and the file was listed as a model that will not
-          # load. Read only where the camelized name is not already loaded, so
+          # load. A root pushed under a namespace declares a prefix the path
+          # lacks. Read only where the camelized name is not already loaded, so
           # a booted run does not parse every model file to learn nothing.
-          class_name = DeclaredConstant.resolve(model_source(record.path).to_s, record.path_name)
+          class_name = DeclaredConstant.named(model_source(record.path).to_s, record.path_name)
           next if known.include?(class_name)
           next if config.excluded_models.include?(class_name)
 
@@ -561,6 +589,7 @@ module RailsAiContext
 
         details = {
           table_name:       model.table_name,
+          primary_key:      model_primary_key(model),
           file:             relative_to_root(model_source_path(model)),
           # Reflection-based (runtime, most accurate for these)
           associations:     extract_associations(model, source_data),
@@ -853,13 +882,23 @@ module RailsAiContext
       # it. A module the source includes, or one the app defines, stays.
       def base_gem_modules(model, mixins)
         written = ConcernMembership.from_mixins(mixins)
-        abstract_bases(model).flat_map { |base| base.ancestors - every_model_modules }.uniq.select do |mod|
+        gem_bases(model).flat_map { |base| base.ancestors - every_model_modules }.uniq.select do |mod|
           !mod.is_a?(Class) && mod.name && !written.include?(mod.name) && !ConcernPaths.find_file(app.root.to_s, mod.name)
         end
       end
 
       def abstract_bases(model)
         model.ancestors.select { |klass| klass.is_a?(Class) && klass < ActiveRecord::Base && klass != model && klass.abstract_class? }
+      end
+
+      # The bases a gem's inherited hook reaches as it reaches the model. Kaminari's
+      # reaches every direct ActiveRecord::Base child, so a model that is one is
+      # measured against the app's abstract bases that are one too.
+      def gem_bases(model)
+        bases = abstract_bases(model)
+        return bases unless model.superclass == ActiveRecord::Base
+
+        bases | ActiveRecord::Base.subclasses.select { |klass| klass.name && klass.abstract_class? }
       end
 
       def every_model_modules
@@ -1122,7 +1161,7 @@ module RailsAiContext
         # Reflection-discovered class methods (for completeness)
         # The abstract bases' class methods reach every model, the static tier reads none of
         # them, and a gem's (Kaminari's `page`) would otherwise be listed on each model.
-        base_methods = abstract_bases(model).flat_map(&:methods)
+        base_methods = gem_bases(model).flat_map(&:methods)
         all_methods = (model.methods - ActiveRecord::Base.methods - Object.methods - base_methods)
           .reject { |m|
             ms = m.to_s
@@ -1216,7 +1255,7 @@ module RailsAiContext
             # Bases arrive first, so the class's own assignment wins.
             (macros[:model_settings] ||= {})[m[:setting]] = m[:value]
           elsif macro == :connects_to
-            macros[:database] = { connects_to: m[:text], declared_in: m[:declared_in] }.compact
+            macros[:database] = { connects_to: m[:text], condition: m[:condition], declared_in: m[:declared_in], writing: m[:writing] }.compact
           elsif macro == :gem_macro
             (macros[:gem_macros] ||= []) << m.slice(:text, :adds)
           elsif macro == :aasm
@@ -1466,9 +1505,9 @@ module RailsAiContext
       BOOLEAN_ASSOCIATION_OPTIONS = %i[polymorphic optional].freeze
 
       # What the record already says another way, or what Rails keeps for itself.
-      # A has_many's foreign key stays listed: its record carries reflection's
-      # default key too, so only the declaration tells a reader it is not the default.
-      UNLISTED_ASSOCIATION_OPTIONS = [ *(LIFTED_ASSOCIATION_OPTIONS - [ :foreign_key ]), :query_constraints, :anonymous_class ].freeze
+      # A has_many's foreign key (or query_constraints, its 7.1 spelling) stays listed: its
+      # record carries reflection's default key too, so only the declaration says it is not the default.
+      UNLISTED_ASSOCIATION_OPTIONS = [ *(LIFTED_ASSOCIATION_OPTIONS - [ :foreign_key ]), :anonymous_class ].freeze
 
       # Every other option the association declares, each as display text:
       # its callbacks, extensions, counter cache and the rest.
@@ -1476,7 +1515,7 @@ module RailsAiContext
         return nil unless options.is_a?(Hash)
 
         shown = options.except(*UNLISTED_ASSOCIATION_OPTIONS)
-        shown = shown.except(:required, :foreign_key) if type.to_s == "belongs_to"
+        shown = shown.except(:required, :foreign_key, :query_constraints) if type.to_s == "belongs_to"
         shown.to_h { |key, value| [ key.to_s, association_option_text(value) ] }.presence
       end
 
@@ -1567,7 +1606,7 @@ module RailsAiContext
       end
 
       def static_model_details(path, class_name, file: relative_to_root(path), table_name: nil, inherited_from: [],
-                               sti: nil, parent_model: nil)
+                               sti: nil, parent_model: nil, primary_key: nil)
         own = own_body(source_walk(path), class_name)
         calls = singleton_lookup([ [ class_name, path ], *Array(inherited_from) ])
         data, unread, bases_unread, hidden = merge_class_and_bases(own, class_name, calls, inherited_from, file: path,
@@ -1580,6 +1619,7 @@ module RailsAiContext
         details = {
           confidence: Confidence::STATIC,
           table_name: table_name || TableName.stem(path),
+          primary_key: primary_key,
           associations: with_join_tables(reject_excluded_associations(data[:associations]), path, class_name),
           validations: static_validations(data, [ path, *Array(inherited_from).map(&:last) ]),
           custom_validates: extract_custom_validates_from_ast(data),
@@ -1625,7 +1665,8 @@ module RailsAiContext
         }
         details.merge!(extract_macros_from_ast(data, path))
         details.merge!(extract_detailed_macros_from_ast(data))
-        details[:sti] = sti.merge(type_column: static_type_column(details[:model_settings])) if sti
+        type_column = static_type_column(details[:model_settings]) if sti
+        details[:sti] = sti && !lacks_column?(details[:table_name], type_column) ? sti.merge(type_column: type_column) : nil
         downgrade_records(details.compact)
       end
 
@@ -2145,16 +2186,22 @@ module RailsAiContext
         end
       end
 
+      MONGOID_MACROS = -> { Listeners::GenericMacroListener.new(%i[field embeds_many embeds_one embedded_in store_in index], call_source: %i[index]) }
+
       def mongoid_model_details(source, class_name, path)
         data = SourceIntrospector.walk_source(source, {
-          mongoid: -> { Listeners::GenericMacroListener.new(%i[field embeds_many embeds_one embedded_in store_in index], call_source: %i[index]) },
+          mongoid: MONGOID_MACROS,
           associations: Listeners::AssociationsListener,
           validations: Listeners::ValidationsListener,
           scopes: Listeners::ScopesListener,
           callbacks: Listeners::CallbacksListener,
-          methods: Listeners::MethodsListener
+          methods: Listeners::MethodsListener,
+          mixins: Listeners::MixinsListener
         })
-        macros = data[:mongoid] || []
+        # A concern's `included` block declares into the document before the body that follows it.
+        from_concerns, = ConcernMacros.collect(app.root.to_s, data[:mixins], keys: %i[mongoid], prefer: "model", within: class_name,
+                                               listeners: { mongoid: MONGOID_MACROS, mixins: Listeners::MixinsListener }, file: path)
+        macros = Array(from_concerns[:mongoid]) + Array(data[:mongoid])
         calls = singleton_lookup([ [ class_name, path ] ])
         calls.add(0, {}, {}, [])
         own = own_body(data.merge(mixins: []), class_name)

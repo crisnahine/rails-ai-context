@@ -489,6 +489,19 @@ RSpec.describe RailsAiContext::Introspectors::MultiDatabaseIntrospector do
       expect(animal).not_to be_nil
       expect(animal[:connects_to]).to include("animals")
     end
+
+    it "keeps the condition a connects_to runs under" do
+      File.write(File.join(@models_dir, "animals_record.rb"), <<~RUBY)
+        class AnimalsRecord < ApplicationRecord
+          self.abstract_class = true
+          connects_to database: { writing: :animals } if ENV["ANIMALS"]
+        end
+      RUBY
+
+      animal = introspector.call[:model_connections].find { |c| c[:model] == "AnimalsRecord" }
+
+      expect(animal[:condition]).to eq('if ENV["ANIMALS"]')
+    end
   end
 
   describe "model connections across every model directory" do

@@ -519,7 +519,7 @@ module RailsAiContext
         if data[:model_connections]&.any?
           lines << "### Model Connections"
           data[:model_connections].each do |c|
-            lines << "- `#{c[:model]}` → #{c[:connects_to] || 'custom connection'}"
+            lines << "- `#{c[:model]}` → #{c[:connects_to] || 'custom connection'}#{" (only #{c[:condition]})" if c[:condition]}"
           end
         end
 

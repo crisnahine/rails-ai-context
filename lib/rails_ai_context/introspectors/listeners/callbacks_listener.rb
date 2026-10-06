@@ -74,8 +74,9 @@ module RailsAiContext
         # tier applies it where the chain is assembled. The kind defaults to
         # :before, as Rails' normalize_callback_params does.
         def record_skip(node)
-          event, *rest = extract_symbol_args(node).map(&:to_s)
-          return unless event
+          positional = (node.arguments&.arguments || []).reject { |a| a.is_a?(Prism::KeywordHashNode) }
+          event, *rest = positional.map { |a| literal_string(a) || one_line_source(a) }
+          return unless event && literal_string(positional.first)
 
           kind = KINDS.include?(rest.first) ? rest.shift : "before"
           options = scope_options(receiver_name(node)).merge(extract_keyword_sources(node))

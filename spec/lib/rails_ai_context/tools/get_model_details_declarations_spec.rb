@@ -27,13 +27,14 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       class User < ApplicationRecord
         attribute :nickname, :string, default: "anon"
         attribute :score, :integer
+        attribute :price, MoneyType.new
         alias_attribute :login, :email
         has_one_attached :avatar
         has_rich_text :bio
       end
     RUBY
 
-    expect(text).to include("- `attribute` :nickname (string, default: \"anon\"), :score (integer)")
+    expect(text).to include("- `attribute` :nickname (string, default: \"anon\"), :score (integer), :price (MoneyType.new)")
     expect(text).to include("- `alias_attribute` :login → :email")
     expect(text).to include("- `has_rich_text` :bio")
   end
@@ -95,7 +96,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
           end
         RUBY
         "profile.rb" => "class Profile < ApplicationRecord\n  belongs_to :user, required: false\n  belongs_to :owner\n  belongs_to :team, optional: true, required: true\nend\n",
-        "ticket.rb" => "class Ticket < ApplicationRecord\n  belongs_to :order, query_constraints: [:shop_id, :order_id], optional: true\nend\n"
+        "ticket.rb" => "class Ticket < ApplicationRecord\n  belongs_to :order, query_constraints: [:shop_id, :order_id], optional: true\n  has_many :lines, query_constraints: [:shop_id, :ticket_id]\nend\n"
       }
     end
 
@@ -122,6 +123,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(profile).to include("- `belongs_to` **owner** (fk: owner_id)")
       expect(profile).to include("- `belongs_to` **team** (fk: team_id)")
       expect(ticket).to include("- `belongs_to` **order** [optional] (fk: (shop_id, order_id))")
+      expect(ticket).to include("- `has_many` **lines** (query_constraints: [:shop_id, :ticket_id])")
     end
   end
 
@@ -215,6 +217,15 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(post).not_to include("stamp_audit")
       expect(post).to include("- `after_commit`: :notify (unless: :draft?)")
       expect(comment).to include("- `before_save`: :stamp_audit")
+    end
+
+    it "drops a callback object the model skips, whatever event the parent named with on:" do
+      post = details_for("Post", files.merge(
+        "application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\n  after_commit AuditTrail, on: :create\nend\n",
+        "post.rb" => "class Post < ApplicationRecord\n  skip_callback :commit, :after, AuditTrail\nend\n"
+      ))
+
+      expect(post).not_to include("AuditTrail")
     end
   end
 

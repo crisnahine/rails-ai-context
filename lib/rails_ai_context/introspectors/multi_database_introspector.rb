@@ -81,14 +81,14 @@ module RailsAiContext
         connections = []
         model_classes.each do |model_name, record|
           ast = SourceIntrospector.walk_source(record.source, {
-            connects_to: -> { Listeners::GenericMacroListener.new(:connects_to) },
+            connects_to: -> { Listeners::ConditionalMacroListener.new(:connects_to) },
             connected_to: -> { Listeners::GenericMacroListener.new(:connected_to) }
           })
 
           if ast[:connects_to].any?
             hit = ast[:connects_to].first
             connects_to_text = hit[:options].map { |k, v| "#{k}: #{format_connects_value(v)}" }.join(", ")
-            connections << { model: model_name, connects_to: connects_to_text }
+            connections << { model: model_name, connects_to: connects_to_text, condition: hit[:condition] }.compact
           end
 
           if ast[:connected_to].any?

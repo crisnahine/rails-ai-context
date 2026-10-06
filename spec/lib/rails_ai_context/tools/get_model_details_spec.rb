@@ -106,7 +106,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
   end
 
   describe "an app that does not load Active Record" do
-    it "says the class is not an Active Record model" do
+    it "says there is no such model without claiming the class exists" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))
         File.write(File.join(dir, "config/application.rb"), "require \"rails\"\nrequire \"active_model/railtie\"\n# require \"active_record/railtie\"\nrequire \"action_controller/railtie\"\n")
@@ -115,7 +115,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
 
         text = described_class.call(model: "Contact").content.first[:text]
 
-        expect(text).to include("Contact is not an Active Record model: this app does not load Active Record.")
+        expect(text).to include("No Active Record model named Contact: this app does not load Active Record.")
         expect(text).not_to include("Recovery")
       end
     end
@@ -161,6 +161,20 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).to include("**Primary key:** `shop_id, id`")
       expect(text).to include("- **shop_id** | integer | primary key")
     end
+
+    it "names the model's key when the model sets its own" do
+      allow(described_class).to receive(:cached_context).and_return({
+        models: { "LegacyWidget" => { table_name: "legacy_widgets", primary_key: "label" } },
+        schema: { tables: { "legacy_widgets" => {
+          primary_key: "widget_code",
+          columns: [ { name: "widget_code", type: "string", primary_key: true }, { name: "label", type: "string" } ]
+        } } }
+      })
+
+      text = described_class.call(model: "LegacyWidget").content.first[:text]
+
+      expect(text).to include("**Primary key:** `label` (the table's is `widget_code`)")
+    end
   end
 
   describe "a model on a secondary database" do
@@ -175,6 +189,20 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       text = described_class.call(model: "PageView").content.first[:text]
 
       expect(text).to include("## Columns", "- **path** | string | NOT NULL")
+    end
+
+    it "lists its database's table when the primary has one of the same name" do
+      allow(described_class).to receive(:cached_context).and_return({
+        models: { "PageView" => { table_name: "page_views", database: { connects_to: "connects_to ...", writing: "analytics" } } },
+        schema: { tables: { "page_views" => { columns: [ { name: "legacy_only", type: "string" } ] } }, secondary_databases: {
+          "analytics" => { tables: { "page_views" => { columns: [ { name: "path", type: "string", null: false } ] } } }
+        } }
+      })
+
+      text = described_class.call(model: "PageView").content.first[:text]
+
+      expect(text).to include("- **path** | string | NOT NULL")
+      expect(text).not_to include("legacy_only")
     end
   end
 
@@ -668,6 +696,20 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       text = described_class.call(model: "PageView").content.first[:text]
 
       expect(text).to include("**Database:** `connects_to database: { writing: :analytics, reading: :analytics }`, inherited from `AnalyticsRecord`")
+    end
+
+    it "says a connects_to under a condition runs only when it holds" do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Status" => { table_name: "statuses",
+                                database: { connects_to: "connects_to database: { writing: :primary, reading: :replica }",
+                                            condition: "if DatabaseHelper.replica_enabled?", declared_in: "ApplicationRecord" } } }
+      )
+
+      text = described_class.call(model: "Status").content.first[:text]
+
+      expect(text).to include("**Database:** `connects_to database: { writing: :primary, reading: :replica }` " \
+                              "(only if DatabaseHelper.replica_enabled?), inherited from `ApplicationRecord`")
     end
   end
 

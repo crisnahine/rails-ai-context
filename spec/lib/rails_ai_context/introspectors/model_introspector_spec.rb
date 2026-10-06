@@ -1811,6 +1811,37 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    it "lists the fields and indexes an included concern declares, in both tiers" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "concerns", "taggable.rb"), <<~RUBY)
+          module Taggable
+            extend ActiveSupport::Concern
+            included do
+              field :tags, type: Array
+              index tags: 1
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "book.rb"), <<~RUBY)
+          class Book
+            include Mongoid::Document
+            include Taggable
+            field :title, type: String
+            index title: 1
+          end
+        RUBY
+
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        [ introspector.static_call, introspector.call ].each do |result|
+          expect(result["Book"][:fields].map { |f| f[:name] }).to eq(%i[tags title])
+          expect(result["Book"][:indexes]).to eq([ "index tags: 1", "index title: 1" ])
+        end
+      end
+    end
+
     it "keeps only the later declaration of a callback declared twice" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))
@@ -3007,6 +3038,30 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  describe "a concern the model builds with concerning" do
+    it "is listed by both tiers as the model's own, not a gem's" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "widget_log.rb"),
+                   "class WidgetLog < ApplicationRecord\n  concerning :Exporting do\n    def export; end\n  end\nend\n")
+        model = Class.new(ApplicationRecord) { self.table_name = "posts" }
+        model.define_singleton_method(:name) { "WidgetLog" }
+        model.const_set(:Exporting, Module.new)
+        model.include(model::Exporting)
+        stub_const("WidgetLog", model)
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+
+        booted = introspector.send(:extract_model_details, model)
+        static = introspector.static_call["WidgetLog"]
+
+        expect(booted[:concerns]).to include("WidgetLog::Exporting")
+        expect(booted[:concern_sources].to_h).not_to have_key("WidgetLog::Exporting")
+        expect(static[:concerns]).to eq([ "WidgetLog::Exporting" ])
+        expect(static[:concern_sources]).to be_nil
+      end
+    end
+  end
+
   # Kaminari includes its extension into the app's abstract base from an
   # inherited hook, so every model has it and no file of the app says so.
   describe "what a gem puts into the app's abstract base" do
@@ -3033,6 +3088,76 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(booted[:concerns]).to eq([ "WidgetGem::Widget" ])
         expect(booted[:class_methods]).to include("featured")
         expect(booted[:class_methods]).not_to include("page")
+      end
+    end
+  end
+
+  # Kaminari's hook includes into every direct ActiveRecord::Base child, so a
+  # model with no abstract base of its own gets what the app's base gets.
+  describe "what a gem puts into a model that is a direct ActiveRecord::Base child" do
+    it "is neither a concern nor a class method of the model" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "legacy.rb"), "class Legacy < ActiveRecord::Base\nend\n")
+        stub_const("PagerGem::ModelExtension", Module.new)
+        base = Class.new(ActiveRecord::Base) { self.abstract_class = true }
+        stub_const("AppBase", base)
+        model = Class.new(ActiveRecord::Base) { self.table_name = "posts" }
+        model.define_singleton_method(:name) { "Legacy" }
+        [ base, model ].each do |klass|
+          klass.include(PagerGem::ModelExtension)
+          klass.define_singleton_method(:page) { |*| all }
+        end
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+
+        booted = introspector.send(:extract_model_details, model)
+
+        expect(booted[:concerns]).to eq([])
+        expect(booted[:class_methods]).not_to include("page")
+      end
+    end
+  end
+
+  describe "a model that sets its own primary key" do
+    it "records the key the model sets, and its STI child's, on both tiers" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "legacy_widget.rb"), "class LegacyWidget < ApplicationRecord\n  self.primary_key = :label\nend\n")
+        File.write(File.join(dir, "app", "models", "special_widget.rb"), "class SpecialWidget < LegacyWidget\nend\n")
+        File.write(File.join(dir, "app", "models", "plain.rb"), "class Plain < ApplicationRecord\nend\n")
+        model = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          self.primary_key = "label"
+        end
+        model.define_singleton_method(:name) { "LegacyWidget" }
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+
+        static = introspector.static_call
+
+        expect(introspector.send(:extract_model_details, model)[:primary_key]).to eq("label")
+        expect(static["LegacyWidget"][:primary_key]).to eq("label")
+        expect(static["SpecialWidget"][:primary_key]).to eq("label")
+        expect(static["Plain"]).not_to have_key(:primary_key)
+      end
+    end
+  end
+
+  describe "the primary key of a booted model with no connection" do
+    it "never asks the database, and still reads a key the source assigns" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "legacy_widget.rb"), "class LegacyWidget < ApplicationRecord\n  self.primary_key = :label\nend\n")
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        introspector.static_call
+        models = %w[LegacyWidget Plain].map do |name|
+          Class.new(ApplicationRecord) { self.table_name = "posts" }.tap do |model|
+            model.define_singleton_method(:name) { name }
+            allow(model).to receive(:connected?).and_return(false)
+            expect(model).not_to receive(:primary_key)
+          end
+        end
+
+        expect(models.map { |model| introspector.send(:model_primary_key, model) }).to eq([ "label", nil ])
       end
     end
   end
@@ -5276,6 +5401,37 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  describe "the booted listing over a root the app pushes under a namespace" do
+    it "names the file by the namespaced class it declares" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "domain", "billing"))
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "initializers", "autoloading.rb"), <<~RUBY)
+          module Domain; end
+          Rails.autoloaders.main.push_dir(Rails.root.join("app/domain"), namespace: Domain)
+        RUBY
+        File.write(File.join(dir, "app", "domain", "billing", "invoice.rb"), <<~RUBY)
+          module Domain
+            module Billing
+              class Invoice < ApplicationRecord
+              end
+            end
+          end
+        RUBY
+
+        invoice = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          def self.name = "Domain::Billing::Invoice"
+        end
+        stub_const("Domain::Billing::Invoice", invoice)
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        allow(ActiveRecord::Base).to receive(:descendants).and_return([])
+
+        expect(introspector.call.keys).to eq([ "Domain::Billing::Invoice" ])
+      end
+    end
+  end
+
   # Rails reads the prefix off the innermost namespace that declares one and
   # falls back to the class itself, so a model declaring its own is the case
   # `full_table_name_prefix` ends on. The walk read the namespaces only.
@@ -5843,8 +5999,28 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
         expect(models["PageView"][:database]).to eq(connects_to: "connects_to database: { writing: :analytics, reading: :analytics }",
-                                                    declared_in: "AnalyticsRecord")
+                                                    declared_in: "AnalyticsRecord", writing: "analytics")
         expect(models["Post"]).not_to have_key(:database)
+      end
+    end
+  end
+
+  describe "a connects_to under a condition" do
+    it "keeps the condition and routes no table to its database" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "replica_record.rb"), <<~RUBY)
+          class ReplicaRecord < ApplicationRecord
+            self.abstract_class = true
+            connects_to database: { writing: :primary, reading: :replica } if DatabaseHelper.replica_enabled?
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "status.rb"), "class Status < ReplicaRecord\nend\n")
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["Status"][:database]).to eq(connects_to: "connects_to database: { writing: :primary, reading: :replica }",
+                                                  condition: "if DatabaseHelper.replica_enabled?", declared_in: "ReplicaRecord")
       end
     end
   end
@@ -5879,6 +6055,35 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
         expect(models["Post"][:sti]).to eq(sti_base: true, sti_children: [ "Article" ], type_column: "type")
         expect(models["Article"][:sti]).to eq(sti_base: false, sti_parent: "Post", type_column: "type")
+      end
+    end
+
+    it "reports no STI where the schema shows the base's table has no type column" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[7.1].define(version: 1) do
+            create_table "users" do |t|
+              t.string "name"
+              t.bigint "type_id"
+            end
+            create_table "principals" do |t|
+              t.string "type"
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "user.rb"), "class User < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app", "models", "null_user.rb"), "class NullUser < User\nend\n")
+        File.write(File.join(dir, "app", "models", "principal.rb"), "class Principal < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app", "models", "group.rb"), "class Group < Principal\nend\n")
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["User"]).not_to have_key(:sti)
+        expect(models["NullUser"]).not_to have_key(:sti)
+        expect(models["NullUser"][:table_name]).to eq("users")
+        expect(models["Group"][:sti]).to include(sti_parent: "Principal", type_column: "type")
       end
     end
 

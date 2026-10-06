@@ -44,7 +44,7 @@ module RailsAiContext
             data = models[key]
             unless data
               reason = RailsAiContext::AppKind.without_active_record(rails_app.root)
-              return empty_response("#{model} is not an Active Record model: #{reason}.") if reason && models.empty?
+              return empty_response("No Active Record model named #{model}: #{reason}.") if reason && models.empty?
 
               return not_found_response("Model", model, models.keys.sort,
                 recovery_tool: "Call rails_get_model_details(detail:\"summary\") to see all models")
@@ -165,7 +165,8 @@ module RailsAiContext
         lines = [ "# #{name}#{header_tag}", "" ]
         lines << "**Table:** `#{data[:table_name]}`" if data[:table_name]
         if (database = data[:database])
-          lines << "**Database:** `#{database[:connects_to]}`#{", inherited from `#{database[:declared_in]}`" if database[:declared_in]}"
+          lines << "**Database:** `#{database[:connects_to]}`#{" (only #{database[:condition]})" if database[:condition]}" \
+                   "#{", inherited from `#{database[:declared_in]}`" if database[:declared_in]}"
         end
         lines << tenancy_line(data[:tenancy]) if data[:tenancy].is_a?(Hash)
         lines << sti_line(data[:sti]) if data[:sti].is_a?(Hash) && (data[:sti][:sti_parent] || data[:sti][:sti_children])
@@ -179,17 +180,20 @@ module RailsAiContext
         if structure
           lines << "**File:** `#{structure[:path]}` (#{count_phrase(structure[:total_lines], "line")})"
           map = structure[:sections].map { |s| "#{s[:label]}(#{s[:start]}-#{s[:end]})" }.join(" → ")
-          lines << "**Structure:** #{map}"
+          lines << "**Structure:** #{map}" unless map.empty?
         end
 
         # Schema columns - inline from schema introspection
         if data[:table_name]
-          table_data = Payload.schema_table(Payload.section(cached_context, :schema), data[:table_name])
+          table_data = Payload.model_table(Payload.section(cached_context, :schema), data)
           if table_data
             ignored = Array(data[:ignored_columns])
             cols = (table_data[:columns] || []).reject { |c| ignored.include?(c[:name].to_s) }
-            if table_data[:primary_key]
-              lines << "**Primary key:** `#{Introspectors::SchemaConventions.primary_key_label(table_data[:primary_key])}`"
+            if (key = data[:primary_key] || table_data[:primary_key])
+              line = "**Primary key:** `#{Introspectors::SchemaConventions.primary_key_label(key)}`"
+              table_key = table_data[:primary_key]
+              line += " (the table's is `#{Introspectors::SchemaConventions.primary_key_label(table_key)}`)" if table_key && Array(table_key).map(&:to_s) != Array(key).map(&:to_s)
+              lines << line
             end
             if cols.any?
               lines << "" << "## Columns"
@@ -725,13 +729,17 @@ module RailsAiContext
         source = RailsAiContext::SafeFile.read(full_path) or return nil
 
         source_lines = source.lines
+        # A def's kind comes from the walk: a regex cannot see `class << self`,
+        # `def Name.x`, or a def that only extends a scope.
+        def_scopes = Introspectors::ActionResolver.methods_in(source).to_h { |m| [ m[:location], m[:scope] ] }
         sections = []
         current_section = nil
         current_start = nil
 
         source_lines.each_with_index do |line, idx|
           label = case line
-          when /\A\s*class\s/ then "class definition"
+          when /\A\s*(?:[a-z_]+\s+)*def\s/ then { class: "class methods", instance: "instance methods" }[def_scopes[idx + 1]]
+          when /\A\s*class\s+(?!<<)/, /\A\s*[A-Z][\w:]*\s*=\s*Class\.new\b/ then "class definition"
           when /\A\s*(include|extend|prepend)\s/ then "includes"
           when /\A\s*[A-Z_]+\s*=/ then "constants"
           when /\A\s*(belongs_to|has_many|has_one|has_and_belongs_to_many)\s/ then "associations"
@@ -739,8 +747,6 @@ module RailsAiContext
           when /\A\s*scope\s/ then "scopes"
           when /\A\s*(enum|encrypts|normalizes|has_secure_password|has_one_attached|has_many_attached)\s/ then "macros"
           when /\A\s*(before_|after_|around_)/ then "callbacks"
-          when /\A\s*def\s+self\./ then "class methods"
-          when /\A\s*def\s/ then "instance methods"
           when /\A\s*private\s*$/ then "private"
           end
 
