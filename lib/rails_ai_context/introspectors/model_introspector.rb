@@ -2052,7 +2052,7 @@ module RailsAiContext
         models = mongoid_model_names(entries)
         done = {}
         entries.each_key { |class_name| mongoid_entry(class_name, entries, models, done) }
-        entries.keys.select { |class_name| done[class_name] }.to_h { |class_name| [ class_name, done[class_name] ] }
+        entries.keys.select { |class_name| done[class_name] }.to_h { |class_name| [ class_name, done[class_name].except(:settled_callbacks) ] }
       end
 
       # A subclass of a document is a document; its parent is read first.
@@ -2218,8 +2218,12 @@ module RailsAiContext
         calls = singleton_lookup([ [ class_name, path ] ])
         calls.add(0, {}, {}, [])
         own = own_body(data.merge(mixins: []), class_name)
+        parent_name, inherited = parent
+        settled = settle(Walk.empty(own), calls).first[:callbacks]
+        # A parent's callbacks join the chain as a base's do, one rank above the subclass's.
+        settled = Array(inherited&.dig(:settled_callbacks)).map { |cb| cb.merge(rank: cb[:rank].to_i + 1) } + settled
         # Mongoid sets after_commit without prepend, as Rails 7.0 does, so it runs last declared first.
-        callbacks = chain_order(settle(Walk.empty(own), calls).first[:callbacks], false)
+        callbacks = chain_order(settled, false)
         details = {
           confidence: Confidence::STATIC,
           mongoid: true,
@@ -2238,12 +2242,15 @@ module RailsAiContext
           # against an Array.
           callbacks: group_callbacks_by_type(callbacks),
           callback_conditions: callback_conditions(callbacks),
-          methods: data[:methods]
+          methods: data[:methods],
+          settled_callbacks: settled
         }
-        parent_name, inherited = parent
         if inherited
-          own = details[:fields].map { |f| f[:name] }
-          details[:fields] = Array(inherited[:fields]).reject { |f| own.include?(f[:name]) } + details[:fields]
+          { fields: :name, embeds: :name, associations: :name, scopes: :name }.each do |key, name|
+            mine = Array(details[key]).map { |entry| entry[name].to_s }
+            details[key] = Array(inherited[key]).reject { |entry| mine.include?(entry[name].to_s) } + Array(details[key])
+          end
+          details[:validations] = (Array(inherited[:validations]) + Array(details[:validations])).uniq
           details[:parent_model] = parent_name
         end
         embedded = macros.find { |m| m[:macro] == :embedded_in }
