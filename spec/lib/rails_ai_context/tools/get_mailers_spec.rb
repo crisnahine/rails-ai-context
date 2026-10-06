@@ -103,6 +103,17 @@ RSpec.describe RailsAiContext::Tools::GetMailers do
       end
     end
 
+    def static_text(**args)
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+      described_class.call(**args).content.first[:text]
+    end
+
+    it "reads the format after a template's locale, and no format from a locale alone" do
+      %w[alert.html.erb alert.es.text.erb notice.es.erb digest.text+phone.erb].each { |f| write("app/views/user_mailer/#{f}", "hi") }
+      expect(static_text(mailer: "UserMailer")).to include("alert (html, text)", "notice (any format)", "digest (text)")
+    end
+
     # load_defaults 6.1 sets deliver_later_queue_name to nil, so mail goes to ActiveJob's default queue.
     it "names ActiveJob's default queue under load_defaults 6.1 or later" do
       write("config/application.rb", "module App\n  class Application < Rails::Application\n    config.load_defaults 7.1\n  end\nend\n")

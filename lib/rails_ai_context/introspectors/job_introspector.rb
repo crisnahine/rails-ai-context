@@ -900,8 +900,18 @@ module RailsAiContext
           action, *middle, handler = File.basename(path).split(".")
           next if action.start_with?("_") || handler.nil?
 
-          (found[action] ||= []) << (middle.first || "any format")
+          (found[action] ||= []) << (template_format(middle) || "any format")
         end.transform_values { |formats| formats.uniq.sort }.sort.to_h
+      end
+
+      # action.locale.format+variant.handler: the format is the last part, and a lone
+      # part that reads as a locale and names no format is the locale.
+      def template_format(middle)
+        format = middle.last&.sub(/\+.*\z/, "")
+        return nil if format.blank?
+        return nil if middle.one? && format.match?(ViewFile::LOCALE) && !ViewFile::FORMAT_EXTENSIONS.include?(format)
+
+        format
       end
 
       DEFAULT_MAILER_PREVIEW_DIRS = %w[test/mailers/previews spec/mailers/previews].freeze
