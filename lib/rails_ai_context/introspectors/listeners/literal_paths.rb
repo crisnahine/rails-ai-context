@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "pathname"
+
 module RailsAiContext
   module Introspectors
     module Listeners
@@ -34,10 +36,45 @@ module RailsAiContext
         # `Rails.root.join("lib_static")` and its `.to_s`, whose arguments are
         # the path relative to the app root.
         def collect_call_path(node)
+          return collect_file_path(node) if @file && node.receiver.is_a?(Prism::ConstantReadNode) && node.receiver.name == :File
           return collect_paths(node.receiver) unless node.name == :join
 
           segments = app_root_join(node)
           push_path(File.join(*segments)) if segments
+        end
+
+        # `File.expand_path("x", __dir__)` and `File.join(__dir__, "x")`, read when the
+        # listener is given `@file`, the walked file's path relative to the app root.
+        def collect_file_path(node)
+          arguments = Array(node.arguments&.arguments)
+          path = case node.name
+          when :expand_path then file_relative(arguments.first, arguments[1]) if arguments.size == 2
+          when :join then file_relative_join(arguments)
+          end
+          push_path(path) if path
+        end
+
+        def file_relative(relative, base)
+          return unless relative.is_a?(Prism::StringNode)
+
+          anchor = file_anchor(base) or return
+          Pathname.new(File.join(anchor, relative.unescaped)).cleanpath.to_s
+        end
+
+        def file_relative_join(arguments)
+          anchor = file_anchor(arguments.first) or return
+          rest = arguments.drop(1)
+          return unless rest.any? && rest.all?(Prism::StringNode)
+
+          Pathname.new(File.join(anchor, *rest.map(&:unescaped))).cleanpath.to_s
+        end
+
+        # `File.expand_path("x", __FILE__)` resolves against the file name itself, as Ruby does.
+        def file_anchor(node)
+          case node
+          when Prism::SourceFileNode then @file
+          when Prism::CallNode then File.dirname(@file) if node.name == :__dir__ && node.receiver.nil?
+          end
         end
 
         # The segments of `Rails.root.join("a", "b")`, nil unless every one is a literal.

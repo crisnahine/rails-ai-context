@@ -792,6 +792,16 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
         write("spec/support/fb.rb", "FactoryBot.definition_file_paths = %w[custom/factories]\nFactoryBot.reload\n")
         expect(payload[:factory_names].keys).to eq(%w[custom/factories/c.rb])
       end
+
+      it "reads a path built from __dir__, and says so when a replacement cannot be read" do
+        write("spec/support/fb.rb", "FactoryBot.definition_file_paths = [File.expand_path(\"../../custom/factories\", __dir__)]\nFactoryBot.reload\n")
+        expect(payload[:factory_names].keys).to eq(%w[custom/factories/c.rb])
+
+        write("spec/support/fb.rb", "FactoryBot.definition_file_paths = [ENV.fetch(\"DIR\")]\nFactoryBot.reload\n")
+        result = payload
+        expect(result[:factory_names]).to be_nil
+        expect(result[:factories][:location]).to include("not read")
+      end
     end
 
     it "reads no pack factories from a pack that is a gem" do
