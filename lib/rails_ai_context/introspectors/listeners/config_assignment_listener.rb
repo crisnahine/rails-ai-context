@@ -133,13 +133,25 @@ module RailsAiContext
         def block_scope(node)
           outer = @scopes.last
           params = block_params(node.block)
-          scope = { self: EVALS.include?(node.name) && node.receiver ? nil : outer[:self], locals: outer[:locals].except(*params) }
+          own_self = EVALS.include?(node.name) && node.receiver ? receiver_root(node.receiver, outer) : outer[:self]
+          scope = { self: own_self, locals: outer[:locals].except(*params) }
           root = block_root(node)
           return scope unless root
 
           scope[:locals][params.first] = root if params.first
           scope[:self] = root if root.start_with?("on_load(") && !extract_keyword_nodes(node).key?(:yield)
           scope
+        end
+
+        # The root an eval's receiver stands for: the hook's self, a bound block param, or a root constant.
+        def receiver_root(receiver, outer)
+          case receiver
+          when Prism::SelfNode then outer[:self]
+          when Prism::LocalVariableReadNode then outer[:locals][receiver.name]
+          when Prism::ConstantReadNode, Prism::ConstantPathNode
+            name = constant_path_string(receiver)
+            name if @roots.include?(name)
+          end
         end
 
         # `ActiveSupport.on_load(:x)` names `on_load(:x)`; `Apartment.configure` names itself when it is a root.

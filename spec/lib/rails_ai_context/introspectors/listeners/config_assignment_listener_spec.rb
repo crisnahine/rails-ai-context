@@ -88,6 +88,18 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
     expect(results.map { |r| [ r[:path], r[:value] ] }).to eq([ [ [ :table_name_prefix ], "op_" ], [ [ :pluralize_table_names ], false ] ])
   end
 
+  it "reads a class_eval on the hook's own self, its block param or a root constant as that root" do
+    source = <<~RUBY
+      ActiveSupport.on_load(:active_record) { self.class_eval { self.table_name_prefix = "ce_" } }
+      ActiveSupport.on_load(:active_record) { |base| base.class_eval { self.table_name_suffix = "_ce" } }
+      ActiveRecord::Base.class_eval { self.pluralize_table_names = false }
+    RUBY
+
+    results = assignments(source, "on_load(:active_record)", "ActiveRecord::Base")
+
+    expect(results.map { |r| [ r[:path], r[:value] ] }).to eq([ [ [ :table_name_prefix ], "ce_" ], [ [ :table_name_suffix ], "_ce" ], [ [ :pluralize_table_names ], false ] ])
+  end
+
   it "reads the hook's block param and a ::ActiveSupport receiver as the hook's root" do
     source = <<~RUBY
       ::ActiveSupport.on_load(:active_record) do |base|
