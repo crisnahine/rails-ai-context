@@ -1942,7 +1942,6 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
             field :labels, type: Array, default: []
             embeds_many :line_items
             embeds_one :address
-            embedded_in :customer
           end
         RUBY
 
@@ -1953,9 +1952,28 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
                                        { name: :age, type: "Integer", default: "0" }, { name: :labels, type: "Array", default: "[]" } ])
         expect(order[:embeds]).to eq([
           { type: :embeds_many, name: :line_items },
-          { type: :embeds_one, name: :address },
-          { type: :embedded_in, name: :customer }
+          { type: :embeds_one, name: :address }
         ])
+      end
+    end
+
+    # Mongoid keeps an embedded document inside its parent's, and a subclass in its root's collection.
+    it "names the parent of an embedded document and the root's collection for a subclass" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "address.rb"), "class Address\n  include Mongoid::Document\n  embedded_in :author\n  field :city\nend\n")
+        File.write(File.join(dir, "app", "models", "book.rb"), "class Book\n  include Mongoid::Document\n  field :title\nend\n")
+        File.write(File.join(dir, "app", "models", "ebook.rb"), "class Ebook < Book\n  field :url\nend\n")
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["Address"]).to include(embedded_in: "Author")
+        expect(models["Address"]).not_to have_key(:collection)
+        expect(models["Ebook"]).to include(mongoid: true, collection: "books", parent_model: "Book")
+        expect(models["Ebook"][:fields].map { |f| f[:name] }).to eq(%i[title url])
+        expect(models["Ebook"]).not_to have_key(:table_name)
       end
     end
   end

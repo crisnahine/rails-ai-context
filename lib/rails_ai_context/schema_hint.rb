@@ -12,9 +12,10 @@ module RailsAiContext
     :validations,   # [{kind: "presence", attributes: ["title"]}, ...]
     :primary_key,   # "id"
     :confidence,    # "[VERIFIED]", "[STATIC]" or "[INFERRED]"
-    :collection     # true for a Mongoid document: table_name is its collection
+    :collection,    # true for a Mongoid document: table_name is its collection
+    :embedded_in    # the parent a Mongoid embedded document is stored inside, nil otherwise
   ) do
-    def initialize(collection: false, **members)
+    def initialize(collection: false, embedded_in: nil, **members)
       super
     end
   end

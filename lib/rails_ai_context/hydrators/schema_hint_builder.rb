@@ -64,7 +64,8 @@ module RailsAiContext
           validations: validations,
           primary_key: Introspectors::SchemaConventions.primary_key_label(primary_key),
           confidence: confidence,
-          collection: mongoid
+          collection: mongoid,
+          embedded_in: (model_info[:embedded_in] if mongoid)
         )
       end
     end

@@ -197,7 +197,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`before_perform`). (#392)
 - **A Mongoid model's payload always carries `collection:`**, the `store_in`
   name or the one Mongoid derives (`admin_shelves`), where it was set only for
-  `store_in`. (#382)
+  `store_in`. An embedded document carries `embedded_in:` (its parent class)
+  in its place, and a subclass of a document (`class Ebook < Book`) is a
+  Mongoid model with its root's collection and fields and `parent_model:`,
+  where it was read as an ActiveRecord model with an `ebooks` table. (#382)
 - **`schema --table` JSON for a name that holds different tables in two
   databases is `{table:, databases: {<name> => table}}`** instead of one table's
   keys at the top level. (#356)

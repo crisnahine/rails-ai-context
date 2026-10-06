@@ -2057,24 +2057,33 @@ module RailsAiContext
       def mongoid_static_models
         entries = mongoid_candidates
         models = mongoid_model_names(entries)
-        entries.each_with_object({}) do |(class_name, entry), result|
-          if entry[:error]
-            result[class_name] = { error: entry[:error] }
-            next
-          end
-          next unless models.include?(class_name)
+        done = {}
+        entries.each_key { |class_name| mongoid_entry(class_name, entries, models, done) }
+        entries.keys.select { |class_name| done[class_name] }.to_h { |class_name| [ class_name, done[class_name] ] }
+      end
 
-          result[class_name] = if entry[:source].include?("Mongoid::Document")
-            mongoid_model_details(entry[:source], class_name, entry[:path]).merge(file: relative_to_root(entry[:path]))
-          else
-            # This walk keeps no candidate hash, so an AR model in a
-            # hybrid app gets the table it assigns itself and the derived
-            # stem otherwise - no namespace prefix, no STI parent.
-            static_model_details(entry[:path], class_name, table_name: TableName.explicit(entry[:source], class_name, app.root))
-          end
-        rescue => e
-          result[class_name] = { error: e.message }
+      # A subclass of a document is a document; its parent is read first.
+      def mongoid_entry(class_name, entries, models, done)
+        return done[class_name] if done.key?(class_name)
+
+        entry = entries[class_name]
+        return done[class_name] = { error: entry[:error] } if entry[:error]
+        return done[class_name] = nil unless models.include?(class_name)
+
+        done[class_name] = false
+        parent_name = entry[:superclass] && SuperclassChain.resolve_in_scope(class_name, entry[:superclass], nesting: entry[:nesting]) { |q| q if models.include?(q) }
+        parent = parent_name && mongoid_entry(parent_name, entries, models, done)
+        done[class_name] = if entry[:source].include?("Mongoid::Document") || (parent.is_a?(Hash) && parent[:mongoid])
+          mongoid_model_details(entry[:source], class_name, entry[:path], parent: parent && parent[:mongoid] ? [ parent_name, parent ] : nil)
+            .merge(file: relative_to_root(entry[:path]))
+        else
+          # This walk keeps no candidate hash, so an AR model in a
+          # hybrid app gets the table it assigns itself and the derived
+          # stem otherwise - no namespace prefix, no STI parent.
+          static_model_details(entry[:path], class_name, table_name: TableName.explicit(entry[:source], class_name, app.root))
         end
+      rescue => e
+        done[class_name] = { error: e.message }
       end
 
       def mongoid_candidates
@@ -2201,7 +2210,7 @@ module RailsAiContext
 
       MONGOID_MACROS = -> { Listeners::GenericMacroListener.new(%i[field embeds_many embeds_one embedded_in store_in index], call_source: %i[index]) }
 
-      def mongoid_model_details(source, class_name, path)
+      def mongoid_model_details(source, class_name, path, parent: nil)
         data = SourceIntrospector.walk_source(source, {
           mongoid: MONGOID_MACROS,
           associations: Listeners::AssociationsListener,
@@ -2240,8 +2249,21 @@ module RailsAiContext
           callback_conditions: callback_conditions(callbacks),
           methods: data[:methods]
         }
-        # Mongoid's collection_name: store_in's, else the class name tableized with "/" as "_".
-        details[:collection] = macros.find { |m| m[:macro] == :store_in }&.dig(:options, :collection) || class_name.tableize.tr("/", "_")
+        parent_name, inherited = parent
+        if inherited
+          own = details[:fields].map { |f| f[:name] }
+          details[:fields] = Array(inherited[:fields]).reject { |f| own.include?(f[:name]) } + details[:fields]
+          details[:parent_model] = parent_name
+        end
+        embedded = macros.find { |m| m[:macro] == :embedded_in }
+        embedded_in = embedded ? embedded_parent(embedded) : inherited&.dig(:embedded_in)
+        if embedded_in
+          details[:embedded_in] = embedded_in
+        else
+          # Mongoid's collection_name: store_in's, else the root class's name tableized with "/" as "_".
+          details[:collection] = macros.find { |m| m[:macro] == :store_in }&.dig(:options, :collection) ||
+                                 inherited&.dig(:collection) || class_name.tableize.tr("/", "_")
+        end
         downgrade_records(details)
       end
 
@@ -2250,6 +2272,13 @@ module RailsAiContext
         options = macro[:options]
         default = SchemaConventions.format_default(options[:default]) unless options[:default] == Confidence::INFERRED
         { name: macro[:args].first, type: options[:type], default: default }.compact
+      end
+
+      def embedded_parent(macro)
+        options = macro[:options] || {}
+        return "#{macro[:args].first} (polymorphic)" if options[:polymorphic]
+
+        options[:class_name]&.to_s || macro[:args].first.to_s.camelize
       end
 
       def embedded_associations(macros)

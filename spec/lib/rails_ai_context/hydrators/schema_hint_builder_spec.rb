@@ -65,6 +65,14 @@ RSpec.describe RailsAiContext::Hydrators::SchemaHintBuilder do
       expect(RailsAiContext::Hydrators::HydrationFormatter.format_hint(hint)).to include("**Collection:** `books` (key: `_id`)\n**Fields:** `title` String")
     end
 
+    it "names the parent an embedded document lives in, and no collection" do
+      context = mongoid_context.merge(models: { "Address" => { mongoid: true, embedded_in: "Author", fields: [ { name: :city } ] } })
+      formatted = RailsAiContext::Hydrators::HydrationFormatter.format_hint(described_class.build("Address", context: context))
+
+      expect(formatted).to include("**Embedded in:** `Author` (no collection of its own)")
+      expect(formatted).not_to include("**Collection:**")
+    end
+
     it "takes the collection store_in names" do
       expect(described_class.build("Admin::Shelf", context: mongoid_context).table_name).to eq("legacy_shelves")
     end
