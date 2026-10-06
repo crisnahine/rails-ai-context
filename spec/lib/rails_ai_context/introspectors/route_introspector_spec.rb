@@ -164,6 +164,29 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       expect(result[:unrouted_mounts]).to eq(result[:mounted_engines].size)
     end
 
+    it "carries the condition config/routes.rb mounts an app under, as the static tier does" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            mount MetricsApp => "/metrics" if Rails.env.development?
+            mount MetricsAdminApp => "/metrics-admin"
+          end
+        RUBY
+        set = ActionDispatch::Routing::RouteSet.new
+        set.draw do
+          mount MetricsApp => "/metrics"
+          mount MetricsAdminApp => "/metrics-admin"
+        end
+        result = described_class.new(double("app", routes: set, routes_reloader: nil, root: Pathname(dir))).call
+
+        expect(result[:mounted_engines]).to contain_exactly(
+          { engine: "MetricsApp", path: "/metrics", condition: "if Rails.env.development?" },
+          { engine: "MetricsAdminApp", path: "/metrics-admin" }
+        )
+      end
+    end
+
     it "counts them as the mounts they are, and leaves the controller route alone" do
       result = described_class.new(app_double).call
 

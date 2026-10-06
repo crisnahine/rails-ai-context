@@ -610,6 +610,8 @@ module RailsAiContext
       # count includes it either way and a header that disagrees with the list
       # below it is the thing this pairing exists to prevent.
       def detect_mounted_engines
+        # The live table holds only what this environment drew; the source holds the condition it drew it under.
+        conditions = static_mounts.select { |m| m[:condition] }.to_h { |m| [ [ m[:engine], m[:path] ], m[:condition] ] }
         mounted_routes.map do |r|
           mounted = r.app.respond_to?(:app) ? r.app.app : r.app
           name = mounted.is_a?(Class) ? mounted.name : mounted.class.name
@@ -617,7 +619,8 @@ module RailsAiContext
           # print and is still one of the endpoints the count counts, so it is
           # named for what it is rather than dropped into a disagreement
           # between the two numbers.
-          { engine: name || "(anonymous Rack app)", path: mount_path(r) }
+          path = mount_path(r)
+          { engine: name || "(anonymous Rack app)", path: path, condition: conditions[[ name, path ]] }.compact
         rescue => e
           RailsAiContext.debug_fail(e, { engine: "(unreadable Rack app)", path: nil }, label: "detect_mounted_engines")
         end
