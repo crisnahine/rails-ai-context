@@ -30,7 +30,7 @@ jobs:
             version: "0.13.0"
           # railties 7.0 is the last line that allows zeitwerk 2.5, and it runs on Ruby 3.1 only.
           - gem: zeitwerk
-            version: "2.5.4"
+            version: "2.5.0"
             rails: "7.0"
             ruby: "3.1"
 

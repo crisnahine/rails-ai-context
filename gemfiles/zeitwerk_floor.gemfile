@@ -8,6 +8,6 @@ source "https://rubygems.org"
 
 gemspec path: ".."
 
-gem "zeitwerk", "~> 2.5.0"
+gem "zeitwerk", "= 2.5.0"
 
 eval_gemfile "rails.gemfile"
