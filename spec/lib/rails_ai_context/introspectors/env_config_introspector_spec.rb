@@ -419,6 +419,27 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
       ])
     end
 
+    it "reads the keys of the environment a literal env: names, and no keys when env: is an expression" do
+      result = application(
+        "config/application.rb" => <<~RUBY,
+          module App
+            class Application < Rails::Application
+              config.feature = config_for(:feature, env: "production")
+              config.other = config_for(:feature, env: ENV["DEPLOY_ENV"])
+              config.same = config_for(:feature, env: Rails.env)
+            end
+          end
+        RUBY
+        "config/feature.yml" => "shared:\n  flag_a: true\ntest:\n  dev_only: 1\nproduction:\n  prod_only: 2\n"
+      )
+
+      expect(result[:config_for]).to eq([
+        { key: "feature", file: "config/feature.yml", environment: "production", keys: %w[flag_a prod_only] },
+        { key: "other", file: "config/feature.yml", environment_unread: true },
+        { key: "same", file: "config/feature.yml", keys: %w[dev_only flag_a] }
+      ])
+    end
+
     it "is nil for an app without config/application.rb" do
       expect(application({})).to be_nil
     end
