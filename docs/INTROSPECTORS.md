@@ -226,6 +226,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 | VariantCallListener | `variant` calls (ChainedCallListener with `:variant` preset) |
 | ProcLiteralListener | Proc literals: line, source, assigned constant |
 | QueueAssignmentListener | A queue a class body assigns outside any method: Resque's `@queue = :name`, Que's `self.queue = "name"`, or a `def self.queue` returning one, a literal as its value, anything else as source |
+| ConstantReferenceListener | References to constants by last name, qualified or not (`ActiveSupport::MessageVerifier`), skipping one that only qualifies a nested constant (`MessageVerifier::InvalidSignature`) and mentions in comments or strings. Used by the ActiveSupport introspector for message verifier and encryptor usage |
 | MethodCallListener | Call sites by name or pattern anywhere in a file, inside a `def`, a lambda or a block included, with arguments, options, receiver, line and offset. Used by the Turbo introspector for broadcast calls, the ActiveSupport introspector for notification subscriptions, and others |
 
 `GenericMacroListener.new(*names, block_source: [:name])` adds `block`, the

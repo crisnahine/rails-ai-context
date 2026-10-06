@@ -106,21 +106,18 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "extract_deprecators")
       end
 
-      # The class itself, Rails.application.message_verifier(s) or ActiveStorage.verifier; a nested
-      # constant such as MessageVerifier::InvalidSignature is only a rescue.
-      VERIFIER_USE = /MessageVerifier(?!::)|\bmessage_verifiers?\b|\bActiveStorage\.verifier\b/
-      ENCRYPTOR_USE = /MessageEncryptor(?!::)/
-
       def extract_message_verifier_usage
         scan_sources[:message_verifier_usage]
       end
 
       SUBSCRIBE_CALLS = %w[subscribe monotonic_subscribe].freeze
-      # Only the receivers subscriptions_in keeps, so a newsletter `subscribe` is not parsed.
+      # Prefilter: only the receivers subscriptions_from keeps, so a newsletter `subscribe` is not parsed.
       SUBSCRIPTION_HINT = /Notifications\s*&?\.\s*(?:monotonic_)?subscribe\b|\battach_to\b/
+      VERIFIER_HINTS = %w[MessageEncryptor MessageVerifier message_verifier ActiveStorage.verifier].freeze
+      VERIFIER_CALLS = %w[message_verifier message_verifiers verifier].freeze
 
-      # One read of lib/, app/ and the initializers serves both lists; only a file
-      # that mentions a subscription is parsed.
+      # One read of lib/, app/ and the initializers serves both lists; a file that
+      # mentions either is walked once, for both.
       def scan_sources
         @scan_sources ||= begin
           verifier = []
@@ -128,16 +125,14 @@ module RailsAiContext
           source_paths.each do |path|
             content = RailsAiContext::SafeFile.read(path) or next
             relative = path.sub("#{root}/", "")
-            # A literal check first: these patterns have no literal prefix, so each scans the whole file.
-            if content.include?("MessageEncryptor") || content.include?("MessageVerifier") ||
-               content.include?("message_verifier") || content.include?("ActiveStorage.verifier")
-              encryptor = content.match?(ENCRYPTOR_USE)
-              verifies = content.match?(VERIFIER_USE)
-              verifier << { file: relative, encryptor: encryptor, verifier: verifies } if (encryptor || verifies) && !relative.start_with?("config/")
-            end
-            next unless content.include?("subscribe") || content.include?("attach_to")
+            verifies = VERIFIER_HINTS.any? { |hint| content.include?(hint) } && !relative.start_with?("config/")
+            subscribes = (content.include?("subscribe") || content.include?("attach_to")) && content.match?(SUBSCRIPTION_HINT)
+            next unless verifies || subscribes
 
-            subscriptions.concat(subscriptions_in(content, relative)) if content.match?(SUBSCRIPTION_HINT)
+            walked = walk_usage(content, verifies: verifies, subscribes: subscribes) or next
+            usage = verifier_usage(walked)
+            verifier << { file: relative, **usage } if usage.values.any?
+            subscriptions.concat(subscriptions_from(walked, relative))
           end
           { message_verifier_usage: verifier, notification_subscriptions: subscriptions.sort_by { |s| [ s[:file], s[:line], s[:event] ] } }
         end
@@ -155,12 +150,32 @@ module RailsAiContext
         paths + PathResolver.initializer_paths(root)
       end
 
+      def walk_usage(content, verifies:, subscribes:)
+        listeners = {}
+        if verifies
+          listeners[:constants] = -> { Listeners::ConstantReferenceListener.new(names: %w[MessageVerifier MessageEncryptor]) }
+          listeners[:verifier_calls] = -> { Listeners::MethodCallListener.new(names: VERIFIER_CALLS) }
+        end
+        if subscribes
+          listeners[:calls] = -> { Listeners::MethodCallListener.new(names: SUBSCRIBE_CALLS + %w[attach_to]) }
+          listeners[:methods] = Listeners::MethodsListener
+        end
+        SourceIntrospector.walk_source(content, listeners)
+      rescue StandardError, ScriptError => e
+        RailsAiContext.debug_fail(e, nil, label: "active_support usage walk")
+      end
+
+      # The class itself, Rails.application.message_verifier(s) or ActiveStorage.verifier.
+      def verifier_usage(walked)
+        constants = Array(walked[:constants]).map { |ref| ref[:name] }
+        calls = Array(walked[:verifier_calls]).select do |call|
+          call[:name] != "verifier" || call[:receiver].to_s.match?(/(\A|::)ActiveStorage\z/)
+        end
+        { encryptor: constants.include?("MessageEncryptor"), verifier: constants.include?("MessageVerifier") || calls.any? }
+      end
+
       # A Subscriber's attach_to listens for "<public method>.<namespace>", one event per method.
-      def subscriptions_in(content, relative)
-        walked = SourceIntrospector.walk_source(content, {
-          calls: -> { Listeners::MethodCallListener.new(names: SUBSCRIBE_CALLS + %w[attach_to]) },
-          methods: Listeners::MethodsListener
-        })
+      def subscriptions_from(walked, relative)
         Array(walked[:calls]).flat_map do |call|
           if call[:name] == "attach_to"
             attach_to_events(call, walked[:methods], relative)
@@ -172,8 +187,6 @@ module RailsAiContext
             []
           end
         end
-      rescue StandardError, ScriptError => e
-        RailsAiContext.debug_fail(e, [], label: "subscriptions_in")
       end
 
       def attach_to_events(call, methods, relative)
