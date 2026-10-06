@@ -276,7 +276,7 @@ module RailsAiContext
           rescue_from: extract_rescue_from(source),
           rate_limits: declared[:rate_limits].presence,
           turbo_stream_actions: extract_turbo_stream_actions(source),
-          **ControllerSettings.from_source(source, walked),
+          **ControllerSettings.from_source(source, walked, root: app.root.to_s, within: class_name),
           file: relative_file
         }.compact
         details
@@ -313,7 +313,7 @@ module RailsAiContext
           rescue_from: extract_rescue_from(source),
           rate_limits: declared[:rate_limits].presence,
           turbo_stream_actions: extract_turbo_stream_actions(source),
-          **ControllerSettings.from_source(source, walked),
+          **ControllerSettings.from_source(source, walked, root: app.root.to_s, within: ctrl.name),
           file: relative_source_path(ctrl)
         }.compact
       end
