@@ -17,6 +17,18 @@ module RailsAiContext
           stack.concat(current.compact_child_nodes.reverse)
         end
       end
+
+      # The nodes a body runs with its own self: the node opening a method,
+      # class or `class << x` is there, its body is not.
+      def scope(node, found = [])
+        return found unless node
+
+        found << node
+        case node
+        when Prism::DefNode, Prism::ClassNode, Prism::ModuleNode, Prism::SingletonClassNode then found
+        else node.compact_child_nodes.each_with_object(found) { |child, into| scope(child, into) }
+        end
+      end
     end
   end
 end

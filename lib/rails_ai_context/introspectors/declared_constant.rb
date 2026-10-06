@@ -145,6 +145,20 @@ module RailsAiContext
         named&.superclass ? named : found.find(&:superclass)
       end
 
+      # The body of each `class` statement that writes `name`, reached through
+      # the namespaces alone, never a method body.
+      def class_bodies(node, name, scope = [], found = [])
+        case node
+        when Prism::ProgramNode then class_bodies(node.statements, name, scope, found)
+        when Prism::StatementsNode then node.body.each { |child| class_bodies(child, name, scope, found) }
+        when Prism::ClassNode, Prism::ModuleNode
+          inner = scoped(scope, node)
+          found << node.body if node.is_a?(Prism::ClassNode) && node.body && inner.join("::") == name.to_s
+          class_bodies(node.body, name, inner, found)
+        end
+        found
+      end
+
       # Every class the source declares, with the superclass it names -
       # nil for a class with no superclass or a computed one. A module
       # declares no class and so appears here not at all.

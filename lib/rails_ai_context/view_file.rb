@@ -89,8 +89,9 @@ module RailsAiContext
     LOCALE = /\A[a-z]{2}(?:[-_][A-Z]{2})?\z/
 
     # @param path [String] a view path such as "posts/show.fr.html+mobile.erb"
+    # @param locales [Array<String>] the app's available locales, which Rails reads in any spelling (`zh-Hant`)
     # @return [String, nil] the locale and variant the file renders for, and the template name it shares
-    def alternate_of(path)
+    def alternate_of(path, locales = nil)
       base = File.basename(path.to_s)
       return nil if base.empty?
 
@@ -98,7 +99,7 @@ module RailsAiContext
       variant = rest[/\+([^.]*)\z/, 1]
       segments = rest.sub(/\+[^.]*\z/, "").split(".")
       segments.pop if segments.size > 1 && FORMAT_EXTENSIONS.include?(segments.last)
-      locale = segments.pop if segments.size > 1 && segments.last.match?(LOCALE)
+      locale = segments.pop if segments.size > 1 && (segments.last.match?(LOCALE) || Array(locales).include?(segments.last))
       parts = [ ("`#{locale}` locale" if locale), ("`#{variant}` variant" if variant.present?) ].compact
       return nil if parts.empty? || segments.empty?
 

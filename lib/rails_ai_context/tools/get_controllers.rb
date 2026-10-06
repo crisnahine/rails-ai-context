@@ -478,7 +478,7 @@ module RailsAiContext
         if info[:concerns_unread]&.any?
           lines << "" << "_#{RailsAiContext::Confidence::UNAVAILABLE} " \
                          "#{CountPhrase.call(info[:concerns_unread].size, "included module")} not read, " \
-                         "so a filter declared there is missing from this list: #{info[:concerns_unread].join(', ')}_"
+                         "so a filter declared there would be missing from this list: #{info[:concerns_unread].join(', ')}_"
         end
 
         if info[:strong_params]&.any?
@@ -498,7 +498,10 @@ module RailsAiContext
 
         if declared[:settings].any?
           lines << "" << "## Settings"
-          declared[:settings].each { |setting| lines << "- `#{setting[:text]}`#{" _(from #{setting[:from]})_" unless setting[:from] == name}" }
+          declared[:settings].each do |setting|
+            origin = [ ("from #{setting[:from]}" unless setting[:from] == name), ("through #{setting[:via]}" if setting[:via]) ].compact
+            lines << "- `#{setting[:text]}`#{" _(#{origin.join(' ')})_" if origin.any?}"
+          end
         end
 
         # Rescue handlers

@@ -608,6 +608,22 @@ RSpec.describe RailsAiContext::Tools::GetView do
       end
     end
 
+    it "labels a locale the app makes available in any spelling, unbooted from the i18n section" do
+      listing = { templates: { "posts/index.zh-Hant.html.erb" => { lines: 1 } }, partials: {} }
+      allow(described_class).to receive(:cached_context).and_return(view_templates: listing, i18n: { available_locales: [ "zh-Hant" ] })
+
+      expect(described_class.call(controller: "posts", detail: "summary").content.first[:text]).to include("`zh-Hant` locale of `index`")
+    end
+
+    it "labels a locale the app makes available in any spelling, booted from I18n" do
+      listing = { templates: { "posts/index.zh-Hant.html.erb" => { lines: 1 } }, partials: {} }
+      allow(RailsAiContext).to receive(:default_app).and_return(Rails.application)
+      allow(described_class).to receive(:cached_context).and_return(view_templates: listing)
+      allow(I18n).to receive(:available_locales).and_return([ :en, :"zh-Hant" ])
+
+      expect(described_class.call(controller: "posts", detail: "summary").content.first[:text]).to include("`zh-Hant` locale of `index`")
+    end
+
     it "ties each to show when the listing is read off disk" do
       allow(described_class).to receive(:cached_context).and_return({})
       text = described_class.call(controller: "posts", detail: "summary").content.first[:text]

@@ -132,6 +132,13 @@ RSpec.describe RailsAiContext::ViewFile do
       expect(described_class.alternate_of("posts/show+tablet.erb")).to eq("`tablet` variant of `show`")
     end
 
+    # actionview's resolver unions I18n.available_locales with the two-letter form.
+    it "reads a locale the app makes available in any spelling" do
+      expect(described_class.alternate_of("posts/index.zh-Hant.html.erb", %w[zh-Hant es-419])).to eq("`zh-Hant` locale of `index`")
+      expect(described_class.alternate_of("posts/show.es-419.html.erb", %w[zh-Hant es-419])).to eq("`es-419` locale of `show`")
+      expect(described_class.alternate_of("posts/index.zh-Hant.html.erb")).to be_nil
+    end
+
     it "leaves a plain template, a format that looks like a locale and an odd name alone" do
       expect(described_class.alternate_of("posts/show.html.erb")).to be_nil
       expect(described_class.alternate_of("posts/show.js.erb")).to be_nil

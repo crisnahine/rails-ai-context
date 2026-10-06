@@ -276,7 +276,7 @@ RSpec.describe RailsAiContext::ActionFilters do
         expect(chain[:inherited].map { |f| [ f[:name], f[:from], f[:from_concern] ] })
           .to eq([ [ "authenticate_user!", "ApplicationController", nil ],
                    [ "set_locale", "ApplicationController", "Localized" ] ])
-        expect(RailsAiContext::Payload.controllers(ctx)["Admin::FollowsController"][:concerns_unread]).to be_nil
+        expect(RailsAiContext::Payload.controllers(ctx)["Admin::FollowsController"][:concerns_unread]).to eq(%w[Pundit::Authorization])
       end
     end
 

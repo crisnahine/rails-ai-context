@@ -128,6 +128,17 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
       expect(refs).to contain_exactly("comments", "notes")
     end
 
+    # A trailing scope or Enumerable call keeps the records it was called on.
+    it "names the records under a trailing call, and no name for a chain on something that is no model" do
+      source = "<%= render @posts.first %>\n<%= render @post.comments.reverse %>\n<%= render current_account.widgets %>"
+      expect(introspector.send(:extract_partial_refs, source)).to contain_exactly("posts", "comments")
+    end
+
+    it "reads a chain on a receiver that is no model from the records it names, when the app has that model" do
+      expect(introspector.send(:extract_partial_refs, "<%= render current_user.comments.recent %>")).to eq([ "comments" ])
+      expect(introspector.send(:extract_partial_refs, "<%= render current_account.widgets %>")).to be_empty
+    end
+
     it "still detects render @ivar" do
       source = "<%= render @article %>"
       expect(introspector.send(:extract_partial_refs, source)).to include("article")

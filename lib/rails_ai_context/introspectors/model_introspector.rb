@@ -2186,17 +2186,7 @@ module RailsAiContext
       def class_scope(tree, class_name)
         short = class_name.to_s.split("::").last.to_s
         roots = AstWalk.each(tree).select { |node| node.is_a?(Prism::ClassNode) && node.constant_path.slice.split("::").last.casecmp?(short) }
-        roots.empty? ? scope_nodes(tree) : roots.flat_map { |root| scope_nodes(root.body) }
-      end
-
-      def scope_nodes(node, found = [])
-        return found unless node
-
-        found << node
-        case node
-        when Prism::DefNode, Prism::ClassNode, Prism::ModuleNode, Prism::SingletonClassNode then found
-        else node.child_nodes.compact.each_with_object(found) { |child, into| scope_nodes(child, into) }
-        end
+        roots.empty? ? AstWalk.scope(tree) : roots.flat_map { |root| AstWalk.scope(root.body) }
       end
 
       MONGOID_MACROS = -> { Listeners::GenericMacroListener.new(%i[field embeds_many embeds_one embedded_in store_in index], call_source: %i[index]) }

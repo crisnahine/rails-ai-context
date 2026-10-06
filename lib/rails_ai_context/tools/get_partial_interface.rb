@@ -210,7 +210,7 @@ module RailsAiContext
         # list built by globbing had just offered. Rails names a partial by
         # its directory and basename, whatever format and handler follow.
         # The plain file before a locale or variant one: Rails renders it for a request that asks for neither.
-        plain_first = ->(paths) { paths.sort_by { |path| [ RailsAiContext::ViewFile.alternate_of(path) ? 1 : 0, path ] } }
+        plain_first = ->(paths) { paths.sort_by { |path| [ view_alternate_of(path) ? 1 : 0, path ] } }
         candidates = [
           *plain_first.call(Dir.glob(File.join(views_dir, *dir_parts, "#{prefixed_basename}.*"))),
           *plain_first.call(Dir.glob(File.join(views_dir, *dir_parts, "#{unprefixed_basename}.*"))),
@@ -409,11 +409,11 @@ module RailsAiContext
 
             next if matched_line
 
-            var = line[Introspectors::ViewTemplateIntrospector::IMPLICIT_RENDER, 1]
-            next unless var && !line.include?("partial:")
+            chain = line[Introspectors::ViewTemplateIntrospector::IMPLICIT_RENDER, 1]
+            next unless chain && !line.include?("partial:")
 
             view_dir = File.dirname(file.delete_prefix(views_dir + File::SEPARATOR))
-            next unless implicit_partial(var, view_dir, prefixed, root, object_paths) == canonical
+            next unless implicit_partial(chain, view_dir, prefixed, root, object_paths) == canonical
 
             sites << { file: relative, line: line_num, locals: [], snippet: snippet }
           end
@@ -424,12 +424,12 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "find_render_sites")
       end
 
-      # The partial Rails renders for a record named `var` from a view in
+      # The partial Rails renders for the records `chain` names from a view in
       # view_dir, which stands in for the controller's path; nil when the
-      # model's to_partial_path cannot be read.
-      private_class_method def self.implicit_partial(var, view_dir, prefixed, root, memo)
-        singular = var.singularize
-        path = memo.fetch(singular) { memo[singular] = object_partial_path(singular, root) }
+      # model's to_partial_path or the chain cannot be read.
+      private_class_method def self.implicit_partial(chain, view_dir, prefixed, root, memo)
+        _, model = Introspectors::RenderedRecord.resolve(chain, root, memo)
+        path = model && Introspectors::RenderedRecord.partial_path(model, root, memo)
         return path unless path && prefixed
 
         merge_prefix_into_object_path(view_dir == "." ? "" : view_dir, path)
@@ -447,29 +447,6 @@ module RailsAiContext
           prefixes << dir
         end
         (prefixes << object_path).join("/")
-      end
-
-      # The model's own to_partial_path when it returns a literal, else the
-      # ActiveModel default. Only the conventional model file is read.
-      private_class_method def self.object_partial_path(singular, root)
-        relative = "app/models/#{singular}.rb"
-        default = "#{singular.pluralize}/#{singular}"
-        return default unless RailsAiContext::SafePath.locate(relative, under: root).ok?
-
-        path = File.join(root, relative)
-        methods = Introspectors::SourceIntrospector.walk(path, { methods: Introspectors::Listeners::MethodsListener })[:methods]
-        own = Introspectors::ActionResolver.own_methods(methods, singular.camelize)
-                                           .find { |m| m[:scope] == :instance && m[:name].to_s == "to_partial_path" }
-        return default unless own
-
-        tree = RailsAiContext::AstCache.parse(path).value
-        defn = Introspectors::AstWalk.each(tree).find { |n| n.is_a?(Prism::DefNode) && n.location.start_offset == own[:offset] }
-        return nil unless defn
-
-        body = defn.body&.body
-        body&.size == 1 && body.first.is_a?(Prism::StringNode) ? body.first.unescaped : nil
-      rescue => e
-        RailsAiContext.debug_fail(e, nil, label: "object_partial_path")
       end
 
       # Rails prefixes a record's partial with the controller namespace unless

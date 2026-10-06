@@ -990,6 +990,21 @@ module RailsAiContext
       [ found, read ]
     end
 
+    # [line, order, at, entry] for each entry a concern's block declares: at the `include` reaching that
+    # concern, then by the concern's place in Ruby's order, then by `at` (the block yields it).
+    def at_includes(entries, placement, mixins)
+      line_of = Array(mixins).reverse.to_h { |mixin| [ mixin[:name], mixin[:location].to_i ] }
+      entries.map do |entry|
+        top, order = placement[entry[:from_concern]]
+        [ line_of[top].to_i, order.to_i, yield(entry), entry ]
+      end
+    end
+
+    # The entries of [line, order, at, entry] tuples in the order Rails adds them; a tie keeps its place.
+    def in_include_order(placed)
+      placed.each_with_index.sort_by { |(line, order, at, _), index| [ line, order, at, index ] }.map { |(_, _, _, entry), _| entry }
+    end
+
     # The innermost of `bodies`, [range, name] pairs, around `line`.
     def enclosing(bodies, line)
       line && bodies.select { |range, _| range.cover?(line) }.min_by { |range, _| range.size }
