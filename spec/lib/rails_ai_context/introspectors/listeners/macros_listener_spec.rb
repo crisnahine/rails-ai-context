@@ -253,6 +253,26 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "connec
     RUBY
     expect(results.map { |r| r.slice(:macro, :text) }).to eq([ { macro: :connects_to, text: "connects_to shards: { shard_one: { writing: :shard_one } }" } ])
   end
+
+  it "names the case branch a connects_to sits in, and builds no branch text a walk never reads" do
+    listener = described_class.new
+    source = <<~RUBY
+      class ShardRecord < ApplicationRecord
+        case ENV["DB"]
+        when "a" then connects_to database: { writing: :a }
+        end
+        def x
+          case y
+          when 1 then a && b
+          end
+        end
+      end
+    RUBY
+    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(Prism.parse(source).value)
+
+    expect(listener.results.map { |r| r[:condition] }).to eq([ %(when ENV["DB"] is "a") ])
+    expect(listener.send(:case_branches).values.grep(String)).to be_empty
+  end
 end
 
 RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "scope" do
