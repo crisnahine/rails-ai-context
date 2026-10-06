@@ -144,21 +144,23 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
 
           self.table_name = "ledger"
           self.pluralize_table_names = false
+          self.primary_key = [:shop_id, "id"]
         end
       RUBY
 
       expect(described_class.declarations(source, "Legacy")).to eq(
-        table_name: "ledger", table_name_prefix: "legacy_", table_name_suffix: "_v1", pluralize_table_names: false
+        table_name: "ledger", table_name_prefix: "legacy_", table_name_suffix: "_v1", pluralize_table_names: false,
+        primary_key: %w[shop_id id]
       )
     end
 
-    it "answers all four as nil when the file declares no such scope" do
+    it "answers each as nil when the file declares no such scope" do
       expect(described_class.declarations("class Widget\nend\n", "Other")).to eq(
-        table_name: nil, table_name_prefix: nil, table_name_suffix: nil, pluralize_table_names: nil
+        table_name: nil, table_name_prefix: nil, table_name_suffix: nil, pluralize_table_names: nil, primary_key: nil
       )
     end
 
-    it "descends the file once for the four" do
+    it "descends the file once for all of them" do
       source = "class Widget < ApplicationRecord\n  self.table_name = 'gizmos'\nend\n"
       allow(RailsAiContext::AstCache).to receive(:parse_string).and_call_original
 

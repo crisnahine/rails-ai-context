@@ -161,6 +161,20 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).to include("**Primary key:** `shop_id, id`")
       expect(text).to include("- **shop_id** | integer | primary key")
     end
+
+    it "names the model's key when the model sets its own" do
+      allow(described_class).to receive(:cached_context).and_return({
+        models: { "LegacyWidget" => { table_name: "legacy_widgets", primary_key: "label" } },
+        schema: { tables: { "legacy_widgets" => {
+          primary_key: "widget_code",
+          columns: [ { name: "widget_code", type: "string", primary_key: true }, { name: "label", type: "string" } ]
+        } } }
+      })
+
+      text = described_class.call(model: "LegacyWidget").content.first[:text]
+
+      expect(text).to include("**Primary key:** `label` (the table's is `widget_code`)")
+    end
   end
 
   describe "a model on a secondary database" do

@@ -112,6 +112,7 @@ module RailsAiContext
           table = resolve_table_name(class_name, candidates)
           result[class_name] = static_model_details(candidate[:path], class_name, file: candidate[:file],
                                                     table_name: table,
+                                                    primary_key: resolve_primary_key(class_name, candidates),
                                                     inherited_from: declaring_bases(class_name, candidates),
                                                     sti: static_sti_info(class_name, sti_parents),
                                                     parent_model: sti_parents[class_name])
@@ -332,6 +333,22 @@ module RailsAiContext
           contained_prefix(class_name, candidates, seen),
           TableName.stem(candidate[:path], pluralize_tables?(class_name, candidates)),
           namespace_affix(class_name, candidates, :table_name_suffix) ].join
+      end
+
+      # Reading the key asks the connection; a database that is not there costs the key, not the model.
+      def model_primary_key(model)
+        model.primary_key
+      rescue StandardError => e
+        RailsAiContext.debug_fail(e, nil, label: "model_primary_key")
+      end
+
+      # Rails reads an STI child's key off its base class; an abstract base's assignment reaches no model.
+      def resolve_primary_key(class_name, candidates, seen = [])
+        own = candidates.dig(class_name, :primary_key)
+        return own if own
+
+        parent = sti_parent(class_name, candidates, seen)
+        parent && resolve_primary_key(parent, candidates, seen + [ class_name ])
       end
 
       # A class attribute: the class's own assignment, else its superclass chain's, else the app's.
@@ -562,6 +579,7 @@ module RailsAiContext
 
         details = {
           table_name:       model.table_name,
+          primary_key:      model_primary_key(model),
           file:             relative_to_root(model_source_path(model)),
           # Reflection-based (runtime, most accurate for these)
           associations:     extract_associations(model, source_data),
@@ -1578,7 +1596,7 @@ module RailsAiContext
       end
 
       def static_model_details(path, class_name, file: relative_to_root(path), table_name: nil, inherited_from: [],
-                               sti: nil, parent_model: nil)
+                               sti: nil, parent_model: nil, primary_key: nil)
         own = own_body(source_walk(path), class_name)
         calls = singleton_lookup([ [ class_name, path ], *Array(inherited_from) ])
         data, unread, bases_unread, hidden = merge_class_and_bases(own, class_name, calls, inherited_from, file: path,
@@ -1591,6 +1609,7 @@ module RailsAiContext
         details = {
           confidence: Confidence::STATIC,
           table_name: table_name || TableName.stem(path),
+          primary_key: primary_key,
           associations: with_join_tables(reject_excluded_associations(data[:associations]), path, class_name),
           validations: static_validations(data, [ path, *Array(inherited_from).map(&:last) ]),
           custom_validates: extract_custom_validates_from_ast(data),

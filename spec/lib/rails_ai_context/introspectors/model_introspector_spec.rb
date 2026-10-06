@@ -3087,6 +3087,30 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  describe "a model that sets its own primary key" do
+    it "records the key the model sets, and its STI child's, on both tiers" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "legacy_widget.rb"), "class LegacyWidget < ApplicationRecord\n  self.primary_key = :label\nend\n")
+        File.write(File.join(dir, "app", "models", "special_widget.rb"), "class SpecialWidget < LegacyWidget\nend\n")
+        File.write(File.join(dir, "app", "models", "plain.rb"), "class Plain < ApplicationRecord\nend\n")
+        model = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          self.primary_key = "label"
+        end
+        model.define_singleton_method(:name) { "LegacyWidget" }
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+
+        static = introspector.static_call
+
+        expect(introspector.send(:extract_model_details, model)[:primary_key]).to eq("label")
+        expect(static["LegacyWidget"][:primary_key]).to eq("label")
+        expect(static["SpecialWidget"][:primary_key]).to eq("label")
+        expect(static["Plain"]).not_to have_key(:primary_key)
+      end
+    end
+  end
+
   describe "a custom validate method with a condition" do
     it "keeps the condition in both tiers" do
       Dir.mktmpdir do |dir|

@@ -13,14 +13,12 @@ module RailsAiContext
     # namespace and the superclass chain is the caller's business, because only
     # it knows the other files.
     #
-    # It reads table_name, table_name_prefix, table_name_suffix and
-    # pluralize_table_names and nothing else: a class-level `self.primary_key =` is just as invisible to the
-    # static tier, and answering one of those and not the other would be worse
-    # than answering neither.
+    # It reads table_name, table_name_prefix, table_name_suffix,
+    # pluralize_table_names and a literal `self.primary_key =`.
     module TableName
       module_function
 
-      NONE = { table_name: nil, table_name_prefix: nil, table_name_suffix: nil, pluralize_table_names: nil }.freeze
+      NONE = { table_name: nil, table_name_prefix: nil, table_name_suffix: nil, pluralize_table_names: nil, primary_key: nil }.freeze
 
       PREFIX_INDEX = Concurrent::Map.new
       APP_AFFIXES = Concurrent::Map.new
@@ -64,7 +62,7 @@ module RailsAiContext
         read(source, name) do |body|
           own = { table_name_prefix: affix(body, :table_name_prefix), table_name_suffix: affix(body, :table_name_suffix) }
           { table_name: assigned(body, :table_name=) || interpolated(body, own, root) }.merge(own)
-            .merge(pluralize_table_names: boolean_assigned(body, :pluralize_table_names=))
+            .merge(pluralize_table_names: boolean_assigned(body, :pluralize_table_names=), primary_key: primary_key_assigned(body))
         end || NONE
       end
 
@@ -240,6 +238,16 @@ module RailsAiContext
         call && literal(call.arguments&.arguments)
       end
 
+      # A name, or a composite key's names; nil for anything computed.
+      def primary_key_assigned(body)
+        call = body.find { |node| node.is_a?(Prism::CallNode) && node.name == :primary_key= && node.receiver.is_a?(Prism::SelfNode) }
+        args = call&.arguments&.arguments
+        return literal(args) unless args&.size == 1 && args.first.is_a?(Prism::ArrayNode)
+
+        names = args.first.elements.map { |element| literal([ element ]) }
+        names if names.all?
+      end
+
       def boolean_assigned(body, name)
         call = body.find do |node|
           node.is_a?(Prism::CallNode) && node.name == name && node.receiver.is_a?(Prism::SelfNode)
@@ -299,7 +307,7 @@ module RailsAiContext
       end
 
       private_class_method :affix, :read, :body_of, :descend, :statements, :segment,
-                           :assigned, :boolean_assigned, :returned, :literal, :read_namespace_prefixes, :read_app_affixes,
+                           :assigned, :boolean_assigned, :primary_key_assigned, :returned, :literal, :read_namespace_prefixes, :read_app_affixes,
                            :interpolated, :affixed_node, :affix_read,
                            :engine_files, :collect_isolate_calls
     end

@@ -188,8 +188,11 @@ module RailsAiContext
           if table_data
             ignored = Array(data[:ignored_columns])
             cols = (table_data[:columns] || []).reject { |c| ignored.include?(c[:name].to_s) }
-            if table_data[:primary_key]
-              lines << "**Primary key:** `#{Introspectors::SchemaConventions.primary_key_label(table_data[:primary_key])}`"
+            if (key = data[:primary_key] || table_data[:primary_key])
+              line = "**Primary key:** `#{Introspectors::SchemaConventions.primary_key_label(key)}`"
+              table_key = table_data[:primary_key]
+              line += " (the table's is `#{Introspectors::SchemaConventions.primary_key_label(table_key)}`)" if table_key && Array(table_key).map(&:to_s) != Array(key).map(&:to_s)
+              lines << line
             end
             if cols.any?
               lines << "" << "## Columns"
