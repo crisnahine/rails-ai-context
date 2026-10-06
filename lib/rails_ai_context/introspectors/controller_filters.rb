@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "set"
+
 module RailsAiContext
   module Introspectors
     # One reader for the filter macros a controller body declares.
@@ -22,6 +24,9 @@ module RailsAiContext
         set_current_tenant_by_subdomain: [ :before_action, :find_tenant_by_subdomain ],
         set_current_tenant_by_subdomain_or_domain: [ :before_action, :find_tenant_by_subdomain_or_domain ]
       }.freeze
+
+      # cancancan's controller_resource.rb adds these with prepend_before_action when passed `prepend: true`.
+      GEM_PREPENDABLE = %i[load_and_authorize_resource load_resource authorize_resource].freeze
 
       MACROS = (%i[
         before_action after_action around_action
@@ -49,11 +54,14 @@ module RailsAiContext
       MAX_BASES = 8
 
       # The class body's receiverless calls by name, read only once a mixin's class method declares a filter.
-      CallSites = Struct.new(:source) do
+      # A class method the chain defines makes its own calls where a call of it runs
+      # (`def self.public_page = allow_unauthenticated_access only: :show`), each listed as Relayed.
+      CallSites = Struct.new(:source, :defs) do
         def sites_by_name
           @sites_by_name ||= begin
             tree = AstCache.parse_string(source)&.value
-            tree ? SourceIntrospector.calls_outside_methods(tree, self_receiver: true) : {}
+            sites = tree ? SourceIntrospector.calls_outside_methods(tree, self_receiver: true) : {}
+            defs ? ControllerFilters.relayed(sites, defs.call) : sites
           end
         end
       end
@@ -89,7 +97,7 @@ module RailsAiContext
         cache ||= RunCache.fetch([ :controller_concern_walks ]) { {} }
         walked = SourceIntrospector.walk_source(source, LISTENERS)
         mixins = Array(walked[:mixins])
-        calls = CallSites.new(source)
+        calls = CallSites.new(source, -> { class_method_defs(source, mixins, within, root, cache) })
         # One walk, so a concern two includes reach is added once, as Ruby does.
         collected, unread, _hidden, block_calls, placement, _skipped, block_sites = ConcernMacros.collect(
           root, mixins, keys: [ :filters ], prefer: "controller", within: within, cache: cache, calls: calls, listeners: LISTENERS
@@ -113,7 +121,7 @@ module RailsAiContext
         from_blocks, inherited = inherited.partition { |entry| block_sites.key?(entry[:site].__id__) }
         by_concern += from_blocks.map { |entry| entry.merge(from_concern: block_sites[entry[:site].__id__].first) }
         placed = class_level(walked).map { |entry| [ entry[:location].to_i, -1, 0, entry ] } +
-                 (own_defs + called + inherited).map { |entry| [ entry[:site].location.start_line, -1, 0, entry.except(:site, :definer, :from_concern) ] } +
+                 (own_defs + called + inherited).map { |entry| [ ConcernMacros::Relayed.root(entry[:site]).location.start_line, -1, 0, entry.except(:site, :definer, :from_concern) ] } +
                  by_concern.map do |entry|
                    top, order = placement[entry[:from_concern]]
                    [ line_of[top].to_i, order.to_i, entry[:site] ? entry[:site].location.start_line : entry[:location].to_i, entry ]
@@ -174,6 +182,21 @@ module RailsAiContext
       # each call this class makes of it, nearest base first.
       def base_expansions(source, within, root, calls, taken, cache)
         found = []
+        each_base(source, within, root, cache) do |label, base, _path, file, walked|
+          own = singleton_expansions(base, walked, calls, taken).map { |entry| entry.merge(file: file) }
+          taken.merge(own.map { |entry| entry[:site].name })
+          collected, _, _, _, placement = ConcernMacros.collect(root, Array(walked[:mixins]), keys: [ :filters ], prefer: "controller",
+                                                                within: label, cache: cache, calls: calls, listeners: LISTENERS)
+          mixed = Array(collected[:filters]).select { |entry| body_call?(entry, calls) && !taken.include?(entry[:site].name) }
+                                            .map { |entry| with_file(entry, placement.dig(entry[:from_concern], 2), root) }
+          taken.merge(mixed.map { |entry| entry[:site].name })
+          found.concat(own + mixed)
+        end
+        found
+      end
+
+      # Each app-defined base of the class, nearest first: [constant, source, realpath, app-relative path, walk].
+      def each_base(source, within, root, cache)
         seen = Set.new
         name, scope = superclass_of(source, within)
         MAX_BASES.times do
@@ -185,17 +208,48 @@ module RailsAiContext
           # Every controller reaches ApplicationController, so its walk is read once per run.
           key = [ :controller_base_walk, path, base ]
           walked = cache ? (cache[key] ||= SourceIntrospector.walk_source(base, LISTENERS)) : RunCache.fetch(key) { SourceIntrospector.walk_source(base, LISTENERS) }
-          own = singleton_expansions(base, walked, calls, taken).map { |entry| entry.merge(file: file) }
-          taken.merge(own.map { |entry| entry[:site].name })
-          collected, _, _, _, placement = ConcernMacros.collect(root, Array(walked[:mixins]), keys: [ :filters ], prefer: "controller",
-                                                                within: label, cache: cache, calls: calls, listeners: LISTENERS)
-          mixed = Array(collected[:filters]).select { |entry| body_call?(entry, calls) && !taken.include?(entry[:site].name) }
-                                            .map { |entry| with_file(entry, placement.dig(entry[:from_concern], 2), root) }
-          taken.merge(mixed.map { |entry| entry[:site].name })
-          found.concat(own + mixed)
+          yield label, base, path, file, walked
           name, scope = RunCache.fetch([ :controller_base_superclass, path, label ]) { superclass_of(base, label) }
         end
+      end
+
+      # The class methods the class and its app-defined bases define, their own and their concerns', by name,
+      # nearest first as Ruby's lookup finds them.
+      def class_method_defs(source, mixins, within, root, cache)
+        found = {}
+        add = lambda do |text, owner, modules, label|
+          tree = AstCache.parse_string(text)&.value
+          ConcernMacros::SingletonLookup.own_defs(tree ? AstWalk.each(tree).to_a : [], owner).each { |definition| found[definition.name] ||= definition }
+          given = ConcernMacros.collect(root, modules, keys: [ :filters ], prefer: "controller", within: label, cache: cache, listeners: LISTENERS)[7]
+          Array(given).reverse_each { |_, _, defs, _| defs.each_value { |list| list.each { |definition| found[definition.name] ||= definition } } }
+        end
+        add.call(source, within, mixins, within)
+        each_base(source, within, root, cache) { |label, base, path, _, walked| add.call(base, path, Array(walked[:mixins]), label) }
         found
+      end
+
+      # `sites` with the calls each class method `defs` names makes in turn, bound to the call running it.
+      def relayed(sites, defs)
+        queue = sites.flat_map { |name, nodes| nodes.map { |node| [ name, node ] } }
+        read = Set.new
+        until queue.empty?
+          name, site = queue.shift
+          definition = defs[name]
+          next unless definition&.node && read.add?([ definition.key, ConcernMacros::Relayed.root(site).__id__ ])
+
+          text = CallSiteExpansion.rewritten(definition.node, site)
+          tree = text && AstCache.parse_string(text)&.value
+          next unless tree
+
+          SourceIntrospector.calls_outside_methods(tree, self_receiver: true).each do |inner, nodes|
+            nodes.each do |node|
+              call = ConcernMacros::Relayed.new(node, site, definition)
+              (sites[inner] ||= []) << call
+              queue << [ inner, call ]
+            end
+          end
+        end
+        sites
       end
 
       # Whether the entry is what a method declares at a call the class body makes.
@@ -267,6 +321,7 @@ module RailsAiContext
         entry = entry.merge(FORGERY_SKIP) if entry[:macro] == :skip_forgery_protection
         entry = entry.merge(BASIC_AUTH) if entry[:macro] == :http_basic_authenticate_with
         if (macro, name = GEM_FILTERS[entry[:macro]])
+          macro = :prepend_before_action if GEM_PREPENDABLE.include?(entry[:macro]) && (entry[:options] || {})[:prepend] == true
           entry = entry.merge(macro: macro, args: [ name ], values: [], proc_lines: [])
         end
         macro = entry[:macro].to_s
@@ -301,10 +356,33 @@ module RailsAiContext
           text = value.to_s
           if value.is_a?(Symbol) || literals.include?(text) then text
           elsif text.start_with?("->") then blocks.shift
-          elsif (const = text[/\A(?:::)?([A-Z]\w*(?:::[A-Z]\w*)*)\.new\b/, 1]) then "#{const} (object)"
+          elsif (const = object_name(text)) then "#{const} (object)"
           elsif text.match?(/\A(?:::)?[A-Z]\w*(?:::[A-Z]\w*)*\z/) then text.delete_prefix("::")
           end
         end + blocks
+      end
+
+      # The class the booted tier names an object filter by: `Class` for an anonymous class,
+      # an instance's nearest named class (`Class.new(Base) {}.new` is Base's, `Class.new {}.new` Object's).
+      def object_name(text)
+        node = AstCache.parse_string(text)&.value&.statements&.body&.first
+        return nil unless node.is_a?(Prism::CallNode) && node.name == :new && node.receiver
+        return "Class" if %w[Class Struct].include?(constant_name(node.receiver))
+
+        named_class(node.receiver)
+      end
+
+      def named_class(node)
+        return constant_name(node) unless node.is_a?(Prism::CallNode) && node.name == :new
+
+        case constant_name(node.receiver)
+        when "Class" then (superclass = node.arguments&.arguments&.first) ? named_class(superclass) : "Object"
+        when "Struct" then "Struct"
+        end
+      end
+
+      def constant_name(node)
+        node.slice.delete_prefix("::") if node.is_a?(Prism::ConstantReadNode) || node.is_a?(Prism::ConstantPathNode)
       end
 
       def constraints(entry)
@@ -364,7 +442,8 @@ module RailsAiContext
         statements.body.first
       end
 
-      private_class_method :walk, :class_level, :singleton_expansions, :declares_filters?, :base_expansions,
+      private_class_method :walk, :class_level, :singleton_expansions, :declares_filters?, :base_expansions, :each_base,
+                           :class_method_defs, :object_name, :named_class, :constant_name,
                            :superclass_of, :base_source, :constant_source, :with_file, :body_call?, :record, :positional_names, :constraints, :condition_text, :normalize, :action_condition, :lambda_body
     end
   end

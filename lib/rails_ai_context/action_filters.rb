@@ -81,11 +81,12 @@ module RailsAiContext
         outside, own = own.partition { |f| !f[:declared] }
         outside = outside.map { |f| f.merge(provenance: "not declared in the controller chain") }
       end
-      inherited = mark_conditional_skips(
-        parent.reject { |f| declared_names.include?(entry_key(f)) } +
-          applicable.select(&inherited_here)
-            .map { |f| f.except(:from, :from_concern, :provenance).merge(attribution_of[entry_key(f)]) }, conditions, action
-      ) + outside
+      moved = applicable.select(&inherited_here)
+        .map { |f| f.except(:from, :from_concern, :provenance).merge(attribution_of[entry_key(f)]) }
+        .group_by { |f| entry_key(f) }
+      # Each moved entry takes its ancestor's slot, so one the runtime list does not carry keeps its place among them.
+      kept = parent.flat_map { |f| declared_names.include?(entry_key(f)) ? Array(moved.delete(entry_key(f))) : [ f ] }
+      inherited = mark_conditional_skips(kept + moved.values.flatten, conditions, action) + outside
       own = unnumbered(own)
       inherited = unnumbered(inherited)
       inherited += unplaced_conditional_skips(own + inherited, conditions, action,

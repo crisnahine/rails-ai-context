@@ -56,8 +56,9 @@ module RailsAiContext
             key = Payload.find_controller(ctx, controller) || controller
             info = controllers[key]
             unless info
+              recovery = "Call rails_get_controllers(detail:\"summary\") to see all controllers"
               return not_found_response("Controller", controller, app_controller_names,
-                recovery_tool: "Call rails_get_controllers(detail:\"summary\") to see all controllers")
+                recovery_tool: data[:unread_engine] ? "#{unread_engine_line(data)} #{recovery}" : recovery)
             end
             return text_response("Error inspecting #{key}: #{info[:error]}") if info[:error]
 
@@ -85,7 +86,7 @@ module RailsAiContext
           # Listing mode
           case detail
           when "summary"
-            lines = [ "# Controllers (#{page[:total]})", "" ]
+            lines = [ "# Controllers (#{page[:total]})", "", *(data[:unread_engine] ? [ unread_engine_line(data), "" ] : []) ]
             paginated_names.each do |name|
               info = app_controllers[name]
               action_count = info[:actions]&.size || 0
@@ -96,7 +97,7 @@ module RailsAiContext
             text_response(lines.join("\n"))
 
           when "standard"
-            lines = [ "# Controllers (#{page[:total]})", "" ]
+            lines = [ "# Controllers (#{page[:total]})", "", *(data[:unread_engine] ? [ unread_engine_line(data), "" ] : []) ]
             paginated_names.each do |name|
               info = app_controllers[name]
               lines << "- **#{name}** - #{Serializers::SectionFacts.actions_phrase(info)}"
@@ -105,7 +106,7 @@ module RailsAiContext
             text_response(lines.join("\n"))
 
           when "full"
-            lines = [ "# Controllers (#{page[:total]})", "" ]
+            lines = [ "# Controllers (#{page[:total]})", "", *(data[:unread_engine] ? [ unread_engine_line(data), "" ] : []) ]
 
             # Group sibling controllers that share the same parent and identical structure
             paginated_ctrl = app_controllers.select { |k, _| paginated_names.include?(k) }
@@ -151,7 +152,9 @@ module RailsAiContext
                     info, rescue_handlers: true,
                     ctx: ctx, name: name, root: rails_app&.root&.to_s
                   ))
-                  lines << "- Rate limit: #{info[:rate_limits].map { |limit| limit[:text] }.join('; ')}" if info[:rate_limits]&.any?
+                  # An inherited limit is named with its base in the controller's own detail.
+                  own_limits = Array(info[:rate_limits]).reject { |limit| limit[:from] }
+                  lines << "- Rate limit: #{own_limits.map { |limit| limit[:text] }.join('; ')}" if own_limits.any?
                   lines << "- Turbo Stream actions: #{info[:turbo_stream_actions].join(', ')}" if info[:turbo_stream_actions]&.any?
                   lines << ""
                 end
@@ -172,6 +175,10 @@ module RailsAiContext
         Introspectors::ActionResolver.resolve_entry_name(
           Payload.controllers(ctx), info[:parent_class], name
         )
+      end
+
+      private_class_method def self.unread_engine_line(data)
+        "The engine at `#{data[:unread_engine]}` is not read unbooted, so its controllers are not listed; boot the app to read them."
       end
 
       # A class that defines no action of its own is an answer, and dropping
@@ -501,12 +508,12 @@ module RailsAiContext
         end
 
         # Rate limiting
-        limits = Array(info[:rate_limits])
+        limits = Array(info[:rate_limits]).map { |limit| "#{limit[:text]}#{" _(from #{limit[:from]})_" if limit[:from]}" }
         if limits.one?
-          lines << "" << "**Rate limit:** #{limits.first[:text]}"
+          lines << "" << "**Rate limit:** #{limits.first}"
         elsif limits.any?
           lines << "" << "**Rate limits:**"
-          limits.each { |limit| lines << "- #{limit[:text]}" }
+          limits.each { |limit| lines << "- #{limit}" }
         end
 
         # Turbo Stream actions

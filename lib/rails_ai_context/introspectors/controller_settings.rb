@@ -73,31 +73,37 @@ module RailsAiContext
       end
 
       def chain_for(controllers, controller_name, root)
-        chain = []
+        links, stop = lineage(controllers, controller_name, root)
+        [ links.map { |name, entry, source| [ name, entry || from_source(source) ] }, stop ]
+      end
+
+      # [[name, payload entry, nil] or [name, nil, source of a base the listing leaves out]], the
+      # class first, and the framework or unread class the walk stopped at.
+      def lineage(controllers, controller_name, root)
+        links = []
         seen = Set.new
         name = controller_name
         while name && seen.add?(name)
-          return [ chain, name ] if FRAMEWORK.include?(name)
+          return [ links, name ] if FRAMEWORK.include?(name)
 
           entry = controllers[name]
           if entry.is_a?(Hash)
-            decl = entry
+            links << [ name, entry, nil ]
             parent = entry[:parent_class]
           elsif (source = ActionFilters.base_controller_source(name, root))
-            decl = from_source(source)
+            links << [ name, nil, source ]
             declarations = DeclaredConstant.declarations(source)
             parent = (declarations.find { |d| d.name == name } || declarations.find(&:superclass))&.superclass
           else
             base = ActionFilters.gem_controller_base(name, root)
-            return [ chain, name ] unless base
+            return [ links, name ] unless base
 
             name = base
             next
           end
-          chain << [ name, decl ]
           name = ActionResolver.resolve_entry_name(controllers, parent, name)
         end
-        [ chain, nil ]
+        [ links, nil ]
       end
 
       def layout_for(ctx, chain, stop, root)

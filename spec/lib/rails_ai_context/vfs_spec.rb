@@ -196,6 +196,8 @@ RSpec.describe RailsAiContext::VFS do
       end
 
       it "carries the inherited filters, ahead of the controller's own" do
+        # The booted payload marks what the class body declares; an unmarked name is one it only inherits.
+        context[:controllers][:controllers]["PostsController"][:filters].each { |f| f[:declared] = true }
         result = described_class.resolve("rails-ai-context://controllers/posts/show")
         data = JSON.parse(result.first[:text])
         # Declaring authenticate_user! again moves it to the end of the chain, after set_post.

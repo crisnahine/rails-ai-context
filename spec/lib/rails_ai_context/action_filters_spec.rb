@@ -88,6 +88,30 @@ RSpec.describe RailsAiContext::ActionFilters do
       RailsAiContext.tier = previous
     end
 
+    # Booted in development, `before_action :test_only if Rails.env.test?` is not in the reflected chain.
+    it "keeps a base filter the reflected chain leaves out at its declared place" do
+      Dir.mktmpdir do |dir|
+        app_with_base(dir)
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"), <<~RUBY)
+          class ApplicationController < ActionController::Base
+            before_action :always
+            before_action :test_only if Rails.env.test?
+            if Rails.env.development?
+              before_action :dev_only
+            end
+          end
+        RUBY
+        ctx = { controllers: { controllers: {
+          "PagesController" => { parent_class: "ApplicationController", file: "app/controllers/pages_controller.rb",
+                                 filters: [ { kind: "before", name: "always" }, { kind: "before", name: "dev_only" } ] }
+        } } }
+
+        chain = described_class.for_controller(ctx, "PagesController", root: dir)[:chain]
+
+        expect(chain.map { |f| f[:name] }).to eq(%w[always test_only dev_only])
+      end
+    end
+
     it "carries its filters into a child's chain" do
       Dir.mktmpdir do |dir|
         app_with_base(dir)
@@ -395,6 +419,75 @@ RSpec.describe RailsAiContext::ActionFilters do
           expect(destroy[:skipped]).to eq([])
           expect(destroy[:inherited].map { |f| f[:name] }).to include("require_authentication")
           expect(described_class.for(ctx, "PasswordsController", "new", root: dir)[:skipped]).to eq([ "require_authentication" ])
+        end
+      end
+
+      it "follows the method through a class method of the base that calls it" do
+        Dir.mktmpdir do |dir|
+          app_with_authentication(dir)
+          File.write(File.join(dir, "app", "controllers", "application_controller.rb"), <<~RUBY)
+            class ApplicationController < ActionController::Base
+              include Authentication
+              before_action :track
+
+              def self.public_page(only: :show)
+                allow_unauthenticated_access only: only
+              end
+            end
+          RUBY
+          File.write(File.join(dir, "app", "controllers", "pages_controller.rb"), <<~RUBY)
+            class PagesController < ApplicationController
+              public_page
+              def home; end
+              def show; end
+            end
+          RUBY
+          ctx = static_context(dir)
+          previous = RailsAiContext.tier
+          RailsAiContext.tier = :static
+
+          expect(described_class.for(ctx, "PagesController", "show", root: dir)[:skipped]).to eq([ "require_authentication" ])
+          home = described_class.for(ctx, "PagesController", "home", root: dir)
+          expect(home[:skipped]).to eq([])
+          expect(home[:chain].map { |f| f[:name] }).to eq(%w[require_authentication track])
+        ensure
+          RailsAiContext.tier = previous
+        end
+      end
+
+      it "follows the method through a class method a concern of the base defines" do
+        Dir.mktmpdir do |dir|
+          app_with_authentication(dir)
+          File.write(File.join(dir, "app", "controllers", "concerns", "publicity.rb"), <<~RUBY)
+            module Publicity
+              extend ActiveSupport::Concern
+
+              class_methods do
+                def public_page
+                  allow_unauthenticated_access only: :show
+                end
+              end
+            end
+          RUBY
+          File.write(File.join(dir, "app", "controllers", "application_controller.rb"),
+                     "class ApplicationController < ActionController::Base\n  include Authentication\n  include Publicity\nend\n")
+          File.write(File.join(dir, "app", "controllers", "pages_controller.rb"), <<~RUBY)
+            class PagesController < ApplicationController
+              public_page
+              def home; end
+              def show; end
+            end
+          RUBY
+          ctx = static_context(dir)
+          previous = RailsAiContext.tier
+          RailsAiContext.tier = :static
+
+          expect(described_class.for(ctx, "PagesController", "show", root: dir)[:skipped]).to eq([ "require_authentication" ])
+          home = described_class.for(ctx, "PagesController", "home", root: dir)
+          expect(home[:skipped]).to eq([])
+          expect(home[:chain].map { |f| f[:name] }).to eq(%w[require_authentication])
+        ensure
+          RailsAiContext.tier = previous
         end
       end
     end

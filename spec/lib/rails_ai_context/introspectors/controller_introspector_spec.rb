@@ -925,6 +925,31 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         expect(static).to eq(booted)
       end
 
+      it "names an anonymous class filter and an anonymous struct's instance the way the static tier does" do
+        source = <<~RUBY
+          class WidgetsController < ApplicationController
+            after_action Class.new { def self.after(c); end }
+            before_action Struct.new(:x) { def before(c); end }.new(1)
+            before_action Class.new { def before(c); end }.new
+            before_action Class.new(Struct.new(:y)) { def before(c); end }.new(1)
+          end
+        RUBY
+        ctrl = Class.new(ActionController::Base) do
+          after_action Class.new { def self.after(c); end }
+          before_action Struct.new(:x) { def before(c); end }.new(1)
+          before_action Class.new { def before(c); end }.new
+          before_action Class.new(Struct.new(:y)) { def before(c); end }.new(1)
+        end
+        ctrl.define_singleton_method(:name) { "WidgetsController" }
+
+        booted = introspector.send(:extract_filters, ctrl, source).map { |f| [ f[:kind], f[:name], f[:declared] ] }
+        static = introspector.send(:extract_filters_from_source, source).map { |f| [ f[:kind], f[:name], f[:declared] ] }
+
+        expect(static).to eq([ [ "after", "Class (object)", true ], [ "before", "Struct (object)", true ],
+                               [ "before", "Object (object)", true ], [ "before", "Struct (object)", true ] ])
+        expect(booted.sort).to eq(static.sort)
+      end
+
       # http_authentication.rb: `before_action(options) { http_basic_authenticate_or_request_with ... }`.
       it "names the filter http_basic_authenticate_with adds, in both tiers, password left out" do
         source = <<~RUBY
@@ -1049,6 +1074,61 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
   end
 
   describe "#static_call" do
+    # Unbooted, the engine a test/dummy runs in is not walked, so the listing says so.
+    it "says the engine above a test/dummy is not read" do
+      Dir.mktmpdir do |dir|
+        dummy = File.join(dir, "test", "dummy")
+        FileUtils.mkdir_p([ File.join(dummy, "config"), File.join(dummy, "app", "controllers"), File.join(dir, ".git"),
+                            File.join(dir, "app", "controllers", "shop") ])
+        File.write(File.join(dummy, "config", "boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n))
+        File.write(File.join(dir, "Gemfile"), "gemspec\n")
+        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  specs:\n")
+        File.write(File.join(dir, "shop.gemspec"), "")
+        File.write(File.join(dir, "app", "controllers", "shop", "widgets_controller.rb"), "module Shop\n  class WidgetsController < ActionController::Base\n  end\nend\n")
+
+        result = RailsAiContext::RunCache.around { described_class.new(RailsAiContext::StaticApp.new(dummy)).static_call }
+
+        expect(result[:controllers]).to eq({})
+        expect(result[:unread_engine]).to eq("../..")
+        expect(result[:note]).to include("the engine at ../.. is not read unbooted")
+      end
+    end
+
+    # responders' respond_to copies the class attribute the parent set before adding to it, and
+    # a rate_limit is a before_action every subclass runs.
+    it "hands an ancestor's class-level respond_to and rate_limit down to its subclasses" do
+      Dir.mktmpdir do |dir|
+        controllers_dir = File.join(dir, "app", "controllers")
+        FileUtils.mkdir_p(File.join(controllers_dir, "admin"))
+        File.write(File.join(controllers_dir, "application_controller.rb"),
+                   "class ApplicationController < ActionController::Base\n  respond_to :html\n  rate_limit to: 50, within: 1.hour\nend\n")
+        File.write(File.join(controllers_dir, "posts_controller.rb"), "class PostsController < ApplicationController\n  def index; end\nend\n")
+        File.write(File.join(controllers_dir, "gadgets_controller.rb"),
+                   "class GadgetsController < ApplicationController\n  respond_to :json\n  def index; end\nend\n")
+        File.write(File.join(controllers_dir, "child_gadgets_controller.rb"),
+                   "class ChildGadgetsController < GadgetsController\n  def show; end\nend\n")
+        File.write(File.join(controllers_dir, "feeds_controller.rb"),
+                   "class FeedsController < GadgetsController\n  clear_respond_to\n  respond_to :xml\nend\n")
+        File.write(File.join(controllers_dir, "admin", "base_controller.rb"),
+                   "class Admin::BaseController < ApplicationController\n  rate_limit to: 5, within: 1.minute\nend\n")
+        File.write(File.join(controllers_dir, "admin", "reports_controller.rb"),
+                   "class Admin::ReportsController < Admin::BaseController\n  def index; end\nend\n")
+
+        controllers = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:controllers]
+        formats = controllers.slice("PostsController", "GadgetsController", "ChildGadgetsController", "FeedsController")
+                             .transform_values { |info| info[:respond_to_formats] }
+
+        expect(formats).to eq("PostsController" => %w[html], "GadgetsController" => %w[html json],
+                              "ChildGadgetsController" => %w[html json], "FeedsController" => %w[xml])
+        expect(controllers["Admin::ReportsController"][:rate_limits]).to eq([
+          { text: "to: 50, within: 1.hour", to: 50, within: "1.hour", from: "ApplicationController" },
+          { text: "to: 5, within: 1.minute", to: 5, within: "1.minute", from: "Admin::BaseController" }
+        ])
+        expect(controllers["Admin::BaseController"][:rate_limits].map { |limit| limit[:from] }).to eq([ "ApplicationController", nil ])
+        expect(controllers.values.none? { |info| info.key?(:declared_formats) }).to be true
+      end
+    end
+
     it "reads a compact controller's bare superclass from the top level" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers", "api"))
@@ -1568,6 +1648,40 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         .to eq("packs/billing/app/controllers/billing_invoices_controller.rb")
     ensure
       FileUtils.rm_rf(File.join(Rails.root, "packs"))
+    end
+
+    # Booted from an engine's test/dummy, the engine's controller is defined above the app root.
+    it "is read from the engine a test/dummy runs in, with its only: and its file" do
+      Dir.mktmpdir do |engine|
+        engine = File.realpath(engine)
+        dummy = File.join(engine, "test", "dummy")
+        path = File.join(engine, "app", "controllers", "b3eng", "widgets_controller.rb")
+        FileUtils.mkdir_p([ File.dirname(path), dummy ])
+        File.write(path, <<~RUBY)
+          module B3eng
+            class WidgetsController < ActionController::Base
+              before_action :set_widget, only: %i[show]
+              def index; end
+              def show; end
+              private
+              def set_widget; end
+              def widget_params = params.require(:widget).permit(:name)
+            end
+          end
+        RUBY
+        ctrl = Class.new(ActionController::Base) { before_action :set_widget }
+        ctrl.define_singleton_method(:name) { "B3eng::WidgetsController" }
+        allow(Object).to receive(:const_source_location).and_call_original
+        allow(Object).to receive(:const_source_location).with("B3eng::WidgetsController").and_return([ path, 2 ])
+        allow(RailsAiContext::PathResolver).to receive(:enclosing_engine_roots).and_return([ engine ])
+        in_dummy = described_class.new(double("app", root: Pathname.new(dummy)))
+
+        details = in_dummy.send(:extract_controller_details, ctrl)
+
+        expect(details[:file]).to eq("../../app/controllers/b3eng/widgets_controller.rb")
+        expect(details[:filters].first).to include(name: "set_widget", only: [ "show" ])
+        expect(details[:strong_params].map { |p| p[:name] }).to eq([ "widget_params" ])
+      end
     end
   end
 
