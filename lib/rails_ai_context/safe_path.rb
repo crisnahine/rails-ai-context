@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "pathname"
 require_relative "polyfill/data"
 
 module RailsAiContext
@@ -32,7 +33,11 @@ module RailsAiContext
       return refuse(:outside) unless contained?(real, real_under)
 
       real_root = real_base(root)
-      root_relative = real == real_root ? "" : real.delete_prefix(dir_prefix(real_root))
+      root_relative = if real == real_root then ""
+      elsif contained?(real, real_root) then real.delete_prefix(dir_prefix(real_root))
+      # A directory the caller trusts outside the root, such as the engine around a test/dummy.
+      else Pathname.new(real).relative_path_from(Pathname.new(real_root)).to_s
+      end
       return refuse(:sensitive) if sensitive?(root_relative)
       return refuse(:missing) unless File.file?(real)
 

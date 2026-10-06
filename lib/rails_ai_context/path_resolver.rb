@@ -40,7 +40,10 @@ module RailsAiContext
     def view_dirs(root)
       prepended, appended = declared(root)[:views].partition { |direction, _dir| direction == :prepend }
       spelled = ->(list) { list.map { |_direction, dir| File.join(root.to_s, dir) } }
-      (spelled.(prepended) + dirs_for(root, "app/views") + spelled.(appended)).uniq.freeze
+      engines = RunCache.fetch([ :engine_view_dirs, root.to_s ]) do
+        enclosing_engine_roots(root).map { |engine| File.join(engine, "app/views") }.select { |dir| Dir.exist?(dir) }
+      end
+      (spelled.(prepended) + dirs_for(root, "app/views") + spelled.(appended) + engines).uniq.freeze
     end
 
     # Every initializer Rails loads: railties globs config/initializers with **/*.rb, in path order.

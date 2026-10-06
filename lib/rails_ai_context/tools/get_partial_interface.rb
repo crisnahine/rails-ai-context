@@ -85,7 +85,7 @@ module RailsAiContext
         return text_response("Could not read partial file.") unless source
 
         relative_path = located.relative
-        partial_name = view_relative(File.join(root, relative_path), view_dirs)
+        partial_name = view_relative(File.expand_path(relative_path, root), view_dirs)
 
         # Parse the partial's interface
         magic_locals = extract_magic_comment_locals(source)
@@ -363,7 +363,7 @@ module RailsAiContext
           content = safe_read(file)
           next unless content
 
-          relative = file.sub("#{root}/", "")
+          relative = RailsAiContext::PortablePath.relativize(file, root)
 
           lines = content.lines
           # Per call, not per line: `render(` and a call split over lines are

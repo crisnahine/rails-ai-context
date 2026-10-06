@@ -89,7 +89,7 @@ module RailsAiContext
             else
               " No view directories found (API-only apps typically have none)."
             end
-            return empty_response("No views for '#{controller}'.#{hint}#{dirs_note}")
+            return empty_response("No views for '#{controller}'.#{hint}#{dirs_note}#{static_engine_note}")
           end
 
           templates = filtered_templates
@@ -240,6 +240,14 @@ module RailsAiContext
       # its key on "/" made its own filename the group name: the group matched
       # no file, the row was dropped, and the header went on counting it.
       ROOT_GROUP = "(app/views root)"
+
+      # Unbooted, a test/dummy's enclosing engine is not a views root.
+      private_class_method def self.static_engine_note
+        root = rails_app.root.to_s
+        return "" unless RailsAiContext.static_tier? && RailsAiContext::PathResolver.test_root(root) != root
+
+        "\n\n_The views of the engine this app runs in are read only with the app booted._"
+      end
 
       private_class_method def self.view_group(key)
         key.include?("/") ? key.split("/").first : ROOT_GROUP

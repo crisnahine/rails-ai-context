@@ -52,6 +52,16 @@ RSpec.describe RailsAiContext::PathResolver do
     end
   end
 
+  describe ".view_dirs" do
+    it "searches the views of the engine a booted test/dummy runs in, after the app's own" do
+      dummy = File.join(@root, "test", "dummy")
+      FileUtils.mkdir_p([ File.join(dummy, "app/views"), File.join(@root, "app/views") ])
+      allow(described_class).to receive(:enclosing_engine_roots).and_return([ @root ])
+
+      expect(described_class.view_dirs(dummy)).to eq([ File.join(dummy, "app/views"), File.join(@root, "app/views") ])
+    end
+  end
+
   describe ".app_initializer_files" do
     it "answers the initializers app-relative, however the app spells them" do
       mkdirs("config/initializers")

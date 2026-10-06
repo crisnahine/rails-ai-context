@@ -402,6 +402,14 @@ RSpec.describe RailsAiContext::Tools::GetView do
         )
       end
 
+      it "says unbooted that the views of the engine a test/dummy runs in are not read" do
+        allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+        allow(RailsAiContext::PathResolver).to receive(:test_root).and_return("/engine")
+
+        text = described_class.call(controller: "posts").content.first[:text]
+        expect(text).to include("_The views of the engine this app runs in are read only with the app booted._")
+      end
+
       it "keeps the original recovery copy for a controller filter miss instead of the API-only note" do
         response = described_class.call(controller: "posts")
         text = response.content.first[:text]
