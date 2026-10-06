@@ -218,7 +218,7 @@ module RailsAiContext
           config/locales/en.yml
           package.json Gemfile
           Procfile Procfile.dev
-          .rubocop.yml .standard.yml .erb_lint.yml .rspec
+          .rubocop.yml .standard.yml .erb_lint.yml .erb-lint.yml .rspec
           sorbet/config Steepfile
           Dockerfile docker-compose.yml
           .github/workflows/ci.yml

@@ -29,6 +29,15 @@ RSpec.describe RailsAiContext::Introspectors::ConventionIntrospector do
       expect(result[:config_files]).to be_an(Array)
     end
 
+    it "names the .erb-lint.yml erb_lint still loads under its old name" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".erb-lint.yml"), "")
+        app = double("app", root: Pathname.new(dir), config: double(api_only: false))
+
+        expect(described_class.new(app).call[:config_files]).to include(".erb-lint.yml")
+      end
+    end
+
     it "names the linter and type-checker config files beside .rubocop.yml" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "sorbet"))
