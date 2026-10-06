@@ -384,6 +384,16 @@ RSpec.describe RailsAiContext::GemLock do
       end
     end
 
+    it "reads the project config mise keeps in .mise/config.toml and .config/mise/config.toml" do
+      %w[.mise/config.toml .config/mise/config.toml].each do |name|
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), "[tools]\nruby = \"3.3.6\"\n")
+          expect(described_class.for(dir).ruby_versions).to eq(name => "3.3.6")
+        end
+      end
+    end
+
     it "does not follow a mise directory symlinked out of the app" do
       Dir.mktmpdir do |outside|
         File.write(File.join(outside, "config.toml"), "[tools]\nruby = \"3.3.6\"\n")

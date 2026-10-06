@@ -32,7 +32,8 @@ module RailsAiContext
       "mruby" => "mruby", "rbx" => "Rubinius"
     }.freeze
     # mise's project files, highest precedence first (mise docs, configuration).
-    MISE_FILES = [ "mise.local.toml", "mise.toml", ".mise.toml", "mise/config.toml", ".config/mise.toml" ].freeze
+    MISE_FILES = [ "mise.local.toml", "mise.toml", ".mise.toml", "mise/config.toml", ".mise/config.toml", ".config/mise.toml",
+                   ".config/mise/config.toml" ].freeze
     VERSION_FILES = [ ".ruby-version", ".tool-versions", *MISE_FILES ].freeze
     # The line `rails new` and `rails plugin new` write into config/boot.rb.
     BOOT_GEMFILE = /^\s*ENV\[["']BUNDLE_GEMFILE["']\]\s*(?:\|\|)?=\s*File\.expand_path\(\s*["']([^"']+)["']\s*,\s*(__dir__|__FILE__)\s*\)/
