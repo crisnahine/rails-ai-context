@@ -3007,6 +3007,30 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  describe "a concern the model builds with concerning" do
+    it "is listed by both tiers as the model's own, not a gem's" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "widget_log.rb"),
+                   "class WidgetLog < ApplicationRecord\n  concerning :Exporting do\n    def export; end\n  end\nend\n")
+        model = Class.new(ApplicationRecord) { self.table_name = "posts" }
+        model.define_singleton_method(:name) { "WidgetLog" }
+        model.const_set(:Exporting, Module.new)
+        model.include(model::Exporting)
+        stub_const("WidgetLog", model)
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+
+        booted = introspector.send(:extract_model_details, model)
+        static = introspector.static_call["WidgetLog"]
+
+        expect(booted[:concerns]).to include("WidgetLog::Exporting")
+        expect(booted[:concern_sources].to_h).not_to have_key("WidgetLog::Exporting")
+        expect(static[:concerns]).to eq([ "WidgetLog::Exporting" ])
+        expect(static[:concern_sources]).to be_nil
+      end
+    end
+  end
+
   # Kaminari includes its extension into the app's abstract base from an
   # inherited hook, so every model has it and no file of the app says so.
   describe "what a gem puts into the app's abstract base" do

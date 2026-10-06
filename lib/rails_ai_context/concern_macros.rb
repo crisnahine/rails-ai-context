@@ -567,6 +567,9 @@ module RailsAiContext
           name, written, given = mixin.is_a?(Hash) ? mixin.values_at(:name, :macro, :path) : mixin
           # A base module comes with the file its top-level name resolves to.
           base = mixin.is_a?(Hash) && mixin.key?(:path)
+          # A `concerning` block is the class's own body, read with the class.
+          next if mixin.is_a?(Hash) && mixin[:inline]
+
           @top = name if file.nil?
           next unless ConcernMembership.candidate?(name)
 

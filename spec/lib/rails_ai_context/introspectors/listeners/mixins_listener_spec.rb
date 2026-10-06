@@ -13,6 +13,23 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MixinsListener do
     expect(results.first).to include(macro: :include, name: "Publishable", ancestor: true, location: 2)
   end
 
+  it "records the module a concerning block builds and includes, under the class's name" do
+    results = parse_and_dispatch(<<~RUBY)
+      class WidgetLog < ApplicationRecord
+        concerning :Exporting do
+          def export; end
+        end
+        concerning :Stamping, prepend: true do
+        end
+      end
+    RUBY
+
+    expect(results).to contain_exactly(
+      include(macro: :include, name: "WidgetLog::Exporting", ancestor: true, location: 2, inline: true),
+      include(macro: :prepend, name: "WidgetLog::Stamping", ancestor: true, location: 5, inline: true)
+    )
+  end
+
   it "detects a prepended module as reaching the ancestor chain" do
     results = parse_and_dispatch("class Post\n  prepend Auditable\nend\n")
 
