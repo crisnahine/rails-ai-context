@@ -26,7 +26,25 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::DefinitionFilePathsList
     ])
   end
 
-  it "leaves out a write whose paths it cannot read, and another receiver's" do
-    expect(writes_in("FactoryBot.definition_file_paths = paths\nOther.definition_file_paths << \"x\"\n")).to eq([])
+  it "marks a write whose paths it cannot read, and leaves out another receiver's" do
+    expect(writes_in("FactoryBot.definition_file_paths = paths\nOther.definition_file_paths << \"x\"\n"))
+      .to eq([ { replace: true, paths: [], unread: true } ])
+  end
+
+  it "resolves a path built from __dir__ or __FILE__ against the helper it is written in" do
+    writes = RailsAiContext::Introspectors::SourceIntrospector.walk_source(<<~RUBY, { writes: -> { described_class.new(file: "spec/rails_helper.rb") } })[:writes]
+      FactoryBot.definition_file_paths = [File.expand_path("support/factories", __dir__)]
+      FactoryBot.definition_file_paths << File.join(__dir__, "more")
+    RUBY
+
+    expect(writes).to eq([ { replace: true, paths: [ "spec/support/factories" ] }, { replace: false, paths: [ "spec/more" ] } ])
+  end
+
+  it "marks a write that it read only part of" do
+    writes = RailsAiContext::Introspectors::SourceIntrospector.walk_source(<<~RUBY, { writes: -> { described_class.new(file: "spec/rails_helper.rb") } })[:writes]
+      FactoryBot.definition_file_paths = [File.expand_path("f", __dir__), ENV["X"]]
+    RUBY
+
+    expect(writes).to eq([ { replace: true, paths: [ "spec/f" ], unread: true } ])
   end
 end

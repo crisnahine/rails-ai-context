@@ -66,7 +66,7 @@ module RailsAiContext
           when *NAMESPACES
             space = literal_string(args.first)
             if node.name == :route_param && space
-              type = keyword(args, :type)
+              type = keyword(node, :type)
               @pending += [ { name: space, type: type, required: true } ] if type
               space = ":#{space}"
             end
@@ -77,7 +77,7 @@ module RailsAiContext
             [ :params ]
           when *PARAMS
             if @blocks.last&.first == :params
-              type = keyword(args, :type)
+              type = keyword(node, :type)
               args.filter_map { |arg| literal_string(arg) }.each do |name|
                 @pending << { name: name, type: type, required: node.name == :requires }
               end
@@ -85,7 +85,7 @@ module RailsAiContext
             [ :body ]
           when :version, :prefix
             value = literal_string(args.first)
-            @results << { kind: node.name, owner: owner, value: value, using: keyword(args, :using) || "path" } if value
+            @results << { kind: node.name, owner: owner, value: value, using: keyword(node, :using) || "path" } if value
             [ :body ]
           when :mount
             mounts(args).each { |target, path| @results << { kind: :mount, owner: owner, target: target, path: path, namespace: namespace } }
@@ -107,13 +107,9 @@ module RailsAiContext
           @blocks.flat_map { |kind, _, params| kind == :namespace ? params : [] }
         end
 
-        def keyword(args, key)
-          args.grep(Prism::KeywordHashNode).flat_map(&:elements).grep(Prism::AssocNode).each do |assoc|
-            next unless extract_key(assoc.key) == key
-
-            return literal_string(assoc.value) || assoc.value.slice
-          end
-          nil
+        def keyword(node, key)
+          value = extract_keyword_nodes(node)[key]
+          value && (literal_string(value) || value.slice)
         end
 
         # `mount V1::Users`, `mount V1::Users => "/v1"` and the braced form.
@@ -133,9 +129,7 @@ module RailsAiContext
         end
 
         def scope_name(node)
-          path = node.constant_path.slice
-          outer = @scopes.last
-          path.start_with?("::") || outer.nil? ? path.delete_prefix("::") : "#{outer}::#{path}"
+          nested_name(node.constant_path, @scopes.last)
         end
       end
     end

@@ -1,10 +1,13 @@
 # frozen_string_literal: true
 
+require "pathname"
+
 module RailsAiContext
   module Introspectors
     module Listeners
       # The literal path forms an app writes a setting with: a string, `%W(#{config.root}/x)`,
       # `Rails.root.join("x")`. Each one read lands in `push_path`; a path built at run time stays unread.
+      # `collect_paths` returns whether it read the whole node, so a caller can tell a partly read write.
       module LiteralPaths
         APPENDING = %i[<< push append concat].to_set.freeze
 
@@ -16,28 +19,63 @@ module RailsAiContext
 
         def collect_paths(node)
           case node
-          when Prism::ArrayNode then node.elements.each { |element| collect_paths(element) }
+          when Prism::ArrayNode then node.elements.map { |element| collect_paths(element) }.all?
           when Prism::StringNode then push_path(node.unescaped)
           when Prism::InterpolatedStringNode then collect_interpolated_path(node)
           when Prism::CallNode then collect_call_path(node)
           end
         end
 
-        # `"#{config.root}/lib_static"`, and only that: an interpolation of
-        # some gem's root names a path outside the app.
+        # `"#{config.root}/lib_static"`, and only that: a gem's root names a path outside
+        # the app, and a later interpolation leaves the path unknown.
         def collect_interpolated_path(node)
-          return unless app_root?(node.parts.first)
+          return unless app_root?(node.parts.first) && node.parts.drop(1).all?(Prism::StringNode)
 
-          push_path(node.parts.filter_map { |part| part.content if part.is_a?(Prism::StringNode) }.join)
+          push_path(node.parts.drop(1).map(&:content).join)
         end
 
         # `Rails.root.join("lib_static")` and its `.to_s`, whose arguments are
         # the path relative to the app root.
         def collect_call_path(node)
+          return collect_file_path(node) if @file && file_constant?(node.receiver)
           return collect_paths(node.receiver) unless node.name == :join
 
           segments = app_root_join(node)
           push_path(File.join(*segments)) if segments
+        end
+
+        # `File.expand_path("x", __dir__)` and `File.join(__dir__, "x")`, read when the
+        # listener is given `@file`, the walked file's path relative to the app root.
+        def collect_file_path(node)
+          arguments = Array(node.arguments&.arguments)
+          path = case node.name
+          when :expand_path then file_relative(arguments.first, arguments[1]) if arguments.size == 2
+          when :join then file_relative_join(arguments)
+          end
+          push_path(path) if path
+        end
+
+        def file_relative(relative, base)
+          return unless relative.is_a?(Prism::StringNode)
+
+          anchor = file_anchor(base) or return
+          Pathname.new(File.join(anchor, relative.unescaped)).cleanpath.to_s
+        end
+
+        def file_relative_join(arguments)
+          anchor = file_anchor(arguments.first) or return
+          rest = arguments.drop(1)
+          return unless rest.any? && rest.all?(Prism::StringNode)
+
+          Pathname.new(File.join(anchor, *rest.map(&:unescaped))).cleanpath.to_s
+        end
+
+        # `File.expand_path("x", __FILE__)` resolves against the file name itself, as Ruby does.
+        def file_anchor(node)
+          case node
+          when Prism::SourceFileNode then @file
+          when Prism::CallNode then File.dirname(@file) if dir_call?(node)
+          end
         end
 
         # The segments of `Rails.root.join("a", "b")`, nil unless every one is a literal.
@@ -67,6 +105,7 @@ module RailsAiContext
         def push_path(value)
           cleaned = value.to_s.strip.delete_prefix("/")
           @results << cleaned unless cleaned.empty?
+          true
         end
       end
     end

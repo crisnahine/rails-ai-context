@@ -46,7 +46,7 @@ module RailsAiContext
         end
 
         def constant_name(node)
-          node.slice.delete_prefix("::") if node.is_a?(Prism::ConstantReadNode) || node.is_a?(Prism::ConstantPathNode)
+          constant_path_string(node) if node.is_a?(Prism::ConstantReadNode) || node.is_a?(Prism::ConstantPathNode)
         end
       end
     end

@@ -45,10 +45,8 @@ module RailsAiContext
         private
 
         def enter_scope(node)
-          path = node.constant_path.slice
           outer = @nestings.last
-          scope = path.start_with?("::") || outer.empty? ? path.delete_prefix("::") : "#{outer.first}::#{path}"
-          @nestings.push([ scope ] + outer)
+          @nestings.push([ nested_name(node.constant_path, outer.first) ] + outer)
         end
 
         # nil for an anonymous or computed superclass (`< Struct.new(:a)`).

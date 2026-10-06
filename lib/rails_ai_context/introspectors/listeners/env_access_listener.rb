@@ -39,8 +39,7 @@ module RailsAiContext
           keys = parts.map { |arg| literal_string(arg) }
           return if keys.empty? || keys.any?(&:nil?)
 
-          default = args.grep(Prism::KeywordHashNode).flat_map(&:elements).grep(Prism::AssocNode)
-                        .find { |assoc| extract_key(assoc.key) == :default }&.value
+          default = extract_keyword_nodes(node)[:default]
           optional = node.name == :option
           @results << {
             method:      optional && default.nil? ? "[]" : "fetch",

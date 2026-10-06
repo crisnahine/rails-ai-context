@@ -46,18 +46,14 @@ module RailsAiContext
         def on_case_node_enter(node)
           return unless branch_statement?(node)
 
-          subject = node.predicate&.slice&.gsub(/\s+/, " ")
-          seen = []
           node.conditions.each do |branch|
             register_statements(branch.statements)
-            conditions = branch.conditions.map { |c| c.slice.gsub(/\s+/, " ") }
-            seen.concat(conditions)
-            case_branches[branch] = subject ? "when #{subject} is #{conditions.join(', ')}" : "if #{conditions.join(' or ')}"
+            case_branches[branch] = -> { case_text(node, branch.conditions, "is", "if") }
           end
           return unless node.else_clause
 
           register_statements(node.else_clause.statements)
-          case_branches[node.else_clause] = subject ? "when #{subject} is none of #{seen.join(', ')}" : "unless #{seen.join(' or ')}"
+          case_branches[node.else_clause] = -> { case_text(node, node.conditions.flat_map(&:conditions), "is none of", "unless") }
         end
 
         def on_when_node_enter(node)
@@ -102,7 +98,7 @@ module RailsAiContext
           return unless branch_statement?(node)
 
           @statements[node.right] = true if @statements
-          branch_conditions << { node: node, text: "#{keyword} #{node.left.slice.gsub(/\s+/, " ")}" }
+          branch_conditions << { node: node, text: -> { "#{keyword} #{squish(node.left)}" } }
         end
 
         def enter_condition(node, keyword, other)
@@ -118,7 +114,7 @@ module RailsAiContext
         end
 
         def current_condition
-          branch_conditions.map { |c| c[:text] || condition_text(c) }.join(" and ").then { |text| text unless text.empty? }
+          branch_conditions.map { |c| c[:text]&.call || condition_text(c) }.join(" and ").then { |text| text unless text.empty? }
         end
 
         # [chain offset, arm, arms] when every open branch is an arm of one if/unless chain that ends
@@ -143,7 +139,16 @@ module RailsAiContext
         def condition_text(branch)
           keyword = branch[:keyword]
           keyword = keyword == "if" ? "unless" : "if" if branch[:negated]
-          "#{keyword} #{branch[:node].predicate.slice.gsub(/\s+/, " ")}"
+          "#{keyword} #{squish(branch[:node].predicate)}"
+        end
+
+        def case_text(node, conditions, relation, keyword)
+          texts = conditions.map { |c| squish(c) }
+          node.predicate ? "when #{squish(node.predicate)} #{relation} #{texts.join(', ')}" : "#{keyword} #{texts.join(" or ")}"
+        end
+
+        def squish(node)
+          node.slice.gsub(/\s+/, " ")
         end
       end
     end

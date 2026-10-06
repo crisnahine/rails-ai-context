@@ -89,9 +89,9 @@ module RailsAiContext
         # Bundler reads the path from the evaluating file's directory.
         def extract_eval_gemfile(node)
           arg = node.arguments&.arguments&.first
-          if arg.is_a?(Prism::CallNode) && arg.name == :expand_path && arg.receiver&.slice == "File"
+          if arg.is_a?(Prism::CallNode) && arg.name == :expand_path && file_constant?(arg.receiver)
             inner = arg.arguments&.arguments || []
-            arg = inner.first if inner.size == 2 && inner.last.slice == "__dir__"
+            arg = inner.first if inner.size == 2 && dir_call?(inner.last)
           end
           return unknown_gems(node) unless arg.is_a?(Prism::StringNode)
 

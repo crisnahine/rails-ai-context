@@ -23,21 +23,21 @@ module RailsAiContext
 
         INLINE_BLOCK = "[inline_block]"
 
+        # Macros that call args.extract_options!, so a trailing braced hash is options, not a filter.
+        EXTRACTS_OPTIONS = %i[
+          before_validation after_validation after_commit after_rollback
+          after_create_commit after_update_commit after_destroy_commit after_save_commit
+        ].to_set.freeze
+
         def on_call_node_enter(node)
           return record_skip(node) if node.name == :skip_callback && in_scope?(node)
           return unless CALLBACK_METHODS.include?(node.name) && in_scope?(node)
 
           # Sources, not literals: a lambda condition reads as the line the
           # file holds rather than as a marker.
-          options = scope_options(receiver_name(node)).merge(extract_keyword_sources(node))
-          callback_types = resolve_callback_types(node.name, options)
-          methods = extract_symbol_args(node)
-
-          if methods.any?
-            emit(node, callback_types, methods.map(&:to_s), options, confidence_for(node))
-          else
-            emit_without_symbol_args(node, callback_types, options)
-          end
+          hash = options_hash(node)
+          options = scope_options(receiver_name(node)).merge(extract_keyword_sources(node)).merge(hash_sources(hash))
+          emit(node, resolve_callback_types(node.name, options), callback_targets(node, hash), options)
         end
 
         ON_EVENT = "after_commit_on_"
@@ -69,10 +69,7 @@ module RailsAiContext
 
         KINDS = %w[before after around].freeze
 
-        # `skip_callback :save, :before, :stamp_audit` takes a callback the
-        # class inherited (or declared above) out of its chain; the model
-        # tier applies it where the chain is assembled. The kind defaults to
-        # :before, as Rails' normalize_callback_params does.
+        # Rails' skip_callback; the kind defaults to :before, as normalize_callback_params does.
         def record_skip(node)
           positional = (node.arguments&.arguments || []).reject { |a| a.is_a?(Prism::KeywordHashNode) }
           event, *rest = positional.map { |a| literal_string(a) || one_line_source(a) }
@@ -94,24 +91,34 @@ module RailsAiContext
           end
         end
 
-        # `around_create Snowflake::Callbacks` and `before_validation
-        # Normalizer.new` name a callback object, kept as the source writes
-        # it; a lambda names nothing, so it reports as a block.
-        def emit_without_symbol_args(node, callback_types, options)
-          positional = (node.arguments&.arguments || []).reject { |a| a.is_a?(Prism::KeywordHashNode) }
-          targets = positional.reject { |a| proc_argument?(a) }.map { |a| one_line_source(a) }
-
-          if targets.any?
-            emit(node, callback_types, targets, options, confidence_for(node))
-          elsif node.block || positional.any?
-            # Keyword options are not a target: `after_commit on: :create`
-            # declares no block, so there is none to report.
-            emit(node, callback_types, [ INLINE_BLOCK ], options, RailsAiContext::Confidence::INFERRED)
+        # Each filter Rails registers, in its order: the block first, then every positional
+        # argument. An object (`Normalizer.new`) is kept as written; a lambda names nothing.
+        def callback_targets(node, options_hash)
+          positional = (node.arguments&.arguments || []).reject { |a| a.is_a?(Prism::KeywordHashNode) || a.equal?(options_hash) }
+          targets = node.block ? [ [ INLINE_BLOCK, RailsAiContext::Confidence::INFERRED ] ] : []
+          targets + positional.map do |arg|
+            if (name = literal_string(arg)) then [ name, confidence_for(node) ]
+            elsif proc_argument?(arg) then [ INLINE_BLOCK, RailsAiContext::Confidence::INFERRED ]
+            else [ one_line_source(arg), confidence_for(node) ]
+            end
           end
         end
 
-        def emit(node, callback_types, methods, options, confidence)
-          methods.each do |method_name|
+        def options_hash(node)
+          last = node.arguments&.arguments&.last
+          last if last.is_a?(Prism::HashNode) && EXTRACTS_OPTIONS.include?(node.name)
+        end
+
+        def hash_sources(hash)
+          return {} unless hash
+
+          hash.elements.each_with_object({}) do |assoc, h|
+            h[extract_key(assoc.key)] = value_or_source(assoc.value) if assoc.is_a?(Prism::AssocNode)
+          end
+        end
+
+        def emit(node, callback_types, targets, options)
+          targets.each do |method_name, confidence|
             callback_types.each do |callback_type|
               @results << {
                 # The declared macro, so a renderer can print what the file

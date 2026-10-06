@@ -11,9 +11,8 @@ module RailsAiContext
         def on_call_node_enter(node)
           return unless AUTOLOAD_LIB.include?(node.name) && node.receiver
 
-          options = Array(node.arguments&.arguments).find { |argument| argument.is_a?(Prism::KeywordHashNode) }
-          ignore = options&.elements&.find { |element| element.is_a?(Prism::AssocNode) && element.key.slice.delete_suffix(":") == "ignore" }
-          collect(ignore.value) if ignore
+          ignore = extract_keyword_nodes(node)[:ignore]
+          collect(ignore) if ignore
         end
 
         private

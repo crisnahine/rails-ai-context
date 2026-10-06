@@ -33,6 +33,7 @@ module RailsAiContext
           @roots = (names.empty? ? DEFAULT_ROOTS : names).to_set
           @conditions = []
           @statements = Set.new.compare_by_identity
+          @chain_heads = {}.compare_by_identity
           @def_params = []
           # The root `self` and each block-bound local stand for here.
           @scopes = [ { self: nil, locals: {} } ]
@@ -103,11 +104,11 @@ module RailsAiContext
           if node.name.to_s.match?(SETTER)
             record_assignment(node)
           elsif node.arguments
-            return unless node.name.to_s.match?(MUTATOR) && @statements.include?(node)
+            return unless node.name.to_s.match?(MUTATOR) && (@statements.include?(node) || @chain_heads.key?(node))
 
-            # `config.hosts << "a" << "b"` writes through the inner call.
+            # `config.hosts << "a" << "b"` writes through the inner call, which records the whole chain.
             receiver = node.receiver
-            @statements << receiver if receiver.is_a?(Prism::CallNode) && receiver.arguments && receiver.name.to_s.match?(MUTATOR)
+            @chain_heads[receiver] = @chain_heads.fetch(node, node) if receiver.is_a?(Prism::CallNode) && receiver.arguments && receiver.name.to_s.match?(MUTATOR)
             record_write(node.receiver, node.name, :call, node)
           else
             record_reference(node)
@@ -243,7 +244,7 @@ module RailsAiContext
         def chained_read(value, call)
           return nil if value.equal?(call)
 
-          text = value.location.slice[(call.location.end_offset - value.location.start_offset)..]
+          text = value.location.slice.byteslice((call.location.end_offset - value.location.start_offset)..)
           RailsAiContext::Redaction.call(text)
         end
 
@@ -296,15 +297,23 @@ module RailsAiContext
           return if setting.empty? && prefix.include?(:[])
 
           path = setting + [ name ]
-          # A one-argument call (`<<`, `merge!`) carries what it adds; `[]=` and the like carry a key too.
-          args = kind == :call ? node.arguments&.arguments : nil
-          value = args&.size == 1 ? extract_value(args.first) : nil
-          redacted = RailsAiContext::Redaction.redact_assignment(path, value: value, source: NodeSource.text(node))
+          head = @chain_heads[node]
+          args = kind == :call && !head ? node.arguments&.arguments : nil
+          # A one-argument call (`<<`, `merge!`) carries what it adds; `[]=` and `store` carry a key,
+          # which names the secret: `smtp_settings[:password] = ...`.
+          key = literal_string(args.first) if args&.size == 2
+          value = extract_value(args.last) if args&.size == 1 || key
+          # The written setting's own name counts too (`config.x.mail.password << ...`): the call's name may be an operator.
+          judged = if key then setting + [ key.to_sym ]
+          elsif RailsAiContext::Redaction.secret_name?(setting) then setting
+          else path
+          end
+          redacted = RailsAiContext::Redaction.redact_assignment(judged, value: value, source: NodeSource.text(head || node))
           @results << {
             path:       path,
             assignment: false,
             write:      kind,
-            value:      redacted[:value],
+            value:      (redacted[:value] unless key),
             source:     redacted[:source],
             location:   node.location.start_line
           }

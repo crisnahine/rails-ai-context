@@ -76,12 +76,15 @@ module RailsAiContext
       # as a directory.
       FACTORY_PATHS = %w[factories test/factories spec/factories].freeze
       FABRICATOR_PATHS = %w[test/fabricators spec/fabricators].freeze
+      UNREAD_FACTORY_PATH = "a path a test helper builds at run time (not read)"
 
       # [location, files] for every place factory_bot loads definitions
       # from, each pack's spec/factories and test/factories included as
       # packs-rails adds them.
       def factory_sources
         @factory_sources ||= factory_definition_paths.flat_map do |rel|
+          next [ [ UNREAD_FACTORY_PATH, [] ] ] if rel.equal?(UNREAD_FACTORY_PATH)
+
           single = app_files("#{rel}.rb")
           files = app_files(File.join(rel, "**", "*.rb"))
           [ ([ "#{rel}.rb", single ] if single.any?), ([ rel, files ] if files.any?) ].compact
@@ -100,6 +103,7 @@ module RailsAiContext
           when :reload then loaded = paths
           else
             found = event[:paths].map { |rel| Pathname.new(rel).cleanpath.to_s }.reject { |rel| RailsAiContext::SafePath.traversal?(rel) }
+            found << UNREAD_FACTORY_PATH if event[:unread]
             paths = event[:replace] ? found : paths + found
           end
         end
@@ -144,10 +148,13 @@ module RailsAiContext
         { location: "features", count: features.size, step_definitions: app_files("features/step_definitions/**/*.rb").size }
       end
 
+      # A path a helper builds at run time has no files to count, so the count covers only the paths read.
       def locations_with_count(sources)
         return nil if sources.empty?
 
-        { location: sources.map(&:first).join(", "), count: sources.sum { |_, files| files.size } }
+        read = sources.reject { |location, _| location.equal?(UNREAD_FACTORY_PATH) }
+        found = { location: sources.map(&:first).join(", "), count: (read.sum { |_, files| files.size } if read.any?) }
+        read.size < sources.size ? found.merge(unread: true) : found
       end
 
       # The files a glob under the suite root matches, sorted, leaving out any whose
@@ -336,7 +343,7 @@ module RailsAiContext
           chained:       -> { Listeners::ChainedCallListener.new(:include, receiver: :config) },
           setup:         -> { Listeners::GenericMacroListener.new(*SETUP_MACROS) },
           fixture_paths: -> { Listeners::FixturePathsListener.new(file: path.delete_prefix("#{suite_root}/")) },
-          definition_paths: Listeners::DefinitionFilePathsListener,
+          definition_paths: -> { Listeners::DefinitionFilePathsListener.new(file: path.delete_prefix("#{suite_root}/")) },
           cleaner:       -> { Listeners::ConfigAssignmentListener.new(:DatabaseCleaner) }
         }) : nil
       end

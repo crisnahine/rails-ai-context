@@ -58,6 +58,19 @@ module RailsAiContext
       "#{CountPhrase.call(count, "YAML fixture set")}, #{CountPhrase.call(others, "other file")}"
     end
 
+    # The file count of a factories entry, nil when none of its paths was read.
+    def factory_files_phrase(factories)
+      return nil if factories[:count].nil?
+
+      phrase = CountPhrase.call(factories[:count], "file")
+      factories[:unread] ? "#{phrase} read" : phrase
+    end
+
+    def factory_location(factories)
+      files = factory_files_phrase(factories)
+      files ? "#{factories[:location]} (#{files})" : factories[:location]
+    end
+
     # RSpec wins where both are real: a new test in an app with an RSpec suite goes to RSpec.
     def command(framework)
       framework.to_s.include?("rspec") ? "bundle exec rspec" : "rails test"

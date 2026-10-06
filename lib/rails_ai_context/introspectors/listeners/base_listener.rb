@@ -33,12 +33,14 @@ module RailsAiContext
 
           # The node's text runs on past its end when it opens a heredoc, and
           # every cut sits inside the node, so the offsets still line up.
-          text = NodeSource.text(node).dup
-          text = text[0, finish - start] if upto
+          # Offsets count bytes, so the cuts work on the bytes and the text gets its encoding back after.
+          source = NodeSource.text(node)
+          text = source.b
+          text = text.byteslice(0, finish - start) if upto
           cuts.sort_by(&:first).reverse_each do |from, to, replacement|
-            text[(from - start)...(to - start)] = replacement
+            text[(from - start)...(to - start)] = replacement.b
           end
-          fold_newlines(text)
+          fold_newlines(text.force_encoding(source.encoding))
         end
 
         # A plain multi-line string literal (a SQL fragment) is respelt on one line as `inspect`
@@ -337,6 +339,21 @@ module RailsAiContext
         # constant, so only the root scope operator comes off.
         def constant_path_string(node)
           node.slice.delete_prefix("::")
+        end
+
+        # `File` or `::File`, and a bare `__dir__`, as a path anchored at the walked file is written.
+        def file_constant?(node)
+          (node.is_a?(Prism::ConstantReadNode) || node.is_a?(Prism::ConstantPathNode)) && constant_path_string(node) == "File"
+        end
+
+        def dir_call?(node)
+          node.is_a?(Prism::CallNode) && node.name == :__dir__ && node.receiver.nil? && node.arguments.nil?
+        end
+
+        # A class or module's full name: `::A` is top level, `A` nests under the open `outer`.
+        def nested_name(constant_path, outer)
+          path = constant_path.slice
+          path.start_with?("::") || outer.nil? ? path.delete_prefix("::") : "#{outer}::#{path}"
         end
 
         def hash_node_to_hash(node, source: false)

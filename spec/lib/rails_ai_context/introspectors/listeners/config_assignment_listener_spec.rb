@@ -276,6 +276,35 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
     expect(writes).to eq([ [ :hosts, :<< ], [ :middleware, :push ] ])
   end
 
+  it "records a chained << once, with the whole chain as its source and no single value" do
+    writes = parse_and_dispatch(%(config.hosts << "a.com" << "b.com"\n)).select { |r| r[:write] }
+
+    expect(writes.map { |r| [ r[:path], r[:value], r[:source] ] }).to eq([ [ %i[hosts <<], nil, %(config.hosts << "a.com" << "b.com") ] ])
+  end
+
+  it "reads what a chain takes off config_for by byte offset, after a multibyte name" do
+    expect(assignments(%(config.x = config_for("réglages").fetch(:api)\n)).first[:config_for][:read]).to eq(".fetch(:api)")
+  end
+
+  it "redacts an element write under a secret-named key" do
+    writes = parse_and_dispatch(<<~RUBY).select { |r| r[:write] }
+      config.action_mailer.smtp_settings[:password] = "hunter2pass"
+      config.x.stripe.store(:secret_key, "plainvalue")
+      config.x.stripe.store(:region, "eu")
+    RUBY
+
+    expect(writes.map { |r| r[:source] }).to eq([ "[FILTERED]", "[FILTERED]", %(config.x.stripe.store(:region, "eu")) ])
+  end
+
+  it "redacts a one-argument write to a secret-named setting" do
+    writes = parse_and_dispatch(<<~RUBY).select { |r| r[:write] }
+      config.x.mail.password << "hunter2pass"
+      config.x.secret_token.concat("plainvalue")
+    RUBY
+
+    expect(writes.map { |r| [ r[:value], r[:source] ] }).to eq([ %w[[FILTERED] [FILTERED]], %w[[FILTERED] [FILTERED]] ])
+  end
+
   it "records a write through an index read as a write of the indexed setting" do
     writes = parse_and_dispatch(<<~RUBY).select { |r| r[:write] }.map { |r| r[:path] }
       config.paths["config/routes.rb"] << "config/extra_routes.rb"

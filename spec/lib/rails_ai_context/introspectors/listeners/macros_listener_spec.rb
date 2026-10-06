@@ -241,6 +241,28 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "option
   end
 end
 
+RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "multibyte source" do
+  it "cuts a gem macro at its block by byte offset, past a multibyte label and comment" do
+    results = parse_and_dispatch(<<~RUBY)
+      class Car < ApplicationRecord
+        state_machine :status, initial: :brouillon, label: "état créé" do # étiquette
+        end
+      end
+    RUBY
+    expect(results.map { |r| r[:text] }).to eq([ 'state_machine :status, initial: :brouillon, label: "état créé"' ])
+  end
+
+  it "cuts a comment out of a call by byte offset, after a multibyte string" do
+    results = parse_and_dispatch(<<~RUBY)
+      class Car < ApplicationRecord
+        has_paper_trail meta: { a: "é" }, # note
+          on: [:update]
+      end
+    RUBY
+    expect(results.map { |r| r[:text] }).to eq([ 'has_paper_trail meta: { a: "é" }, on: [:update]' ])
+  end
+end
+
 RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "connects_to" do
   it "records the call as written" do
     results = parse_and_dispatch(<<~RUBY)
@@ -252,6 +274,26 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "connec
       end
     RUBY
     expect(results.map { |r| r.slice(:macro, :text) }).to eq([ { macro: :connects_to, text: "connects_to shards: { shard_one: { writing: :shard_one } }" } ])
+  end
+
+  it "names the case branch a connects_to sits in, and builds no branch text a walk never reads" do
+    listener = described_class.new
+    source = <<~RUBY
+      class ShardRecord < ApplicationRecord
+        case ENV["DB"]
+        when "a" then connects_to database: { writing: :a }
+        end
+        def x
+          case y
+          when 1 then a && b
+          end
+        end
+      end
+    RUBY
+    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(Prism.parse(source).value)
+
+    expect(listener.results.map { |r| r[:condition] }).to eq([ %(when ENV["DB"] is "a") ])
+    expect(listener.send(:case_branches).values.grep(String)).to be_empty
   end
 end
 
@@ -275,6 +317,25 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "scope"
       end
     RUBY
     expect(results.map { |r| [ r[:macro], r[:attribute] ] }).to eq([ [ :encrypts, "ssn" ] ])
+  end
+
+  it "reads the macros a mixin hook's class_eval block declares on the includer" do
+    results = parse_and_dispatch(<<~RUBY)
+      module Tokened
+        def self.included(base)
+          base.class_eval do
+            serialize :prefs, coder: JSON
+            has_secure_token :api_key
+            self.ignored_columns += %w[legacy]
+            def rotate
+              encrypts :never
+            end
+          end
+          encrypts :not_on_includer
+        end
+      end
+    RUBY
+    expect(results.map { |r| r[:macro] }).to eq(%i[serialize has_secure_token ignored_columns])
   end
 
   it "names the class each record is written in, so a nested class keeps its own" do

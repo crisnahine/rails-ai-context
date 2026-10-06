@@ -41,6 +41,6 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::QueueAssignmentListener
 
   it "reads nothing from an empty or broken source" do
     expect(parse_and_dispatch("")).to eq([])
-    expect(parse_and_dispatch("class A\n  @queue =\n")).to all(include(:form))
+    expect(parse_and_dispatch("class A\n  @queue =\n")).to eq([])
   end
 end

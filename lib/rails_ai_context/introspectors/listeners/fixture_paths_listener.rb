@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require "pathname"
-
 module RailsAiContext
   module Introspectors
     module Listeners
@@ -14,7 +12,7 @@ module RailsAiContext
       #
       # A path built from __dir__ or __FILE__ is read only when the walk is given the helper's
       # `file`, relative to the app root.
-      # The path forms are LiteralPaths'. A write whose path it cannot read records :unread,
+      # The path forms are LiteralPaths'. A write with any path it cannot read records :unread,
       # so a caller still knows the setting is set.
       class FixturePathsListener < BaseListener
         include LiteralPaths
@@ -34,7 +32,7 @@ module RailsAiContext
             return unless APPENDING.include?(node.name) && fixture_setting?(node.receiver)
           end
 
-          record_write { Array(node.arguments&.arguments).each { |argument| collect_paths(argument) } }
+          record_write { Array(node.arguments&.arguments).map { |argument| collect_paths(argument) }.all? }
         end
 
         def on_call_operator_write_node_enter(node)
@@ -45,44 +43,8 @@ module RailsAiContext
 
         private
 
-        def collect_call_path(node)
-          return super unless @file && node.receiver.is_a?(Prism::ConstantReadNode) && node.receiver.name == :File
-
-          arguments = Array(node.arguments&.arguments)
-          path = case node.name
-          when :expand_path then file_relative(arguments.first, arguments[1]) if arguments.size == 2
-          when :join then file_relative_join(arguments)
-          end
-          push_path(path) if path
-        end
-
-        def file_relative(relative, base)
-          return unless relative.is_a?(Prism::StringNode)
-
-          anchor = file_anchor(base) or return
-          Pathname.new(File.join(anchor, relative.unescaped)).cleanpath.to_s
-        end
-
-        def file_relative_join(arguments)
-          anchor = file_anchor(arguments.first) or return
-          rest = arguments.drop(1)
-          return unless rest.any? && rest.all? { |argument| argument.is_a?(Prism::StringNode) }
-
-          Pathname.new(File.join(anchor, *rest.map(&:unescaped))).cleanpath.to_s
-        end
-
-        # `File.expand_path("x", __FILE__)` resolves against the file name itself, as Ruby does.
-        def file_anchor(node)
-          case node
-          when Prism::SourceFileNode then @file
-          when Prism::CallNode then File.dirname(@file) if node.name == :__dir__ && node.receiver.nil?
-          end
-        end
-
         def record_write
-          before = @results.size
-          yield
-          @results << :unread if @results.size == before
+          @results << :unread unless yield
         end
 
         def fixture_setting?(node)

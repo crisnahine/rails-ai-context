@@ -843,6 +843,14 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
       expect(listener.results.select { |r| r[:type] == :route }.map { |r| r[:path] }).to eq([ "/three" ])
       expect(listener.results.count { |r| r[:type] == :dynamic }).to eq(1)
     end
+
+    it "draws a route whose options are a braced hash under Rails 8.1's single-path rule" do
+      listener = described_class.new
+      source = "Rails.application.routes.draw do\n  get \"x\", { to: \"a#b\" }\n  get \"y\", to: \"a#c\"\nend\n"
+      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(Prism.parse(source).value)
+
+      expect(listener.results.map { |r| [ r[:type], r[:path] ] }).to eq([ [ :route, "/x" ], [ :route, "/y" ] ])
+    end
   end
 
   describe "calls the walk does not know" do

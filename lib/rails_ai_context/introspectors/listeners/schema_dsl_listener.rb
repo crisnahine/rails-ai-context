@@ -121,7 +121,7 @@ module RailsAiContext
         # scenic's dump: create_view "name", [materialized: true,] sql_definition: <<-SQL.
         def extract_view(node)
           name = literal_string(node.arguments&.arguments&.first) or return
-          options = keyword_hash(node) { |value| value }
+          options = extract_keyword_nodes(node)
           @results << {
             type: :view, name: SchemaConventions.local_name(name), materialized: options[:materialized].is_a?(Prism::TrueNode),
             sql: literal_string(options[:sql_definition])&.strip, location: node.location.start_line
@@ -224,7 +224,7 @@ module RailsAiContext
             type:       :add_check_constraint,
             table:      SchemaConventions.local_name(table_arg.unescaped),
             expression: expr_arg.unescaped,
-            name:       literal_string(keyword_hash(node) { |value| value }[:name]),
+            name:       literal_string(extract_keyword_nodes(node)[:name]),
             location:   node.location.start_line
           }.compact
         end
@@ -241,7 +241,7 @@ module RailsAiContext
           @results << {
             type:       :check_constraint,
             expression: expr_arg.unescaped,
-            name:       literal_string(keyword_hash(node) { |value| value }[:name]),
+            name:       literal_string(extract_keyword_nodes(node)[:name]),
             location:   node.location.start_line
           }.compact
         end
