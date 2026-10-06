@@ -1191,6 +1191,20 @@ RSpec.describe RailsAiContext::ActionFilters do
       expect(paper_trail).to include(name: "set_paper_trail_enabled_for_controller", provenance: "not declared in the controller chain")
     end
 
+    # `include ActiveStorage::SetBlob` adds set_blob from a file the walk never reads.
+    it "labels nothing as undeclared when a class on the chain mixes in a module from outside the app" do
+      reflection = [ { kind: "before", name: "set_blob" }, { kind: "before", name: "bb", declared: true } ]
+      ctx = { controllers: { controllers: {
+        "ApplicationController" => { filters: [], parent_class: "ActionController::Base" },
+        "BlobsController" => { parent_class: "ApplicationController", filters: reflection, mixins_unread: [ "ActiveStorage::SetBlob" ] }
+      } } }
+
+      result = described_class.for_controller(ctx, "BlobsController")
+
+      expect(result[:chain].map { |f| f[:name] }).to eq(%w[set_blob bb])
+      expect(result[:chain].first).not_to have_key(:provenance)
+    end
+
     # An ancestor that could not be read ends the walk early, so a name no read
     # class declares may still be that ancestor's own.
     it "labels nothing as undeclared when an ancestor could not be read" do

@@ -74,9 +74,10 @@ module RailsAiContext
                           runs_once?(f[:from_concern], root, controller_name))
       end
       own = mark_conditional_skips(applicable.reject(&inherited_here), conditions, action)
-      # The runtime tier's list is the whole chain: once the body and every ancestor were read,
-      # a name none of them declares was installed from outside it (a gem's on_load).
+      # The runtime tier's list is the whole chain: once the body, every ancestor and every module
+      # they mix in were read, a name none of them declares was installed from outside it (a gem's on_load).
       outside = []
+      whole_chain &&= info.values_at(:concerns_unread, :mixins_unread).all?(&:blank?)
       if whole_chain && Array(info[:filters]).grep(Hash).any? { |f| f[:declared] || f[:skipped] }
         outside, own = own.partition { |f| !f[:declared] }
         outside = outside.map { |f| f.merge(provenance: "not declared in the controller chain") }

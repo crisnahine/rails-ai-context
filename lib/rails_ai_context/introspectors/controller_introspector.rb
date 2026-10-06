@@ -308,6 +308,7 @@ module RailsAiContext
           inherited_actions: (actions - own).presence,
           filters: filters,
           concerns: concerns,
+          mixins_unread: mixins_unread(ctrl).presence,
           strong_params: extract_strong_params(source),
           respond_to_formats: declared[:respond_to_formats],
           rescue_from: extract_rescue_from(source),
@@ -567,6 +568,21 @@ module RailsAiContext
         ctrl < ::DeviseController || ctrl.ancestors.any? { |a| a.name&.start_with?("Devise::") }
       rescue => e
         RailsAiContext.debug_fail(e, false, label: "devise_controller?")
+      end
+
+      # Modules an app class on the chain mixes in from a file outside the app: a filter one
+      # adds is declared in no file the walk reads. A gem's on_load lands above the framework base.
+      def mixins_unread(ctrl)
+        ancestors = ctrl.ancestors
+        base = ancestors.index { |mod| mod.is_a?(Class) && ActionResolver.framework?(mod, kind: :controller) }
+        ancestors.first(base || 0).filter_map do |mod|
+          next if mod.is_a?(Class) || mod.name.nil?
+
+          path, = Object.const_source_location(mod.name)
+          mod.name unless path && project_relative(path) && !PortablePath.gem_file?(path, app.root)
+        end
+      rescue => e
+        RailsAiContext.debug_fail(e, [], label: "mixins_unread")
       end
 
       def extract_concerns(ctrl)

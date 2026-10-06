@@ -393,6 +393,17 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
     end
   end
 
+  describe "mixins_unread" do
+    it "names a module an app class mixes in from outside the app, and none the framework base carries" do
+      stub_const("OutsideMixin", Module.new { def self.name = "OutsideMixin" })
+      app_base = Class.new(ActionController::Base)
+      ctrl = Class.new(app_base) { include OutsideMixin }
+
+      expect(introspector.send(:mixins_unread, ctrl)).to eq([ "OutsideMixin" ])
+      expect(introspector.send(:mixins_unread, app_base)).to eq([])
+    end
+  end
+
   # Reflection that yields nothing but excluded names falls through to the
   # source parser, which is the same producer the static tier uses.
   describe "excluded_filters on the booted source fallback" do
