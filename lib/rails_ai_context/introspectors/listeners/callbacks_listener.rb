@@ -30,14 +30,7 @@ module RailsAiContext
           # Sources, not literals: a lambda condition reads as the line the
           # file holds rather than as a marker.
           options = scope_options(receiver_name(node)).merge(extract_keyword_sources(node))
-          callback_types = resolve_callback_types(node.name, options)
-          methods = extract_symbol_args(node)
-
-          if methods.any?
-            emit(node, callback_types, methods.map(&:to_s), options, confidence_for(node))
-          else
-            emit_without_symbol_args(node, callback_types, options)
-          end
+          emit(node, resolve_callback_types(node.name, options), callback_targets(node), options)
         end
 
         ON_EVENT = "after_commit_on_"
@@ -91,24 +84,21 @@ module RailsAiContext
           end
         end
 
-        # `around_create Snowflake::Callbacks` and `before_validation
-        # Normalizer.new` name a callback object, kept as the source writes
-        # it; a lambda names nothing, so it reports as a block.
-        def emit_without_symbol_args(node, callback_types, options)
+        # Each filter Rails registers, in its order: the block first, then every positional
+        # argument. An object (`Normalizer.new`) is kept as written; a lambda names nothing.
+        def callback_targets(node)
           positional = (node.arguments&.arguments || []).reject { |a| a.is_a?(Prism::KeywordHashNode) }
-          targets = positional.reject { |a| proc_argument?(a) }.map { |a| one_line_source(a) }
-
-          if targets.any?
-            emit(node, callback_types, targets, options, confidence_for(node))
-          elsif node.block || positional.any?
-            # Keyword options are not a target: `after_commit on: :create`
-            # declares no block, so there is none to report.
-            emit(node, callback_types, [ INLINE_BLOCK ], options, RailsAiContext::Confidence::INFERRED)
+          targets = node.block ? [ [ INLINE_BLOCK, RailsAiContext::Confidence::INFERRED ] ] : []
+          targets + positional.map do |arg|
+            if (name = literal_string(arg)) then [ name, confidence_for(node) ]
+            elsif proc_argument?(arg) then [ INLINE_BLOCK, RailsAiContext::Confidence::INFERRED ]
+            else [ one_line_source(arg), confidence_for(node) ]
+            end
           end
         end
 
-        def emit(node, callback_types, methods, options, confidence)
-          methods.each do |method_name|
+        def emit(node, callback_types, targets, options)
+          targets.each do |method_name, confidence|
             callback_types.each do |callback_type|
               @results << {
                 # The declared macro, so a renderer can print what the file

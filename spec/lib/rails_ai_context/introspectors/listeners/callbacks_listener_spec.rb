@@ -82,6 +82,19 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::CallbacksListener do
     expect(results.first[:confidence]).to eq("[INFERRED]")
   end
 
+  it "lists every positional argument Rails registers, the block first as normalize_callback_params puts it" do
+    results = parse_and_dispatch(<<~RUBY)
+      before_save :stamp, AuditTrail.new
+      after_commit AuditTrail, -> { notify }
+      after_save(:a) { b }
+    RUBY
+    expect(results.map { |r| [ r[:type], r[:method] ] }).to eq([
+      %w[before_save stamp], %w[before_save AuditTrail.new],
+      %w[after_commit AuditTrail], [ "after_commit", "[inline_block]" ],
+      [ "after_save", "[inline_block]" ], %w[after_save a]
+    ])
+  end
+
   it "reports every proc spelling as an inline block, Proc.new included" do
     results = parse_and_dispatch("before_save Proc.new { touch }\nbefore_save proc { x }\nbefore_save ::Proc.new { y }\nbefore_save lambda { z }")
     expect(results.map { |r| r[:method] }).to eq([ "[inline_block]" ] * 4)
