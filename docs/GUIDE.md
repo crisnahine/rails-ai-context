@@ -914,7 +914,7 @@ rails_get_job_pattern(detail: "full")
 
 ### rails_get_env
 
-Discover environment variables, external service dependencies, and credentials keys used by the app. Scans Ruby files for ENV[], .env.example, Dockerfile, the env Kamal's config/deploy.yml sets (secret names, clear values), config gem setting keys, Anyway::Config attributes with their env names, external HTTP calls, and credentials keys (never values).
+Discover environment variables, external service dependencies, and credentials keys used by the app. Scans Ruby files for ENV[], .env.example, Dockerfile, the env Kamal's config/deploy.yml sets (secret names; clear values, except one holding a URL or a key-like token, or under a secret-named variable, which shows as hidden, and one an ERB tag sets, which says so), config gem setting keys, Anyway::Config attributes with their env names, external HTTP calls, and credentials keys (never values).
 
 **Parameters:**
 
@@ -1435,7 +1435,7 @@ Includes all standard introspectors plus:
 | `active_storage` | Attachments (has_one_attached, has_many_attached per model), storage services, direct upload config. |
 | `action_text` | Rich text fields (has_rich_text per model), Action Text installation status. |
 | `api` | API-only mode, API versioning (from directory structure), serializers (Jbuilder, AMS, etc.), GraphQL (types, mutations), rate limiting (Rack::Attack). |
-| `rake_tasks` | Custom rake tasks in `lib/tasks/` with names, descriptions, namespaces, file paths. |
+| `rake_tasks` | Custom rake tasks from the Rakefile, `lib/tasks/` and `rakelib/` (names, arguments, descriptions, namespaces, file paths); the app's generators under `lib/generators`, `lib/templates` overrides and the Railties under `lib/`. |
 | `assets` | Asset pipeline (Propshaft/Sprockets), JS bundler (importmap/esbuild/webpack/vite), CSS framework, importmap pins, manifest files. |
 | `devops` | Puma config (threads, workers, port), Procfile entries, Docker (multi-stage detection), deployment tools, health check routes. |
 | `action_mailbox` | Action Mailbox mailboxes with routing patterns. |

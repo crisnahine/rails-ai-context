@@ -76,16 +76,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`env` lists environment variables from more places**: the env Kamal's
   `config/deploy.yml` sets at the top level, for each role
   (`servers.<role>.env`) and for each `env.tags` tag (secret names, never
-  values, and clear values, except one holding a URL or a key-like token, which
-  shows as hidden, and one an ERB tag sets, which says so; a
-  `config/deploy.<destination>.yml` is named as not read), the setting keys in
-  the config gem's `config/settings.yml` and `config/settings/<env>.yml` when
-  the bundle has the config gem, each `Anyway::Config` class's attributes with
-  the env names they read (values left out), the ENV names `Rails.app.creds` and
-  `Rails.app.envs` read on Rails 8.2 (`require(:stripe_api_key)` is
-  `STRIPE_API_KEY`, nested keys joined by `__`), and the ENV names read in
-  `config.ru`, `db/seeds.rb`, `db/seeds/` and the Ruby scripts in `bin/`. (#397,
-  #398, #404, #417)
+  values, and clear values, except one holding a URL or a key-like token, or
+  under a secret-named variable, which shows as hidden, and one an ERB tag sets,
+  which says so; a `config/deploy.<destination>.yml` is named as not read), the
+  setting keys in the config gem's `config/settings.yml` and
+  `config/settings/<env>.yml` when the bundle has the config gem, each
+  `Anyway::Config` class's attributes with the env names they read (values left
+  out), the ENV names `Rails.app.creds` and `Rails.app.envs` read on Rails 8.2
+  (`require(:stripe_api_key)` is `STRIPE_API_KEY`, nested keys joined by `__`),
+  and the ENV names read in `config.ru`, `db/seeds.rb`, `db/seeds/` and the Ruby
+  scripts in `bin/`. (#397, #398, #404, #417)
 - **`config` lists what runs in front of Rails and what CurrentAttributes
   holds**: the middleware `config.ru` adds (with the `if` it runs under, and the
   `map` it sits inside when that map runs the app itself) and the `map` mounts
