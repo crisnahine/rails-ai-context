@@ -679,6 +679,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are not put inside it, `task "a:b"` names and `multitask` are listed, and the
   Rakefile and `rakelib/*.rake` are read; a rake file symlinked out of the app
   is not. (#384)
+- **A tool failure's `At:` line names a frame outside the app and every gem by
+  its file name and line**, never an absolute path from the answering machine.
+  A frame inside an `eval` names the evaluated file the same way.
 
 ## [5.31.0] - 2026-10-05
 
