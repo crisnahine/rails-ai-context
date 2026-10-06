@@ -8,12 +8,12 @@ require "spec_helper"
 RSpec.describe RailsAiContext::RouteCoverage do
   describe ".suffix" do
     it "is interpolatable straight into a count" do
-      expect("Routes: 94#{described_class.suffix(dynamic_routes: 23)}")
+      expect("Routes: 94#{described_class.suffix({ dynamic_routes: 23 })}")
         .to eq("Routes: 94, 23 dynamic constructs not expanded")
     end
 
     it "counts one construct in the singular" do
-      expect(described_class.suffix(dynamic_routes: 1))
+      expect(described_class.suffix({ dynamic_routes: 1 }))
         .to eq(", 1 dynamic construct not expanded")
     end
 
@@ -25,16 +25,16 @@ RSpec.describe RailsAiContext::RouteCoverage do
 
     it "says a table read from source leaves out the routes gems draw at boot" do
       routes = { total_routes: 2, confidence: RailsAiContext::Confidence::STATIC }
-      expect(described_class.suffix(routes)).to eq(", routes gems draw at boot not read without booting")
-      expect(described_class.suffix(routes, false)).to eq("")
+      expect(described_class.suffix(routes)).to eq(", routes Rails' engines and gems draw at boot not read without booting")
+      expect(described_class.suffix(routes, gem_drawn: false)).to eq("")
     end
 
     it "is empty when the count is the whole table" do
-      expect(described_class.suffix(total_routes: 20)).to eq("")
+      expect(described_class.suffix({ total_routes: 20 })).to eq("")
     end
 
     it "is empty when the section failed" do
-      expect(described_class.suffix(error: "boom")).to eq("")
+      expect(described_class.suffix({ error: "boom" })).to eq("")
     end
 
     it "is empty for a section that is not a hash" do
@@ -42,19 +42,19 @@ RSpec.describe RailsAiContext::RouteCoverage do
     end
 
     it "names in-repo engine route files the walk never opens" do
-      expect(described_class.suffix(total_routes: 94, in_repo_route_files: 25))
+      expect(described_class.suffix({ total_routes: 94, in_repo_route_files: 25 }))
         .to eq(", 25 in-repo engine route files not read")
     end
 
     it "names both when the walk misses both" do
-      expect(described_class.suffix(dynamic_routes: 2, in_repo_route_files: 1))
+      expect(described_class.suffix({ dynamic_routes: 2, in_repo_route_files: 1 }))
         .to eq(", 2 dynamic constructs not expanded, 1 in-repo engine route file not read")
     end
 
     # A booted app expands everything, so the key is absent and every surface
     # reads exactly as it did before.
     it "is empty for a runtime context" do
-      expect(described_class.suffix(total_routes: 723, by_controller: {})).to eq("")
+      expect(described_class.suffix({ total_routes: 723, by_controller: {} })).to eq("")
     end
   end
 

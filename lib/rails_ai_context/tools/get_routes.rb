@@ -36,8 +36,7 @@ module RailsAiContext
 
       HINTED_FILTERS = 3
 
-      GEM_DRAWN_NOTE = "_Read from source: routes Rails' own engines and gems draw into the app's table " \
-                       "(Active Storage, Action Mailbox, conductor) are read only with the app booted, so no count here includes them._"
+      GEM_DRAWN_NOTE = "_Read from source: #{RailsAiContext::RouteCoverage::GEM_DRAWN} (Active Storage, Action Mailbox, conductor); no count here includes them._"
 
       # The filters this controller actually runs, read the way every other
       # surface reads them, so a skipped one is never named here. The cut is
@@ -194,7 +193,7 @@ module RailsAiContext
           # thing an unbooted answer must not do. All three detail levels share
           # this label. Gated on `controller` because the caveat is about the
           # whole table, and a filtered answer is not that.
-          count_label += RailsAiContext::RouteCoverage.suffix(routes, false) if controller.nil?
+          count_label += RailsAiContext::RouteCoverage.suffix(routes, gem_drawn: false) if controller.nil?
 
           case detail
           when "summary"
