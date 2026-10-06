@@ -97,7 +97,10 @@ module RailsAiContext
           tests = Payload.section(ctx, :tests)
           if tests
             framework = tests[:framework]
-            parts << (RailsAiContext::TestFramework.none?(framework) ? "with no tests yet" : "tested with #{framework || 'unknown framework'}")
+            parts << if RailsAiContext::TestFramework.none?(framework) then "with no tests yet"
+            elsif framework == RailsAiContext::TestFramework::NOT_READ then "with its tests not read"
+            else "tested with #{framework || 'unknown framework'}"
+            end
           end
 
           parts.join(" ") + "."
@@ -362,7 +365,7 @@ module RailsAiContext
           framework = tests[:framework] || "unknown"
           lines << "Framework: #{framework}."
 
-          lines << "Data setup: #{data_setup_phrase(tests)}."
+          lines << "Data setup: #{data_setup_phrase(tests)}." unless framework == RailsAiContext::TestFramework::NOT_READ
 
           ci = tests[:ci_config]
           lines << "CI: #{ci.join(', ')}." if ci&.any?

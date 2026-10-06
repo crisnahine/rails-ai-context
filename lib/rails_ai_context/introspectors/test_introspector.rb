@@ -81,11 +81,29 @@ module RailsAiContext
       # from, each pack's spec/factories and test/factories included as
       # packs-rails adds them.
       def factory_sources
-        @factory_sources ||= (FACTORY_PATHS + pack_factory_paths).flat_map do |rel|
+        @factory_sources ||= factory_definition_paths.flat_map do |rel|
           single = app_files("#{rel}.rb")
           files = app_files(File.join(rel, "**", "*.rb"))
           [ ([ "#{rel}.rb", single ] if single.any?), ([ rel, files ] if files.any?) ].compact
         end
+      end
+
+      # The paths factory_bot loads: factory_bot_rails finds the defaults before any
+      # helper runs, and a helper's writes count only once find_definitions (adds)
+      # or reload (replaces) runs after them.
+      def factory_definition_paths
+        paths = defaults = FACTORY_PATHS + pack_factory_paths
+        loaded = defaults if RailsAiContext::GemLock.for(root).present?("factory_bot_rails")
+        helper_paths.flat_map { |path| Array(helper_walk(path)&.dig(:definition_paths)) }.each do |event|
+          case event[:load]
+          when :find_definitions then loaded = Array(loaded) + paths
+          when :reload then loaded = paths
+          else
+            found = event[:paths].map { |rel| Pathname.new(rel).cleanpath.to_s }.reject { |rel| RailsAiContext::SafePath.traversal?(rel) }
+            paths = event[:replace] ? found : paths + found
+          end
+        end
+        (loaded || defaults).uniq
       end
 
       # ponytail: packs-specification's default pack_paths; a packs.yml that
@@ -177,7 +195,7 @@ module RailsAiContext
       def fixture_dirs
         @fixture_dirs ||= begin
           real_root = File.realpath(suite_root)
-          writes = (HELPER_FILES.map { |rel| File.join(suite_root, rel) } + support_files)
+          writes = helper_paths
             .to_h { |path| [ path, Array(helper_walk(path)&.dig(:fixture_paths)) ] }
           configured = writes.values.flatten.grep(String)
           defaults = DEFAULT_FIXTURE_DIRS.reject { |rel| rel == "spec/fixtures" && rspec_without_fixture_paths?(writes) }
@@ -194,6 +212,10 @@ module RailsAiContext
         spec_dir = File.join(suite_root, "spec/")
         %w[spec/rails_helper.rb spec/spec_helper.rb].any? { |rel| File.file?(File.join(suite_root, rel)) } &&
           writes.none? { |path, found| path.start_with?(spec_dir) && found.any? }
+      end
+
+      def helper_paths
+        HELPER_FILES.map { |rel| File.join(suite_root, rel) } + support_files
       end
 
       def support_files
@@ -314,7 +336,8 @@ module RailsAiContext
           bare:          -> { Listeners::GenericMacroListener.new(:include) },
           chained:       -> { Listeners::ChainedCallListener.new(:include, receiver: :config) },
           setup:         -> { Listeners::GenericMacroListener.new(*SETUP_MACROS) },
-          fixture_paths: Listeners::FixturePathsListener,
+          fixture_paths: -> { Listeners::FixturePathsListener.new(file: path.delete_prefix("#{suite_root}/")) },
+          definition_paths: Listeners::DefinitionFilePathsListener,
           cleaner:       -> { Listeners::ConfigAssignmentListener.new(:DatabaseCleaner) }
         }) : nil
       end
@@ -334,6 +357,7 @@ module RailsAiContext
           configs << "travis" if File.exist?(File.join(dir, ".travis.yml"))
           configs << "buildkite" if Dir.exist?(File.join(dir, ".buildkite")) || Dir.glob(File.join(dir, "buildkite.{yml,yaml,json}")).any?
           configs << "jenkins" if File.file?(File.join(dir, "Jenkinsfile"))
+          configs << "bitbucket_pipelines" if File.file?(File.join(dir, "bitbucket-pipelines.yml"))
           configs
         end.uniq
       end

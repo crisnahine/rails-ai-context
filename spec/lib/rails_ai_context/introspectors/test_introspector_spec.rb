@@ -574,13 +574,14 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
       ])
     end
 
-    it "names Buildkite and Jenkins beside the others" do
+    it "names Buildkite, Jenkins and Bitbucket Pipelines beside the others" do
       write(".gitlab-ci.yml")
       write(".circleci/config.yml")
       write(".buildkite/pipeline.yml")
       write("Jenkinsfile")
+      write("bitbucket-pipelines.yml")
 
-      expect(payload[:ci_config]).to eq(%w[circleci gitlab_ci buildkite jenkins])
+      expect(payload[:ci_config]).to eq(%w[circleci gitlab_ci buildkite jenkins bitbucket_pipelines])
       expect(payload[:ci_steps]).to be_nil
     end
 
@@ -669,6 +670,14 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
       expect(result[:fixtures]).to eq(location: "test/fixtures, test/shared_fixtures", locations: %w[test/fixtures test/shared_fixtures], count: 2)
     end
 
+    it "reads a directory the test helper adds relative to its own file" do
+      write("test/test_helper.rb", "ActiveSupport::TestCase.fixture_paths << File.expand_path(\"../extra_fx\", __dir__)\n")
+      write("test/fixtures/users.yml", "bob:\n  name: B\n")
+      write("extra_fx/widgets.yml", "one:\n  name: W\n")
+
+      expect(payload[:fixture_names]).to eq("users" => %w[bob], "widgets" => %w[one])
+    end
+
     it "does not follow a fixture path out of the app or into a missing directory" do
       Dir.mktmpdir do |outside|
         File.write(File.join(outside, "secrets.yml"), "leak:\n  key: x\n")
@@ -732,6 +741,47 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
       write("test/factories.rb", "FactoryBot.define do\n  factory :order\nend\n")
 
       expect(payload[:factory_names].values.flatten).to contain_exactly("account", "invoice", "user", "order")
+    end
+
+    # factory_bot loads the paths only when find_definitions or reload runs; factory_bot_rails
+    # runs find_definitions on the defaults before any spec helper loads.
+    describe "a helper that sets FactoryBot.definition_file_paths" do
+      let(:defaults) { %w[spec/factories.rb packs/billing/spec/factories/invoices.rb] }
+
+      before do
+        write("custom/factories/c.rb", "FactoryBot.define do\n  factory :custom_one\nend\n")
+        write("lib/factories/l.rb", "FactoryBot.define do\n  factory :lib_one\nend\n")
+      end
+
+      def with_factory_bot_rails
+        write("Gemfile.lock", "GEM\n  specs:\n    factory_bot_rails (6.5.1)\n\nDEPENDENCIES\n  factory_bot_rails\n")
+      end
+
+      it "loads only the paths it sets and then finds, and adds the ones it appends" do
+        write("spec/support/fb.rb", "::FactoryBot.definition_file_paths = %w[custom/factories]\n::FactoryBot.find_definitions\n")
+        expect(payload[:factory_names]).to eq("custom/factories/c.rb" => %w[custom_one])
+
+        write("spec/support/fb.rb", "FactoryBot.definition_file_paths << \"lib/factories\"\nFactoryBot.find_definitions\n")
+        expect(payload[:factory_names].keys).to contain_exactly(*defaults, "lib/factories/l.rb")
+      end
+
+      it "keeps the defaults when nothing loads the paths it sets" do
+        write("spec/support/fb.rb", "FactoryBot.find_definitions\nFactoryBot.definition_file_paths = %w[custom/factories]\n")
+        expect(payload[:factory_names].keys).to contain_exactly(*defaults)
+
+        with_factory_bot_rails
+        write("spec/support/fb.rb", "FactoryBot.definition_file_paths = %w[custom/factories]\n")
+        expect(payload[:factory_names].keys).to contain_exactly(*defaults)
+      end
+
+      it "under factory_bot_rails, adds the paths find_definitions loads and replaces them on reload" do
+        with_factory_bot_rails
+        write("spec/support/fb.rb", "FactoryBot.definition_file_paths = %w[custom/factories]\nFactoryBot.find_definitions\n")
+        expect(payload[:factory_names].keys).to contain_exactly(*defaults, "custom/factories/c.rb")
+
+        write("spec/support/fb.rb", "FactoryBot.definition_file_paths = %w[custom/factories]\nFactoryBot.reload\n")
+        expect(payload[:factory_names].keys).to eq(%w[custom/factories/c.rb])
+      end
     end
 
     it "reads no pack factories from a pack that is a gem" do

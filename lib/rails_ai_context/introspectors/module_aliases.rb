@@ -76,9 +76,17 @@ module RailsAiContext
       end
 
       # A tsconfig's compilerOptions as its `extends` chain settles them, and
-      # the directory each option was declared in; nil when unreadable.
-      def compiler_options(path, seen = Set.new)
+      # the directory each option was declared in; nil when unreadable. With
+      # `within`, a config is only read through PackageJson.outside_file in that directory.
+      def compiler_options(path, seen = Set.new, within: nil)
         return nil if path.nil? || seen.include?(path) || seen.size > MAX_EXTENDS
+
+        if within
+          full = File.expand_path(path)
+          return nil unless full.start_with?("#{within}/")
+
+          path = RailsAiContext::PackageJson.outside_file(within, full.delete_prefix("#{within}/"))&.to_s or return nil
+        end
 
         seen << path
         text = RailsAiContext::SafeFile.read(path) or return nil
@@ -89,7 +97,7 @@ module RailsAiContext
         dirs = {}
         # A config's own value replaces what it extends; a later `extends` entry replaces an earlier one.
         Array(config["extends"]).each do |spec|
-          parent, parent_dirs = compiler_options(extended_config(spec.to_s, path), seen)
+          parent, parent_dirs = compiler_options(extended_config(spec.to_s, path), seen, within: within)
           options.merge!(parent.to_h)
           dirs.merge!(parent_dirs.to_h)
         end

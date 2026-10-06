@@ -202,13 +202,12 @@ module RailsAiContext
       # ---- TypeScript ----
 
       # An app whose TypeScript lives under frontend/ has no tsconfig.json at
-      # its root, so the frontend roots are searched too. The root one wins.
+      # its root, so the frontend roots are searched too, then the declared
+      # ones outside it. The root one wins.
       def detect_typescript(roots)
         dirs = [ root ] + roots.map { |fr| File.join(root, fr[:path]) }
         path = dirs.map { |dir| File.join(dir, "tsconfig.json") }.find { |p| File.exist?(p) }
-        return { enabled: false } unless path
-
-        compiler, = ModuleAliases.compiler_options(path)
+        compiler, = path ? ModuleAliases.compiler_options(path) : outside_compiler_options
         return { enabled: false } unless compiler
 
         {
@@ -216,6 +215,14 @@ module RailsAiContext
           strict: compiler["strict"] == true,
           path_aliases: compiler["paths"] || {}
         }
+      end
+
+      def outside_compiler_options
+        RailsAiContext::PackageJson.configured_outside(root).each do |dir|
+          path = RailsAiContext::PackageJson.outside_file(dir[:dir], "tsconfig.json") or next
+          return ModuleAliases.compiler_options(path.to_s, within: dir[:dir])
+        end
+        nil
       end
 
       # ---- Monorepo ----
@@ -272,17 +279,17 @@ module RailsAiContext
         %w[webpack rollup bun].each do |tool|
           return tool if Dir.glob(File.join(root, "#{tool}.config.*")).any?
         end
-        outside = RailsAiContext::PackageJson.configured_outside(root).map { |dir| dir[:dir] }
+        dirs = RailsAiContext::PackageJson.frontend_roots(root).map { |dir| dir[:dir] }
         %w[vite webpack rollup bun].each do |tool|
-          return tool if outside.any? { |dir| outside_config?(dir, "#{tool}.config.*") }
+          return tool if dirs.any? { |dir| frontend_config?(dir, "#{tool}.config.*") }
         end
         %w[esbuild webpack rollup].find { |pkg| RailsAiContext::PackageJson.present?(root, pkg) }
       end
 
-      def self.outside_config?(dir, pattern)
+      def self.frontend_config?(dir, pattern)
         Dir.glob(pattern, base: dir).any? { |name| RailsAiContext::PackageJson.outside_file(dir, name) }
       end
-      private_class_method :outside_config?
+      private_class_method :frontend_config?
 
       # ---- Vite config framework detection ----
 

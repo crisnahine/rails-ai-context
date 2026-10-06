@@ -91,6 +91,13 @@ RSpec.describe RailsAiContext::TestFramework do
     expect(described_class.for(@root)).to eq("no tests yet (rspec-rails in the bundle)")
   end
 
+  it "says the suite is not read for a dummy whose bundle is outside the repository" do
+    FileUtils.mkdir_p(File.join(@root, "config"))
+    File.write(File.join(@root, "config", "boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n))
+
+    expect(described_class.for(@root)).to eq("not read")
+  end
+
   it "says there are no tests with nothing to read" do
     expect(described_class.for(@root)).to eq("no tests yet")
   end
