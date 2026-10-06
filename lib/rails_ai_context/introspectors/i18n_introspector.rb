@@ -388,7 +388,7 @@ module RailsAiContext
 
         data = path.end_with?(".rb") ? ruby_locale_data(content) : yaml_locale_data(content)
         # I18n reads <locale>.i18n.plural and .transliterate as backend settings, not translations.
-        key_paths = nested_key_paths(data).reject { |key_path| BACKEND_SETTINGS.include?(key_path.split(".", 4)[1, 2]) }
+        key_paths = nested_key_paths(data).reject { |key_path| key_path.include?(".i18n.") && BACKEND_SETTINGS.include?(key_path.split(".", 4)[1, 2]) }
 
         # Only the locale-rooted paths are kept. The per-locale lists are the
         # same strings without their root, so holding both doubled what an
