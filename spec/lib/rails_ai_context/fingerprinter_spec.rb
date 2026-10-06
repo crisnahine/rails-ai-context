@@ -81,6 +81,10 @@ RSpec.describe RailsAiContext::Fingerprinter do
         .to include(*RailsAiContext::Introspectors::JobIntrospector::JOB_DIRS)
     end
 
+    it "watches every directory Grape endpoints are read from" do
+      expect(described_class::WATCHED_DIRS).to include(*RailsAiContext::Introspectors::GrapeEndpoints::DIRS)
+    end
+
     it "detects a change to a worker in app/sidekiq" do
       dir = File.join(app.root, "app/sidekiq")
       FileUtils.mkdir_p(dir)

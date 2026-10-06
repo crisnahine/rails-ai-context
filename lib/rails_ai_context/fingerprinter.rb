@@ -32,7 +32,7 @@ module RailsAiContext
       config
       db
       lib/tasks
-    ] + Introspectors::JobIntrospector::JOB_DIRS).freeze
+    ] + Introspectors::JobIntrospector::JOB_DIRS + Introspectors::GrapeEndpoints::DIRS).freeze
 
     # The kinds whose homes PathResolver resolves beyond the conventional
     # tree - packs/*, engines/* and configured extras. Derived at compute
