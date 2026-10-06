@@ -381,6 +381,24 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(walks).to eq(1)
     end
 
+    it "reads a config file once for the GoodJob cron and the mailer settings" do
+      source = "Rails.application.configure do\n  config.good_job.cron = { sweep: { cron: \"0 * * * *\", class: \"SweepJob\" } }\n" \
+               "  config.action_mailer.deliver_later_queue_name = :mail\nend\n"
+      reads = 0
+      allow(RailsAiContext::SafeFile).to receive(:read).and_wrap_original do |original, path, **opts|
+        reads += 1 if path.to_s.end_with?("config/initializers/both.rb")
+        original.call(path, **opts)
+      end
+
+      result = static_result do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "initializers", "both.rb"), source)
+      end
+
+      expect(result[:recurring_jobs]).to include(include(name: "sweep", class: "SweepJob"))
+      expect(reads).to eq(1)
+    end
+
     it "lets a recurring schedule reader's failure raise" do
       allow(RailsAiContext::Introspectors::RecurringSchedules).to receive(:read).and_raise(NoMethodError, "broken reader")
 
