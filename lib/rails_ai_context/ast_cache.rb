@@ -6,8 +6,8 @@ require "prism"
 
 module RailsAiContext
   # Thread-safe AST parse cache backed by Concurrent::Map.
-  # Keyed by path + content hash + mtime - automatically invalidates
-  # when file content changes. Used by all Prism-based introspectors.
+  # Keyed by content hash, so a file and the same text read as a string share one
+  # parse, and a changed file misses. Used by all Prism-based introspectors.
   # A settled file's stat stands in for the read and hash (see RACY_WINDOW).
   #
   # Bounded: evicts entries when MAX_SIZE is exceeded, and a file's recorded
@@ -45,8 +45,7 @@ module RailsAiContext
       size = content.bytesize
       raise ArgumentError, "File too large for AST parsing: #{path} (#{size} bytes, max #{MAX_PARSE_SIZE})" if size > MAX_PARSE_SIZE
 
-      mtime = File.mtime(path).to_i
-      key   = "#{path}:#{Digest::SHA256.hexdigest(content)}:#{mtime}#{":#{version}" if version}"
+      key = content_key(content, version)
 
       cached = STORE[key]
       unless cached
@@ -90,7 +89,7 @@ module RailsAiContext
       version = prism_version(ruby)
       return prism_parse(source, version) if source.bytesize > MAX_PARSE_SIZE
 
-      key = "string:#{Digest::SHA256.hexdigest(source)}#{":#{version}" if version}"
+      key = content_key(source, version)
 
       cached = STORE[key]
       return cached if cached
@@ -99,6 +98,11 @@ module RailsAiContext
 
       STORE.compute_if_absent(key) { prism_parse(source, version) }
     end
+
+    def self.content_key(source, version)
+      "string:#{Digest::SHA256.hexdigest(source)}#{":#{version}" if version}"
+    end
+    private_class_method :content_key
 
     OLDEST_GRAMMAR = "3.3"
     GRAMMARS = Concurrent::Map.new # major.minor => whether the loaded prism parses it
