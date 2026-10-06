@@ -99,15 +99,19 @@ module RailsAiContext
 
         { dialect: dialect, tables: tables, enums: enums.map { |name, values| { name: name, values: values } },
           views: found_views, virtual_tables: virtual_tables(content, local),
-          extensions: extensions(content, (path.first || "public" unless bare_extensions)) }
+          extensions: extensions(content, (path.first || "public" unless bare_extensions), dialect) }
       end
 
       # As PostgreSQL's connection names them: qualified unless in its current schema.
-      def extensions(content, current_schema = "public")
-        content.scan(/^CREATE EXTENSION (?:IF NOT EXISTS )?("[^"]+"|\w+)(?: WITH SCHEMA ("[^"]+"|\w+))?/).map do |name, schema|
-          schema = schema&.delete('"')
-          [ (schema unless current_schema.nil? || schema == current_schema), name.delete('"') ].compact.join(".")
+      def extensions(content, current_schema = "public", dialect = nil)
+        found = content.scan(/^CREATE EXTENSION (?:IF NOT EXISTS )?("[^"]+"|\w+)(?: WITH SCHEMA ("[^"]+"|\w+))?/).map do |name, schema|
+          [ name.delete('"'), schema&.delete('"') ]
         end
+        # Every PostgreSQL database starts with plpgsql in pg_catalog, and pg_dump leaves it out.
+        if dialect == :postgresql && found.none? { |name, _| name == "plpgsql" } && !content.match?(/^DROP EXTENSION (?:IF EXISTS )?"?plpgsql\b/)
+          found.unshift([ "plpgsql", "pg_catalog" ])
+        end
+        found.map { |name, schema| [ (schema unless current_schema.nil? || schema == current_schema), name ].compact.join(".") }
       end
 
       # Each relation's name as the app reads it, given the schemas on its search path.

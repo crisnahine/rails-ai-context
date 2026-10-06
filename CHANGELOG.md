@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the configured username when the dump creates that schema, and when two
   schemas hold the same table name, show the one in the earlier schema, as
   PostgreSQL resolves it.
+- **A structure.sql app lists plpgsql, as the booted app does.** Every
+  PostgreSQL database starts with plpgsql, so the booted app lists it, but
+  pg_dump leaves it out of the dump. The static tier now adds it, named
+  `pg_catalog.plpgsql` on Rails 8 and `plpgsql` before, unless the dump drops it.
 
 ## [5.32.0] - 2026-10-06
 

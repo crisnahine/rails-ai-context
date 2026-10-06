@@ -1943,7 +1943,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         );
       SQL
 
-      expect(result[:extensions]).to eq(%w[hstore extensions.uuid-ossp pg_trgm])
+      expect(result[:extensions]).to eq(%w[pg_catalog.plpgsql hstore extensions.uuid-ossp pg_trgm])
     end
 
     describe "extension names against the connection's current schema" do
@@ -1974,25 +1974,61 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
       it "names an extension in the first search path schema bare" do
         expect(extensions_with(database_yml: "  adapter: postgresql\n  schema_search_path: \"app,public\"\n"))
-          .to eq(%w[pg_trgm public.hstore])
+          .to eq(%w[pg_catalog.plpgsql pg_trgm public.hstore])
       end
 
       it "reads the search path of the primary database in a multi-database config" do
         yml = "  primary:\n    adapter: postgresql\n    schema_search_path: \" App , public\"\n  cache:\n    adapter: postgresql\n"
-        expect(extensions_with(database_yml: yml)).to eq(%w[pg_trgm public.hstore])
+        expect(extensions_with(database_yml: yml)).to eq(%w[pg_catalog.plpgsql pg_trgm public.hstore])
       end
 
       it "takes public as the current schema with no search path" do
-        expect(extensions_with(database_yml: "  adapter: postgresql\n")).to eq(%w[app.pg_trgm hstore])
+        expect(extensions_with(database_yml: "  adapter: postgresql\n")).to eq(%w[pg_catalog.plpgsql app.pg_trgm hstore])
       end
 
       it "takes public as the current schema when the path starts with $user" do
         expect(extensions_with(database_yml: "  adapter: postgresql\n  schema_search_path: '\"$user\", public'\n"))
-          .to eq(%w[app.pg_trgm hstore])
+          .to eq(%w[pg_catalog.plpgsql app.pg_trgm hstore])
       end
 
       it "names every extension bare before Rails 8.0, whose connection reads extname alone" do
-        expect(extensions_with(database_yml: "  adapter: postgresql\n", rails: "7.2.2")).to eq(%w[pg_trgm hstore])
+        expect(extensions_with(database_yml: "  adapter: postgresql\n", rails: "7.2.2")).to eq(%w[plpgsql pg_trgm hstore])
+      end
+    end
+
+    describe "plpgsql, which pg_dump leaves out" do
+      def extensions_of(dump, rails: nil)
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "structure.sql"), dump)
+          if rails
+            File.write(File.join(dir, "Gemfile"), "gem \"rails\"\n")
+            File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (#{rails})\n\nDEPENDENCIES\n  rails\n")
+          end
+          described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:extensions]
+        end
+      end
+
+      let(:dump) { "SET search_path = '';\nCREATE TABLE public.users (\n    id bigint NOT NULL\n);\n" }
+
+      it "names plpgsql in pg_catalog, as a Rails 8 connection lists it" do
+        expect(extensions_of(dump)).to eq(%w[pg_catalog.plpgsql])
+      end
+
+      it "names plpgsql bare before Rails 8.0" do
+        expect(extensions_of(dump, rails: "7.2.2")).to eq(%w[plpgsql])
+      end
+
+      it "leaves plpgsql out when the dump drops it" do
+        expect(extensions_of("DROP EXTENSION plpgsql;\n#{dump}")).to be_nil
+      end
+
+      it "names plpgsql once when an older pg_dump writes it" do
+        expect(extensions_of("CREATE EXTENSION IF NOT EXISTS plpgsql WITH SCHEMA pg_catalog;\n#{dump}")).to eq(%w[pg_catalog.plpgsql])
+      end
+
+      it "adds nothing to a dump from another database" do
+        expect(extensions_of("CREATE TABLE IF NOT EXISTS \"users\" (\"id\" integer PRIMARY KEY AUTOINCREMENT NOT NULL);\n")).to be_nil
       end
     end
 
