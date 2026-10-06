@@ -22,7 +22,7 @@ module RailsAiContext
         mongoid = model_info[:mongoid] == true
         # Mongoid's collection_name: store_in's, else the class name tableized with "/" as "_".
         table_name = mongoid ? (model_info[:collection] || model_key.to_s.underscore.pluralize.tr("/", "_")) : model_info[:table_name]
-        table_data = Payload.schema_table(schema_data, table_name) if table_name && !mongoid
+        table_data = Payload.model_table(schema_data, model_info) if table_name && !mongoid
 
         columns = if mongoid
           Array(model_info[:fields]).map { |field| { name: field[:name].to_s, type: field[:type] }.compact }

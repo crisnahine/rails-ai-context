@@ -93,9 +93,15 @@ module RailsAiContext
       primary + secondary
     end
 
-    # ponytail: a name in two databases answers the primary's; route by the model's connection if that bites.
-    def schema_table(schema, name)
-      schema_tables(schema).find { |_, table, _| table.to_s == name.to_s }&.last
+    # A name in two databases answers `database`'s when given, else the primary's.
+    def schema_table(schema, name, database: nil)
+      found = schema_tables(schema).select { |_, table, _| table.to_s == name.to_s }
+      (found.find { |db, _, _| database && db == database.to_s } || found.first)&.last
+    end
+
+    # The table a model reads, from the database its `connects_to` writes to.
+    def model_table(schema, model)
+      model.is_a?(Hash) && model[:table_name] ? schema_table(schema, model[:table_name], database: model.dig(:database, :writing)) : nil
     end
 
     # Every database whose schema holds the table, "primary" for the primary's.

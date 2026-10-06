@@ -5948,7 +5948,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
         expect(models["PageView"][:database]).to eq(connects_to: "connects_to database: { writing: :analytics, reading: :analytics }",
-                                                    declared_in: "AnalyticsRecord")
+                                                    declared_in: "AnalyticsRecord", writing: "analytics")
         expect(models["Post"]).not_to have_key(:database)
       end
     end

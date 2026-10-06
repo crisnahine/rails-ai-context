@@ -184,7 +184,7 @@ module RailsAiContext
 
         # Schema columns - inline from schema introspection
         if data[:table_name]
-          table_data = Payload.schema_table(Payload.section(cached_context, :schema), data[:table_name])
+          table_data = Payload.model_table(Payload.section(cached_context, :schema), data)
           if table_data
             ignored = Array(data[:ignored_columns])
             cols = (table_data[:columns] || []).reject { |c| ignored.include?(c[:name].to_s) }

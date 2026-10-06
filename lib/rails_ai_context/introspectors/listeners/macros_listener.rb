@@ -95,7 +95,8 @@ module RailsAiContext
           elsif GEM_MACROS.include?(node.name)
             record_gem_macro(node)
           elsif node.name == :connects_to
-            @results << { macro: :connects_to, text: one_line_source(node), location: node.location.start_line, confidence: confidence_for(node) }
+            @results << { macro: :connects_to, text: one_line_source(node), writing: writing_database(node),
+                          location: node.location.start_line, confidence: confidence_for(node) }.compact
           elsif SIMPLE_MACROS.include?(node.name)
             # Rails defaults the attribute to :password.
             @results << {
@@ -293,6 +294,15 @@ module RailsAiContext
             location:   node.location.start_line,
             confidence: confidence_for(node)
           }
+        end
+
+        # The database `connects_to database: { writing: :analytics }` writes to, which names its schema dump.
+        def writing_database(node)
+          roles = extract_keyword_nodes(node)[:database]
+          return unless roles.is_a?(Prism::HashNode)
+
+          pair = roles.elements.find { |element| element.is_a?(Prism::AssocNode) && literal_string(element.key) == "writing" }
+          pair && literal_string(pair.value)
         end
 
         def extract_attribute_api(node)

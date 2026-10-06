@@ -190,6 +190,20 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
 
       expect(text).to include("## Columns", "- **path** | string | NOT NULL")
     end
+
+    it "lists its database's table when the primary has one of the same name" do
+      allow(described_class).to receive(:cached_context).and_return({
+        models: { "PageView" => { table_name: "page_views", database: { connects_to: "connects_to ...", writing: "analytics" } } },
+        schema: { tables: { "page_views" => { columns: [ { name: "legacy_only", type: "string" } ] } }, secondary_databases: {
+          "analytics" => { tables: { "page_views" => { columns: [ { name: "path", type: "string", null: false } ] } } }
+        } }
+      })
+
+      text = described_class.call(model: "PageView").content.first[:text]
+
+      expect(text).to include("- **path** | string | NOT NULL")
+      expect(text).not_to include("legacy_only")
+    end
   end
 
   describe ".call with specific model" do
