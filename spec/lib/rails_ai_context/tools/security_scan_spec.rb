@@ -573,6 +573,10 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
 
           expect(scan_error("Error in #{home}/My Projects/gems/x.rb:3 and /tmp/plain/z.rb")).to eq("Error in x.rb:3 and z.rb")
           expect(scan_error("Error in #{home}/My Projects/gone.rb now")).to eq("Error in My Projects/gone.rb now")
+
+          FileUtils.mkdir_p(File.join(home, "v1.2 build/lib"))
+          FileUtils.touch(File.join(home, "v1.2 build/lib/y.rb"))
+          expect(scan_error("Error in #{home}/v1.2 build/lib/y.rb:4 then #{home}/My Projects/gems/x.rb")).to eq("Error in y.rb:4 then x.rb")
         end
       end
 

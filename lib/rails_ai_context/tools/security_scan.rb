@@ -235,10 +235,36 @@ module RailsAiContext
         roots = [ Dir.home, *Gem.path, Gem.dir ].map(&:to_s).reject { |root| root.empty? || root == "/" }
         unless roots.empty?
           known = roots.uniq.sort_by { |root| -root.length }.map { |root| Regexp.escape(root) }.join("|")
-          text = text.gsub(%r{(?:#{known})/(?:#{SPACED_FOLDER})*?#{FILE_NAME}}) { |path| File.exist?(path) ? File.basename(path) : path }
+          text = existing_files_by_name(text, %r{(?:#{known})/})
           text = text.gsub(%r{(?:#{known})/#{PATH_TAIL}}, '\1')
         end
         text.gsub(ABSOLUTE_PATH, '\1')
+      end
+
+      # Each path after a known root that is a file on this machine, by its base name: the
+      # first file-name end on the line that exists, as a dotted folder (`v1.2 build/`) ends one too.
+      private_class_method def self.existing_files_by_name(text, root)
+        out = +""
+        pos = 0
+        while (found = root.match(text, pos))
+          start = found.begin(0)
+          line = text[start...(text.index("\n", start) || text.size)]
+          path = existing_path(line, found[0].size)
+          out << text[pos...start] << (path ? File.basename(path) : found[0])
+          pos = start + (path || found[0]).size
+        end
+        out << text[pos..]
+      end
+
+      private_class_method def self.existing_path(line, from)
+        tail = line[from..]
+        tail.to_enum(:scan, FILE_NAME).map { Regexp.last_match.end(0) }.each do |stop|
+          next unless tail[0...stop].match?(%r{\A(?:#{SPACED_FOLDER})*#{FILE_NAME}\z})
+
+          path = line[0, from + stop]
+          return path if File.exist?(path)
+        end
+        nil
       end
 
       private_class_method def self.brakeman_error_line(err)
