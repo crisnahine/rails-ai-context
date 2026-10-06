@@ -120,9 +120,9 @@ module RailsAiContext
 
                 lines << "- **#{set}:**"
                 entries.each do |entry_name, attrs|
-                  attr_str = attrs.map { |k, v| "#{k}: #{v}" }.join(", ")
+                  attr_str = attrs.map { |k, v| "#{k}: #{erb_shown(v)}" }.join(", ")
                   label = if entry_name.to_s.include?(RailsAiContext::FixtureKeys::ERB_VALUE)
-                    "`#{entry_name.to_s.gsub(RailsAiContext::FixtureKeys::ERB_VALUE, '<%= ... %>')}` _(label set by ERB)_"
+                    "`#{erb_shown(entry_name)}` _(label set by ERB)_"
                   else
                     "`#{entry_name}`"
                   end
@@ -185,6 +185,10 @@ module RailsAiContext
       # An engine's test/dummy is tested by the engine's suite, which every path here is under.
       private_class_method def self.suite_root
         RailsAiContext::PathResolver.test_root(rails_app.root.to_s)
+      end
+
+      private_class_method def self.erb_shown(text)
+        text.to_s.gsub(RailsAiContext::FixtureKeys::ERB_VALUE, "<%= ... %>")
       end
 
       private_class_method def self.shown(rel)

@@ -263,10 +263,13 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
           password_digest: <%= password_digest %>
       YAML
       write("test/fixtures/posts.yml", "one: { title: A, user: one }\n")
+      write("test/fixtures/admin/notes.yml", "<% 2.times do |i| %>\nnote_<%= i %>:\n  title: T<%= i %>\n<% end %>\n")
 
       text = full_text
 
-      expect(text).to include("- **users:**\n  - `one`: email_address: one@example.com, password_digest: erb_value")
+      expect(text).to include("- **users:**\n  - `one`: email_address: one@example.com, password_digest: <%= ... %>")
+      expect(text).to include("`note_<%= ... %>` _(label set by ERB)_: title: T<%= ... %>")
+      expect(text).not_to include("erb_value")
       expect(text).to include("- **posts:**\n  - `one`: title: A, user: one")
     end
 
