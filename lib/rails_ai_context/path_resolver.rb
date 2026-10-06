@@ -121,13 +121,13 @@ module RailsAiContext
     # Remotes are relative to the lockfile, which for a test/dummy is the engine's.
     def read_path_gem_libs(root)
       bundle = GemLock.bundle(root)
-      lock = bundle[:lockfile] && SafeFile.read(bundle[:lockfile])
+      lock = bundle.lockfile && SafeFile.read(bundle.lockfile)
       return [] unless lock
 
-      trusted = File.realpath(bundle[:trusted])
+      trusted = File.realpath(bundle.trusted)
       remotes = lock.scan(/^PATH\r?\n  remote: (.+?)\r?$/).flatten.map(&:strip)
       remotes.flat_map do |remote|
-        base = File.expand_path(remote, bundle[:dir])
+        base = File.expand_path(remote, bundle.dir)
         next [] unless Dir.exist?(base) && SafePath.contained?(File.realpath(base), trusted)
 
         # Bundler's own glob for the gemspecs a path source holds.
@@ -282,7 +282,7 @@ module RailsAiContext
     # Unbooted, the engine is the gemspec directory holding the bundle config/boot.rb
     # names, which GemLock only resolves inside the app's git repository.
     def bundle_engine_root(root)
-      dir = GemLock.bundle(root)[:dir]
+      dir = GemLock.bundle(root).dir
       real_root = root_key(root)
       return nil if dir == root || !real_root.start_with?("#{dir}#{File::SEPARATOR}") || Dir.glob(File.join(dir, "*.gemspec")).empty?
 

@@ -6,6 +6,7 @@ module RailsAiContext
       # Detects Gemfile DSL patterns via Prism AST:
       # gem "name", "version", options...
       # group :development, :test do ... end
+      # ruby "3.3.6", and an :unknown_gems entry for each call that adds gems the file does not name.
       class GemfileDslListener < BaseListener
         def initialize
           super
@@ -22,6 +23,10 @@ module RailsAiContext
             extract_source(node)
           when :eval_gemfile
             extract_eval_gemfile(node)
+          when :ruby
+            extract_ruby(node)
+          when :gemspec
+            unknown_gems(node)
           when :group
             return unless node.block
 
@@ -49,7 +54,7 @@ module RailsAiContext
           return if args.empty?
 
           name_arg = args.first
-          return unless name_arg.is_a?(Prism::StringNode)
+          return unknown_gems(node) unless name_arg.is_a?(Prism::StringNode)
 
           name = name_arg.unescaped
           version = nil
@@ -88,7 +93,7 @@ module RailsAiContext
             inner = arg.arguments&.arguments || []
             arg = inner.first if inner.size == 2 && inner.last.slice == "__dir__"
           end
-          return unless arg.is_a?(Prism::StringNode)
+          return unknown_gems(node) unless arg.is_a?(Prism::StringNode)
 
           @results << {
             type:     :eval_gemfile,
@@ -96,6 +101,22 @@ module RailsAiContext
             groups:   @current_groups.flatten.uniq,
             location: node.location.start_line
           }
+        end
+
+        # Bundler takes `engine:` and `engine_version:` beside the version.
+        def extract_ruby(node)
+          options = extract_keyword_nodes(node)
+          @results << {
+            type:           :ruby,
+            version:        literal_string(node.arguments&.arguments&.first),
+            engine:         literal_string(options[:engine]),
+            engine_version: literal_string(options[:engine_version]),
+            location:       node.location.start_line
+          }
+        end
+
+        def unknown_gems(node)
+          @results << { type: :unknown_gems, call: node.name, location: node.location.start_line }
         end
 
         def extract_source(node)

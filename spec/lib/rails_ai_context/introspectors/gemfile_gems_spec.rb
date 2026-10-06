@@ -81,4 +81,34 @@ RSpec.describe RailsAiContext::Introspectors::GemfileGems do
       expect(described_class.names(dummy)).to eq([])
     end
   end
+
+  describe "the one Gemfile reader GemLock shares" do
+    it "walks the Gemfile once for GemLock and every later asker, and GemLock never walks it by hand" do
+      File.write(File.join(@root, "Gemfile"), %(ruby "3.3.6"\ngem "rails"\neval_gemfile "Gemfile.local"\n))
+      File.write(File.join(@root, "Gemfile.local"), %(gem "stripe"\n))
+      gemfile = File.realpath(File.join(@root, "Gemfile"))
+      walks = 0
+      allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk).and_wrap_original do |original, path, *rest|
+        walks += 1 if path == gemfile
+        original.call(path, *rest)
+      end
+      expect(RailsAiContext::Introspectors::AstWalk).not_to receive(:each)
+
+      spec = RailsAiContext::GemLock.for(@root)
+      2.times { described_class.names(@root) }
+
+      expect(walks).to eq(1)
+      expect([ spec.gemfile_gems, spec.ruby_version ]).to eq([ %w[rails stripe], "3.3.6" ])
+    end
+
+    it "reads a Gemfile again once it changes" do
+      path = File.join(@root, "Gemfile")
+      File.write(path, %(gem "rails"\n))
+      expect(described_class.names(@root)).to eq(%w[rails])
+
+      File.write(path, %(gem "rails"\ngem "pg"\n))
+      File.utime(Time.now + 2, Time.now + 2, path)
+      expect(described_class.names(@root)).to eq(%w[rails pg])
+    end
+  end
 end

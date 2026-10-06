@@ -50,7 +50,7 @@ module RailsAiContext
         env_vars.each { |_file, vars| vars.each { |v| all_var_names << v[:name] } }
         env_example.each { |v| all_var_names << v[:name] }
         dockerfile_vars.each { |v| all_var_names << v[:name] if v[:type] == "ENV" }
-        kamal_env.each { |v| all_var_names << v[:name] }
+        kamal_env.each { |v| all_var_names << v[:name] if v[:name] }
 
         anyway_configs.each { |c| c[:attributes].each { |a| all_var_names << a[:env] if a[:env] } }
         deploy_and_settings = kamal_lines(kamal_env, root) + settings_lines(settings) + anyway_lines(anyway_configs)
@@ -311,13 +311,21 @@ module RailsAiContext
       KAMAL_DEPLOY = "config/deploy.yml"
 
       private_class_method def self.kamal_lines(kamal_env, root)
-        return [] if kamal_env.empty?
+        return [] unless File.file?(File.join(root, KAMAL_DEPLOY))
+
+        destinations = Dir.glob("config/deploy.*.yml", base: root).sort
+        return [] if kamal_env.empty? && destinations.empty?
 
         lines = [ "## Set by Kamal (`#{KAMAL_DEPLOY}`)" ]
         kamal_env.each do |v|
           scope = v[:scope] ? " (#{v[:scope]})" : ""
-          lines << if v[:secret]
-            alias_note = v[:secret] == v[:name] ? "" : " (`#{v[:secret]}`)"
+          lines << if v[:name].nil?
+            "- a #{v[:secret] ? 'secret' : 'variable'} whose name an ERB tag sets at deploy time#{scope}"
+          elsif v[:secret]
+            alias_note = if v[:secret] == v[:name] then ""
+            elsif RailsAiContext::ConfigYaml.marked?(v[:secret]) then " (a name an ERB tag sets)"
+            else " (`#{v[:secret]}`)"
+            end
             "- `#{v[:name]}` - secret, from `.kamal/secrets`#{alias_note}#{scope}"
           elsif v[:value] == :computed
             "- `#{v[:name]}` - set by ERB at deploy time#{scope}"
@@ -327,9 +335,7 @@ module RailsAiContext
             "- `#{v[:name]}` = `#{v[:value]}`#{scope}"
           end
         end
-        Dir.glob("config/deploy.*.yml", base: root).sort.each do |file|
-          lines << "- `#{file}` merges over this per destination and is not read"
-        end
+        destinations.each { |file| lines << "- `#{file}` merges over this per destination and is not read" }
         lines << ""
       end
 
@@ -351,14 +357,22 @@ module RailsAiContext
         clear = {} unless clear.is_a?(Hash)
         secrets = Array(env["secret"]).filter_map do |key|
           name, aliased = key.to_s.split(":", 2)
-          { name: name, secret: aliased || name, scope: scope }.compact unless name.to_s.empty?
+          { name: kamal_name(name), secret: aliased || name, scope: scope }.compact unless name.to_s.empty?
         end
-        secrets + clear.map { |name, value| { name: name.to_s, value: kamal_clear_value(name.to_s, value), scope: scope }.compact }
+        secrets + clear.map { |name, value| { name: kamal_name(name.to_s), value: kamal_clear_value(name.to_s, value), scope: scope }.compact }
+      end
+
+      # nil for a name an ERB tag writes, so the marker is never printed as a variable.
+      private_class_method def self.kamal_name(name)
+        name unless RailsAiContext::ConfigYaml.marked?(name)
       end
 
       SAFE_ENV_NAMES = Introspectors::EnvIntrospector::KNOWN_ENV_VARS.select { |spec| spec[:safe] }.to_set { |spec| spec[:name] }.freeze
-      # A run of letters and digits this long is a key or token, whatever the variable is called.
-      OPAQUE_TOKEN = /(?=[A-Za-z0-9+\/=_-]*\d)(?=[A-Za-z0-9+\/=_-]*[A-Za-z])[A-Za-z0-9+\/=_-]{16,}/
+      # A run of letters and digits this long is a key or token, whatever the variable is called;
+      # a hyphen or underscore breaks the run, so a host name such as `myapp-production-db-1` shows.
+      OPAQUE_TOKEN = /(?=[A-Za-z0-9+\/=]*\d)(?=[A-Za-z0-9+\/=]*[A-Za-z])[A-Za-z0-9+\/=]{16,}/
+      # A UUID or a hex key split into groups is still a key once the separators go.
+      GROUPED_HEX = /\A\h{16,}\z/
 
       # Webhook URLs and DSNs hide their secret in the path or user part, where Redaction does not look.
       private_class_method def self.kamal_clear_value(name, value)
@@ -366,7 +380,7 @@ module RailsAiContext
 
         text = value.to_s
         return RailsAiContext::Redaction.value(name, text) if SAFE_ENV_NAMES.include?(name)
-        return :hidden if text.include?("://") || text.match?(OPAQUE_TOKEN) || RailsAiContext::Redaction.value(name, text) != text
+        return :hidden if text.include?("://") || text.match?(OPAQUE_TOKEN) || text.delete("-_").match?(GROUPED_HEX) || RailsAiContext::Redaction.value(name, text) != text
 
         text
       end
@@ -403,6 +417,7 @@ module RailsAiContext
       ANYWAY_BASES = %w[Anyway::Config ApplicationConfig].freeze
 
       # anyway_config reads "#{env_prefix}_#{ATTR}"; the prefix defaults to the class name before `Config` (PAYMENT_*).
+      # declarations is the shared reader cached per tree; the macro walk runs on a matching class only.
       private_class_method def self.scan_anyway_configs(root)
         ANYWAY_CONFIG_DIRS.flat_map { |dir| Dir.glob(File.join(root, dir, "**", "*.rb")).sort }.filter_map do |path|
           file = path.delete_prefix("#{root}/")

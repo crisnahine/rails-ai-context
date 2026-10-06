@@ -4,6 +4,7 @@ require "set"
 require "pathname"
 require_relative "safe_file"
 require_relative "safe_path"
+require_relative "polyfill/data"
 
 module RailsAiContext
   # Which gems an app resolved, read once per lockfile, and the one answer
@@ -32,8 +33,6 @@ module RailsAiContext
     MISE_FILES = [ "mise.local.toml", "mise.toml", ".mise.toml", "mise/config.toml", ".mise/config.toml", ".config/mise.toml",
                    ".config/mise/config.toml" ].freeze
     VERSION_FILES = [ ".ruby-version", ".tool-versions", *MISE_FILES ].freeze
-    # The line `rails new` and `rails plugin new` write into config/boot.rb.
-    BOOT_GEMFILE = /^\s*ENV\[["']BUNDLE_GEMFILE["']\]\s*(?:\|\|)?=\s*File\.expand_path\(\s*["']([^"']+)["']\s*,\s*(__dir__|__FILE__)\s*\)/
     MISE_TOOLS = /^[ \t]*\[tools\][ \t]*$(.*?)(?=^[ \t]*\[|\z)/m
     # ruby = "3.3.6", ruby = ["3.3.6", ...] or ruby = { version = "3.3.6" }
     MISE_RUBY = /^[ \t]*["']?ruby["']?[ \t]*=[ \t]*(?:\[[ \t]*|\{[^}\n]*?version[ \t]*=[ \t]*)?["']([^"'\n]+)["']/
@@ -105,6 +104,10 @@ module RailsAiContext
       end
     end
 
+    # `dir` holds the Gemfile and lockfile; `trusted` is the tree a path gem of theirs must stay
+    # inside; `outside` names a bundle config/boot.rb points at that is never read.
+    Bundle = Data.define(:lockfile, :gemfile, :lock_label, :gemfile_label, :dir, :trusted, :outside)
+
     MUTEX = Mutex.new
     CACHE = {}
     private_constant :MUTEX, :CACHE
@@ -124,8 +127,9 @@ module RailsAiContext
     def for(root)
       root = root.to_s
       bundle = bundle(root)
-      stamp = [ bundle[:lockfile], bundle[:gemfile], File.join(root, "config/boot.rb"),
-                *VERSION_FILES.map { |name| File.join(root, name) } ].map { |file| file && mtime(file) }
+      stamp = [ bundle.lockfile, bundle.gemfile, File.join(root, "config/boot.rb"),
+                *VERSION_FILES.map { |name| File.join(root, name) } ].map { |file| file && mtime(file) } << loaded?
+      stamp << Introspectors::GemfileGems.stamps(bundle) if loaded?
 
       MUTEX.synchronize do
         cached = CACHE[root]
@@ -145,13 +149,12 @@ module RailsAiContext
     end
 
     # The app's own Gemfile and lockfile, or, with no lockfile of its own, the
-    # bundle config/boot.rb points Bundler at (an engine's test/dummy). `dir`
-    # holds them; `trusted` is the tree a path gem of theirs must stay inside.
+    # bundle config/boot.rb points Bundler at (an engine's test/dummy).
     def bundle(root)
       root = root.to_s
-      own = { lockfile: File.join(root, lockfile_name(root)), gemfile: File.join(root, gemfile_name(root)),
-              lock_label: lockfile_name(root), gemfile_label: gemfile_name(root), dir: root, trusted: root }
-      return own if File.file?(own[:lockfile])
+      own = Bundle.new(lockfile: File.join(root, lockfile_name(root)), gemfile: File.join(root, gemfile_name(root)),
+                       lock_label: lockfile_name(root), gemfile_label: gemfile_name(root), dir: root, trusted: root, outside: nil)
+      return own if File.file?(own.lockfile)
 
       boot_bundle(root, own) || own
     end
@@ -170,11 +173,11 @@ module RailsAiContext
       lockfile = gemfile == "gems.rb" ? "gems.locked" : "#{gemfile}.lock"
       repo = SafePath.git_root(real_root)
       unless repo && File.directory?(dir) && SafePath.contained?(File.realpath(dir), repo)
-        return own.merge(lockfile: nil, outside: label.(gemfile))
+        return own.with(lockfile: nil, outside: label.(gemfile))
       end
 
-      { lockfile: inside_file(dir, lockfile), gemfile: inside_file(dir, gemfile), lock_label: label.(lockfile), gemfile_label: label.(gemfile),
-        dir: File.realpath(dir), trusted: repo }
+      Bundle.new(lockfile: inside_file(dir, lockfile), gemfile: inside_file(dir, gemfile), lock_label: label.(lockfile),
+                 gemfile_label: label.(gemfile), dir: File.realpath(dir), trusted: repo, outside: nil)
     rescue SystemCallError
       nil
     end
@@ -182,16 +185,45 @@ module RailsAiContext
 
     # The BUNDLE_GEMFILE config/boot.rb sets, when it is outside the app root.
     def boot_gemfile(root)
-      match = read_inside(root, "config/boot.rb")&.match(BOOT_GEMFILE)
-      return nil unless match
-
       real_root = File.realpath(root)
+      real = File.realpath(File.join(real_root, "config/boot.rb"))
+      return nil unless SafePath.contained?(real, real_root)
+
+      result = ruby_parse(real) or return nil
+      relative, anchor = Introspectors::AstWalk.each(result.value).lazy.filter_map { |node| bundle_gemfile_path(node) }.first
+      return nil unless relative
+
       # Relative to __FILE__ the path starts from boot.rb itself, one level below __dir__.
-      base = match[2] == "__FILE__" ? File.join(real_root, "config", "boot.rb") : File.join(real_root, "config")
-      target = File.expand_path(match[1], base)
+      target = File.expand_path(relative, anchor == :file ? real : File.dirname(real))
       target unless target.start_with?(SafePath.dir_prefix(real_root))
+    rescue SystemCallError
+      nil
     end
     private_class_method :boot_gemfile
+
+    # `ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../Gemfile", __dir__)`, the line `rails new`
+    # and `rails plugin new` write, with `=` or `__FILE__` as older templates do.
+    def bundle_gemfile_path(node)
+      value = case node
+      when Prism::IndexOrWriteNode then node.value if env_index?(node.receiver, node.arguments&.arguments)
+      when Prism::CallNode then node.arguments&.arguments&.last if node.name == :[]= && env_index?(node.receiver, node.arguments&.arguments&.first(1))
+      end
+      return nil unless value.is_a?(Prism::CallNode) && value.name == :expand_path && value.receiver.is_a?(Prism::ConstantReadNode) &&
+                        value.receiver.name == :File
+
+      path, anchor = value.arguments&.arguments
+      return nil unless path.is_a?(Prism::StringNode) && value.arguments.arguments.size == 2
+
+      if anchor.is_a?(Prism::SourceFileNode) then [ path.unescaped, :file ]
+      elsif anchor.is_a?(Prism::CallNode) && anchor.name == :__dir__ && anchor.receiver.nil? then [ path.unescaped, :dir ]
+      end
+    end
+    private_class_method :bundle_gemfile_path
+
+    def env_index?(receiver, arguments)
+      receiver.is_a?(Prism::ConstantReadNode) && receiver.name == :ENV && arguments&.size == 1 && literal(arguments.first) == "BUNDLE_GEMFILE"
+    end
+    private_class_method :env_index?
 
     # The file's real path when it exists and does not link out of its directory.
     def inside_file(dir, name)
@@ -203,13 +235,13 @@ module RailsAiContext
     private_class_method :inside_file
 
     def absent_spec(root, bundle)
-      outside = bundle[:outside]
+      outside = bundle.outside
       reason = if outside
         "No #{lockfile_name(root)} in the app; config/boot.rb points Bundler at #{outside}, outside the app's git repository, which is not read"
       else
-        "No #{bundle[:lock_label]} found"
+        "No #{bundle.lock_label} found"
       end
-      facts = bundle[:gemfile] ? gemfile(bundle[:gemfile]) : { gems: nil }
+      facts = gemfile(bundle)
       Spec.new({}, **declared_ruby(nil, root, bundle, facts), reason: reason, absent: true, outside_gemfile: outside,
                gemfile_gems: facts[:gems])
     end
@@ -223,7 +255,7 @@ module RailsAiContext
     private_class_method :mtime
 
     def parse(bundle, root)
-      path = bundle[:lockfile]
+      path = bundle.lockfile
       content = SafeFile.read(path, max_size: MAX_SIZE)
       return Spec.new({}, reason: "#{File.basename(path)} could not be read") unless content
 
@@ -261,50 +293,68 @@ module RailsAiContext
       # and answering it as an app with no gems denies every gem it holds.
       return Spec.new({}, reason: "#{File.basename(path)} has no specs section") unless specs_section
 
-      facts = bundle[:gemfile] ? gemfile(bundle[:gemfile]) : {}
+      facts = gemfile(bundle)
       Spec.new(versions, **declared_ruby(ruby_version, root, bundle, facts), direct: direct, path_remotes: path_remotes)
     end
     private_class_method :parse
 
-    # `gems` is nil when `gemspec` or `eval_gemfile` adds gems the file does not name.
-    def gemfile(path)
-      result = gemfile_parse(path) or return { ruby: nil, gems: nil }
+    # `gems` is nil when a call adds gems the Gemfile does not name (gemspec, a gem
+    # or eval_gemfile whose argument is not a literal, a file left unread).
+    def gemfile(bundle)
+      entries = gemfile_entries(bundle) or return { ruby: nil, gems: nil }
 
-      facts = { ruby: nil, gems: [] }
-      pending = [ result.value ]
-      while (node = pending.shift)
-        pending.concat(node.compact_child_nodes)
+      ruby = entries.find { |entry| entry[:type] == :ruby }
+      gems = entries.filter_map { |entry| entry[:name] if entry[:type] == :gem }.uniq unless entries.any? { |entry| entry[:type] == :unknown_gems }
+      { ruby: ruby && gemfile_ruby(ruby), gems: gems }
+    end
+    private_class_method :gemfile
+
+    # GemfileGems is the one Gemfile reader once the gem is loaded. Before the boot
+    # its listener cannot load, so the same entries come from a plain walk of the
+    # one file, and an eval_gemfile there is left unread.
+    def gemfile_entries(bundle)
+      return Introspectors::GemfileGems.read_bundle(bundle) if loaded?
+
+      result = ruby_parse(bundle.gemfile) or return nil
+      Introspectors::AstWalk.each(result.value).filter_map do |node|
         next unless node.is_a?(Prism::CallNode) && node.receiver.nil?
 
+        args = node.arguments&.arguments || []
         case node.name
-        when :ruby then facts[:ruby] ||= gemfile_ruby(node)
-        when :gem then (name = literal(node.arguments&.arguments&.first)) && facts[:gems]&.push(name)
-        when :gemspec, :eval_gemfile then facts[:gems] = nil
+        when :ruby
+          options = args.grep(Prism::KeywordHashNode).flat_map(&:elements).grep(Prism::AssocNode).to_h { |pair| [ literal(pair.key), literal(pair.value) ] }
+          { type: :ruby, version: literal(args.first), engine: options["engine"], engine_version: options["engine_version"] }
+        when :gem then args.first.is_a?(Prism::StringNode) ? { type: :gem, name: args.first.unescaped } : { type: :unknown_gems }
+        when :gemspec, :eval_gemfile then { type: :unknown_gems }
         end
       end
-      facts
     end
+    private_class_method :gemfile_entries
 
-    # AstCache once the gem is loaded, so GemfileGems' walk shares the parse; before the boot, Prism alone.
-    def gemfile_parse(path)
-      return AstCache.parse(File.realpath(path)) if defined?(AstCache)
+    def loaded?
+      defined?(Introspectors::GemfileGems) ? true : false
+    end
+    private_class_method :loaded?
+
+    # AstCache once the gem is loaded; before the boot Prism alone, as AstCache's
+    # concurrent-ruby would load ahead of the app's bundle.
+    def ruby_parse(path)
+      return nil unless path
+      return AstCache.parse(File.realpath(path)) if loaded?
 
       require "prism"
+      require_relative "introspectors/ast_walk"
       content = SafeFile.read(path, max_size: MAX_SIZE)
       content && Prism.parse(content)
     rescue SystemCallError, ArgumentError, LoadError
       nil
     end
-    private_class_method :gemfile_parse
+    private_class_method :ruby_parse
 
     # A requirement such as `ruby ">= 3.3.0"` names a range, not a version, so it is left unanswered.
-    def gemfile_ruby(node)
-      args = node.arguments&.arguments || []
-      version = literal(args.first)
-      return nil unless version&.match?(PLAIN_VERSION)
-
-      options = args.grep(Prism::KeywordHashNode).flat_map(&:elements).grep(Prism::AssocNode).to_h { |pair| [ literal(pair.key), literal(pair.value) ] }
-      [ version, engine_name(options["engine"], options["engine_version"]) ]
+    def gemfile_ruby(entry)
+      version = entry[:version]
+      [ version, engine_name(entry[:engine], entry[:engine_version]) ] if version&.match?(PLAIN_VERSION)
     end
     private_class_method :gemfile_ruby
 
@@ -316,8 +366,8 @@ module RailsAiContext
     # Sources in Bundler's order; an engine's Ruby version comes only from its own source (JRuby 9.4 runs Ruby 3.1).
     def declared_ruby(locked, root, bundle, facts)
       declared = {
-        bundle[:lock_label] => locked,
-        bundle[:gemfile_label] => facts[:ruby],
+        bundle.lock_label => locked,
+        bundle.gemfile_label => facts[:ruby],
         ".ruby-version" => version_string(SafeFile.read(File.join(root, ".ruby-version"), max_size: MAX_SIZE)&.strip),
         ".tool-versions" => version_string(SafeFile.read(File.join(root, ".tool-versions"), max_size: MAX_SIZE)&.[](TOOL_VERSIONS_RUBY, 1)),
         **mise_ruby(root)

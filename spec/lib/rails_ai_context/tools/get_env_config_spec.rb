@@ -156,7 +156,10 @@ RSpec.describe RailsAiContext::Tools::GetEnvConfig do
                       { key: "x.stripe", call: 'Rails.root.join(dir, "x.yml")', path_unread: true },
                       { key: "redis", call: ":redis", file: "config/redis.yml", withheld: true },
                       { key: "up", call: ":up", file: "../up.yml", outside: true },
-                      { key: "big", call: ":big", file: "config/big.yml", too_large: true } ] }
+                      { key: "big", call: ":big", file: "config/big.yml", too_large: true },
+                      { key: "dyn", call: ":dyn", file: "config/dyn.yml", keys: %w[host], erb_keys: 2 },
+                      { key: "x.c", call: ":pay", read: ".fetch(:api)", file: "config/pay.yml", keys: %w[api url] },
+                      { key: "x.m", call: ":gone", read: "[:url]", file: "config/gone.yml", missing: true } ] }
     end
 
     before do
@@ -174,6 +177,9 @@ RSpec.describe RailsAiContext::Tools::GetEnvConfig do
         expect(text).to include("- `redis` = config_for(:redis), `config/redis.yml` on sensitive_patterns, keys not read")
         expect(text).to include("- `up` = config_for(:up), `../up.yml` outside the app, not read")
         expect(text).to include("- `big` = config_for(:big), `config/big.yml` over max_file_size, keys not read")
+        expect(text).to include("- `dyn` = config_for(:dyn), `config/dyn.yml` keys for development: host, and 2 named by an ERB tag")
+        expect(text).to include("- `x.c` = config_for(:pay).fetch(:api), one value from `config/pay.yml` (keys for development: api, url)")
+        expect(text).to include("- `x.m` = config_for(:gone)[:url], `config/gone.yml` does not exist")
         expect(text.index("## Every environment")).to be < text.index("## production")
       end
     end

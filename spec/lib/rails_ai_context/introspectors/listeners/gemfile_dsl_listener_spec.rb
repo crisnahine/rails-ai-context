@@ -91,4 +91,16 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::GemfileDslListener do
     expect(results[0][:location]).to eq(1)
     expect(results[1][:location]).to eq(2)
   end
+
+  it "records the ruby call with its engine, and the calls that add gems the file does not name" do
+    results = parse_and_dispatch(<<~RUBY)
+      ruby "3.1.4", engine: "jruby", engine_version: "9.4.8.0"
+      gemspec
+      %w[rails pg].each { |name| gem name }
+      eval_gemfile ENV.fetch("EXTRA")
+    RUBY
+
+    expect(results.find { |r| r[:type] == :ruby }).to include(version: "3.1.4", engine: "jruby", engine_version: "9.4.8.0")
+    expect(results.select { |r| r[:type] == :unknown_gems }.map { |r| r[:call] }).to eq(%i[gemspec gem eval_gemfile])
+  end
 end

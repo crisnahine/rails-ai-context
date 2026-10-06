@@ -106,7 +106,12 @@ module RailsAiContext
             end
           end
 
-          parts.join(" ") + "."
+          [ parts.join(" ") + ".", unread_bundle(rails) ].compact.join(" ")
+        end
+
+        def unread_bundle(rails)
+          outside = RailsAiContext::GemLock.for(rails_app.root).outside_gemfile unless rails
+          "Its gems and Rails version are not read: config/boot.rb points Bundler at `#{outside}`, outside the app's git repository." if outside
         end
 
         def compose_standard(ctx)
@@ -142,8 +147,8 @@ module RailsAiContext
           end
           rails = named_rails_version(ctx)
           lines << "#{ctx[:app_name]} is a Rails#{" #{rails}" if rails} application#{ruby_clause(ctx)} #{db ? "on #{db}" : "without Active Record"}."
-          outside = RailsAiContext::GemLock.for(rails_app.root).outside_gemfile unless rails
-          lines << "Its gems and Rails version are not read: config/boot.rb points Bundler at `#{outside}`, outside the app's git repository." if outside
+          unread = unread_bundle(rails)
+          lines << unread if unread
 
           notable = Payload.notable_gems(ctx)
           if notable.any?

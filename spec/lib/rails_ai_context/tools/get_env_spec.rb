@@ -1021,6 +1021,16 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       expect(text).not_to include("RAC_ERB_OUTPUT")
     end
 
+    it "says an ERB tag on its own line under a key or a block scalar sets that value at deploy time" do
+      write_deploy("env:\n  clear:\n    FROM_ERB:\n      <%= ENV[\"X\"] %>\n    FOLDED: >-\n      <%= ENV[\"Y\"] %>\n    PLAIN: 1\n")
+
+      text = described_class.call(detail: "full").content.first[:text]
+      expect(text).to include("- `FROM_ERB` - set by ERB at deploy time")
+      expect(text).to include("- `FOLDED` - set by ERB at deploy time")
+      expect(text).to include("- `PLAIN` = `1`")
+      expect(text).not_to include("= ``")
+    end
+
     it "hides a clear value that holds a URL or an opaque token, unless the name is on the safe list" do
       write_deploy(<<~YAML)
         env:
@@ -1073,12 +1083,61 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       expect(described_class.call(detail: "summary").content.first[:text]).to include("- `JOB_TOKEN`")
     end
 
+    it "says an ERB tag names a variable, never printing the placeholder as its name" do
+      write_deploy("env:\n  clear:\n    <%= ENV.fetch(\"DYN_NAME\", \"X\") %>: abc\n  secret:\n    - <%= ENV[\"S\"] %>\n    - DB_PASSWORD:<%= ENV[\"P\"] %>\n")
+
+      %w[summary standard full].each do |detail|
+        expect(described_class.call(detail: detail).content.first[:text]).not_to include("RAC_ERB_OUTPUT")
+      end
+      text = described_class.call.content.first[:text]
+      expect(text).to include("- a variable whose name an ERB tag sets at deploy time")
+      expect(text).to include("- a secret whose name an ERB tag sets at deploy time")
+      expect(text).to include("- `DB_PASSWORD` - secret, from `.kamal/secrets` (a name an ERB tag sets)")
+    end
+
+    it "shows a hyphenated host or bucket name, and still hides a long hex key" do
+      write_deploy("env:\n  clear:\n    DB_HOST: myapp-production-db-1\n    S3_BUCKET: myapp-assets-2024\n    HEXKEY: 0123456789abcdef0123456789abcdef\n")
+
+      text = described_class.call.content.first[:text]
+      expect(text).to include("- `DB_HOST` = `myapp-production-db-1`")
+      expect(text).to include("- `S3_BUCKET` = `myapp-assets-2024`")
+      expect(text).to include("- `HEXKEY` - value hidden")
+    end
+
+    it "hides a UUID or a hyphen-grouped hex key under a name Redaction does not key on" do
+      write_deploy("env:\n  clear:\n    LIC: 550e8400-e29b-41d4-a716-446655440000\n    PUSHER_APP_KEY: f3a9-41bc-8d2e-77aa\n    DB_HOST: myapp-production-db-1\n")
+
+      text = described_class.call.content.first[:text]
+      expect(text).to include("- `LIC` - value hidden")
+      expect(text).to include("- `PUSHER_APP_KEY` - value hidden")
+      expect(text).to include("- `DB_HOST` = `myapp-production-db-1`")
+      expect(text).not_to include("550e8400")
+      expect(text).not_to include("f3a9-41bc")
+    end
+
+    it "names a destination file it did not read when the base file sets no env" do
+      write_deploy("service: app\nimage: app\nservers:\n  - 1.1.1.1\n")
+      File.write(File.join(@root, "config", "deploy.staging.yml"), "env:\n  secret:\n    - STAGING_TOKEN\n")
+
+      text = described_class.call(detail: "full").content.first[:text]
+      expect(text).to include("## Set by Kamal (`config/deploy.yml`)")
+      expect(text).to include("`config/deploy.staging.yml` merges over this per destination and is not read")
+    end
+
     it "adds nothing for a deploy file that is not valid YAML or has no env" do
       write_deploy("env: [unclosed\n")
       expect(described_class.call.content.first[:text]).not_to include("Set by Kamal")
 
       write_deploy("service: app\n")
       expect(described_class.call.content.first[:text]).not_to include("Set by Kamal")
+    end
+
+    it "adds nothing when only a destination file exists and config/deploy.yml does not" do
+      File.write(File.join(@root, "config", "deploy.staging.yml"), "env:\n  secret:\n    - STAGING_TOKEN\n")
+
+      text = described_class.call(detail: "full").content.first[:text]
+      expect(text).not_to include("Set by Kamal")
+      expect(text).not_to include("deploy.staging.yml")
     end
   end
 

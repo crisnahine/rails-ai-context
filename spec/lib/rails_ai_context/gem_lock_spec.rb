@@ -278,6 +278,30 @@ RSpec.describe RailsAiContext::GemLock do
       expect(described_class.lockfile_name(dir)).to eq("gems.locked")
     end
   end
+  describe "the gems a Gemfile names, with no lockfile" do
+    it "is nil when a gem's name is not a literal, as with gemspec or an unread eval_gemfile" do
+      Dir.mktmpdir do |dir|
+        [ %(%w[rails pg].each { |name| gem name }\n), %(gem "rails"\ngemspec\n), %(gem "rails"\neval_gemfile "../outside.rb"\n) ].each_with_index do |gemfile, i|
+          File.write(File.join(dir, "Gemfile"), gemfile)
+          File.utime(Time.now + i + 1, Time.now + i + 1, File.join(dir, "Gemfile"))
+          expect(described_class.for(dir).gemfile_gems).to be_nil
+        end
+      end
+    end
+
+    it "rereads when a file the Gemfile evaluates changes" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile"), %(gem "rails"\neval_gemfile "Gemfile.local"\n))
+        File.write(File.join(dir, "Gemfile.local"), %(gem "pg"\n))
+        expect(described_class.for(dir).gemfile_gems).to eq(%w[rails pg])
+
+        File.write(File.join(dir, "Gemfile.local"), %(gem "pg"\ngem "stripe"\n))
+        File.utime(Time.now + 2, Time.now + 2, File.join(dir, "Gemfile.local"))
+        expect(described_class.for(dir).gemfile_gems).to eq(%w[rails pg stripe])
+      end
+    end
+  end
+
   describe "a lockfile config/boot.rb points outside the app" do
     let(:boot) { %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n\nrequire "bundler/setup" if File.exist?(ENV["BUNDLE_GEMFILE"])\n) }
 
@@ -293,6 +317,9 @@ RSpec.describe RailsAiContext::GemLock do
         expect(spec.present?("rails")).to be false
         expect(spec.reason).to eq("No Gemfile.lock in the app; config/boot.rb points Bundler at ../../Gemfile, outside the app's git repository, which is not read")
         expect(spec.outside_gemfile).to eq("../../Gemfile")
+        bundle = described_class.bundle(dummy)
+        expect(bundle).to be_a(described_class::Bundle)
+        expect([ bundle.lockfile, bundle.outside, bundle.dir ]).to eq([ nil, "../../Gemfile", dummy ])
       end
     end
 
@@ -327,6 +354,21 @@ RSpec.describe RailsAiContext::GemLock do
           File.write(File.join(dummy, "config/boot.rb"), boot_rb)
 
           expect(described_class.for(dummy).version("rails")).to eq("8.1.4")
+        end
+      end
+    end
+
+    it "reads the assignment as Ruby: without parentheses it counts, inside a =begin block it does not" do
+      { %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path "../../../Gemfile", __dir__\n) => "8.1.4",
+        %(=begin\nENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n=end\n) => nil }.each do |boot_rb, version|
+        Dir.mktmpdir do |engine|
+          FileUtils.mkdir_p(File.join(engine, ".git"))
+          File.write(File.join(engine, "Gemfile.lock"), "GEM\n  specs:\n    rails (8.1.4)\n")
+          dummy = File.join(engine, "test/dummy")
+          FileUtils.mkdir_p(File.join(dummy, "config"))
+          File.write(File.join(dummy, "config/boot.rb"), boot_rb)
+
+          expect(described_class.for(dummy).version("rails")).to eq(version)
         end
       end
     end

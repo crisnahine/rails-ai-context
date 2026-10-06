@@ -58,10 +58,16 @@ module RailsAiContext
       end
 
       # The loader declines a file it does not manage (a pack or an in-repo
-      # engine runs its own), by nil or by raising; camelize still names it
-      # well enough for that loader's autoload to answer.
+      # engine runs its own), by nil or by raising, and Zeitwerk before 2.6.9
+      # cannot answer; its inflector, segment by segment as Zeitwerk itself
+      # names a file, still names it well enough for an autoload to answer.
       def cpath_for(loader, path, file)
-        expected_cpath(loader, file) || file.delete_prefix(path + File::SEPARATOR).sub(/\.rb\z/, "").camelize
+        expected_cpath(loader, file) ||
+          file.delete_prefix(path + File::SEPARATOR).delete_suffix(".rb").split(File::SEPARATOR).map { |segment| inflect(loader, segment, file) }.join("::")
+      end
+
+      def inflect(loader, segment, file)
+        loader.respond_to?(:inflector) ? loader.inflector.camelize(segment, file) : segment.camelize
       end
 
       def expected_cpath(loader, file)
@@ -69,7 +75,7 @@ module RailsAiContext
       rescue Zeitwerk::Error
         nil
       end
-      private_class_method :load_dir, :load_individually, :cpath_for, :expected_cpath
+      private_class_method :load_dir, :load_individually, :cpath_for, :inflect, :expected_cpath
     end
   end
 end

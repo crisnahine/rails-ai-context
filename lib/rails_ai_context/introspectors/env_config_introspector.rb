@@ -57,7 +57,7 @@ module RailsAiContext
       def config_for_files(assignments)
         assignments.filter_map do |key, entries|
           call = entries.last[:config_for] or next
-          entry = { key: key, call: call[:argument], file: call[:file] }.compact
+          entry = { key: key, call: call[:argument], read: call[:read], file: call[:file] }.compact
           next entry.merge(path_unread: true) unless call[:file]
 
           environment = current_environment
@@ -68,11 +68,12 @@ module RailsAiContext
           refusal = SafePath.locate(call[:file], under: root).refusal
           next entry.merge(REFUSALS.fetch(refusal) => true) if refusal
 
-          data = ConfigYaml.read(root, call[:file], label: "config_for")
+          data = ConfigYaml.read(root, call[:file], label: "config_for", marker: ConfigYaml::ERB_OUTPUT)
           next entry.merge(unreadable: true) unless data.is_a?(Hash)
 
           sections = [ data["shared"], data[environment] ].select { |section| section.is_a?(Hash) }
-          entry.merge(keys: sections.flat_map(&:keys).uniq.sort)
+          computed, keys = sections.flat_map(&:keys).uniq.partition { |name| ConfigYaml.marked?(name) }
+          entry.merge(keys: keys.sort, erb_keys: computed.size.nonzero?).compact
         end
       end
 
