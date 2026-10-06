@@ -285,6 +285,17 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
           expect(result[:total_locale_files]).to eq(1)
         end
       end
+
+      it "never reads a sensitive file a load path glob reaches" do
+        result = static_result("en.yml" => "en:\n  hello: Hello\n") do |dir|
+          File.write(File.join(dir, "config", "database.yml"), "production:\n  password: x\n")
+          File.write(File.join(dir, "config", "extra.yml"), "fr:\n  hello: Bonjour\n")
+          File.write(File.join(dir, "config", "application.rb"), "config.i18n.load_path += Dir[Rails.root.join(\"config/*.yml\")]\n")
+        end
+
+        expect(result[:locale_files].map { |f| f[:file] }).to contain_exactly("en.yml", "config/extra.yml")
+        expect(result[:available_locales]).to eq(%w[en fr])
+      end
     end
 
     it "reads the available locales from the files on disk" do

@@ -32,13 +32,15 @@ module RailsAiContext
         # `scope` is the frames a `draw` of this file sits in, as its record carries them.
         # `route_set` answers { prefix:, name_prefix: } for an app class that draws routes.
         # `names` is the set of route names taken so far, shared by every file of one table.
+        # `multi_path`: the app's Rails draws every path of `get "/a", "/b"`; 8.1 raises instead.
         # ponytail: an engine's namespace is its first segment; read isolate_namespace if one differs.
         def self.engine_namespace(engine)
           engine.split("::").first.underscore
         end
 
-        def initialize(scope: [], route_set: nil, names: Set.new)
+        def initialize(scope: [], route_set: nil, names: Set.new, multi_path: false)
           super()
+          @multi_path = multi_path
           @stack = scope.map { |frame| frame.merge(node: nil) }
           @route_set = route_set
           @concern_blocks = {}
@@ -747,7 +749,7 @@ module RailsAiContext
           rocket_key = opts.keys.find { |k| k.is_a?(String) }
           paths = literal_paths(node)
           paths = [ [ rocket_key, false ] ] if paths.empty? && rocket_key
-          return emit_dynamic(node) if paths.empty?
+          return emit_dynamic(node) if paths.empty? || (paths.size > 1 && !@multi_path)
 
           paths.each { |segment, action| emit_verb_path(node, verb, segment, action, opts, rocket_key) }
         end
@@ -760,6 +762,14 @@ module RailsAiContext
         end
 
         def emit_verb_path(node, verb, segment, action_given, opts, rocket_key)
+          # Rails' match reads `path => :action` as the action and `path => "controller"` as the controller.
+          rocket = rocket_key && opts[rocket_key]
+          if rocket.is_a?(Symbol) || (rocket.is_a?(String) && !rocket.include?("#"))
+            opts = opts.except(rocket_key)
+            opts[rocket.is_a?(Symbol) ? :action : :controller] ||= rocket
+            rocket_key = nil
+          end
+
           target_given = opts.key?(:to) || !rocket_key.nil?
           target = opts[:to] || (rocket_key && opts[rocket_key])
           return emit_dynamic(node) if target_given && unreadable_target?(target)

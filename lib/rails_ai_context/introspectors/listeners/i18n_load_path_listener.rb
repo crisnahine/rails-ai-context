@@ -10,7 +10,9 @@ module RailsAiContext
       #   config.i18n.load_path = Dir[Rails.root.join("x/*.yml")]                → "x/*.yml"
       #
       # The path forms are the autoload listener's, plus the Dir[] / Dir.glob wrapper.
-      class I18nLoadPathListener < AutoloadPathsListener
+      class I18nLoadPathListener < BaseListener
+        include LiteralPaths
+
         def on_call_node_enter(node)
           if node.name == :load_path= && i18n?(node.receiver)
             collect_paths(node.arguments&.arguments&.first)

@@ -55,6 +55,11 @@ module RailsAiContext
 
         def macro_condition; end
 
+        # A def evaluates to its name, which is what `helper_method def foo` passes.
+        def extract_symbol_args(node)
+          Array(node.arguments&.arguments).filter_map { |arg| arg.is_a?(Prism::DefNode) ? arg.name : literal_string(arg)&.to_sym }
+        end
+
         def proc_lines(node)
           procs = Array(node.arguments&.arguments).grep(Prism::LambdaNode)
           procs << node.block if node.block.is_a?(Prism::BlockNode)

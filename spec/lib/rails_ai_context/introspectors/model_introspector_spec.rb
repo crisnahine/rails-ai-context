@@ -3273,6 +3273,41 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  describe "declarations in a method body" do
+    it "lists a model's declaration only where a call runs the method holding it" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "app", "models", "account.rb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, <<~RUBY)
+          class Account < ApplicationRecord
+            validates :email, presence: true
+
+            def self.setup
+              validates :name, presence: true
+              has_many :ghosts
+              scope :ghostly, -> { where(name: nil) }
+            end
+
+            def self.called_setup
+              validates :role, presence: true
+            end
+            called_setup
+
+            def instance_level
+              validates :nickname, presence: true
+            end
+          end
+        RUBY
+
+        details = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Account"]
+
+        expect(details[:validations].map { |v| v[:attributes] }).to contain_exactly(%w[email], %w[role])
+        expect(Array(details[:associations]).map { |a| a[:name].to_s }).not_to include("ghosts")
+        expect(Array(details[:scopes]).map { |sc| sc.is_a?(Hash) ? sc[:name].to_s : sc.to_s }).not_to include("ghostly")
+      end
+    end
+  end
+
   describe "callbacks in both tiers" do
     def write_model(dir, class_name, source)
       path = File.join(dir, "app", "models", "#{class_name.underscore}.rb")

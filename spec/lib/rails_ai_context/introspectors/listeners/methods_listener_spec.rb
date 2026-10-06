@@ -565,20 +565,22 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener, "visib
     ])
   end
 
-  it "does not mark a def in class << self inside class_methods as a method the includer gains" do
+  it "leaves out a def self.x or a class << self def inside class_methods, which only ClassMethods responds to" do
     source = <<~RUBY
       module Sluggable
         extend ActiveSupport::Concern
         class_methods do
           def by_slug; end
+          def self.own_of_class_methods; end
           class << self
             def registry; end
+            attr_accessor :setting
           end
         end
       end
     RUBY
     rows = parse_and_dispatch(source).map { |m| [ m[:name], !!m[:class_methods_block] ] }
-    expect(rows).to eq([ [ "by_slug", true ], [ "registry", false ] ])
+    expect(rows).to eq([ [ "by_slug", true ] ])
   end
 end
 
@@ -615,6 +617,14 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener, "metho
       [ "full_title(style = :short)", :instance, :public ],
       [ "headline(style = :short)", :instance, :public ]
     )
+  end
+
+  it "gives an alias its original's params as well as its signature" do
+    source = "class Gadget\n  def build(name, size: 1)\n  end\n  alias_method :setup, :build\n  alias again setup\nend\n"
+    methods = parse_and_dispatch(source).to_h { |m| [ m[:name], m ] }
+
+    expect(methods["setup"]).to include(signature: "setup(name, size: 1)", params: methods["build"][:params])
+    expect(methods["again"]).to include(signature: "again(name, size: 1)", params: methods["build"][:params])
   end
 
   it "honors the options that leave instance methods out" do

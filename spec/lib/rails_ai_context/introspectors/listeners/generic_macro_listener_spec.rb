@@ -15,6 +15,12 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::GenericMacroListener do
     expect(results.map { |r| r[:macro] }).to contain_exactly(:before_action, :after_action)
   end
 
+  it "reads a def argument as the name it evaluates to" do
+    results = parse_and_dispatch("helper_method def current=(v); end, :other\n", :helper_method)
+
+    expect(results.first[:args]).to eq(%i[current= other])
+  end
+
   # A nested describe would otherwise copy most of a spec file per level.
   it "records a block's source only for the macros asked to" do
     source = "describe 'x' do\n  # note\n  it 'y' do\n    run\n  end\nend\n"

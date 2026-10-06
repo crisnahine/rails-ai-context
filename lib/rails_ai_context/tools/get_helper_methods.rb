@@ -327,20 +327,16 @@ module RailsAiContext
         listeners[:mixins] = Introspectors::Listeners::MixinsListener if lib&.may_include?(source)
         return [] if listeners.empty?
 
-        result = Introspectors::SourceIntrospector.walk(path, listeners)
+        result = Introspectors::SourceIntrospector.walk_source(source, listeners)
         lib&.note(result[:mixins])
         calls = Array(result[:calls])
         calls = calls.select { |call| call[:offset] && range.cover?(call[:offset]) } if range
-        names = calls.flat_map do |call|
-          Array(call[:args]).map(&:to_s) + Array(call[:values]).grep(String).filter_map { |v| v[/\Adef\s+([\w?!]+)/, 1] }
-        end.uniq
+        names = calls.flat_map { |call| Array(call[:args]).map(&:to_s) }.uniq
         owner = range ? name : Introspectors::DeclaredConstant.named(source, name)
         names.map { |helper| { name: helper, owner: owner, path: path.delete_prefix("#{real_root}/") } }
       end
 
-      # The modules in lib the controllers include, as [path, constant, range]: a controller
-      # helper module there is required rather than autoloaded, and app/controllers/concerns
-      # is read as a controller already.
+      # The lib modules the controllers include, as [path, constant, range]; concerns are read as controllers already.
       # ponytail: one level, lib only; a module those modules include is not followed.
       class LibModules
         attr_reader :found
@@ -353,7 +349,7 @@ module RailsAiContext
           @found = []
         end
 
-        # Whether a written include names a constant some lib file could hold, as its own file or its outer one's.
+        # Prefilter before the MixinsListener walk: whether a written include names a constant a lib file could hold.
         def may_include?(source)
           return false if @basenames.empty?
 

@@ -344,7 +344,7 @@ module RailsAiContext
         scope = draw[:scope] || []
         already_read << [ path, scope ]
         ast = SourceIntrospector.walk(path, {
-          routes: -> { Listeners::RoutesDslListener.new(scope: scope, route_set: method(:route_set_prefixes), names: @route_names) },
+          routes: -> { Listeners::RoutesDslListener.new(scope: scope, route_set: method(:route_set_prefixes), names: @route_names, multi_path: multi_path_routes?) },
           mounts: -> { Listeners::MountListener.new(prefix: draw[:prefix], name_prefix: draw[:name_prefix]) }
         })
         records = ast[:routes] || []
@@ -432,6 +432,14 @@ module RailsAiContext
         walk_routes_file(target, already_read, depth + 1, draw)
       rescue StandardError, ScriptError => e
         RailsAiContext.debug_fail(e, [ [], [], [] ], label: "draw target #{target}")
+      end
+
+      # Rails 8.1 raises on `get "/a", "/b"`; with no version locked the routes are not guessed.
+      def multi_path_routes?
+        return @multi_path_routes if defined?(@multi_path_routes)
+
+        locked = GemLock.for(app.root.to_s).version("actionpack")
+        @multi_path_routes = !locked.nil? && Gem::Version.new(locked) < Gem::Version.new("8.1.0.a")
       end
 
       # `draw(:"admin/users")` is legal and resolves under config/routes/, but

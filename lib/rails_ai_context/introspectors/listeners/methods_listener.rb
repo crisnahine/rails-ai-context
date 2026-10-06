@@ -21,6 +21,8 @@ module RailsAiContext
           @open_blocks = []
           @def_depth = 0
           @builders = []
+          # Each entry's parameters as written, which an alias of it takes on.
+          @param_slices = {}.compare_by_identity
         end
 
         # One visibility scope: a class or module body, a `class << self`
@@ -170,7 +172,7 @@ module RailsAiContext
           scope = def_scope(node)
           method_name = node.name.to_s
           return unless scope
-          return if @frames.last.kind == :extension
+          return if @frames.last.kind == :extension || class_methods_module_own?(node.receiver)
           return if method_name == "initialize" && scope == :instance && !@include_initialize
 
           frame = @frames.last
@@ -215,13 +217,19 @@ module RailsAiContext
         end
 
         # What an includer gains: a `class_methods` def, or a class method written in `included do`.
-        # A `class << self` in `class_methods` opens ClassMethods' own singleton, which no includer gets.
         def includer_gains?(scope)
           frame = @frames.last
           return true if frame.kind == :class_methods
 
           frame = @frames[-2] if frame.kind == :singleton
           frame&.kind == :included && scope == :class
+        end
+
+        # `def self.x` in `class_methods do`, or anything in its `class << self`, is ClassMethods' own:
+        # neither the includer nor the concern responds to it.
+        def class_methods_module_own?(receiver)
+          kinds = @frames.last(2).map(&:kind)
+          (kinds.last == :class_methods && !receiver.nil?) || kinds == %i[class_methods singleton]
         end
 
         def open_frame(kind)
@@ -285,6 +293,7 @@ module RailsAiContext
         end
 
         def record(node, method_name, scope, visibility, prefixed:)
+          slices = parameter_slices(node.parameters)
           entry = {
             name:         method_name,
             scope:        scope,
@@ -296,7 +305,7 @@ module RailsAiContext
             owner:        @owner_stack.dup,
             # Sliced off the node so defaults read as written (`options = {}`);
             # `params` records names only.
-            signature:    signature_source(node, prefixed),
+            signature:    signature_text("#{'self.' if prefixed}#{node.name}", slices),
             location:     node.location.start_line,
             end_location: node.location.end_line,
             # Offsets, unlike lines, tell a call that shares a line with a def from one inside it.
@@ -306,6 +315,7 @@ module RailsAiContext
           }
           # Outside `included do`, a `def self.x` or `class << self` method stays on the module.
           entry[:class_methods_block] = true if includer_gains?(scope)
+          @param_slices[entry] = slices
           @results << entry
         end
 
@@ -346,17 +356,20 @@ module RailsAiContext
         def record_alias(node, new_name, old_name)
           scope = frame_scope
           original = @results.reverse_each.find { |r| r[:name] == old_name && r[:scope] == scope && r[:owner] == @owner_stack }
-          params = original ? original[:signature].to_s[/\(.*\)\z/m] : nil
-          record_name(node, new_name, scope, original ? original[:visibility] : :public, signature: "#{new_name}#{params}")
+          slices = original ? @param_slices.fetch(original, []) : []
+          record_name(node, new_name, scope, original ? original[:visibility] : :public,
+                      signature: signature_text(new_name, slices), params: original ? original[:params].dup : [], slices: slices)
         end
 
-        def record_name(node, name, scope, visibility, signature: name)
+        def record_name(node, name, scope, visibility, signature: name, params: [], slices: [])
+          return if class_methods_module_own?(nil)
+
           visibility = :public if visibility == :module_function
           entry = {
             name:         name,
             scope:        scope,
             visibility:   @frames.last.marks[[ scope, name ]] || visibility,
-            params:       [],
+            params:       params,
             owner:        @owner_stack.dup,
             signature:    signature,
             # No end: these have no body for a call to sit inside.
@@ -364,6 +377,7 @@ module RailsAiContext
             confidence:   node.is_a?(Prism::CallNode) ? confidence_for(node) : RailsAiContext::Confidence::VERIFIED
           }
           entry[:class_methods_block] = true if includer_gains?(scope)
+          @param_slices[entry] = slices
           @results << entry
         end
 
@@ -405,12 +419,8 @@ module RailsAiContext
 
         # `class << self` members carry no receiver of their own, so they read
         # as the bare name, which is how they are written.
-        def signature_source(node, prefixed)
-          prefix = prefixed ? "self." : ""
-          params = parameter_slices(node.parameters)
-          return "#{prefix}#{node.name}" if params.empty?
-
-          "#{prefix}#{node.name}(#{params.join(', ')})"
+        def signature_text(name, slices)
+          slices.empty? ? name : "#{name}(#{slices.join(', ')})"
         end
 
         # Each parameter is sliced on its own rather than taking the whole list

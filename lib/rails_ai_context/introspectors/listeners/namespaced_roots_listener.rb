@@ -9,7 +9,9 @@ module RailsAiContext
       #     → ["app/components", "Components"]
       #
       # phlex:install writes this, so app/components/base.rb is Components::Base.
-      class NamespacedRootsListener < AutoloadPathsListener
+      class NamespacedRootsListener < BaseListener
+        include LiteralPaths
+
         def on_call_node_enter(node)
           return unless node.name == :push_dir
 
@@ -17,8 +19,6 @@ module RailsAiContext
           @namespace = namespace_of(arguments.find { |argument| argument.is_a?(Prism::KeywordHashNode) })
           collect_paths(arguments.first) if @namespace
         end
-
-        def on_call_operator_write_node_enter(_node); end
 
         private
 

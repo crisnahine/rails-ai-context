@@ -95,18 +95,8 @@ module RailsAiContext
         name == base || name.end_with?("::#{base}")
       end
 
-      # Ruby resolves a bare superclass through Module.nesting where the class
-      # is written, so `module Fasp; class BackfillWorker < BaseWorker` means
-      # Fasp::BaseWorker where that exists and ::BaseWorker where it does not,
-      # while `class Fasp::BackfillWorker < BaseWorker` at the top level means
-      # ::BaseWorker only.
-      #
-      # @param declared [String] the subclass's fully qualified name
-      # @param parent [String, nil] the superclass as the source writes it
-      # @param nesting [Array<String>, nil] the declaration's nesting; nil reads
-      #   it off the declared name, which is right for the nested form only
-      # @yieldparam candidate [String] a name to try, nearest scope first
-      # @return [Object, nil] the block's first truthy answer
+      # A bare superclass resolves through Module.nesting: `module Fasp; class W < BaseWorker` tries Fasp::BaseWorker first.
+      # A nil `nesting` is read off the declared name, which is right for the nested form only.
       def resolve_in_scope(declared, parent, nesting: nil)
         parent = parent.to_s.delete_prefix("::")
         return nil if parent.empty?

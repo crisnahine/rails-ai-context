@@ -351,6 +351,22 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
   end
 
   describe "#static_call" do
+    def multi_path_routes(actionpack)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), "Rails.application.routes.draw do\n  get \"/a\", \"/b\", to: \"pages#show\"\nend\n")
+        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    actionpack (#{actionpack})\n") if actionpack
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        [ result[:by_controller].fetch("pages", []).map { |r| r[:path] }, result[:dynamic_routes] ]
+      end
+    end
+
+    it "draws every path of a multi-path route only when the lockfile pins actionpack below 8.1" do
+      expect(multi_path_routes("8.0.2")).to eq([ [ "/a", "/b" ], nil ])
+      expect(multi_path_routes("8.1.0")).to eq([ [], 1 ])
+      expect(multi_path_routes(nil)).to eq([ [], 1 ])
+    end
+
     it "marks a mount drawn only under a condition, and not one both arms draw" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))
