@@ -155,6 +155,14 @@ module RailsAiContext
           inner = scoped(scope, node)
           found << node.body if node.is_a?(Prism::ClassNode) && node.body && inner.join("::") == name.to_s
           class_bodies(node.body, name, inner, found)
+        when Prism::ConstantWriteNode, Prism::ConstantPathWriteNode
+          block = node.value.block if class_new?(node.value)
+          return found unless block.is_a?(Prism::BlockNode) && block.body
+
+          written = node.is_a?(Prism::ConstantWriteNode) ? node.name.to_s : node.target.slice
+          found << block.body if (written.start_with?("::") ? [ written.delete_prefix("::") ] : scope + [ written ]).join("::") == name.to_s
+          # The block opens no constant scope, so a class inside it keeps the assignment's.
+          class_bodies(block.body, name, scope, found)
         end
         found
       end

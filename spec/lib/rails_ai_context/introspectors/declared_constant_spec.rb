@@ -282,6 +282,24 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
     end
   end
 
+  describe ".class_bodies of a Class.new assignment" do
+    it "is the block body, under the name the assignment writes" do
+      source = <<~RUBY
+        module Admin
+          Flag = Class.new(Base) do
+            attr_config :a
+          end
+        end
+        Plain = Class.new(Base)
+      RUBY
+      tree = RailsAiContext::AstCache.parse_string(source).value
+
+      expect(described_class.class_bodies(tree, "Admin::Flag").map(&:slice)).to eq([ "attr_config :a" ])
+      expect(described_class.class_bodies(tree, "Flag")).to eq([])
+      expect(described_class.class_bodies(tree, "Plain")).to eq([])
+    end
+  end
+
   describe ".declarations nesting" do
     def nesting_of(source, name)
       described_class.declarations(source).find { |d| d.name == name }.nesting

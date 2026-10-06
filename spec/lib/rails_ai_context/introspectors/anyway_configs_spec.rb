@@ -54,4 +54,16 @@ RSpec.describe RailsAiContext::Introspectors::AnywayConfigs do
         attributes: [ { name: "x", env: "INNER_X", required: false } ] }
     ])
   end
+
+  it "reads a class built with Class.new and a block" do
+    write("app/configs/d_config.rb", <<~RUBY)
+      DConfig = Class.new(Anyway::Config) do
+        attr_config :host
+      end
+    RUBY
+
+    expect(described_class.scan(@root)).to eq([
+      { name: "DConfig", file: "app/configs/d_config.rb", attributes: [ { name: "host", env: "D_HOST", required: false } ] }
+    ])
+  end
 end
