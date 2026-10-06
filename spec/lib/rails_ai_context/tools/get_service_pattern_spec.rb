@@ -1222,6 +1222,14 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
       expect(described_class.call(detail: "full").content.first[:text]).to include("- **Initialize:** `initialize(amount:, currency: \"USD\", memo: nil, rate:)`")
     end
 
+    it "reads a listed parent's class body once, for its own record and its children's constructors" do
+      walks = []
+      allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source).and_wrap_original { |m, source, map| walks << source if map.key?(:organize); m.call(source, map) }
+      described_class.call(detail: "full")
+
+      expect(walks.count { |source| source.include?("option :logger, optional: true") }).to eq(1)
+    end
+
     it "reads a T::Struct's const and prop declarations" do
       text = single("LineItemInput")
 

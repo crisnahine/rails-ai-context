@@ -224,12 +224,13 @@ module RailsAiContext
       end
 
       private_class_method def self.format_service_listing(service_files, service_dirs, root, detail, lookup)
-        walks = {}
-        service_data = service_records(service_files, service_dirs, root, lookup).filter_map do |record|
-          next unless record[:source]
-
+        read = service_records(service_files, service_dirs, root, lookup).select { |record| record[:source] }.map do |record|
+          [ record, *class_interface(record[:source], constant_for(record[:path], service_dirs)) ]
+        end
+        # A listed parent's macros are already read, so its children's constructors reuse them.
+        walks = read.to_h { |record, _, macros| [ record[:class_name], { name: record[:class_name], superclass: record[:superclass], macros: macros } ] }
+        service_data = read.map do |record, owned, macros|
           file, source = record.values_at(:path, :source)
-          owned, macros = class_interface(source, constant_for(file, service_dirs))
 
           {
             file: file.sub("#{root}/", ""),
