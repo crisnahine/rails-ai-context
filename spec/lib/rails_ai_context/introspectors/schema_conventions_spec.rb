@@ -41,6 +41,10 @@ RSpec.describe RailsAiContext::Introspectors::SchemaConventions do
       entry = described_class.foreign_key_entry("a", "b", %w[x y], %w[p q])
       expect(entry).to include(column: %w[x y], primary_key: %w[p q])
     end
+
+    it "names Rails 7.0's deferrable: true as immediate, the way structure.sql and Rails 7.1 do" do
+      expect(described_class.foreign_key_entry("posts", "users", nil, nil, deferrable: true)).to include(deferrable: "immediate")
+    end
   end
 
   describe ".default_index_name" do
