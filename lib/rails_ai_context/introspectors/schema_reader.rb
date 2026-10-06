@@ -114,9 +114,14 @@ module RailsAiContext
         parse[:schemas]
       end
 
-      # The app's Rails version, else the one the dump is stamped with.
+      # The app's Rails version, else the one the dump is stamped with: the connection's naming.
       def rails_version
         parse[:rails_version]
+      end
+
+      # The Rails version that wrote the dump, from its stamp, else the app's: the dump's naming.
+      def dump_version
+        parse[:dump_version]
       end
 
       def table?(name)
@@ -275,8 +280,10 @@ module RailsAiContext
 
       # The booted app's names: a dump before 8.1 already holds them, a later one qualifies them.
       def name_relations(schema)
+        # ActiveRecord::Schema[x.y] is Migration.current_version when dumped (schema_dumper.rb:90).
         stamp = schema.delete(:stamp)
-        version = schema[:rails_version] ||= stamp
+        schema[:rails_version] ||= stamp
+        version = schema[:dump_version] = stamp || schema[:rails_version]
         # A 7.0 dump names no schema, so only the "$user" one, which rarely exists, is taken as missing.
         created = PgNaming.dump_lists_schemas?(version) ? schema[:schemas] : @search_path - [ @user_schema ]
         path = PgNaming.existing_path(@search_path, created)
@@ -288,7 +295,7 @@ module RailsAiContext
         %i[tables views virtual_tables not_dumped].each { |key| schema[key] = schema[key].transform_keys { |name| names.relation(name) } }
         schema[:foreign_keys].each { |fk| fk.merge!(from: names.relation(fk[:from]), to: names.relation(fk[:to])) }
         schema[:check_constraints].each { |constraint| constraint[:table] = names.relation(constraint[:table]) if constraint[:table] }
-        schema[:enums] = PgNaming.enum_list(schema[:enums].to_h { |enum| [ enum[:name], enum[:values] ] }, path, version)
+        schema[:enums] = PgNaming.enum_list(schema[:enums].to_h { |enum| [ enum[:name], enum[:values] ] }, path, schema[:rails_version])
         schema[:tables].each_value do |table|
           table[:columns].each do |column|
             type = column.dig(:options, :enum_type)

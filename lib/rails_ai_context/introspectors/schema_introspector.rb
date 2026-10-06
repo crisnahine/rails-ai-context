@@ -699,8 +699,8 @@ module RailsAiContext
           migrate_dir = migrate_dir_for_dump(path)
           result[:pending_migrations] = RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: version, root: app.root)
         end
-        missing = ->(name) { PgNaming.missing_from_schema_rb(name, search_path, schema.schemas, schema.rails_version, relative_dump_path(path)) }
-        placed = PgNaming.dump_places_names?(schema.rails_version, schema.search_path)
+        missing = ->(name) { PgNaming.missing_from_schema_rb(name, search_path, schema.schemas, schema.dump_version, relative_dump_path(path)) }
+        placed = PgNaming.dump_places_names?(schema.dump_version, schema.search_path)
         [ result, DumpLookup.new(tables, qualified, schema.names, missing, placed) ]
       end
 

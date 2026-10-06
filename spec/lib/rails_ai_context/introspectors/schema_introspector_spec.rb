@@ -2749,6 +2749,40 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       FileUtils.rm_rf(dir)
     end
 
+    it "reads a Rails 7.2 schema.rb as 7.2 wrote it after the lockfile moves to 8.1" do
+      dump = rails72_enums.sub(/^end\n\z/, "  create_table \"users\", force: :cascade do |t|\n  end\nend\n")
+      dir = pg_app({ "db/schema.rb" => dump }, rails: "8.1.4")
+      columns = schema_at(dir)[:tables]["posts"][:columns].to_h { |c| [ c[:name], c[:enum_type] ] }
+
+      expect(columns).to include("mood" => "public.mood", "feel" => "mood")
+      expect(ask(dir, table: "public.users")).to include("Table 'public.users' not found.")
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+
+    it "reads a Rails 8.1 schema.rb as 8.1 wrote it under a 7.2 lockfile" do
+      dump = <<~RUBY
+        ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+          create_schema "app"
+
+          create_table "app.users", force: :cascade do |t|
+            t.string "tenant_column"
+          end
+
+          create_table "public.users", force: :cascade do |t|
+            t.string "shared_column"
+          end
+        end
+      RUBY
+      dir = pg_app({ "db/schema.rb" => dump }, rails: "7.2.4")
+      tables = schema_at(dir)[:tables]
+
+      expect(tables.keys).to eq(%w[users])
+      expect(tables["users"][:columns].map { |c| c[:name] }).to eq(%w[id tenant_column])
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+
     it "reads the Rails version off the dump's stamp when no lockfile names it" do
       dir = pg_app({ "db/schema.rb" => rails72_enums })
       columns = schema_at(dir)[:tables]["posts"][:columns].to_h { |c| [ c[:name], c[:enum_type] ] }

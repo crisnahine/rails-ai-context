@@ -41,9 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   7.1. A column's enum type is bare when the search path finds that type first,
   and qualified otherwise. A schema.rb from before Rails 8.1 already holds
   these names and is read as written; a Rails 8.1 schema.rb qualifies every
-  name, and the static tier renames them. The Rails version comes from
-  Gemfile.lock, or the dump's `ActiveRecord::Schema[8.1]` stamp when the lock
-  names none. Both tiers list enum types in name order, and a table's Enum
+  name, and the static tier renames them. How the dump names things follows
+  its `ActiveRecord::Schema[8.1]` stamp, the Rails that wrote it, so a schema.rb
+  not dumped again since a Rails upgrade still reads right; how the connection
+  names them follows Gemfile.lock, or the stamp when the lock names none. Both tiers list enum types in name order, and a table's Enum
   types section pairs each column with the type the search path finds for it,
   so a column `mood` whose type is `public.mood` shows that entry. A booted app
   on Rails 7.0 to 8.0 reads its search path too, where before only 8.1 did.
