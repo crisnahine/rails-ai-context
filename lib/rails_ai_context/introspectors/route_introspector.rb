@@ -270,7 +270,13 @@ module RailsAiContext
         []
       end
 
+      # Booted, the routes section walks these for mount conditions and the
+      # engines section for its mount list, so one run walks them once.
       def walk_route_files(top_files)
+        RunCache.fetch([ :route_walk, app.root.to_s, top_files ]) { walk_route_files!(top_files) }
+      end
+
+      def walk_route_files!(top_files)
         already_read = []
         @route_names = Set.new
         records, mounts, files = top_files.each_with_object([ [], [], [] ]) do |path, (all_records, all_mounts, all_files)|

@@ -187,6 +187,28 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       end
     end
 
+    # Booted, the routes section reads the source for mount conditions and the
+    # engines section reads it for its mount list: one run walks it once.
+    it "walks the route files once for the routes and engines sections of one run" do
+      Dir.mktmpdir do |dir|
+        routes_rb = File.join(dir, "config", "routes.rb")
+        FileUtils.mkdir_p(File.dirname(routes_rb))
+        File.write(routes_rb, "Rails.application.routes.draw do\n  mount MetricsApp => \"/metrics\" if Rails.env.development?\nend\n")
+        set = ActionDispatch::Routing::RouteSet.new
+        set.draw { mount MetricsApp => "/metrics" }
+        app = double("app", routes: set, routes_reloader: nil, root: Pathname(dir))
+        allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk).and_call_original
+
+        engines = RailsAiContext::RunCache.around do
+          described_class.new(app).call
+          RailsAiContext::Introspectors::EngineIntrospector.new(app).call[:mounted_engines]
+        end
+
+        expect(engines).to eq([ { engine: "MetricsApp", path: "/metrics", condition: "if Rails.env.development?" } ])
+        expect(RailsAiContext::Introspectors::SourceIntrospector).to have_received(:walk).with(routes_rb, anything).once
+      end
+    end
+
     # Source names a mount by what it wrote (`MetricsApp.new`, a computed
     # path) and the live table by the class and the drawn path, so an exact
     # match missed both and booted printed the mount as unconditional.
