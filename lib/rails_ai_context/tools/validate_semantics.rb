@@ -482,6 +482,18 @@ module RailsAiContext
         warnings
       end
 
+      # A dump names a view or a skipped table without its columns; only a connection lists them.
+      private_class_method def self.columns_known?(table)
+        !(table[:kind] || table[:not_dumped]) || Array(table[:columns]).any?
+      end
+
+      # A view, a virtual table or a skipped table takes no index; a materialized view does, once its indexes are known.
+      private_class_method def self.indexable?(table)
+        return Array(table[:indexes]).any? if table[:kind] == "materialized_view"
+
+        !(table[:kind] || table[:not_dumped])
+      end
+
       # Shared helper: build valid column set for a model file
       private_class_method def self.model_valid_columns(file, context)
         models = Payload.models(context)
@@ -493,7 +505,7 @@ module RailsAiContext
 
         table_name = model_data[:table_name]
         table_data = RailsAiContext::Payload.model_table(schema, model_data)
-        return nil unless table_data
+        return nil unless table_data && columns_known?(table_data)
 
         table_columns = Set.new
         table_data[:columns]&.each { |c| table_columns << c[:name] }
@@ -527,7 +539,7 @@ module RailsAiContext
 
           table_name = model_data[:table_name]
           table_data = RailsAiContext::Payload.model_table(schema, model_data)
-          next unless table_data
+          next unless table_data && columns_known?(table_data)
 
           valid = Set.new
           table_data[:columns]&.each { |c| valid << c[:name] }
@@ -686,7 +698,7 @@ module RailsAiContext
         table_name = model_data[:table_name]
         table_data = RailsAiContext::Payload.model_table(schema, model_data)
         # A static table whose block called what no reader interprets has columns and indexes unknown.
-        return warnings if table_data.nil? || table_data[:unread_calls]
+        return warnings if table_data.nil? || table_data[:unread_calls] || !indexable?(table_data)
 
         # Only flag columns that are ACTUAL foreign keys (declared via add_foreign_key or belongs_to)
         declared_fk_columns = (table_data[:foreign_keys] || []).map { |fk| fk[:column] }
