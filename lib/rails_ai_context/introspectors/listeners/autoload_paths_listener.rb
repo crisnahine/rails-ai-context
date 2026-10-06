@@ -7,7 +7,7 @@ module RailsAiContext
       #
       #   config.autoload_paths << "lib_static"          → "lib_static"
       #   config.eager_load_paths += %W(#{config.root}/x) → "x"
-      #   config.autoload_lib(ignore: %w[tasks])          → "lib"
+      #   config.autoload_lib(ignore: %w[tasks])          → "lib", and autoload_lib_once
       #
       # Literal paths only; a root built at run time stays unread.
       class AutoloadPathsListener < BaseListener
@@ -16,7 +16,7 @@ module RailsAiContext
         PATH_SETTINGS = %i[autoload_paths eager_load_paths autoload_once_paths].to_set.freeze
 
         def on_call_node_enter(node)
-          return @results << "lib" if node.name == :autoload_lib && node.receiver
+          return @results << "lib" if AutoloadIgnoreListener::AUTOLOAD_LIB.include?(node.name) && node.receiver
           return collect_added_path(node) if node.name == :add && paths_receiver?(node.receiver)
           return unless APPENDING.include?(node.name) && path_setting?(node.receiver)
 

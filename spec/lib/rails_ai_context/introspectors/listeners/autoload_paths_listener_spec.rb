@@ -59,9 +59,15 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::AutoloadPathsListener d
       config.autoload_paths += discovered_roots
       config.autoload_paths << Rails.root.join("lib", ENV["EXTRA"])
       config.autoload_paths << Rails.root(true).join("lib")
+      config.autoload_paths << "\#{config.root}/lib/\#{name}"
+      config.eager_load_paths << "\#{config.root}/editions/\#{EDITION}/models"
     RUBY
 
     expect(paths_in(source)).to eq([])
+  end
+
+  it "reads lib as a root for autoload_lib_once, as railties adds it to eager_load_paths" do
+    expect(paths_in("config.autoload_lib_once(ignore: %w[tasks])\n")).to eq(%w[lib])
   end
 
   it "reads the app root at the node, however it is spelled" do
