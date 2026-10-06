@@ -657,8 +657,6 @@ module RailsAiContext
 
       def recurring_jobs
         RecurringSchedules.read(app.root, ->(file) { config_assignments(file) })
-      rescue => e
-        RailsAiContext.debug_fail(e, [], label: "recurring_jobs")
       end
 
       # Read as YAML so a path in a comment is no queue. Sidekiq's keys may be symbols or

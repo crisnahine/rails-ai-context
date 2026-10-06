@@ -381,6 +381,12 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(walks).to eq(1)
     end
 
+    it "lets a recurring schedule reader's failure raise" do
+      allow(RailsAiContext::Introspectors::RecurringSchedules).to receive(:read).and_raise(NoMethodError, "broken reader")
+
+      expect { static_result { |_dir| nil } }.to raise_error(NoMethodError, "broken reader")
+    end
+
     it "finds mailers and their actions from source" do
       result = static_result do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "mailers"))
