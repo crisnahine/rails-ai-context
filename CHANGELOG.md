@@ -503,7 +503,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`concern` lists a class that prepends the concern** under Included By.
   (#311)
 - **`controllers` lists block, lambda and object filters, in the order Rails
-  runs them.** A block, lambda or proc filter (`-> {}`, `lambda {}`, `proc {}`,
+  adds them to the chain** (after filters run last-declared first). A block, lambda or proc filter (`-> {}`, `lambda {}`, `proc {}`,
   `Proc.new {}`) reads `block (line N)`, or `block (line N of <file>)` when
   written outside the controller's own file (a concern's class method, an
   ancestor), each with its own `only:`/`except:`, in both tiers; every name a
