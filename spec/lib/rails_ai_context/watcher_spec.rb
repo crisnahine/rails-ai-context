@@ -13,7 +13,7 @@ RSpec.describe RailsAiContext::Watcher do
       expect(dirs).to include(File.join(root, "app/models"))
       expect(dirs).to include(File.join(root, "app/controllers"))
       expect(dirs).to include(File.join(root, "config"))
-      expect(dirs).to include(File.join(root, "lib/tasks"))
+      expect(dirs).to include(File.join(root, "lib"))
     end
 
     # config/routes.rb and db/schema.rb are the two edits an author expects to

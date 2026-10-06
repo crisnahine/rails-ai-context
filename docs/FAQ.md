@@ -179,7 +179,7 @@ No. The gem only runs in development. Tools execute on demand (not continuously)
 
 ### How does live reload work?
 
-The `listen` gem watches `app/`, `config/`, `db/`, `lib/tasks/`. When files change, caches are invalidated and MCP clients are notified. Debounce interval: 1.5s (configurable).
+The `listen` gem watches `app/`, `config/`, `db/`, `lib/`, `rakelib/`. When files change, caches are invalidated and MCP clients are notified. Debounce interval: 1.5s (configurable).
 
 ---
 

@@ -37,6 +37,19 @@ RSpec.describe RailsAiContext::Fingerprinter do
       expect(before).not_to eq(after)
     end
 
+    it "detects a change to every source the rake task introspector reads" do
+      root = app.root.to_s
+      %w[rakelib lib/generators/widget lib/templates/erb/scaffold lib/acme].each { |dir| FileUtils.mkdir_p(File.join(root, dir)) }
+      files = %w[Rakefile config.ru rakelib/deploy.rake lib/generators/widget/widget_generator.rb
+                 lib/templates/erb/scaffold/index.html.erb.tt lib/acme/railtie.rb]
+      files.each { |file| File.write(File.join(root, file), "\n") }
+      files.each do |file|
+        before = described_class.compute(app)
+        File.utime(Time.now + 5, Time.now + 5, File.join(root, file))
+        expect(described_class.compute(app)).not_to eq(before), file
+      end
+    end
+
     it "detects changes to .erb view files" do
       before = described_class.compute(app)
       File.utime(Time.now + 5, Time.now + 5, File.join(app.root, "app/views/posts/index.html.erb"))
