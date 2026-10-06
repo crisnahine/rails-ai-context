@@ -396,4 +396,21 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     expect(text).to include("- `has_secure_token` :share_token, :token\n")
     expect(text).to include("- `accepts_nested_attributes_for` :comments, :tags (allow_destroy: true)\n")
   end
+
+  it "names the expression a delegated_type's types come from when the source holds no literal list" do
+    text = details_for("Entry", "entry.rb" => "class Entry < ApplicationRecord\n  delegated_type :entryable, types: Entryable::TYPES\nend\n")
+
+    expect(text).to include("- `belongs_to` **entryable** [polymorphic] (delegated types: from `Entryable::TYPES`, not read statically) (fk: entryable_id)\n")
+  end
+
+  it "reads a delegated_type's types from the booted model when the source holds no literal list" do
+    introspector = RailsAiContext::Introspectors::ModelIntrospector.new(Rails.application)
+    model = double("Entry", entryable_types: %w[Memo Reminder])
+    source = { type: "belongs_to", name: :entryable, delegated: true, delegated_types_source: "Entryable::TYPES", options: { polymorphic: "true" } }
+
+    detail = introspector.send(:with_declared_options, { type: "belongs_to", name: "entryable" }, source, model)
+
+    expect(detail[:delegated_types]).to eq(%w[Memo Reminder])
+    expect(detail).not_to have_key(:delegated_types_source)
+  end
 end

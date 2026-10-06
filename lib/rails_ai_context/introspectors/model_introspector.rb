@@ -905,16 +905,24 @@ module RailsAiContext
         # excluded reflection with a broken :through raises, and `call`'s
         # per-model rescue would replace the whole model with one error line.
         model.reflect_on_all_associations.reject { |assoc| excluded_association?(assoc.name) }.map do |assoc|
-          with_declared_options(association_detail(assoc), declared[[ assoc.macro.to_s, assoc.name.to_s ]]&.first)
+          with_declared_options(association_detail(assoc), declared[[ assoc.macro.to_s, assoc.name.to_s ]]&.first, model)
         end
       end
 
       # Only what the source declares, so both tiers print one spelling; a gem
       # macro's generated association carries Rails' options, not the app's.
-      def with_declared_options(detail, source)
+      def with_declared_options(detail, source, model = nil)
         options = declared_association_options(detail[:type], source&.dig(:options))
         extensions = source&.dig(:extension_methods)
-        detail.merge({ declared_options: options, extension_methods: extensions, delegated_types: source&.dig(:delegated_types) }.compact)
+        delegated = source&.dig(:delegated_types)
+        unread = source&.dig(:delegated_types_source)
+        # delegated_type defines `<role>_types`, which answers a list the source names only as an expression.
+        if unread && model.respond_to?(reader = :"#{detail[:name]}_types")
+          delegated = Array(model.public_send(reader)).map(&:to_s).presence
+          unread = nil if delegated
+        end
+        detail.merge({ declared_options: options, extension_methods: extensions, delegated_types: delegated,
+                       delegated_types_source: unread }.compact)
       end
 
       # One reflection that cannot resolve costs that reflection, not the

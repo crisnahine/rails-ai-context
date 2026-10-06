@@ -39,6 +39,7 @@ module RailsAiContext
             # class, and the marker names nothing.
             options:       options,
             delegated_types: (delegated_types(node) if delegated),
+            delegated_types_source: (delegated_types_source(node) if delegated),
             extension_methods: extension_methods(node),
             location:      node.location.start_line,
             confidence:    confidence_for(node)
@@ -64,6 +65,12 @@ module RailsAiContext
         def delegated_types(node)
           types = extract_keyword_nodes(node)[:types]
           types && literal_strings(types).presence
+        end
+
+        # `types: Entryable::TYPES` names the list only at run time.
+        def delegated_types_source(node)
+          types = extract_keyword_nodes(node)[:types]
+          NodeSource.text(types) if types && literal_strings(types).blank?
         end
 
         # `has_many :sessions do def active ... end end` adds `user.sessions.active`.
