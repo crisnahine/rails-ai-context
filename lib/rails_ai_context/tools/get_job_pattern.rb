@@ -590,7 +590,9 @@ module RailsAiContext
 
         [ "## Recurring Tasks", *schedules.map { |task|
           label = task[:name] ? "`#{task[:name]}`: " : ""
-          "- #{label}`#{task[:class] || task[:command]}` #{schedule_text(task)}"
+          runs = task[:class] || task[:command]
+          runs = runs ? "`#{runs}` " : "#{task[:computed] ? "a #{task[:computed]} an ERB tag sets" : "no class or command"}, "
+          "- #{label}#{runs}#{schedule_text(task)}"
         } ]
       end
 

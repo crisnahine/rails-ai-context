@@ -862,6 +862,30 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text).not_to include("RAC_ERB_OUTPUT")
     end
 
+    it "says an ERB tag sets a recurring task's class or command, never an empty code span" do
+      write("config/recurring.yml", <<~YAML)
+        production:
+          computed_class:
+            class: <%= x %>
+            schedule: every hour
+          computed_command:
+            command: <%= y %>
+            schedule: every day
+      YAML
+      write("config/sidekiq.yml", <<~YAML)
+        :scheduler:
+          :schedule:
+            NightlyJob:
+              class: <%= z %>
+              every: 5m
+      YAML
+      text = text_for(detail: "full")
+      expect(text).to include("- `computed_class`: a class an ERB tag sets, every hour (production, from config/recurring.yml)")
+      expect(text).to include("- `computed_command`: a command an ERB tag sets, every day (production, from config/recurring.yml)")
+      expect(text).to include("- `NightlyJob`: a class an ERB tag sets, 5m (from config/sidekiq.yml)")
+      expect(text).not_to include("``")
+    end
+
     it "reads a computed GoodJob cron schedule as computed, not as a marker" do
       write("config/initializers/good_job.rb", <<~RUBY)
         Rails.application.configure do

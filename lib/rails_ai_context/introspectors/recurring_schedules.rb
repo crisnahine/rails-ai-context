@@ -110,10 +110,11 @@ module RailsAiContext
         schedule = Array(schedule).flat_map { |part| part.is_a?(Hash) ? part.map { |key, value| "#{key}: #{value}" } : [ part ] }.join(", ")
 
         klass = options["class"] || options["klass"]
+        computed = ("class" if klass == :computed) || ("command" if options["command"] == :computed)
         klass = nil if klass == :computed
         command = options["command"] unless options["command"] == :computed
         { name: computed?(name.to_s) ? "computed" : name.to_s, class: klass&.to_s&.delete_prefix("::"), command: command&.to_s,
-          schedule: schedule.to_s, env: computed?(env.to_s) ? "computed" : env&.to_s, file: file }.compact
+          computed: computed, schedule: schedule.to_s, env: computed?(env.to_s) ? "computed" : env&.to_s, file: file }.compact
       end
 
       ERB_OUTPUT = ConfigYaml::ERB_OUTPUT
