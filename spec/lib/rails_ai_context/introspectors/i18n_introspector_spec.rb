@@ -236,8 +236,17 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
         )
 
         expect(result[:available_locales]).to eq(%w[en pl])
-        expect(result[:locale_coverage]["pl"]).to include(keys: 2, missing: 0)
-        expect(result[:locale_files]).to include(file: "pl.rb", key_count: 2, locales: %w[pl])
+        expect(result[:locale_coverage]["pl"]).to include(keys: 1, missing: 0, extra: 0)
+        expect(result[:locale_files]).to include(file: "pl.rb", key_count: 1, locales: %w[pl])
+      end
+
+      it "leaves the I18n backend settings under i18n out of the keys" do
+        result = static_result(
+          "en.yml" => "en:\n  hello: Hello\n",
+          "ru.yml" => "ru:\n  hello: Privet\n  i18n:\n    transliterate:\n      rule:\n        a: b\n"
+        )
+
+        expect(result[:locale_coverage]["ru"]).to include(keys: 1, extra: 0)
       end
 
       it "marks a .rb locale file it cannot parse and carries on" do

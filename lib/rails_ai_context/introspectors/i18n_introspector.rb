@@ -385,7 +385,8 @@ module RailsAiContext
         return REFUSED_LOCALE_FILE unless content
 
         data = path.end_with?(".rb") ? ruby_locale_data(content) : yaml_locale_data(content)
-        key_paths = nested_key_paths(data)
+        # <locale>.i18n holds backend settings (the plural rule, transliteration), not translations.
+        key_paths = nested_key_paths(data).reject { |key_path| key_path.split(".", 3)[1] == "i18n" }
 
         # Only the locale-rooted paths are kept. The per-locale lists are the
         # same strings without their root, so holding both doubled what an
