@@ -1073,6 +1073,18 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       expect(described_class.call(detail: "summary").content.first[:text]).to include("- `JOB_TOKEN`")
     end
 
+    it "says an ERB tag names a variable, never printing the placeholder as its name" do
+      write_deploy("env:\n  clear:\n    <%= ENV.fetch(\"DYN_NAME\", \"X\") %>: abc\n  secret:\n    - <%= ENV[\"S\"] %>\n    - DB_PASSWORD:<%= ENV[\"P\"] %>\n")
+
+      %w[summary standard full].each do |detail|
+        expect(described_class.call(detail: detail).content.first[:text]).not_to include("RAC_ERB_OUTPUT")
+      end
+      text = described_class.call.content.first[:text]
+      expect(text).to include("- a variable whose name an ERB tag sets at deploy time")
+      expect(text).to include("- a secret whose name an ERB tag sets at deploy time")
+      expect(text).to include("- `DB_PASSWORD` - secret, from `.kamal/secrets` (a name an ERB tag sets)")
+    end
+
     it "shows a hyphenated host or bucket name, and still hides a long hex key" do
       write_deploy("env:\n  clear:\n    DB_HOST: myapp-production-db-1\n    S3_BUCKET: myapp-assets-2024\n    HEXKEY: 0123456789abcdef0123456789abcdef\n")
 

@@ -50,7 +50,7 @@ module RailsAiContext
         env_vars.each { |_file, vars| vars.each { |v| all_var_names << v[:name] } }
         env_example.each { |v| all_var_names << v[:name] }
         dockerfile_vars.each { |v| all_var_names << v[:name] if v[:type] == "ENV" }
-        kamal_env.each { |v| all_var_names << v[:name] }
+        kamal_env.each { |v| all_var_names << v[:name] if v[:name] }
 
         anyway_configs.each { |c| c[:attributes].each { |a| all_var_names << a[:env] if a[:env] } }
         deploy_and_settings = kamal_lines(kamal_env, root) + settings_lines(settings) + anyway_lines(anyway_configs)
@@ -316,8 +316,13 @@ module RailsAiContext
         lines = [ "## Set by Kamal (`#{KAMAL_DEPLOY}`)" ]
         kamal_env.each do |v|
           scope = v[:scope] ? " (#{v[:scope]})" : ""
-          lines << if v[:secret]
-            alias_note = v[:secret] == v[:name] ? "" : " (`#{v[:secret]}`)"
+          lines << if v[:name].nil?
+            "- a #{v[:secret] ? 'secret' : 'variable'} whose name an ERB tag sets at deploy time#{scope}"
+          elsif v[:secret]
+            alias_note = if v[:secret] == v[:name] then ""
+            elsif RailsAiContext::ConfigYaml.marked?(v[:secret]) then " (a name an ERB tag sets)"
+            else " (`#{v[:secret]}`)"
+            end
             "- `#{v[:name]}` - secret, from `.kamal/secrets`#{alias_note}#{scope}"
           elsif v[:value] == :computed
             "- `#{v[:name]}` - set by ERB at deploy time#{scope}"
@@ -351,9 +356,14 @@ module RailsAiContext
         clear = {} unless clear.is_a?(Hash)
         secrets = Array(env["secret"]).filter_map do |key|
           name, aliased = key.to_s.split(":", 2)
-          { name: name, secret: aliased || name, scope: scope }.compact unless name.to_s.empty?
+          { name: kamal_name(name), secret: aliased || name, scope: scope }.compact unless name.to_s.empty?
         end
-        secrets + clear.map { |name, value| { name: name.to_s, value: kamal_clear_value(name.to_s, value), scope: scope }.compact }
+        secrets + clear.map { |name, value| { name: kamal_name(name.to_s), value: kamal_clear_value(name.to_s, value), scope: scope }.compact }
+      end
+
+      # nil for a name an ERB tag writes, so the marker is never printed as a variable.
+      private_class_method def self.kamal_name(name)
+        name unless RailsAiContext::ConfigYaml.marked?(name)
       end
 
       SAFE_ENV_NAMES = Introspectors::EnvIntrospector::KNOWN_ENV_VARS.select { |spec| spec[:safe] }.to_set { |spec| spec[:name] }.freeze
