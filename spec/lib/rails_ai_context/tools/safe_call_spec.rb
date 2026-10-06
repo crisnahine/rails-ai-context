@@ -435,6 +435,44 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
         Object.send(:remove_const, :OutsideProbe) if defined?(OutsideProbe)
       end
     end
+
+    it "names an eval frame given a file by that file alone" do
+      Dir.mktmpdir do |dir|
+        script = File.join(dir, "eval_probe.rb")
+        tool = build_tool do
+          input_schema(properties: {})
+          define_singleton_method(:call) { |server_context: nil| eval("raise 'x'", binding, script, 1) } # rubocop:disable Security/Eval
+        end
+
+        text = tool.call.content.first[:text]
+
+        expect(text).to match(/^At: eval_probe\.rb:1:/)
+        expect(text).not_to include(dir)
+      end
+    end
+
+    # Ruby 3.3 and later spell an eval with no file as `(eval at FILE:LINE)`,
+    # and splitting that frame on its first colon left FILE absolute.
+    it "keeps the file inside an eval frame portable" do
+      Dir.mktmpdir do |dir|
+        script = File.join(dir, "instance_eval_probe.rb")
+        File.write(script, "module InstanceEvalProbe; def self.fail! = Object.new.instance_eval(\"nil.empty?\"); end\n")
+        load script
+        tool = build_tool do
+          input_schema(properties: {})
+          def self.call(server_context: nil)
+            InstanceEvalProbe.fail!
+          end
+        end
+
+        text = tool.call.content.first[:text]
+
+        expect(text).to match(/^At: \(eval(?: at instance_eval_probe\.rb:1)?\):1:/)
+        expect(text).not_to include(dir)
+      ensure
+        Object.send(:remove_const, :InstanceEvalProbe) if defined?(InstanceEvalProbe)
+      end
+    end
   end
 
   # An unknown parameter reached the tool as an unknown keyword, so the answer

@@ -102,8 +102,14 @@ module RailsAiContext
       # spelled the way every other path this gem reports is, and one no
       # portable form names keeps only its file name.
       def portable_origin(frame)
+        # Ruby 3.3+ names an eval without a file `(eval at FILE:LINE):LINE`.
+        if (eval_frame = frame.match(/\A\(eval at (.+)\)(:\d+(?::.*)?)?\z/m))
+          return "(eval at #{portable_origin(eval_frame[1])})#{eval_frame[2]}"
+        end
+
         path, rest = frame.split(":", 2)
-        return frame if path.to_s.empty?
+        # A relative path (`(eval)`, `-e`) names nothing on this machine.
+        return frame unless File.absolute_path?(path.to_s)
 
         # This runs inside the rescue that answers a tool failure, so a raise
         # here would leave the net and reach the client as a protocol error.
