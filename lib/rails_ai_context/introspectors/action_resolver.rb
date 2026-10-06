@@ -125,8 +125,11 @@ module RailsAiContext
       end
 
       # The walked methods behind those signatures, for a caller that prints each one's own body.
-      def public_methods_in(source, owner: nil, skip_underscored: true)
-        methods = own_methods_in(source, owner).select { |m| m[:scope] == :instance && m[:visibility] == :public }
+      # `module_function:` also counts a module_function's instance copy, private to Ruby but callable from a view.
+      def public_methods_in(source, owner: nil, skip_underscored: true, module_function: false)
+        methods = own_methods_in(source, owner).select do |m|
+          m[:scope] == :instance && (m[:visibility] == :public || (module_function && m[:module_function]))
+        end
         skip_underscored ? methods.reject { |m| m[:name].start_with?("_") } : methods
       end
 
