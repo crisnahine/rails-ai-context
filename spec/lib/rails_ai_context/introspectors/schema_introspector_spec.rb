@@ -1728,6 +1728,16 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       expect(result[:tables]["users"][:columns].find { |c| c[:name] == "mood" }).to include(type: "enum", enum_type: "mood")
     end
 
+    it "lists the connection's extensions sorted by name" do
+      connection = ActiveRecord::Base.connection
+      connection.create_table(:pa_e_posts, force: true)
+      allow(connection).to receive(:extensions).and_return(%w[public.hstore pg_catalog.plpgsql pg_trgm])
+
+      expect(introspector.call[:extensions]).to eq(%w[pg_catalog.plpgsql pg_trgm public.hstore])
+    ensure
+      connection.drop_table(:pa_e_posts, if_exists: true)
+    end
+
     it "reads a booted table's check constraints from the connection" do
       connection = ActiveRecord::Base.connection
       connection.create_table(:pa_c_posts, force: true) { |t| t.string :title }
@@ -1943,7 +1953,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         );
       SQL
 
-      expect(result[:extensions]).to eq(%w[pg_catalog.plpgsql hstore extensions.uuid-ossp pg_trgm])
+      expect(result[:extensions]).to eq(%w[extensions.uuid-ossp hstore pg_catalog.plpgsql pg_trgm])
     end
 
     describe "extension names against the connection's current schema" do
@@ -1983,17 +1993,31 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
 
       it "takes public as the current schema with no search path" do
-        expect(extensions_with(database_yml: "  adapter: postgresql\n")).to eq(%w[pg_catalog.plpgsql app.pg_trgm hstore])
+        expect(extensions_with(database_yml: "  adapter: postgresql\n")).to eq(%w[app.pg_trgm hstore pg_catalog.plpgsql])
       end
 
       it "takes public as the current schema when the path starts with $user" do
         expect(extensions_with(database_yml: "  adapter: postgresql\n  schema_search_path: '\"$user\", public'\n"))
-          .to eq(%w[pg_catalog.plpgsql app.pg_trgm hstore])
+          .to eq(%w[app.pg_trgm hstore pg_catalog.plpgsql])
       end
 
       it "names every extension bare before Rails 8.0, whose connection reads extname alone" do
-        expect(extensions_with(database_yml: "  adapter: postgresql\n", rails: "7.2.2")).to eq(%w[plpgsql pg_trgm hstore])
+        expect(extensions_with(database_yml: "  adapter: postgresql\n", rails: "7.2.2")).to eq(%w[hstore pg_trgm plpgsql])
       end
+    end
+
+    it "lists a schema.rb's extensions sorted by name" do
+      result = static_of("schema.rb", <<~RUBY)
+        ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+          enable_extension "public.hstore"
+          enable_extension "pg_trgm"
+
+          create_table "users", force: :cascade do |t|
+          end
+        end
+      RUBY
+
+      expect(result[:extensions]).to eq(%w[pg_trgm public.hstore])
     end
 
     describe "plpgsql, which pg_dump leaves out" do

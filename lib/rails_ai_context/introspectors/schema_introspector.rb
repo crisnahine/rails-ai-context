@@ -190,7 +190,7 @@ module RailsAiContext
 
       def extensions
         found = connection.extensions if connection.respond_to?(:extensions)
-        Array(found).map(&:to_s) if found.present?
+        Array(found).map(&:to_s).sort if found.present?
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "extensions")
       end
@@ -623,7 +623,7 @@ module RailsAiContext
           generated_columns: SchemaConventions.generated_columns_of(tables),
           note: "Parsed from #{relative_dump_path(path)} (#{connection_state})"
         }
-        result[:extensions] = schema.extensions if schema.extensions.any?
+        result[:extensions] = schema.extensions.sort if schema.extensions.any?
         # schema.rb records only the max applied version, so pending here
         # means "migration files newer than the schema version" - exact for
         # linear histories, best-effort for out-of-order merges. With no
@@ -657,7 +657,7 @@ module RailsAiContext
           generated_columns: SchemaConventions.generated_columns_of(tables),
           note: "Parsed from #{relative_dump_path(path)} (#{connection_state})"
         }
-        result[:extensions] = parsed[:extensions] if parsed[:extensions].any?
+        result[:extensions] = parsed[:extensions].sort if parsed[:extensions].any?
         if applied.any?
           result[:schema_version] = applied.map(&:to_i).max.to_s
           migrate_dir = migrate_dir_for_dump(path)

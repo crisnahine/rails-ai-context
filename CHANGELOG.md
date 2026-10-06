@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PostgreSQL database starts with plpgsql, so the booted app lists it, but
   pg_dump leaves it out of the dump. The static tier now adds it, named
   `pg_catalog.plpgsql` on Rails 8 and `plpgsql` before, unless the dump drops it.
+- **Extensions are listed in name order, with or without a boot.** The booted
+  app listed them in the order the database created them and the static tier
+  in the order the dump wrote them, so the same app gave two orders.
 
 ## [5.32.0] - 2026-10-06
 
