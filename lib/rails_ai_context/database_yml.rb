@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "uri"
 require "yaml"
 
 module RailsAiContext
@@ -77,6 +78,7 @@ module RailsAiContext
       known = adapter(name, settings).first
       return %w[public] if known && !known.start_with?("postg")
 
+      settings = settings.merge(url_settings(name, settings["url"]))
       text = settings["schema_search_path"].to_s
       text = '"$user", public' if text.strip.empty?
       user = settings["username"].to_s
@@ -119,11 +121,25 @@ module RailsAiContext
     # Rails' DatabaseConfigurations: an entry's own url wins over its keys, and an entry
     # without one takes <NAME>_DATABASE_URL, or DATABASE_URL for the primary.
     def url_adapter(name, own_url)
-      url = own_url.nil? ? ENV["#{name.upcase}_DATABASE_URL"] || (ENV["DATABASE_URL"] if name == "primary") : own_url.to_s
-      return nil if url.to_s.empty? || computed?(url)
+      url = url_for(name, own_url) or return nil
 
       scheme = url[/\A([a-z][a-z0-9+.-]*):/i, 1]&.tr("-", "_")
       scheme && URL_SCHEME_ADAPTERS.fetch(scheme, scheme)
+    end
+
+    def url_for(name, own_url)
+      url = own_url.nil? ? ENV["#{name.upcase}_DATABASE_URL"] || (ENV["DATABASE_URL"] if name == "primary") : own_url.to_s
+      url unless url.to_s.empty? || computed?(url)
+    end
+
+    # The username and schema_search_path a database URL carries, which Rails merges over the entry's keys.
+    def url_settings(name, own_url)
+      uri = URI.parse(url_for(name, own_url).to_s)
+      found = uri.query ? URI.decode_www_form(uri.query).to_h.slice("schema_search_path") : {}
+      found["username"] = URI.decode_www_form_component(uri.user) if uri.user
+      found
+    rescue URI::Error, ArgumentError
+      {}
     end
 
     # [adapter, from_default]: the URL's scheme wins, then the entry's adapter. An ERB-computed

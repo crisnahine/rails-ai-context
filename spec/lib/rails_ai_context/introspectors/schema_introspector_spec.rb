@@ -2282,6 +2282,28 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(tables.keys).to contain_exactly("users", "notes", "events")
       end
 
+      it "reads $user from DATABASE_URL when database.yml names no username" do
+        original = ENV["DATABASE_URL"]
+        ENV["DATABASE_URL"] = "postgres://audit:secret@localhost/app_db"
+        tables = static_with("structure.sql", structure, "")[:tables]
+
+        expect(tables.keys).to contain_exactly("users", "notes", "events")
+      ensure
+        ENV["DATABASE_URL"] = original
+      end
+
+      it "takes the entry's url user over its username, as Rails merges the url over the hash" do
+        tables = static_with("structure.sql", structure, "  username: postgres\n  url: postgres://audit@localhost/app_db\n")[:tables]
+
+        expect(tables.keys).to contain_exactly("users", "notes", "events")
+      end
+
+      it "reads schema_search_path from the url's query" do
+        tables = static_with("structure.sql", structure, "  url: postgres://localhost/app_db?schema_search_path=app,public\n")[:tables]
+
+        expect(tables.keys).to contain_exactly("widgets", "users", "notes")
+      end
+
       it "skips $user when the dump creates no schema by the username" do
         tables = static_with("structure.sql", structure, "  username: postgres\n")[:tables]
 
