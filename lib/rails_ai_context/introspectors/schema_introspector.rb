@@ -339,7 +339,8 @@ module RailsAiContext
       def declared_table_names
         return nil unless schema_file_path && File.exist?(schema_file_path)
 
-        names = schema_reader.tables.keys.map(&:to_s)
+        # Virtual tables count as tables, as the schema header counts them.
+        names = (schema_reader.tables.keys + schema_reader.virtual_tables.keys).map(&:to_s)
         names.any? ? names : nil
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "declared_table_names")

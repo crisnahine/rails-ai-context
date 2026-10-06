@@ -809,8 +809,8 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     end
   end
 
-  # db/schema.rb's count is create_table only, so the connected count leaves
-  # views and virtual tables out too, or "declares 3; has 3; 1 missing" cannot add up.
+  # Both counts, and the header above them, take a virtual table as a table and
+  # a view as a view, or "declares 3; has 3; 1 missing" cannot add up.
   describe "a missing table beside a view and a virtual table" do
     before do
       allow(described_class).to receive(:cached_context).and_return({
@@ -820,16 +820,18 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
             "active_users" => { kind: "view", columns: [], indexes: [], foreign_keys: [], sql: "SELECT 1" },
             "docs_fts" => { kind: "virtual_table", module: "fts5", columns: [ { name: "body" } ], indexes: [], foreign_keys: [] }
           ),
-          declared_tables: tables.keys + [ "order_comments" ]
+          declared_tables: tables.keys + [ "docs_fts", "order_comments" ]
         },
         models: {}
       })
     end
 
-    it "counts the same kind of table on both sides" do
+    it "counts the same kind of table on both sides and in the header" do
       text = described_class.call(detail: "summary").content.first[:text]
+      connected = tables.size + 1
 
-      expect(text).to include("declares #{tables.size + 1} tables; the connected database has #{tables.size}. Missing: order_comments")
+      expect(text).to include("# Schema Summary (#{connected} tables and 1 view)")
+      expect(text).to include("declares #{connected + 1} tables; the connected database has #{connected}. Missing: order_comments")
     end
   end
 

@@ -924,12 +924,16 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
             create_table "order_comments", force: :cascade do |t|
               t.text "body"
             end
+
+            create_virtual_table "docs_fts", "fts5", ["body"]
+            create_view "active_users", sql_definition: "SELECT 1"
           end
         RUBY
 
         result = introspector.call
 
-        expect(result[:declared_tables]).to contain_exactly("users", "order_comments")
+        # A virtual table counts as a table, as the schema header counts it; a view does not.
+        expect(result[:declared_tables]).to contain_exactly("users", "order_comments", "docs_fts")
         expect(result[:tables].keys).to eq([ "users" ])
         expect(result[:declared_in]).to eq("db/schema.rb")
       ensure
