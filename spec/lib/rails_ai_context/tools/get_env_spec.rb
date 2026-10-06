@@ -1104,6 +1104,17 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       expect(text).to include("- `HEXKEY` - value hidden")
     end
 
+    it "hides a UUID or a hyphen-grouped hex key under a name Redaction does not key on" do
+      write_deploy("env:\n  clear:\n    LIC: 550e8400-e29b-41d4-a716-446655440000\n    PUSHER_APP_KEY: f3a9-41bc-8d2e-77aa\n    DB_HOST: myapp-production-db-1\n")
+
+      text = described_class.call.content.first[:text]
+      expect(text).to include("- `LIC` - value hidden")
+      expect(text).to include("- `PUSHER_APP_KEY` - value hidden")
+      expect(text).to include("- `DB_HOST` = `myapp-production-db-1`")
+      expect(text).not_to include("550e8400")
+      expect(text).not_to include("f3a9-41bc")
+    end
+
     it "names a destination file it did not read when the base file sets no env" do
       write_deploy("service: app\nimage: app\nservers:\n  - 1.1.1.1\n")
       File.write(File.join(@root, "config", "deploy.staging.yml"), "env:\n  secret:\n    - STAGING_TOKEN\n")

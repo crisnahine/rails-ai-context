@@ -369,6 +369,8 @@ module RailsAiContext
       # A run of letters and digits this long is a key or token, whatever the variable is called;
       # a hyphen or underscore breaks the run, so a host name such as `myapp-production-db-1` shows.
       OPAQUE_TOKEN = /(?=[A-Za-z0-9+\/=]*\d)(?=[A-Za-z0-9+\/=]*[A-Za-z])[A-Za-z0-9+\/=]{16,}/
+      # A UUID or a hex key split into groups is still a key once the separators go.
+      GROUPED_HEX = /\A\h{16,}\z/
 
       # Webhook URLs and DSNs hide their secret in the path or user part, where Redaction does not look.
       private_class_method def self.kamal_clear_value(name, value)
@@ -376,7 +378,7 @@ module RailsAiContext
 
         text = value.to_s
         return RailsAiContext::Redaction.value(name, text) if SAFE_ENV_NAMES.include?(name)
-        return :hidden if text.include?("://") || text.match?(OPAQUE_TOKEN) || RailsAiContext::Redaction.value(name, text) != text
+        return :hidden if text.include?("://") || text.match?(OPAQUE_TOKEN) || text.delete("-_").match?(GROUPED_HEX) || RailsAiContext::Redaction.value(name, text) != text
 
         text
       end
