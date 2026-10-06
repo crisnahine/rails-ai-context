@@ -437,6 +437,7 @@ module RailsAiContext
 
           job = { name: name, file: candidate.file }
           job[:unknown_base] = true if unknown_base
+          job[:que] = true if que
           job[:queue] = queue if queue
           job[:retries] = retries if retries.any?
           job[:perform_signature] = perform_signature if perform_signature
