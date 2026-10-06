@@ -95,6 +95,28 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::CallbacksListener do
     ])
   end
 
+  # define_model_callbacks takes keywords, so a braced hash stays in args as a filter.
+  it "keeps a braced hash as a filter on a define_model_callbacks macro" do
+    results = parse_and_dispatch("before_save :x, { if: :y }")
+    expect(results.map { |r| r[:method] }).to eq([ "x", "{ if: :y }" ])
+  end
+
+  it "reads a trailing braced hash as the options of before_validation and after_validation" do
+    results = parse_and_dispatch("before_validation :x, { on: :create }\nafter_validation :y, { if: :z }")
+    expect(results.map { |r| [ r[:method], r[:options] ] }).to eq([ [ "x", { on: :create } ], [ "y", { if: :z } ] ])
+  end
+
+  it "reads a trailing braced hash as the options of the commit and rollback macros" do
+    results = parse_and_dispatch("after_commit :x, { on: :create }\nafter_rollback :y, { if: :z }\nafter_create_commit :w, {}")
+    expect(results.map { |r| [ r[:type], r[:method] ] }).to eq([ %w[after_commit_on_create x], %w[after_rollback y], %w[after_create_commit w] ])
+  end
+
+  # Keywords after it are what extract_options! takes, so the braced hash is still a filter.
+  it "keeps a braced hash followed by keywords as a filter" do
+    results = parse_and_dispatch("after_commit :x, { on: :create }, if: :y")
+    expect(results.map { |r| r[:method] }).to eq([ "x", "{ on: :create }" ])
+  end
+
   it "reports every proc spelling as an inline block, Proc.new included" do
     results = parse_and_dispatch("before_save Proc.new { touch }\nbefore_save proc { x }\nbefore_save ::Proc.new { y }\nbefore_save lambda { z }")
     expect(results.map { |r| r[:method] }).to eq([ "[inline_block]" ] * 4)

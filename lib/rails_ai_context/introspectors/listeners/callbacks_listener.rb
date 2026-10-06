@@ -23,14 +23,21 @@ module RailsAiContext
 
         INLINE_BLOCK = "[inline_block]"
 
+        # Macros that call args.extract_options!, so a trailing braced hash is options, not a filter.
+        EXTRACTS_OPTIONS = %i[
+          before_validation after_validation after_commit after_rollback
+          after_create_commit after_update_commit after_destroy_commit after_save_commit
+        ].to_set.freeze
+
         def on_call_node_enter(node)
           return record_skip(node) if node.name == :skip_callback && in_scope?(node)
           return unless CALLBACK_METHODS.include?(node.name) && in_scope?(node)
 
           # Sources, not literals: a lambda condition reads as the line the
           # file holds rather than as a marker.
-          options = scope_options(receiver_name(node)).merge(extract_keyword_sources(node))
-          emit(node, resolve_callback_types(node.name, options), callback_targets(node), options)
+          hash = options_hash(node)
+          options = scope_options(receiver_name(node)).merge(extract_keyword_sources(node)).merge(hash_sources(hash))
+          emit(node, resolve_callback_types(node.name, options), callback_targets(node, hash), options)
         end
 
         ON_EVENT = "after_commit_on_"
@@ -86,14 +93,27 @@ module RailsAiContext
 
         # Each filter Rails registers, in its order: the block first, then every positional
         # argument. An object (`Normalizer.new`) is kept as written; a lambda names nothing.
-        def callback_targets(node)
-          positional = (node.arguments&.arguments || []).reject { |a| a.is_a?(Prism::KeywordHashNode) }
+        def callback_targets(node, options_hash)
+          positional = (node.arguments&.arguments || []).reject { |a| a.is_a?(Prism::KeywordHashNode) || a.equal?(options_hash) }
           targets = node.block ? [ [ INLINE_BLOCK, RailsAiContext::Confidence::INFERRED ] ] : []
           targets + positional.map do |arg|
             if (name = literal_string(arg)) then [ name, confidence_for(node) ]
             elsif proc_argument?(arg) then [ INLINE_BLOCK, RailsAiContext::Confidence::INFERRED ]
             else [ one_line_source(arg), confidence_for(node) ]
             end
+          end
+        end
+
+        def options_hash(node)
+          last = node.arguments&.arguments&.last
+          last if last.is_a?(Prism::HashNode) && EXTRACTS_OPTIONS.include?(node.name)
+        end
+
+        def hash_sources(hash)
+          return {} unless hash
+
+          hash.elements.each_with_object({}) do |assoc, h|
+            h[extract_key(assoc.key)] = value_or_source(assoc.value) if assoc.is_a?(Prism::AssocNode)
           end
         end
 
