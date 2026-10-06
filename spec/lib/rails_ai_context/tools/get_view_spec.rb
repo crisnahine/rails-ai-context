@@ -574,6 +574,17 @@ RSpec.describe RailsAiContext::Tools::GetView do
       end
     end
 
+    %w[summary standard].each do |detail|
+      it "ties a partial's variant to its partial in the #{detail} listing" do
+        partials = { "posts/_card.html.erb" => { lines: 1 }, "posts/_card.html+mobile.erb" => { lines: 1, fields: %w[title] } }
+        allow(described_class).to receive(:cached_context).and_return(view_templates: { templates: {}, partials: partials })
+        text = described_class.call(controller: "posts", detail: detail).content.first[:text]
+
+        expect(text).to match(/posts\/_card\.html\+mobile\.erb \(1 line\) `mobile` variant of `card`/)
+        expect(text).not_to match(/posts\/_card\.html\.erb.*of `card`/)
+      end
+    end
+
     it "ties each to show when the listing is read off disk" do
       allow(described_class).to receive(:cached_context).and_return({})
       text = described_class.call(controller: "posts", detail: "summary").content.first[:text]

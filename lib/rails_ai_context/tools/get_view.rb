@@ -125,7 +125,8 @@ module RailsAiContext
               lines << "- #{name} (#{count_phrase(meta[:lines], "line")}#{phlex_tag})#{alternate}#{parts}#{comps}#{stim}"
             end
             ctrl_partials.sort.each do |name, meta|
-              lines << "- #{name} (#{count_phrase(meta[:lines], "line")})"
+              alternate = (note = RailsAiContext::ViewFile.alternate_of(name)) ? " #{note}" : ""
+              lines << "- #{name} (#{count_phrase(meta[:lines], "line")})#{alternate}"
             end
             lines << ""
           end
@@ -185,7 +186,8 @@ module RailsAiContext
               helpers = meta[:helpers]&.any? ? " helpers: #{meta[:helpers].join(', ')}" : ""
               locals = extract_partial_locals(name, templates)
               locals_str = locals&.any? ? " **locals:** #{locals.join(', ')}" : ""
-              lines << "- #{name} (#{count_phrase(meta[:lines], "line")})#{fields}#{helpers}#{locals_str}"
+              alternate = (note = RailsAiContext::ViewFile.alternate_of(name)) ? " #{note}" : ""
+              lines << "- #{name} (#{count_phrase(meta[:lines], "line")})#{alternate}#{fields}#{helpers}#{locals_str}"
             end
             lines << ""
           end
