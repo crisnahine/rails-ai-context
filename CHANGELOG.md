@@ -348,11 +348,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   config/application.rb, the environment file or any initializer), or at the
   path a model's `to_partial_path` returns when it returns a string literal.
   `render @post.comments` goes to the partial of the records the association
-  the model declares holds (its `class_name:` when it has one), a trailing
-  call on a collection (`@posts.first`, `@posts.recent`) keeps that
-  collection's records, and a chain the app's models cannot resolve is
-  credited to no partial. The `view` tool's `renders:` list reads the call the
-  same way. (#323, #324)
+  the model declares holds (its `class_name:` when it has one), a chain on a
+  receiver that is no model (`current_user.posts`) goes to the partial of the
+  records it names, a trailing call on a collection (`@posts.first`,
+  `@posts.recent`) keeps that collection's records, and a chain the app's
+  models cannot resolve is credited to no partial. The `view` tool's `renders:` list
+  reads the call the same way. (#323, #324)
 - **`schema` shows more of each column and table**, in both tiers: precision,
   scale, limit, the unsigned flag and collation, the table comment, unique
   constraints, a MySQL text or blob column's size (`size: medium`), index

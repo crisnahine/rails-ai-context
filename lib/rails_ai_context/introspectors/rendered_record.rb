@@ -17,12 +17,15 @@ module RailsAiContext
       # [the segment naming the records, the model] for a chain such as "post.comments.reverse": the
       # receiver, then each association its model declares. A call that is no association keeps a
       # collection's records (`.first`, `.recent`); on a single record it returns who knows what, so nil.
-      # Nil too when a chain's receiver is no model the app holds.
+      # A receiver that is no model (`current_user.posts`) is read from the next name, as `render @posts`
+      # is; nil when the app holds no model for that either.
       def resolve(chain, root, memo = {})
         segments = chain.split(".")
+        return [ segments.first, segments.first.singularize ] if segments.size == 1
+
+        segments = segments.drop(1) unless read(segments.first.singularize, root, memo)
         name = segments.first
         model = name.singularize
-        return [ name, model ] if segments.size == 1
         return nil unless read(model, root, memo)
 
         collection = name != model

@@ -136,6 +136,15 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       expect(rendered_from("posts/post")).not_to include("home.html.erb:4")
     end
 
+    it "credits a chain on a receiver that is no model to the partial of the records it names" do
+      File.write(File.join(@root, "app/models/post.rb"), "class Post < ApplicationRecord\nend\n")
+      FileUtils.mkdir_p(File.join(@root, "app/views/users"))
+      File.write(File.join(@root, "app/views/users/show.html.erb"), "<%= render current_user.posts %>\n<%= render current_account.widgets %>\n")
+
+      expect(rendered_from("posts/post")).to include("app/views/users/show.html.erb:1")
+      expect(rendered_from("posts/post")).not_to include("users/show.html.erb:2")
+    end
+
     it "counts a partial under a view root declared inside app/views once" do
       FileUtils.mkdir_p(File.join(@root, "config"))
       File.write(File.join(@root, "config/application.rb"), "config.paths[\"app/views\"].unshift(\"app/views/custom\")\n")

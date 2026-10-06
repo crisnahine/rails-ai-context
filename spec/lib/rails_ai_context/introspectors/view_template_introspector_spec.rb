@@ -134,6 +134,11 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
       expect(introspector.send(:extract_partial_refs, source)).to contain_exactly("posts", "comments")
     end
 
+    it "reads a chain on a receiver that is no model from the records it names, when the app has that model" do
+      expect(introspector.send(:extract_partial_refs, "<%= render current_user.comments.recent %>")).to eq([ "comments" ])
+      expect(introspector.send(:extract_partial_refs, "<%= render current_account.widgets %>")).to be_empty
+    end
+
     it "still detects render @ivar" do
       source = "<%= render @article %>"
       expect(introspector.send(:extract_partial_refs, source)).to include("article")

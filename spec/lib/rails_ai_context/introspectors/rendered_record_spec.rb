@@ -24,6 +24,11 @@ RSpec.describe RailsAiContext::Introspectors::RenderedRecord do
     expect(described_class.partial_path(model, @root)).to eq("blog/users/user")
   end
 
+  it "reads a receiver that is no model by the records the next name holds" do
+    expect(described_class.resolve("current_user.comments.recent", @root)).to eq(%w[comments comment])
+    expect(described_class.resolve("current_account.widgets", @root)).to be_nil
+  end
+
   it "resolves nothing through a polymorphic association or an unknown call on one record" do
     expect(described_class.resolve("comment.commentable", @root)).to be_nil
     expect(described_class.resolve("comment.summary", @root)).to be_nil
