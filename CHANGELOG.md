@@ -409,7 +409,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The MCP cache, live reload and `watch` cover all of `app/`, `test/` and
   `spec/`.** An edit to a mailer preview, a fixture, a factory, a spec or any
   file under `app/` that a tool reads refreshes the cached answer. A bundler's
-  output in `app/assets/builds` does not.
+  output in `app/assets/builds` does not, and a re-recorded VCR cassette does
+  not either.
 - **A table in a secondary database is found** by `schema --table`,
   `model_details`, `analyze_feature`, `diagnose`, `migration_advisor`, the
   controllers schema hint and the model resource. The table view names every
@@ -481,6 +482,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tier also finds models under a symlinked directory or file in `app/models`
   that points inside the app, a model assigned `Class.new(ApplicationRecord)`
   with what its block declares (the `self.table_name` it sets included), and
+  reads a job assigned `Class.new(ApplicationJob)`, or a class whose parent is
+  such a base, the same way. An assignment counts only when the file's path
+  names it, so an error constant such as `PaymentError = Class.new(StandardError)`
+  is never listed as a service, serializer or model. The static tier also
   merges a module prepended after the class body (`Note.prepend(EE::Note)`,
   GitLab's `prepend_mod_with("Note")`). (#344, #347, #413, #416)
 - **Booted `model_details` no longer credits every model with a gem's base
