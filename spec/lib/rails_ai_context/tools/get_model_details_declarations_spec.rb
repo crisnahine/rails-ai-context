@@ -216,6 +216,15 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(post).to include("- `after_commit`: :notify (unless: :draft?)")
       expect(comment).to include("- `before_save`: :stamp_audit")
     end
+
+    it "drops a callback object the model skips, whatever event the parent named with on:" do
+      post = details_for("Post", files.merge(
+        "application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\n  after_commit AuditTrail, on: :create\nend\n",
+        "post.rb" => "class Post < ApplicationRecord\n  skip_callback :commit, :after, AuditTrail\nend\n"
+      ))
+
+      expect(post).not_to include("AuditTrail")
+    end
   end
 
   it "names a callback object as the object, not as a method or a block" do
