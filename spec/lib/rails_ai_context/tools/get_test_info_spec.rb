@@ -269,7 +269,7 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
 
       expect(text).to include("- **users:**\n  - `one`: email_address: one@example.com, password_digest: <%= ... %>")
       expect(text).to include("`note_<%= ... %>` _(label set by ERB)_: title: T<%= ... %>")
-      expect(text).not_to include("erb_value")
+      expect(text).not_to include(RailsAiContext::FixtureKeys::ERB_VALUE)
       expect(text).to include("- **posts:**\n  - `one`: title: A, user: one")
     end
 
@@ -294,13 +294,21 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       expect(described_class.send(:fixture_key_for, "posts", {})).to eq("first")
     end
 
+    it "shows a value or label that only spells the ERB placeholder word as written" do
+      write("test/fixtures/users.yml", "erb_value_one:\n  kind: erb_value_v2\n")
+      text = full_text
+
+      expect(text).to include("- **users:**\n  - `erb_value_one`: kind: erb_value_v2")
+      expect(text).not_to include("<%= ... %>")
+    end
+
     it "never offers a label ERB computes as a fixture key, and shows it as ERB in the listing" do
       write("test/fixtures/users.yml", "<% 2.times do |i| %>\nuser_<%= i %>:\n  n: <%= i %>\n<% end %>\n")
       text = full_text
 
-      expect(described_class.send(:fixture_key_for, "users", { fixture_names: { "users" => [ "user_erb_value" ] } })).to be_nil
+      expect(described_class.send(:fixture_key_for, "users", { fixture_names: { "users" => [ "user_#{RailsAiContext::FixtureKeys::ERB_VALUE}" ] } })).to be_nil
       expect(text).to include("- **users:**\n  - `user_<%= ... %>` _(label set by ERB)_")
-      expect(text).not_to include("users(:user_erb_value)")
+      expect(text).not_to include("users(:user_#{RailsAiContext::FixtureKeys::ERB_VALUE})")
     end
 
     it "lists a label that starts with an underscore as written, with no ERB note" do
