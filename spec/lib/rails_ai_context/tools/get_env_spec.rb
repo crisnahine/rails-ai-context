@@ -1073,6 +1073,15 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       expect(described_class.call(detail: "summary").content.first[:text]).to include("- `JOB_TOKEN`")
     end
 
+    it "shows a hyphenated host or bucket name, and still hides a long hex key" do
+      write_deploy("env:\n  clear:\n    DB_HOST: myapp-production-db-1\n    S3_BUCKET: myapp-assets-2024\n    HEXKEY: 0123456789abcdef0123456789abcdef\n")
+
+      text = described_class.call.content.first[:text]
+      expect(text).to include("- `DB_HOST` = `myapp-production-db-1`")
+      expect(text).to include("- `S3_BUCKET` = `myapp-assets-2024`")
+      expect(text).to include("- `HEXKEY` - value hidden")
+    end
+
     it "adds nothing for a deploy file that is not valid YAML or has no env" do
       write_deploy("env: [unclosed\n")
       expect(described_class.call.content.first[:text]).not_to include("Set by Kamal")

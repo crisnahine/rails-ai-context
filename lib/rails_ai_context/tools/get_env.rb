@@ -357,8 +357,9 @@ module RailsAiContext
       end
 
       SAFE_ENV_NAMES = Introspectors::EnvIntrospector::KNOWN_ENV_VARS.select { |spec| spec[:safe] }.to_set { |spec| spec[:name] }.freeze
-      # A run of letters and digits this long is a key or token, whatever the variable is called.
-      OPAQUE_TOKEN = /(?=[A-Za-z0-9+\/=_-]*\d)(?=[A-Za-z0-9+\/=_-]*[A-Za-z])[A-Za-z0-9+\/=_-]{16,}/
+      # A run of letters and digits this long is a key or token, whatever the variable is called;
+      # a hyphen or underscore breaks the run, so a host name such as `myapp-production-db-1` shows.
+      OPAQUE_TOKEN = /(?=[A-Za-z0-9+\/=]*\d)(?=[A-Za-z0-9+\/=]*[A-Za-z])[A-Za-z0-9+\/=]{16,}/
 
       # Webhook URLs and DSNs hide their secret in the path or user part, where Redaction does not look.
       private_class_method def self.kamal_clear_value(name, value)
