@@ -288,6 +288,18 @@ RSpec.describe RailsAiContext::GemLock do
         end
       end
     end
+
+    it "rereads when a file the Gemfile evaluates changes" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile"), %(gem "rails"\neval_gemfile "Gemfile.local"\n))
+        File.write(File.join(dir, "Gemfile.local"), %(gem "pg"\n))
+        expect(described_class.for(dir).gemfile_gems).to eq(%w[rails pg])
+
+        File.write(File.join(dir, "Gemfile.local"), %(gem "pg"\ngem "stripe"\n))
+        File.utime(Time.now + 2, Time.now + 2, File.join(dir, "Gemfile.local"))
+        expect(described_class.for(dir).gemfile_gems).to eq(%w[rails pg stripe])
+      end
+    end
   end
 
   describe "a lockfile config/boot.rb points outside the app" do

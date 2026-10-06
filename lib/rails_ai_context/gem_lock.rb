@@ -129,6 +129,7 @@ module RailsAiContext
       bundle = bundle(root)
       stamp = [ bundle.lockfile, bundle.gemfile, File.join(root, "config/boot.rb"),
                 *VERSION_FILES.map { |name| File.join(root, name) } ].map { |file| file && mtime(file) } << loaded?
+      stamp << Introspectors::GemfileGems.stamps(bundle) if loaded?
 
       MUTEX.synchronize do
         cached = CACHE[root]

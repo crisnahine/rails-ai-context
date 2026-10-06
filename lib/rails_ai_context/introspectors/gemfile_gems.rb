@@ -43,6 +43,12 @@ module RailsAiContext
         entries
       end
 
+      # The mtimes of the Gemfile and every file it evaluates, as read_bundle last read them.
+      def stamps(bundle)
+        read_bundle(bundle)
+        MUTEX.synchronize { CACHE[[ bundle.dir, bundle.gemfile ]]&.fetch(:stamps) }
+      end
+
       # Bundler evaluates an eval_gemfile file into the same Gemfile, inside
       # the groups around the call. Never read outside the bundle's directory,
       # and a file left unread adds gems no one can name.
