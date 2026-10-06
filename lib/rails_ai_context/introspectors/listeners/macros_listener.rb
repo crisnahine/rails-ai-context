@@ -305,6 +305,8 @@ module RailsAiContext
           type_arg = args[1]
           type = case type_arg
           when Prism::SymbolNode then type_arg.unescaped
+          when nil, Prism::KeywordHashNode then nil
+          else one_line_source(type_arg)
           end
 
           # Sources, so `default: "anon"` prints as the file writes it.

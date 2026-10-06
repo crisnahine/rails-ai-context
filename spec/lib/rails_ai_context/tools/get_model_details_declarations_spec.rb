@@ -27,13 +27,14 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       class User < ApplicationRecord
         attribute :nickname, :string, default: "anon"
         attribute :score, :integer
+        attribute :price, MoneyType.new
         alias_attribute :login, :email
         has_one_attached :avatar
         has_rich_text :bio
       end
     RUBY
 
-    expect(text).to include("- `attribute` :nickname (string, default: \"anon\"), :score (integer)")
+    expect(text).to include("- `attribute` :nickname (string, default: \"anon\"), :score (integer), :price (MoneyType.new)")
     expect(text).to include("- `alias_attribute` :login → :email")
     expect(text).to include("- `has_rich_text` :bio")
   end
