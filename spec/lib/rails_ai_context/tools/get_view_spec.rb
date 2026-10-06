@@ -410,6 +410,15 @@ RSpec.describe RailsAiContext::Tools::GetView do
         expect(text).to include("_The views of the engine this app runs in are read only with the app booted._")
       end
 
+      it "says unbooted in the view listing and on a path miss that the engine's views are not read" do
+        allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+        allow(RailsAiContext::PathResolver).to receive(:test_root).and_return("/engine")
+        note = "_The views of the engine this app runs in are read only with the app booted._"
+
+        expect(described_class.call.content.first[:text]).to include(note)
+        expect(described_class.call(path: "b3eng/widgets/show.html.erb").content.first[:text]).to include(note)
+      end
+
       it "keeps the original recovery copy for a controller filter miss instead of the API-only note" do
         response = described_class.call(controller: "posts")
         text = response.content.first[:text]

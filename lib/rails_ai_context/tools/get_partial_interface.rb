@@ -73,7 +73,7 @@ module RailsAiContext
         unless located
           available = view_dirs.flat_map { |dir| find_available_partials(dir, root) }.uniq.sort.first(30)
           return not_found_response("Partial", partial, available,
-            recovery_tool: "Call rails_get_view(detail:\"summary\") to see all views and partials")
+            recovery_tool: "Call rails_get_view(detail:\"summary\") to see all views and partials", note: static_engine_views_note)
         end
 
         file_path = located.realpath

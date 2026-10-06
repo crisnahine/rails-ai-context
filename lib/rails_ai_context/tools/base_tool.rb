@@ -299,7 +299,7 @@ module RailsAiContext
 
         # Structured not-found error with fuzzy suggestion and recovery hint.
         # Helps AI agents self-correct without retrying blind.
-        def not_found_response(type, name, available, recovery_tool: nil)
+        def not_found_response(type, name, available, recovery_tool: nil, note: nil)
           # Don't suggest the exact same string the user typed - that's useless
           suggestions = find_closest_matches(name, available) - [ name ]
           lines = [ "#{type} '#{name}' not found." ]
@@ -310,7 +310,16 @@ module RailsAiContext
           end
           lines << "Available: #{available.first(20).join(', ')}#{"..." if available.size > 20}" if available.any?
           lines << "_Recovery: #{recovery_tool}_" if recovery_tool
+          lines << "" << note if note
           empty_response(lines.join("\n"))
+        end
+
+        # Unbooted, a test/dummy's enclosing engine is not a views root.
+        def static_engine_views_note
+          root = rails_app.root.to_s
+          return nil unless RailsAiContext.static_tier? && RailsAiContext::PathResolver.test_root(root) != root
+
+          "_The views of the engine this app runs in are read only with the app booted._"
         end
 
         # A tool ran, answered honestly, and found nothing. Renders exactly
