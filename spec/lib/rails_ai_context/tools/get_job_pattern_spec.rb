@@ -1016,6 +1016,14 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text).to include("**Queues:** file_serve(1), default(1)")
     end
 
+    it "reads a Resque queue a class method returns" do
+      File.write(File.join(tmpdir, "app", "jobs", "export_job.rb"), "class ExportJob\n  def self.queue\n    :exports\n  end\n  def self.perform(id); end\nend\n")
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+      expect(described_class.call(job: "ExportJob").content.first[:text]).to include("**Queue:** `exports`")
+    end
+
     it "says so on the job's own page" do
       text = described_class.call(job: "Archive").content.first[:text]
 
