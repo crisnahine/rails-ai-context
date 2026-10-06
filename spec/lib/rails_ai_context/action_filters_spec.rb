@@ -134,6 +134,27 @@ RSpec.describe RailsAiContext::ActionFilters do
       end
     end
 
+    it "places a base's last filter the reflected chain leaves out after the base filter before it" do
+      Dir.mktmpdir do |dir|
+        app_with_base(dir)
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"), <<~RUBY)
+          class ApplicationController < ActionController::Base
+            before_action :always
+            before_action :test_only if Rails.env.test?
+          end
+        RUBY
+        ctx = { controllers: { controllers: {
+          "WidgetsController" => { parent_class: "ApplicationController", file: "app/controllers/widgets_controller.rb",
+                                   filters: [ { kind: "before", name: "p", declared: true, prepend: true },
+                                              { kind: "before", name: "always" } ] }
+        } } }
+
+        chain = described_class.for_controller(ctx, "WidgetsController", root: dir)[:chain]
+
+        expect(chain.map { |f| f[:name] }).to eq(%w[p always test_only])
+      end
+    end
+
     it "carries its filters into a child's chain" do
       Dir.mktmpdir do |dir|
         app_with_base(dir)
