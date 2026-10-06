@@ -646,15 +646,19 @@ module RailsAiContext
 
       # [the schema answer, a DumpLookup over the same parse]
       def read_dump(format, path)
+        read_at = Time.now
         stamp = lookup_stamp(path)
         found = format == :ruby ? read_schema_rb(path) : read_structure_sql(path)
-        DUMP_LOOKUPS[path] = [ stamp, found.last ] if found.last
+        # A same-size rewrite inside one mtime tick keeps the whole stat, as AstCache knows.
+        DUMP_LOOKUPS[path] = [ stamp, found.last ] if found.last && stamp.first < read_at - RailsAiContext::AstCache::RACY_WINDOW
         found
       end
 
+      # Every input the reader takes besides the file; pk_type is bigint for every PostgreSQL dump.
       def lookup_stamp(path)
         stat = File.stat(path)
-        [ stat.mtime, stat.size, stat.ino, search_path_for(path), rails_version ]
+        [ stat.mtime, stat.size, stat.ino, search_path_for(path), rails_version,
+          RailsAiContext::DatabaseYml.user_schema(app.root, database_name_for(path)) ]
       end
 
       # The tables of one dump by the names a lookup may ask for.

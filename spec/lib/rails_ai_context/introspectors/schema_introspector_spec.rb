@@ -2892,6 +2892,40 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       FileUtils.rm_rf(dir)
     end
 
+    def lookup(dir, name)
+      described_class.new(RailsAiContext::StaticApp.new(dir)).qualified_table(name)&.first
+    end
+
+    it "answers a qualified lookup from the current database.yml after only the \"$user\" schema changes" do
+      dump = public_only.sub("Schema[8.0]", "Schema[7.0]").sub("events", "users")
+      dir = pg_app({ "db/schema.rb" => dump }, rails: "7.0.10", yml: "  username: app\n  schema_search_path: \"$user,public\"\n")
+      settled = Time.now - 60
+      File.utime(settled, settled, File.join(dir, "db/schema.rb"))
+      expect(lookup(dir, "public.users")).to eq("users")
+
+      File.write(File.join(dir, "config/database.yml"),
+                 "#{RailsAiContext.environment_name}:\n  adapter: postgresql\n  username: app\n  schema_search_path: \"app,public\"\n")
+
+      expect(lookup(dir, "public.users")).to be_nil
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+
+    it "answers a qualified lookup from a dump rewritten within one mtime tick" do
+      dump = public_only.sub("Schema[8.0]", "Schema[7.0]").sub("events", "users")
+      dir = pg_app({ "db/schema.rb" => dump }, rails: "7.0.10", yml: "")
+      file = File.join(dir, "db/schema.rb")
+      mtime = File.mtime(file)
+      expect(lookup(dir, "public.users")).to eq("users")
+
+      File.write(file, dump.sub("users", "posts"))
+      File.utime(mtime, mtime, file)
+
+      expect(lookup(dir, "public.users")).to be_nil
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+
     it "finds a Rails 7.0 schema.rb table by its qualified name on the default path, whose $user schema rarely exists" do
       dump = public_only.sub("Schema[8.0]", "Schema[7.0]")
       dir = pg_app({ "db/schema.rb" => dump }, rails: "7.0.10", yml: "  username: deploy\n")
@@ -3016,6 +3050,8 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
     it "answers a qualified lookup from the parse the introspection already made" do
       sql = pg_app({ "db/structure.sql" => shadowing_sql }, rails: "8.1.4")
       rb = pg_app({ "db/schema.rb" => rails72_enums.sub("Schema[7.2]", "Schema[8.1]").sub(/^end\n\z/, "  create_table \"audit.events\" do |t|\n  end\nend\n") }, rails: "8.1.4")
+      settled = Time.now - 60
+      [ File.join(sql, "db/structure.sql"), File.join(rb, "db/schema.rb") ].each { |dump| File.utime(settled, settled, dump) }
       allow(RailsAiContext::Introspectors::StructureSqlReader).to receive(:parse).and_call_original
       allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk).and_call_original
 
