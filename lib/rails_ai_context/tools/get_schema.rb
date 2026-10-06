@@ -390,8 +390,10 @@ module RailsAiContext
         missing = declared_not_connected(schema)
         if missing.any?
           declared_total = Array(schema[:declared_tables]).size
+          # declared_tables is create_table only, so views and virtual tables stay out of this side too.
+          connected_total = (schema[:tables] || {}).count { |_, table| !(table.is_a?(Hash) && table[:kind]) }
           lines << "_#{schema[:declared_in] || "db/schema.rb"} declares #{count_phrase(declared_total, "table")}; the connected database has " \
-                   "#{(schema[:tables] || {}).size}. Missing: #{missing.sort.first(5).join(', ')}" \
+                   "#{connected_total}. Missing: #{missing.sort.first(5).join(', ')}" \
                    "#{missing.size > 5 ? " (+#{missing.size - 5} more)" : ""}. Run `rails db:migrate`._"
         end
         if schema[:pending_migrations].is_a?(Array)

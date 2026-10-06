@@ -809,6 +809,30 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     end
   end
 
+  # db/schema.rb's count is create_table only, so the connected count leaves
+  # views and virtual tables out too, or "declares 3; has 3; 1 missing" cannot add up.
+  describe "a missing table beside a view and a virtual table" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: {
+          adapter: "sqlite3",
+          tables: tables.merge(
+            "active_users" => { kind: "view", columns: [], indexes: [], foreign_keys: [], sql: "SELECT 1" },
+            "docs_fts" => { kind: "virtual_table", module: "fts5", columns: [ { name: "body" } ], indexes: [], foreign_keys: [] }
+          ),
+          declared_tables: tables.keys + [ "order_comments" ]
+        },
+        models: {}
+      })
+    end
+
+    it "counts the same kind of table on both sides" do
+      text = described_class.call(detail: "summary").content.first[:text]
+
+      expect(text).to include("declares #{tables.size + 1} tables; the connected database has #{tables.size}. Missing: order_comments")
+    end
+  end
+
   describe "a table a renamed dump declares and the database does not have" do
     before do
       allow(described_class).to receive(:cached_context).and_return({
