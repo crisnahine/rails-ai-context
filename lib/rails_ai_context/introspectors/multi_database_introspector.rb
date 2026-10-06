@@ -126,20 +126,14 @@ module RailsAiContext
         end
       end
 
-      # Read as YAML so anchors, merge keys and comments follow the file format itself.
       def file_databases
-        config = database_yml_env
-        config = {} unless config.is_a?(Hash)
+        databases = RailsAiContext::DatabaseYml.databases(root)
         # Rails builds the primary from DATABASE_URL when the file has no entry for the env.
-        return ENV["DATABASE_URL"].to_s.empty? ? [] : [ database_entry("primary", {}) ] if config.empty?
+        return ENV["DATABASE_URL"].to_s.empty? ? [] : [ database_entry("primary", {}) ] if databases.empty?
 
-        # Rails' own rule: an env whose values are all Hashes names one
-        # database per key, anything else is a single primary config.
-        if config.values.all? { |value| value.is_a?(Hash) }
-          config.map { |name, entry| database_entry(name, entry) }
-        else
-          [ database_entry("primary", config) ]
-        end
+        # The file's order, which the booted configurations keep; databases moves the primary first.
+        order = Array(database_yml_env&.keys)
+        databases.sort_by { |name, _| order.index(name) || 0 }.map { |name, entry| database_entry(name, entry) }
       end
 
       def database_entry(name, entry)
