@@ -320,7 +320,8 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
       expect(described_class.from_source(source)).to eq([
         { name: "find_tenant_by_subdomain", kind: "before", declared: true },
         { name: "load_and_authorize_resource", kind: "before", declared: true },
-        { name: "authorize_resource", kind: "before", declared: true, except: [ "index" ] },
+        # controller_resource.rb: `prepend: true` adds it with prepend_before_action.
+        { name: "authorize_resource", kind: "before", declared: true, prepend: true, except: [ "index" ] },
         { name: "check_authorization", kind: "after", declared: true },
         { name: "skip_authorization_check", kind: "before", declared: true, only: [ "index" ] }
       ])

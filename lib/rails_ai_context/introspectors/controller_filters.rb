@@ -23,6 +23,9 @@ module RailsAiContext
         set_current_tenant_by_subdomain_or_domain: [ :before_action, :find_tenant_by_subdomain_or_domain ]
       }.freeze
 
+      # cancancan's controller_resource.rb adds these with prepend_before_action when passed `prepend: true`.
+      GEM_PREPENDABLE = %i[load_and_authorize_resource load_resource authorize_resource].freeze
+
       MACROS = (%i[
         before_action after_action around_action
         prepend_before_action append_before_action
@@ -267,6 +270,7 @@ module RailsAiContext
         entry = entry.merge(FORGERY_SKIP) if entry[:macro] == :skip_forgery_protection
         entry = entry.merge(BASIC_AUTH) if entry[:macro] == :http_basic_authenticate_with
         if (macro, name = GEM_FILTERS[entry[:macro]])
+          macro = :prepend_before_action if GEM_PREPENDABLE.include?(entry[:macro]) && (entry[:options] || {})[:prepend] == true
           entry = entry.merge(macro: macro, args: [ name ], values: [], proc_lines: [])
         end
         macro = entry[:macro].to_s
