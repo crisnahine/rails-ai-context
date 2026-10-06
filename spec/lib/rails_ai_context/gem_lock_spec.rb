@@ -346,6 +346,21 @@ RSpec.describe RailsAiContext::GemLock do
       end
     end
 
+    it "reads the assignment as Ruby: without parentheses it counts, inside a =begin block it does not" do
+      { %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path "../../../Gemfile", __dir__\n) => "8.1.4",
+        %(=begin\nENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n=end\n) => nil }.each do |boot_rb, version|
+        Dir.mktmpdir do |engine|
+          FileUtils.mkdir_p(File.join(engine, ".git"))
+          File.write(File.join(engine, "Gemfile.lock"), "GEM\n  specs:\n    rails (8.1.4)\n")
+          dummy = File.join(engine, "test/dummy")
+          FileUtils.mkdir_p(File.join(dummy, "config"))
+          File.write(File.join(dummy, "config/boot.rb"), boot_rb)
+
+          expect(described_class.for(dummy).version("rails")).to eq(version)
+        end
+      end
+    end
+
     it "never reads a bundle above the git root, nor a lockfile that links out of its directory" do
       Dir.mktmpdir do |engine|
         File.write(File.join(engine, "Gemfile.lock"), "GEM\n  specs:\n    rails (8.1.4)\n")

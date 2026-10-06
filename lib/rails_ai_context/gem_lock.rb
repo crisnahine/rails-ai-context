@@ -33,8 +33,6 @@ module RailsAiContext
     MISE_FILES = [ "mise.local.toml", "mise.toml", ".mise.toml", "mise/config.toml", ".mise/config.toml", ".config/mise.toml",
                    ".config/mise/config.toml" ].freeze
     VERSION_FILES = [ ".ruby-version", ".tool-versions", *MISE_FILES ].freeze
-    # The line `rails new` and `rails plugin new` write into config/boot.rb.
-    BOOT_GEMFILE = /^\s*ENV\[["']BUNDLE_GEMFILE["']\]\s*(?:\|\|)?=\s*File\.expand_path\(\s*["']([^"']+)["']\s*,\s*(__dir__|__FILE__)\s*\)/
     MISE_TOOLS = /^[ \t]*\[tools\][ \t]*$(.*?)(?=^[ \t]*\[|\z)/m
     # ruby = "3.3.6", ruby = ["3.3.6", ...] or ruby = { version = "3.3.6" }
     MISE_RUBY = /^[ \t]*["']?ruby["']?[ \t]*=[ \t]*(?:\[[ \t]*|\{[^}\n]*?version[ \t]*=[ \t]*)?["']([^"'\n]+)["']/
@@ -186,16 +184,45 @@ module RailsAiContext
 
     # The BUNDLE_GEMFILE config/boot.rb sets, when it is outside the app root.
     def boot_gemfile(root)
-      match = read_inside(root, "config/boot.rb")&.match(BOOT_GEMFILE)
-      return nil unless match
-
       real_root = File.realpath(root)
+      real = File.realpath(File.join(real_root, "config/boot.rb"))
+      return nil unless SafePath.contained?(real, real_root)
+
+      result = ruby_parse(real) or return nil
+      relative, anchor = Introspectors::AstWalk.each(result.value).lazy.filter_map { |node| bundle_gemfile_path(node) }.first
+      return nil unless relative
+
       # Relative to __FILE__ the path starts from boot.rb itself, one level below __dir__.
-      base = match[2] == "__FILE__" ? File.join(real_root, "config", "boot.rb") : File.join(real_root, "config")
-      target = File.expand_path(match[1], base)
+      target = File.expand_path(relative, anchor == :file ? real : File.dirname(real))
       target unless target.start_with?(SafePath.dir_prefix(real_root))
+    rescue SystemCallError
+      nil
     end
     private_class_method :boot_gemfile
+
+    # `ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../Gemfile", __dir__)`, the line `rails new`
+    # and `rails plugin new` write, with `=` or `__FILE__` as older templates do.
+    def bundle_gemfile_path(node)
+      value = case node
+      when Prism::IndexOrWriteNode then node.value if env_index?(node.receiver, node.arguments&.arguments)
+      when Prism::CallNode then node.arguments&.arguments&.last if node.name == :[]= && env_index?(node.receiver, node.arguments&.arguments&.first(1))
+      end
+      return nil unless value.is_a?(Prism::CallNode) && value.name == :expand_path && value.receiver.is_a?(Prism::ConstantReadNode) &&
+                        value.receiver.name == :File
+
+      path, anchor = value.arguments&.arguments
+      return nil unless path.is_a?(Prism::StringNode) && value.arguments.arguments.size == 2
+
+      if anchor.is_a?(Prism::SourceFileNode) then [ path.unescaped, :file ]
+      elsif anchor.is_a?(Prism::CallNode) && anchor.name == :__dir__ && anchor.receiver.nil? then [ path.unescaped, :dir ]
+      end
+    end
+    private_class_method :bundle_gemfile_path
+
+    def env_index?(receiver, arguments)
+      receiver.is_a?(Prism::ConstantReadNode) && receiver.name == :ENV && arguments&.size == 1 && literal(arguments.first) == "BUNDLE_GEMFILE"
+    end
+    private_class_method :env_index?
 
     # The file's real path when it exists and does not link out of its directory.
     def inside_file(dir, name)
@@ -287,7 +314,7 @@ module RailsAiContext
     def gemfile_entries(bundle)
       return Introspectors::GemfileGems.read_bundle(bundle) if loaded?
 
-      result = preboot_parse(bundle.gemfile) or return nil
+      result = ruby_parse(bundle.gemfile) or return nil
       Introspectors::AstWalk.each(result.value).filter_map do |node|
         next unless node.is_a?(Prism::CallNode) && node.receiver.nil?
 
@@ -308,9 +335,11 @@ module RailsAiContext
     end
     private_class_method :loaded?
 
-    # Before the boot, Prism alone: AstCache's concurrent-ruby would load ahead of the app's bundle.
-    def preboot_parse(path)
+    # AstCache once the gem is loaded; before the boot Prism alone, as AstCache's
+    # concurrent-ruby would load ahead of the app's bundle.
+    def ruby_parse(path)
       return nil unless path
+      return AstCache.parse(File.realpath(path)) if loaded?
 
       require "prism"
       require_relative "introspectors/ast_walk"
@@ -319,7 +348,7 @@ module RailsAiContext
     rescue SystemCallError, ArgumentError, LoadError
       nil
     end
-    private_class_method :preboot_parse
+    private_class_method :ruby_parse
 
     # A requirement such as `ruby ">= 3.3.0"` names a range, not a version, so it is left unanswered.
     def gemfile_ruby(entry)
