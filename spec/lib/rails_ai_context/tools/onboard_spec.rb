@@ -491,9 +491,11 @@ RSpec.describe RailsAiContext::Tools::Onboard do
         RailsAiContext::GemLock::Spec.new({}, reason: "x", absent: true, outside_gemfile: "../../Gemfile")
       )
 
-      text = described_class.call(detail: "standard").content.first[:text]
+      %w[quick standard].each do |detail|
+        text = described_class.call(detail: detail).content.first[:text]
 
-      expect(text).to include("Its gems and Rails version are not read: config/boot.rb points Bundler at `../../Gemfile`, outside the app's git repository.")
+        expect(text).to include("Its gems and Rails version are not read: config/boot.rb points Bundler at `../../Gemfile`, outside the app's git repository.")
+      end
     end
 
     it "says a booted run is running that ruby" do
