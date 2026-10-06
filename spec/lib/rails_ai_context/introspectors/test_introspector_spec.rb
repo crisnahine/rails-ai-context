@@ -742,14 +742,45 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
       expect(payload[:factory_names].values.flatten).to contain_exactly("account", "invoice", "user", "order")
     end
 
-    it "reads only the definition paths a helper sets, and adds the ones it appends" do
-      write("custom/factories/c.rb", "FactoryBot.define do\n  factory :custom_one\nend\n")
-      write("lib/factories/l.rb", "FactoryBot.define do\n  factory :lib_one\nend\n")
-      write("spec/support/fb.rb", "FactoryBot.definition_file_paths = %w[custom/factories]\n")
-      expect(payload[:factory_names]).to eq("custom/factories/c.rb" => %w[custom_one])
+    # factory_bot loads the paths only when find_definitions or reload runs; factory_bot_rails
+    # runs find_definitions on the defaults before any spec helper loads.
+    describe "a helper that sets FactoryBot.definition_file_paths" do
+      let(:defaults) { %w[spec/factories.rb packs/billing/spec/factories/invoices.rb] }
 
-      write("spec/support/fb.rb", "FactoryBot.definition_file_paths << \"lib/factories\"\n")
-      expect(payload[:factory_names].keys).to contain_exactly("spec/factories.rb", "packs/billing/spec/factories/invoices.rb", "lib/factories/l.rb")
+      before do
+        write("custom/factories/c.rb", "FactoryBot.define do\n  factory :custom_one\nend\n")
+        write("lib/factories/l.rb", "FactoryBot.define do\n  factory :lib_one\nend\n")
+      end
+
+      def with_factory_bot_rails
+        write("Gemfile.lock", "GEM\n  specs:\n    factory_bot_rails (6.5.1)\n\nDEPENDENCIES\n  factory_bot_rails\n")
+      end
+
+      it "loads only the paths it sets and then finds, and adds the ones it appends" do
+        write("spec/support/fb.rb", "::FactoryBot.definition_file_paths = %w[custom/factories]\n::FactoryBot.find_definitions\n")
+        expect(payload[:factory_names]).to eq("custom/factories/c.rb" => %w[custom_one])
+
+        write("spec/support/fb.rb", "FactoryBot.definition_file_paths << \"lib/factories\"\nFactoryBot.find_definitions\n")
+        expect(payload[:factory_names].keys).to contain_exactly(*defaults, "lib/factories/l.rb")
+      end
+
+      it "keeps the defaults when nothing loads the paths it sets" do
+        write("spec/support/fb.rb", "FactoryBot.find_definitions\nFactoryBot.definition_file_paths = %w[custom/factories]\n")
+        expect(payload[:factory_names].keys).to contain_exactly(*defaults)
+
+        with_factory_bot_rails
+        write("spec/support/fb.rb", "FactoryBot.definition_file_paths = %w[custom/factories]\n")
+        expect(payload[:factory_names].keys).to contain_exactly(*defaults)
+      end
+
+      it "under factory_bot_rails, adds the paths find_definitions loads and replaces them on reload" do
+        with_factory_bot_rails
+        write("spec/support/fb.rb", "FactoryBot.definition_file_paths = %w[custom/factories]\nFactoryBot.find_definitions\n")
+        expect(payload[:factory_names].keys).to contain_exactly(*defaults, "custom/factories/c.rb")
+
+        write("spec/support/fb.rb", "FactoryBot.definition_file_paths = %w[custom/factories]\nFactoryBot.reload\n")
+        expect(payload[:factory_names].keys).to eq(%w[custom/factories/c.rb])
+      end
     end
 
     it "reads no pack factories from a pack that is a gem" do

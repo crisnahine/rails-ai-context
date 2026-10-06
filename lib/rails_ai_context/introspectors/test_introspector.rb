@@ -87,13 +87,22 @@ module RailsAiContext
         end
       end
 
-      # The defaults, then each write a test helper makes to FactoryBot.definition_file_paths in load order.
+      # The paths factory_bot loads: factory_bot_rails finds the defaults before any
+      # helper runs, and a helper's writes count only once find_definitions (adds)
+      # or reload (replaces) runs after them.
       def factory_definition_paths
-        helper_paths.flat_map { |path| Array(helper_walk(path)&.dig(:definition_paths)) }
-          .reduce(FACTORY_PATHS + pack_factory_paths) do |paths, write|
-            found = write[:paths].map { |rel| Pathname.new(rel).cleanpath.to_s }.reject { |rel| RailsAiContext::SafePath.traversal?(rel) }
-            write[:replace] ? found : paths + found
-          end.uniq
+        paths = defaults = FACTORY_PATHS + pack_factory_paths
+        loaded = defaults if RailsAiContext::GemLock.for(root).present?("factory_bot_rails")
+        helper_paths.flat_map { |path| Array(helper_walk(path)&.dig(:definition_paths)) }.each do |event|
+          case event[:load]
+          when :find_definitions then loaded = Array(loaded) + paths
+          when :reload then loaded = paths
+          else
+            found = event[:paths].map { |rel| Pathname.new(rel).cleanpath.to_s }.reject { |rel| RailsAiContext::SafePath.traversal?(rel) }
+            paths = event[:replace] ? found : paths + found
+          end
+        end
+        (loaded || defaults).uniq
       end
 
       # ponytail: packs-specification's default pack_paths; a packs.yml that

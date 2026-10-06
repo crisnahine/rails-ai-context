@@ -7,11 +7,16 @@ module RailsAiContext
       #
       #   FactoryBot.definition_file_paths = %w[custom/factories]  → { replace: true, paths: ["custom/factories"] }
       #   FactoryBot.definition_file_paths << "lib/factories"      → { replace: false, paths: ["lib/factories"] }
+      #   FactoryBot.find_definitions / FactoryBot.reload           → { load: :find_definitions } / { load: :reload }
       #
       # The path forms are the autoload listener's.
       class DefinitionFilePathsListener < AutoloadPathsListener
+        LOADS = %i[find_definitions reload].freeze
+
         def on_call_node_enter(node)
-          if node.name == :definition_file_paths= && factory_bot?(node.receiver)
+          if LOADS.include?(node.name) && factory_bot?(node.receiver)
+            @results << { load: node.name }
+          elsif node.name == :definition_file_paths= && factory_bot?(node.receiver)
             record(true) { collect_arguments(node) }
           elsif APPENDING.include?(node.name) && setting?(node.receiver)
             record(false) { collect_arguments(node) }
@@ -43,7 +48,11 @@ module RailsAiContext
         end
 
         def factory_bot?(node)
-          node.is_a?(Prism::ConstantReadNode) && node.name == :FactoryBot
+          case node
+          when Prism::ConstantReadNode then node.name == :FactoryBot
+          when Prism::ConstantPathNode then node.parent.nil? && node.name == :FactoryBot
+          else false
+          end
         end
       end
     end
