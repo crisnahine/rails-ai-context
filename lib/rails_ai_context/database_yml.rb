@@ -15,7 +15,12 @@ module RailsAiContext
     module_function
 
     # The running environment's entry, or nil when the file is missing or unreadable.
+    # Every database question routes here, so a run reads the file once.
     def env(root)
+      RailsAiContext::RunCache.fetch([ :database_yml, root.to_s, RailsAiContext.environment_name ]) { read_env(root) }
+    end
+
+    def read_env(root)
       path = File.join(root.to_s, "config/database.yml")
       return nil unless File.exist?(path)
 
@@ -30,23 +35,33 @@ module RailsAiContext
       RailsAiContext.debug_fail(e, nil, label: "database_yml")
     end
 
-    # The primary database's settings: Rails' own rule is that an env whose values
-    # are all Hashes names one database per key, the primary first.
-    def primary(root)
+    # Each database by name, the primary first. Rails' rule: an env whose values are
+    # all Hashes names one database per key, "primary" or else the first; any other
+    # env is the primary's settings.
+    def databases(root)
       config = env(root)
-      return nil unless config.is_a?(Hash) && config.any?
-      return config unless config.values.all? { |value| value.is_a?(Hash) }
+      return {} unless config.is_a?(Hash) && config.any?
+      return { "primary" => config } unless config.values.all?(Hash)
 
-      config["primary"] || config.values.first
+      primary = config.key?("primary") ? "primary" : config.keys.first
+      { primary => config[primary] }.merge(config.except(primary))
+    end
+
+    # The databases other than the primary that Rails dumps and migrates:
+    # HashConfig#database_tasks? skips a replica and database_tasks: false.
+    def task_secondaries(root)
+      databases(root).drop(1).to_h.select { |_, entry| !entry["replica"] && entry.fetch("database_tasks", true) }
+    end
+
+    # The primary database's settings.
+    def primary(root)
+      databases(root).values.first
     end
 
     # The named database's settings in the running environment, or nil.
     def entry(root, name)
-      config = env(root)
-      return nil unless config.is_a?(Hash) && config.any?
-      return (config if name == "primary") unless config.values.all? { |value| value.is_a?(Hash) }
-
-      config[name] || (config.values.first if name == "primary")
+      found = databases(root)
+      found[name] || (found.values.first if name == "primary")
     end
 
     # Rails' DatabaseConfigurations: an entry's own url wins over its keys, and an entry

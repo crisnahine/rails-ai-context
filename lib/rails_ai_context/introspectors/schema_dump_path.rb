@@ -29,11 +29,7 @@ module RailsAiContext
       def secondaries(root)
         root = root.to_s
         RailsAiContext::RunCache.fetch([ :secondary_schema_dumps, root ]) do
-          config = RailsAiContext::DatabaseYml.env(root)
-          next {} unless config.is_a?(Hash) && config.size > 1 && config.values.all?(Hash)
-
-          primary = config.key?("primary") ? "primary" : config.keys.first
-          config.except(primary).each_with_object({}) do |(name, entry), found|
+          RailsAiContext::DatabaseYml.task_secondaries(root).each_with_object({}) do |(name, entry), found|
             format = schema_format(root, entry)
             dump = entry.key?("schema_dump") ? configured(root, entry, format) : [ format, File.join(root, "db", "#{name}_#{FILE_NAMES[format]}") ]
             found[name] = dump if dump

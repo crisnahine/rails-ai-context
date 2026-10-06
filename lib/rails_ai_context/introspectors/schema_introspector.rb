@@ -481,12 +481,8 @@ module RailsAiContext
 
       # A database whose dump is not written yet answers from its own migrations_paths.
       def replay_secondary_migrations(dumps)
-        config = RailsAiContext::DatabaseYml.env(app.root)
-        return dumps unless config.is_a?(Hash) && config.size > 1 && config.values.all?(Hash)
-
-        primary = config.key?("primary") ? "primary" : config.keys.first
-        config.each do |name, entry|
-          next if name == primary || dumps.key?(name)
+        RailsAiContext::DatabaseYml.task_secondaries(app.root).each do |name, entry|
+          next if dumps.key?(name)
 
           dirs = MigrationReplay.configured_dirs(app.root.to_s, entry) or next
           pk_type = SchemaConventions.implicit_pk_type(app.root.to_s, "#{name}_schema.rb")

@@ -1164,6 +1164,35 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
+    it "lists no replica or database_tasks: false entry as a database of its own" do
+      Dir.mktmpdir do |dir|
+        write_app(dir, "config/database.yml" => <<~YAML,
+                    #{RailsAiContext.environment_name}:
+                      primary:
+                        adapter: sqlite3
+                        database: db/dev.sqlite3
+                      analytics: &analytics
+                        adapter: sqlite3
+                        database: db/analytics.sqlite3
+                        migrations_paths: db/analytics_migrate
+                      analytics_replica:
+                        <<: *analytics
+                        replica: true
+                      reporting:
+                        <<: *analytics
+                        database_tasks: false
+                  YAML
+                       "db/schema.rb" => "ActiveRecord::Schema[8.1].define(version: 1) do\n  create_table \"users\" do |t|\n  end\nend\n",
+                       "db/analytics_schema.rb" => "ActiveRecord::Schema[8.1].define(version: 1) do\n  create_table \"page_views\" do |t|\n  end\nend\n",
+                       "db/analytics_migrate/20260101000001_create_page_views.rb" => create_posts)
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:secondary_databases].keys).to eq([ "analytics" ])
+        expect(RailsAiContext::Introspectors::SchemaDumpPath.secondaries(dir).keys).to eq([ "analytics" ])
+      end
+    end
+
     it "reads a secondary database's dump under the name its schema_dump gives" do
       Dir.mktmpdir do |dir|
         write_app(dir, "config/database.yml" => <<~YAML,
