@@ -14,10 +14,11 @@ jobs:
   test:
     uses: ./.github/workflows/unit-matrix.yml
 
-  # The gemspec's floors are claims; this is the test of them. Ruby 3.2, where
-  # prism is a real gem rather than stdlib, so the pin actually decides which
-  # parser runs. The trimmed gemfiles keep a dev dependency from resolving the
-  # pinned gem upward and turning this into a test of whatever won.
+  # The gemspec's floors are claims; this is the test of them. Ruby 3.2 by
+  # default (3.1 for the zeitwerk leg, which needs Rails 7.0), where prism is a
+  # real gem rather than stdlib, so the pin actually decides which parser runs.
+  # The trimmed gemfiles keep a dev dependency from resolving the pinned gem
+  # upward and turning this into a test of whatever won.
   floor:
     runs-on: ubuntu-latest
     strategy:
