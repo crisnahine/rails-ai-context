@@ -146,7 +146,7 @@ module RailsAiContext
 
         # Prism recovers from a syntax error with nodes the file does not hold.
         parsed = AstCache.parse_string(source)
-        return [] if parsed.errors.any?
+        return [ { unread: "config.ru does not parse" } ] if parsed.errors.any?
 
         calls = SourceIntrospector.walk_dispatch(parsed, { calls: -> { Listeners::ConditionalMacroListener.new(:use, :map, :run) } })[:calls]
         inside = calls.group_by { |call| call[:parent_offset] }

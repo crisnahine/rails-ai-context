@@ -185,6 +185,13 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
         FileUtils.rm_rf(root)
       end
 
+      it "says config.ru was not read when it does not parse" do
+        allow(described_class).to receive(:cached_context).and_return({ config: config_data, middleware: { rackup: [ { unread: "config.ru does not parse" } ] } })
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("## config.ru (runs before the Rails middleware stack)\n- not read: config.ru does not parse, so the middleware it adds is unknown")
+      end
+
       it "reads no config.ru in the static tier when the middleware introspector is off, as the booted tier does" do
         root = Dir.mktmpdir
         File.write(File.join(root, "config.ru"), "use Rack::ContentLength\n")

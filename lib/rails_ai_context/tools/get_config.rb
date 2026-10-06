@@ -137,6 +137,8 @@ module RailsAiContext
 
         lines = [ "", "## config.ru (runs before the Rails middleware stack)" ]
         calls.each do |call|
+          next lines << "- not read: #{call[:unread]}, so the middleware it adds is unknown" if call[:unread]
+
           where = [ "line #{call[:line]}", ("inside `map #{call[:within]}`" if call[:within]), call[:condition] ].compact.join(", ")
           lines << if call[:call] == "map"
             "- `map \"#{call[:target]}\"` (#{where}) - its own Rack app; requests under it never reach Rails' router"
