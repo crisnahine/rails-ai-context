@@ -214,11 +214,16 @@ module RailsAiContext
           source = ConcernPaths.module_source(root, mixin[:name], prefer: "model", within: model_name)
           next [] unless source&.include?("devise")
 
-          parsed = AstCache.parse_string(source)
-          SourceIntrospector.walk_source(source, { devise: -> { Listeners::GenericMacroListener.new(:devise) } })[:devise]
-            .reject { |hit| conditional_call?(parsed, hit[:offset]) }
-            .flat_map { |hit| hit[:args].map(&:to_s) }
+          # Keyed by source: which file a name resolves to depends on the including model.
+          (@concern_devise ||= {})[source] ||= unconditional_devise_modules(source)
         end
+      end
+
+      def unconditional_devise_modules(source)
+        parsed = AstCache.parse_string(source)
+        SourceIntrospector.walk_source(source, { devise: -> { Listeners::GenericMacroListener.new(:devise) } })[:devise]
+          .reject { |hit| conditional_call?(parsed, hit[:offset]) }
+          .flat_map { |hit| hit[:args].map(&:to_s) }
       end
 
       CONDITIONAL_NODES = [ Prism::IfNode, Prism::UnlessNode, Prism::CaseNode, Prism::DefNode ].freeze
