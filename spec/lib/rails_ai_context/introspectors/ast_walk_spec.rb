@@ -19,4 +19,13 @@ RSpec.describe RailsAiContext::Introspectors::AstWalk do
   it "answers an enumerator without a block" do
     expect(described_class.each(tree)).to be_an(Enumerator)
   end
+
+  it "finds the def that starts at an offset, and nothing where no def starts" do
+    source = "class A\n  private def b = 1\n  def c; end\nend\n"
+    tree = Prism.parse(source).value
+
+    expect(described_class.def_at(tree, source.index("def c"))&.name).to eq(:c)
+    expect(described_class.def_at(tree, source.index("def b"))&.name).to eq(:b)
+    expect(described_class.def_at(tree, source.index("private"))).to be_nil
+  end
 end

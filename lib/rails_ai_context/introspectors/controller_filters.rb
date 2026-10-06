@@ -75,7 +75,8 @@ module RailsAiContext
       # @param source [String] one controller's Ruby source
       # @return [Array<Hash>] { name:, kind:, skipped:/declared:, only:, except:, if:, unless: }
       def from_source(source, root: nil)
-        class_level(walk(source)).flat_map { |entry| record(entry, root) }
+        walked = walk(source)
+        SourceIntrospector.class_level(walked[:filters], walked).flat_map { |entry| record(entry, root) }
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "controller filter read")
       end
@@ -120,7 +121,7 @@ module RailsAiContext
         from_blocks, inherited = inherited.partition { |entry| block_sites.key?(entry[:site].__id__) }
         by_concern += from_blocks.map { |entry| entry.merge(from_concern: block_sites[entry[:site].__id__].first) }
         # A class method the chain defines answers the call, not the gem's macro of that name.
-        own_level = class_level(walked)
+        own_level = SourceIntrospector.class_level(walked[:filters], walked)
         if own_level.any? { |entry| GEM_FILTERS.key?(entry[:macro]) }
           shadowed = calls.defs.call.keys.to_set(&:to_s)
           own_level = own_level.reject { |entry| GEM_FILTERS.key?(entry[:macro]) && shadowed.include?(entry[:macro].to_s) }
@@ -156,14 +157,6 @@ module RailsAiContext
         SourceIntrospector.walk_source(source, LISTENERS.slice(:filters, :methods, :nested))
       end
 
-      # The filters the class body declares itself: one inside a `def` runs only when the method is called.
-      def class_level(walked)
-        nested = Array(walked[:nested])
-        SourceIntrospector.outside_defs(walked[:filters], walked[:methods]).reject do |entry|
-          entry[:offset] && nested.any? { |range| range.cover?(entry[:offset]) }
-        end
-      end
-
       # What the class methods `source` defines itself (`def self.x`, `class << self`) declare at
       # each call `calls` makes of one, skipping the names in `taken`.
       def singleton_expansions(source, walked, calls, taken)
@@ -177,9 +170,7 @@ module RailsAiContext
 
         tree = AstCache.parse_string(source).value
         declaring.flat_map do |method|
-          definition = AstWalk.each(tree).find do |node|
-            node.is_a?(Prism::DefNode) && node.name.to_s == method[:name].to_s && node.location.start_line == method[:location]
-          end
+          definition = AstWalk.def_at(tree, method[:offset])
           next [] unless definition
 
           found, = ConcernMacros.expand_calls(definition, sites.fetch(method[:name].to_s), [ :filters ], LISTENERS) do |entry, call|
@@ -320,11 +311,12 @@ module RailsAiContext
         file && file != own ? entry.merge(file: file) : entry
       end
 
-      BARE_BLOCK = /\Ablock \(line \d+\)\z/
+      BARE_BLOCK = /\A(?:block|lambda) \(line \d+\)\z/
 
       # A block outside the class's own file names that file: two blocks on one line number are two callbacks.
-      def block_name(line, file = nil)
-        file ? "block (line #{line} of #{file})" : "block (line #{line})"
+      # A lambda says so, as Proc#lambda? tells it from the block it may share a line with.
+      def block_name(line, file = nil, lambda: false)
+        "#{lambda ? 'lambda' : 'block'} (line #{line}#{" of #{file}" if file})"
       end
 
       # A class body's filters as a class elsewhere names them: its own blocks by the file it is in.
@@ -335,7 +327,7 @@ module RailsAiContext
       end
 
       def block?(name)
-        name.to_s.start_with?("block (line ")
+        name.to_s.start_with?("block (line ", "lambda (line ")
       end
 
       # One filter per callback the call adds, a block or lambda named by its line.
@@ -350,7 +342,7 @@ module RailsAiContext
         end
         macro = entry[:macro].to_s
         skipped = macro.start_with?("skip_")
-        names = positional_names(entry, skipped ? [] : Array(entry[:proc_lines]).map { |line| block_name(line, entry[:file]) })
+        names = positional_names(entry, skipped ? [] : Array(entry[:proc_lines]))
         # An excluded name is framework noise only while it runs. A skip of it
         # is the app's own decision, which the per-action answer reports.
         names -= RailsAiContext.configuration.excluded_filters.map(&:to_s) unless skipped
@@ -378,19 +370,19 @@ module RailsAiContext
 
       # Each callback the call gives, in the order Rails adds them: positional arguments as written,
       # the block last, each named by FilterMacroListener.
-      def positional_names(entry, blocks)
+      def positional_names(entry, lines)
         callbacks = entry[:callbacks]
-        return Array(entry[:args]).map(&:to_s) + blocks if callbacks.blank?
-
-        blocks = blocks.dup
-        callbacks.filter_map do |kind, name|
+        lines = lines.dup
+        named = Array(callbacks).filter_map do |kind, name|
           case kind
           when :name then name
-          when :block then blocks.shift
+          when :block, :lambda then block_name(lines.shift, entry[:file], lambda: kind == :lambda)
           when :object then "#{name} (object)"
           when :unread then "#{name} (not read)"
           end
-        end + blocks
+        end
+        named = Array(entry[:args]).map(&:to_s) if callbacks.blank?
+        named + lines.map { |line| block_name(line, entry[:file]) }
       end
 
       def constraints(entry)
@@ -450,7 +442,7 @@ module RailsAiContext
         statements.body.first
       end
 
-      private_class_method :walk, :outside_modules, :class_level, :singleton_expansions, :declares_filters?, :base_expansions, :each_base,
+      private_class_method :walk, :outside_modules, :singleton_expansions, :declares_filters?, :base_expansions, :each_base,
                            :class_method_defs,
                            :superclass_of, :base_source, :constant_source, :with_file, :body_call?, :record, :bundled?, :positional_names, :constraints, :condition_text, :normalize, :action_condition, :lambda_body
     end

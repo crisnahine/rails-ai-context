@@ -17,7 +17,7 @@ module RailsAiContext
     module_function
 
     # { own: [filter], inherited: [filter], chain: [filter], skipped: [name] } for one action:
-    # `chain` is own and inherited together, in the order Rails runs them.
+    # `chain` is own and inherited together, in the order Rails adds them; after filters run in reverse.
     # `source:` is the controller's source when the caller already has it.
     def for(ctx, controller_name, action, source: nil, root: nil)
       split(ctx, controller_name, action.to_s, source: source, root: root)

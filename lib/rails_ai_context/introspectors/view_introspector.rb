@@ -131,7 +131,7 @@ module RailsAiContext
 
           relative = path.sub("#{dir}/", "")
           module_name = relative.sub(/\.rb\z/, "").camelize
-          ast_data = HelperNames.walk(path, source, { methods: Listeners::MethodsListener })
+          ast_data = SourceIntrospector.walk(path, { methods: Listeners::MethodsListener }, source: source)
           methods = ActionResolver.own_methods(ast_data[:methods], module_name).map { |m| m[:name] }
           {
             file: relative,

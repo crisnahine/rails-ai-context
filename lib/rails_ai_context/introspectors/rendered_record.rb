@@ -81,11 +81,9 @@ module RailsAiContext
         [ model, COLLECTIONS.include?(assoc[:type].to_s) ]
       end
 
-      # The string a one-line `def` at `offset` returns, reached down the nodes that hold it.
+      # The string a one-line `def` at `offset` returns.
       def literal_return(path, offset)
-        node = AstCache.parse(path).value
-        node = node.compact_child_nodes.find { |child| child.location.start_offset <= offset && offset < child.location.end_offset } until node.nil? || (node.is_a?(Prism::DefNode) && node.location.start_offset == offset)
-        body = node&.body&.body
+        body = AstWalk.def_at(AstCache.parse(path).value, offset)&.body&.body
         body&.size == 1 && body.first.is_a?(Prism::StringNode) ? body.first.unescaped : nil
       end
     end

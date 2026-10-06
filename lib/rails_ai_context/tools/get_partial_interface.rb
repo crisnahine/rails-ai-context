@@ -454,8 +454,7 @@ module RailsAiContext
       PREFIX_SETTER = :prefix_partial_path_with_controller_namespace=
 
       private_class_method def self.prefix_partial_paths?(root)
-        booted = !RailsAiContext.static_tier? && !rails_app.is_a?(RailsAiContext::StaticApp)
-        return ActionView::Base.prefix_partial_path_with_controller_namespace != false if booted && defined?(ActionView::Base)
+        return ActionView::Base.prefix_partial_path_with_controller_namespace != false if booted_app? && defined?(ActionView::Base)
 
         prefix = "#{root.to_s.chomp('/')}/"
         files = [ "config/application.rb", "config/environments/#{rails_env_name}.rb" ] +

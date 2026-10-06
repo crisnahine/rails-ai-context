@@ -103,20 +103,14 @@ module RailsAiContext
       def discover_rails_engines
         return [] unless defined?(Rails::Engine)
 
+        routes = RouteIntrospector.new(app)
         Rails::Engine.subclasses.filter_map do |engine|
           next if engine.name.nil?
           next if engine.name == "RailsAiContext::Engine"
           next if engine.name.start_with?("Rails::", "ActionPack::", "ActionView::", "ActiveModel::")
 
           entry = { name: engine.name, root: portable_root(engine.root) }
-          # Counted as the routes section lists the table, so one engine has one number.
-          if engine.respond_to?(:routes) && engine.routes.respond_to?(:routes)
-            routes = RouteIntrospector.new(app)
-            entry[:route_count] = (RouteCoverage.dedupe_put_patch_routes(routes.table_routes(engine.routes)).size rescue nil)
-            # A redirect or lambda has no controller#action row, so it is counted beside them.
-            dynamic = (routes.dynamic_route_count(engine.routes) rescue 0)
-            entry[:dynamic_route_count] = dynamic if dynamic.positive?
-          end
+          entry.merge!(route_counts(routes, engine.routes)) if engine.respond_to?(:routes) && engine.routes.respond_to?(:routes)
           if Dir.exist?(File.join(engine.root.to_s, "app", "models"))
             entry[:model_count] = ModelIntrospector.new(StaticApp.new(engine.root.to_s)).model_count
           end
@@ -126,6 +120,16 @@ module RailsAiContext
         end.sort_by { |e| e[:name] }
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "discover_rails_engines")
+      end
+
+      # Counted as the routes section lists the table, so one engine has one number; a redirect
+      # or lambda has no controller#action row, so it is counted beside them.
+      def route_counts(routes, route_set)
+        dynamic = routes.dynamic_route_count(route_set)
+        { route_count: RouteCoverage.dedupe_put_patch_routes(routes.table_routes(route_set)).size,
+          dynamic_route_count: (dynamic if dynamic.positive?) }
+      rescue => e
+        RailsAiContext.debug_fail(e, {}, label: "engine route counts")
       end
     end
   end

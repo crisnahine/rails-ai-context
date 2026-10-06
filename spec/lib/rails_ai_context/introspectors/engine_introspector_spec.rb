@@ -234,6 +234,18 @@ RSpec.describe RailsAiContext::Introspectors::EngineIntrospector do
 
       expect(loaded.first).to include(route_count: 7, dynamic_route_count: 2)
     end
+
+    it "records a route set it cannot count and keeps the engine without a count" do
+      set = double("routes", routes: nil)
+      engine = double("engine", name: "Shop::Engine", root: Pathname.new(Dir.tmpdir), routes: set)
+      allow(Rails::Engine).to receive(:subclasses).and_return([ engine ])
+      allow(RailsAiContext).to receive(:debug_fail).and_call_original
+
+      loaded = described_class.new(Rails.application).send(:discover_rails_engines)
+
+      expect(loaded.first.keys).not_to include(:route_count, :dynamic_route_count)
+      expect(RailsAiContext).to have_received(:debug_fail).with(NoMethodError, {}, label: "engine route counts")
+    end
   end
 
   # .ai-context.json is committed: an engine's root is carried relative to

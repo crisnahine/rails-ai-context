@@ -198,7 +198,7 @@ module RailsAiContext
 
       # { formats: [[format...] per respond_to, nil per clear_respond_to], rate_limits: [...] }
       def class_declarations(source, walked)
-        calls = walked ? SourceIntrospector.outside_defs(walked[:respond_to], walked[:methods]) : []
+        calls = walked ? SourceIntrospector.class_level(walked[:respond_to], walked) : []
         formats = calls.map { |call| call[:macro] == :clear_respond_to ? nil : Array(call[:args]).map(&:to_s) }
         { formats: formats, rate_limits: extract_rate_limits(source, walked) }
       end
@@ -444,7 +444,7 @@ module RailsAiContext
         file = path && project_relative(path)
         return if file.nil? || file.start_with?("vendor/") || PortablePath.gem_file?(path, app.root)
 
-        ControllerFilters.block_name(line, (file unless own_file.nil? || file == own_file))
+        ControllerFilters.block_name(line, (file unless own_file.nil? || file == own_file), lambda: filter.lambda?)
       end
 
       # A compiled callback keeps only:/except: in private ivars, so the
@@ -769,7 +769,7 @@ module RailsAiContext
             permits << el.unescaped
           when Prism::ArrayNode
             # Doubly-wrapped array marks an array-of-hashes attribute
-            nested[key] = permit_fields(el)
+            nested[key] = [ permit_fields(el) ]
           when Prism::KeywordHashNode, Prism::HashNode
             el.elements.each do |inner|
               next unless inner.is_a?(Prism::AssocNode)
@@ -790,13 +790,14 @@ module RailsAiContext
       end
 
       # What a nested list permits: a scalar by name, `{ key => fields }` for an
-      # array (empty for scalars), `{ key => {} }` for any hash, and
-      # `{ key => { inner => fields } }` for a hash that names its keys.
+      # array (empty for scalars), `{ key => {} }` for any hash,
+      # `{ key => { inner => fields } }` for a hash that names its keys, and an
+      # inner list as an array, which `expect` reads as an array of hashes.
       def permit_fields(array_node)
         array_node.elements.flat_map do |el|
           case el
           when Prism::SymbolNode, Prism::StringNode then [ el.unescaped ]
-          when Prism::ArrayNode then permit_fields(el)
+          when Prism::ArrayNode then [ permit_fields(el) ]
           when Prism::KeywordHashNode, Prism::HashNode
             el.elements.grep(Prism::AssocNode).map do |assoc|
               key = extract_ast_value(assoc.key).to_s
@@ -899,7 +900,7 @@ module RailsAiContext
       def extract_rate_limits(source, walked = class_body_walk(source))
         return [] if walked.nil?
 
-        SourceIntrospector.outside_defs(walked[:rate_limit], walked[:methods]).map do |entry|
+        SourceIntrospector.class_level(walked[:rate_limit], walked).map do |entry|
           options = entry[:options] || {}
           sources = entry[:option_values] || {}
           text = options.map { |key, value| "#{key}: #{inferred?(value) ? sources[key] : value.inspect}" }.join(", ")

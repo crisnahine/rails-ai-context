@@ -185,6 +185,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `from_concern`.** With `include ActiveStorage::SetBlob`, `set_blob` reads
   `(from ActiveStorage::SetBlob)` and is never labelled as not declared in the
   controller chain; an `on_load` filter beside it still is. (#293)
+- **A strong params entry's `nested` list keeps a doubly-wrapped list as an
+  inner array.** `params.expect(thing: [items: [[:sku, :qty]]])` carries
+  `"items" => [["sku", "qty"]]`, where it was flattened to the single-hash
+  `["sku", "qty"]`, and the `controllers` summary prints it as
+  `items: [[:sku, :qty]]`. (#333)
 - **The views payload no longer carries `conditional_layouts`.** Each controller
   entry carries `layout` and `settings` instead. (#337)
 - **The mailboxes payload drops each mailbox's `routing` list** (`{pattern,
@@ -507,8 +512,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`concern` lists a class that prepends the concern** under Included By.
   (#311)
 - **`controllers` lists block, lambda and object filters, in the order Rails
-  runs them.** A block, lambda or proc filter (`-> {}`, `lambda {}`, `proc {}`,
-  `Proc.new {}`) reads `block (line N)`, or `block (line N of <file>)` when
+  adds them to the chain** (after filters run last-declared first). A block or
+  proc filter (`proc {}`, `Proc.new {}`) reads `block (line N)` and a lambda
+  (`-> {}`, `lambda {}`) `lambda (line N)`, or `(line N of <file>)` when
   written outside the controller's own file (a concern's class method, an
   ancestor), each with its own `only:`/`except:`, in both tiers; every name a
   `before_action :a, :b` call gives is listed in the order Rails runs them (a

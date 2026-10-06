@@ -15,6 +15,7 @@ module RailsAiContext
       LISTENERS = {
         settings_calls: -> { Listeners::GenericMacroListener.new(:layout, *MACROS, call_source: MACROS) },
         methods: Listeners::MethodsListener,
+        nested: Listeners::NestedConstantsListener,
         mixins: Listeners::MixinsListener
       }.freeze
 
@@ -25,7 +26,7 @@ module RailsAiContext
         return {} if source.nil?
 
         walked ||= SourceIntrospector.walk_source(source, LISTENERS)
-        placed = SourceIntrospector.outside_defs(walked[:settings_calls], walked[:methods]).map { |call| [ call[:location].to_i, -1, 0, call ] }
+        placed = SourceIntrospector.class_level(walked[:settings_calls], walked).map { |call| [ call[:location].to_i, -1, 0, call ] }
         placed += concern_calls(walked, root, within) if root
         layout_call, settings = ConcernMacros.in_include_order(placed).partition { |call| call[:macro] == :layout }
         {
@@ -116,21 +117,27 @@ module RailsAiContext
       end
 
       # Rails' `_layout`: a class with no `layout` call of its own inherits the nearest one's value and
-      # conditions. A nil value, or an action the conditions leave out, looks for layouts/<controller_path>
-      # of each class up to the declaring one, and then runs the `_layout` of the class above it.
+      # conditions. `layout nil` clears the inherited conditions and looks for layouts/<controller_path> of
+      # each class up to the declaring one, then runs the `_layout` above it for every action. An action
+      # the conditions leave out fails the same inherited conditions in every ancestor's `_layout`, so it
+      # only ever gets the name lookup over the whole chain.
       def layout_for(ctx, chain, stop, root)
         at = chain.index { |_, d| d[:layout] }
-        unless at
-          return by_name(ctx, chain, root) || (stop && !FRAMEWORK.include?(stop) ? { unread: stop } : { name: nil, implied: true })
-        end
+        return name_lookup(ctx, chain, stop, root) unless at
 
         declared_at, decl = chain[at]
-        lookup = -> { by_name(ctx, chain.first(at + 1), root) || layout_for(ctx, chain.drop(at + 1), stop, root) }
-        return lookup.call if decl[:layout][:by_name]
+        if decl[:layout][:by_name]
+          found = by_name(ctx, chain.first(at + 1), root) || layout_for(ctx, chain.drop(at + 1), stop, root).except(:only, :except, :otherwise)
+          return found[:implied] ? found.merge(from: declared_at) : found
+        end
 
         layout = decl[:layout].merge(from: declared_at)
-        layout[:otherwise] = lookup.call if layout[:only] || layout[:except]
+        layout[:otherwise] = name_lookup(ctx, chain, stop, root) if layout[:only] || layout[:except]
         layout
+      end
+
+      def name_lookup(ctx, chain, stop, root)
+        by_name(ctx, chain, root) || (stop && !FRAMEWORK.include?(stop) ? { unread: stop } : { name: nil, implied: true })
       end
 
       # The first of the classes' layouts/<controller_path> files, nearest first.
@@ -153,7 +160,8 @@ module RailsAiContext
         text = if layout[:unread]
           "#{Confidence::UNAVAILABLE} not read: decided by #{layout[:unread]}, which the app holds no source for"
         elsif layout[:implied]
-          layout[:name] ? "`#{layout[:name]}` (none declared; found as layouts/#{layout[:name]})" : "none (no layout file matches this controller or its ancestors)"
+          why = layout[:from] ? "`layout nil` in #{layout[:from]}; " : ""
+          layout[:name] ? "`#{layout[:name]}` (#{why.presence || 'none declared; '}found as layouts/#{layout[:name]})" : "none (#{why}no layout file matches this controller or its ancestors)"
         else
           what = if layout[:name] == false then "none (`layout false`"
           elsif layout[:method] then "chosen by `#{layout[:method]}` (declared"
@@ -168,7 +176,7 @@ module RailsAiContext
         layout[:otherwise] ? "#{text}; other actions: #{layout_phrase(layout[:otherwise])}" : text
       end
 
-      private_class_method :layout_of, :concern_calls, :chain_for, :layout_for, :by_name, :layout_names
+      private_class_method :layout_of, :concern_calls, :chain_for, :layout_for, :name_lookup, :by_name, :layout_names
     end
   end
 end

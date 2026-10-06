@@ -49,8 +49,9 @@ module RailsAiContext
       end
 
       # Walk a file with a custom listener map. Returns { key => results_array }.
-      def self.walk(path, listener_map = LISTENER_MAP)
-        result = AstCache.parse(path)
+      # A caller that already read the file passes `source`, so its other reads share the parse.
+      def self.walk(path, listener_map = LISTENER_MAP, source: nil)
+        result = source ? AstCache.parse_string(source) : AstCache.parse(path)
         walk_dispatch(result, listener_map)
       end
 
@@ -65,6 +66,13 @@ module RailsAiContext
       def self.outside_defs(calls, methods)
         bodies = Array(methods).filter_map { |m| m[:offset]...m[:end_offset] if m[:offset] && m[:end_offset] }
         Array(calls).reject { |call| call[:offset] && bodies.any? { |range| range.cover?(call[:offset]) } }
+      end
+
+      # The calls a class body makes itself, out of a walk that ran MethodsListener as `methods:` and
+      # NestedConstantsListener as `nested:`: a class or module it nests declares only for itself.
+      def self.class_level(calls, walked)
+        nested = Array(walked[:nested])
+        outside_defs(calls, walked[:methods]).reject { |call| call[:offset] && nested.any? { |range| range.cover?(call[:offset]) } }
       end
 
       # Walk a parse result the caller already holds, so a second reader of the

@@ -9,7 +9,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::FilterMacroListener do
 
     expect(parse_and_dispatch(source, :before_action).first[:callbacks])
       .to eq([ [ :name, "a" ], [ :name, "b" ], [ :name, "Gate" ], [ :object, "Timing" ], [ :object, "Class" ],
-               [ :block ], [ :block ], [ :block ], [ :block ], [ :unread, "pick" ] ])
+               [ :lambda ], [ :block ], [ :block ], [ :lambda ], [ :unread, "pick" ] ])
   end
 
   it "keeps the branch condition its parent records" do

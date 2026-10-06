@@ -113,6 +113,28 @@ module RailsAiContext
         }
       end
 
+      # A config file the bundler reads comes first: jsbundling-rails writes
+      # webpack.config.js, rollup.config.js or bun.config.js, and bun has no package.
+      def self.build_tool(root)
+        root = root.to_s
+        return "vite" if Dir.glob(File.join(root, "vite.config.*")).any?
+        return "webpack" if File.exist?(File.join(root, "config/webpacker.yml")) ||
+                            File.exist?(File.join(root, "config/shakapacker.yml"))
+        %w[webpack rollup bun].each do |tool|
+          return tool if Dir.glob(File.join(root, "#{tool}.config.*")).any?
+        end
+        dirs = RailsAiContext::PackageJson.frontend_roots(root).map { |dir| dir[:dir] }
+        %w[vite webpack rollup bun].each do |tool|
+          return tool if dirs.any? { |dir| frontend_config?(dir, "#{tool}.config.*") }
+        end
+        %w[esbuild webpack rollup].find { |pkg| RailsAiContext::PackageJson.present?(root, pkg) }
+      end
+
+      def self.frontend_config?(dir, pattern)
+        Dir.glob(pattern, base: dir).any? { |name| RailsAiContext::PackageJson.outside_file(dir, name) }
+      end
+      private_class_method :frontend_config?
+
       private
 
       # ---- Package.json reading ----
@@ -262,28 +284,6 @@ module RailsAiContext
       def detect_build_tool
         self.class.build_tool(root)
       end
-
-      # A config file the bundler reads comes first: jsbundling-rails writes
-      # webpack.config.js, rollup.config.js or bun.config.js, and bun has no package.
-      def self.build_tool(root)
-        root = root.to_s
-        return "vite" if Dir.glob(File.join(root, "vite.config.*")).any?
-        return "webpack" if File.exist?(File.join(root, "config/webpacker.yml")) ||
-                            File.exist?(File.join(root, "config/shakapacker.yml"))
-        %w[webpack rollup bun].each do |tool|
-          return tool if Dir.glob(File.join(root, "#{tool}.config.*")).any?
-        end
-        dirs = RailsAiContext::PackageJson.frontend_roots(root).map { |dir| dir[:dir] }
-        %w[vite webpack rollup bun].each do |tool|
-          return tool if dirs.any? { |dir| frontend_config?(dir, "#{tool}.config.*") }
-        end
-        %w[esbuild webpack rollup].find { |pkg| RailsAiContext::PackageJson.present?(root, pkg) }
-      end
-
-      def self.frontend_config?(dir, pattern)
-        Dir.glob(pattern, base: dir).any? { |name| RailsAiContext::PackageJson.outside_file(dir, name) }
-      end
-      private_class_method :frontend_config?
 
       # ---- Vite config framework detection ----
 

@@ -156,6 +156,13 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
 
             def self.throttle = rate_limit(to: 1, within: 1.second)
 
+            class CsvExport < ActionController::Base
+              layout "export"
+              allow_browser versions: :modern
+              respond_to :csv
+              rate_limit to: 1, within: 1.minute
+            end
+
             def index
               render plain: "ok"
             end
@@ -164,6 +171,13 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
 
       after { FileUtils.rm_f(fixture_ctrl) }
+
+      it "leaves out what a class nested in the body declares, as the filter reader does" do
+        entry = result[:controllers]["RateLimitedController"]
+
+        expect(entry.slice(:layout, :settings)).to eq({})
+        expect(entry[:respond_to_formats]).not_to include("csv")
+      end
 
       # `name:` exists so one controller can declare several limits (rate_limiting.rb).
       it "extracts every rate_limit the class body declares, a call split over lines whole" do
@@ -303,7 +317,17 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       result = introspector.send(:extract_strong_params, source).find { |h| h[:name] == "post_params" }
       expect(result[:requires]).to eq("post")
       expect(result[:permits]).to eq([ "title" ])
-      expect(result[:nested]).to eq({ "comments" => [ "body" ] })
+      expect(result[:nested]).to eq({ "comments" => [ [ "body" ] ] })
+    end
+
+    # In expect, `key: [:a]` is one hash and `key: [[:a]]` an array of them.
+    it "keeps a doubly-wrapped list apart from a single hash, at the top and nested" do
+      source = "def thing_params = params.expect(thing: [:name, items: [[:sku, :qty]], one: [:a]])\ndef list_params = params.expect(rows: [[:x]])\n"
+
+      thing, list = introspector.send(:extract_strong_params, source)
+
+      expect(thing[:nested]).to eq("items" => [ %w[sku qty] ], "one" => [ "a" ])
+      expect(list[:nested]).to eq("rows" => [ [ "x" ] ])
     end
 
     # `tags: []` permits an array of scalars, in expect as in permit.
@@ -836,8 +860,8 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
 
           expect(booted).to eq([
             [ "before", "block (line 5 of app/controllers/concerns/cache_concern.rb)", nil ],
-            [ "before", "block (line 4)", [ "create" ] ],
-            [ "before", "block (line 5)", [ "create" ] ],
+            [ "before", "lambda (line 4)", [ "create" ] ],
+            [ "before", "lambda (line 5)", [ "create" ] ],
             [ "around", "block (line 5 of app/controllers/concerns/rate_limited.rb)", [ "create" ] ],
             [ "around", "block (line 5 of app/controllers/concerns/rate_limited.rb)", [ "update" ] ]
           ])
@@ -888,15 +912,15 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       it "lists a call's lambdas and names in argument order, in both tiers" do
         Dir.mktmpdir do |dir|
           path = File.join(dir, "app/controllers/users_controller.rb")
-          source = "class UsersController < ApplicationController\n  before_action -> { head :ok }, :a\nend\n"
+          source = "class UsersController < ApplicationController\n  before_action -> { head :ok }, :a, proc { head :ok } do\n  end\nend\n"
           ctrl = Class.new(ActionController::Base)
           ctrl.define_singleton_method(:name) { "UsersController" }
-          ctrl.class_eval(source.lines[1], path, 2)
+          ctrl.class_eval(source.lines[1, 2].join, path, 2)
           in_dir = described_class.new(double("app", root: Pathname.new(dir)))
 
           booted = in_dir.send(:extract_filters, ctrl, source).map { |f| f[:name] }
 
-          expect(booted).to eq([ "block (line 2)", "a" ])
+          expect(booted).to eq([ "lambda (line 2)", "a", "block (line 2)", "block (line 2)" ])
           expect(in_dir.send(:extract_filters_from_source, source).map { |f| f[:name] }).to eq(booted)
         end
       end
@@ -1162,7 +1186,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
           { text: "to: 5, within: 1.minute", to: 5, within: "1.minute", from: "Admin::BaseController" }
         ])
         expect(controllers["Admin::BaseController"][:rate_limits].map { |limit| limit[:from] }).to eq([ "ApplicationController", nil ])
-        expect(controllers.values.none? { |info| info.key?(:declared_formats) }).to be true
+        expect(controllers.values.flat_map(&:keys) & %i[formats block_formats]).to be_empty
       end
     end
 

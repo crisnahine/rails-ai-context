@@ -327,6 +327,41 @@ module RailsAiContext
         end
       end
 
+      # The controller#action rows of a route set; the engines section counts an engine's table with them.
+      def table_routes(route_set)
+        route_set.routes.filter_map do |route|
+          # Journey::Route exposes the flag as a plain attribute reader
+          # (`internal`), not a predicate - a respond_to?(:internal?) guard
+          # never matches and would let Rails' info/mailers routes through.
+          next if route.respond_to?(:internal) && route.internal
+          next if route.defaults[:controller].blank?
+
+          route_path = route.path.spec.to_s.gsub("(.:format)", "")
+          action = route.defaults[:action]
+
+          entry = {
+            verb: route.verb.presence || "ANY",
+            path: route_path,
+            controller: route.defaults[:controller],
+            action: action,
+            name: route.name,
+            constraints: extract_constraints(route)
+          }
+
+          params = route_path.scan(/:(\w+)/).flatten
+          entry[:params] = params if params.any?
+
+          entry[:restful] = %w[index show new create edit update destroy].include?(action)
+
+          entry.compact
+        end
+      end
+
+      # The redirects and lambdas a route set holds, which no controller#action row lists.
+      def dynamic_route_count(route_set)
+        controllerless_routes(route_set).count { |r| dynamic_target?(r) }
+      end
+
       private
 
       # An app that splits its routing table with `draw` keeps most of it in
@@ -518,38 +553,6 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "booted_engine_routes")
       end
 
-      def table_routes(route_set)
-        route_set.routes.filter_map do |route|
-          # Journey::Route exposes the flag as a plain attribute reader
-          # (`internal`), not a predicate - a respond_to?(:internal?) guard
-          # never matches and would let Rails' info/mailers routes through.
-          next if route.respond_to?(:internal) && route.internal
-          next if route.defaults[:controller].blank?
-
-          route_path = route.path.spec.to_s.gsub("(.:format)", "")
-          action = route.defaults[:action]
-
-          entry = {
-            verb: route.verb.presence || "ANY",
-            path: route_path,
-            controller: route.defaults[:controller],
-            action: action,
-            name: route.name,
-            constraints: extract_constraints(route)
-          }
-
-          params = route_path.scan(/:(\w+)/).flatten
-          entry[:params] = params if params.any?
-
-          entry[:restful] = %w[index show new create edit update destroy].include?(action)
-
-          entry.compact
-        end
-      end
-
-      # The engines section counts an engine's table with these same rows.
-      public :table_routes
-
       # What `bin/rails routes` prints beside the route, written alike on every Ruby.
       def extract_constraints(route)
         shown = route.requirements.except(:controller, :action)
@@ -582,12 +585,6 @@ module RailsAiContext
       rescue => e
         RailsAiContext.debug_fail(e, 0, label: "count_controllerless_constructs")
       end
-
-      # The redirects and lambdas a route set holds, which no controller#action row lists.
-      def dynamic_route_count(route_set)
-        controllerless_routes(route_set).count { |r| dynamic_target?(r) }
-      end
-      public :dynamic_route_count
 
       def controllerless_routes(route_set = app.routes)
         route_set.routes.reject do |r|
