@@ -14,7 +14,7 @@ module RailsAiContext
   # stat goes with its parse.
   module AstCache
     STORE = Concurrent::Map.new
-    SEEN = Concurrent::Map.new # path => [stat signature, STORE key, whether the stat can be trusted]
+    SEEN = Concurrent::Map.new # path, or [path, ruby grammar] => [stat signature, STORE key, whether the stat can be trusted]
     MAX_SIZE = 500
     EVICTION_MUTEX = Mutex.new
 
@@ -100,7 +100,7 @@ module RailsAiContext
     end
 
     def self.content_key(source, version)
-      "string:#{Digest::SHA256.hexdigest(source)}#{":#{version}" if version}"
+      "src:#{Digest::SHA256.hexdigest(source)}#{":#{version}" if version}"
     end
     private_class_method :content_key
 
@@ -149,8 +149,8 @@ module RailsAiContext
         return if STORE.size < MAX_SIZE
         keys = STORE.keys
         evicted = keys.first(keys.size / 4).each { |k| STORE.delete(k) }.to_set
-        # A stat that points at an evicted parse can only send the next call to
-        # read the file, so it goes with it, and SEEN stays within MAX_SIZE.
+        # A stat goes with the parse it points at; files with the same bytes share
+        # one parse, so SEEN can outgrow STORE but not the app's file count.
         SEEN.each_pair { |path, entry| SEEN.delete(path) if evicted.include?(entry[1]) }
       end
     end
