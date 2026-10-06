@@ -224,6 +224,16 @@ Proof sources:
    v5.30.2 and by the release branch side by side, every changed answer
    checked against the app's source; the lab regressions on SQLite in all three
    tiers, PostgreSQL and MySQL; and the unit suite on Ruby 3.1 with Rails 7.0.
+   In the v5.32.0 release QA: the same private app booted and static, Mastodon,
+   Discourse, OpenProject, Canvas, Whitehall, Consul, OpenFoodNetwork, Forem,
+   Huginn, Errbit, Diaspora, Plots2 and Decidim answered by v5.31.0 and by the
+   release branch side by side, every changed answer checked against the app's
+   source; 23 small apps built one per project shape (API-only, no Active
+   Record, Mongoid, Sequel, multi-database, engine root and dummy, packs,
+   monorepo, multi-tenant, GraphQL, view-heavy, Rails 6.1 and 7.0, Sorbet,
+   Sinatra and a plain gem); the lab regressions on SQLite in all three tiers,
+   PostgreSQL and MySQL; and the unit suite on Ruby 3.1 with Rails 7.0 through
+   Ruby 4.0 with Rails 8.1.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified
