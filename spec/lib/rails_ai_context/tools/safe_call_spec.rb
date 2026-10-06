@@ -411,6 +411,30 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
       expect(text).to include("lib/rails_ai_context/tools/base_tool.rb:")
       expect(text).not_to include("At: #{gem_root}")
     end
+
+    # A frame in a file no portable form names (the Ruby install, a vendored
+    # script) was reported as its absolute path, which carries the home
+    # directory of the machine that answered.
+    it "names a frame no portable form covers by its file alone" do
+      Dir.mktmpdir do |dir|
+        script = File.join(dir, "outside_probe.rb")
+        File.write(script, "module OutsideProbe; def self.fail!; nil.empty?; end; end\n")
+        load script
+        tool = build_tool do
+          input_schema(properties: {})
+          def self.call(server_context: nil)
+            OutsideProbe.fail!
+          end
+        end
+
+        text = tool.call.content.first[:text]
+
+        expect(text).to match(/^At: outside_probe\.rb:1:/)
+        expect(text).not_to include(dir)
+      ensure
+        Object.send(:remove_const, :OutsideProbe) if defined?(OutsideProbe)
+      end
+    end
   end
 
   # An unknown parameter reached the tool as an unknown keyword, so the answer
