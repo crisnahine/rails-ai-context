@@ -504,6 +504,16 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
       expect(described_class.new(double("app", root: @root)).call[:fixture_names]).to eq("users" => %w[bob])
     end
 
+    it "reads only the directory an RSpec helper sets fixture_paths to, not spec/fixtures beside it" do
+      FileUtils.mkdir_p([ File.join(@root, "spec", "fixtures"), File.join(@root, "spec", "support", "fx") ])
+      File.write(File.join(@root, "spec", "fixtures", "widgets.yml"), "a:\n  name: A\n")
+      File.write(File.join(@root, "spec", "support", "fx", "gadgets.yml"), "b:\n  name: B\n")
+      File.write(File.join(@root, "spec", "rails_helper.rb"),
+                 "RSpec.configure do |config|\n  config.fixture_paths = [Rails.root.join(\"spec/support/fx\")]\nend\n")
+
+      expect(described_class.new(double("app", root: @root)).call[:fixture_names]).to eq("gadgets" => %w[b])
+    end
+
     it "reads no sets from spec/fixtures when only test/test_helper.rb sets fixture_paths" do
       FileUtils.mkdir_p(File.join(@root, "spec", "fixtures"))
       FileUtils.mkdir_p(File.join(@root, "test", "shared"))
