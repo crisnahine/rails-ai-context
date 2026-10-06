@@ -313,7 +313,7 @@ module RailsAiContext
           bare:          -> { Listeners::GenericMacroListener.new(:include) },
           chained:       -> { Listeners::ChainedCallListener.new(:include, receiver: :config) },
           setup:         -> { Listeners::GenericMacroListener.new(*SETUP_MACROS) },
-          fixture_paths: Listeners::FixturePathsListener,
+          fixture_paths: -> { Listeners::FixturePathsListener.new(file: path.delete_prefix("#{suite_root}/")) },
           cleaner:       -> { Listeners::ConfigAssignmentListener.new(:DatabaseCleaner) }
         }) : nil
       end

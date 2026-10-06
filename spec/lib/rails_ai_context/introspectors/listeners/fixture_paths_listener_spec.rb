@@ -32,4 +32,13 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::FixturePathsListener do
       config.autoload_paths << "lib"
     RUBY
   end
+
+  it "reads a path relative to the helper's own directory, on the test case constant too" do
+    found = RailsAiContext::Introspectors::SourceIntrospector.walk_source(<<~RUBY, { fixtures: -> { described_class.new(file: "test/test_helper.rb") } })[:fixtures]
+      ActiveSupport::TestCase.fixture_paths << File.expand_path("../extra_fx", __dir__)
+      self.fixture_paths << File.expand_path("../../shared_fx", __FILE__)
+      self.fixture_paths << File.join(__dir__, "more_fx")
+    RUBY
+    expect(found).to eq(%w[extra_fx shared_fx test/more_fx])
+  end
 end

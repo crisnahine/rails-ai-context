@@ -669,6 +669,14 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
       expect(result[:fixtures]).to eq(location: "test/fixtures, test/shared_fixtures", locations: %w[test/fixtures test/shared_fixtures], count: 2)
     end
 
+    it "reads a directory the test helper adds relative to its own file" do
+      write("test/test_helper.rb", "ActiveSupport::TestCase.fixture_paths << File.expand_path(\"../extra_fx\", __dir__)\n")
+      write("test/fixtures/users.yml", "bob:\n  name: B\n")
+      write("extra_fx/widgets.yml", "one:\n  name: W\n")
+
+      expect(payload[:fixture_names]).to eq("users" => %w[bob], "widgets" => %w[one])
+    end
+
     it "does not follow a fixture path out of the app or into a missing directory" do
       Dir.mktmpdir do |outside|
         File.write(File.join(outside, "secrets.yml"), "leak:\n  key: x\n")
