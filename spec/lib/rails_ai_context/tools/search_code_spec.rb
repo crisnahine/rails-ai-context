@@ -1443,10 +1443,16 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
           ledger = "class Billing::Ledger\n  private def secret_total = 1\n  def Ledger.build = new\n" \
                    "  ruby2_keywords def forward(*args); end\n  def endless = secret_total\nend\n"
           with_search_app(files.merge("app/models/billing/ledger.rb" => ledger)) do
+            method_walks = Hash.new(0)
+            allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_dispatch).and_wrap_original do |original, result, map|
+              method_walks[result.source.source] += 1 if map.key?(:methods)
+              original.call(result, map)
+            end
             traced = text(pattern: "secret_total", match_type: "trace")
             siblings = traced[/## Sibling methods \(same file\)\n(.*?)\n\n/m, 1].lines.map(&:strip)
 
             expect(siblings).to eq([ "- `self.build`", "- `forward`", "- `endless`" ])
+            expect(method_walks[ledger]).to eq(1)
           end
         end
 

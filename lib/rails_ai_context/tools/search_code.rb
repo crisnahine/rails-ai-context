@@ -629,7 +629,7 @@ module RailsAiContext
             end
 
             # Sibling methods in the same file
-            siblings = extract_sibling_methods(File.join(root, r[:file]), r[:line_number], cleaned)
+            siblings = extract_sibling_methods(File.join(root, r[:file]), cleaned)
             if siblings.any?
               lines << "" << "## Sibling methods (same file)"
               siblings.first(10).each { |s| lines << "- `#{s}`" }
@@ -745,12 +745,11 @@ module RailsAiContext
       end
 
       # The other public defs in the file, in every form the definition search finds.
-      private_class_method def self.extract_sibling_methods(file_path, _def_line, exclude_method)
+      private_class_method def self.extract_sibling_methods(file_path, exclude_method)
         source = RailsAiContext::SafeFile.read(file_path)
         return [] unless source
 
-        found = Introspectors::SourceIntrospector.walk_source(source, { methods: -> { Introspectors::Listeners::MethodsListener.new } })
-        found[:methods].filter_map do |method|
+        Introspectors::ActionResolver.methods_in(source).filter_map do |method|
           next unless method[:end_location] && method[:visibility] == :public && method[:name] != exclude_method
 
           method[:scope] == :class ? "self.#{method[:name]}" : method[:name]
