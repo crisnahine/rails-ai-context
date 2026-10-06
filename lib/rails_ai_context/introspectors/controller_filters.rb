@@ -192,10 +192,10 @@ module RailsAiContext
         each_base(source, within, root, cache) do |label, base, _path, file, walked|
           own = singleton_expansions(base, walked, calls, taken).map { |entry| entry.merge(file: file) }
           taken.merge(own.map { |entry| entry[:site].name })
-          collected, _, _, _, placement = ConcernMacros.collect(root, Array(walked[:mixins]), keys: [ :filters ], prefer: "controller",
-                                                                within: label, cache: cache, calls: calls, listeners: LISTENERS)
-          mixed = Array(collected[:filters]).select { |entry| body_call?(entry, calls) && !taken.include?(entry[:site].name) }
-                                            .map { |entry| with_file(entry, placement.dig(entry[:from_concern], 2), root) }
+          found_in = ConcernMacros.collect(root, Array(walked[:mixins]), keys: [ :filters ], prefer: "controller",
+                                           within: label, cache: cache, calls: calls, listeners: LISTENERS)
+          mixed = Array(found_in.collected[:filters]).select { |entry| body_call?(entry, calls) && !taken.include?(entry[:site].name) }
+                                                     .map { |entry| with_file(entry, found_in.placement.dig(entry[:from_concern], 2), root) }
           taken.merge(mixed.map { |entry| entry[:site].name })
           found.concat(own + mixed)
         end
@@ -227,7 +227,7 @@ module RailsAiContext
         add = lambda do |text, owner, modules, label|
           tree = AstCache.parse_string(text)&.value
           ConcernMacros::SingletonLookup.own_defs(tree ? AstWalk.each(tree).to_a : [], owner).each { |definition| found[definition.name] ||= definition }
-          given = ConcernMacros.collect(root, modules, keys: [ :filters ], prefer: "controller", within: label, cache: cache, listeners: LISTENERS)[7]
+          given = ConcernMacros.collect(root, modules, keys: [ :filters ], prefer: "controller", within: label, cache: cache, listeners: LISTENERS).mixins
           Array(given).reverse_each { |_, _, defs, _| defs.each_value { |list| list.each { |definition| found[definition.name] ||= definition } } }
         end
         add.call(source, within, mixins, within)

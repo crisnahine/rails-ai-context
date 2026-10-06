@@ -667,12 +667,12 @@ RSpec.describe RailsAiContext::ConcernMacros do
     described_class.collect(tmpdir, mixin("Publishable"), keys: keys, within: "Post", cache: cache)
     before = tree_walks
     cached = %w[Comment Article].map do |owner|
-      described_class.collect(tmpdir, mixin("Publishable"), keys: keys, within: owner, cache: cache).first
+      described_class.collect(tmpdir, mixin("Publishable"), keys: keys, within: owner, cache: cache).collected
     end
     walks_for_two = tree_walks - before
     indexes_in_run = indexes
     uncached = %w[Comment Article].map do |owner|
-      described_class.collect(tmpdir, mixin("Publishable"), keys: keys, within: owner).first
+      described_class.collect(tmpdir, mixin("Publishable"), keys: keys, within: owner).collected
     end
 
     expect(cached).to eq(uncached)

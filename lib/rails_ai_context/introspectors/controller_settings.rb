@@ -40,11 +40,11 @@ module RailsAiContext
       # Each call an included concern's block makes, placed at the `include` that reaches it.
       def concern_calls(walked, root, within)
         mixins = Array(walked[:mixins])
-        collected, _, _, _, placement = ConcernMacros.collect(root, mixins, keys: [ :settings_calls ], prefer: "controller", within: within,
-                                                              cache: RunCache.fetch([ :controller_concern_walks ]) { {} }, listeners: LISTENERS)
+        found = ConcernMacros.collect(root, mixins, keys: [ :settings_calls ], prefer: "controller", within: within,
+                                      cache: RunCache.fetch([ :controller_concern_walks ]) { {} }, listeners: LISTENERS)
         line_of = mixins.reverse.to_h { |mixin| [ mixin[:name], mixin[:location].to_i ] }
-        Array(collected[:settings_calls]).map do |call|
-          top, order = placement[call[:from_concern]]
+        Array(found.collected[:settings_calls]).map do |call|
+          top, order = found.placement[call[:from_concern]]
           [ line_of[top].to_i, order.to_i, call[:location].to_i, call ]
         end
       end

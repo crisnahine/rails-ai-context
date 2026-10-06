@@ -10,6 +10,10 @@ module RailsAiContext
   # excludes what the class skipped, so the parent's filters are separated by
   # name rather than added.
   module ActionFilters
+    # The ancestors' filters, the names they dropped, the conditions they set, every name they
+    # declare, and whether every class up to ActionController was read.
+    ParentWalk = Struct.new(:filters, :dropped, :conditions, :declares, :whole_chain)
+
     module_function
 
     # { own: [filter], inherited: [filter], chain: [filter], skipped: [name] } for one action:
@@ -43,10 +47,10 @@ module RailsAiContext
       # A skip record states what does not run, so it is never a filter.
       offsets = Hash.new(0)
       declared = number_blocks(Array(info[:filters]).grep(Hash).reject { |f| f[:skipped] }, offsets)
-      parent, dropped, inherited_conditions, declares, whole_chain = parent_filters(ctx, info[:parent_class], action, skipped,
-                                                                       root: root, within: controller_name.to_s,
-                                                                       offsets: offsets)
-      conditions = merge_conditions(inherited_conditions, conditions_by_name(skips, action))
+      walk = parent_filters(ctx, info[:parent_class], action, skipped, root: root, within: controller_name.to_s, offsets: offsets)
+      parent = walk.filters
+      dropped = walk.dropped
+      conditions = merge_conditions(walk.conditions, conditions_by_name(skips, action))
       # The runtime tier's list is the whole chain, so an ancestor's skip
       # applies here too - except to what this body declares again, which
       # Rails re-adds.
@@ -77,7 +81,7 @@ module RailsAiContext
       # The runtime tier's list is the whole chain: once the body, every ancestor and every module
       # they mix in were read, a name none of them declares was installed from outside it (a gem's on_load).
       outside = []
-      whole_chain &&= info.values_at(:concerns_unread, :mixins_unread).all?(&:blank?)
+      whole_chain = walk.whole_chain && info.values_at(:concerns_unread, :mixins_unread).all?(&:blank?)
       if whole_chain && Array(info[:filters]).grep(Hash).any? { |f| f[:declared] || f[:skipped] }
         outside, own = own.partition { |f| !f[:declared] }
         outside = outside.map { |f| f.merge(provenance: "not declared in the controller chain") }
@@ -91,7 +95,7 @@ module RailsAiContext
       own = unnumbered(own)
       inherited = unnumbered(inherited)
       inherited += unplaced_conditional_skips(own + inherited, conditions, action,
-                                              declares | declared.map { |f| f[:name].to_s }.to_set)
+                                              walk.declares | declared.map { |f| f[:name].to_s }.to_set)
       chain = run_sequence(inherited + own, info)
       mine = own.to_set.compare_by_identity
 
@@ -305,7 +309,7 @@ module RailsAiContext
         name = Introspectors::ActionResolver.resolve_entry_name(controllers, info[:parent_class], name)
       end
 
-      [ run_order(found, attributed, positions, evidence), dropped, conditions, declares, whole && reached ]
+      ParentWalk.new(run_order(found, attributed, positions, evidence), dropped, conditions, declares, whole && reached)
     end
 
     # The closest ancestor carrying a filter keeps its constraints, but a
