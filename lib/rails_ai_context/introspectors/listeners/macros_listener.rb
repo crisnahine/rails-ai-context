@@ -10,6 +10,7 @@ module RailsAiContext
       class MacrosListener < BaseListener
         include WithOptionsScope
         include OwnerScope
+        include BranchConditions
 
         SIMPLE_MACROS = %i[
           has_secure_password
@@ -95,7 +96,10 @@ module RailsAiContext
           elsif GEM_MACROS.include?(node.name)
             record_gem_macro(node)
           elsif node.name == :connects_to
-            @results << { macro: :connects_to, text: one_line_source(node), writing: writing_database(node),
+            # Under a condition the app may never call it, so no table is routed to its database.
+            condition = current_condition
+            @results << { macro: :connects_to, text: one_line_source(node), condition: condition,
+                          writing: (writing_database(node) unless condition),
                           location: node.location.start_line, confidence: confidence_for(node) }.compact
           elsif SIMPLE_MACROS.include?(node.name)
             # Rails defaults the attribute to :password.

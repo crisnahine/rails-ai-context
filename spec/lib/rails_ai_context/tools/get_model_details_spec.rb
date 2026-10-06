@@ -697,6 +697,20 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
 
       expect(text).to include("**Database:** `connects_to database: { writing: :analytics, reading: :analytics }`, inherited from `AnalyticsRecord`")
     end
+
+    it "says a connects_to under a condition runs only when it holds" do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Status" => { table_name: "statuses",
+                                database: { connects_to: "connects_to database: { writing: :primary, reading: :replica }",
+                                            condition: "if DatabaseHelper.replica_enabled?", declared_in: "ApplicationRecord" } } }
+      )
+
+      text = described_class.call(model: "Status").content.first[:text]
+
+      expect(text).to include("**Database:** `connects_to database: { writing: :primary, reading: :replica }` " \
+                              "(only if DatabaseHelper.replica_enabled?), inherited from `ApplicationRecord`")
+    end
   end
 
   describe "callbacks" do

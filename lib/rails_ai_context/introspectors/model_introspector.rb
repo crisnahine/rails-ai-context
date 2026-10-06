@@ -1245,7 +1245,7 @@ module RailsAiContext
             # Bases arrive first, so the class's own assignment wins.
             (macros[:model_settings] ||= {})[m[:setting]] = m[:value]
           elsif macro == :connects_to
-            macros[:database] = { connects_to: m[:text], declared_in: m[:declared_in], writing: m[:writing] }.compact
+            macros[:database] = { connects_to: m[:text], condition: m[:condition], declared_in: m[:declared_in], writing: m[:writing] }.compact
           elsif macro == :gem_macro
             (macros[:gem_macros] ||= []) << m.slice(:text, :adds)
           elsif macro == :aasm

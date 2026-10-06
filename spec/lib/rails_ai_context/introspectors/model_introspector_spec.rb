@@ -5954,6 +5954,26 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  describe "a connects_to under a condition" do
+    it "keeps the condition and routes no table to its database" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "replica_record.rb"), <<~RUBY)
+          class ReplicaRecord < ApplicationRecord
+            self.abstract_class = true
+            connects_to database: { writing: :primary, reading: :replica } if DatabaseHelper.replica_enabled?
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "status.rb"), "class Status < ReplicaRecord\nend\n")
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["Status"][:database]).to eq(connects_to: "connects_to database: { writing: :primary, reading: :replica }",
+                                                  condition: "if DatabaseHelper.replica_enabled?", declared_in: "ReplicaRecord")
+      end
+    end
+  end
+
   describe "STI on the booted tier" do
     it "reads the type column the model names, not a fixed one" do
       parent = Class.new { def self.name = "Vehicle" }
