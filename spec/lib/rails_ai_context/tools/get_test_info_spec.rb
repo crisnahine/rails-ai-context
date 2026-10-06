@@ -227,6 +227,12 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       end
     end
 
+    it "names the dummy's config/ci.rb under the engine's suite root" do
+      test_data[:ci_steps_dir] = "test/dummy/"
+
+      expect(described_class.call.content.first[:text]).to include("## CI Steps (`test/dummy/config/ci.rb`, run by `test/dummy/bin/ci`)")
+    end
+
     it "keeps them out of the summary" do
       expect(described_class.call(detail: "summary").content.first[:text]).not_to include("CI Steps")
     end

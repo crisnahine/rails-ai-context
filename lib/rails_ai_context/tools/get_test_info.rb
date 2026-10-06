@@ -74,7 +74,7 @@ module RailsAiContext
             lines << "- **System tests:** #{data[:system_tests][:location]}" if data[:system_tests]
             lines << "- **CI:** #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
             lines << "- **Coverage:** #{data[:coverage]}" if data[:coverage]
-            lines.concat(ci_step_lines(data[:ci_steps]))
+            lines.concat(ci_step_lines(data[:ci_steps], data[:ci_steps_dir]))
 
             if data[:test_files]&.any?
               lines << "" << "## Test Files"
@@ -103,7 +103,7 @@ module RailsAiContext
             lines << "- **CI:** #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
             lines << "- **Coverage:** #{data[:coverage]}" if data[:coverage]
             lines << cucumber_line(data[:cucumber]) if data[:cucumber]
-            lines.concat(ci_step_lines(data[:ci_steps]))
+            lines.concat(ci_step_lines(data[:ci_steps], data[:ci_steps_dir]))
 
             lines.concat(trait_lines(data[:factory_traits], 20))
 
@@ -362,10 +362,10 @@ module RailsAiContext
           "#{count_phrase(cucumber[:step_definitions].to_i, "step definition file")})"
       end
 
-      private_class_method def self.ci_step_lines(steps)
+      private_class_method def self.ci_step_lines(steps, dir)
         return [] unless steps.is_a?(Array) && steps.any?
 
-        [ "", "## CI Steps (`config/ci.rb`, run by `bin/ci`)" ] +
+        [ "", "## CI Steps (`#{dir}config/ci.rb`, run by `#{dir}bin/ci`)" ] +
           steps.map { |step| "- #{step[:name]}: `#{step[:command]}`" }
       end
 

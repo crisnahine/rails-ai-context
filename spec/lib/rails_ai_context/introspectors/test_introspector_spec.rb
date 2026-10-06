@@ -34,6 +34,7 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
 
         expect(result[:ci_config]).to eq(%w[rails_ci github_actions])
         expect(result[:ci_steps]).to eq([ { name: "Tests: Rails", command: "bin/rails test" } ])
+        expect(result[:ci_steps_dir]).to eq("test/dummy/")
         expect(result[:test_files]).to include("models")
       end
     end
