@@ -105,8 +105,6 @@ module RailsAiContext
           { class: klass, command: hit[:macro] == :runner ? code : "#{hit[:macro]} #{code}",
             schedule: whenever_schedule(every), file: file }.compact
         end
-      rescue StandardError, ScriptError => e
-        RailsAiContext.debug_fail(e, [], label: "whenever schedule")
       end
 
       def whenever_schedule(every)
