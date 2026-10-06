@@ -15,12 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `store_full_sti_class`, `attr_readonly` and `query_constraints`, in both
   tiers; a setting assigned inside a method or a nested class is not listed as
   the model's. An STI model names its parent (or a base its subclasses) and its
-  type column, honoring `inheritance_column`. A model whose base class calls
+  type column, honoring `inheritance_column`, and only where the table has that
+  column (the static tier reads the schema dump). A model whose base class calls
   `connects_to` gets a Database line with the call as written and the class it
-  comes from, in `model_details` and `get_context`. (#294, #390, #395)
-- **`model_details` lists a model's `default_scope`** at the top of Scopes, with
-  `all_queries: true` when declared. A base's default scope comes first, in the
-  order Rails stacks them. (#295)
+  comes from, in `model_details` and `get_context`; a call under a condition
+  says `(only if ...)`, and otherwise the model's columns come from the schema
+  of the database it writes to. (#294, #390, #395)
+- **`model_details` lists a model's `default_scope`** at the top of Scopes,
+  declared as the macro or as `def self.default_scope` in the model's own class
+  (not a class or module nested in its file), with `all_queries: true` when
+  declared. A base's default scope comes first, in the order Rails stacks them.
+  (#295)
 - **`model_details` reads common model gems.** An `aasm` machine shows its
   states, initial state, events and transitions, and `has_paper_trail`,
   `friendly_id`, `mount_uploader`, `monetize` (with the attribute it adds),
@@ -29,8 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declares. A macro written inside a method body or a nested class is not
   credited to the model, and `aasm.current_state` in a method opens no second
   machine. (#389)
-- **`model_details` lists each index a Mongoid document declares**, as written.
-  (#412)
+- **`model_details` lists each index a Mongoid document declares**, as written,
+  and the fields and indexes its included concerns declare. (#412)
 - **In an Apartment app, `model_details` says where a model's table lives**: in
   the shared schema (`excluded_models`) or in each tenant's schema, whatever the
   `Apartment.configure` block calls its parameter. A list built with `+=` or
@@ -48,9 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `limits_concurrency` and its enqueue, perform and `after_discard` callbacks;
   `retry_on` keeps its `queue:`, `priority:` and `jitter:`, and a Sidekiq
   worker's `sidekiq_retry_in` and `sidekiq_retries_exhausted` blocks are listed
-  under its retries. A priority given as a lambda reads as computed. A job that
-  includes `ActiveJob::Continuable`, itself or through a base, is marked so,
-  with the steps its `perform` runs in order. (#392, #409)
+  under its retries (the worker listing names such a block by its macro only). A
+  priority given as a lambda reads as computed. A job that includes
+  `ActiveJob::Continuable`, itself or through a base, is marked so, with the
+  steps its `perform` runs in order. (#392, #409)
 - **`job_pattern` names the queues Solid Queue's workers poll** in
   `config/queue.yml` and flags every job queue no worker polls, in the listing
   and on the job's own page, when the app runs Solid Queue (its config sets
@@ -58,7 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has `solid_queue`). (#396)
 - **delayed_job's `handle_asynchronously` methods are listed** with their
   options, in `job_pattern` and `model_details`, where `job_pattern` used to say
-  No jobs found. (#410)
+  No jobs found. A method a concern wraps is listed under each model that
+  includes the concern, directly or through another concern. (#410)
 - **`mailers` lists Action Mailbox and more mailer settings.** The mailboxes,
   the routing rules in the order Rails tries them with the mailbox each sends
   to, and each mailbox's processing callbacks. Each mailer shows its own
@@ -67,21 +74,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   uses, the interceptors and observers the config registers, and the mailer
   preview paths. (#386, #393)
 - **`env` lists environment variables from more places**: the env Kamal's
-  `config/deploy.yml` sets (secret names, never values, and clear values), the
-  setting keys in the config gem's `config/settings.yml` and
-  `config/settings/<env>.yml`, each `Anyway::Config` class's attributes with the
-  env names they read (values left out), the ENV names `Rails.app.creds` and
+  `config/deploy.yml` sets at the top level, for each role
+  (`servers.<role>.env`) and for each `env.tags` tag (secret names, never
+  values, and clear values, except one holding a URL or a key-like token, which
+  shows as hidden, and one an ERB tag sets, which says so; a
+  `config/deploy.<destination>.yml` is named as not read), the setting keys in
+  the config gem's `config/settings.yml` and `config/settings/<env>.yml` when
+  the bundle has the config gem, each `Anyway::Config` class's attributes with
+  the env names they read (values left out), the ENV names `Rails.app.creds` and
   `Rails.app.envs` read on Rails 8.2 (`require(:stripe_api_key)` is
   `STRIPE_API_KEY`, nested keys joined by `__`), and the ENV names read in
   `config.ru`, `db/seeds.rb`, `db/seeds/` and the Ruby scripts in `bin/`. (#397,
   #398, #404, #417)
 - **`config` lists what runs in front of Rails and what CurrentAttributes
-  holds**: the middleware and `map` mounts `config.ru` adds, in the static tier
-  too, and each CurrentAttributes class's attributes, their defaults and its
-  reset hooks. (#398, #399)
+  holds**: the middleware `config.ru` adds (with the `if` it runs under, and the
+  `map` it sits inside when that map runs the app itself) and the `map` mounts
+  that run their own Rack app, in the static tier too, and each
+  CurrentAttributes class's attributes, their defaults and its reset hooks.
+  (#398, #399)
 - **`env_config` lists the config keys `config/application.rb` sets for every
-  environment** (`config.x` included) and, for each `config_for(:name)`, the
-  keys `config/name.yml` gives the running environment. (#394)
+  environment** (`config.x` included) and, for each `config_for` call (a name,
+  or `Rails.root.join` of literal parts), the keys its YAML file gives the
+  running environment, or the environment a literal `env:` names. A file on
+  `sensitive_patterns`, outside the app, or over `max_file_size` is named with
+  that reason and its keys are not read. (#394)
 - **`active_support` lists the ActiveSupport::Notifications events the app
   subscribes to** (`subscribe`, `monotonic_subscribe`, and a Subscriber's
   `attach_to`, inside the class with or without `self.`, or called on it
@@ -89,45 +105,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lists one `<method>.<namespace>` event per public method the subscriber
   defines in that file, and says so in words when it defines none. (#387)
 - **`onboard` lists the app's own tooling**: its custom rake tasks (Rakefile,
-  `lib/tasks`, `rakelib`) with their arguments, description and file (the first
-  15 at standard detail, every one at full), its own generators (`bin/rails
-  generate service`), the `lib/templates` files that replace a built-in
-  generator's template, and the Railties under `lib/` with their initializers.
-  (#385, #400)
+  `lib/tasks`, `rakelib`) with their arguments, the description `rake -T` prints
+  and the file, one entry for a task defined in several places (the first 15 at
+  standard detail, every one at full), its own generators (`bin/rails generate
+  service`), the `lib/templates` files that replace a built-in generator's
+  template, and the Railties under `lib/` with their initializers. (#385, #400)
 - **`onboard` and the gems resource read more Ruby version sources.** A Ruby
   engine other than CRuby is named from `.ruby-version`, `.tool-versions`, the
   Gemfile `ruby` line or the lockfile ("declaring JRuby 9.4.8.0 (Ruby
-  3.1.4p0)"), where a `jruby-` `.ruby-version` gave no Ruby at all. A version
-  pinned in mise (`mise.toml`, `mise.local.toml`, `.mise.toml`,
-  `mise/config.toml` or `.config/mise.toml`) is read when no other file names
-  one. (#420, #421)
+  3.1.4p0)"), where a `jruby-` `.ruby-version`, or a bare `jruby` one, gave no
+  Ruby at all. A version pinned in mise (`mise.toml`, `mise.local.toml`,
+  `.mise.toml`, `mise/config.toml`, `.mise/config.toml`, `.config/mise.toml` or
+  `.config/mise/config.toml`) is read when no other file names one. (#420, #421)
 - **`controllers` and `view` say which layout a controller renders in**
-  (declared, inherited, or found by name), and `controllers` lists the
-  `allow_browser`, `protect_from_forgery`, `add_flash_types`,
-  `default_form_builder` and `wrap_parameters` settings it and its ancestors
-  declare. (#337)
+  (declared, inherited, set by an app concern it includes, or found by name),
+  and `controllers` lists the `allow_browser`, `protect_from_forgery`,
+  `add_flash_types`, `default_form_builder` and `wrap_parameters` settings it,
+  its ancestors and their app concerns declare. (#337)
 - **`controllers` lists the filters authorization gems add**: cancancan's
   `load_and_authorize_resource`, `load_resource`, `authorize_resource`,
   `check_authorization` and `skip_authorization_check`, and acts_as_tenant's
-  `find_tenant_by_subdomain`, in both tiers. A responders class-level
-  `respond_to :json` shows its formats in both tiers. (#406, #407)
-- **`view` marks template variants and locales**: `show.html+mobile.erb` is the
-  `mobile` variant of `show`, and `show.fr.html.erb` its `fr` locale. (#408)
+  `find_tenant_by_subdomain`, in both tiers; one passed `prepend: true` is
+  listed first, where cancancan adds it. Each is read only when the lockfile
+  resolves that gem and no class on the chain defines a class method of the same
+  name. A responders class-level `respond_to :json` shows its formats in both
+  tiers, and a subclass shows the formats its ancestors declare, as responders
+  copies them. (#406, #407)
+- **`view` marks template and partial variants and locales**:
+  `show.html+mobile.erb` is the `mobile` variant of `show`, and
+  `show.fr.html.erb` its `fr` locale. (#408)
 - **`routes` lists the endpoints of a mounted Grape API** under its mount: verb,
   full path with prefix and version, and declared params, with a `route_param`'s
   param and a params block before a namespace given to every endpoint inside it.
-  Read from `app/api` and `lib/api` in both tiers. (#411)
+  Read from `app/api` and `lib/api` in both tiers; an edit there refreshes the
+  MCP server's cached answer. (#411)
 - **`service_pattern` reads more service shapes.** It reads `app/interactions`
   and `app/interactors` as well as `app/services`, lists an interactor
   organizer's steps in order, and shows an Initialize line and an Inputs section
   for a service whose constructor comes from T::Struct `const`/`prop`,
   Dry::Struct `attribute`, dry-initializer `param`/`option` or the attr_extras
-  initializers. (#402, #403)
+  initializers. Dry::Struct attributes and dry-initializer params and options an
+  app superclass declares are included, marked with the class they come from.
+  (#402, #403)
 - **`conventions` and `analyze_feature` list the models an admin gem exposes**:
   ActiveAdmin (with the params it permits), Administrate, Avo (2 and 3 resource
   naming), Madmin and Trestle. (#405)
-- **`conventions` lists `.standard.yml`, `.erb_lint.yml`, `sorbet/config` and
-  `Steepfile`** under Notable config files, beside `.rubocop.yml`. (#422)
+- **`conventions` lists `.standard.yml`, `.erb_lint.yml` (or the older
+  `.erb-lint.yml`), `sorbet/config` and `Steepfile`** under Notable config
+  files, beside `.rubocop.yml`. (#422)
 - **The package manager is found at the JS workspace root.** `frontend_stack`
   and `conventions` name it when the lockfile sits in a workspace root above the
   app (never above the git root), and `frontend_stack` says which directory that
@@ -138,9 +163,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A configured frontend directory outside the app root is read for its
   manifests.** A `frontend_paths` entry such as `../web-client`, and the JS
   workspace root above the app, are read for `package.json`, lockfiles and the
-  presence of a bundler config only, and `frontend_stack` reports the framework
-  and names the directory instead of calling the app API-only. docs/SECURITY.md
-  lists this read under "Frontend roots outside the app". (#377, #401)
+  presence of a bundler config only, plus a configured entry's `tsconfig.json`
+  and the configs it extends inside that directory. `frontend_stack` reports the
+  framework, build tool, package manager and TypeScript settings and names the
+  directory instead of calling the app API-only; an entry inside the app root
+  gets the same build tool and package manager answer. docs/SECURITY.md lists
+  this read under "Frontend roots outside the app". (#377, #401)
 - **An app with no lockfile of its own reads the bundle `config/boot.rb` points
   at.** In an engine's `test/dummy`, static `onboard`, `gems`, `env` and the
   Rails version read the Gemfile and lockfile its `BUNDLE_GEMFILE` names when
@@ -150,9 +178,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "The engine an app's test/dummy runs in". (#381, #423)
 - **The controllers payload carries `rate_limits`**, one entry per `rate_limit`
   call, in place of `rate_limit` and `rate_limit_parsed`. `controllers` prints
-  every limit a controller declares, whole when the call spans lines. (#332)
+  every limit a controller declares, whole when the call spans lines, and in a
+  controller's own detail each limit an ancestor declares, named by the class
+  that declares it. (#332)
+- **A booted filter an outside module defines carries that module as
+  `from_concern`.** With `include ActiveStorage::SetBlob`, `set_blob` reads
+  `(from ActiveStorage::SetBlob)` and is never labelled as not declared in the
+  controller chain; an `on_load` filter beside it still is. (#293)
 - **The views payload no longer carries `conditional_layouts`.** Each controller
   entry carries `layout` and `settings` instead. (#337)
+- **The mailboxes payload drops each mailbox's `routing` list** (`{pattern,
+  action}`). A mailbox carries `routed_from`, the patterns that send to it, the
+  section gains a top-level `routes` list (`{pattern, mailbox, file}`) in the
+  order Rails tries them, and a mailbox's `file` is relative to the app root
+  (`app/mailboxes/replies_mailbox.rb`), not to `app/mailboxes`. (#386)
+- **A job's `callbacks` in the jobs payload holds the declarations as written**
+  (`before_perform :log_start`) in place of the bare macro names
+  (`before_perform`). (#392)
+- **A Mongoid model's payload always carries `collection:`**, the `store_in`
+  name or the one Mongoid derives (`admin_shelves`), where it was set only for
+  `store_in`. (#382)
+- **`schema --table` JSON for a name that holds different tables in two
+  databases is `{table:, databases: {<name> => table}}`** instead of one table's
+  keys at the top level. (#356)
 - **Views are counted apart from tables.** Schema entries carry `kind:` (`view`,
   `materialized_view`, `virtual_table`) in JSON, `total_tables` leaves views
   out, and the schema headers read `116 tables and 2 views`. `onboard` counts
@@ -165,7 +213,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `class_methods do`, `module ClassMethods`, and a `def self.x` written in
   `included do`. The module's own `def self.x` and `class << self` methods move
   to a new Module Methods section, and its `def self.included(base)` (or
-  `extended`, `prepended`) hook is listed under neither. (#312)
+  `extended`, `prepended`) hook is listed under neither. A `def self.x` or
+  `class << self` written inside `class_methods do` belongs to ClassMethods
+  alone, so neither section lists it. (#312)
 - **`search_docs` no longer accepts `source: "api"`**, which never had entries.
   The valid sources are all, guides, stimulus, turbo and hotwire. (#322)
 
@@ -179,13 +229,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Encoding::CompatibilityError on a non-ASCII argument under a C or other
   non-UTF-8 locale. (#272, #273, #275)
 - **A Sinatra app with `config/environment.rb` and `app/` is not read as a Rails
-  app**; both tiers answer "No Rails app found". A tree whose
-  `config/environment.rb` loads but defines no Rails application, with no
-  lockfile to decide, reports a failed boot and answers from the static tier.
-  (#274)
+  app**; both tiers answer "No Rails app found". With no lockfile, a Gemfile
+  that names neither rails nor railties decides the same before anything boots,
+  so the tree's own `bundler/setup` never runs and never writes a lockfile into
+  it. A tree whose `config/environment.rb` loads but defines no Rails
+  application, with no lockfile to decide, reports a failed boot and answers
+  from the static tier. (#274)
 - **An app without Active Record says so.** `schema` says introspection does not
-  apply, `onboard` no longer says "on unknown", and `model_details` says the
-  class is not an Active Record model. A sequel-rails app gets "this app uses
+  apply, `onboard` no longer says "on unknown", and `model_details` says there
+  is no Active Record model by that name. A sequel-rails app gets "this app uses
   Sequel; ActiveRecord schema introspection does not apply" instead of id-only
   tables replayed from Sequel migrations, and a replay behind an empty schema.rb
   says the dump declares no tables. (#364, #383)
@@ -198,56 +250,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declares when there are no tables yet, where it said "on unknown"; `schema`
   lists the solid_queue, solid_cache and solid_cable tables from their own dump
   files and says the primary database has no tables yet. `onboard --detail full`
-  says "Dockerfile: present." and "Deployment: kamal.", and no longer prints an
-  empty "File Storage & Rich Text" heading. The migrations list names a
-  migration `active_storage:install` or `action_text:install` copied by its
-  class, without the scope suffix. (#276, #280, #281, #284)
+  says "Dockerfile: present." and "Deployment: kamal.", names a `Procfile.dev`
+  on its own line instead of reporting a Procfile, and no longer prints an empty
+  "File Storage & Rich Text" heading. The migrations list names a migration
+  `active_storage:install` or `action_text:install` copied by its class, without
+  the scope suffix. (#276, #280, #281, #284)
 - **`config` reports the Action Cable adapter of the current environment**
   (solid_cable in a default Rails 8 production, not the development block's
   async) and keeps the Database line when the environment lists several
   databases. `observability` reports Rails 8.1's event reporter (`Rails.event`)
   as available, with its subscriber count. (#285, #286)
 - **`test_info` reads Rails 8.1 test setups.** It and `onboard` name
-  `config/ci.rb` (`rails_ci`), Buildkite and Jenkins as CI, and `test_info`
-  lists the steps `bin/ci` runs. It lists `test/test_helpers` (where the
-  authentication generator puts `SessionTestHelper`) as test helpers, no longer
-  lists `test/helpers` helper tests as helpers, and shows the `parallelize`,
-  `fixtures` and `driven_by` calls. (#277, #287)
+  `config/ci.rb` (`rails_ci`), Buildkite, Jenkins and Bitbucket Pipelines as CI,
+  and `test_info` lists the steps `bin/ci` runs. It lists `test/test_helpers`
+  (where the authentication generator puts `SessionTestHelper`) as test helpers,
+  no longer lists `test/helpers` helper tests as helpers, and shows the
+  `parallelize`, `fixtures` and `driven_by` calls. (#277, #287)
 - **Rails 8 generated authentication reads right.** `controllers` no longer
   drops the authentication filter from every controller: a `skip_before_action`
   inside a class method (`allow_unauthenticated_access`) applies only where a
-  controller calls that method, with the options the call passes. `conventions`
-  builds the controller test's sign-in from the call the app's tests make
-  (`sign_in_as`), and signs in the app's own users fixture where the tests sign
-  in a variable set elsewhere. (#288, #289)
+  controller calls that method, with the options the call passes, also through a
+  class method of its base, or of a concern either one includes, that calls it.
+  `conventions` builds the controller test's sign-in from the call the app's
+  tests make (`sign_in_as`), and signs in the app's own users fixture where the
+  tests sign in a variable set elsewhere. (#288, #289)
 - **`read_logs` reads the level a formatter writes**, never a word in the
-  message, and reads Sidekiq's 6/7, 8 (colored) and JSON formats. It filters by
-  level only when most lines carry a severity; otherwise (Rails' default dev and
-  8.0+ production formatter) it shows every line and says it cannot filter by
-  level. It reads a rotated log (`file: "development.log.0"`) and lists rotated
-  logs under the available files. (#278, #343)
+  message, and reads Sidekiq's 6/7, 8 (colored) and JSON formats and
+  rails_semantic_logger's one-letter level. It filters by level only when most
+  lines carry a severity; otherwise (Rails' default dev and 8.0+ production
+  formatter) it shows every line and says it cannot filter by level. It reads a
+  rotated log (`file: "development.log.0"`) and lists rotated logs under the
+  available files. (#278, #343)
 - **Static `routes` draws more of what Rails draws.** Shallow nesting,
-  `path_names`, a `new do` block, every path of a multi-path route, routes
-  inside `controller :x do`, `options` routes, and the routes of a method
-  defined in a route file, where it is called. A resource whose options are a
-  variable, and a call it cannot expand (`load`, `use_doorkeeper`,
-  `ActiveAdmin.routes(self)`, also inside a `constraints` or `authenticate`
-  block), count as not expanded instead of listing seven actions or vanishing;
-  `direct` and `resolve` are no longer counted, and a lambda mount counts as the
-  booted tier counts it. Routes an initializer adds with
-  `Rails.application.routes.prepend` or `.append` are listed first and last, as
-  Rails draws them; one registered inside `after_initialize` or `on_load` counts
-  as not expanded. The framework count says it covers only the app's route
-  files, and that routes Rails' own engines and gems draw are read only with the
-  app booted. (#283, #325, #326, #328)
+  `path_names`, a `new do` block, every path of a multi-path route (Rails 8.1
+  refuses that form, so on 8.1 it counts as not expanded), routes inside
+  `controller :x do`, `options` routes, and the routes of a method defined in a
+  route file, where it is called. A resource whose options are a variable, and a
+  call it cannot expand (`load`, `use_doorkeeper`, `ActiveAdmin.routes(self)`,
+  also inside a `constraints` or `authenticate` block), count as not expanded
+  instead of listing seven actions or vanishing; `direct` and `resolve` are no
+  longer counted, and a lambda mount counts as the booted tier counts it. Routes
+  an initializer adds with `Rails.application.routes.prepend` or `.append` are
+  listed first and last, as Rails draws them, including one registered inside
+  `after_initialize`, which Rails runs before it draws the routes; one
+  registered inside another `on_load` hook counts as not expanded, since that
+  hook may run after the draw. The framework count says it covers only the app's
+  route files, and that routes Rails' own engines and gems draw are read only
+  with the app booted; `onboard`, the rake summary and the generated context
+  files say so beside their route count too. (#283, #325, #326, #328)
 - **A route, mount or filter under a condition carries it.** Static `routes`
-  marks a route under `if`/`unless` or a `case` branch (`case Rails.env`,
-  `Rails.env.development?`, `ENV[...]`) with that condition. A mounted app in
-  the `routes`, `engines` and `onboard` lists and the generated context files,
-  and a controller filter or skip declared under one (`before_action :x if
-  Rails.env.test?`), carry it too, on both tiers; a skip under one leaves the
-  filter in the chain, and the generated files no longer count such a filter as
-  global. (#327)
+  marks a route under `if`/`unless`, a `case` branch or an `&&`/`||` guard
+  (`case Rails.env`, `Rails.env.development?`, `ENV[...]`) with that condition.
+  A mounted app in the `routes`, `engines` and `onboard` lists and the generated
+  context files, and a controller filter or skip declared under one
+  (`before_action :x if Rails.env.test?`), carry it too, on both tiers; a skip
+  under one leaves the filter in the chain, and the generated files no longer
+  count such a filter as global. (#327)
 - **`routes --detail full` prints each route's constraints and defaults** beside
   its path, as `bin/rails routes` does, on both tiers, and escapes the `|` in a
   merged `PATCH|PUT` or `via:` verb so each route stays one table row. (#279,
@@ -256,15 +314,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `onboard` list and count the engine's own routes instead of 0, including
   an engine whose namespace does not match its path (`PgHero::Engine` in
   `lib/pghero/engine.rb`). `engines` counts a loaded engine's routes the way
-  `routes` does, PATCH and PUT as one. (#379, #380)
+  `routes` does, PATCH and PUT as one, and counts its redirects and lambdas
+  beside them (`23 routes, 2 redirect or lambda routes`). (#379, #380)
 - **Booted from a mountable engine's `test/dummy`, the engine's own code is
   read.** `model_details`, `controllers` and the other class listings include
   the engine's own models and controllers, name their files relative to the app
-  root (`../../app/models/...`), and find the layouts in the engine's
-  `app/views`; `test_info`, `analyze_feature` and `generate_test` read the
-  engine's test suite. With `--no-boot` the test tools read it too when the
-  engine's bundle is inside the app's git repository, and `test_info` says it is
-  not read when it is not. (#381)
+  root (`../../app/models/...`), and list and render the views and layouts in
+  the engine's `app/views`; `test_info`, `analyze_feature` and `generate_test`
+  read the engine's test suite. With `--no-boot` the test tools read it too when
+  the engine's bundle is inside the app's git repository. When it is not, the
+  test framework reads "not read" in `test_info`, `onboard` and the generated
+  context, where it said "no tests yet", and a `test_info` model or controller
+  search says the engine's suite was not searched. `controllers` with
+  `--no-boot` from a `test/dummy` says the engine above it is not read, where it
+  listed no controllers and said nothing, and `view` and `partial_interface` say
+  the engine's views are read only with the app booted. (#381)
 - **`view` lists more templates.** Templates with no handler extension
   (`pwa/service-worker.js`, `pages/about.text`), which Rails renders with its
   raw handler, are listed and shown, each fenced by what renders it. View paths
@@ -278,26 +342,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   strict locals comment that ends in `-%>`, has a default with parentheses, or
   is the empty `locals: ()` (now said to accept no locals) is read. `render
   @posts` is credited to the partial Rails renders: under the view's controller
-  namespace unless `prefix_partial_path_with_controller_namespace` is off in
-  config/application.rb, the environment file or any initializer, or at the path
-  a model's `to_partial_path` returns when it returns a string literal. (#323,
-  #324)
+  namespace unless `prefix_partial_path_with_controller_namespace` is off
+  (booted, as ActionView::Base holds it; unbooted, as `config.action_view`,
+  ActionView::Base or an `on_load(:action_view)` block sets it in
+  config/application.rb, the environment file or any initializer), or at the
+  path a model's `to_partial_path` returns when it returns a string literal.
+  `render @post.comments` goes to the partial of the records the association
+  holds, named by the association (one declared with `class_name:` is read by
+  its name), and the `view` tool's `renders:` list reads the call the same way.
+  (#323, #324)
 - **`schema` shows more of each column and table**, in both tiers: precision,
   scale, limit, the unsigned flag and collation, the table comment, unique
   constraints, a MySQL text or blob column's size (`size: medium`), index
-  options (using, include, order), foreign key actions, the enabled extensions,
-  the primary key (a composite one as its columns, in `model_details` too), and
-  with `--table` the check constraints (a MySQL one without the parentheses
+  options (using, include, order), foreign key actions with the deferrable mode
+  and `validate: false`, the enabled extensions, the primary key (a composite
+  one as its columns, in `model_details` too, which also names a key the model
+  sets with `self.primary_key =`, and the table's beside it when they differ),
+  and with `--table` the check constraints (a MySQL one without the parentheses
   MySQL adds), the enum types its columns use with their values, and generated
   columns with their expressions. A `t.virtual` column is typed by its `type:`
   in every static source, migration replays included. (#290, #291, #292, #352)
 - **`db/structure.sql` reads like schema.rb.** A structure.sql app gets the
   column types schema.rb gives the same table (hstore, citext, enum with its
   type, jsonb, timestamptz, binary, time, integer with its limit, unsigned),
-  plus table and column comments, and its extensions. On SQLite, a table with a
-  multi-line foreign key or a dump with no semicolons is read whole, and
-  `sqlite_sequence` is not listed as a table. On MySQL, a `FULLTEXT KEY` or
-  `SPATIAL KEY` line is an index with its type, not a column. (#348, #349, #350)
+  plus table and column comments, and its extensions; an index shows its method,
+  order, operator class, prefix lengths and INCLUDE list, and a table its unique
+  constraints. On SQLite, a table with a multi-line foreign key or a dump with
+  no semicolons is read whole, and `sqlite_sequence` is not listed as a table.
+  On MySQL, a `FULLTEXT KEY` or `SPATIAL KEY` line is an index with its type,
+  not a column. (#348, #349, #350)
 - **MySQL column types read as the dumper writes them.** A schema.rb column
   written as `t.column "kind", "enum('a','b')"` is listed with that type instead
   of dropped, and the booted tier names MySQL enum, set and timestamp columns
@@ -310,26 +383,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   database.yml, as Rails merges them, and the replayed schema types its implicit
   primary keys by that adapter. The schema comes from the dump the app
   configures: database.yml's `schema_dump` name and `schema_format = :sql`
-  (database.yml on Rails 8.0.3 and later, config/application.rb or the
-  environment file); the doctor, schema version, tool guide, onboarding setup
-  command and missing-table messages name the same file, a configured dump over
-  `max_schema_file_size` is reported as too large, and a change to any `.sql`
-  dump under `db/` refreshes the MCP cache. (#355, #357)
+  (database.yml on Rails 8.0.3 and later, or
+  `config.active_record.schema_format` or `ActiveRecord.schema_format` as
+  config/application.rb, the environment file or an initializer sets it, the
+  last assignment winning); the doctor, schema version, tool guide, onboarding
+  setup command and missing-table messages name the same file, a configured dump
+  over `max_schema_file_size` is reported as too large, and a change to any
+  `.sql` dump under `db/` refreshes the MCP cache. (#355, #357)
 - **A table in a secondary database is found** by `schema --table`,
   `model_details`, `analyze_feature`, `diagnose`, `migration_advisor`, the
   controllers schema hint and the model resource. The table view names every
-  database that holds it, and `migration_advisor` passes `--database <name>` so
-  the migration lands in that database's migrations_paths. (#356)
+  database that holds it, and where one name holds different tables in two
+  databases it shows each database's columns and models. `migration_advisor`
+  passes `--database <name>` so the migration lands in that database's
+  migrations_paths, and leaves out `foreign_key: true` on a reference between
+  tables in different databases. A replica or a `database_tasks: false` entry is
+  not listed as a database of its own. (#356)
 - **Migration replay follows what Rails runs.** It reads migrations in
   subdirectories of `db/migrate` and in the migrations_paths database.yml sets
   (for the primary and for a secondary with no dump yet), and the migrations
   listing, the pending check and `doctor` read the same directories; a migration
-  file symlinked from outside the app is not read. A `revert` block is undone (a
+  file symlinked from outside the app is not read, and a secondary database's
+  line in `schema` names its pending migrations. A `revert` block is undone (a
   nested one runs forward), and `revert SomeMigration` counts as a statement it
   could not follow. One column is kept when both branches of an `if` declare it,
   temporary and `if_not_exists` tables are skipped, `as:` and `execute "CREATE
-  TABLE"` tables are read, `rename_index` is followed, and `Migration[5.0]`
-  tables get integer keys. (#360, #361, #362, #363)
+  TABLE"` tables are read (a heredoc over several lines too), check constraints
+  are replayed, `rename_index` is followed, and `Migration[5.0]` tables get
+  integer keys. An `execute` whose CREATE TABLE is built at run time counts as
+  not replayed. (#360, #361, #362, #363)
 - **Static primary keys and table names read as Rails reads them.** A primary
   key written as `id: { type: :string, limit: 36 }` is typed `string, limit:
   36`, and a model whose class, base class or app sets `pluralize_table_names =
@@ -338,8 +420,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `touch:`, `inverse_of:`, `extend:`, `before_add:`, the foreign key a
   `has_many` or `has_one` declares and the rest) and an extension block's
   methods; `callbacks` lists association callbacks; and `--no-boot` reads
-  `required: false` as optional and `query_constraints:` as the foreign key.
-  (#296)
+  `required: false` as optional and `query_constraints:` as the foreign key (a
+  `has_many` prints the option). (#296)
 - **`model_details` reads more model declarations.** A `validate do ... end`
   block is a custom validation with its `on:`/`if:`/`unless:` and first line. An
   enum shows its `default:` and, with a prefix or suffix, the methods Rails
@@ -350,21 +432,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   columns" line. `encrypts`, `normalizes`, `serialize` and `generates_token_for`
   show every option (`expires_in: 2.days`, or `never`), and a named
   `has_secure_password :recovery_password` keeps its name. A Mongoid document's
-  schema hint names its collection and `_id` key, and a field shows its default.
-  An array constant wrapped in `Ractor.make_shareable` is listed under
-  Constants. (#302, #305, #306, #307, #309, #382, #391, #414)
+  schema hint in `controllers` names its collection and `_id` key instead of an
+  empty table, and a field shows its default. An array constant wrapped in
+  `Ractor.make_shareable` is listed under Constants. A validation, association,
+  scope or enum written in a method nothing calls is not listed. (#302, #305,
+  #306, #307, #309, #382, #391, #414)
 - **`delegated_type`, `has_secure_token` and `accepts_nested_attributes_for` are
   read.** The static tier lists the polymorphic `belongs_to` that
-  `delegated_type` declares, both tiers name its types, and `model_details`
-  lists `has_secure_token` and `accepts_nested_attributes_for` under Macros.
-  (#365)
+  `delegated_type` declares, both tiers name its types (booted asks the model's
+  `<role>_types` when the source names them through a constant, and the static
+  tier names that constant as not read), and `model_details` lists
+  `has_secure_token` and `accepts_nested_attributes_for` under Macros. (#365)
 - **`callbacks` and `model_details` read callbacks as Rails registers them.** A
-  callback the model removes with `skip_callback` is not listed (a conditional
-  skip shows as the negated condition). A callback object (`after_commit
-  AuditTrail`, `before_validation PostNormalizer.new`) prints as the class or
-  expression the model passes. A concern's `prepended do` block applies only to
-  a class that prepends it, and its `included do` block only to one that
-  includes it. (#303, #304, #310)
+  callback the model removes with `skip_callback`, by name or by callback
+  object, is not listed (a conditional skip shows as the negated condition). A
+  callback object (`after_commit AuditTrail`, `before_validation
+  PostNormalizer.new`) prints as the class or expression the model passes. A
+  concern's `prepended do` block applies only to a class that prepends it, and
+  its `included do` block only to one that includes it. (#303, #304, #310)
 - **Models outside `app/models` are found**, in both tiers: in another `app/*`
   directory such as `app/domain`, or under a path `config/application.rb` adds
   to `eager_load_paths` or `autoload_paths`, when its superclass is a model. A
@@ -372,12 +457,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the lib subdirectories `autoload_lib(ignore:)` names are not read. The static
   tier also finds models under a symlinked directory or file in `app/models`
   that points inside the app, a model assigned `Class.new(ApplicationRecord)`
-  with what its block declares, and merges a module prepended after the class
-  body (`Note.prepend(EE::Note)`, GitLab's `prepend_mod_with("Note")`). (#344,
-  #347, #413, #416)
+  with what its block declares (the `self.table_name` it sets included), and
+  merges a module prepended after the class body (`Note.prepend(EE::Note)`,
+  GitLab's `prepend_mod_with("Note")`). (#344, #347, #413, #416)
 - **Booted `model_details` no longer credits every model with a gem's base
   mixins**, such as Kaminari's two modules and `page` and `default_per_page` on
-  the app's abstract base. (#371)
+  the app's abstract base, or on a model that subclasses ActiveRecord::Base
+  itself, which Kaminari reaches the same way. (#371)
 - **Method listings read more of how Ruby defines methods**, in `model_details`,
   `concern`, `service_pattern` and every tool that reads a file's methods. A
   `private` inside `class << self` or a `concerning` block no longer hides the
@@ -386,7 +472,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stays public, and a `module_function` method is a module method
   (`self.total(items)`). Methods defined with `alias`, `alias_method`, `attr_*`,
   `define_method`, `class_attribute` and `cattr_*`/`mattr_*` are listed, an
-  inline `private attr_reader :x` keeping its visibility. A method in a scope or
+  inline `private attr_reader :x` or `protected attr_writer :y` keeping its
+  visibility, and `service_pattern` writes the class-side reader, writer and
+  predicate a `class_attribute` defines with `self.`. A method in a scope or
   association extension block, a `concern :Name do` block, or a `Struct.new`,
   `Data.define`, `Class.new` or `Module.new` block is not the enclosing class's;
   one assigned to a constant is that constant's, and a `Module.new` held in a
@@ -409,18 +497,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`concern` lists a class that prepends the concern** under Included By.
   (#311)
 - **`controllers` lists block, lambda and object filters, in the order Rails
-  runs them.** A block or lambda filter reads `block (line N)`, or `block (line
-  N of <file>)` when written outside the controller's own file, each with its
-  own `only:`/`except:`, in both tiers; every name a `before_action :a, :b` call
-  gives is listed in order; the static tier reads `prepend_after_action`,
-  `prepend_around_action` and `append_around_action`, each prepended filter at
-  the front of the chain; `skip_forgery_protection` shows as the
-  `verify_authenticity_token` skip it is. An object filter (`around_action
-  TimingFilter.new`) reads `TimingFilter (object)` in both tiers, where the
-  booted tier printed a memory address. The booted tier leaves out a gem's block
-  filter (`allow_browser`, `rate_limit`). `http_basic_authenticate_with` is a
-  before filter with its `only:`/`except:`, never its credentials. (#293, #332,
-  #335)
+  runs them.** A block, lambda or proc filter (`-> {}`, `lambda {}`, `proc {}`,
+  `Proc.new {}`) reads `block (line N)`, or `block (line N of <file>)` when
+  written outside the controller's own file (a concern's class method, an
+  ancestor), each with its own `only:`/`except:`, in both tiers; every name a
+  `before_action :a, :b` call gives is listed in the order Rails runs them (a
+  lambda where it stands, the block last); the static tier reads
+  `prepend_after_action`, `prepend_around_action` and `append_around_action`,
+  each prepended filter at the front of the chain; `skip_forgery_protection`
+  shows as the `verify_authenticity_token` skip it is. An object filter
+  (`around_action TimingFilter.new`) reads `TimingFilter (object)` in both
+  tiers, where the booted tier printed a memory address. The booted tier leaves
+  out a gem's block filter (`allow_browser`, `rate_limit`), even when the bundle
+  is installed under the app root. The static tier names a framework or gem
+  module the controller includes (`include ActiveStorage::SetBlob`) as an
+  included module not read, where a filter it adds would be missing.
+  `http_basic_authenticate_with` is a before filter with its `only:`/`except:`,
+  never its credentials. (#293, #332, #335)
 - **`controllers` reads strong params and delegated actions.**
   `params.expect(user: [tags: []])` reads as an array of scalars, and the
   summary lists nested keys, arrays and `key: {}` hashes beside the flat
@@ -435,19 +528,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them.** Fixture files that open with an ERB line or use the `DEFAULTS` alias
   are read, subfolder sets such as `admin/posts` stay apart, `_fixture` and the
   labels its `ignore:` names are dropped, and directories a helper adds to
-  `fixture_paths` are read (inside `RSpec.configure do |config|` too); an RSpec
-  `spec/fixtures` no helper loads gives no sets, and a file it cannot parse
-  lists its labels. A fixture file that links out of the app or to a sensitive
-  file is not read, here or by `generate_test` and `conventions`. Factories are
-  found in `factories.rb`, `factories/`, `test/factories.rb`,
-  `spec/factories.rb` and each pack's `spec/factories` and `test/factories`
-  (both suites' when both exist), Fabrication's fabricators are listed, and a
-  Cucumber `features/` tree is counted. (#313, #373)
+  `fixture_paths` are read (inside `RSpec.configure do |config|` too, on
+  `ActiveSupport::TestCase` by name, and as a path built from `__dir__` or
+  `__FILE__`); an RSpec `spec/fixtures` no helper loads gives no sets, and a
+  file it cannot parse lists its labels. A fixture file that links out of the
+  app or to a sensitive file is not read, here or by `generate_test` and
+  `conventions`, and a file over `max_test_file_size` is named as too large. A
+  label or value ERB computes (`row_<%= i %>`) is shown as ERB, and such a label
+  is never written as a fixture key. Factories are found in `factories.rb`,
+  `factories/`, `test/factories.rb`, `spec/factories.rb` and each pack's
+  `spec/factories` and `test/factories` (both suites' when both exist). A helper
+  that sets or appends to `FactoryBot.definition_file_paths` is followed when it
+  then calls `FactoryBot.find_definitions` (added to the defaults
+  factory_bot_rails already loaded) or `FactoryBot.reload` (in place of them);
+  `config.factory_bot.definition_file_paths` is not read. Fabrication's
+  fabricators are listed, `onboard` names Fabrication as the data setup of a
+  fabricators-only suite, the generated context lists the fabricators directory,
+  and a Cucumber `features/` tree is counted. (#313, #373)
 - **`i18n` reads the locale files Rails loads.** `.rb` locales are read for
-  their keys, `.yaml` files Rails ignores are not counted, files
-  `config.i18n.load_path` adds or replaces are listed and counted in both tiers,
-  and the Fallbacks section shows on a booted app whose `config.i18n.fallbacks`
-  sets only default locales. (#314, #315)
+  their keys (the plural rule and transliteration settings under `i18n.plural`
+  and `i18n.transliterate` are not counted as keys), `.yaml` files Rails ignores
+  are not counted, files `config.i18n.load_path` adds or replaces (`+=`, `<<`,
+  `=`) are listed and counted in both tiers, a sensitive file a `load_path` glob
+  reaches is never read, and the Fallbacks section shows on a booted app whose
+  `config.i18n.fallbacks` sets only default locales. (#314, #315)
 - **Initializers in subdirectories of `config/initializers` are read** for the
   default locale, middleware, tagged logging, OmniAuth providers, component
   preview paths, CORS, Rack::Attack, inflections and the shard selector, and
@@ -457,29 +561,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads, and adds `SECRET_KEY_BASE_DUMMY`, `RAILS_DEVELOPMENT_HOSTS`,
   `RAILS_GROUPS`, `RAILS_CACHE_ID`, `RAILS_APP_VERSION` and
   `SOLID_QUEUE_IN_PUMA`. Credentials that decrypt to nothing are said to hold no
-  keys. External services called as `Net::HTTP.get(URI("..."))` or
-  `Faraday.get("...")`, and HTTP clients in `lib/` or `config/`, are listed.
-  `env_config` lists keys set with `<<`, `+=`/`||=`/`&&=`, an index write, a
-  method call or a block, and not another library's config
-  (`OmniAuth.config.test_mode`). (#317, #318, #319, #320)
+  keys. External services called as `Net::HTTP.get(URI("..."))`,
+  `Net::HTTP.start("host")`, `Faraday.get("...")`, `RestClient`, `HTTP`
+  (http.rb), `Excon`, `Typhoeus` or `URI.open`, and HTTP clients in `lib/` or
+  `config/`, are listed; a loopback, private or unspecified (`0.0.0.0`) IP, a
+  file name handed to a client, and a call in a comment or a string are not.
+  `env_config` lists keys set with `<<`, `+=`/`||=`/`&&=`, an index write
+  (`config.action_dispatch.default_headers["X-Frame-Options"] = "DENY"`), a
+  write through an index read (`config.paths["app/views"] << "x"`), a method
+  call or a block, and not a call whose value is used (`x =
+  config.root.join("tmp")`), a method argument named `config`, or another
+  library's config (`OmniAuth.config.test_mode`). (#317, #318, #319, #320)
 - **`active_support` lists files that sign with
   `Rails.application.message_verifier`**, `message_verifiers` or
   `ActiveStorage.verifier`, and not a file that only rescues
-  `MessageVerifier::InvalidSignature`. (#321)
+  `MessageVerifier::InvalidSignature` or names one in a comment or a string.
+  (#321)
 - **`search_docs` finds the 21 Rails guides the index lacked** (upgrading,
   engines, autoloading, error reporting, generators, core extensions and more).
-  (#322)
+  A guide newer than the app's Rails links to main and says so, since the app's
+  stable branch has no file for it. (#322)
 - **`frontend_stack` names the asset pipeline and CSS and build tools.** A
   Propshaft or Sprockets pipeline is named (with Sprockets' `manifest.js` link
   lines), an app with no JavaScript build is said so, and an app is called
   API-only only when `config.api_only` is set. webpack, rollup or bun is named
-  as a jsbundling-rails app's build tool, and `conventions` reads bun from the
-  text `bun.lock`. `conventions` and `frontend_stack` name Tailwind CSS or
-  Bootstrap on a `rails new --css` app. (#339, #340, #341)
+  as a jsbundling-rails app's build tool, and `conventions` names Rollup and
+  reads bun from the text `bun.lock`. `conventions` and `frontend_stack` name
+  Tailwind CSS or Bootstrap on a `rails new --css` app. (#339, #340, #341)
 - **`validate` checks Ruby syntax with the app's own Ruby grammar** (the running
-  Ruby when booted, the declared one with `--no-boot`), so a file valid on Ruby
-  3.3 is not failed for a rule 3.4 added. Ruby 3.1 and 3.2 are checked as 3.3,
-  the oldest grammar prism has. (#342)
+  Ruby when booted, the declared one with `--no-boot`, or the running Ruby when
+  the app declares none), so a file valid on Ruby 3.3 is not failed for a rule
+  3.4 added. Ruby 3.1 and 3.2 are checked as 3.3, the oldest grammar prism has.
+  An app that declares JRuby or TruffleRuby and no Ruby version is checked with
+  the running Ruby's grammar, and a syntax error says so. (#342)
 - **`autoload` lists every root Rails autoloads from**: app/models, app/lib,
   app/services and the rest, other engines' app/* directories, a directory an
   initializer adds with `push_dir` (with the namespace it loads under),
@@ -496,18 +610,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   job classes too. A schedule an ERB tag builds reads as computed. Without
   booting, queues are named as ActiveJob names them, with `queue_name_prefix`,
   `queue_name_delimiter` and `default_queue_name` applied, and a job with no
-  `queue_as` is on the default queue in both tiers. A Resque job's `@queue` and
-  a Que job's `self.queue =` are read, Que::Job subclasses are listed with their
-  `run` signature, and `run` is the entry point of a Que job only. (#330, #331,
-  #366, #374)
+  `queue_as` is on the default queue in both tiers. A Resque job's `@queue` (or
+  `def self.queue` when it sets none) and a Que job's `self.queue =` are read,
+  Que::Job subclasses are listed with their `run` signature, and `run` is the
+  entry point of a Que job only. (#330, #331, #366, #374)
 - **`api` names the serialization layer and OpenAPI specs right.** Blueprinter
   blueprints, Alba resources and RABL templates are named; an Active Job
   argument serializer and a mixin module the serializers include are not counted
-  as response serializers. A file is an OpenAPI spec only when its top-level key
-  is `openapi` or `swagger`, found in `public/`, `doc/`, `app/` and `config/` as
-  well; a spec over the per-file read limit is still listed, from its first
-  64KB. `gems` says rswag-api serves specs from its `openapi_root`. (#367, #368,
-  #375)
+  as response serializers. A file is an OpenAPI spec only when its top-level
+  `openapi` or `swagger` key holds a version number, found in `public/`, `doc/`,
+  `app/` and `config/` as well; a docs site's `_config.yml` and locale files are
+  not listed. A spec over the per-file read limit is still listed: the check
+  reads only the first 64KB of each candidate. `gems` says rswag-api serves
+  specs from its configured `openapi_root`, and names
+  `config/initializers/rswag_api.rb` when the app has it. (#367, #368, #375)
 - **`onboard` names auth and serialization like the other tools.** An
   "Authentication & Authorization" section covers Rodauth, Action Policy and
   Rails 8 generated authentication; the Devise model is named with its modules,
@@ -520,9 +636,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `has_closure_tree` and `include Discard::Model`, multi-tenancy from
   activerecord-multi-tenant, and a `discarded_at` column as soft delete. (#370)
 - **`component_catalog` reads more components.** The usage example for a
-  `renders_many` slot calls the singular setter (`c.with_item do`), and a
-  component in the layout `phlex:install` generates types as Phlex, read from
-  its root even outside `app/components`. (#372, #378)
+  `renders_many` slot calls the singular setter (`c.with_item do`), and the
+  one for a polymorphic slot calls each setter its `types:` define. A component
+  in the layout
+  `phlex:install` generates types as Phlex, read from its root even outside
+  `app/components` (`app/views/components`), and is named by the constant that
+  renders it (`Components::Badge`). (#372, #378)
 - **`performance_check` no longer suggests `counter_cache: true`** on a
   `belongs_to` whose count column `counter_culture` already keeps. (#376)
 - **Rake tasks are read whole.** Tasks after a brace-form `namespace(:x) { }`
