@@ -59,6 +59,12 @@ RSpec.describe RailsAiContext::Introspectors::AdminResources do
     )
   end
 
+  it "lists the array and nested keys permit_params takes as keywords" do
+    write("app/admin/memos.rb", "ActiveAdmin.register Note, as: \"Memo\" do\n  permit_params :title, tags: [], meta: [:a, :b], prefs: {}\nend\n")
+    memo = described_class.call(@root).find { |r| r[:file] == "app/admin/memos.rb" }
+    expect(described_class.line(memo)).to eq("ActiveAdmin `Note` (`app/admin/memos.rb`) - permits title, tags (array), meta (a, b), prefs (hash)")
+  end
+
   it "survives a file that does not parse and a directory symlinked out of the app" do
     write("app/admin/broken.rb", "ActiveAdmin.register User do\n  permit_params :a,\n")
     write("app/dashboards/garbage.rb", "\xFF\xFE class".b)
