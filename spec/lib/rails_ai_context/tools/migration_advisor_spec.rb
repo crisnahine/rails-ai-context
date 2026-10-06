@@ -508,6 +508,19 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       expect(text).not_to include("once per database")
     end
 
+    it "adds a reference with no foreign key to a table in another database" do
+      context = shard_context
+      context[:schema][:tables]["users"] = { columns: [] }
+      allow(described_class).to receive(:cached_context).and_return(context)
+
+      across = described_class.call(action: "add_association", table: "page_views", column: "user").content.first[:text]
+      expect(across).to include("add_reference :page_views, :user\n", "`users` is in primary")
+      expect(across).not_to include("foreign_key: true")
+
+      same = described_class.call(action: "add_association", table: "users", column: "user").content.first[:text]
+      expect(same).to include("add_reference :users, :user, foreign_key: true")
+    end
+
     it "asks for one migration per database when their migrations_paths differ" do
       allow(described_class).to receive(:cached_context).and_return(shard_context)
       allow(RailsAiContext::DatabaseYml).to receive(:entry) { |_, name| { "migrations_paths" => "db/#{name}_migrate" } }
