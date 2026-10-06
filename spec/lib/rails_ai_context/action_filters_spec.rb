@@ -1235,17 +1235,39 @@ RSpec.describe RailsAiContext::ActionFilters do
     end
 
     # `include ActiveStorage::SetBlob` adds set_blob from a file the walk never reads.
-    it "labels nothing as undeclared when a class on the chain mixes in a module from outside the app" do
-      reflection = [ { kind: "before", name: "set_blob" }, { kind: "before", name: "bb", declared: true } ]
+    it "credits a filter to the outside module that defines it, and still labels an on_load filter" do
+      reflection = [ { kind: "before", name: "onload_filter" },
+                     { kind: "before", name: "set_blob", from_concern: "ActiveStorage::SetBlob" },
+                     { kind: "before", name: "bb", declared: true } ]
       ctx = { controllers: { controllers: {
         "ApplicationController" => { filters: [], parent_class: "ActionController::Base" },
-        "BlobsController" => { parent_class: "ApplicationController", filters: reflection, mixins_unread: [ "ActiveStorage::SetBlob" ] }
+        "BlobsController" => { parent_class: "ApplicationController", filters: reflection }
       } } }
 
-      result = described_class.for_controller(ctx, "BlobsController")
+      chain = described_class.for_controller(ctx, "BlobsController")[:chain]
 
-      expect(result[:chain].map { |f| f[:name] }).to eq(%w[set_blob bb])
-      expect(result[:chain].first).not_to have_key(:provenance)
+      expect(chain.map { |f| f[:name] }).to eq(%w[onload_filter set_blob bb])
+      expect(chain[0]).to include(provenance: "not declared in the controller chain")
+      expect(chain[1]).to include(from_concern: "ActiveStorage::SetBlob")
+      expect(chain[1]).not_to have_key(:provenance)
+    end
+
+    it "keeps an ancestor's outside-module filter credited to the module in a child's chain" do
+      base = [ { kind: "before", name: "onload_filter" },
+               { kind: "before", name: "set_blob", from_concern: "ActiveStorage::SetBlob" },
+               { kind: "before", name: "always", declared: true } ]
+      ctx = { controllers: { controllers: {
+        "ApplicationController" => { filters: base, parent_class: "ActionController::Base" },
+        "PostsController" => { parent_class: "ApplicationController",
+                               filters: base.map { |f| f.except(:declared) } + [ { kind: "before", name: "set_post", declared: true } ] }
+      } } }
+
+      chain = described_class.for_controller(ctx, "PostsController")[:chain]
+
+      expect(chain.map { |f| f[:name] }).to eq(%w[onload_filter set_blob always set_post])
+      expect(chain[0]).to include(provenance: "not declared in the controller chain")
+      expect(chain[1]).to include(from_concern: "ActiveStorage::SetBlob", from: "ApplicationController")
+      expect(chain[1]).not_to have_key(:provenance)
     end
 
     # An ancestor that could not be read ends the walk early, so a name no read

@@ -393,14 +393,28 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
     end
   end
 
-  describe "mixins_unread" do
-    it "names a module an app class mixes in from outside the app, and none the framework base carries" do
-      stub_const("OutsideMixin", Module.new { def self.name = "OutsideMixin" })
-      app_base = Class.new(ActionController::Base)
-      ctrl = Class.new(app_base) { include OutsideMixin }
+  describe "a filter an outside module defines" do
+    it "names the module that defines the filter's method, and no other filter" do
+      stub_const("OutsideMixin", Module.new {
+        def self.name = "OutsideMixin"
+        def outside_filter; end
+      })
+      stub_const("QuietMixin", Module.new { def self.name = "QuietMixin" })
+      app_base = Class.new(ActionController::Base) do
+        include QuietMixin
+        before_action :base_filter
+        def base_filter; end
+      end
+      ctrl = Class.new(app_base) do
+        include OutsideMixin
+        before_action :outside_filter
+      end
 
-      expect(introspector.send(:mixins_unread, ctrl)).to eq([ "OutsideMixin" ])
-      expect(introspector.send(:mixins_unread, app_base)).to eq([])
+      reflection = [ { kind: "before", name: "base_filter" }, { kind: "before", name: "outside_filter" } ]
+      filters = introspector.send(:from_unread_mixins, ctrl, reflection)
+
+      expect(filters.find { |f| f[:name] == "outside_filter" }).to include(from_concern: "OutsideMixin")
+      expect(filters.find { |f| f[:name] == "base_filter" }).not_to have_key(:from_concern)
     end
   end
 

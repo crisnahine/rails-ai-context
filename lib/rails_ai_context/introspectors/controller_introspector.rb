@@ -291,7 +291,7 @@ module RailsAiContext
 
       def extract_controller_details(ctrl)
         source = read_source(ctrl)
-        filters = extract_filters(ctrl, source)
+        filters = from_unread_mixins(ctrl, extract_filters(ctrl, source))
         concerns = extract_concerns(ctrl)
         actions = extract_actions(ctrl, source, filters) | concern_actions(concerns, ctrl.name, filters)
         # What the file does not define itself is inherited or mixed in, for
@@ -308,7 +308,6 @@ module RailsAiContext
           inherited_actions: (actions - own).presence,
           filters: filters,
           concerns: concerns,
-          mixins_unread: mixins_unread(ctrl).presence,
           strong_params: extract_strong_params(source),
           respond_to_formats: declared[:respond_to_formats],
           rescue_from: extract_rescue_from(source),
@@ -570,8 +569,26 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, false, label: "devise_controller?")
       end
 
-      # Modules an app class on the chain mixes in from a file outside the app: a filter one
-      # adds is declared in no file the walk reads. A gem's on_load lands above the framework base.
+      # A filter whose method a module from outside the app defines (`include ActiveStorage::SetBlob`)
+      # is declared in no file the walk reads, so it is credited to that module.
+      def from_unread_mixins(ctrl, filters)
+        unread = mixins_unread(ctrl)
+        return filters if unread.empty?
+
+        filters.map do |f|
+          next f if f[:declared] || f[:skipped] || f[:from_concern]
+
+          owner = begin
+            ctrl.instance_method(f[:name]).owner.name
+          rescue NameError
+            nil
+          end
+          unread.include?(owner) ? f.merge(from_concern: owner) : f
+        end
+      end
+
+      # Modules an app class on the chain mixes in from a file outside the app. A gem's on_load
+      # lands above the framework base.
       def mixins_unread(ctrl)
         ancestors = ctrl.ancestors
         base = ancestors.index { |mod| mod.is_a?(Class) && ActionResolver.framework?(mod, kind: :controller) }

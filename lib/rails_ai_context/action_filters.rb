@@ -81,9 +81,9 @@ module RailsAiContext
       # The runtime tier's list is the whole chain: once the body, every ancestor and every module
       # they mix in were read, a name none of them declares was installed from outside it (a gem's on_load).
       outside = []
-      whole_chain = walk.whole_chain && info.values_at(:concerns_unread, :mixins_unread).all?(&:blank?)
+      whole_chain = walk.whole_chain && info[:concerns_unread].blank?
       if whole_chain && Array(info[:filters]).grep(Hash).any? { |f| f[:declared] || f[:skipped] }
-        outside, own = own.partition { |f| !f[:declared] }
+        outside, own = own.partition { |f| !f[:declared] && !f[:from_concern] }
         outside = outside.map { |f| f.merge(provenance: "not declared in the controller chain") }
       end
       moved = applicable.select(&inherited_here)
@@ -341,7 +341,7 @@ module RailsAiContext
         .sort_by { |key, index| [ -positions.fetch(key, 0), index ] }
         .map do |key, _|
           entry = found[key]
-          next entry if attributed.include?(key) || !evidence[key]
+          next entry if attributed.include?(key) || !evidence[key] || entry[:from_concern]
 
           entry.merge(from: nil, provenance: "not declared in the controller chain").compact
         end
