@@ -80,11 +80,20 @@ module RailsAiContext
       # from, each pack's spec/factories and test/factories included as
       # packs-rails adds them.
       def factory_sources
-        @factory_sources ||= (FACTORY_PATHS + pack_factory_paths).flat_map do |rel|
+        @factory_sources ||= factory_definition_paths.flat_map do |rel|
           single = app_files("#{rel}.rb")
           files = app_files(File.join(rel, "**", "*.rb"))
           [ ([ "#{rel}.rb", single ] if single.any?), ([ rel, files ] if files.any?) ].compact
         end
+      end
+
+      # The defaults, then each write a test helper makes to FactoryBot.definition_file_paths in load order.
+      def factory_definition_paths
+        helper_paths.flat_map { |path| Array(helper_walk(path)&.dig(:definition_paths)) }
+          .reduce(FACTORY_PATHS + pack_factory_paths) do |paths, write|
+            found = write[:paths].map { |rel| Pathname.new(rel).cleanpath.to_s }.reject { |rel| RailsAiContext::SafePath.traversal?(rel) }
+            write[:replace] ? found : paths + found
+          end.uniq
       end
 
       # ponytail: packs-specification's default pack_paths; a packs.yml that
@@ -176,7 +185,7 @@ module RailsAiContext
       def fixture_dirs
         @fixture_dirs ||= begin
           real_root = File.realpath(suite_root)
-          writes = (HELPER_FILES.map { |rel| File.join(suite_root, rel) } + support_files)
+          writes = helper_paths
             .to_h { |path| [ path, Array(helper_walk(path)&.dig(:fixture_paths)) ] }
           configured = writes.values.flatten.grep(String)
           defaults = DEFAULT_FIXTURE_DIRS.reject { |rel| rel == "spec/fixtures" && rspec_without_fixture_paths?(writes) }
@@ -193,6 +202,10 @@ module RailsAiContext
         spec_dir = File.join(suite_root, "spec/")
         %w[spec/rails_helper.rb spec/spec_helper.rb].any? { |rel| File.file?(File.join(suite_root, rel)) } &&
           writes.none? { |path, found| path.start_with?(spec_dir) && found.any? }
+      end
+
+      def helper_paths
+        HELPER_FILES.map { |rel| File.join(suite_root, rel) } + support_files
       end
 
       def support_files
@@ -314,6 +327,7 @@ module RailsAiContext
           chained:       -> { Listeners::ChainedCallListener.new(:include, receiver: :config) },
           setup:         -> { Listeners::GenericMacroListener.new(*SETUP_MACROS) },
           fixture_paths: -> { Listeners::FixturePathsListener.new(file: path.delete_prefix("#{suite_root}/")) },
+          definition_paths: Listeners::DefinitionFilePathsListener,
           cleaner:       -> { Listeners::ConfigAssignmentListener.new(:DatabaseCleaner) }
         }) : nil
       end

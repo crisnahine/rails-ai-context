@@ -742,6 +742,16 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
       expect(payload[:factory_names].values.flatten).to contain_exactly("account", "invoice", "user", "order")
     end
 
+    it "reads only the definition paths a helper sets, and adds the ones it appends" do
+      write("custom/factories/c.rb", "FactoryBot.define do\n  factory :custom_one\nend\n")
+      write("lib/factories/l.rb", "FactoryBot.define do\n  factory :lib_one\nend\n")
+      write("spec/support/fb.rb", "FactoryBot.definition_file_paths = %w[custom/factories]\n")
+      expect(payload[:factory_names]).to eq("custom/factories/c.rb" => %w[custom_one])
+
+      write("spec/support/fb.rb", "FactoryBot.definition_file_paths << \"lib/factories\"\n")
+      expect(payload[:factory_names].keys).to contain_exactly("spec/factories.rb", "packs/billing/spec/factories/invoices.rb", "lib/factories/l.rb")
+    end
+
     it "reads no pack factories from a pack that is a gem" do
       write("packs/billing/billing.gemspec", "")
 
