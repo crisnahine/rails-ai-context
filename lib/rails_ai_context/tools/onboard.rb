@@ -571,7 +571,9 @@ module RailsAiContext
 
           if devops
             lines << "Dockerfile: #{devops[:docker] ? 'present' : 'not found'}."
-            lines << "Procfile: #{devops[:procfile].present? ? 'present' : 'not found'}."
+            procfiles = Array(devops[:procfile]).map { |procfile| procfile[:file] }
+            lines << "Procfile: #{procfiles.include?('Procfile') ? 'present' : 'not found'}."
+            lines << "Procfile.dev: present." if procfiles.include?("Procfile.dev")
             deploy = devops[:deployment]
             lines << "Deployment: #{deploy}." if deploy
             has_content = true
@@ -581,7 +583,7 @@ module RailsAiContext
           unless has_content
             root = rails_app.root.to_s
             has_dockerfile = File.exist?(File.join(root, "Dockerfile")) || File.exist?(File.join(root, "Dockerfile.dev"))
-            has_procfile = File.exist?(File.join(root, "Procfile")) || File.exist?(File.join(root, "Procfile.dev"))
+            has_procfile = File.exist?(File.join(root, "Procfile"))
             has_ci = Dir.exist?(File.join(root, ".github", "workflows")) || File.exist?(File.join(root, ".gitlab-ci.yml"))
 
             if has_dockerfile || has_procfile || has_ci

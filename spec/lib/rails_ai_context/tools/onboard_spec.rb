@@ -76,6 +76,22 @@ RSpec.describe RailsAiContext::Tools::Onboard do
         expect(text).not_to include("## File Storage & Rich Text")
       end
     end
+
+    it "names a Procfile.dev on its own, never as a Procfile" do
+      Dir.mktmpdir do |dir|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+        allow(described_class).to receive(:cached_context).and_return(
+          { app_name: "App", models: {},
+            devops: { puma: nil, procfile: [ { file: "Procfile.dev", entries: [ { name: "web", command: "bin/rails server" } ] } ],
+                      health_check: true, docker: nil, deployment: nil },
+            active_storage: { attachments: [] }, action_text: { models: [] } }
+        )
+
+        text = described_class.call(detail: "full").content.first[:text]
+
+        expect(text).to include("Procfile: not found.", "Procfile.dev: present.")
+      end
+    end
   end
 
   describe "the app's custom rake tasks" do
