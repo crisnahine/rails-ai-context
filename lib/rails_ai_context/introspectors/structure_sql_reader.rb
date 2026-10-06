@@ -11,7 +11,8 @@ module RailsAiContext
       module_function
 
       # @return [Hash] { dialect: Symbol, tables: { name => { columns:, indexes:, foreign_keys: } } }
-      def parse(content)
+      # current_schema: the schema the connection names an extension bare in; nil names every one bare.
+      def parse(content, current_schema: "public")
         tables = {}
         dialect = detect_sql_dialect(content)
         enums = enum_types(content)
@@ -93,13 +94,14 @@ module RailsAiContext
         end
 
         { dialect: dialect, tables: tables, enums: enums.map { |name, values| { name: name, values: values } },
-          views: found_views, virtual_tables: virtual_tables(content), extensions: extensions(content) }
+          views: found_views, virtual_tables: virtual_tables(content), extensions: extensions(content, current_schema) }
       end
 
-      # As PostgreSQL's connection names them: qualified unless in the public schema.
-      def extensions(content)
+      # As PostgreSQL's connection names them: qualified unless in its current schema.
+      def extensions(content, current_schema = "public")
         content.scan(/^CREATE EXTENSION (?:IF NOT EXISTS )?("[^"]+"|\w+)(?: WITH SCHEMA ("[^"]+"|\w+))?/).map do |name, schema|
-          [ (schema.delete('"') unless schema.nil? || schema == "public"), name.delete('"') ].compact.join(".")
+          schema = schema&.delete('"')
+          [ (schema unless current_schema.nil? || schema == current_schema), name.delete('"') ].compact.join(".")
         end
       end
 

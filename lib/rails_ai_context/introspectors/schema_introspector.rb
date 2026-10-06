@@ -639,7 +639,7 @@ module RailsAiContext
         content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
         return { error: "#{relative_dump_path(path)} too large (#{File.size(path)} bytes, over max_schema_file_size)" } unless content
 
-        parsed = StructureSqlReader.parse(content)
+        parsed = StructureSqlReader.parse(content, current_schema: extension_schema)
         dialect = parsed[:dialect]
         tables = parsed[:tables]
         tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
@@ -664,6 +664,13 @@ module RailsAiContext
           result[:pending_migrations] = RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: applied, root: app.root)
         end
         result
+      end
+
+      # Rails before 8.0 reads extname alone, so its connection names every extension bare.
+      def extension_schema
+        lock = GemLock.for(app.root)
+        version = lock.version("rails") || lock.version("railties")
+        RailsAiContext::DatabaseYml.current_schema(app.root) unless version && Gem::Version.new(version) < Gem::Version.new("8.0")
       end
 
       def connection_state

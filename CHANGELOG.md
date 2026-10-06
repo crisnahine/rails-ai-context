@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A structure.sql app names its PostgreSQL extensions the way the booted app
+  does.** The static tier named an extension bare only when it lived in
+  `public`. Rails names it bare when it lives in the connection's current
+  schema, the first entry of `schema_search_path`, so an app with
+  `schema_search_path: "app,public"` saw `app.pg_trgm` without a boot and
+  `pg_trgm` with one. The static tier now reads the search path from
+  config/database.yml, and on Rails before 8.0 names every extension bare, as
+  that connection does.
+
 ## [5.32.0] - 2026-10-06
 
 ### Added
