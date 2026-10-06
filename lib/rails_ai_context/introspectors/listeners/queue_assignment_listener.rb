@@ -40,7 +40,10 @@ module RailsAiContext
 
         private
 
+        # A half-written `@queue =` parses with a MissingNode value.
         def record(node, value, form)
+          return if value.is_a?(Prism::MissingNode)
+
           literal = value.is_a?(Prism::SymbolNode) || value.is_a?(Prism::StringNode)
           @results << { form: form, queue: literal ? value.unescaped : nil, source: value.slice,
                         location: node.location.start_line, confidence: literal ? Confidence::VERIFIED : Confidence::INFERRED }
