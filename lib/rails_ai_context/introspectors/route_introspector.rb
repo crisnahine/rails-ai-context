@@ -302,6 +302,7 @@ module RailsAiContext
           conditions = same.map { |copy| copy[:condition] }.uniq
           next mount if conditions.include?(nil) || every_arm?(same.map { |copy| copy[:arm] })
 
+          mount = mount.merge(merged: true) if conditions.size > 1
           mount.merge(condition: conditions.join(" or "))
         end
       end
@@ -635,8 +636,8 @@ module RailsAiContext
       # Source names an instance or a factory mount by what it wrote
       # (`MetricsApp.new`) and a computed path not at all, so after the exact
       # app and path, the one mount at that path, then the one of that app
-      # with no literal path. Two candidates (an if/else at one path) are a
-      # guess, so neither is taken.
+      # with no literal path. Two candidates (an if/else at one path, or one
+      # entry merged from several mounts) are a guess, so none is taken.
       def source_mount(source, name, path)
         source.find { |m| m[:engine] == name && m[:path] == path } ||
           sole(source.select { |m| m[:path] == path }) ||
@@ -644,7 +645,7 @@ module RailsAiContext
       end
 
       def sole(candidates)
-        candidates.first if candidates.one?
+        candidates.first if candidates.one? && !candidates.first[:merged]
       end
 
       # Routable, controller-less, and not a redirect or a lambda: what is

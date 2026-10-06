@@ -252,6 +252,21 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
         expect(mounts).to eq([ { engine: "Rack::Builder", path: "/flags", condition: "unless Rails.env.production?" } ])
       end
 
+      # Static merges the two into one pathless entry with the conditions
+      # joined, and neither live mount drew under both.
+      it "attaches no condition when one app is mounted at two computed paths" do
+        routes_rb = <<~RUBY
+          mount MetricsApp, at: ENV.fetch("A_PATH", "/a") if Rails.env.development?
+          mount MetricsApp, at: ENV.fetch("B_PATH", "/b"), as: :metrics_two unless Rails.env.production?
+        RUBY
+        mounts = booted_mounts(routes_rb) do
+          mount MetricsApp => "/a"
+          mount MetricsApp => "/b", as: :metrics_two
+        end
+
+        expect(mounts).to contain_exactly({ engine: "MetricsApp", path: "/a" }, { engine: "MetricsApp", path: "/b" })
+      end
+
       it "attaches no condition when two mounts share the path" do
         routes_rb = <<~RUBY
           if ENV["LIVE"]
