@@ -867,6 +867,19 @@ module RailsAiContext
 
         private
 
+        # The locale and variant a view file renders for, reading the locales the app makes available.
+        def view_alternate_of(path)
+          RailsAiContext::ViewFile.alternate_of(path, RailsAiContext::RunCache.fetch([ :view_locales ]) { available_locales })
+        end
+
+        # Booted, as I18n holds them; unbooted, as the i18n section read them from config or the locale files.
+        def available_locales
+          booted = !RailsAiContext.static_tier? && !rails_app.is_a?(RailsAiContext::StaticApp)
+          return I18n.available_locales.map(&:to_s) if booted && defined?(I18n)
+
+          Array(RailsAiContext::Payload.section(cached_context, :i18n)&.dig(:available_locales)).map(&:to_s)
+        end
+
         # English units whatever the locale, unless the app offers no English at all.
         def human_size(bytes)
           ActiveSupport::NumberHelper.number_to_human_size(bytes.to_i, locale: :en)

@@ -145,6 +145,13 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       expect(rendered_from("posts/post")).not_to include("users/show.html.erb:2")
     end
 
+    it "reads the plain partial before a sibling for a locale the app makes available" do
+      File.write(File.join(@root, "app/views/posts/_post.es-419.html.erb"), "<%= publicacion.titulo %>\n")
+      allow(described_class).to receive(:cached_context).and_return(i18n: { available_locales: %w[en es-419] })
+
+      expect(described_class.call(partial: "posts/post").content.first[:text]).to start_with("# Partial: posts/_post.html.erb")
+    end
+
     it "counts a partial under a view root declared inside app/views once" do
       FileUtils.mkdir_p(File.join(@root, "config"))
       File.write(File.join(@root, "config/application.rb"), "config.paths[\"app/views\"].unshift(\"app/views/custom\")\n")
