@@ -334,6 +334,25 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       expect(full_text).to include("- **users:** bob _(over the 20 byte read limit; labels only)_")
     end
 
+    it "shows a label ERB computes as ERB in the labels-only line" do
+      write("test/fixtures/widgets.yml", "<% 3.times do |i| %>\nuser_<%= i %>:\n  name: \"U<%= i %>\"\n<% end %>\nadmin:\n  name: boss\n")
+      allow(RailsAiContext.configuration).to receive(:max_test_file_size).and_return(40)
+
+      text = full_text
+      expect(text).to include("- **widgets:** admin, `user_<%= ... %>` (set by ERB) _(over the 40 byte read limit; labels only)_")
+      expect(text).not_to include(RailsAiContext::ConfigYaml::ERB_OUTPUT)
+    end
+
+    it "draws no relationship from an id or a label ERB computes" do
+      write("test/fixtures/users.yml", "one:\n  name: A\n")
+      write("test/fixtures/posts.yml", "first:\n  user_id: one\n<% 2.times do |i| %>\nrow_<%= i %>:\n  title: <%= \"T\#{i}\" %>\n  user_id: <%= ActiveRecord::FixtureSet.identify(:one) %>\n  author_id: one\n<% end %>\n")
+
+      text = full_text
+      expect(text).to include("- **users (one)** \u2190 posts.first, posts.row_<%= ... %>")
+      expect(text).not_to include("id=")
+      expect(text).not_to include(RailsAiContext::ConfigYaml::ERB_OUTPUT)
+    end
+
     it "prints no label from a fixture file that links out of the app" do
       Dir.mktmpdir do |outside|
         File.write(File.join(outside, "leak.yml"), "secret_label:\n  key: x\n")

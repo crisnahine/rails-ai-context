@@ -29,7 +29,8 @@ module RailsAiContext
           fabricator_names: fabricator_definitions.presence,
           cucumber: detect_cucumber,
           fixtures: detect_fixtures,
-          fixture_names: detect_fixture_names,
+          fixture_names: fixture_labels[:names],
+          fixture_erb_labels: fixture_labels[:erb],
           system_tests: detect_system_tests,
           test_helpers: detect_test_helpers,
           test_helper_setup: detect_test_helper_setup,
@@ -284,9 +285,18 @@ module RailsAiContext
 
       # Each set named as Rails names it, by its path under its directory,
       # with the labels ActiveRecord loads. A file that does not read as YAML
-      # still gives the labels its top-level keys spell.
-      def detect_fixture_names
-        names = {}
+      # still gives the labels its top-level keys spell. A label ERB computes
+      # names no row we can write, so it is kept apart, shown as ERB.
+      def fixture_labels
+        @fixture_labels ||= begin
+          names = {}
+          erb = {}
+          read_fixture_labels(names, erb)
+          { names: names.presence, erb: erb.presence }
+        end
+      end
+
+      def read_fixture_labels(names, erb)
         fixture_dirs.each do |rel|
           dir = File.join(suite_root, rel)
           app_files(File.join(rel, "**", "*.yml")).each do |path|
@@ -296,10 +306,11 @@ module RailsAiContext
             content = RailsAiContext::SafeFile.read(path) or next
             labels = RailsAiContext::FixtureKeys.parse(content)&.keys ||
                      content.scan(/^(\w+):/).flatten.select { |key| RailsAiContext::FixtureKeys.name?(key) }
-            names[set] = labels if labels.any?
+            computed, named = labels.partition { |label| RailsAiContext::ConfigYaml.marked?(label) }
+            names[set] = named if labels.any?
+            erb[set] = computed.map { |label| label.gsub(RailsAiContext::ConfigYaml::ERB_OUTPUT, "<%= ... %>") } if computed.any?
           end
         end
-        names.presence
       end
 
       # Calls that configure every test or every system test, shown as written.

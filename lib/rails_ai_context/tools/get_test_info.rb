@@ -114,7 +114,8 @@ module RailsAiContext
                 entries = parsed_fixtures[set.to_s]
                 unless entries.is_a?(Hash)
                   why = entries == :too_large ? "over the #{max_test_file_size} byte read limit" : "not parsed as YAML"
-                  lines << "- **#{set}:** #{Array(labels).join(', ')} _(#{why}; labels only)_"
+                  erb_labels = Array((data[:fixture_erb_labels] || {})[set]).map { |label| "`#{label}` (set by ERB)" }
+                  lines << "- **#{set}:** #{(Array(labels) + erb_labels).join(', ')} _(#{why}; labels only)_"
                   next
                 end
 
@@ -601,7 +602,11 @@ module RailsAiContext
 
         parsed_fixtures.each do |file, entries|
           entries.each do |entry_name, attrs|
+            entry_name = erb_shown(entry_name)
             attrs.each do |key, value|
+              # An id ERB computes names no row we can see.
+              next if RailsAiContext::ConfigYaml.marked?(value)
+
               # Foreign key pattern: key ends with _id and value matches an entry, or
               # key matches a fixture file name and value is a fixture entry reference
               str_value = value.to_s
