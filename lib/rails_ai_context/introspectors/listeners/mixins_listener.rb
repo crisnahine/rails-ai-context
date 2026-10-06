@@ -66,7 +66,8 @@ module RailsAiContext
 
           macro = :"singleton_#{macro}" if singleton
 
-          arguments.each do |arg|
+          # Ruby adds `include A, B` last argument first: B's hook runs first and A ends up nearer.
+          arguments.reverse_each do |arg|
             name = constant_name(arg)
             next unless name
 

@@ -192,6 +192,7 @@ module RailsAiContext
       end
       RunCache.fetch([ :exist, current ]) { File.exist?(current) }
     end
+    private_class_method :file_exist?
 
     # `relative` as the disk spells it: an app acronym underscores `ActivityPub` to `activitypub`,
     # where this process, which has none of the app's acronyms, writes `activity_pub`. Nil when absent.

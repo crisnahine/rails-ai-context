@@ -18,8 +18,6 @@ RSpec.describe RailsAiContext::PathResolver do
     paths.each { |p| FileUtils.mkdir_p(File.join(@root, p)) }
   end
 
-  # Two callers each wrapped initializer_files with the same
-  # sub("#{root}/", ""), and both wanted the app-relative path.
   describe ".test_root" do
     it "is the engine's root for a test/dummy with no suite of its own, else the app's" do
       dummy = File.join(@root, "test", "dummy")
@@ -62,6 +60,8 @@ RSpec.describe RailsAiContext::PathResolver do
     end
   end
 
+  # Two callers each wrapped initializer_files with the same
+  # sub("#{root}/", ""), and both wanted the app-relative path.
   describe ".app_initializer_files" do
     it "answers the initializers app-relative, however the app spells them" do
       mkdirs("config/initializers")

@@ -60,8 +60,6 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
     end
   end
 
-  # Canvas's plugin_settings runs `module_eval <<~RUBY` with interpolation;
-  # a heredoc's body sits past its node's slice, and reading it crashed.
   describe "a local the method derives from a parameter" do
     it "binds a name built from it, and holds back one it cannot build" do
       data = expand(<<~'RUBY', "has_home_page_list_of :contacts")
@@ -92,6 +90,8 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
     end
   end
 
+  # Canvas's plugin_settings runs `module_eval <<~RUBY` with interpolation;
+  # a heredoc's body sits past its node's slice, and reading it crashed.
   it "reads a method whose heredoc interpolates, keeping what follows it" do
     data = expand(<<~'RUBY', "recent_by :created_at")
       def recent_by(column)
@@ -493,6 +493,34 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
 
       expect(filters(method_source, "batch_jobs_in_actions only: :create, batch: { priority: 1 }"))
         .to eq([ [ :around_action, { only: :create } ] ])
+    end
+  end
+
+  describe "a key the body deletes from a hash parameter into a local" do
+    def filter_args(call_source)
+      definition = Prism.parse(<<~RUBY).value.statements.body.first
+        def kguard3(options = {})
+          kind = options.delete(:kind)
+          before_action :kw_three, options
+          before_action kind if kind
+        end
+      RUBY
+      call = Prism.parse(call_source).value.statements.body.first
+      described_class.entries(definition, call, RailsAiContext::Introspectors::ControllerFilters::LISTENERS)[:filters]
+                     .map { |f| [ f[:args], f[:options] ] }
+    end
+
+    # Ruby: `kind` holds the deleted value, nil when the call left the key out.
+    it "binds the local to the value the call gave the key" do
+      expect(filter_args("kguard3 kind: :kw_kind, only: :edit")).to eq([ [ [ :kw_three ], { only: :edit } ], [ [ :kw_kind ], {} ] ])
+      expect(filter_args("kguard3 only: :edit")).to eq([ [ [ :kw_three ], { only: :edit } ] ])
+    end
+
+    it "leaves the local unbound when the body writes it again" do
+      definition = Prism.parse("def kguard4(options = {})\n  kind = options.delete(:kind)\n  kind = :other if rand > 1\n  before_action kind\nend\n").value.statements.body.first
+      call = Prism.parse("kguard4 kind: :kw_kind").value.statements.body.first
+
+      expect(described_class.entries(definition, call, RailsAiContext::Introspectors::ControllerFilters::LISTENERS)[:filters]).to be_empty
     end
   end
 

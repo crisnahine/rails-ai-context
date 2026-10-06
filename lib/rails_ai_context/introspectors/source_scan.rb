@@ -148,7 +148,6 @@ module RailsAiContext
         (0..scopes.size).map { |depth| [ *scopes.first(depth), base ].join("::") }
       end
 
-      # ponytail: the app/* kinds Rails generates for other code are skipped by name.
       # The candidates, and every name the scanned files declare by path or by a superclassed class.
       def extra_model_declarations(root, real_root)
         seen = Set.new

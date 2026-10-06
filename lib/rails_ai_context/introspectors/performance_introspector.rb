@@ -130,9 +130,9 @@ module RailsAiContext
       # The parent key a tree macro declares, in the model or its concerns.
       # The models section cannot carry it statically: the macro is a gem's.
       def tree_parent_keys(ast, class_name)
-        collected, = ConcernMacros.collect(root, ast[:mixins], keys: %i[tree], prefer: "model",
-                                           within: class_name, cache: (@concern_cache ||= {}),
-                                           listeners: TREE_CONCERN_LISTENERS)
+        collected = ConcernMacros.collect(root, ast[:mixins], keys: %i[tree], prefer: "model",
+                                          within: class_name, cache: (@concern_cache ||= {}),
+                                          listeners: TREE_CONCERN_LISTENERS).collected
         (ast[:tree] + Array(collected[:tree])).map do |macro|
           ((macro[:options] || {})[TREE_MACROS[macro[:macro]]] || "parent_id").to_s
         end

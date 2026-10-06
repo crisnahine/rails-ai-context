@@ -82,7 +82,7 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
   # The payload key the introspector fills, built the way it builds it, so
   # these render what a real run would hand the tool.
   def payload_concern_callbacks(root, concern_name)
-    collected, = RailsAiContext::ConcernMacros.collect(
+    collected, = *RailsAiContext::ConcernMacros.collect(
       root, [ { name: concern_name, ancestor: true } ], keys: %i[callbacks], prefer: "model"
     )
     collected[:callbacks] || []

@@ -294,10 +294,8 @@ module RailsAiContext
         lines << ""
       end
 
-      # A module_function method's instance copy is private, but a view calls it like any helper.
       private_class_method def self.view_callable(source)
-        Introspectors::ActionResolver.own_methods_in(source, nil)
-          .select { |m| m[:scope] == :instance && (m[:visibility] == :public || m[:module_function]) && !m[:name].start_with?("_") }
+        Introspectors::ActionResolver.public_methods_in(source, module_function: true)
           .map { |m| Introspectors::ActionResolver.signature(m) }.uniq
       end
 
@@ -349,11 +347,11 @@ module RailsAiContext
           @found = []
         end
 
-        # Prefilter before the MixinsListener walk: whether a written include names a constant a lib file could hold.
+        # A prefilter before the parse: the source mixes something in and names a constant a lib file could hold, wherever it is written.
         def may_include?(source)
-          return false if @basenames.empty?
+          return false if @basenames.empty? || !source.match?(/\b(?:include|prepend)\b/)
 
-          source.scan(/\b(?:include|prepend)\s+:*([A-Z][\w:]*)/).flatten.any? do |written|
+          source.scan(/\b[A-Z][\w:]*/).any? do |written|
             written.split("::").any? { |segment| @basenames.include?(segment.underscore) }
           end
         end

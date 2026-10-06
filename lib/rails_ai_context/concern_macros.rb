@@ -10,10 +10,8 @@ module RailsAiContext
   module ConcernMacros
     MAX_DEPTH = 3
 
-    # What collect found; to_ary keeps positional destructuring in field order.
-    Collected = Struct.new(:collected, :unread, :hidden, :included_calls, :placement, :skipped, :block_sites, :mixins) do
-      def to_ary = to_a
-    end
+    # What collect found.
+    Collected = Struct.new(:collected, :unread, :hidden, :included_calls, :placement, :skipped, :block_sites, :mixins)
 
     # A call made inside a class method's body, standing where the call that ran
     # that body (`outer`) was made; `definition` is the body it sits in.
@@ -200,7 +198,8 @@ module RailsAiContext
             end
           next [] unless macro
 
-          arguments.filter_map do |arg|
+          # Ruby adds the last argument first, as MixinsListener records them.
+          arguments.reverse.filter_map do |arg|
             [ macro, arg, call ] if arg.is_a?(Prism::SelfNode) || arg.is_a?(Prism::ConstantReadNode) || arg.is_a?(Prism::ConstantPathNode)
           end
         end
@@ -931,9 +930,7 @@ module RailsAiContext
       def in_file(entry, shift)
         return entry unless shift.positive? && entry.is_a?(Hash) && entry[:location]
 
-        moved = entry.merge(location: entry[:location] + shift)
-        moved[:proc_lines] = entry[:proc_lines].map { |line| line + shift } if entry[:proc_lines].is_a?(Array)
-        moved
+        ConcernMacros.moved(entry) { |line| line + shift }
       end
 
       # A mixin hook runs again for a subclass that includes the module again; a Concern's block does not.
@@ -1005,6 +1002,13 @@ module RailsAiContext
       placed.each_with_index.sort_by { |(line, order, at, _), index| [ line, order, at, index ] }.map { |(_, _, _, entry), _| entry }
     end
 
+    # `entry` with every line it carries mapped through the block.
+    def moved(entry)
+      moved = entry.merge(location: yield(entry[:location]))
+      moved[:proc_lines] = entry[:proc_lines].map { |line| yield(line) } if entry[:proc_lines].is_a?(Array)
+      moved
+    end
+
     # The innermost of `bodies`, [range, name] pairs, around `line`.
     def enclosing(bodies, line)
       line && bodies.select { |range, _| range.cover?(line) }.min_by { |range, _| range.size }
@@ -1049,8 +1053,10 @@ module RailsAiContext
       # Most walks never look at the class's calls, so a base's walk is the
       # same for every subclass: kept in the caller's per-run cache.
       memo_key = cache && [ :collect, root.to_s, mixins, keys, prefer, within, listeners, extra, file ]
+      # A walk is the class's own only where it asked about a method the class itself calls.
+      own_calls = memo_key ? Run.merge_calls({}, calls&.sites_by_name).keys.to_set : Set.new
       if memo_key && (consulted, result = cache[memo_key])
-        return fresh(result) if consulted.empty? || !consulted.intersect?(Run.merge_calls({}, calls&.sites_by_name).keys.to_set)
+        return fresh(result) unless consulted.intersect?(own_calls)
       end
 
       # Resolved once per call and held by the run: the configured paths
@@ -1075,18 +1081,16 @@ module RailsAiContext
 
       result = Collected.new(run.collected, run.unresolved, run.hidden, run.included_calls, run.placement, run.skipped_methods,
                              run.block_sites, run.mixins)
-      # The repeat walks follow the concerns' own included calls, the same for every
-      # class; only a method the class itself calls makes the answer its own.
-      own_calls = Run.merge_calls({}, calls&.sites_by_name).keys.to_set
+      # The repeat walks follow the concerns' own included calls, the same for every class.
       cache[memo_key] = [ consulted, fresh(result) ] if memo_key && !consulted.intersect?(own_calls)
       result
     end
 
     # A copy a caller may change without changing the cached walk.
     def fresh(result)
-      collected, unresolved, hidden, included, placement, skipped, blocks, mixins = result
-      Collected.new(collected.transform_values { |entries| entries.map { |entry| entry.is_a?(Hash) ? entry.dup : entry } },
-                    unresolved.dup, hidden.dup, included.transform_values(&:dup), placement.dup, skipped.dup, blocks.dup, mixins.dup)
+      Collected.new(result.collected.transform_values { |entries| entries.map { |entry| entry.is_a?(Hash) ? entry.dup : entry } },
+                    result.unread.dup, result.hidden.dup, result.included_calls.transform_values(&:dup), result.placement.dup,
+                    result.skipped.dup, result.block_sites.dup, result.mixins.dup)
     end
     private_class_method :fresh
   end
