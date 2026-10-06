@@ -1082,4 +1082,30 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
       "/a/:id" => "{id: /[/}", "/b/:id" => "{id: ID_FORMAT}", "/c" => nil, "/d" => nil, "/e" => nil
     )
   end
+
+  it "reads the defaults a bare defaults block sets and the format a route requires" do
+    records = route_records(<<~'RUBY')
+      Rails.application.routes.draw do
+        defaults format: :json do
+          get "stats", to: "pages#stats"
+        end
+        get "/opt", to: "photos#opt", format: true
+        get "/re", to: "photos#re", format: /json|xml/
+        get "/str", to: "photos#str", format: "json"
+        scope format: true do
+          get "/inner", to: "photos#inner"
+        end
+        get "/plain", to: "photos#plain"
+      end
+    RUBY
+
+    expect(records.to_h { |r| [ r[:path], r[:constraints] ] }).to eq(
+      "/stats" => "{format: :json}",
+      "/opt.:format" => "{format: /.+/}",
+      "/re" => "{format: /json|xml/}",
+      "/str" => '{format: /json/}',
+      "/inner.:format" => "{format: /.+/}",
+      "/plain" => nil
+    )
+  end
 end

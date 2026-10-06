@@ -295,6 +295,8 @@ module RailsAiContext
           found = { url: {}, defaults: {}, segment: {}, scoped: {}, options: {} }
           if node.name == :constraints && node.receiver.nil?
             read_constraint_hash(hash, found)
+          elsif node.name == :defaults && node.receiver.nil?
+            each_literal(hash) { |k, v| found[:defaults][k] = constraint_value(v) }
           else
             hash.elements.each do |assoc|
               key = assoc_key(assoc)
@@ -303,6 +305,7 @@ module RailsAiContext
               case key
               when "constraints" then read_constraint_hash(assoc.value, found)
               when "defaults" then each_literal(assoc.value) { |k, v| found[:defaults][k] = constraint_value(v) }
+              when "format" then read_format(assoc.value, found) if OPTION_CARRIERS.include?(node.name)
               else
                 unless assoc.value.is_a?(Prism::RegularExpressionNode)
                   found[:options][key] = constraint_value(assoc.value) if OPTION_CARRIERS.include?(node.name) && !MAPPER_OPTIONS.include?(key)
@@ -327,6 +330,28 @@ module RailsAiContext
               found[:scoped][key] = value
             end
           end
+        end
+
+        # Mapping#normalize_format: `true` requires a format, a string also defaults it.
+        def read_format(value, found)
+          case value
+          when Prism::TrueNode then found[:segment]["format"] = "/.+/"
+          when Prism::RegularExpressionNode then found[:segment]["format"] = constraint_value(value)
+          when Prism::StringNode
+            found[:defaults]["format"] = constraint_value(value)
+            found[:segment]["format"] = Regexp.new(value.unescaped).inspect
+          end
+        rescue RegexpError
+          nil
+        end
+
+        # The innermost `format:` a route or its scopes give; `true` makes the segment required.
+        def required_format?(node)
+          carriers = [ node, *@stack.reverse_each.map { |f| f[:node] } ].select do |n|
+            n.is_a?(Prism::CallNode) && n.receiver.nil? && OPTION_CARRIERS.include?(n.name)
+          end
+          carrier = carriers.find { |n| own_options(n).key?(:format) }
+          carrier && own_options(carrier)[:format] == true
         end
 
         def hash_arg(node)
@@ -821,6 +846,7 @@ module RailsAiContext
         end
 
         def emit(node, verb, path, controller, action, name)
+          path = "#{path}.:format" if required_format?(node)
           record = {
             type: :route,
             verb: verb,
