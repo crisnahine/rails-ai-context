@@ -267,8 +267,7 @@ module RailsAiContext
 
       # [superclass, the namespace it is written in] of the class `within` names in `source`.
       def superclass_of(source, within)
-        declarations = DeclaredConstant.declarations(source)
-        written = (declarations.find { |d| d.name == within.to_s } || declarations.find(&:superclass))&.superclass
+        written = DeclaredConstant.parent_declaration(source, within.to_s)&.superclass
         return nil unless written
 
         written.start_with?("::") ? [ written.delete_prefix("::"), nil ] : [ written, within ]

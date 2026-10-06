@@ -105,8 +105,7 @@ module RailsAiContext
             parent = entry[:parent_class]
           elsif (source = ActionFilters.base_controller_source(name, root))
             links << [ name, nil, source ]
-            declarations = DeclaredConstant.declarations(source)
-            parent = (declarations.find { |d| d.name == name } || declarations.find(&:superclass))&.superclass
+            parent = DeclaredConstant.parent_declaration(source, name)&.superclass
           else
             base = ActionFilters.gem_controller_base(name, root)
             return [ links, name ] unless base
