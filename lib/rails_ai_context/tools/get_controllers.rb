@@ -151,7 +151,9 @@ module RailsAiContext
                     info, rescue_handlers: true,
                     ctx: ctx, name: name, root: rails_app&.root&.to_s
                   ))
-                  lines << "- Rate limit: #{info[:rate_limits].map { |limit| limit[:text] }.join('; ')}" if info[:rate_limits]&.any?
+                  # An inherited limit is named with its base in the controller's own detail.
+                  own_limits = Array(info[:rate_limits]).reject { |limit| limit[:from] }
+                  lines << "- Rate limit: #{own_limits.map { |limit| limit[:text] }.join('; ')}" if own_limits.any?
                   lines << "- Turbo Stream actions: #{info[:turbo_stream_actions].join(', ')}" if info[:turbo_stream_actions]&.any?
                   lines << ""
                 end

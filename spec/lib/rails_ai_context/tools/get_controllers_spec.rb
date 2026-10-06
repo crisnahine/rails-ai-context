@@ -390,6 +390,20 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(full).to include('- Rate limit: to: 10, within: 3.minutes, only: :create; to: 100, within: 1.hour, name: "long"')
     end
 
+    it "leaves an inherited rate limit out of the full listing and names its base in the controller's detail" do
+      inherited = { text: "to: 5, within: 1.minute", from: "Admin::BaseController" }
+      stub_controllers({ "Admin::ReportsController" => { actions: %w[index], filters: [], parent_class: "Admin::BaseController", rate_limits: [ inherited ] },
+                         "Admin::UsersController" => { actions: %w[index], filters: [], parent_class: "Admin::BaseController",
+                                                       rate_limits: [ inherited, { text: "to: 2, within: 1.minute" } ] } })
+
+      one = described_class.call(controller: "Admin::ReportsController").content.first[:text]
+      full = described_class.call(detail: "full").content.first[:text]
+
+      expect(one).to include("**Rate limit:** to: 5, within: 1.minute _(from Admin::BaseController)_")
+      expect(full).not_to include("to: 5, within: 1.minute")
+      expect(full).to include("- Rate limit: to: 2, within: 1.minute\n")
+    end
+
     it "names the layout a controller renders in and the settings it and ApplicationController declare" do
       Dir.mktmpdir do |root|
         FileUtils.mkdir_p(File.join(root, "app/controllers"))
