@@ -191,7 +191,7 @@ module RailsAiContext
 
         receiver = call[:receiver]&.to_s
         bare = receiver.nil? || receiver == "self"
-        owner = bare ? call[:owner].last : receiver
+        owner = bare ? call[:owner].join("::").presence : receiver
         short = owner.to_s.split("::").last
         names = Array(methods).select do |m|
           m[:scope] == :instance && m[:visibility] == :public &&

@@ -268,20 +268,22 @@ RSpec.describe RailsAiContext::Introspectors::ActiveSupportIntrospector do
     it "gives each bare attach_to to the class it is written in, with that class's methods" do
       result = subscriptions(
         "app/subscribers/subs.rb" => <<~RUBY
-          class FirstSubscriber < ActiveSupport::Subscriber
+          class Ops::FirstSubscriber < ActiveSupport::Subscriber
             def sql(event); end
             attach_to :active_record
           end
-          class SecondSubscriber < ActiveSupport::Subscriber
-            def deliver(event); end
-            attach_to :action_mailer
+          module Ops
+            class SecondSubscriber < ActiveSupport::Subscriber
+              def deliver(event); end
+              attach_to :action_mailer
+            end
           end
         RUBY
       )
 
       expect(result).to eq([
-        { event: "sql.active_record", via: "FirstSubscriber.attach_to", file: "app/subscribers/subs.rb", line: 3 },
-        { event: "deliver.action_mailer", via: "SecondSubscriber.attach_to", file: "app/subscribers/subs.rb", line: 7 }
+        { event: "sql.active_record", via: "Ops::FirstSubscriber.attach_to", file: "app/subscribers/subs.rb", line: 3 },
+        { event: "deliver.action_mailer", via: "Ops::SecondSubscriber.attach_to", file: "app/subscribers/subs.rb", line: 8 }
       ])
     end
 
