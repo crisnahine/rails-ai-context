@@ -268,7 +268,16 @@ module RailsAiContext
         path = source_path(ctrl)
         return nil unless path && File.exist?(path)
 
-        path.to_s.sub("#{app.root}/", "")
+        project_relative(path)
+      end
+
+      # Under the app root, or `../../app/...` in the engine a test/dummy runs in; nil anywhere else.
+      def project_relative(path)
+        root = "#{app.root.to_s.chomp("/")}/"
+        return path.to_s.delete_prefix(root) if path.to_s.start_with?(root)
+        return nil unless PathResolver.project_file?(path, app.root)
+
+        Pathname.new(File.realpath(path)).relative_path_from(Pathname.new(File.realpath(app.root.to_s))).to_s
       end
 
       def api_controller?(ctrl)
@@ -376,12 +385,9 @@ module RailsAiContext
         cancan = cancan_callback(filter, path)
         return cancan if cancan
 
-        root = "#{app.root.to_s.chomp("/")}/"
-        return unless path&.start_with?(root) && !path.delete_prefix(root).start_with?("vendor/")
+        file = path && project_relative(path)
+        return if file.nil? || file.start_with?("vendor/") || PortablePath.gem_file?(path, app.root)
 
-        return if PortablePath.gem_file?(path, root)
-
-        file = path.delete_prefix(root)
         ControllerFilters.block_name(line, (file unless own_file.nil? || file == own_file))
       end
 
@@ -899,12 +905,10 @@ module RailsAiContext
       # agrees when the app registers no inflection. See CONTEXT.md,
       # "Declared constant".
       def source_path(ctrl)
-        # Contained under the app root: a constant defined by a gem - or by a
-        # spec - is not this app's controller file.
+        # The app's own, or the engine's its test/dummy runs in: a constant defined by a gem - or by
+        # a spec - is not this app's controller file.
         located = Object.const_source_location(ctrl.name)&.first
-        if located && File.exist?(located) && located.to_s.start_with?("#{app.root}/")
-          return located
-        end
+        return located if located && File.exist?(located) && project_relative(located)
 
         File.join(app.root.to_s, "app", "controllers", "#{ctrl.name.underscore}.rb")
       rescue StandardError

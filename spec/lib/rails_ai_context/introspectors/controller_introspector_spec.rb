@@ -1589,6 +1589,40 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
     ensure
       FileUtils.rm_rf(File.join(Rails.root, "packs"))
     end
+
+    # Booted from an engine's test/dummy, the engine's controller is defined above the app root.
+    it "is read from the engine a test/dummy runs in, with its only: and its file" do
+      Dir.mktmpdir do |engine|
+        engine = File.realpath(engine)
+        dummy = File.join(engine, "test", "dummy")
+        path = File.join(engine, "app", "controllers", "b3eng", "widgets_controller.rb")
+        FileUtils.mkdir_p([ File.dirname(path), dummy ])
+        File.write(path, <<~RUBY)
+          module B3eng
+            class WidgetsController < ActionController::Base
+              before_action :set_widget, only: %i[show]
+              def index; end
+              def show; end
+              private
+              def set_widget; end
+              def widget_params = params.require(:widget).permit(:name)
+            end
+          end
+        RUBY
+        ctrl = Class.new(ActionController::Base) { before_action :set_widget }
+        ctrl.define_singleton_method(:name) { "B3eng::WidgetsController" }
+        allow(Object).to receive(:const_source_location).and_call_original
+        allow(Object).to receive(:const_source_location).with("B3eng::WidgetsController").and_return([ path, 2 ])
+        allow(RailsAiContext::PathResolver).to receive(:enclosing_engine_roots).and_return([ engine ])
+        in_dummy = described_class.new(double("app", root: Pathname.new(dummy)))
+
+        details = in_dummy.send(:extract_controller_details, ctrl)
+
+        expect(details[:file]).to eq("../../app/controllers/b3eng/widgets_controller.rb")
+        expect(details[:filters].first).to include(name: "set_widget", only: [ "show" ])
+        expect(details[:strong_params].map { |p| p[:name] }).to eq([ "widget_params" ])
+      end
+    end
   end
 
   # An app's Api::V1::Admin::BaseController listed its own before_action
