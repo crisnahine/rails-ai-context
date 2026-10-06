@@ -81,10 +81,21 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
                      "Rails.application.configure do\n  config.active_record.table_name_suffix = \"_v1\"\nend\n")
           File.write(File.join(dir, "config/initializers/ar.rb"), "ActiveRecord::Base.pluralize_table_names = false\n")
           File.write(File.join(dir, "config/initializers/z.rb"), "Rails.application.config.active_record.table_name_suffix = \"_v2\"\n")
-          described_class.app_affixes(dir)
+          described_class.active_record_settings(dir)
         end
 
         expect(result).to eq(table_name_prefix: "op_", table_name_suffix: "_v2", pluralize_table_names: false)
+      end
+
+      it "takes what an on_load(:active_record) block sets on the base class" do
+        result = with_config(nil) do |dir|
+          FileUtils.mkdir_p(File.join(dir, "config/initializers"))
+          File.write(File.join(dir, "config/initializers/ar.rb"),
+                     "ActiveSupport.on_load(:active_record) do\n  self.table_name_prefix = \"app_\"\n  self.pluralize_table_names = false\nend\n")
+          described_class.active_record_settings(dir)
+        end
+
+        expect(result).to eq(table_name_prefix: "app_", pluralize_table_names: false)
       end
 
       it "takes a prefix the class declares itself" do

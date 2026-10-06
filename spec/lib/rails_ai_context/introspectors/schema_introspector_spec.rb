@@ -2007,6 +2007,16 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
+    it "takes schema_format however the environment file or an initializer spells the assignment" do
+      dump = { "db/schema.rb" => one_table_rb.call("stale_things"),
+               "db/structure.sql" => "CREATE TABLE \"fresh_things\" (\"id\" integer PRIMARY KEY);\n" }
+      [ { "config/environments/#{RailsAiContext.environment_name}.rb" => "Rails.application.config.active_record.schema_format = :sql\n" },
+        { "config/initializers/ar.rb" => "Rails.application.configure do\n  config.active_record.schema_format = :sql\nend\n" },
+        { "config/initializers/ar.rb" => "ActiveRecord.schema_format = :sql\n" } ].each do |config|
+        static_with(dump.merge(config)) { |result, _| expect(result[:tables].keys).to eq(%w[fresh_things]), config.inspect }
+      end
+    end
+
     def lockfile(activerecord)
       "GEM\n  remote: https://rubygems.org/\n  specs:\n    activerecord (#{activerecord})\n\nDEPENDENCIES\n  activerecord\n"
     end

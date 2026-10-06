@@ -6,7 +6,6 @@ module RailsAiContext
     # (7.0 to 8.1): database.yml's schema_dump in the configured schema_format.
     module SchemaDumpPath
       FILE_NAMES = { ruby: "schema.rb", sql: "structure.sql" }.freeze
-      APP_FORMAT = /^\s*config\.active_record\.schema_format\s*=\s*:(ruby|sql)\b/
 
       module_function
 
@@ -55,9 +54,7 @@ module RailsAiContext
         declared = config["schema_format"].to_s
         return declared.to_sym if FILE_NAMES.key?(declared.to_sym) && reads_database_schema_format?(root)
 
-        files = [ "config/application.rb", "config/environments/#{RailsAiContext.environment_name}.rb" ]
-        found = files.filter_map { |path| RailsAiContext::SafeFile.read(File.join(root, path)).to_s.scan(APP_FORMAT).last&.first }
-        (found.last || "ruby").to_sym
+        TableName.active_record_settings(root)[:schema_format] || :ruby
       end
 
       # An app whose lockfile does not say its Active Record is taken to read it.
