@@ -606,5 +606,22 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
       expect(text).to include("- **posts** before_add → :check_limit, after_remove → :log_removal")
       expect(text).not_to include("comments")
     end
+
+    it "lists them for every model, including one with no record callbacks" do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "User" => { associations: [ { type: "has_many", name: "posts", declared_options: { "before_add" => ":check_limit" } } ], callbacks: {} },
+                  "Post" => { associations: [ { type: "has_many", name: "likes", declared_options: { "after_add" => "[:a, :b]" } } ],
+                              callbacks: { "before_save" => %w[normalize] } } }
+      )
+
+      summary = described_class.call(detail: "summary").content.first[:text]
+      expect(summary).to include("# Model Callbacks (2 models)", "- **Post** - 1 callback (before_save); association callbacks on likes",
+                                 "- **User** - association callbacks on posts")
+      %w[standard full].each do |detail|
+        text = described_class.call(detail: detail).content.first[:text]
+        expect(text).to include("## User", "- **posts** before_add → :check_limit", "- **likes** after_add → [:a, :b]")
+      end
+    end
   end
 end
