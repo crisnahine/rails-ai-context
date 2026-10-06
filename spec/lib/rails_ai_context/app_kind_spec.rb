@@ -133,4 +133,23 @@ RSpec.describe RailsAiContext::AppKind do
       app_with("\xff\xfe class (") { |dir| expect(described_class.active_record?(dir)).to be(true) }
     end
   end
+
+  describe ".sequel_schema" do
+    def sequel_app(schema)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  specs:\n    sequel (5.80.0)\n")
+        File.write(File.join(dir, "db", "schema.rb"), schema)
+        return described_class.sequel_schema(dir)
+      end
+    end
+
+    it "reads Sequel's DSL by the call, behind a block comment or a top-level constant" do
+      expect(sequel_app("=begin\ndumped\n=end\n::Sequel.migration do\n  change do\n  end\nend\n")).to eq("db/schema.rb is a Sequel migration")
+    end
+
+    it "is nil for an Active Record schema that only mentions Sequel.migration" do
+      expect(sequel_app("# Sequel.migration was here\nActiveRecord::Schema[7.1].define(version: 1) do\nend\n")).to be_nil
+    end
+  end
 end

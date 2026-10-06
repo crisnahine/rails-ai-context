@@ -51,8 +51,6 @@ module RailsAiContext
       "this app does not load Active Record"
     end
 
-    SEQUEL_MIGRATION = /\A(?:\s*#[^\n]*\n|\s)*Sequel\.migration\b/
-
     # Why the schema files Active Record would read are not its own: sequel-rails keeps its
     # schema.rb and migrations in the same places, written in Sequel's DSL. Nil when they are.
     def sequel_schema(root)
@@ -62,9 +60,20 @@ module RailsAiContext
       return nil if format == :sql
 
       file = dump || Introspectors::MigrationReplay.migration_files(Introspectors::MigrationReplay.migration_dirs(root), root: root).first
-      return nil unless file && RailsAiContext::SafeFile.read(file).to_s.match?(SEQUEL_MIGRATION)
+      return nil unless file && sequel_migration?(RailsAiContext::SafeFile.read(file))
 
       "#{file.delete_prefix("#{root.to_s.chomp('/')}/")} is a Sequel migration"
+    end
+
+    def sequel_migration?(source)
+      tree = source && RailsAiContext::AstCache.parse_string(source)
+      return false unless tree&.value
+
+      tree.value.statements.body.any? do |node|
+        node.is_a?(Prism::CallNode) && node.name == :migration &&
+          (node.receiver.is_a?(Prism::ConstantReadNode) || node.receiver.is_a?(Prism::ConstantPathNode)) &&
+          node.receiver.slice.delete_prefix("::") == "Sequel"
+      end
     end
 
     # The development database config/mongoid.yml names, by `database:` or the
