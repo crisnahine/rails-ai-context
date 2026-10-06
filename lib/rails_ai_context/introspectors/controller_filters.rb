@@ -37,13 +37,13 @@ module RailsAiContext
       ] + GEM_FILTERS.keys).freeze
 
       # The block filter http_authentication.rb adds, named for the macro: its keywords are credentials.
-      BASIC_AUTH = { macro: :before_action, args: [ :http_basic_authenticate_with ], proc_lines: [] }.freeze
+      BASIC_AUTH = { macro: :before_action, args: [ :http_basic_authenticate_with ], callbacks: nil, proc_lines: [] }.freeze
 
       # actionpack's request_forgery_protection.rb defines it as this skip.
       FORGERY_SKIP = { macro: :skip_before_action, args: [ :verify_authenticity_token ] }.freeze
 
       LISTENERS = {
-        filters: -> { Listeners::ConditionalMacroListener.new(*MACROS) },
+        filters: -> { Listeners::FilterMacroListener.new(*MACROS) },
         nested: Listeners::NestedConstantsListener,
         mixins: Listeners::MixinsListener,
         # A macro inside a `def` runs when the method is called, so ConcernMacros holds it back by these.
@@ -322,7 +322,7 @@ module RailsAiContext
         entry = entry.merge(BASIC_AUTH) if entry[:macro] == :http_basic_authenticate_with
         if (macro, name = GEM_FILTERS[entry[:macro]])
           macro = :prepend_before_action if GEM_PREPENDABLE.include?(entry[:macro]) && (entry[:options] || {})[:prepend] == true
-          entry = entry.merge(macro: macro, args: [ name ], values: [], proc_lines: [])
+          entry = entry.merge(macro: macro, args: [ name ], callbacks: nil, proc_lines: [])
         end
         macro = entry[:macro].to_s
         skipped = macro.start_with?("skip_")
@@ -345,44 +345,19 @@ module RailsAiContext
       end
 
       # Each callback the call gives, in the order Rails adds them: positional arguments as written,
-      # the block last. A class (`before_action Gatekeeper`) is named as written, an instance
-      # (`around_action TimingFilter.new`) by its class, as the booted tier names both.
+      # the block last, each named by FilterMacroListener.
       def positional_names(entry, blocks)
-        literals = Array(entry[:args]).map(&:to_s)
-        return literals + blocks if Array(entry[:values]).empty?
+        callbacks = entry[:callbacks]
+        return Array(entry[:args]).map(&:to_s) + blocks if callbacks.blank?
 
         blocks = blocks.dup
-        entry[:values].filter_map do |value|
-          text = value.to_s
-          if value.is_a?(Symbol) || literals.include?(text) then text
-          elsif text.start_with?("->") then blocks.shift
-          elsif (const = object_name(text)) then "#{const} (object)"
-          elsif text.match?(/\A(?:::)?[A-Z]\w*(?:::[A-Z]\w*)*\z/) then text.delete_prefix("::")
+        callbacks.filter_map do |kind, name|
+          case kind
+          when :name then name
+          when :block then blocks.shift
+          when :object then "#{name} (object)"
           end
         end + blocks
-      end
-
-      # The class the booted tier names an object filter by: `Class` for an anonymous class,
-      # an instance's nearest named class (`Class.new(Base) {}.new` is Base's, `Class.new {}.new` Object's).
-      def object_name(text)
-        node = AstCache.parse_string(text)&.value&.statements&.body&.first
-        return nil unless node.is_a?(Prism::CallNode) && node.name == :new && node.receiver
-        return "Class" if %w[Class Struct].include?(constant_name(node.receiver))
-
-        named_class(node.receiver)
-      end
-
-      def named_class(node)
-        return constant_name(node) unless node.is_a?(Prism::CallNode) && node.name == :new
-
-        case constant_name(node.receiver)
-        when "Class" then (superclass = node.arguments&.arguments&.first) ? named_class(superclass) : "Object"
-        when "Struct" then "Struct"
-        end
-      end
-
-      def constant_name(node)
-        node.slice.delete_prefix("::") if node.is_a?(Prism::ConstantReadNode) || node.is_a?(Prism::ConstantPathNode)
       end
 
       def constraints(entry)
@@ -443,7 +418,7 @@ module RailsAiContext
       end
 
       private_class_method :walk, :class_level, :singleton_expansions, :declares_filters?, :base_expansions, :each_base,
-                           :class_method_defs, :object_name, :named_class, :constant_name,
+                           :class_method_defs,
                            :superclass_of, :base_source, :constant_source, :with_file, :body_call?, :record, :positional_names, :constraints, :condition_text, :normalize, :action_condition, :lambda_body
     end
   end

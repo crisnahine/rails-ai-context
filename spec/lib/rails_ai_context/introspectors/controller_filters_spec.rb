@@ -283,6 +283,15 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
         .to eq([ "block (line 2)", "a", "block (line 2)", "b", "block (line 2)" ])
     end
 
+    it "names a lambda, proc or Proc.new argument as the block it is, with its options" do
+      source = "class C < ApplicationController\n  before_action -> { a }\n  before_action lambda { b }\n" \
+               "  before_action proc { c }, only: :show\n  before_action Proc.new { d }\n  before_action Gatekeeper, :x\nend\n"
+
+      expect(described_class.from_source(source).map { |f| [ f[:name], f[:only] ] })
+        .to eq([ [ "block (line 2)", nil ], [ "block (line 3)", nil ], [ "block (line 4)", [ "show" ] ],
+                 [ "block (line 5)", nil ], [ "Gatekeeper", nil ], [ "x", nil ] ])
+    end
+
     it "keeps a filter that shares a line with a def or follows a delegation" do
       expect(described_class.from_source("class C < ApplicationController; def index; end; before_action :x; end").map { |f| f[:name] })
         .to eq([ "x" ])
