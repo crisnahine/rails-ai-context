@@ -259,7 +259,7 @@ module RailsAiContext
 
       def extract_slots(structure, type)
         slots = structure.fetch(:slot_macro, []).map do |entry|
-          entry.slice(:name, :type, :renderer).compact
+          entry.slice(:name, :type, :renderer, :setters).compact
         end
 
         # Phlex slots are plain methods taking a block.

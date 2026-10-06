@@ -65,6 +65,18 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ComponentStructureListe
       expect(results.first[:renderer]).to eq("HeaderComponent")
     end
 
+    it "records the setters of a polymorphic slot, as view_component names them" do
+      results = structure(<<~RUBY)
+        class C < ViewComponent::Base
+          renders_many :entries, types: { image: "ItemComponent", text: { renders: "ItemComponent", as: :caption } }
+          renders_one :visual, types: { icon: IconComponent }
+        end
+      RUBY
+
+      expect(results.map { |r| r[:setters] }).to eq([ %w[entry_image caption], %w[visual_icon] ])
+      expect(results).to all(satisfy { |r| !r.key?(:renderer) })
+    end
+
     it "omits the renderer key when there is none" do
       results = structure("class C < ViewComponent::Base; renders_many :items; end")
 
