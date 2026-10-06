@@ -19,12 +19,7 @@ module RailsAiContext
       key != ANCHOR && !key.start_with?("_") && !ConfigYaml.marked?(key)
     end
 
-    # The fixtures a file defines, label => attributes, or nil when it does not
-    # read as fixtures. ERB is not run: a tag that prints becomes ConfigYaml's
-    # marker and one that does not is dropped, so a file opening with
-    # `<% digest = ... %>` still reads. Aliases are allowed, as Rails allows
-    # them, and the labels `_fixture: ignore:` names are dropped. A result is
-    # kept by content digest, so the introspector and the tool share a parse.
+    # label => attributes, or nil when not fixtures; ERB unrun, cached by digest so readers share a parse.
     def self.parse(content)
       key = Digest::SHA256.hexdigest(content.to_s)
       PARSED_MUTEX.synchronize { return PARSED[key] if PARSED.key?(key) }

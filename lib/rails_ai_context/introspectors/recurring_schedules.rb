@@ -2,11 +2,7 @@
 
 module RailsAiContext
   module Introspectors
-    # Recurring tasks from each scheduler's own file, in the shape each gem reads it:
-    # Solid Queue's config/recurring.yml, sidekiq-cron's config/schedule.yml,
-    # sidekiq-scheduler's section of config/sidekiq.yml, GoodJob's
-    # `config.good_job.cron` and whenever's config/schedule.rb.
-    # Each task: { name:, class:, command:, schedule:, env:, file: }.
+    # Recurring tasks from each scheduler's own file, read the way that gem reads it.
     module RecurringSchedules
       module_function
 
@@ -56,7 +52,7 @@ module RailsAiContext
       # In the order Rails loads them; initializers at any depth, sorted by path.
       GOOD_JOB_FILES = %w[config/application.rb config/environments/*.rb config/initializers/**/*.rb].freeze
 
-      # `config.good_job.cron = {...}`, or entries merged into it (OpenProject does so in after_initialize).
+      # `config.good_job.cron = {...}`, or entries merged into it (apps also merge! in after_initialize).
       GOOD_JOB_CRON = [ %i[good_job cron], %i[good_job cron merge!], %i[good_job cron update] ].freeze
 
       # `cron =` replaces the hash, dropping what earlier files set; an environment

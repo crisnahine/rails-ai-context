@@ -999,10 +999,7 @@ module RailsAiContext
       REGISTER_CALLS = { "register_interceptor" => :interceptors, "register_interceptors" => :interceptors,
                          "register_observer" => :observers, "register_observers" => :observers }.freeze
 
-      # The queue deliver_later uses, and the interceptors and observers the config registers.
-      # Booted, the queue is ActionMailer's own setting; statically it is the config's, else
-      # `load_defaults` 6.1 or later sets it to nil, which is ActiveJob's default queue.
-      # An app with no mailers has no queue to name.
+      # Statically the deliver_later queue is the config's, else nil under load_defaults 6.1+ (ActiveJob's default).
       def mailer_settings(mailers, booted: false)
         settings = { interceptors: [], observers: [] }
         queue = nil
@@ -1041,8 +1038,7 @@ module RailsAiContext
         settings.merge(deliver_later_queue: queue, preview_paths: mailer_preview_dirs)
       end
 
-      # The class an interceptor or observer is, or is built from with `.new`; a symbol, string
-      # or constant name is the class ActionMailer camelizes it to. Anything else is named as written.
+      # A symbol, string or constant name is the class ActionMailer camelizes it to.
       def registered(name, relative, computed: [], constants: {})
         text = name.to_s
         return { name: constants[text], file: relative } if constants[text]

@@ -21,10 +21,7 @@ module RailsAiContext
           mode: detect_mode,
           zeitwerk_available: zeitwerk_available?,
           autoloaders: extract_autoloaders,
-          # Rails' own formula (Engine#_all_autoload_paths): eager-load paths
-          # autoload too, and an autoload-once path is the once loader's.
-          # The loaders also hold what never passes through the app's config:
-          # other engines' app/* and an initializer's push_dir.
+          # Rails' Engine#_all_autoload_paths, plus loader roots no config lists (engines, push_dir).
           autoload_paths: relativize(config_paths(:autoload_paths) + eager - once + app_first(main_roots.keys)),
           autoload_once_paths: relativize(once + app_first(once_roots.keys)),
           autoload_namespaces: relativize_namespaces(main_roots.merge(once_roots)),
