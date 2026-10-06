@@ -127,6 +127,26 @@ RSpec.describe RailsAiContext::Tools::GetMailers do
       expect(text).to include("**Observers:** DeliveryLogObserver (`config/initializers/mail.rb`)")
     end
 
+    it "names the class ActionMailer camelizes from a symbol or string, and leaves a computed one unread" do
+      write("config/application.rb", <<~RUBY)
+        module App
+          class Application < Rails::Application
+            config.action_mailer.interceptors = [:sandbox_interceptor, "staging_interceptor", interceptor_for(env)]
+          end
+        end
+      RUBY
+      write("config/initializers/mail.rb", <<~RUBY)
+        name = "audit_interceptor"
+        ActionMailer::Base.register_interceptor(:audit_interceptor)
+        ActionMailer::Base.register_interceptor(name)
+        ActionMailer::Base.register_observer("delivery_log_observer")
+      RUBY
+      text = static_text
+      expect(text).to include("SandboxInterceptor (`config/application.rb`), StagingInterceptor (`config/application.rb`)")
+      expect(text).to include("AuditInterceptor (`config/initializers/mail.rb`), `name`, not read (`config/initializers/mail.rb`)")
+      expect(text).to include("**Observers:** DeliveryLogObserver (`config/initializers/mail.rb`)")
+    end
+
     it "gives no deliver_later queue to an app with no mailers" do
       FileUtils.rm_rf(File.join(tmpdir, "app/mailers"))
       expect(static_text).not_to include("deliver_later queue")

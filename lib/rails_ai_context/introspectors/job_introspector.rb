@@ -989,7 +989,8 @@ module RailsAiContext
             if call[:name] == "load_defaults"
               version = defaults_version(call[:arguments].first) if relative == "config/application.rb"
             else
-              call[:arguments].flatten.each { |name| settings[REGISTER_CALLS[call[:name]]] << registered(name, relative) }
+              computed = Array(call[:computed])
+              call[:arguments].flatten.each { |name| settings[REGISTER_CALLS[call[:name]]] << registered(name, relative, computed: computed) }
             end
           end
         end
@@ -1005,12 +1006,20 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, {}, label: "mailer_settings")
       end
 
-      # The class an interceptor or observer is, or is built from with `.new`; any
-      # other argument (a local variable, a method call) is named as written.
-      def registered(name, relative)
+      # The class an interceptor or observer is, or is built from with `.new`; a symbol or
+      # string literal is the class ActionMailer camelizes it to. Any other argument (a
+      # local variable, a method call) is named as written.
+      def registered(name, relative, computed: [])
         text = name.to_s
         constant = text[/\A(?:::)?([A-Z]\w*(?:::[A-Z]\w*)*)(?:\.new\b.*)?\z/m, 1]
-        constant ? { name: constant, file: relative } : { name: text, file: relative, unresolved: true }
+        return { name: constant, file: relative } if constant
+        return { name: text.camelize, file: relative } if name.is_a?(Symbol) || (literal_name?(text) && !computed.include?(text))
+
+        { name: text, file: relative, unresolved: true }
+      end
+
+      def literal_name?(text)
+        text.match?(/\A\w+(?:\/\w+)*\z/)
       end
 
       # A version that is not a literal is the running Rails's, past every cutoff.

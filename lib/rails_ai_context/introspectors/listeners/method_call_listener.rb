@@ -22,9 +22,19 @@ module RailsAiContext
             line: node.location.start_line,
             offset: node.location.start_offset,
             arguments: extract_arg_values(node),
+            computed: computed_arguments(node),
             options: extract_keyword_sources(node),
             snippet: node.slice.lines.first.to_s.strip
           }
+        end
+
+        private
+
+        # The source of each positional argument, or array element, that is no literal,
+        # since `arguments` gives a local variable's source and a string's value alike.
+        def computed_arguments(node)
+          (node.arguments&.arguments || []).flat_map { |arg| arg.is_a?(Prism::ArrayNode) ? arg.elements : [ arg ] }
+            .select { |arg| extract_value(arg) == RailsAiContext::Confidence::INFERRED }.map { |arg| one_line_source(arg) }
         end
       end
     end
