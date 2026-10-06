@@ -209,9 +209,22 @@ module RailsAiContext
           return statements(node) if qualified == name
 
           descend(node, scope + [ segment(node) ], name)
+        when Prism::ConstantWriteNode, Prism::ConstantPathWriteNode
+          written = node.is_a?(Prism::ConstantWriteNode) ? node.name.to_s : node.target.slice.delete_prefix("::")
+          return built_body(node.value) if (scope + [ written ]).join("::") == name
+
+          descend(node, scope, name)
         else
           descend(node, scope, name)
         end
+      end
+
+      # `Name = Class.new(Base) do ... end` runs the block as Name's body.
+      def built_body(value)
+        return [] unless value.is_a?(Prism::CallNode) && value.name == :new && value.receiver&.slice == "Class"
+
+        block = value.block
+        block.is_a?(Prism::BlockNode) && block.body.is_a?(Prism::StatementsNode) ? block.body.body : []
       end
 
       def descend(node, scope, name)
@@ -306,7 +319,7 @@ module RailsAiContext
         end
       end
 
-      private_class_method :affix, :read, :body_of, :descend, :statements, :segment,
+      private_class_method :affix, :read, :body_of, :built_body, :descend, :statements, :segment,
                            :assigned, :boolean_assigned, :primary_key_assigned, :returned, :literal, :read_namespace_prefixes, :read_app_affixes,
                            :interpolated, :affixed_node, :affix_read,
                            :engine_files, :collect_isolate_calls

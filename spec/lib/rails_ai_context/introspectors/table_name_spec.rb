@@ -160,6 +160,22 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
       )
     end
 
+    it "reads a class built with Class.new from its block" do
+      source = <<~RUBY
+        module Admin
+          Flag = Class.new(ApplicationRecord) do
+            self.table_name = "admin_flags"
+          end
+        end
+        LegacyFlag = Class.new(ApplicationRecord) { self.table_name = "legacy" }
+        Other = Class.new(ApplicationRecord)
+      RUBY
+
+      expect(described_class.explicit(source, "Admin::Flag")).to eq("admin_flags")
+      expect(described_class.explicit(source, "LegacyFlag")).to eq("legacy")
+      expect(described_class.explicit(source, "Other")).to be_nil
+    end
+
     it "descends the file once for all of them" do
       source = "class Widget < ApplicationRecord\n  self.table_name = 'gizmos'\nend\n"
       allow(RailsAiContext::AstCache).to receive(:parse_string).and_call_original

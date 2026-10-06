@@ -37,6 +37,16 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     ])
   end
 
+  it "labels a class built with Class.new as its definition" do
+    sections = structure_of(<<~RUBY)
+      Widget = Class.new(ApplicationRecord) do
+        self.table_name = "gizmos"
+      end
+    RUBY
+
+    expect(sections).to eq([ [ "class definition", 1 ] ])
+  end
+
   it "does not count a def in a scope's block as a method of the model" do
     sections = structure_of(<<~RUBY)
       class Widget < ApplicationRecord

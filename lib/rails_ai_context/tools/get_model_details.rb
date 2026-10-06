@@ -180,7 +180,7 @@ module RailsAiContext
         if structure
           lines << "**File:** `#{structure[:path]}` (#{count_phrase(structure[:total_lines], "line")})"
           map = structure[:sections].map { |s| "#{s[:label]}(#{s[:start]}-#{s[:end]})" }.join(" → ")
-          lines << "**Structure:** #{map}"
+          lines << "**Structure:** #{map}" unless map.empty?
         end
 
         # Schema columns - inline from schema introspection
@@ -739,7 +739,7 @@ module RailsAiContext
         source_lines.each_with_index do |line, idx|
           label = case line
           when /\A\s*(?:[a-z_]+\s+)*def\s/ then { class: "class methods", instance: "instance methods" }[def_scopes[idx + 1]]
-          when /\A\s*class\s+(?!<<)/ then "class definition"
+          when /\A\s*class\s+(?!<<)/, /\A\s*[A-Z][\w:]*\s*=\s*Class\.new\b/ then "class definition"
           when /\A\s*(include|extend|prepend)\s/ then "includes"
           when /\A\s*[A-Z_]+\s*=/ then "constants"
           when /\A\s*(belongs_to|has_many|has_one|has_and_belongs_to_many)\s/ then "associations"
