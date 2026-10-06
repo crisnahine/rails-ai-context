@@ -145,8 +145,8 @@ module RailsAiContext
         named&.superclass ? named : found.find(&:superclass)
       end
 
-      # The body of each `class` statement that writes `name`, reached through
-      # the namespaces alone, never a method body.
+      # The body of each class statement or Class.new block that writes `name`,
+      # reached through the namespaces alone, never a method body.
       def class_bodies(node, name, scope = [], found = [])
         case node
         when Prism::ProgramNode then class_bodies(node.statements, name, scope, found)
@@ -169,8 +169,10 @@ module RailsAiContext
 
       # Every class the source declares, with the superclass it names -
       # nil for a class with no superclass or a computed one. A module
-      # declares no class and so appears here not at all.
-      def declarations(source)
+      # declares no class and so appears here not at all. `assignments: true`
+      # adds each `X = Class.new(Base)`, which only the model and config
+      # listings read: elsewhere the first declaration is the file's class.
+      def declarations(source, assignments: false)
         return [] unless source
 
         root = AstCache.parse_string(source)&.value
@@ -178,7 +180,16 @@ module RailsAiContext
 
         # Keyed by the cached tree, so the entry lives as long as the parse:
         # one run asks the same file three or four times.
-        (DECLARATIONS[root] ||= constants(root, assignments: true).filter_map do |name, node, nesting|
+        found = (DECLARATIONS[root] ||= declarations_in(root))
+        (assignments ? found[:all] : found[:classes]).dup
+      rescue StandardError, ScriptError => e
+        RailsAiContext.debug_fail(e, [], label: "DeclaredConstant")
+      end
+
+      def declarations_in(root)
+        all = []
+        classes = []
+        constants(root, assignments: true) do |name, node, nesting|
           if node.is_a?(Prism::ClassNode)
             parent = node.superclass
             nesting = nesting.drop(1)
@@ -189,10 +200,11 @@ module RailsAiContext
             next
           end
 
-          Declaration.new(name: name, superclass: superclass_name(parent), nesting: parent&.slice&.start_with?("::") ? [] : nesting)
-        end.freeze).dup
-      rescue StandardError, ScriptError => e
-        RailsAiContext.debug_fail(e, [], label: "DeclaredConstant")
+          declaration = Declaration.new(name: name, superclass: superclass_name(parent), nesting: parent&.slice&.start_with?("::") ? [] : nesting)
+          all << declaration
+          classes << declaration if node.is_a?(Prism::ClassNode)
+        end
+        { all: all.freeze, classes: classes.freeze }.freeze
       end
 
       # The module a parsed file declares under this fully qualified name, for

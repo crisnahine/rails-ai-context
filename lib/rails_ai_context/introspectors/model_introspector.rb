@@ -222,7 +222,7 @@ module RailsAiContext
 
             next if mixin_path?(record.path_name.underscore, source)
 
-            declarations = DeclaredConstant.declarations(source)
+            declarations = DeclaredConstant.declarations(source, assignments: true)
             declaration = DeclaredConstant.declaration_for(declarations, record.path_name)
             class_name = declaration&.name || record.path_name
             # Two files can declare one class (an app reopening a model to add methods);
