@@ -66,6 +66,22 @@ RSpec.describe RailsAiContext::Introspectors::Base do
         expect(check.call(%w[ZzEngine::ZzRecord])).to be(true)
       end
     end
+
+    it "loads an engine base from a bundle installed under the app root, as vendor/bundle" do
+      gem_dir = Rails.root.join("tmp", "vendor", "bundle", "ruby", "3.4.0", "gems", "zzengine-1.0")
+      file = gem_dir.join("app", "models", "zz_engine", "zz_record.rb")
+      FileUtils.mkdir_p(file.dirname)
+      File.write(file, "module ZzEngine; class ZzRecord < ActiveRecord::Base; self.abstract_class = true; end; end\n")
+      spec = Gem::Specification.new { |s| s.name = "zzengine" }
+      allow(spec).to receive(:full_gem_path).and_return(gem_dir.to_s)
+      allow(Gem).to receive(:loaded_specs).and_return(Gem.loaded_specs.merge("zzengine" => spec))
+      stub_const("ZzEngine", Module.new)
+      ZzEngine.autoload(:ZzRecord, file.to_s)
+
+      expect(check.call(%w[ZzEngine::ZzRecord])).to be(true)
+    ensure
+      FileUtils.rm_rf(Rails.root.join("tmp", "vendor"))
+    end
   end
 
   # Ruby looks up the superclass of a compact `class A::B < X` from the top level, of a nested one from A.
