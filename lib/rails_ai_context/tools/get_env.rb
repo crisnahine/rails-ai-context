@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "ipaddr"
+require "uri"
 
 module RailsAiContext
   module Tools
@@ -629,9 +630,9 @@ module RailsAiContext
       end
 
       private_class_method def self.service_name_from_host(host)
-        # An address names no service; a loopback or private one is not external at all.
+        # An address names no service; a loopback, private or unspecified one is not external at all.
         if (ip = (IPAddr.new(host.delete("[]")) rescue nil))
-          return ip.loopback? || ip.private? || ip.link_local? ? nil : host
+          return ip.loopback? || ip.private? || ip.link_local? || ip.to_i.zero? ? nil : host
         end
 
         parts = host.split(".")
