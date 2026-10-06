@@ -16,7 +16,7 @@ module RailsAiContext
           if client == "Net::HTTP" && %i[start new].include?(node.name)
             host = literal_string(first)
             @results << { client: client, host: host, line: node.location.start_line } if host
-          elsif (url = url_literal(first) || url_literal(keyword_hash(node) { |value| value }[:url]))
+          elsif (url = url_literal(first) || url_literal(extract_keyword_nodes(node)[:url]))
             @results << { client: client, url: url, line: node.location.start_line }
           end
         end
