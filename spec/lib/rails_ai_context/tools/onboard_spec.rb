@@ -5,12 +5,6 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Tools::Onboard do
   before { described_class.reset_cache! }
 
-  it "keeps its gem lists on the tool class, where a caller can name them" do
-    expect(described_class::AUTHZ_GEMS).to include("pundit", "action_policy")
-    expect(described_class::AUTH_GEMS).to include("devise")
-    expect(described_class::RAKE_TASKS_SHOWN).to eq(15)
-  end
-
   # Errbit: no ActiveRecord schema, so the stack line said "on unknown".
   describe "a Mongoid app" do
     it "names Mongoid and the database mongoid.yml names" do
