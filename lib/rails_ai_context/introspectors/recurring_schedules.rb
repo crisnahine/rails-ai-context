@@ -154,7 +154,7 @@ module RailsAiContext
         value.is_a?(Hash) ? value.to_h { |key, inner| [ key.to_s, inner ] } : value
       end
 
-      # Only the scheduler readers pass `marker`; every other caller prints values, so an output tag reads as empty.
+      # With `marker` an output tag reads as that marker, which computed? finds; without it, as empty.
       def yaml(root, file, marker: nil)
         content = read_file(root, file) or return nil
         content = marker ? ErbSource.with_output_marked(content, marker) : ErbSource.without_tags(content)

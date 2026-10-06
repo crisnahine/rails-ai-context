@@ -991,11 +991,13 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       expect(text).not_to include("Zx9kQ2mW7pL4vB8nR3tY6uH1")
     end
 
-    it "never prints the ERB marker for a clear value an ERB tag sets" do
-      write_deploy("env:\n  clear:\n    DB_HOST: <%= ENV[\"DB_HOST\"] %>\n")
+    it "says an ERB tag sets a clear value at deploy time, never printing it as empty" do
+      write_deploy("env:\n  clear:\n    RAILS_LOG_LEVEL: <%= ENV.fetch(\"LOG_LEVEL\", \"info\") %>\n    HOST: app-<%= ENV[\"N\"] %>\n")
 
       text = described_class.call.content.first[:text]
-      expect(text).to include("- `DB_HOST` = ``")
+      expect(text).to include("- `RAILS_LOG_LEVEL` - set by ERB at deploy time")
+      expect(text).to include("- `HOST` - set by ERB at deploy time")
+      expect(text).not_to include("= ``")
       expect(text).not_to include("RAC_ERB_OUTPUT")
     end
 

@@ -310,6 +310,8 @@ module RailsAiContext
           lines << if v[:secret]
             alias_note = v[:secret] == v[:name] ? "" : " (`#{v[:secret]}`)"
             "- `#{v[:name]}` - secret, from `.kamal/secrets`#{alias_note}"
+          elsif v[:value] == :computed
+            "- `#{v[:name]}` - set by ERB at deploy time"
           else
             "- `#{v[:name]}` = `#{v[:value]}`"
           end
@@ -320,7 +322,7 @@ module RailsAiContext
       # The app container's env as Kamal::Configuration::Env reads it: `clear`
       # and `secret` keys, or a bare hash that is all clear values.
       private_class_method def self.scan_kamal_env(root)
-        env = Introspectors::RecurringSchedules.yaml(root, KAMAL_DEPLOY)
+        env = Introspectors::RecurringSchedules.yaml(root, KAMAL_DEPLOY, marker: Introspectors::RecurringSchedules::ERB_OUTPUT)
         env = env["env"] if env.is_a?(Hash)
         return [] unless env.is_a?(Hash)
 
@@ -330,7 +332,10 @@ module RailsAiContext
           name, aliased = key.to_s.split(":", 2)
           { name: name, secret: aliased || name } unless name.to_s.empty?
         end
-        secrets + clear.map { |name, value| { name: name.to_s, value: RailsAiContext::Redaction.value(name, value.to_s) } }
+        secrets + clear.map do |name, value|
+          computed = Introspectors::RecurringSchedules.computed?(value)
+          { name: name.to_s, value: computed ? :computed : RailsAiContext::Redaction.value(name, value.to_s) }
+        end
       end
 
       # The config gem merges config/settings.yml, then config/settings/<env>.yml
