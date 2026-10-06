@@ -24,6 +24,7 @@ module RailsAiContext
           adapter: adapter_name,
           tables: tables,
           qualified_tables: qualified_tables,
+          search_path: live_search_path,
           total_tables: SchemaConventions.table_count(tables),
           schema_version: current_schema_version,
           # The version stamp is read off db/schema.rb and the tables off the
@@ -127,6 +128,16 @@ module RailsAiContext
           AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_(toast|temp_)'
           AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = c.oid AND d.deptype = 'e')
       SQL
+
+      # The schemas the connection searches, which name its enum types; public alone is the default.
+      def live_search_path
+        return unless postgres? && connection.respond_to?(:current_schemas)
+
+        found = connection.current_schemas
+        found unless found == SchemaConventions::DEFAULT_SEARCH_PATH
+      rescue => e
+        RailsAiContext.debug_fail(e, nil, label: "search_path")
+      end
 
       # Findable by schema-qualified name, as the static tier reads them from the dump.
       def qualified_tables
@@ -635,6 +646,7 @@ module RailsAiContext
           note: "Parsed from #{relative_dump_path(path)} (#{connection_state})"
         }
         result[:qualified_tables] = qualified if qualified.any?
+        result[:search_path] = schema.search_path unless schema.search_path == SchemaConventions::DEFAULT_SEARCH_PATH
         found = search_path_dump(path, content) unless secondary_dump(path)
         result[:search_path_dump] = found if found
         result[:extensions] = schema.extensions.sort if schema.extensions.any?
@@ -707,6 +719,7 @@ module RailsAiContext
           note: "Parsed from #{relative_dump_path(path)} (#{connection_state})"
         }
         result[:qualified_tables] = parsed[:qualified_tables] if parsed[:qualified_tables].any?
+        result[:search_path] = parsed[:search_path] unless parsed[:search_path] == SchemaConventions::DEFAULT_SEARCH_PATH
         result[:extensions] = parsed[:extensions].sort if parsed[:extensions].any?
         if applied.any?
           result[:schema_version] = applied.map(&:to_i).max.to_s

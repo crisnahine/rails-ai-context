@@ -93,6 +93,12 @@ module RailsAiContext
         parse[:qualified_tables]
       end
 
+      # The configured search path less the schemas the dump never creates.
+      def search_path
+        parse
+        @existing_path || @search_path
+      end
+
       def table?(name)
         tables.key?(name) || qualified_tables.key?(name)
       end

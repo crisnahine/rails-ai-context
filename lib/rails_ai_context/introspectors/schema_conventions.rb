@@ -223,6 +223,17 @@ module RailsAiContext
         listed.uniq { |enum| enum[:name] }.sort_by { |enum| enum[:name] }
       end
 
+      # The enum types a table's columns use, from the list: a column's bare type resolves to the
+      # first schema on the search path holding it, and a bare list name is in the current schema.
+      def enums_used(enum_types, column_types, search_path)
+        path = Array(search_path).presence || DEFAULT_SEARCH_PATH
+        listed = Array(enum_types).to_h { |enum| [ enum[:name].to_s.include?(".") ? enum[:name].to_s : "#{path.first}.#{enum[:name]}", enum ] }
+        used = column_types.map do |type|
+          type.include?(".") ? type : path.map { |schema| "#{schema}.#{type}" }.find { |key| listed.key?(key) }
+        end
+        listed.select { |key, _| used.include?(key) }.values
+      end
+
       # The configured search path less the schemas the dump never creates, as PostgreSQL
       # skips a schema that does not exist. public is assumed, since pg_dump does not create it.
       def existing_search_path(search_path, created)

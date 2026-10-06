@@ -106,12 +106,12 @@ module RailsAiContext
 
               output = groups.map do |dbs, data|
                 in_db = models_data.select { |_, model| model.is_a?(Hash) && model[:table_name] == table_key && Payload.model_databases(schema, model).intersect?(dbs) }
-                format_table_markdown(table_key, data, in_db, schema[:enum_types]).sub("\n\n", "\n\n**Database:** #{dbs.join(", ")}\n")
+                format_table_markdown(table_key, data, in_db, schema[:enum_types], schema[:search_path]).sub("\n\n", "\n\n**Database:** #{dbs.join(", ")}\n")
               end.join("\n\n")
             else
               return json_response(table_data.except(:unread_calls).merge({ database: database }.compact)) if format == "json"
 
-              output = format_table_markdown(table_key, table_data, models_data, schema[:enum_types])
+              output = format_table_markdown(table_key, table_data, models_data, schema[:enum_types], schema[:search_path])
               output = output.sub("\n\n", "\n\n**Database:** #{database}\n") if database
             end
             # Cross-reference hint for AI: suggest next tool call
@@ -267,7 +267,7 @@ module RailsAiContext
             lines = [ "# Schema Full Detail (#{paginated.size} of #{Introspectors::SchemaConventions.relations_phrase(tables)})", "" ]
             lines.concat(note_lines(schema))
             paginated.each do |name|
-              lines << format_table_markdown(name, tables[name], models_data, schema[:enum_types])
+              lines << format_table_markdown(name, tables[name], models_data, schema[:enum_types], schema[:search_path])
               lines << ""
             end
             coverage = model_coverage_lines(tables, models_data)
@@ -525,7 +525,7 @@ module RailsAiContext
         end
       end
 
-      private_class_method def self.format_table_markdown(name, data, models, enum_types = nil)
+      private_class_method def self.format_table_markdown(name, data, models, enum_types = nil, search_path = nil)
         columns = data[:columns] || []
         # Always show Nullable and Default - agents need these for migrations and validations
         has_defaults = columns.any? { |c| c.key?(:default) && !c[:default].nil? }
@@ -603,8 +603,7 @@ module RailsAiContext
           end
         end
 
-        used = columns.filter_map { |c| c[:enum_type] }
-        enums = Array(enum_types).select { |enum| used.include?(enum[:name]) }
+        enums = RailsAiContext::Introspectors::SchemaConventions.enums_used(enum_types, columns.filter_map { |c| c[:enum_type]&.to_s }, search_path)
         if enums.any?
           lines << "" << "### Enum types"
           enums.each { |enum| lines << "- `#{enum[:name]}`: #{Array(enum[:values]).join(', ')}" }

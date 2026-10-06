@@ -35,7 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holds the types in a schema on the search path, bare in the current schema
   and schema-qualified otherwise, or every type by its bare name before Rails
   7.1. A column's enum type is bare when the search path finds that type first,
-  and qualified otherwise. Both tiers list enum types in name order.
+  and qualified otherwise. Both tiers list enum types in name order. A table's
+  Enum types section now pairs each column with the type the search path
+  finds for it, so a column `mood` shows the list entry `public.mood`.
 - **A table outside the search path stays out of the table list but can still
   be looked up.** Without a boot, a schema.rb table in another schema was
   listed and counted, while the booted app leaves it out. Both tiers now leave

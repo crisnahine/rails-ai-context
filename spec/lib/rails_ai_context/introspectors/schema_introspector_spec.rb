@@ -2111,6 +2111,22 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(columns).to eq("status" => "status", "mood" => "mood", "pstatus" => "public.status", "level" => "audit.level")
       end
 
+      it "pairs each enum column with the type the search path resolves it to, in the table's Enum types" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          FileUtils.mkdir_p(File.join(dir, "config"))
+          File.write(File.join(dir, "db", "structure.sql"), structure)
+          File.write(File.join(dir, "config", "database.yml"), "#{RailsAiContext.environment_name}:\n  adapter: postgresql\n  schema_search_path: \"app,public\"\n")
+          schema = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+          RailsAiContext::Tools::GetSchema.reset_cache!
+          allow(RailsAiContext::Tools::GetSchema).to receive(:cached_context).and_return({ schema: schema, models: {} })
+          text = RailsAiContext::Tools::GetSchema.call(table: "widgets").content.first[:text]
+
+          expect(text[/### Enum types\n(?:- .*\n?)*/].lines.drop(1).map(&:strip))
+            .to eq([ "- `public.mood`: happy, sad", "- `public.status`: x", "- `status`: on, off" ])
+        end
+      end
+
       it "lists only public's enums bare with no search path" do
         list, columns = enums_of("structure.sql", structure, "")
 

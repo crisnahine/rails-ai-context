@@ -104,7 +104,7 @@ module RailsAiContext
           (shown.include?(".") ? qualified_tables : tables).delete(shown)
         end
 
-        { dialect: dialect, tables: tables, qualified_tables: qualified_tables, enums: SchemaConventions.enum_list(enums, path, legacy: before_rails?(rails_version, "7.1")),
+        { dialect: dialect, tables: tables, qualified_tables: qualified_tables, search_path: path, enums: SchemaConventions.enum_list(enums, path, legacy: before_rails?(rails_version, "7.1")),
           views: found_views, virtual_tables: virtual_tables(content, local),
           extensions: extensions(content, (path.first || "public" unless before_rails?(rails_version, "8.0")), dialect) }
       end

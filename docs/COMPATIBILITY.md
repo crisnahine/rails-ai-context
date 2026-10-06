@@ -324,6 +324,10 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   in the static tier, so databases, replicas, sharding and `connects_to`
   declarations come from the files rather than from the live connection
   handlers. A database only a runtime `connects_to` names is missed.
+- **Rails 7.0 merges same-name enum types.** On Rails 7.0, two PostgreSQL enum
+  types with one name in different schemas come back from the connection as
+  one type holding both label lists; the static tier keeps the first type's
+  labels.
 - **Inherited controller actions and filters are resolved by parent name, so
   some walks end early.** A controller that defines no action of its own takes
   the actions of the nearest app ancestor the listing holds, walked through the
