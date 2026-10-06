@@ -747,9 +747,11 @@ module RailsAiContext
           return emit_dynamic(node) if verb.nil? || opaque_options?(node)
 
           rocket_key = opts.keys.find { |k| k.is_a?(String) }
+          return emit_dynamic(node) if !@multi_path && (node.arguments&.arguments || []).count { |a| !a.is_a?(Prism::KeywordHashNode) } > 1
+
           paths = literal_paths(node)
           paths = [ [ rocket_key, false ] ] if paths.empty? && rocket_key
-          return emit_dynamic(node) if paths.empty? || (paths.size > 1 && !@multi_path)
+          return emit_dynamic(node) if paths.empty?
 
           paths.each { |segment, action| emit_verb_path(node, verb, segment, action, opts, rocket_key) }
         end

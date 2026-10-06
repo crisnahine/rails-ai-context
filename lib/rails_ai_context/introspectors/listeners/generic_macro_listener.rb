@@ -61,9 +61,17 @@ module RailsAiContext
         end
 
         def proc_lines(node)
-          procs = Array(node.arguments&.arguments).grep(Prism::LambdaNode)
+          procs = Array(node.arguments&.arguments).select { |arg| proc_argument?(arg) }
           procs << node.block if node.block.is_a?(Prism::BlockNode)
           procs.map { |found| found.location.start_line }
+        end
+
+        # `-> {}`, `lambda {}`, `proc {}` or `Proc.new {}`; a call's line is where it opens, as Proc#source_location gives it.
+        def proc_argument?(arg)
+          return true if arg.is_a?(Prism::LambdaNode)
+          return false unless arg.is_a?(Prism::CallNode) && arg.block.is_a?(Prism::BlockNode)
+
+          arg.receiver.nil? ? %i[lambda proc].include?(arg.name) : arg.name == :new && arg.receiver.slice.delete_prefix("::") == "Proc"
         end
       end
     end

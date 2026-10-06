@@ -393,6 +393,31 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
     end
   end
 
+  describe "a filter an outside module defines" do
+    it "names the module that defines the filter's method, and no other filter" do
+      stub_const("OutsideMixin", Module.new {
+        def self.name = "OutsideMixin"
+        def outside_filter; end
+      })
+      stub_const("QuietMixin", Module.new { def self.name = "QuietMixin" })
+      app_base = Class.new(ActionController::Base) do
+        include QuietMixin
+        before_action :base_filter
+        def base_filter; end
+      end
+      ctrl = Class.new(app_base) do
+        include OutsideMixin
+        before_action :outside_filter
+      end
+
+      reflection = [ { kind: "before", name: "base_filter" }, { kind: "before", name: "outside_filter" } ]
+      filters = introspector.send(:from_unread_mixins, ctrl, reflection)
+
+      expect(filters.find { |f| f[:name] == "outside_filter" }).to include(from_concern: "OutsideMixin")
+      expect(filters.find { |f| f[:name] == "base_filter" }).not_to have_key(:from_concern)
+    end
+  end
+
   # Reflection that yields nothing but excluded names falls through to the
   # source parser, which is the same producer the static tier uses.
   describe "excluded_filters on the booted source fallback" do

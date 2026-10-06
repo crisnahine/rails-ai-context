@@ -36,6 +36,27 @@ RSpec.describe RailsAiContext::Introspectors::ControllerSettings do
       expect(described_class.from_source("class A\n  layout nil\nend\n")).to eq({})
     end
 
+    it "reads what an included concern's block declares where the include stands" do
+      Dir.mktmpdir("controller-settings") do |root|
+        FileUtils.mkdir_p(File.join(root, "app/controllers/concerns"))
+        File.write(File.join(root, "app/controllers/concerns/admin_layout.rb"), <<~RUBY)
+          module AdminLayout
+            extend ActiveSupport::Concern
+            included do
+              layout "admin"
+              allow_browser versions: :modern
+            end
+          end
+        RUBY
+        source = "class CommentsController < ApplicationController\n  layout \"plain\"\n  include AdminLayout\n  add_flash_types :info\nend\n"
+        later = "class CommentsController < ApplicationController\n  include AdminLayout\n  layout \"plain\"\nend\n"
+
+        expect(described_class.from_source(source, root: root, within: "CommentsController"))
+          .to eq(layout: { name: "admin", via: "AdminLayout" }, settings: [ "allow_browser versions: :modern", "add_flash_types :info" ])
+        expect(described_class.from_source(later, root: root, within: "CommentsController")[:layout]).to eq(name: "plain")
+      end
+    end
+
     it "degrades on source it cannot parse" do
       expect(described_class.from_source("class A\n  layout 'x',\n")).to be_a(Hash)
       expect(described_class.from_source(nil)).to eq({})

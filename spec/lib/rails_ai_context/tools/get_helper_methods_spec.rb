@@ -380,22 +380,25 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
     end
 
     # A Discourse plugin nests its tree under its own namespace:
-    # plugins/discourse-chat-integration/app/helpers/helper.rb declares
-    # DiscourseChatIntegration::Helper, which the path names "Helper".
+    # plugins/discourse-ai/app/helpers/discourse_ai/ai_bot/shared_ai_conversations_helper.rb
+    # declares the namespace its path carries; one written under a bare path
+    # still answers to the constant the file declares.
     context "when a plugin's helper declares a namespace its path does not carry" do
       def plugin_app(root)
         plugin = File.join(root, "plugins", "discourse-chat-integration")
         FileUtils.mkdir_p(File.join(plugin, "app", "helpers"))
         File.write(File.join(plugin, "plugin.rb"), "# name: discourse-chat-integration\n")
-        File.write(File.join(plugin, "app", "helpers", "helper.rb"), <<~RUBY)
+        File.write(File.join(plugin, "app", "helpers", "channel_helper.rb"), <<~RUBY)
           module DiscourseChatIntegration
-            module Helper
+            module ChannelHelper
               def self.process_command; end
 
               def channel_name; end
             end
           end
         RUBY
+        # `helper :all` reads only *_helper.rb, so this module of class methods reaches no view.
+        File.write(File.join(plugin, "app", "helpers", "helper.rb"), "module DiscourseChatIntegration\n  module Helper\n    def self.status; end\n  end\nend\n")
         FileUtils.mkdir_p(File.join(root, "app", "helpers"))
         allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
       end
@@ -404,10 +407,12 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
         Dir.mktmpdir do |root|
           plugin_app(root)
 
-          expect(described_class.call.content.first[:text]).to include("DiscourseChatIntegration::Helper")
+          listing = described_class.call.content.first[:text]
+          expect(listing).to include("DiscourseChatIntegration::ChannelHelper")
+          expect(listing).not_to include("DiscourseChatIntegration::Helper ")
 
-          text = described_class.call(helper: "DiscourseChatIntegration::Helper").content.first[:text]
-          expect(text).to include("# DiscourseChatIntegration::Helper")
+          text = described_class.call(helper: "DiscourseChatIntegration::ChannelHelper").content.first[:text]
+          expect(text).to include("# DiscourseChatIntegration::ChannelHelper")
           expect(text).to include("channel_name")
         end
       end

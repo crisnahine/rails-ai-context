@@ -112,6 +112,49 @@ RSpec.describe RailsAiContext::ActionFilters do
       end
     end
 
+    # The reflected chain runs the prepend first; a base filter it leaves out sits before the next one it carries.
+    it "places a base filter the reflected chain leaves out after the subclass's prepend" do
+      Dir.mktmpdir do |dir|
+        app_with_base(dir)
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"), <<~RUBY)
+          class ApplicationController < ActionController::Base
+            before_action :test_only if Rails.env.test?
+            before_action :always
+          end
+        RUBY
+        ctx = { controllers: { controllers: {
+          "WidgetsController" => { parent_class: "ApplicationController", file: "app/controllers/widgets_controller.rb",
+                                   filters: [ { kind: "before", name: "p", declared: true, prepend: true },
+                                              { kind: "before", name: "always" } ] }
+        } } }
+
+        chain = described_class.for_controller(ctx, "WidgetsController", root: dir)[:chain]
+
+        expect(chain.map { |f| f[:name] }).to eq(%w[p test_only always])
+      end
+    end
+
+    it "places a base's last filter the reflected chain leaves out after the base filter before it" do
+      Dir.mktmpdir do |dir|
+        app_with_base(dir)
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"), <<~RUBY)
+          class ApplicationController < ActionController::Base
+            before_action :always
+            before_action :test_only if Rails.env.test?
+          end
+        RUBY
+        ctx = { controllers: { controllers: {
+          "WidgetsController" => { parent_class: "ApplicationController", file: "app/controllers/widgets_controller.rb",
+                                   filters: [ { kind: "before", name: "p", declared: true, prepend: true },
+                                              { kind: "before", name: "always" } ] }
+        } } }
+
+        chain = described_class.for_controller(ctx, "WidgetsController", root: dir)[:chain]
+
+        expect(chain.map { |f| f[:name] }).to eq(%w[p always test_only])
+      end
+    end
+
     it "carries its filters into a child's chain" do
       Dir.mktmpdir do |dir|
         app_with_base(dir)
@@ -1189,6 +1232,42 @@ RSpec.describe RailsAiContext::ActionFilters do
       expect(result[:chain].map { |f| f[:name] }).to eq(%w[set_paper_trail_enabled_for_controller set_request_locale a_one])
       expect(result[:own].map { |f| f[:name] }).to eq(%w[a_one])
       expect(paper_trail).to include(name: "set_paper_trail_enabled_for_controller", provenance: "not declared in the controller chain")
+    end
+
+    # `include ActiveStorage::SetBlob` adds set_blob from a file the walk never reads.
+    it "credits a filter to the outside module that defines it, and still labels an on_load filter" do
+      reflection = [ { kind: "before", name: "onload_filter" },
+                     { kind: "before", name: "set_blob", from_concern: "ActiveStorage::SetBlob" },
+                     { kind: "before", name: "bb", declared: true } ]
+      ctx = { controllers: { controllers: {
+        "ApplicationController" => { filters: [], parent_class: "ActionController::Base" },
+        "BlobsController" => { parent_class: "ApplicationController", filters: reflection }
+      } } }
+
+      chain = described_class.for_controller(ctx, "BlobsController")[:chain]
+
+      expect(chain.map { |f| f[:name] }).to eq(%w[onload_filter set_blob bb])
+      expect(chain[0]).to include(provenance: "not declared in the controller chain")
+      expect(chain[1]).to include(from_concern: "ActiveStorage::SetBlob")
+      expect(chain[1]).not_to have_key(:provenance)
+    end
+
+    it "keeps an ancestor's outside-module filter credited to the module in a child's chain" do
+      base = [ { kind: "before", name: "onload_filter" },
+               { kind: "before", name: "set_blob", from_concern: "ActiveStorage::SetBlob" },
+               { kind: "before", name: "always", declared: true } ]
+      ctx = { controllers: { controllers: {
+        "ApplicationController" => { filters: base, parent_class: "ActionController::Base" },
+        "PostsController" => { parent_class: "ApplicationController",
+                               filters: base.map { |f| f.except(:declared) } + [ { kind: "before", name: "set_post", declared: true } ] }
+      } } }
+
+      chain = described_class.for_controller(ctx, "PostsController")[:chain]
+
+      expect(chain.map { |f| f[:name] }).to eq(%w[onload_filter set_blob always set_post])
+      expect(chain[0]).to include(provenance: "not declared in the controller chain")
+      expect(chain[1]).to include(from_concern: "ActiveStorage::SetBlob", from: "ApplicationController")
+      expect(chain[1]).not_to have_key(:provenance)
     end
 
     # An ancestor that could not be read ends the walk early, so a name no read

@@ -34,6 +34,14 @@ RSpec.describe RailsAiContext::Introspectors::HelperNames do
     expect(described_class.for(@root)).not_to include("latest_version")
   end
 
+  # abstract_controller/helpers.rb: `helper :all` loads only `**/*_helper.rb`.
+  it "leaves out a module under app/helpers whose file is not named *_helper.rb" do
+    write("app/helpers/wiki_pages.rb", "module WikiPages\n  def wiki_link\n  end\nend\n")
+    write("app/helpers/users_helper.rb", "module UsersHelper\n  def full_name\n  end\nend\n")
+
+    expect(described_class.for(@root)).to contain_exactly("full_name")
+  end
+
   it "answers an empty set for an app with no helpers" do
     expect(described_class.for(@root)).to be_empty
   end

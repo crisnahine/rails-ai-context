@@ -10,6 +10,11 @@ module RailsAiContext
   module ConcernMacros
     MAX_DEPTH = 3
 
+    # What `collect` found, by name; it still destructures in this order.
+    Collected = Struct.new(:collected, :unread, :hidden, :included_calls, :placement, :skipped, :block_sites, :mixins) do
+      def to_ary = to_a
+    end
+
     # A call made inside a class method's body, standing where the call that ran
     # that body (`outer`) was made; `definition` is the body it sits in.
     Relayed = Struct.new(:node, :outer, :definition) do
@@ -713,11 +718,12 @@ module RailsAiContext
       end
 
       def introspect_nested(file, (qualified, node))
-        memo("#{file}##{qualified}") { Introspectors::SourceIntrospector.walk_source(node.slice, @listeners) }
+        memo([ :walk, @listeners, "#{file}##{qualified}" ]) { Introspectors::SourceIntrospector.walk_source(node.slice, @listeners) }
       end
 
       def introspect(path)
-        memo(path) { read(path) }
+        # Keyed by the listener map too: callers reading other macros may share one cache.
+        memo([ :walk, @listeners, path ]) { read(path) }
       end
 
       # A concern too big or unreadable costs its own declarations, not the
@@ -1007,7 +1013,7 @@ module RailsAiContext
     #   the kind from outside its file, read from the file they name
     # @param listeners [Hash] the listener map each concern file is walked
     #   with; it must carry `mixins` for the walk to follow nested concerns
-    # @return [Array(Hash, Array<String>, Array<String>, Hash, Hash, Set, Hash, Array)]
+    # @return [Collected] (Hash, Array<String>, Array<String>, Hash, Hash, Set, Hash, Array):
     #   the collected entries per key, the names whose file could not be read,
     #   the names `excluded_concerns` hid that the walk would otherwise have
     #   read, the methods `included` blocks call with their call sites, and for
@@ -1023,7 +1029,7 @@ module RailsAiContext
       # A module the class extends itself with gives it class methods, though no ancestor.
       walked = Array(mixins).select { |mixin| SingletonLookup.joins?(mixin, true) } +
                extra.map { |mixin| { name: mixin.name, macro: mixin.macro, path: mixin.path } }
-      return [ {}, [], [], {}, {}, Set.new, {}, [] ] if walked.empty?
+      return Collected.new({}, [], [], {}, {}, Set.new, {}, []) if walked.empty?
 
       # Most walks never look at the class's calls, so a base's walk is the
       # same for every subclass: kept in the caller's per-run cache.
@@ -1052,8 +1058,8 @@ module RailsAiContext
         consulted.merge(run.consulted)
       end
 
-      result = [ run.collected, run.unresolved, run.hidden, run.included_calls, run.placement, run.skipped_methods,
-                 run.block_sites, run.mixins ]
+      result = Collected.new(run.collected, run.unresolved, run.hidden, run.included_calls, run.placement, run.skipped_methods,
+                             run.block_sites, run.mixins)
       # The repeat walks follow the concerns' own included calls, the same for every
       # class; only a method the class itself calls makes the answer its own.
       own_calls = Run.merge_calls({}, calls&.sites_by_name).keys.to_set
@@ -1064,8 +1070,8 @@ module RailsAiContext
     # A copy a caller may change without changing the cached walk.
     def fresh(result)
       collected, unresolved, hidden, included, placement, skipped, blocks, mixins = result
-      [ collected.transform_values { |entries| entries.map { |entry| entry.is_a?(Hash) ? entry.dup : entry } },
-        unresolved.dup, hidden.dup, included.transform_values(&:dup), placement.dup, skipped.dup, blocks.dup, mixins.dup ]
+      Collected.new(collected.transform_values { |entries| entries.map { |entry| entry.is_a?(Hash) ? entry.dup : entry } },
+                    unresolved.dup, hidden.dup, included.transform_values(&:dup), placement.dup, skipped.dup, blocks.dup, mixins.dup)
     end
     private_class_method :fresh
   end

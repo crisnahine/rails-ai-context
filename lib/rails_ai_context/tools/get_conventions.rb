@@ -186,7 +186,7 @@ module RailsAiContext
           label if label == css || packages.any? { |pkg| RailsAiContext::PackageJson.present?(root, pkg) }
         end
 
-        pm = Introspectors::FrontendFrameworkIntrospector.package_manager(root)
+        pm = RailsAiContext::PackageJson.package_manager(root)&.first
         stack << "#{pm} (package manager)" if pm
 
         stack

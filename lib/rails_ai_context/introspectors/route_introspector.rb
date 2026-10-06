@@ -312,8 +312,8 @@ module RailsAiContext
       def route_initializers
         @route_initializers ||= begin
           root = app.root.to_s
-          listed = Dir.glob("config/initializers/**/*.rb", base: root).sort
-          contained_route_files(root, listed).select do |path|
+          PathResolver.initializer_paths(root).select do |path|
+            # Regex prefilter over every initializer; walk_draw_target's AST walk decides.
             SafeFile.read(path).to_s.match?(/\.routes\.(?:append|prepend)\b/) && app_route_file?(path)
           end
         end
@@ -440,6 +440,8 @@ module RailsAiContext
 
         locked = GemLock.for(app.root.to_s).version("actionpack")
         @multi_path_routes = !locked.nil? && Gem::Version.new(locked) < Gem::Version.new("8.1.0.a")
+      rescue ArgumentError
+        @multi_path_routes = false
       end
 
       # `draw(:"admin/users")` is legal and resolves under config/routes/, but

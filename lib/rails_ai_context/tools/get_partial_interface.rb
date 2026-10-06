@@ -209,9 +209,11 @@ module RailsAiContext
         # A fixed extension list refused `.text.erb`, which the Available
         # list built by globbing had just offered. Rails names a partial by
         # its directory and basename, whatever format and handler follow.
+        # The plain file before a locale or variant one: Rails renders it for a request that asks for neither.
+        plain_first = ->(paths) { paths.sort_by { |path| [ RailsAiContext::ViewFile.alternate_of(path) ? 1 : 0, path ] } }
         candidates = [
-          *Dir.glob(File.join(views_dir, *dir_parts, "#{prefixed_basename}.*")).sort,
-          *Dir.glob(File.join(views_dir, *dir_parts, "#{unprefixed_basename}.*")).sort,
+          *plain_first.call(Dir.glob(File.join(views_dir, *dir_parts, "#{prefixed_basename}.*"))),
+          *plain_first.call(Dir.glob(File.join(views_dir, *dir_parts, "#{unprefixed_basename}.*"))),
           File.join(views_dir, partial)
         ]
 
@@ -454,9 +456,15 @@ module RailsAiContext
         default = "#{singular.pluralize}/#{singular}"
         return default unless RailsAiContext::SafePath.locate(relative, under: root).ok?
 
-        tree = RailsAiContext::AstCache.parse(File.join(root, relative)).value
-        defn = tree.breadth_first_search { |n| n.is_a?(Prism::DefNode) && n.name == :to_partial_path && n.receiver.nil? }
-        return default unless defn
+        path = File.join(root, relative)
+        methods = Introspectors::SourceIntrospector.walk(path, { methods: Introspectors::Listeners::MethodsListener })[:methods]
+        own = Introspectors::ActionResolver.own_methods(methods, singular.camelize)
+                                           .find { |m| m[:scope] == :instance && m[:name].to_s == "to_partial_path" }
+        return default unless own
+
+        tree = RailsAiContext::AstCache.parse(path).value
+        defn = Introspectors::AstWalk.each(tree).find { |n| n.is_a?(Prism::DefNode) && n.location.start_offset == own[:offset] }
+        return nil unless defn
 
         body = defn.body&.body
         body&.size == 1 && body.first.is_a?(Prism::StringNode) ? body.first.unescaped : nil
@@ -472,9 +480,9 @@ module RailsAiContext
         booted = !RailsAiContext.static_tier? && !rails_app.is_a?(RailsAiContext::StaticApp)
         return ActionView::Base.prefix_partial_path_with_controller_namespace != false if booted && defined?(ActionView::Base)
 
-        env = ENV["RAILS_ENV"] || "development"
-        files = [ "config/application.rb", "config/environments/#{env}.rb" ] +
-          Dir.glob("config/initializers/**/*.rb", base: root).sort
+        prefix = "#{root.to_s.chomp('/')}/"
+        files = [ "config/application.rb", "config/environments/#{rails_env_name}.rb" ] +
+          RailsAiContext::PathResolver.initializer_paths(root).map { |path| path.delete_prefix(prefix) }
         last = nil
         # The setter name is ActionView's own, so config.action_view, ActionView::Base and an on_load `self.` all match.
         listener = -> { Introspectors::Listeners::MethodCallListener.new(names: [ PREFIX_SETTER ]) }

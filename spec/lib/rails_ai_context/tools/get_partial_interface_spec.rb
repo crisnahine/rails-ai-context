@@ -43,6 +43,13 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       expect(rendered_from("session_row")).to eq("## Rendered From (1)\n- `app/views/sessions/index.html.erb:1`")
     end
 
+    it "reads to_partial_path only off the model's own class, not a class nested in its file" do
+      File.write(File.join(@root, "app/models/post.rb"),
+                 "class Post < ApplicationRecord\n  class Row\n    def to_partial_path = \"shared/session_row\"\n  end\nend\n")
+
+      expect(rendered_from("posts/post")).to eq("## Rendered From (1)\n- `app/views/posts/show.html.erb:3`")
+    end
+
     it "drops the namespace when the app turns the prefix off" do
       FileUtils.mkdir_p(File.join(@root, "config"))
       File.write(File.join(@root, "config/application.rb"), <<~RUBY)
@@ -78,6 +85,22 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       File.write(File.join(@root, "config/initializers/pp.rb"),
                  "ActiveSupport.on_load(:action_view) { self.prefix_partial_path_with_controller_namespace = false }\n")
       expect(rendered_from("admin/posts/post")).to be_nil
+    end
+
+    it "reads the environment file RACK_ENV names when RAILS_ENV is unset, as Rails does" do
+      FileUtils.mkdir_p(File.join(@root, "config/environments"))
+      File.write(File.join(@root, "config/environments/production.rb"),
+                 "Rails.application.configure do\n  config.action_view.prefix_partial_path_with_controller_namespace = false\nend\n")
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      saved = ENV.to_h.slice("RAILS_ENV", "RACK_ENV")
+      begin
+        ENV.delete("RAILS_ENV")
+        ENV["RACK_ENV"] = "production"
+        expect(rendered_from("admin/posts/post")).to be_nil
+      ensure
+        ENV.delete("RACK_ENV")
+        ENV.update(saved)
+      end
     end
 
     it "asks ActionView::Base when the app is booted" do
@@ -149,7 +172,17 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
     it "degrades on a partial whose bytes are not valid UTF-8" do
       File.binwrite(File.join(@root, "app/views/notes/_bad.html.erb"), "<%# locals: (title:) %>\n\xFF\xFE<%= title %>\n".b)
 
-      expect { interface("bad") }.not_to raise_error
+      expect(interface("bad")).to include("**Declared locals** (Rails 7.1+ magic comment): title")
+    end
+
+    # `+` sorts before `.`, and Rails renders the plain file for a request with no variant.
+    it "reads the plain partial ahead of a variant beside it" do
+      File.write(File.join(@root, "app/views/notes/_post.html+mobile.erb"), "<%# locals: (compact:) %>\n<%= compact %>\n")
+      File.write(File.join(@root, "app/views/notes/_post.html.erb"), "<%# locals: (title:) %>\n<%= title %>\n")
+
+      text = interface("post")
+      expect(text).to include("app/views/notes/_post.html.erb", "**Declared locals** (Rails 7.1+ magic comment): title")
+      expect(text).not_to include("# Partial: notes/_post.html+mobile.erb")
     end
 
     it "says an empty list rejects every local" do

@@ -15,6 +15,28 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
       RUBY
     end
 
+    # excluded_concerns hides ActiveStorage::SetBlob from the walk, but its set_blob filter still runs.
+    it "lists a framework or gem module the class includes and no app file declares as unread" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        concern(dir, "Owned", "included do\n    before_action :check_owner\n  end")
+        source = <<~RUBY
+          class BlobsController < ApplicationController
+            include ActiveStorage::SetBlob
+            include ActionController::MimeResponds
+            include Owned
+            include ERB::Util
+            extend ActiveSupport::Concern
+            before_action :bb
+          end
+        RUBY
+
+        _, unread = described_class.with_concerns(source, root: dir, within: "BlobsController")
+
+        expect(unread).to eq(%w[ActiveStorage::SetBlob ActionController::MimeResponds])
+      end
+    end
+
     # Ruby adds a module to the ancestors once, where it is first included,
     # so a concern reached through two includes runs its filters once.
     it "adds a concern reached through two includes once, at its first include" do
@@ -39,6 +61,23 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
     end
 
     # The block opens in the method's file; the expansion re-reads the method's body on its own.
+    # The other chain walks stop only at the framework or a class they cannot read.
+    it "reads a class method a base nine levels up defines" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        File.write(File.join(dir, "app", "controllers", "base0_controller.rb"),
+                   "class Base0Controller < ActionController::Base\n  def self.guarded(**opts)\n    before_action :guard, **opts\n  end\nend\n")
+        (1..9).each do |i|
+          File.write(File.join(dir, "app", "controllers", "base#{i}_controller.rb"), "class Base#{i}Controller < Base#{i - 1}Controller\nend\n")
+        end
+        source = "class LeafController < Base9Controller\n  guarded only: :show\nend\n"
+
+        filters, = described_class.with_concerns(source, root: dir, within: "LeafController")
+
+        expect(filters.map { |f| [ f[:name], f[:only] ] }).to eq([ [ "guard", [ "show" ] ] ])
+      end
+    end
+
     it "names a block a class method declares by its line in the file that defines the method, and that file when it is not the class's" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
@@ -283,6 +322,15 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
         .to eq([ "block (line 2)", "a", "block (line 2)", "b", "block (line 2)" ])
     end
 
+    it "names a lambda, proc or Proc.new argument as the block it is, with its options" do
+      source = "class C < ApplicationController\n  before_action -> { a }\n  before_action lambda { b }\n" \
+               "  before_action proc { c }, only: :show\n  before_action Proc.new { d }\n  before_action Gatekeeper, :x\nend\n"
+
+      expect(described_class.from_source(source).map { |f| [ f[:name], f[:only] ] })
+        .to eq([ [ "block (line 2)", nil ], [ "block (line 3)", nil ], [ "block (line 4)", [ "show" ] ],
+                 [ "block (line 5)", nil ], [ "Gatekeeper", nil ], [ "x", nil ] ])
+    end
+
     it "keeps a filter that shares a line with a def or follows a delegation" do
       expect(described_class.from_source("class C < ApplicationController; def index; end; before_action :x; end").map { |f| f[:name] })
         .to eq([ "x" ])
@@ -325,6 +373,29 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
         { name: "check_authorization", kind: "after", declared: true },
         { name: "skip_authorization_check", kind: "before", declared: true, only: [ "index" ] }
       ])
+    end
+
+    it "reads no gem callback for a macro the lockfile lacks the gem for, or a class method the chain defines" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (8.1.0)\n\nDEPENDENCIES\n  rails\n")
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"), <<~RUBY)
+          class ApplicationController < ActionController::Base
+            def self.authorize_resource(**opts)
+              before_action :require_admin, **opts
+            end
+          end
+        RUBY
+        source = "class CommentsController < ApplicationController\n  authorize_resource only: :show\nend\n"
+
+        expect(described_class.from_source("class C < ApplicationController\n  check_authorization\nend\n", root: dir)).to eq([])
+        filters, = described_class.with_concerns(source, root: dir, within: "CommentsController")
+        expect(filters.map { |f| [ f[:name], f[:only] ] }).to eq([ [ "require_admin", [ "show" ] ] ])
+
+        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    cancancan (3.6.1)\n\nDEPENDENCIES\n  cancancan\n")
+        filters, = described_class.with_concerns(source, root: dir, within: "CommentsController")
+        expect(filters.map { |f| f[:name] }).to eq([ "require_admin" ])
+      end
     end
   end
 end

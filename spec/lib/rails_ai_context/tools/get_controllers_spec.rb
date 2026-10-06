@@ -44,6 +44,37 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
     end
   end
 
+  describe "a gem module the controller includes, read statically" do
+    before { described_class.reset_cache! }
+
+    it "says the module was not read" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/controllers"))
+        source = <<~RUBY
+          class BlobsController < ApplicationController
+            include ActiveStorage::SetBlob
+            before_action :bb
+            def show; end
+          end
+        RUBY
+        File.write(File.join(root, "app/controllers/blobs_controller.rb"), source)
+        filters, unread = RailsAiContext::Introspectors::ControllerFilters.with_concerns(source, root: root, within: "BlobsController")
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+        allow(described_class).to receive(:cached_context).and_return(
+          controllers: { controllers: { "BlobsController" => {
+            actions: %w[show], parent_class: "ApplicationController", file: "app/controllers/blobs_controller.rb",
+            filters: filters, concerns_unread: unread.presence
+          }.compact } }
+        )
+
+        text = described_class.call(controller: "BlobsController").content.first[:text]
+
+        expect(text).to include("1 included module not read, so a filter declared there is missing " \
+                                "from this list: ActiveStorage::SetBlob")
+      end
+    end
+  end
+
   # A group of top-level controllers shares no namespace, so the heading was
   # the bare count - and two such groups in one document carried the same
   # heading, naming nothing and repeating.

@@ -12,17 +12,17 @@ module RailsAiContext
     # `before_action` in ApplicationController reached the generated overview
     # through its own file read and reached no tool at all.
     module ControllerFilters
-      # Macros a gem defines to add one callback: cancancan's controller_additions.rb
+      # Macros a gem defines to add one callback, with the gem: cancancan's controller_additions.rb
       # (load and authorize blocks, check_authorization after) and acts_as_tenant's
       # controller extensions, which add a named before_action.
       GEM_FILTERS = {
-        load_and_authorize_resource: [ :before_action, :load_and_authorize_resource ],
-        load_resource: [ :before_action, :load_resource ],
-        authorize_resource: [ :before_action, :authorize_resource ],
-        check_authorization: [ :after_action, :check_authorization ],
-        skip_authorization_check: [ :before_action, :skip_authorization_check ],
-        set_current_tenant_by_subdomain: [ :before_action, :find_tenant_by_subdomain ],
-        set_current_tenant_by_subdomain_or_domain: [ :before_action, :find_tenant_by_subdomain_or_domain ]
+        load_and_authorize_resource: [ :before_action, :load_and_authorize_resource, "cancancan" ],
+        load_resource: [ :before_action, :load_resource, "cancancan" ],
+        authorize_resource: [ :before_action, :authorize_resource, "cancancan" ],
+        check_authorization: [ :after_action, :check_authorization, "cancancan" ],
+        skip_authorization_check: [ :before_action, :skip_authorization_check, "cancancan" ],
+        set_current_tenant_by_subdomain: [ :before_action, :find_tenant_by_subdomain, "acts_as_tenant" ],
+        set_current_tenant_by_subdomain_or_domain: [ :before_action, :find_tenant_by_subdomain_or_domain, "acts_as_tenant" ]
       }.freeze
 
       # cancancan's controller_resource.rb adds these with prepend_before_action when passed `prepend: true`.
@@ -37,21 +37,18 @@ module RailsAiContext
       ] + GEM_FILTERS.keys).freeze
 
       # The block filter http_authentication.rb adds, named for the macro: its keywords are credentials.
-      BASIC_AUTH = { macro: :before_action, args: [ :http_basic_authenticate_with ], proc_lines: [] }.freeze
+      BASIC_AUTH = { macro: :before_action, args: [ :http_basic_authenticate_with ], callbacks: nil, proc_lines: [] }.freeze
 
       # actionpack's request_forgery_protection.rb defines it as this skip.
       FORGERY_SKIP = { macro: :skip_before_action, args: [ :verify_authenticity_token ] }.freeze
 
       LISTENERS = {
-        filters: -> { Listeners::ConditionalMacroListener.new(*MACROS) },
+        filters: -> { Listeners::FilterMacroListener.new(*MACROS) },
         nested: Listeners::NestedConstantsListener,
         mixins: Listeners::MixinsListener,
         # A macro inside a `def` runs when the method is called, so ConcernMacros holds it back by these.
         methods: Listeners::MethodsListener
       }.freeze
-
-      # How deep the walk follows a class's app-defined bases for a class method its body calls.
-      MAX_BASES = 8
 
       # The class body's receiverless calls by name, read only once a mixin's class method declares a filter.
       # A class method the chain defines makes its own calls where a call of it runs
@@ -77,8 +74,8 @@ module RailsAiContext
 
       # @param source [String] one controller's Ruby source
       # @return [Array<Hash>] { name:, kind:, skipped:/declared:, only:, except:, if:, unless: }
-      def from_source(source)
-        class_level(walk(source)).flat_map { |entry| record(entry) }
+      def from_source(source, root: nil)
+        class_level(walk(source)).flat_map { |entry| record(entry, root) }
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "controller filter read")
       end
@@ -97,7 +94,8 @@ module RailsAiContext
         cache ||= RunCache.fetch([ :controller_concern_walks ]) { {} }
         walked = SourceIntrospector.walk_source(source, LISTENERS)
         mixins = Array(walked[:mixins])
-        calls = CallSites.new(source, -> { class_method_defs(source, mixins, within, root, cache) })
+        chain_defs = nil
+        calls = CallSites.new(source, -> { chain_defs ||= class_method_defs(source, mixins, within, root, cache) })
         # One walk, so a concern two includes reach is added once, as Ruby does.
         collected, unread, _hidden, block_calls, placement, _skipped, block_sites = ConcernMacros.collect(
           root, mixins, keys: [ :filters ], prefer: "controller", within: within, cache: cache, calls: calls, listeners: LISTENERS
@@ -120,7 +118,13 @@ module RailsAiContext
         # A base's method a concern's block calls declares where that concern is included.
         from_blocks, inherited = inherited.partition { |entry| block_sites.key?(entry[:site].__id__) }
         by_concern += from_blocks.map { |entry| entry.merge(from_concern: block_sites[entry[:site].__id__].first) }
-        placed = class_level(walked).map { |entry| [ entry[:location].to_i, -1, 0, entry ] } +
+        # A class method the chain defines answers the call, not the gem's macro of that name.
+        own_level = class_level(walked)
+        if own_level.any? { |entry| GEM_FILTERS.key?(entry[:macro]) }
+          shadowed = calls.defs.call.keys.to_set(&:to_s)
+          own_level = own_level.reject { |entry| GEM_FILTERS.key?(entry[:macro]) && shadowed.include?(entry[:macro].to_s) }
+        end
+        placed = own_level.map { |entry| [ entry[:location].to_i, -1, 0, entry ] } +
                  (own_defs + called + inherited).map { |entry| [ ConcernMacros::Relayed.root(entry[:site]).location.start_line, -1, 0, entry.except(:site, :definer, :from_concern) ] } +
                  by_concern.map do |entry|
                    top, order = placement[entry[:from_concern]]
@@ -128,11 +132,23 @@ module RailsAiContext
                  end
         entries = placed.each_with_index.sort_by { |(line, order, at, _), index| [ line, order, at, index ] }.map { |(_, _, _, entry), _| entry }
         filters = entries.flat_map do |entry|
-          record(entry).map { |filter| entry[:from_concern] ? filter.merge(from_concern: entry[:from_concern]) : filter }
+          record(entry, root).map { |filter| entry[:from_concern] ? filter.merge(from_concern: entry[:from_concern]) : filter }
         end
-        [ filters, unread ]
+        [ filters, unread | outside_modules(mixins, root, within) ]
       rescue => e
         RailsAiContext.debug_fail(e, [ [], [] ], label: "controller filter read with concerns")
+      end
+
+      # The walk skips a framework module and one excluded_concerns names, but a filter
+      # one adds (ActiveStorage::SetBlob's set_blob) still runs.
+      def outside_modules(mixins, root, within)
+        mixins.filter_map do |mixin|
+          name = mixin[:name].to_s
+          next unless mixin[:ancestor] && !mixin[:inline]
+          next if ConcernMembership.payload?(name) || ConcernMembership::STDLIB.any? { |lib| name == lib || name.start_with?("#{lib}::") }
+
+          name unless ConcernPaths.module_source(root.to_s, name, prefer: "controller", within: within)
+        end
       end
 
       def walk(source)
@@ -185,10 +201,10 @@ module RailsAiContext
         each_base(source, within, root, cache) do |label, base, _path, file, walked|
           own = singleton_expansions(base, walked, calls, taken).map { |entry| entry.merge(file: file) }
           taken.merge(own.map { |entry| entry[:site].name })
-          collected, _, _, _, placement = ConcernMacros.collect(root, Array(walked[:mixins]), keys: [ :filters ], prefer: "controller",
-                                                                within: label, cache: cache, calls: calls, listeners: LISTENERS)
-          mixed = Array(collected[:filters]).select { |entry| body_call?(entry, calls) && !taken.include?(entry[:site].name) }
-                                            .map { |entry| with_file(entry, placement.dig(entry[:from_concern], 2), root) }
+          found_in = ConcernMacros.collect(root, Array(walked[:mixins]), keys: [ :filters ], prefer: "controller",
+                                           within: label, cache: cache, calls: calls, listeners: LISTENERS)
+          mixed = Array(found_in.collected[:filters]).select { |entry| body_call?(entry, calls) && !taken.include?(entry[:site].name) }
+                                                     .map { |entry| with_file(entry, found_in.placement.dig(entry[:from_concern], 2), root) }
           taken.merge(mixed.map { |entry| entry[:site].name })
           found.concat(own + mixed)
         end
@@ -196,10 +212,11 @@ module RailsAiContext
       end
 
       # Each app-defined base of the class, nearest first: [constant, source, realpath, app-relative path, walk].
+      # Like the other chain walks it ends at the framework or a base it cannot read; `seen` ends a cycle.
       def each_base(source, within, root, cache)
         seen = Set.new
         name, scope = superclass_of(source, within)
-        MAX_BASES.times do
+        loop do
           break unless name && root
 
           label, base, path, file = base_source(root, name, scope)
@@ -220,7 +237,7 @@ module RailsAiContext
         add = lambda do |text, owner, modules, label|
           tree = AstCache.parse_string(text)&.value
           ConcernMacros::SingletonLookup.own_defs(tree ? AstWalk.each(tree).to_a : [], owner).each { |definition| found[definition.name] ||= definition }
-          given = ConcernMacros.collect(root, modules, keys: [ :filters ], prefer: "controller", within: label, cache: cache, listeners: LISTENERS)[7]
+          given = ConcernMacros.collect(root, modules, keys: [ :filters ], prefer: "controller", within: label, cache: cache, listeners: LISTENERS).mixins
           Array(given).reverse_each { |_, _, defs, _| defs.each_value { |list| list.each { |definition| found[definition.name] ||= definition } } }
         end
         add.call(source, within, mixins, within)
@@ -260,8 +277,7 @@ module RailsAiContext
 
       # [superclass, the namespace it is written in] of the class `within` names in `source`.
       def superclass_of(source, within)
-        declarations = DeclaredConstant.declarations(source)
-        written = (declarations.find { |d| d.name == within.to_s } || declarations.find(&:superclass))&.superclass
+        written = DeclaredConstant.parent_declaration(source, within.to_s)&.superclass
         return nil unless written
 
         written.start_with?("::") ? [ written.delete_prefix("::"), nil ] : [ written, within ]
@@ -317,12 +333,14 @@ module RailsAiContext
       end
 
       # One filter per callback the call adds, a block or lambda named by its line.
-      def record(entry)
+      def record(entry, root = nil)
         entry = entry.merge(FORGERY_SKIP) if entry[:macro] == :skip_forgery_protection
         entry = entry.merge(BASIC_AUTH) if entry[:macro] == :http_basic_authenticate_with
-        if (macro, name = GEM_FILTERS[entry[:macro]])
+        if (macro, name, gem = GEM_FILTERS[entry[:macro]])
+          return [] unless bundled?(gem, root)
+
           macro = :prepend_before_action if GEM_PREPENDABLE.include?(entry[:macro]) && (entry[:options] || {})[:prepend] == true
-          entry = entry.merge(macro: macro, args: [ name ], values: [], proc_lines: [])
+          entry = entry.merge(macro: macro, args: [ name ], callbacks: nil, proc_lines: [])
         end
         macro = entry[:macro].to_s
         skipped = macro.start_with?("skip_")
@@ -344,45 +362,28 @@ module RailsAiContext
         names.map { |name| { name: name, kind: kind, **mark, **tail } }
       end
 
+      # Whether the app's lockfile resolves the gem; an app whose gems are unknown is given the benefit.
+      def bundled?(gem, root)
+        return true unless root
+
+        lock = GemLock.for(root)
+        lock.missing? || lock.present?(gem)
+      end
+
       # Each callback the call gives, in the order Rails adds them: positional arguments as written,
-      # the block last. A class (`before_action Gatekeeper`) is named as written, an instance
-      # (`around_action TimingFilter.new`) by its class, as the booted tier names both.
+      # the block last, each named by FilterMacroListener.
       def positional_names(entry, blocks)
-        literals = Array(entry[:args]).map(&:to_s)
-        return literals + blocks if Array(entry[:values]).empty?
+        callbacks = entry[:callbacks]
+        return Array(entry[:args]).map(&:to_s) + blocks if callbacks.blank?
 
         blocks = blocks.dup
-        entry[:values].filter_map do |value|
-          text = value.to_s
-          if value.is_a?(Symbol) || literals.include?(text) then text
-          elsif text.start_with?("->") then blocks.shift
-          elsif (const = object_name(text)) then "#{const} (object)"
-          elsif text.match?(/\A(?:::)?[A-Z]\w*(?:::[A-Z]\w*)*\z/) then text.delete_prefix("::")
+        callbacks.filter_map do |kind, name|
+          case kind
+          when :name then name
+          when :block then blocks.shift
+          when :object then "#{name} (object)"
           end
         end + blocks
-      end
-
-      # The class the booted tier names an object filter by: `Class` for an anonymous class,
-      # an instance's nearest named class (`Class.new(Base) {}.new` is Base's, `Class.new {}.new` Object's).
-      def object_name(text)
-        node = AstCache.parse_string(text)&.value&.statements&.body&.first
-        return nil unless node.is_a?(Prism::CallNode) && node.name == :new && node.receiver
-        return "Class" if %w[Class Struct].include?(constant_name(node.receiver))
-
-        named_class(node.receiver)
-      end
-
-      def named_class(node)
-        return constant_name(node) unless node.is_a?(Prism::CallNode) && node.name == :new
-
-        case constant_name(node.receiver)
-        when "Class" then (superclass = node.arguments&.arguments&.first) ? named_class(superclass) : "Object"
-        when "Struct" then "Struct"
-        end
-      end
-
-      def constant_name(node)
-        node.slice.delete_prefix("::") if node.is_a?(Prism::ConstantReadNode) || node.is_a?(Prism::ConstantPathNode)
       end
 
       def constraints(entry)
@@ -442,9 +443,9 @@ module RailsAiContext
         statements.body.first
       end
 
-      private_class_method :walk, :class_level, :singleton_expansions, :declares_filters?, :base_expansions, :each_base,
-                           :class_method_defs, :object_name, :named_class, :constant_name,
-                           :superclass_of, :base_source, :constant_source, :with_file, :body_call?, :record, :positional_names, :constraints, :condition_text, :normalize, :action_condition, :lambda_body
+      private_class_method :walk, :outside_modules, :class_level, :singleton_expansions, :declares_filters?, :base_expansions, :each_base,
+                           :class_method_defs,
+                           :superclass_of, :base_source, :constant_source, :with_file, :body_call?, :record, :bundled?, :positional_names, :constraints, :condition_text, :normalize, :action_condition, :lambda_body
     end
   end
 end

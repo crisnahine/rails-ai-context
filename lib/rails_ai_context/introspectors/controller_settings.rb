@@ -13,24 +13,40 @@ module RailsAiContext
       module_function
 
       LISTENERS = {
-        settings_calls: -> { Listeners::GenericMacroListener.new(:layout, *MACROS) },
-        methods: -> { Listeners::MethodsListener.new }
+        settings_calls: -> { Listeners::GenericMacroListener.new(:layout, *MACROS, call_source: MACROS) },
+        methods: Listeners::MethodsListener,
+        mixins: Listeners::MixinsListener
       }.freeze
 
-      # { layout: {...}, settings: ["allow_browser versions: :modern"] } for one class body.
-      # A caller already walking the body with LISTENERS passes that walk.
-      def from_source(source, walked = nil)
+      # { layout: {...}, settings: ["allow_browser versions: :modern"] } for one class body, with what the
+      # app's concerns it includes declare where each `include` stands. A caller already walking the body
+      # with LISTENERS passes that walk.
+      def from_source(source, walked = nil, root: nil, within: nil)
         return {} if source.nil?
 
         walked ||= SourceIntrospector.walk_source(source, LISTENERS)
-        calls = SourceIntrospector.outside_defs(walked[:settings_calls], walked[:methods])
+        placed = SourceIntrospector.outside_defs(walked[:settings_calls], walked[:methods]).map { |call| [ call[:location].to_i, -1, 0, call ] }
+        placed += concern_calls(walked, root, within) if root
+        calls = placed.each_with_index.sort_by { |(line, order, at, _), index| [ line, order, at, index ] }.map { |(_, _, _, call), _| call }
         layout_call, settings = calls.partition { |call| call[:macro] == :layout }
         {
           layout: layout_call.last && layout_of(layout_call.last),
-          settings: settings.map { |call| call_text(source, call) }.presence
+          settings: settings.map { |call| call[:text] }.presence
         }.compact
       rescue => e
         RailsAiContext.debug_fail(e, {}, label: "ControllerSettings.from_source")
+      end
+
+      # Each call an included concern's block makes, placed at the `include` that reaches it.
+      def concern_calls(walked, root, within)
+        mixins = Array(walked[:mixins])
+        found = ConcernMacros.collect(root, mixins, keys: [ :settings_calls ], prefer: "controller", within: within,
+                                      cache: RunCache.fetch([ :controller_concern_walks ]) { {} }, listeners: LISTENERS)
+        line_of = mixins.reverse.to_h { |mixin| [ mixin[:name], mixin[:location].to_i ] }
+        Array(found.collected[:settings_calls]).map do |call|
+          top, order = found.placement[call[:from_concern]]
+          [ line_of[top].to_i, order.to_i, call[:location].to_i, call ]
+        end
       end
 
       # A literal string is the layout, a literal symbol the method that picks it; `nil`
@@ -50,11 +66,8 @@ module RailsAiContext
 
         options = call[:options] || {}
         %i[only except].each { |key| found[key] = Array(options[key]).map(&:to_s) if options.key?(key) }
+        found[:via] = call[:from_concern] if call[:from_concern]
         found
-      end
-
-      def call_text(source, call)
-        source.byteslice(call[:offset], call[:end_offset] - call[:offset]).to_s.gsub(/\s*\n\s*/, " ").strip
       end
 
       # { layout: {...}, settings: [{ text:, from: }] } for a controller in the listing, its
@@ -74,7 +87,7 @@ module RailsAiContext
 
       def chain_for(controllers, controller_name, root)
         links, stop = lineage(controllers, controller_name, root)
-        [ links.map { |name, entry, source| [ name, entry || from_source(source) ] }, stop ]
+        [ links.map { |name, entry, source| [ name, entry || from_source(source, root: root, within: name) ] }, stop ]
       end
 
       # [[name, payload entry, nil] or [name, nil, source of a base the listing leaves out]], the
@@ -92,8 +105,7 @@ module RailsAiContext
             parent = entry[:parent_class]
           elsif (source = ActionFilters.base_controller_source(name, root))
             links << [ name, nil, source ]
-            declarations = DeclaredConstant.declarations(source)
-            parent = (declarations.find { |d| d.name == name } || declarations.find(&:superclass))&.superclass
+            parent = DeclaredConstant.parent_declaration(source, name)&.superclass
           else
             base = ActionFilters.gem_controller_base(name, root)
             return [ links, name ] unless base
@@ -150,12 +162,13 @@ module RailsAiContext
           else "`#{layout[:name]}` (declared"
           end
           conditions = %i[only except].filter_map { |key| "#{key}: #{layout[key].join(', ')}" if layout[key] }
-          "#{what} in #{layout[:from]}#{conditions.map { |c| ", #{c}" }.join})"
+          via = " through #{layout[:via]}" if layout[:via]
+          "#{what} in #{layout[:from]}#{via}#{conditions.map { |c| ", #{c}" }.join})"
         end
         layout[:otherwise] ? "#{text}; other actions: #{layout_phrase(layout[:otherwise])}" : text
       end
 
-      private_class_method :layout_of, :call_text, :chain_for, :layout_for, :by_name, :layout_names
+      private_class_method :layout_of, :concern_calls, :chain_for, :layout_for, :by_name, :layout_names
     end
   end
 end

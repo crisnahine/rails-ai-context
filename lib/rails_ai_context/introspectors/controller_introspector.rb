@@ -276,7 +276,7 @@ module RailsAiContext
           rescue_from: extract_rescue_from(source),
           rate_limits: declared[:rate_limits].presence,
           turbo_stream_actions: extract_turbo_stream_actions(source),
-          **ControllerSettings.from_source(source, walked),
+          **ControllerSettings.from_source(source, walked, root: app.root.to_s, within: class_name),
           file: relative_file
         }.compact
         details
@@ -291,7 +291,7 @@ module RailsAiContext
 
       def extract_controller_details(ctrl)
         source = read_source(ctrl)
-        filters = extract_filters(ctrl, source)
+        filters = from_unread_mixins(ctrl, extract_filters(ctrl, source))
         concerns = extract_concerns(ctrl)
         actions = extract_actions(ctrl, source, filters) | concern_actions(concerns, ctrl.name, filters)
         # What the file does not define itself is inherited or mixed in, for
@@ -313,7 +313,7 @@ module RailsAiContext
           rescue_from: extract_rescue_from(source),
           rate_limits: declared[:rate_limits].presence,
           turbo_stream_actions: extract_turbo_stream_actions(source),
-          **ControllerSettings.from_source(source, walked),
+          **ControllerSettings.from_source(source, walked, root: app.root.to_s, within: ctrl.name),
           file: relative_source_path(ctrl)
         }.compact
       end
@@ -543,7 +543,7 @@ module RailsAiContext
       end
 
       def extract_filters_from_source(source)
-        ControllerFilters.from_source(source)
+        ControllerFilters.from_source(source, root: app.root.to_s)
       end
 
       # Statically evaluate known runtime conditions to exclude inapplicable filters.
@@ -567,6 +567,39 @@ module RailsAiContext
         ctrl < ::DeviseController || ctrl.ancestors.any? { |a| a.name&.start_with?("Devise::") }
       rescue => e
         RailsAiContext.debug_fail(e, false, label: "devise_controller?")
+      end
+
+      # A filter whose method a module from outside the app defines (`include ActiveStorage::SetBlob`)
+      # is declared in no file the walk reads, so it is credited to that module.
+      def from_unread_mixins(ctrl, filters)
+        unread = mixins_unread(ctrl)
+        return filters if unread.empty?
+
+        filters.map do |f|
+          next f if f[:declared] || f[:skipped] || f[:from_concern]
+
+          owner = begin
+            ctrl.instance_method(f[:name]).owner.name
+          rescue NameError
+            nil
+          end
+          unread.include?(owner) ? f.merge(from_concern: owner) : f
+        end
+      end
+
+      # Modules an app class on the chain mixes in from a file outside the app. A gem's on_load
+      # lands above the framework base.
+      def mixins_unread(ctrl)
+        ancestors = ctrl.ancestors
+        base = ancestors.index { |mod| mod.is_a?(Class) && ActionResolver.framework?(mod, kind: :controller) }
+        ancestors.first(base || 0).filter_map do |mod|
+          next if mod.is_a?(Class) || mod.name.nil?
+
+          path, = Object.const_source_location(mod.name)
+          mod.name unless path && project_relative(path) && !PortablePath.gem_file?(path, app.root)
+        end
+      rescue => e
+        RailsAiContext.debug_fail(e, [], label: "mixins_unread")
       end
 
       def extract_concerns(ctrl)

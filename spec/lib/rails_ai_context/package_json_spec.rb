@@ -118,4 +118,61 @@ RSpec.describe RailsAiContext::PackageJson do
     write("{ not json")
     expect(described_class.deps(@root)).to eq({})
   end
+
+  describe ".package_manager" do
+    it "names bun from the text bun.lock" do
+      File.write(File.join(@root, "bun.lock"), "{}")
+
+      expect(described_class.package_manager(@root)).to eq([ "bun", nil ])
+    end
+
+    context "with a lockfile at the JS workspace root above the app" do
+      def workspace(lockfile: "yarn.lock", git: true)
+        repo = File.realpath(@root)
+        root = File.join(repo, "backend")
+        FileUtils.mkdir_p(root)
+        FileUtils.mkdir_p(File.join(repo, ".git")) if git
+        File.write(File.join(repo, "package.json"), JSON.generate("private" => true, "workspaces" => [ "backend" ]))
+        File.write(File.join(repo, lockfile), "") if lockfile
+        File.write(File.join(root, "package.json"), "{}")
+        yield repo, root
+      end
+
+      it "names the workspace's package manager" do
+        workspace { |_repo, root| expect(described_class.package_manager(root)&.first).to eq("yarn") }
+      end
+
+      it "never looks above the git root" do
+        workspace do |repo, root|
+          FileUtils.rm_rf(File.join(repo, ".git"))
+          FileUtils.mkdir_p(File.join(root, ".git"))
+
+          expect(described_class.package_manager(root)).to be_nil
+        end
+      end
+
+      it "does not walk up at all outside a git repository" do
+        workspace(git: false) { |_repo, root| expect(described_class.package_manager(root)).to be_nil }
+      end
+
+      it "refuses a lockfile symlinked out of the workspace root" do
+        workspace(lockfile: nil) do |repo, root|
+          Dir.mktmpdir do |elsewhere|
+            File.write(File.join(elsewhere, "yarn.lock"), "")
+            File.symlink(File.join(elsewhere, "yarn.lock"), File.join(repo, "yarn.lock"))
+
+            expect(described_class.package_manager(root)).to be_nil
+          end
+        end
+      end
+
+      it "survives a workspace package.json that is not JSON" do
+        workspace(lockfile: nil) do |repo, root|
+          File.write(File.join(repo, "package.json"), "{ not json")
+
+          expect(described_class.package_manager(root)).to be_nil
+        end
+      end
+    end
+  end
 end
