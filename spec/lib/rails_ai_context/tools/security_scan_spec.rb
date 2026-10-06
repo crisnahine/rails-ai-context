@@ -157,6 +157,17 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
 
         expect(text).to include("not in this app's bundle")
       end
+
+      it "quotes what the outside run said without an absolute path from this machine" do
+        root = Rails.root.to_s
+        allow(described_class).to receive(:run_brakeman_unbundled)
+          .and_return([ nil, "Permission denied @ rb_sysopen - #{root}/app/models/locked.rb" ])
+
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("It said: `Permission denied @ rb_sysopen - app/models/locked.rb`")
+        expect(text).not_to include(root)
+      end
     end
 
     # The two scanners render through one formatter, so a Tracker and the
@@ -507,6 +518,22 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         text = result.content.first[:text]
         expect(text).to include("Brakeman scan failed")
         expect(text).to include("parse error")
+      end
+
+      it "quotes a scan error without an absolute path from this machine" do
+        root = Rails.root.to_s
+        allow(Brakeman).to receive(:run).and_raise(Errno::EACCES, "rb_sysopen - #{root}/app/models/locked.rb")
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("Brakeman scan failed", "app/models/locked.rb")
+        expect(text).not_to include(root)
+      end
+
+      it "names a file outside the app by its base name in a scan error" do
+        allow(Brakeman).to receive(:run).and_raise(RuntimeError, "cannot load such file -- /home/dev/.gems/ruby_parser/lib/ruby_parser.rb, see https://brakemanscanner.org/docs")
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("cannot load such file -- ruby_parser.rb, see https://brakemanscanner.org/docs")
       end
     end
   end

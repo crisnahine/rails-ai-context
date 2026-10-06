@@ -84,7 +84,7 @@ module RailsAiContext
           unbundled_scan(min_confidence, resolved_checks)
         end
         return text_response(unavailable_message(scan&.dig(:unavailable))) if scan.nil? || scan.key?(:unavailable)
-        return text_response("Brakeman scan failed: #{scan[:error]}") if scan[:error]
+        return text_response("Brakeman scan failed: #{portable_error(scan[:error])}") if scan[:error]
 
         warnings = scan[:warnings]
         checks_run = scan[:checks_run]
@@ -222,6 +222,13 @@ module RailsAiContext
       BACKTRACE_FRAME = /\A(?:from\s+)?\S+:\d+:in\s/
       ERROR_LOCATION = /\A\S+:\d+:in\s+[`'][^`']*[`']:\s+/
 
+      ABSOLUTE_PATH = %r{(?<![\w.:/~])/(?:[^\s'"`:,/]+/)+([^\s'"`:,/]+)}
+
+      # The answer leaves the machine: a file in the app is named from its root, any other by its base name.
+      private_class_method def self.portable_error(message)
+        RailsAiContext::PortablePath.relativize_text(message, rails_app.root).gsub(ABSOLUTE_PATH, '\1')
+      end
+
       private_class_method def self.brakeman_error_line(err)
         lines = err.to_s.lines.map(&:strip).reject(&:empty?)
         raised = lines.find { |line| line.match?(ERROR_LOCATION) }
@@ -329,7 +336,7 @@ module RailsAiContext
       # gem and an app whose bundle simply does not carry it.
       private_class_method def self.unavailable_message(failure = nil)
         version = brakeman_on_machine
-        said = failure ? " It said: `#{failure}`." : ""
+        said = failure ? " It said: `#{portable_error(failure)}`." : ""
         locked = locked_brakeman
         if locked
           problem = version ? "running brakeman #{version} produced no report.#{said}" : "it is not installed on this machine."
