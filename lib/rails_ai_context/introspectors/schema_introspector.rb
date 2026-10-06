@@ -303,7 +303,7 @@ module RailsAiContext
 
       # The configured dump, whatever its format: a view's SQL and a MySQL generated expression are not on the connection.
       def declared_dump
-        format, = dump_candidates.first
+        format, = present_dump
         format == :sql ? SchemaReader.for(app.root) : schema_reader
       end
 
@@ -372,9 +372,14 @@ module RailsAiContext
         dump_candidates.first.last
       end
 
-      # The schema.rb dump Rails loads for this app, or nil when it loads structure.sql or nothing.
+      # The first dump on disk, as the static tier reads it; the configured name when none is.
+      def present_dump
+        @present_dump ||= SchemaDumpPath.present(app.root) || dump_candidates.first
+      end
+
+      # The schema.rb dump the readers answer from, or nil when it is structure.sql.
       def schema_file_path
-        format, path = dump_candidates.first
+        format, path = present_dump
         path if format == :ruby
       end
 

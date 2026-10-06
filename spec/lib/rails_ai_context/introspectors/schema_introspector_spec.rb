@@ -2008,6 +2008,17 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
+    it "reads the dump on disk in both tiers when the configured one is missing" do
+      files = { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  schema_dump: main_schema.rb\n",
+                "db/schema.rb" => one_table_rb.call("widgets") }
+      static_with(files) do |result, dir|
+        expect(result[:tables].keys).to eq(%w[widgets])
+        booted = described_class.new(double("app", root: Pathname.new(dir)))
+        expect(booted.send(:schema_reader).tables.keys).to eq(%w[widgets])
+        expect(booted.send(:declared_dump).tables.keys).to eq(%w[widgets])
+      end
+    end
+
     it "compares a configured dump against db/migrate, the primary database's migrations" do
       files = { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  schema_dump: schema_sqlite.rb\n",
                 "db/schema_sqlite.rb" => one_table_rb.call("widgets").sub("2026_01_01_000001", "2025_01_01_000000") }.merge(migration)
