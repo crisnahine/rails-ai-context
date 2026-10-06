@@ -452,10 +452,10 @@ module RailsAiContext
         # an API-only app, or nil when the app has a view layer. Tools check
         # this before rendering "no X found" copy so a legitimately absent
         # surface never reads as "not built yet".
-        def api_only_note(section_label)
+        def api_only_note(section_label, dir: nil)
           return nil unless api_only_app?
           # rails new --api keeps app/views when it keeps Action Mailer.
-          return nil if File.directory?(File.join(rails_app.root.to_s, section_label))
+          return nil if dir && File.directory?(File.join(rails_app.root.to_s, dir))
 
           "Not applicable: this is an API-only app (config.api_only), so #{section_label} does not exist."
         end

@@ -616,6 +616,18 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
           expect(text).to include("API-only")
         end
       end
+
+      it "checks a directory only when one is named, never the label" do
+        Dir.mktmpdir("rac_gpi_api_only") do |tmp|
+          FileUtils.mkdir_p(File.join(tmp, "Stimulus"))
+          FileUtils.mkdir_p(File.join(tmp, "app/views"))
+          allow(described_class).to receive(:cached_context).and_return(api: { api_only: true })
+          allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+
+          expect(described_class.send(:api_only_note, "Stimulus")).to include("Not applicable")
+          expect(described_class.send(:api_only_note, "views", dir: "app/views")).to be_nil
+        end
+      end
     end
   end
 

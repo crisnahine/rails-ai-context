@@ -447,6 +447,18 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
 
       expect(names).to eq("admin/notes" => %w[one], "users" => %w[bob])
     end
+
+    it "keeps a label ERB computes out of the fixture names and lists it as ERB apart" do
+      FileUtils.mkdir_p(File.join(@root, "test", "fixtures"))
+      File.write(File.join(@root, "test", "fixtures", "widgets.yml"), "<% 3.times do |i| %>\nuser_<%= i %>:\n  n: 1\n<% end %>\nadmin:\n  n: 2\n")
+      File.write(File.join(@root, "test", "fixtures", "loops.yml"), "<% 2.times do |i| %>\nrow_<%= i %>:\n  n: 1\n<% end %>\n")
+
+      result = described_class.new(double("app", root: @root)).call
+
+      expect(result[:fixture_names]).to eq("loops" => [], "widgets" => %w[admin])
+      expect(result[:fixture_erb_labels]).to eq("loops" => [ "row_<%= ... %>" ], "widgets" => [ "user_<%= ... %>" ])
+      expect(RailsAiContext::Serializers::JsonSerializer.new(tests: result).call).not_to include(RailsAiContext::ConfigYaml::ERB_OUTPUT)
+    end
   end
 
   # A spec/fixtures directory can hold hundreds of JSON, XML and binary files

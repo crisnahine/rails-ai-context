@@ -127,6 +127,15 @@ RSpec.describe RailsAiContext::Tools::GetMailers do
       expect(text).to include("**Observers:** DeliveryLogObserver (`config/initializers/mail.rb`)")
     end
 
+    it "names a namespaced constant and the namespaced class a call builds with .new" do
+      write("config/application.rb", "module App\n  class Application < Rails::Application\n    config.action_mailer.interceptors = [Admin::Sandbox]\n  end\nend\n")
+      write("config/initializers/mail.rb", "Mail.register_interceptor(::Admin::Audit.new(ENV[\"TO\"]))\nMail.register_observer(Ops::Log)\n")
+      text = static_text
+
+      expect(text).to include("**Interceptors:** Admin::Sandbox (`config/application.rb`), Admin::Audit (`config/initializers/mail.rb`)")
+      expect(text).to include("**Observers:** Ops::Log (`config/initializers/mail.rb`)")
+    end
+
     it "names the class ActionMailer camelizes from a symbol or string, and leaves a computed one unread" do
       write("config/application.rb", <<~RUBY)
         module App
@@ -145,6 +154,39 @@ RSpec.describe RailsAiContext::Tools::GetMailers do
       expect(text).to include("SandboxInterceptor (`config/application.rb`), StagingInterceptor (`config/application.rb`)")
       expect(text).to include("AuditInterceptor (`config/initializers/mail.rb`), `name`, not read (`config/initializers/mail.rb`)")
       expect(text).to include("**Observers:** DeliveryLogObserver (`config/initializers/mail.rb`)")
+    end
+
+    it "lists only the class-body declarations, not calls made inside initialize" do
+      write("app/mailers/init_mailer.rb", <<~RUBY)
+        class InitMailer < ApplicationMailer
+          default from: "a@b.c"
+          def initialize(*)
+            super
+            layout "special"
+            default reply_to: "x@y.z"
+          end
+          def welcome = mail
+        end
+      RUBY
+      text = static_text(mailer: "InitMailer")
+      expect(text).to include("- **Declares:** `default from: \"a@b.c\"`")
+      expect(text).not_to include("special", "x@y.z")
+    end
+
+    it "names each constant a config list builds and quotes the rest, never an internal marker" do
+      write("config/application.rb", <<~RUBY)
+        module App
+          class Application < Rails::Application
+            config.action_mailer.interceptors = [Admin::Sandbox.new, interceptor_var, "audit_log"]
+            config.action_mailer.observers = Ops::Log.new
+          end
+        end
+      RUBY
+      text = static_text
+      expect(text).to include("**Interceptors:** Admin::Sandbox (`config/application.rb`), " \
+                              "`interceptor_var`, not read (`config/application.rb`), AuditLog (`config/application.rb`)")
+      expect(text).to include("**Observers:** Ops::Log (`config/application.rb`)")
+      expect(text).not_to include("INFERRED")
     end
 
     it "gives no deliver_later queue to an app with no mailers" do

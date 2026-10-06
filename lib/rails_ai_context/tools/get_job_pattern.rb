@@ -199,6 +199,8 @@ module RailsAiContext
         config = data[:solid_queue_config]
         return nil unless config.is_a?(Hash)
 
+        return "#{config[:file]} sets worker queues with ERB, so which queues they poll is not known from source." if config[:queues_computed]
+
         queues = Array(config[:queues])
         line = "#{config[:file]} workers poll #{count_phrase(queues.size, "queue")}: #{queues.join(', ')}."
         missed = unpolled_queues(data, jobs).group_by { |job| job[:queue] }
@@ -207,13 +209,14 @@ module RailsAiContext
         "#{line} No worker polls #{missed.map { |queue, held| "#{queue} (#{held.filter_map { |j| j[:name] }.join(', ')})" }.join(', ')}."
       end
 
-      # A plain queue name no worker pattern matches: "*" polls all, "name*" a prefix.
+      # An Active Job's plain queue name no worker pattern matches: "*" polls all, "name*" a prefix.
+      # Que and Resque jobs run on their own workers.
       private_class_method def self.unpolled_queues(data, jobs)
         config = data[:solid_queue_config]
-        return [] unless config.is_a?(Hash)
+        return [] if !config.is_a?(Hash) || config[:queues_computed]
 
         patterns = Array(config[:queues])
-        jobs.select do |job|
+        jobs.reject { |job| job[:que] || job[:unknown_base] }.select do |job|
           queue = job[:queue].to_s
           queue.match?(/\A[\w.:-]+\z/) && patterns.none? { |pattern| pattern.end_with?("*") ? queue.start_with?(pattern.delete_suffix("*")) : pattern == queue }
         end
@@ -299,7 +302,7 @@ module RailsAiContext
         # A worker or base declares its queue in `sidekiq_options`, which the introspector read.
         # The record's queue carries the app's prefix and delimiter, which the source line does not.
         queue = (record && (record[:queue] || (record[:options] || {})["queue"])) || extract_queue(source)
-        unpolled = queue && !worker && unpolled_queues(data, [ { queue: queue.to_s } ]).any?
+        unpolled = queue && !worker && unpolled_queues(data, [ (record || {}).merge(queue: queue.to_s) ]).any?
         lines << "**Queue:** #{queue_text(queue)}#{" (no worker in #{Introspectors::JobIntrospector::SOLID_QUEUE_FILE} polls it)" if unpolled}" if queue
         lines << "**Throttle:** #{worker[:throttle]}" if worker && worker[:throttle]
         lines << "**Priority:** #{record[:priority]}" if record && !record[:priority].nil?

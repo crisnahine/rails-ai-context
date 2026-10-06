@@ -64,7 +64,7 @@ module RailsAiContext
       # The calls a class body makes itself, out of what one walk found: a call
       # inside a `def` runs only when the method is called.
       def self.outside_defs(calls, methods)
-        bodies = Array(methods).filter_map { |m| m[:offset]...m[:end_offset] if m[:offset] && m[:end_offset] }
+        bodies = methods.respond_to?(:def_spans) ? methods.def_spans : Array(methods).filter_map { |m| m[:offset]...m[:end_offset] if m[:offset] && m[:end_offset] }
         Array(calls).reject { |call| call[:offset] && bodies.any? { |range| range.cover?(call[:offset]) } }
       end
 

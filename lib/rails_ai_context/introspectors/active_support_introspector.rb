@@ -138,12 +138,12 @@ module RailsAiContext
         end
       end
 
-      # Sort before slicing - Dir.glob ordering is filesystem-dependent and
-      # would produce non-deterministic output on large monorepos.
+      # Sorted, since Dir.glob order is filesystem-dependent. No cap: the hint prefilter
+      # keeps a file nobody subscribes from to one read.
       def source_paths
         paths = %w[lib app].flat_map do |rel|
           dir = File.join(root, rel)
-          Dir.exist?(dir) ? Dir.glob(File.join(dir, "**/*.rb")).sort.first(2000) : []
+          Dir.exist?(dir) ? Dir.glob(File.join(dir, "**/*.rb")).sort : []
         end
         paths + PathResolver.initializer_paths(root)
       end
@@ -190,18 +190,16 @@ module RailsAiContext
         return [] unless namespace.is_a?(Symbol) || namespace.is_a?(String)
 
         receiver = call[:receiver]&.to_s
-        owner = receiver.nil? || receiver == "self" ? owner_at(methods, call) : receiver
+        bare = receiver.nil? || receiver == "self"
+        owner = bare ? call[:owner].join("::").presence : receiver
         short = owner.to_s.split("::").last
-        names = Array(methods).select { |m| m[:scope] == :instance && m[:visibility] == :public && m[:owner]&.last.to_s.split("::").last == short }.map { |m| m[:name] }
+        names = Array(methods).select do |m|
+          m[:scope] == :instance && m[:visibility] == :public &&
+            (bare ? m[:owner] == call[:owner] : m[:owner]&.last.to_s.split("::").last == short)
+        end.map { |m| m[:name] }
         via = [ owner, "attach_to" ].compact.join(".")
         events = names.empty? ? [ "every public method of #{owner || "the subscriber"}, as <method>.#{namespace}" ] : names.map { |name| "#{name}.#{namespace}" }
         events.map { |event| { event: event, via: via, file: relative, line: call[:line] } }
-      end
-
-      # attach_to sits in the class body above the defs it attaches, so the next def names the class.
-      def owner_at(methods, call)
-        defs = Array(methods).select { |m| m[:offset] && m[:owner]&.any? }.sort_by { |m| m[:offset] }
-        (defs.find { |m| m[:offset] > call[:offset] } || defs.last)&.dig(:owner)&.last
       end
 
       # config.log_tags is evaluated at boot, so a static run reads only the initializer.

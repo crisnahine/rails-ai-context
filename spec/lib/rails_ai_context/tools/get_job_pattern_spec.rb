@@ -96,9 +96,31 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
         expect(text).to include("config/queue.yml workers poll 2 queues: default, mailers. No worker polls maintenance (CleanupJob).")
       end
 
-      it "never names the ERB marker as a queue" do
+      it "says a queue list ERB computes is unknown and flags no queue" do
         text = answer("workers:\n  - queues: <%= ENV.fetch(\"QUEUES\", \"default\") %>\n")
+
+        expect(text).to include("config/queue.yml sets worker queues with ERB, so which queues they poll is not known from source.")
         expect(text).not_to include("RAC_ERB_OUTPUT")
+        expect(text).not_to include("No worker polls")
+        expect(text).not_to include("poll 0 queues")
+        expect(answer("workers:\n  - queues: <%= ENV[\"Q\"] %>\n", job: "CleanupJob")).to include("**Queue:** `maintenance`\n")
+      end
+
+      it "reads an empty queue list as every queue, as Solid Queue does" do
+        text = answer("test:\n  workers:\n    - queues:\n    - queues: []\n")
+
+        expect(text).to include("config/queue.yml workers poll 1 queue: *.")
+        expect(text).not_to include("No worker polls")
+      end
+
+      it "never flags a Que or Resque job, which Solid Queue does not run" do
+        File.write(File.join(tmpdir.tap { |dir| FileUtils.mkdir_p(File.join(dir, "app/jobs")) }, "app/jobs/que_thing.rb"),
+                   "class QueThing < Que::Job\n  self.queue = \"que_q\"\n  def run; end\nend\n")
+        File.write(File.join(tmpdir, "app/jobs/resque_thing.rb"), "class ResqueThing\n  @queue = :heavy\n  def self.perform; end\nend\n")
+
+        expect(answer(queue_yml)).to include("No worker polls maintenance (CleanupJob).")
+        expect(answer(queue_yml, job: "QueThing")).not_to include("no worker in")
+        expect(answer(queue_yml, job: "ResqueThing")).not_to include("no worker in")
       end
 
       it "says so on the page of a job whose queue no worker polls" do

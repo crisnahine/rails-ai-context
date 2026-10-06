@@ -13,6 +13,7 @@ module RailsAiContext
         def initialize(include_initialize: false)
           super()
           @include_initialize = include_initialize
+          @results = Results.new
           @frames = [ Frame.new(:body, :public, {}) ]
           @owner_stack = []
           # Blocks that open a body of their own, keyed by their block node so
@@ -23,6 +24,14 @@ module RailsAiContext
           @builders = []
           # Each entry's parameters as written, which an alias of it takes on.
           @param_slices = {}.compare_by_identity
+        end
+
+        # The methods found, plus the span of every def walked, listed or not: a call
+        # inside a skipped `initialize` still runs only when that method does.
+        class Results < Array
+          def def_spans
+            @def_spans ||= []
+          end
         end
 
         # One visibility scope: a class or module body, a `class << self`
@@ -172,6 +181,7 @@ module RailsAiContext
 
         def on_def_node_enter(node)
           @def_depth += 1
+          @results.def_spans << (node.location.start_offset...node.location.end_offset)
           scope = def_scope(node)
           method_name = node.name.to_s
           return unless scope

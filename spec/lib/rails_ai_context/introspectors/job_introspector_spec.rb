@@ -318,11 +318,11 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       end
     end
 
-    it "reads a base's class body once however many jobs inherit it" do
+    it "reads a base's class body from the candidate walk, with no second traversal" do
       base = "class ApplicationJob < ActiveJob::Base\n  queue_with_priority 5\n  before_perform :log\nend\n"
       traversals = 0
       allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:calls_outside_methods).and_wrap_original do |original, root, *rest, **opts|
-        traversals += 1 if rest.empty? && root.slice.strip == base.strip
+        traversals += 1
         original.call(root, *rest, **opts)
       end
       jobs = static_result do |dir|
@@ -332,7 +332,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       end[:jobs]
 
       expect(jobs.map { |job| job[:priority] }.uniq).to eq([ 5 ])
-      expect(traversals).to eq(1)
+      expect(traversals).to eq(0)
     end
 
     # The worker's calls came from a second walk of a tree the candidate walk
@@ -609,6 +609,23 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
 
       queues = result[:jobs].to_h { |job| [ job[:name], job[:queue] ] }
       expect(queues).to eq("CleanupJob" => "myapp.low", "DigestJob" => "myapp.normal")
+    end
+
+    it "reads a constant or interpolated queue prefix as computed, and adjacent literals as their value" do
+      queue = lambda do |prefix|
+        static_result do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "jobs"))
+          FileUtils.mkdir_p(File.join(dir, "config"))
+          File.write(File.join(dir, "config", "application.rb"),
+                     "module App\n  class Application < Rails::Application\n    config.active_job.queue_name_prefix = #{prefix}\n  end\nend\n")
+          File.write(File.join(dir, "app", "jobs", "digest_job.rb"), "class DigestJob < ApplicationJob\n  def perform; end\nend\n")
+        end[:jobs].first[:queue]
+      end
+
+      expect(queue.call("::Prefix::NAME")).to eq("`::Prefix::NAME`_default (computed)")
+      expect(queue.call('"a#{ENV["X"]}"')).to eq("`\"a\#{ENV[\"X\"]}\"`_default (computed)")
+      expect(queue.call('"my" "app"')).to eq("myapp_default")
+      expect(queue.call(":Shop")).to eq("Shop_default")
     end
 
     it "names a job with no queue_as and no queue config the default queue, as the booted app does" do

@@ -20,6 +20,7 @@ module RailsAiContext
       RAILS_CI = "config/ci.rb"
 
       def call
+        ci_steps, ci_steps_dir = detect_ci_steps
         {
           framework: detect_framework,
           factories: detect_factories,
@@ -29,15 +30,16 @@ module RailsAiContext
           fabricator_names: fabricator_definitions.presence,
           cucumber: detect_cucumber,
           fixtures: detect_fixtures,
-          fixture_names: detect_fixture_names,
+          fixture_names: fixture_labels[:names],
+          fixture_erb_labels: fixture_labels[:erb],
           system_tests: detect_system_tests,
           test_helpers: detect_test_helpers,
           test_helper_setup: detect_test_helper_setup,
           test_files: test_categories,
           vcr_cassettes: detect_vcr,
           ci_config: detect_ci,
-          ci_steps: detect_ci_steps,
-          ci_steps_dir: @ci_steps_dir,
+          ci_steps: ci_steps,
+          ci_steps_dir: ci_steps_dir,
           coverage: detect_coverage,
           factory_traits: detect_factory_traits,
           test_count_by_category: detect_test_count_by_category,
@@ -291,9 +293,18 @@ module RailsAiContext
 
       # Each set named as Rails names it, by its path under its directory,
       # with the labels ActiveRecord loads. A file that does not read as YAML
-      # still gives the labels its top-level keys spell.
-      def detect_fixture_names
-        names = {}
+      # still gives the labels its top-level keys spell. A label ERB computes
+      # names no row we can write, so it is kept apart, shown as ERB.
+      def fixture_labels
+        @fixture_labels ||= begin
+          names = {}
+          erb = {}
+          read_fixture_labels(names, erb)
+          { names: names.presence, erb: erb.presence }
+        end
+      end
+
+      def read_fixture_labels(names, erb)
         fixture_dirs.each do |rel|
           dir = File.join(suite_root, rel)
           app_files(File.join(rel, "**", "*.yml")).each do |path|
@@ -303,10 +314,11 @@ module RailsAiContext
             content = RailsAiContext::SafeFile.read(path) or next
             labels = RailsAiContext::FixtureKeys.parse(content)&.keys ||
                      content.scan(/^(\w+):/).flatten.select { |key| RailsAiContext::FixtureKeys.name?(key) }
-            names[set] = labels if labels.any?
+            computed, named = labels.partition { |label| RailsAiContext::ConfigYaml.marked?(label) }
+            names[set] = named if labels.any?
+            erb[set] = computed.map { |label| label.gsub(RailsAiContext::ConfigYaml::ERB_OUTPUT, "<%= ... %>") } if computed.any?
           end
         end
-        names.presence
       end
 
       # Calls that configure every test or every system test, shown as written.
@@ -373,22 +385,20 @@ module RailsAiContext
       end
 
       # The steps bin/ci runs, from the `step title, *command` calls of the
-      # CI DSL Rails 8.1 generates.
+      # CI DSL Rails 8.1 generates, and the directory of config/ci.rb when it is not the suite root.
       def detect_ci_steps
         dir, content = ci_roots.lazy.filter_map { |d| (text = RailsAiContext::SafePath.read(RAILS_CI, under: d).first) && [ d, text ] }.first
         return nil unless content
 
         # Paths in the answer are under the suite root, which for a test/dummy is the engine's.
-        unless dir == suite_root
-          @ci_steps_dir = "#{Pathname.new(PathResolver.root_key(dir)).relative_path_from(Pathname.new(PathResolver.root_key(suite_root)))}/"
-        end
+        ci_dir = "#{Pathname.new(PathResolver.root_key(dir)).relative_path_from(Pathname.new(PathResolver.root_key(suite_root)))}/" unless dir == suite_root
 
         hits = SourceIntrospector.walk_source(content, steps: -> { Listeners::GenericMacroListener.new(:step) })[:steps]
         steps = hits.filter_map do |hit|
           title, *command = hit[:values]
           { name: title, command: command.join(" ") } if title.is_a?(String)
         end
-        steps.presence
+        [ steps.presence, ci_dir ]
       end
 
       def detect_coverage

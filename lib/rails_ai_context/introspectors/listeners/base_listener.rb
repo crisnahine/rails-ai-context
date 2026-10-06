@@ -223,6 +223,26 @@ module RailsAiContext
           assoc&.value
         end
 
+        # The source of each positional argument, or array element, that is no literal,
+        # since `arguments` gives a local variable's source and a string's value alike.
+        def computed_arguments(node)
+          positional_elements(node).select { |arg| extract_value(arg) == RailsAiContext::Confidence::INFERRED }.map { |arg| one_line_source(arg) }
+        end
+
+        # Argument as `arguments` gives it => the constant it is, or builds with `.new`.
+        def constant_arguments(node)
+          positional_elements(node).each_with_object({}) do |arg, found|
+            target = arg.is_a?(Prism::CallNode) && arg.name == :new ? arg.receiver : arg
+            next unless target.is_a?(Prism::ConstantReadNode) || target.is_a?(Prism::ConstantPathNode)
+
+            found[value_or_source(arg)] = constant_path_string(target)
+          end
+        end
+
+        def positional_elements(node)
+          (node.arguments&.arguments || []).flat_map { |arg| arg.is_a?(Prism::ArrayNode) ? arg.elements : [ arg ] }
+        end
+
         def value_or_source(node)
           extract_value(node, source: true)
         end

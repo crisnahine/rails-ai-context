@@ -55,6 +55,20 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
     expect(results.map { |r| r[:value] }).to eq([ "Cron::CleanupJob", RailsAiContext::Confidence::INFERRED, RailsAiContext::Confidence::INFERRED ])
   end
 
+  it "reports each element as written, the constant it names or builds, and which are no literal" do
+    hit = assignments("config.action_mailer.interceptors = [Admin::Sandbox.new, var, \"audit\"]").first
+
+    expect(hit[:arguments]).to eq([ [ "Admin::Sandbox.new", "var", "audit" ] ])
+    expect(hit[:constants]).to eq("Admin::Sandbox.new" => "Admin::Sandbox")
+    expect(hit[:computed]).to eq([ "Admin::Sandbox.new", "var" ])
+  end
+
+  it "keeps the element facts out of a redacted assignment" do
+    hit = assignments("config.secret_key_base = fetch_secret(:key)").first
+
+    expect(hit).not_to include(:arguments, :computed, :constants)
+  end
+
   it "reads self inside an on_load block as that hook's root, and not inside a def" do
     source = <<~RUBY
       ActiveSupport.on_load(:active_record) do

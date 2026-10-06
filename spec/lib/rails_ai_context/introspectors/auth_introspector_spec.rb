@@ -314,6 +314,22 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
       it "lists the concern's unconditional modules with the model's own" do
         expect(result[:devise_modules_per_model]["Member"]).to eq(%w[registerable omniauthable])
       end
+
+      it "walks a concern once however many devise models include it" do
+        second = File.join(Rails.root, "app/models/guest_member.rb")
+        File.write(second, "class GuestMember < ApplicationRecord\n  include MemberOmniauthable\n  devise :registerable\nend\n")
+        walks = 0
+        allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source).and_wrap_original do |original, source, *rest|
+          walks += 1 if source.start_with?("module MemberOmniauthable")
+          original.call(source, *rest)
+        end
+
+        per_model = result[:devise_modules_per_model]
+        expect(per_model.values_at("Member", "GuestMember")).to eq([ %w[registerable omniauthable] ] * 2)
+        expect(walks).to eq(1)
+      ensure
+        FileUtils.rm_f(second)
+      end
     end
 
     context "with no Devise models" do

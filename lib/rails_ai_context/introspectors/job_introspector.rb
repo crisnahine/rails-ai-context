@@ -263,13 +263,10 @@ module RailsAiContext
           end
       end
 
-      # The listener turns a constant into its name and anything computed into a
-      # marker, so only a string or symbol written as one is the value Rails sees.
+      # Only a string or symbol written as one is the value Rails sees.
       def queue_setting(key, hit)
-        value = hit[:value]
-        literal = value.is_a?(Symbol) ||
-          (value.is_a?(String) && value != RailsAiContext::Confidence::INFERRED && !hit[:source].to_s.match?(/\A(?:::)?[A-Z]/))
-        text = literal ? value.to_s : "`#{hit[:source]}`"
+        literal = hit[:literal]
+        text = literal ? hit[:value].to_s : "`#{hit[:source]}`"
         note = if hit[:condition] then "#{key} set only when `#{hit[:condition]}`"
         elsif !literal then "computed"
         end
@@ -437,6 +434,7 @@ module RailsAiContext
 
           job = { name: name, file: candidate.file }
           job[:unknown_base] = true if unknown_base
+          job[:que] = true if que
           job[:queue] = queue if queue
           job[:retries] = retries if retries.any?
           job[:perform_signature] = perform_signature if perform_signature
@@ -683,19 +681,22 @@ module RailsAiContext
       SOLID_QUEUE_FILE = "config/queue.yml"
 
       # The queues Solid Queue's workers poll, from this environment's section or the
-      # whole file; a worker that names none polls every queue.
+      # whole file; a worker that names none polls every queue, as QueueSelector reads it.
       def extract_solid_queue_config
         return nil unless solid_queue_adapter?
 
-        data = ConfigYaml.read(app.root, SOLID_QUEUE_FILE, label: "Solid Queue")
+        data = ConfigYaml.read(app.root, SOLID_QUEUE_FILE, label: "Solid Queue", marker: ConfigYaml::ERB_OUTPUT)
         return nil unless data.is_a?(Hash)
 
         section = data[RailsAiContext.environment_name].is_a?(Hash) ? data[RailsAiContext.environment_name] : data
         workers = Array(section["workers"]).select { |worker| worker.is_a?(Hash) }
         return nil if workers.empty?
 
-        queues = workers.flat_map { |worker| worker.key?("queues") ? Array(worker["queues"]).map { |queue| queue.to_s.strip } : [ "*" ] }
-        { file: SOLID_QUEUE_FILE, queues: queues.uniq }
+        queues = workers.flat_map { |worker| Array(worker["queues"]).map { |queue| queue.to_s.strip }.presence || [ "*" ] }
+        computed, named = queues.uniq.partition { |queue| ConfigYaml.marked?(queue) }
+        config = { file: SOLID_QUEUE_FILE, queues: named }
+        config[:queues_computed] = true if computed.any?
+        config
       end
 
       # Read from source in both tiers: production's adapter is the one queue.yml is for,
@@ -908,14 +909,18 @@ module RailsAiContext
 
       # A mailer's own declarations as written, the template formats of each action, and
       # its preview class: read from source in both tiers.
-      def mailer_extras(name, file, source = nil, macros = nil)
+      def mailer_extras(name, file, source = nil, macros = nil, methods = nil)
         source ||= file && SafeFile.read(File.join(app.root.to_s, file))
         extras = {}
         if source
-          macros ||= SourceIntrospector.walk_source(source, {
-            macros: -> { Listeners::GenericMacroListener.new(ACTION_CALLBACKS + MAILER_DECLARATIONS) }
-          })[:macros]
-          declares = class_body(Array(macros), source).select { |m| (MAILER_DECLARATIONS + ACTION_CALLBACKS).include?(m[:macro]) }
+          unless macros
+            walked = SourceIntrospector.walk_source(source, {
+              macros: -> { Listeners::GenericMacroListener.new(ACTION_CALLBACKS + MAILER_DECLARATIONS) },
+              methods: Listeners::MethodsListener
+            })
+            macros, methods = walked.values_at(:macros, :methods)
+          end
+          declares = SourceIntrospector.outside_defs(macros, methods).select { |m| (MAILER_DECLARATIONS + ACTION_CALLBACKS).include?(m[:macro]) }
                                                      .sort_by { |m| m[:offset] }.map { |m| written(source, m) }
           extras[:declares] = declares if declares.any?
         end
@@ -994,10 +999,7 @@ module RailsAiContext
       REGISTER_CALLS = { "register_interceptor" => :interceptors, "register_interceptors" => :interceptors,
                          "register_observer" => :observers, "register_observers" => :observers }.freeze
 
-      # The queue deliver_later uses, and the interceptors and observers the config registers.
-      # Booted, the queue is ActionMailer's own setting; statically it is the config's, else
-      # `load_defaults` 6.1 or later sets it to nil, which is ActiveJob's default queue.
-      # An app with no mailers has no queue to name.
+      # Statically the deliver_later queue is the config's, else nil under load_defaults 6.1+ (ActiveJob's default).
       def mailer_settings(mailers, booted: false)
         settings = { interceptors: [], observers: [] }
         queue = nil
@@ -1012,14 +1014,13 @@ module RailsAiContext
               queue_set = true
               queue = hit[:value]&.to_s
             end
-            Array(hit[:value]).each { |name| settings[key] << registered(name, relative) } if settings.key?(key)
+            settings[key].concat(registered_all(hit, relative)) if settings.key?(key)
           end
           Array(walked[:calls]).each do |call|
             if call[:name] == "load_defaults"
               version = defaults_version(call[:arguments].first) if relative == "config/application.rb"
             else
-              computed = Array(call[:computed])
-              call[:arguments].flatten.each { |name| settings[REGISTER_CALLS[call[:name]]] << registered(name, relative, computed: computed) }
+              settings[REGISTER_CALLS[call[:name]]].concat(registered_all(call, relative))
             end
           end
         end
@@ -1033,20 +1034,25 @@ module RailsAiContext
         settings.merge(deliver_later_queue: queue, preview_paths: mailer_preview_dirs)
       end
 
-      # The class an interceptor or observer is, or is built from with `.new`; a symbol or
-      # string literal is the class ActionMailer camelizes it to. Any other argument (a
-      # local variable, a method call) is named as written.
-      def registered(name, relative, computed: [])
+      # Each argument of a register call or element of a config list, read off the listener's node facts.
+      def registered_all(hit, relative)
+        computed = Array(hit[:computed])
+        constants = hit[:constants] || {}
+        Array(hit[:arguments]).flatten.map { |name| registered(name, relative, computed: computed, constants: constants) }
+      end
+
+      # A symbol, string or constant name is the class ActionMailer camelizes it to.
+      def registered(name, relative, computed: [], constants: {})
         text = name.to_s
-        constant = text[/\A(?:::)?([A-Z]\w*(?:::[A-Z]\w*)*)(?:\.new\b.*)?\z/m, 1]
-        return { name: constant, file: relative } if constant
+        return { name: constants[text], file: relative } if constants[text]
         return { name: text.camelize, file: relative } if name.is_a?(Symbol) || (literal_name?(text) && !computed.include?(text))
 
         { name: text, file: relative, unresolved: true }
       end
 
+      # A string value's characters, not Ruby source.
       def literal_name?(text)
-        text.match?(/\A\w+(?:\/\w+)*\z/)
+        text.match?(%r{\A\w+(?:/\w+)*\z})
       end
 
       # A version that is not a literal is the running Rails's, past every cutoff.
@@ -1063,7 +1069,7 @@ module RailsAiContext
       MAILER_DECLARATIONS = %i[layout helper helper_method include default default_url_options=].freeze
 
       def mailer_base_record(name, file, source, macros, methods, heirs)
-        declares = class_body(macros, source).select { |m| (MAILER_DECLARATIONS + ACTION_CALLBACKS).include?(m[:macro]) }
+        declares = SourceIntrospector.outside_defs(macros, methods).select { |m| (MAILER_DECLARATIONS + ACTION_CALLBACKS).include?(m[:macro]) }
           .sort_by { |m| m[:offset] }.map { |m| written(source, m) }
         defined = ActionResolver.own_methods(methods, name).select { |m| m[:scope] == :instance }.map { |m| m[:name] }.uniq
         { name: name, file: file, declares: declares.presence, methods: defined.presence,
@@ -1084,19 +1090,11 @@ module RailsAiContext
         text.gsub(/\s+/, " ").gsub(/\(\s+/, "(").sub(/,?\s*\)\z/, ")").strip
       end
 
-      # Every job below a base reads its body, so each candidate's is traversed once.
-      def candidate_body(name)
-        @candidate_bodies ||= {}
-        @candidate_bodies[name] ||= class_body(job_candidates[name].ast[:macros], job_candidates[name].source)
-      end
-
       # A declaration is a call in the class body; the same name inside a
       # method - `default[:from]` in a `class << self` reader - is a use.
-      def class_body(macros, source)
-        root = AstCache.parse_string(source)&.value or return macros
-        outside = SourceIntrospector.calls_outside_methods(root, self_receiver: true).values.flatten
-                                    .map { |call| call.location.start_offset }
-        macros.select { |m| outside.include?(m[:offset]) }
+      def candidate_body(name)
+        @candidate_bodies ||= {}
+        @candidate_bodies[name] ||= SourceIntrospector.outside_defs(job_candidates[name].ast[:macros], job_candidates[name].ast[:methods])
       end
 
       def inherits_from?(name, base, parent_of, seen = [])
@@ -1166,7 +1164,7 @@ module RailsAiContext
         )
 
         entry = { name: klass.name, file: klass.file, actions: actions,
-                  confidence: RailsAiContext::Confidence::STATIC }.merge(mailer_extras(klass.name, klass.file, klass.source, klass.macros))
+                  confidence: RailsAiContext::Confidence::STATIC }.merge(mailer_extras(klass.name, klass.file, klass.source, klass.macros, klass.methods))
         return entry if actions.any?
 
         class_actions = ActionResolver.own_methods(klass.methods, klass.name)

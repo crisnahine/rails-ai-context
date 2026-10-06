@@ -265,6 +265,37 @@ RSpec.describe RailsAiContext::Introspectors::ActiveSupportIntrospector do
       ])
     end
 
+    it "gives each bare attach_to to the class it is written in, with that class's methods" do
+      result = subscriptions(
+        "app/subscribers/subs.rb" => <<~RUBY
+          class Ops::FirstSubscriber < ActiveSupport::Subscriber
+            def sql(event); end
+            attach_to :active_record
+          end
+          module Ops
+            class SecondSubscriber < ActiveSupport::Subscriber
+              def deliver(event); end
+              attach_to :action_mailer
+            end
+          end
+        RUBY
+      )
+
+      expect(result).to eq([
+        { event: "sql.active_record", via: "Ops::FirstSubscriber.attach_to", file: "app/subscribers/subs.rb", line: 3 },
+        { event: "deliver.action_mailer", via: "Ops::SecondSubscriber.attach_to", file: "app/subscribers/subs.rb", line: 8 }
+      ])
+    end
+
+    it "reads every file of app/, however many models sort ahead of app/subscribers" do
+      models = (1..2001).to_h { |i| [ "app/models/m#{i}.rb", "class M#{i}; end\n" ] }
+      result = subscriptions(models.merge(
+        "app/subscribers/order_subscriber.rb" => "class OrderSubscriber < ActiveSupport::Subscriber\n  attach_to :orders\n  def placed(event); end\nend\n"
+      ))
+
+      expect(result).to eq([ { event: "placed.orders", via: "OrderSubscriber.attach_to", file: "app/subscribers/order_subscriber.rb", line: 2 } ])
+    end
+
     it "ignores a subscribe call on anything but Notifications, and survives a file it cannot parse" do
       result = subscriptions(
         "app/models/newsletter.rb" => "class Newsletter\n  def go = Mailchimp.subscribe(\"x\")\nend\n",

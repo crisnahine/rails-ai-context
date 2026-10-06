@@ -12,21 +12,14 @@ module RailsAiContext
   module FixtureKeys
     ANCHOR = "DEFAULTS"
     CONFIG = "_fixture"
-    # A token no fixture writes, so a literal value is never mistaken for printed ERB.
-    ERB_VALUE = "rac_erb_value_5f3a9c"
 
-    # A label holding ERB_VALUE was computed by ERB, so its real names are unknown.
+    # A label ERB printed into was computed, so its real names are unknown.
     def self.name?(key)
       key = key.to_s
-      key != ANCHOR && !key.start_with?("_") && !key.include?(ERB_VALUE)
+      key != ANCHOR && !key.start_with?("_") && !ConfigYaml.marked?(key)
     end
 
-    # The fixtures a file defines, label => attributes, or nil when it does not
-    # read as fixtures. ERB is not run: a tag that prints becomes ERB_VALUE
-    # and one that does not is dropped, so a file opening with
-    # `<% digest = ... %>` still reads. Aliases are allowed, as Rails allows
-    # them, and the labels `_fixture: ignore:` names are dropped. A result is
-    # kept by content digest, so the introspector and the tool share a parse.
+    # label => attributes, or nil when not fixtures; ERB unrun, cached by digest so readers share a parse.
     def self.parse(content)
       key = Digest::SHA256.hexdigest(content.to_s)
       PARSED_MUTEX.synchronize { return PARSED[key] if PARSED.key?(key) }
@@ -44,7 +37,7 @@ module RailsAiContext
     private_constant :PARSED, :PARSED_MUTEX, :MAX_PARSED
 
     def self.read(content)
-      parsed = YAML.safe_load(without_erb(content), permitted_classes: [ Date, Time, Symbol ], aliases: true)
+      parsed = YAML.safe_load(ErbSource.with_output_marked(content, ConfigYaml::ERB_OUTPUT), permitted_classes: [ Date, Time, Symbol ], aliases: true)
       return {} unless parsed
       return nil unless parsed.is_a?(Hash)
 
@@ -59,14 +52,6 @@ module RailsAiContext
     rescue Psych::Exception, ArgumentError
       nil
     end
-
-    def self.without_erb(content)
-      content.to_s
-        .gsub(/<%(?![=%]).*?%>/m, "")
-        .gsub(/"<%=.*?%>"/m, %("#{ERB_VALUE}"))
-        .gsub(/'<%=.*?%>'/m, "'#{ERB_VALUE}'")
-        .gsub(/<%=.*?%>/m, ERB_VALUE)
-    end
-    private_class_method :read, :without_erb
+    private_class_method :read
   end
 end

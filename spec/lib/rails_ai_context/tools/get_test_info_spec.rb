@@ -281,7 +281,7 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
 
       expect(text).to include("- **users:**\n  - `one`: email_address: one@example.com, password_digest: <%= ... %>")
       expect(text).to include("`note_<%= ... %>` _(label set by ERB)_: title: T<%= ... %>")
-      expect(text).not_to include(RailsAiContext::FixtureKeys::ERB_VALUE)
+      expect(text).not_to include(RailsAiContext::ConfigYaml::ERB_OUTPUT)
       expect(text).to include("- **posts:**\n  - `one`: title: A, user: one")
     end
 
@@ -318,9 +318,9 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       write("test/fixtures/users.yml", "<% 2.times do |i| %>\nuser_<%= i %>:\n  n: <%= i %>\n<% end %>\n")
       text = full_text
 
-      expect(described_class.send(:fixture_key_for, "users", { fixture_names: { "users" => [ "user_#{RailsAiContext::FixtureKeys::ERB_VALUE}" ] } })).to be_nil
+      expect(described_class.send(:fixture_key_for, "users", { fixture_names: { "users" => [ "user_#{RailsAiContext::ConfigYaml::ERB_OUTPUT}" ] } })).to be_nil
       expect(text).to include("- **users:**\n  - `user_<%= ... %>` _(label set by ERB)_")
-      expect(text).not_to include("users(:user_#{RailsAiContext::FixtureKeys::ERB_VALUE})")
+      expect(text).not_to include("users(:user_#{RailsAiContext::ConfigYaml::ERB_OUTPUT})")
     end
 
     it "lists a label that starts with an underscore as written, with no ERB note" do
@@ -344,6 +344,25 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       allow(RailsAiContext.configuration).to receive(:max_test_file_size).and_return(20)
 
       expect(full_text).to include("- **users:** bob _(over the 20 byte read limit; labels only)_")
+    end
+
+    it "shows a label ERB computes as ERB in the labels-only line" do
+      write("test/fixtures/widgets.yml", "<% 3.times do |i| %>\nuser_<%= i %>:\n  name: \"U<%= i %>\"\n<% end %>\nadmin:\n  name: boss\n")
+      allow(RailsAiContext.configuration).to receive(:max_test_file_size).and_return(40)
+
+      text = full_text
+      expect(text).to include("- **widgets:** admin, `user_<%= ... %>` (set by ERB) _(over the 40 byte read limit; labels only)_")
+      expect(text).not_to include(RailsAiContext::ConfigYaml::ERB_OUTPUT)
+    end
+
+    it "draws no relationship from an id or a label ERB computes" do
+      write("test/fixtures/users.yml", "one:\n  name: A\n")
+      write("test/fixtures/posts.yml", "first:\n  user_id: one\n<% 2.times do |i| %>\nrow_<%= i %>:\n  title: <%= \"T\#{i}\" %>\n  user_id: <%= ActiveRecord::FixtureSet.identify(:one) %>\n  author_id: one\n<% end %>\n")
+
+      text = full_text
+      expect(text).to include("- **users (one)** \u2190 posts.first, posts.row_<%= ... %>")
+      expect(text).not_to include("id=")
+      expect(text).not_to include(RailsAiContext::ConfigYaml::ERB_OUTPUT)
     end
 
     it "prints no label from a fixture file that links out of the app" do

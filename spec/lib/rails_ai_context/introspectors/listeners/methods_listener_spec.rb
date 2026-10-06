@@ -15,6 +15,13 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener do
     expect(results.first).to include(name: "full_name", scope: :instance, visibility: :public)
   end
 
+  it "keeps the span of a def it leaves out of the list, so a call inside it is not a class-body call" do
+    source = "class A\n  def initialize\n    layout \"x\"\n  end\n  def a; end\nend\n"
+    methods = RailsAiContext::Introspectors::SourceIntrospector.walk_source(source, { methods: described_class })[:methods]
+    expect(methods.map { |m| m[:name] }).to eq([ "a" ])
+    expect(methods.def_spans.map { |span| source[span][/\A.*/] }).to eq([ "def initialize", "def a; end" ])
+  end
+
   it "records the hooks Ruby always makes private as private, unless marked public" do
     source = <<~RUBY
       class User
