@@ -69,6 +69,25 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
     expect(assignments(source)).to eq([])
   end
 
+  it "reads a rooted ActiveSupport receiver and a block parameter in the on_load hook as its root" do
+    source = <<~RUBY
+      ::ActiveSupport.on_load(:active_record) { self.table_name_prefix = "x_" }
+      ActiveSupport.on_load(:active_record) { |base| base.pluralize_table_names = false }
+      ActiveSupport.on_load(:active_record) { |(a, b)| a.skipped = 1 }
+      ActiveSupport.on_load(:active_record) do |base|
+        other = base
+        def self.helper(base)
+          base.ignored = 1
+        end
+      end
+      base.outside = 3
+    RUBY
+
+    results = assignments(source, "on_load(:active_record)")
+
+    expect(results.map { |r| [ r[:path], r[:value] ] }).to eq([ [ [ :table_name_prefix ], "x_" ], [ [ :pluralize_table_names ], false ] ])
+  end
+
   it "reads a nested config assignment" do
     results = assignments("config.action_mailer.delivery_method = :smtp")
 

@@ -15,7 +15,7 @@ module RailsAiContext
       #
       # The chain is matched from a root receiver name, so
       # `Rails.application.config.assets.paths = x` reports [:assets, :paths].
-      # The root `on_load(:active_record)` reads `self` inside that hook's block.
+      # The root `on_load(:active_record)` reads `self`, or the block's one parameter, inside that hook's block.
       class ConfigAssignmentListener < BaseListener
         DEFAULT_ROOTS = %w[config].freeze
         SETTER = /\A[A-Za-z_]\w*=\z/
@@ -84,7 +84,7 @@ module RailsAiContext
         end
 
         def on_call_node_enter(node)
-          @self_roots.push(load_hook(node)) if node.block && load_hook(node)
+          if (hook = load_hook(node)) then @self_roots.push(hook) end
           return if node.receiver.nil?
 
           if node.name.to_s.match?(SETTER)
@@ -102,7 +102,7 @@ module RailsAiContext
         end
 
         def on_call_node_leave(node)
-          @self_roots.pop if node.block && load_hook(node)
+          @self_roots.pop if load_hook(node)
         end
 
         def on_call_operator_write_node_enter(node)
@@ -119,12 +119,19 @@ module RailsAiContext
 
         private
 
-        # `ActiveSupport.on_load(:active_record)` names the root `on_load(:active_record)`.
+        # `ActiveSupport.on_load(:active_record) { |base| }` names the root `on_load(:active_record)`,
+        # as [root, the parameter that is the base].
         def load_hook(node)
-          return unless node.name == :on_load && node.receiver.is_a?(Prism::ConstantReadNode) && node.receiver.name == :ActiveSupport
+          receiver = node.receiver
+          return unless node.name == :on_load && node.block.is_a?(Prism::BlockNode) &&
+                        (receiver.is_a?(Prism::ConstantReadNode) || receiver.is_a?(Prism::ConstantPathNode)) &&
+                        constant_path_string(receiver) == "ActiveSupport"
 
           hook = node.arguments&.arguments&.first
-          "on_load(:#{hook.unescaped})" if hook.is_a?(Prism::SymbolNode)
+          return unless hook.is_a?(Prism::SymbolNode)
+
+          base = Array(node.block.parameters&.parameters&.requireds).first
+          [ "on_load(:#{hook.unescaped})", (base.name if base.is_a?(Prism::RequiredParameterNode)) ]
         end
 
         def record_assignment(node)
@@ -257,7 +264,9 @@ module RailsAiContext
               current = current.receiver
             when Prism::LocalVariableReadNode
               return nil if @def_params.last&.include?(current.name)
-              parts.unshift(current.name)
+
+              root, base = @self_roots.last
+              parts.unshift(base && current.name == base ? root.to_sym : current.name)
               current = nil
             when Prism::ConstantReadNode, Prism::ConstantPathNode
               parts.unshift(constant_path_string(current).to_sym)
@@ -265,7 +274,7 @@ module RailsAiContext
             when Prism::SelfNode
               return nil unless @self_roots.last
 
-              parts.unshift(@self_roots.last.to_sym)
+              parts.unshift(@self_roots.last.first.to_sym)
               current = nil
             else
               return nil
