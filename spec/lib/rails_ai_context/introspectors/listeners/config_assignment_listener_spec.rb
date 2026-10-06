@@ -296,6 +296,15 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
     expect(writes.map { |r| r[:source] }).to eq([ "[FILTERED]", "[FILTERED]", %(config.x.stripe.store(:region, "eu")) ])
   end
 
+  it "redacts a one-argument write to a secret-named setting" do
+    writes = parse_and_dispatch(<<~RUBY).select { |r| r[:write] }
+      config.x.mail.password << "hunter2pass"
+      config.x.secret_token.concat("plainvalue")
+    RUBY
+
+    expect(writes.map { |r| [ r[:value], r[:source] ] }).to eq([ %w[[FILTERED] [FILTERED]], %w[[FILTERED] [FILTERED]] ])
+  end
+
   it "records a write through an index read as a write of the indexed setting" do
     writes = parse_and_dispatch(<<~RUBY).select { |r| r[:write] }.map { |r| r[:path] }
       config.paths["config/routes.rb"] << "config/extra_routes.rb"

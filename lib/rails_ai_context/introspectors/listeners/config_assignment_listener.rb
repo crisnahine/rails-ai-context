@@ -303,8 +303,12 @@ module RailsAiContext
           # which names the secret: `smtp_settings[:password] = ...`.
           key = literal_string(args.first) if args&.size == 2
           value = extract_value(args.last) if args&.size == 1 || key
-          redacted = RailsAiContext::Redaction.redact_assignment(key ? setting + [ key.to_sym ] : path, value: value,
-                                                                 source: NodeSource.text(head || node))
+          # The written setting's own name counts too (`config.x.mail.password << ...`): the call's name may be an operator.
+          judged = if key then setting + [ key.to_sym ]
+          elsif RailsAiContext::Redaction.secret_name?(setting) then setting
+          else path
+          end
+          redacted = RailsAiContext::Redaction.redact_assignment(judged, value: value, source: NodeSource.text(head || node))
           @results << {
             path:       path,
             assignment: false,
