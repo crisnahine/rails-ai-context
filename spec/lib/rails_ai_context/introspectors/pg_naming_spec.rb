@@ -28,7 +28,7 @@ RSpec.describe RailsAiContext::Introspectors::PgNaming do
         .to eq([ { name: "public.mood", values: %w[happy] }, { name: "status", values: %w[on] } ])
     end
 
-    it "lists every type by its bare name on Rails 7.0, the first of a shared name winning" do
+    it "lists every type by its bare name on Rails 7.0, keeping the first label set of a name Rails merges" do
       list = described_class.enum_list(enums.merge("public.status" => %w[x]), %w[app public], "7.0.10")
 
       expect(list.map { |e| e[:name] }).to eq(%w[level mood status])

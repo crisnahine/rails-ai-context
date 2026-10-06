@@ -32,7 +32,7 @@ module RailsAiContext
       end
 
       # 7.1 postgresql_adapter.rb:502-522 (to 8.1 :533-553): the types in current_schemas(false),
-      # bare in current_schema. 7.0 :458-469 groups every type by typname, so the first label set stands.
+      # bare in current_schema. 7.0 :458-469 merges same-name types' labels; the static tier keeps the first set.
       def enum_list(enums, path, version)
         legacy = !at_least?(version, "7.1")
         listed = enums.filter_map do |name, values|
