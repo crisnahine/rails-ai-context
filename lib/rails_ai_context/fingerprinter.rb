@@ -18,7 +18,9 @@ module RailsAiContext
     ] + Introspectors::RakeTaskIntrospector::RAKEFILES).freeze
 
     # The one scope: everything the fingerprint walks is also everything the
-    # watcher watches.
+    # watcher watches. All of app/, test/ and spec/ too, since readers scan any
+    # app/** file (notification subscribers) and the suites' fixtures,
+    # factories, mailer previews and test counts; the named dirs name a change.
     WATCHED_DIRS = (%w[
       app/models
       app/controllers
@@ -33,7 +35,8 @@ module RailsAiContext
       db
       lib
       rakelib
-    ] + Introspectors::ServiceClasses::ROOTS + Introspectors::JobIntrospector::JOB_DIRS + Introspectors::GrapeEndpoints::DIRS).freeze
+    ] + Introspectors::ServiceClasses::ROOTS + Introspectors::JobIntrospector::JOB_DIRS + Introspectors::GrapeEndpoints::DIRS +
+      %w[app test spec]).freeze
 
     # The kinds whose homes PathResolver resolves beyond the conventional
     # tree - packs/*, engines/* and configured extras. Derived at compute
@@ -49,7 +52,8 @@ module RailsAiContext
     # a change and a walk that names it read the same tree.
     # sql: a structure dump, under whatever name database.yml's schema_dump gives it.
     # tt: a generator template override under lib/templates.
-    WATCHED_EXTENSIONS = "**/*.{rb,rake,js,ts,erb,haml,slim,yml,sql,tt}"
+    WATCHED_EXTNAMES = %w[.rb .rake .js .ts .erb .haml .slim .yml .sql .tt].freeze
+    WATCHED_EXTENSIONS = "**/*{#{WATCHED_EXTNAMES.join(",")}}"
 
     # What a reader holds so it can ask later whether the app moved. Taken
     # before the read it protects: a mark taken after introspection records
@@ -88,7 +92,7 @@ module RailsAiContext
         end
 
         watched_dirs(root).each do |full_dir|
-          Dir.glob(File.join(full_dir, WATCHED_EXTENSIONS)).sort.each do |path|
+          watched_files(full_dir).sort.each do |path|
             digest.update(File.mtime(path).to_f.to_s)
           rescue Errno::ENOENT
             # File deleted between glob and mtime read - skip
@@ -102,13 +106,16 @@ module RailsAiContext
       # the resolvers add for this app (packs, engines, extra_app_paths,
       # concern homes such as app/serializers/concerns).
       def watched_dirs(root)
+        dirs = scope_dirs(root)
+        # A dir under another one is already globbed and watched through it.
+        dirs.reject { |dir| dirs.any? { |other| dir.start_with?("#{other}/") } }
+      end
+
+      def scope_dirs(root)
         conventional = WATCHED_DIRS.map { |dir| File.join(root, dir) }
         resolved = RESOLVED_KINDS.flat_map { |kind| PathResolver.dirs_for(root, kind) }
 
-        dirs = (conventional + resolved + ConcernPaths.resolve(root) + stimulus_dirs(root))
-               .uniq.select { |dir| Dir.exist?(dir) }
-        # A dir under another one is already globbed and watched through it.
-        dirs.reject { |dir| dirs.any? { |other| dir.start_with?("#{other}/") } }
+        (conventional + resolved + ConcernPaths.resolve(root) + stimulus_dirs(root)).uniq.select { |dir| Dir.exist?(dir) }
       end
 
       # The controller homes the Stimulus introspector reads, so an edit under
@@ -118,16 +125,22 @@ module RailsAiContext
                                            .map { |path, _js_root| File.dirname(path) }.uniq
       end
 
-      # Which watched directories hold a file newer than the given time,
-      # named the way an app author would write them.
+      # Which directories hold a file newer than the given time, each named by
+      # the narrowest scope dir that holds it, the way an app author would write it.
       def changed_since(root, time)
         base = File.expand_path(root.to_s)
-        watched_dirs(base).select { |dir|
-          Dir.glob(File.join(dir, WATCHED_EXTENSIONS)).any? { |path| newer?(path, time) }
-        }.map { |dir| dir.delete_prefix(SafePath.dir_prefix(base)) }
+        named = scope_dirs(base)
+        watched_dirs(base).flat_map { |dir| watched_files(dir).select { |path| newer?(path, time) } }
+                          .map { |path| named.select { |dir| path.start_with?("#{dir}/") }.max_by(&:size) }
+                          .uniq.map { |dir| dir.delete_prefix(SafePath.dir_prefix(base)) }
       end
 
       private
+
+      # One walk with an extension filter: a brace glob walks the tree once per extension.
+      def watched_files(dir)
+        Dir.glob(File.join(dir, "**/*")).select { |path| WATCHED_EXTNAMES.include?(File.extname(path)) }
+      end
 
       def newer?(path, time)
         File.mtime(path) > time

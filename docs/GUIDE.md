@@ -1635,7 +1635,7 @@ When running the MCP server via `rails ai:serve`, **live reload** automatically 
 
 ### How it works
 
-1. A background thread watches `app/`, `config/`, `db/`, `lib/` and `rakelib/` for changes
+1. A background thread watches `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/` and `spec/` for changes
 2. On change (debounced 1.5s), it checks the file fingerprint to avoid false positives
 3. If files truly changed, it:
    - Clears all MCP tool caches

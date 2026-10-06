@@ -10,8 +10,7 @@ RSpec.describe RailsAiContext::Watcher do
     it "includes key Rails directories" do
       dirs = RailsAiContext::ChangeWatch.new(app).watched_dirs
       root = app.root.to_s
-      expect(dirs).to include(File.join(root, "app/models"))
-      expect(dirs).to include(File.join(root, "app/controllers"))
+      expect(dirs).to include(File.join(root, "app"))
       expect(dirs).to include(File.join(root, "config"))
       expect(dirs).to include(File.join(root, "lib"))
     end
