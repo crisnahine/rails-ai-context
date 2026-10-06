@@ -9,7 +9,7 @@ module RailsAiContext
       #   I18n.load_path << "#{Rails.root}/lib/locales/de.yml"                   → "lib/locales/de.yml"
       #   config.i18n.load_path = Dir[Rails.root.join("x/*.yml")]                → "x/*.yml"
       #
-      # The path forms are the autoload listener's, plus the Dir[] / Dir.glob wrapper.
+      # The path forms are LiteralPaths', plus the Dir[] / Dir.glob wrapper.
       class I18nLoadPathListener < BaseListener
         include LiteralPaths
 
