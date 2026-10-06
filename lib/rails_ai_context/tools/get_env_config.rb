@@ -84,7 +84,9 @@ module RailsAiContext
             elsif entry[:too_large] then "over max_file_size, keys not read"
             elsif entry[:unreadable] then "could not be read as YAML"
             elsif entry[:environment_unread] then "keys not read: its env: is not a literal"
-            else "keys for #{entry[:environment] || current}: #{Array(entry[:keys]).join(', ').presence || 'none'}"
+            else
+              named = [ Array(entry[:keys]).join(", ").presence, ("#{entry[:erb_keys]} named by an ERB tag" if entry[:erb_keys]) ].compact
+              "keys for #{entry[:environment] || current}: #{named.join(', and ').presence || 'none'}"
             end
             file = entry[:file] ? " `#{entry[:file]}`" : ""
             lines << "- `#{entry[:key]}` = config_for(#{entry[:call]}),#{file} #{found}"

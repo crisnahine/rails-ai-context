@@ -456,6 +456,19 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
       expect(result[:config_for].first).to eq({ key: "payment", call: ":payment", file: "config/payment.yml", unreadable: true })
     end
 
+    it "lists the keys of a config_for file holding a date, as Rails' unsafe_load reads it" do
+      result = application("config/application.rb" => application_rb, "config/payment.yml" => "shared:\n  launch: 2024-05-01\n  at: 2024-05-01 10:00:00\ntest:\n  b: 2\n")
+
+      expect(result[:config_for].first).to eq({ key: "payment", call: ":payment", file: "config/payment.yml", keys: %w[at b launch] })
+    end
+
+    it "counts a key an ERB tag names instead of failing the file, and still reads a tag that writes whole lines" do
+      result = application("config/application.rb" => application_rb,
+                           "config/payment.yml" => "test:\n  <%= ENV[\"K\"] %>: 1\n  host: <%= ENV[\"H\"] %>\n  <%= File.read(\"x.yml\") %>\n  port: 1\n")
+
+      expect(result[:config_for].first).to eq({ key: "payment", call: ":payment", file: "config/payment.yml", keys: %w[host port], erb_keys: 1 })
+    end
+
     it "reads a config_for under a secret-shaped key, and a Pathname path, off the node" do
       result = application(
         "config/application.rb" => <<~RUBY,

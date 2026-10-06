@@ -156,7 +156,8 @@ RSpec.describe RailsAiContext::Tools::GetEnvConfig do
                       { key: "x.stripe", call: 'Rails.root.join(dir, "x.yml")', path_unread: true },
                       { key: "redis", call: ":redis", file: "config/redis.yml", withheld: true },
                       { key: "up", call: ":up", file: "../up.yml", outside: true },
-                      { key: "big", call: ":big", file: "config/big.yml", too_large: true } ] }
+                      { key: "big", call: ":big", file: "config/big.yml", too_large: true },
+                      { key: "dyn", call: ":dyn", file: "config/dyn.yml", keys: %w[host], erb_keys: 2 } ] }
     end
 
     before do
@@ -174,6 +175,7 @@ RSpec.describe RailsAiContext::Tools::GetEnvConfig do
         expect(text).to include("- `redis` = config_for(:redis), `config/redis.yml` on sensitive_patterns, keys not read")
         expect(text).to include("- `up` = config_for(:up), `../up.yml` outside the app, not read")
         expect(text).to include("- `big` = config_for(:big), `config/big.yml` over max_file_size, keys not read")
+        expect(text).to include("- `dyn` = config_for(:dyn), `config/dyn.yml` keys for development: host, and 2 named by an ERB tag")
         expect(text.index("## Every environment")).to be < text.index("## production")
       end
     end

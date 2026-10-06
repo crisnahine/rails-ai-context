@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "date"
 require "yaml"
 
 module RailsAiContext
@@ -14,7 +15,7 @@ module RailsAiContext
     def read(root, file, label:, marker: nil)
       content = SafePath.read(file, under: root.to_s).first or return nil
       content = marker ? ErbSource.with_output_marked(content, marker) : ErbSource.without_tags(content)
-      stringify_keys(YAML.safe_load(content, aliases: true, permitted_classes: [ Symbol ]))
+      stringify_keys(YAML.safe_load(content, aliases: true, permitted_classes: [ Symbol, Date, Time ]))
     rescue StandardError, ScriptError => e
       RailsAiContext.debug_fail(e, nil, label: "#{label} #{file}")
     end

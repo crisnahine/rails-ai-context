@@ -68,11 +68,12 @@ module RailsAiContext
           refusal = SafePath.locate(call[:file], under: root).refusal
           next entry.merge(REFUSALS.fetch(refusal) => true) if refusal
 
-          data = ConfigYaml.read(root, call[:file], label: "config_for")
+          data = ConfigYaml.read(root, call[:file], label: "config_for", marker: ConfigYaml::ERB_OUTPUT)
           next entry.merge(unreadable: true) unless data.is_a?(Hash)
 
           sections = [ data["shared"], data[environment] ].select { |section| section.is_a?(Hash) }
-          entry.merge(keys: sections.flat_map(&:keys).uniq.sort)
+          computed, keys = sections.flat_map(&:keys).uniq.partition { |name| ConfigYaml.marked?(name) }
+          entry.merge(keys: keys.sort, erb_keys: computed.size.nonzero?).compact
         end
       end
 

@@ -49,13 +49,25 @@ module RailsAiContext
     end
 
     # Like without_tags, but an output tag (`<%= %>`) becomes `marker`, so a value
-    # it builds, whole or in part, reads as computed rather than as the text around it.
+    # or key it builds reads as computed. A tag alone on its line writes lines we
+    # cannot see, and a marker there would break the YAML around it.
     def with_output_marked(source, marker)
-      source.to_s.gsub(TAG) do
-        tag = Regexp.last_match(0)
-        tag.start_with?("<%=") ? marker : "\n" * tag.count("\n")
+      source = source.to_s
+      source.gsub(TAG) do
+        match = Regexp.last_match
+        tag = match[0]
+        next "\n" * tag.count("\n") unless tag.start_with?("<%=") && !own_line?(source, match.begin(0), match.end(0))
+
+        marker
       end
     end
+
+    def own_line?(source, from, to)
+      line_start = from.zero? ? 0 : (source.rindex("\n", from - 1) || -1) + 1
+      line_end = source.index("\n", to) || source.size
+      source[line_start...from].strip.empty? && source[to...line_end].strip.empty?
+    end
+    private_class_method :own_line?
 
     def blank(text)
       text.gsub(/[^\n]/, " ")
