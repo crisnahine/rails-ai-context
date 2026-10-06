@@ -74,10 +74,15 @@ module RailsAiContext
         def file_anchor(node)
           case node
           when Prism::SourceFileNode then @file
-          when Prism::CallNode then File.dirname(@file) if dir_call?(node)
+          when Prism::CallNode then File.dirname(@file) if dir_call?(node) || file_dirname_call?(node)
           end
         end
 
+        # `File.dirname(__FILE__)`, the older spelling of `__dir__`.
+        def file_dirname_call?(node)
+          arguments = Array(node.arguments&.arguments)
+          node.name == :dirname && file_constant?(node.receiver) && arguments.size == 1 && arguments.first.is_a?(Prism::SourceFileNode)
+        end
 
         # The segments of `Rails.root.join("a", "b")`, nil unless every one is a literal.
         def app_root_join(node)
