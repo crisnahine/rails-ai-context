@@ -15,6 +15,13 @@ module RailsAiContext
       SYMBOL_DEVISE_SETTINGS = %i[lock_strategy unlock_strategy].freeze
       DEVISE_SETTINGS = (%i[timeout_in maximum_attempts password_length] + SYMBOL_DEVISE_SETTINGS).freeze
 
+      # One sentence per model in secure_password_digests, for every surface that prints it.
+      def self.digest_sentences(authentication)
+        (authentication&.dig(:secure_password_digests) || {}).map do |model, attrs|
+          "has_secure_password #{attrs.map { |a| ":#{a}" }.join(', ')} on #{model} (a named digest, not the login password)."
+        end
+      end
+
       def call
         {
           authentication: detect_authentication,

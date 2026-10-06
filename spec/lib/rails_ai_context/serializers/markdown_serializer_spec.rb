@@ -136,6 +136,19 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
       expect(output).not_to include("CanCanCan")
     end
 
+    it "lists a named has_secure_password as a digest, apart from the login" do
+      context = {
+        auth: { authentication: { has_secure_password: [ "User" ], secure_password_digests: { "Code" => [ "six_digit_code" ] } },
+                authorization: {} }
+      }
+
+      output = described_class.new(context).call
+
+      expect(output).to include("- has_secure_password: User")
+      expect(output).to include("- has_secure_password :six_digit_code on Code (a named digest, not the login password).")
+      expect(output).not_to include("has_secure_password: User, Code")
+    end
+
     it "names Rodauth and the Action Policy policies" do
       context = {
         auth: { authentication: { rodauth: { classes: %w[RodauthMain] } }, authorization: { action_policy: %w[ApplicationPolicy] } }

@@ -210,7 +210,7 @@ module RailsAiContext
           # Each half falls back to the gems on its own: a policy directory says nothing about login.
           authn = authentication_lines(auth).presence || gem_authn
           authz = authorization_lines(auth).presence || gem_authz
-          found = authn + digest_lines(auth) + authz
+          found = authn + Introspectors::AuthIntrospector.digest_sentences(auth[:authentication]) + authz
           return [] if found.empty?
 
           [ "## Authentication & Authorization", "", *found, "" ]
@@ -232,12 +232,6 @@ module RailsAiContext
           lines << "has_secure_password on #{authn[:has_secure_password].join(', ')}." if Array(authn[:has_secure_password]).any?
           lines << "OmniAuth providers: #{authn[:omniauth_providers].join(', ')}." if Array(authn[:omniauth_providers]).any?
           lines
-        end
-
-        def digest_lines(auth)
-          (auth.dig(:authentication, :secure_password_digests) || {}).map do |model, attrs|
-            "has_secure_password #{attrs.map { |a| ":#{a}" }.join(', ')} on #{model} (a named digest, not the login password)."
-          end
         end
 
         def authorization_lines(auth)

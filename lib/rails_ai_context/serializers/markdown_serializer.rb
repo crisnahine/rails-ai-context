@@ -293,9 +293,7 @@ module RailsAiContext
         lines << "- Rails 8 built-in auth detected" if authn[:rails_auth]
         lines << "- Rodauth: #{Array(authn.dig(:rodauth, :classes)).join(', ').presence || 'rodauth-rails'}" if authn[:rodauth]
         lines << "- has_secure_password: #{authn[:has_secure_password].join(', ')}" if authn[:has_secure_password]
-        (authn[:secure_password_digests] || {}).each do |model, attrs|
-          lines << "- has_secure_password #{attrs.map { |a| ":#{a}" }.join(', ')} on #{model} (a named digest, not the login password)"
-        end
+        Introspectors::AuthIntrospector.digest_sentences(authn).each { |sentence| lines << "- #{sentence}" }
         if authz[:pundit]
           lines << "### Pundit Policies"
           authz[:pundit].each { |p| lines << "- `#{p}`" }
