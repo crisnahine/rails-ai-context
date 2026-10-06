@@ -80,8 +80,11 @@ module RailsAiContext
       data = file(root)
       return nil unless data
 
+      # A key with no config/environments file holds an anchor (`default: &default`), not an environment.
+      declared = Dir.glob(File.join(root.to_s, "config/environments/*.rb")).map { |path| File.basename(path, ".rb") }
       data.each do |env_name, config|
         next if env_name == RailsAiContext.environment_name
+        next if declared.any? && !declared.include?(env_name)
 
         found = entry_in(databases_in(config), name)
         return [ env_name, found ] if found.is_a?(Hash)
