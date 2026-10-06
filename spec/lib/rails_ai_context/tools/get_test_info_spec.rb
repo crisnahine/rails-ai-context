@@ -294,6 +294,12 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       expect(text).not_to include("users(:user_erb_value)")
     end
 
+    it "lists a label that starts with an underscore as written, with no ERB note" do
+      write("test/fixtures/unders.yml", "_draft:\n  n: 1\nplain:\n  n: 2\n")
+
+      expect(full_text).to include("- **unders:**\n  - `_draft`: n: 1\n  - `plain`: n: 2")
+    end
+
     it "lists the labels of a set it cannot parse and says so" do
       write("test/fixtures/users.yml", "bob:\n  name: B\n")
       write("test/fixtures/broken.yml", "one:\n  title: [unclosed\n")
