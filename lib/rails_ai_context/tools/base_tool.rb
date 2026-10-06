@@ -869,10 +869,13 @@ module RailsAiContext
           RailsAiContext::ViewFile.alternate_of(path, RailsAiContext::RunCache.fetch([ :view_locales ]) { available_locales })
         end
 
+        def booted_app?
+          !RailsAiContext.static_tier? && !rails_app.is_a?(RailsAiContext::StaticApp)
+        end
+
         # Booted, as I18n holds them; unbooted, as the i18n section read them from config or the locale files.
         def available_locales
-          booted = !RailsAiContext.static_tier? && !rails_app.is_a?(RailsAiContext::StaticApp)
-          return I18n.available_locales.map(&:to_s) if booted && defined?(I18n)
+          return I18n.available_locales.map(&:to_s) if booted_app? && defined?(I18n)
 
           Array(RailsAiContext::Payload.section(cached_context, :i18n)&.dig(:available_locales)).map(&:to_s)
         end

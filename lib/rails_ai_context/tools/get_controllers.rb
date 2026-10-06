@@ -86,7 +86,7 @@ module RailsAiContext
           # Listing mode
           case detail
           when "summary"
-            lines = [ "# Controllers (#{page[:total]})", "", *(data[:unread_engine] ? [ unread_engine_line(data), "" ] : []) ]
+            lines = listing_header(page, data)
             paginated_names.each do |name|
               info = app_controllers[name]
               action_count = info[:actions]&.size || 0
@@ -97,7 +97,7 @@ module RailsAiContext
             text_response(lines.join("\n"))
 
           when "standard"
-            lines = [ "# Controllers (#{page[:total]})", "", *(data[:unread_engine] ? [ unread_engine_line(data), "" ] : []) ]
+            lines = listing_header(page, data)
             paginated_names.each do |name|
               info = app_controllers[name]
               lines << "- **#{name}** - #{Serializers::SectionFacts.actions_phrase(info)}"
@@ -106,7 +106,7 @@ module RailsAiContext
             text_response(lines.join("\n"))
 
           when "full"
-            lines = [ "# Controllers (#{page[:total]})", "", *(data[:unread_engine] ? [ unread_engine_line(data), "" ] : []) ]
+            lines = listing_header(page, data)
 
             # Group sibling controllers that share the same parent and identical structure
             paginated_ctrl = app_controllers.select { |k, _| paginated_names.include?(k) }
@@ -175,6 +175,10 @@ module RailsAiContext
         Introspectors::ActionResolver.resolve_entry_name(
           Payload.controllers(ctx), info[:parent_class], name
         )
+      end
+
+      private_class_method def self.listing_header(page, data)
+        [ "# Controllers (#{page[:total]})", "", *(data[:unread_engine] ? [ unread_engine_line(data), "" ] : []) ]
       end
 
       private_class_method def self.unread_engine_line(data)
