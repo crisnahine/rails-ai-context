@@ -265,6 +265,15 @@ RSpec.describe RailsAiContext::Introspectors::ActiveSupportIntrospector do
       ])
     end
 
+    it "reads every file of app/, however many models sort ahead of app/subscribers" do
+      models = (1..2001).to_h { |i| [ "app/models/m#{i}.rb", "class M#{i}; end\n" ] }
+      result = subscriptions(models.merge(
+        "app/subscribers/order_subscriber.rb" => "class OrderSubscriber < ActiveSupport::Subscriber\n  attach_to :orders\n  def placed(event); end\nend\n"
+      ))
+
+      expect(result).to eq([ { event: "placed.orders", via: "OrderSubscriber.attach_to", file: "app/subscribers/order_subscriber.rb", line: 2 } ])
+    end
+
     it "ignores a subscribe call on anything but Notifications, and survives a file it cannot parse" do
       result = subscriptions(
         "app/models/newsletter.rb" => "class Newsletter\n  def go = Mailchimp.subscribe(\"x\")\nend\n",

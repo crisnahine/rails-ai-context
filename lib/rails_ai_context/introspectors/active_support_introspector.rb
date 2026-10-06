@@ -138,12 +138,12 @@ module RailsAiContext
         end
       end
 
-      # Sort before slicing - Dir.glob ordering is filesystem-dependent and
-      # would produce non-deterministic output on large monorepos.
+      # Sorted, since Dir.glob order is filesystem-dependent. No cap: the hint prefilter
+      # keeps a file nobody subscribes from to one read.
       def source_paths
         paths = %w[lib app].flat_map do |rel|
           dir = File.join(root, rel)
-          Dir.exist?(dir) ? Dir.glob(File.join(dir, "**/*.rb")).sort.first(2000) : []
+          Dir.exist?(dir) ? Dir.glob(File.join(dir, "**/*.rb")).sort : []
         end
         paths + PathResolver.initializer_paths(root)
       end
