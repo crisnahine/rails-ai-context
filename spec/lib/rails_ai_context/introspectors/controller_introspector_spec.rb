@@ -1176,7 +1176,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
           { text: "to: 5, within: 1.minute", to: 5, within: "1.minute", from: "Admin::BaseController" }
         ])
         expect(controllers["Admin::BaseController"][:rate_limits].map { |limit| limit[:from] }).to eq([ "ApplicationController", nil ])
-        expect(controllers.values.none? { |info| info.key?(:declared_formats) }).to be true
+        expect(controllers.values.flat_map(&:keys) & %i[formats block_formats]).to be_empty
       end
     end
 

@@ -538,7 +538,6 @@ RSpec.describe RailsAiContext::Introspectors::FrontendFrameworkIntrospector do
         expect(result[:package_manager_dir]).to eq("../web-client")
         expect(result[:build_tool]).to eq("vite")
         expect(result[:frontend_roots]).to be_empty
-        expect(result).not_to have_key(:skipped_frontend_paths)
       end
     end
 

@@ -58,8 +58,8 @@ RSpec.describe RailsAiContext::Introspectors::ControllerSettings do
       end
     end
 
-    it "degrades on source it cannot parse" do
-      expect(described_class.from_source("class A\n  layout 'x',\n")).to be_a(Hash)
+    it "reads what Prism recovers from source it cannot parse, and nothing from no source" do
+      expect(described_class.from_source("class A\n  layout 'x',\n")).to eq(layout: { name: "x" })
       expect(described_class.from_source(nil)).to eq({})
     end
   end
