@@ -249,7 +249,7 @@ module RailsAiContext
 
       INVERSE = { create_table: :drop_table, add_column: :remove_column, add_index: :remove_index,
                   add_reference: :remove_reference, add_belongs_to: :remove_reference,
-                  add_foreign_key: :remove_foreign_key }.freeze
+                  add_foreign_key: :remove_foreign_key, add_check_constraint: :remove_check_constraint }.freeze
 
       # Migration#revert runs its block's statements inverted and last first.
       # CommandRecorder#revert flips reverting, so a revert inside one runs forward.

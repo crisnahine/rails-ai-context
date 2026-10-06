@@ -1999,4 +1999,95 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(described_class.tables(File.join(app, "db/migrate"), pk_type: "bigint", root: app)).not_to have_key("secrets")
     end
   end
+
+  # What db:migrate dumps for these statements, which the replay dropped or mistyped.
+  describe "statements a dump records in full" do
+    let(:tables) do
+      replay([ <<~RUBY ])
+        class Shapes < ActiveRecord::Migration[8.1]
+          def change
+            create_table :boxes do |t|
+              t.integer :w
+              t.integer :h
+              t.check_constraint "w > 0", name: "w_positive"
+              t.check_constraint "h > 0"
+            end
+            add_column :boxes, :area, :virtual, type: :integer, as: "w * h", stored: true
+            add_column :boxes, :tags, :string, array: true
+            add_check_constraint :boxes, "w < 100", name: "w_small"
+            add_check_constraint :boxes, "h < 100"
+            remove_check_constraint :boxes, name: "w_small"
+            remove_check_constraint :boxes, "h > 0"
+            create_table :tokens, id: { type: :string, limit: 36 }
+            reversible do |dir|
+              dir.up do
+                execute <<~SQL
+                  CREATE TABLE heredoc_things (
+                    id integer primary key,
+                    label varchar(20) NOT NULL
+                  )
+                SQL
+              end
+            end
+          end
+        end
+      RUBY
+    end
+
+    it "types an added virtual column by its type: and lists it as generated" do
+      area = tables["boxes"][:columns].find { |c| c[:name] == "area" }
+      expect(area).to eq(name: "area", type: "integer", generated: "w * h", stored: true)
+      expect(tables["boxes"][:columns].find { |c| c[:name] == "tags" }).to include(array: true)
+    end
+
+    it "keeps the check constraints a block or add_check_constraint declares, less the removed ones" do
+      expect(tables["boxes"][:check_constraints]).to eq([
+        { name: "w_positive", expression: "w > 0" },
+        { expression: "h < 100" }
+      ])
+    end
+
+    it "gives an id: hash's limit to the key" do
+      expect(tables["tokens"][:columns].first).to include(name: "id", type: "string", limit: 36)
+    end
+
+    it "reads a table a multi-line squiggly heredoc creates" do
+      expect(tables["heredoc_things"][:columns].map { |c| c[:name] }).to eq(%w[id label])
+    end
+
+    it "counts a CREATE TABLE built at run time as not replayed" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "20240101000000_raw.rb"), <<~'RUBY')
+          class Raw < ActiveRecord::Migration[8.1]
+            def up
+              execute <<~SQL
+                CREATE TABLE #{name} (
+                  id integer primary key
+                )
+              SQL
+            end
+          end
+        RUBY
+        expect(described_class.replayed(dir, pk_type: "bigint").counts.helper_calls).to eq(1)
+      end
+    end
+
+    it "drops a check constraint a revert block adds" do
+      reverted = replay([ <<~RUBY ])
+        class Undo < ActiveRecord::Migration[8.1]
+          def change
+            create_table :posts do |t|
+              t.string :title
+            end
+            add_check_constraint :posts, "length(title) > 0", name: "title_len"
+            revert do
+              add_check_constraint :posts, "length(title) > 0", name: "title_len"
+            end
+          end
+        end
+      RUBY
+
+      expect(reverted["posts"][:check_constraints].to_a).to eq([])
+    end
+  end
 end

@@ -4,7 +4,7 @@ module RailsAiContext
   module Introspectors
     module Listeners
       # What a replay needs beyond the DSL listeners: down-only and revert ranges,
-      # a block's `t.` statements, and four top-level statements.
+      # a block's `t.` statements, and the top-level statements the DSL listeners leave out.
       class MigrationReplayListener < BaseListener
         include SchemaDslListener::TableBlock
 
@@ -19,7 +19,7 @@ module RailsAiContext
           remove: :remove_columns, remove_references: :remove_reference, remove_belongs_to: :remove_reference,
           remove_index: :remove_index, rename: :rename_column, remove_timestamps: :remove_columns,
           change: :change_column, change_default: :change_column_default, change_null: :change_column_null,
-          timestamps: :add_timestamps
+          timestamps: :add_timestamps, check_constraint: :add_check_constraint, remove_check_constraint: :remove_check_constraint
         }.freeze
 
         def on_call_node_enter(node)
@@ -41,10 +41,17 @@ module RailsAiContext
             tables = args.reject { |arg| arg.is_a?(Prism::KeywordHashNode) }.first(2).map { |arg| literal_string(arg) }
             @results << { action: :create_join_table, tables: tables, options: extract_keyword_options(node),
                           location: node.location.start_line }
-          elsif %i[remove_columns add_timestamps rename_index].include?(node.name) && node.receiver.nil?
+          elsif %i[remove_columns add_timestamps rename_index add_check_constraint remove_check_constraint].include?(node.name) && node.receiver.nil?
             @results << top_level(node, args)
           elsif node.name == :execute && node.receiver.nil?
-            sql_statements(args.first).each do |sql|
+            statements = sql_statements(args.first)
+            # SQL built at run time that creates or drops a table is counted as not replayed.
+            if statements.nil?
+              literal = args.first.respond_to?(:parts) ? args.first.parts.grep(Prism::StringNode).map(&:unescaped).join : ""
+              @results << { kind: :not_replayed, location: node.location.start_line } if literal.match?(/\b(?:CREATE|DROP)\s+TABLE\b/i)
+              return
+            end
+            statements.each do |sql|
               if (match = DROP_TABLE.match(sql))
                 match[1].split(",").each do |name|
                   @results << { action: :drop_table, table: name.strip.delete('"`').split(".").last, options: {}, location: node.location.start_line }
@@ -61,13 +68,15 @@ module RailsAiContext
 
         private
 
-        # A literal SQL string's statements, which drop or create tables here;
-        # a string built at run time does nothing.
+        # A literal SQL string's statements, which drop or create tables here; nil for a string built at run time.
         def sql_statements(node)
           node = node.receiver if node.is_a?(Prism::CallNode) && node.name == :squish && node.arguments.nil?
-          return [] unless node.is_a?(Prism::StringNode)
-
-          node.unescaped.split(";")
+          sql = case node
+          when Prism::StringNode then node.unescaped
+          # A squiggly heredoc over several lines parses as one string per line.
+          when Prism::InterpolatedStringNode then adjacent_literals(node)
+          end
+          sql.split(";") unless sql.nil? || sql == RailsAiContext::Confidence::INFERRED
         end
 
         # A statement naming a table it cannot read is counted, never given another table.
@@ -95,6 +104,7 @@ module RailsAiContext
             result[:column] = names[0]
             result[:new_default] = extract_value(positional[1]) if positional[1]
           when :add_timestamps then result.merge!(default_source: default_source(node), default_proc: proc_default?(node))
+          when :add_check_constraint, :remove_check_constraint then result[:expression] = names[0]
           end
           result
         end

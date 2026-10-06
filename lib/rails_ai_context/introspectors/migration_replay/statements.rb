@@ -53,7 +53,27 @@ module RailsAiContext
           when :add_foreign_key
             fk = SchemaConventions.foreign_key_entry(table, entry[:to_table], options[:column], options[:primary_key])
             tables[table][:foreign_keys] << fk if tables[table]
+          when :add_check_constraint then add_check_constraint(tables[table], entry[:expression], options)
+          when :remove_check_constraint then remove_check_constraint(tables[table], entry[:expression], options)
           end
+        end
+
+        # A name Rails makes up (chk_rails_...) is one the dump leaves out.
+        def add_check_constraint(table_data, expression, options)
+          return unless table_data && expression
+
+          name = options[:name] if options[:name].is_a?(String) || options[:name].is_a?(Symbol)
+          (table_data[:check_constraints] ||= []) << { name: name&.to_s, expression: expression }.compact
+        end
+
+        # The constraint remove_check_constraint drops: by name: when given, else by expression (check_constraint_for, 7.0 to 8.1).
+        def remove_check_constraint(table_data, expression, options)
+          constraints = table_data && table_data[:check_constraints] or return
+
+          name = options[:name]&.to_s
+          found = constraints.find { |c| name ? c[:name] == name : c[:expression] == expression }
+          constraints.delete(found) if found
+          table_data.delete(:check_constraints) if constraints.empty?
         end
 
         # A create_table implies its key column the way a dump does. A table
@@ -92,7 +112,8 @@ module RailsAiContext
 
         def implicit_pk_columns(options, pk_type)
           SchemaConventions.implicit_primary_key(options || {}, pk_type).map do |pk|
-            { name: pk[:name], type: pk[:type], null: false, primary_key: true }
+            sizes = pk[:options].slice(:limit, :precision, :scale).select { |_, value| value.is_a?(Integer) }
+            { name: pk[:name], type: pk[:type], null: false, primary_key: true, **sizes }
           end
         end
 
@@ -101,11 +122,25 @@ module RailsAiContext
           return unless table_data && entry[:column]
 
           table_data[:columns].reject! { |c| c[:name] == entry[:column] }
-          col = { name: entry[:column], type: entry[:column_type] }
+          table_data[:columns] << column_entry(entry[:column], entry[:column_type], entry)
+        end
+
+        # A column as the dump writes it, whether a table block or add_column declares it.
+        def column_entry(name, type, entry)
           opts = entry[:options] || {}
+          virtual = entry[:virtual] || type == "virtual"
+          # A generated column takes its own type from type: (each adapter's virtual, 7.0 to 8.1).
+          type = opts[:type].to_s if type == "virtual" && (opts[:type].is_a?(Symbol) || opts[:type].is_a?(String))
+          col = { name: name, type: type }
           col[:null] = false if opts[:null] == false
-          col[:default] = SchemaConventions.format_default(opts[:default]) if opts.key?(:default)
-          table_data[:columns] << col
+          default = declared_default(opts, entry)
+          col[:default] = SchemaConventions.format_default(default) if opts.key?(:default) && default != RailsAiContext::Confidence::INFERRED
+          col[:array] = true if opts[:array] == true
+          if virtual
+            col[:generated] = opts[:as].is_a?(String) ? opts[:as] : ""
+            col[:stored] = opts[:stored] == true
+          end
+          col
         end
 
         # The new default is to: of a from:/to: pair, or the positional value
@@ -138,16 +173,8 @@ module RailsAiContext
           # Skip non-column types
           return if %w[index check_constraint].include?(col_type)
 
-          col = { name: entry[:name], type: col_type }
+          col = column_entry(entry[:name], col_type, entry)
           opts = entry[:options] || {}
-          col[:null] = false if opts[:null] == false
-          default = declared_default(opts, entry)
-          col[:default] = SchemaConventions.format_default(default) if opts.key?(:default) && default != RailsAiContext::Confidence::INFERRED
-          col[:array] = true if opts[:array] == true
-          if entry[:virtual]
-            col[:generated] = opts[:as].is_a?(String) ? opts[:as] : ""
-            col[:stored] = opts[:stored] == true
-          end
           # Only one branch of an if runs, so a second declaration of a name replaces the first.
           tables[current_table][:columns].reject! { |c| c[:name] == col[:name] }
           tables[current_table][:columns] << col
