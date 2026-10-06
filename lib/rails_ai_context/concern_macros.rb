@@ -10,10 +10,8 @@ module RailsAiContext
   module ConcernMacros
     MAX_DEPTH = 3
 
-    # What collect found; to_ary keeps positional destructuring in field order.
-    Collected = Struct.new(:collected, :unread, :hidden, :included_calls, :placement, :skipped, :block_sites, :mixins) do
-      def to_ary = to_a
-    end
+    # What collect found.
+    Collected = Struct.new(:collected, :unread, :hidden, :included_calls, :placement, :skipped, :block_sites, :mixins)
 
     # A call made inside a class method's body, standing where the call that ran
     # that body (`outer`) was made; `definition` is the body it sits in.
@@ -1084,9 +1082,9 @@ module RailsAiContext
 
     # A copy a caller may change without changing the cached walk.
     def fresh(result)
-      collected, unresolved, hidden, included, placement, skipped, blocks, mixins = result
-      Collected.new(collected.transform_values { |entries| entries.map { |entry| entry.is_a?(Hash) ? entry.dup : entry } },
-                    unresolved.dup, hidden.dup, included.transform_values(&:dup), placement.dup, skipped.dup, blocks.dup, mixins.dup)
+      Collected.new(result.collected.transform_values { |entries| entries.map { |entry| entry.is_a?(Hash) ? entry.dup : entry } },
+                    result.unread.dup, result.hidden.dup, result.included_calls.transform_values(&:dup), result.placement.dup,
+                    result.skipped.dup, result.block_sites.dup, result.mixins.dup)
     end
     private_class_method :fresh
   end

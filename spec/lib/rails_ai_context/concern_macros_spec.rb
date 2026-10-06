@@ -45,7 +45,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
       end
     RUBY
 
-    collected, unresolved = described_class.collect(tmpdir, mixin("Publishable"), keys: %i[associations validations scopes callbacks])
+    collected, unresolved = *described_class.collect(tmpdir, mixin("Publishable"), keys: %i[associations validations scopes callbacks])
 
     expect(unresolved).to be_empty
     expect(collected[:associations].map { |a| a[:name] }).to eq([ :revisions ])
@@ -57,7 +57,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
   it "tags every entry with the concern it came from" do
     File.write(File.join(concern_dir, "wired.rb"), "module Wired\n  has_many :wires\nend\n")
 
-    collected, = described_class.collect(tmpdir, mixin("Wired"), keys: %i[associations])
+    collected, = *described_class.collect(tmpdir, mixin("Wired"), keys: %i[associations])
 
     expect(collected[:associations].first[:from_concern]).to eq("Wired")
   end
@@ -67,7 +67,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
   it "hands back a plain hash, so reading a key the walk never produced adds none" do
     File.write(File.join(concern_dir, "wired.rb"), "module Wired\n  has_many :wires\nend\n")
 
-    collected, = described_class.collect(tmpdir, mixin("Wired"), keys: %i[associations])
+    collected, = *described_class.collect(tmpdir, mixin("Wired"), keys: %i[associations])
     collected[:enums]
 
     expect(collected.keys).to eq([ :associations ])
@@ -97,7 +97,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
       end
     RUBY
 
-    collected, unresolved = described_class.collect(tmpdir, mixin("DryRunnable"), keys: %i[associations])
+    collected, unresolved = *described_class.collect(tmpdir, mixin("DryRunnable"), keys: %i[associations])
 
     expect(unresolved).to be_empty
     expect(collected[:associations].map { |a| [ a[:name], a[:from_concern] ] })
@@ -112,7 +112,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     File.write(File.join(lib, "thing.rb"), "module Ns\n  module Thing\n    extend ActiveSupport::Concern\n    include Helper\n  end\nend\n")
     File.write(File.join(lib, "helper.rb"), "module Ns\n  module Helper\n    extend ActiveSupport::Concern\n    included do\n      has_many :helped\n    end\n  end\nend\n")
     extra = [ RailsAiContext::BaseMixins::Mixin.new("Ns::Thing", File.join(lib, "thing.rb"), :include) ]
-    collected, = described_class.collect(tmpdir, [], keys: %i[associations], extra: extra)
+    collected, = *described_class.collect(tmpdir, [], keys: %i[associations], extra: extra)
 
     expect(collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to eq([ [ :helped, "Ns::Helper" ] ])
   end
@@ -123,7 +123,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     FileUtils.mkdir_p(File.join(tmpdir, "lib"))
     File.write(File.join(tmpdir, "lib", "rdbms_functions.rb"), "module RdbmsFunctions\n  has_many :functions\nend\n")
 
-    _, unresolved = described_class.collect(tmpdir, mixin("RdbmsFunctions"), keys: %i[associations])
+    _, unresolved = *described_class.collect(tmpdir, mixin("RdbmsFunctions"), keys: %i[associations])
     expect(unresolved).to eq([ "RdbmsFunctions" ])
 
     other = Dir.mktmpdir
@@ -137,7 +137,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
       end
     RUBY
 
-    collected, unresolved = described_class.collect(other, mixin("RdbmsFunctions"), keys: %i[associations])
+    collected, unresolved = *described_class.collect(other, mixin("RdbmsFunctions"), keys: %i[associations])
     expect(unresolved).to be_empty
     expect(collected[:associations].map { |a| a[:name] }).to eq([ :functions ])
   ensure
@@ -181,7 +181,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     File.write(File.join(concern_dir, "tracker.rb"), "module Tracker\n  has_many :tracks\nend\n")
     File.write(File.join(concern_dir, "notifier.rb"), "module Notifier\n  has_many :notifications\nend\n")
 
-    collected, unresolved = described_class.collect(tmpdir, mixin("Watchable"), keys: %i[associations validations callbacks])
+    collected, unresolved = *described_class.collect(tmpdir, mixin("Watchable"), keys: %i[associations validations callbacks])
 
     expect(unresolved).to be_empty
     expect(collected[:associations].map { |a| a[:name] }).to contain_exactly(:watch_logs, :primary_watcher, :tracks)
@@ -207,7 +207,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
       end
     RUBY
 
-    collected, = described_class.collect(tmpdir, mixin("RateLimitable"), keys: %i[associations callbacks],
+    collected, = *described_class.collect(tmpdir, mixin("RateLimitable"), keys: %i[associations callbacks],
                                          calls: singleton_lookup(%w[rate_limit]))
 
     expect(collected[:callbacks].map { |c| c[:type] }).to eq([ "after_create" ])
@@ -229,7 +229,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
       end
     RUBY
 
-    collected, unresolved = described_class.collect(tmpdir, mixin("Validations"), keys: %i[validations],
+    collected, unresolved = *described_class.collect(tmpdir, mixin("Validations"), keys: %i[validations],
                                                     within: "WorkPackage")
 
     expect(unresolved).to be_empty
@@ -250,7 +250,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     RUBY
     File.write(File.join(concern_dir, "tracked.rb"), "module Tracked\n  has_many :tracks\nend\n")
 
-    collected, unresolved = described_class.collect(tmpdir, mixin("LiquidDroppable"), keys: %i[associations])
+    collected, unresolved = *described_class.collect(tmpdir, mixin("LiquidDroppable"), keys: %i[associations])
 
     expect(unresolved).to be_empty
     expect(collected).to eq({})
@@ -293,7 +293,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     RUBY
 
     mixins = [ *mixin("Watchable"), *mixin("Trackable") ]
-    collected, unresolved = described_class.collect(tmpdir, mixins, keys: %i[associations])
+    collected, unresolved = *described_class.collect(tmpdir, mixins, keys: %i[associations])
 
     expect(unresolved).to be_empty
     expect(collected[:associations].map { |a| a[:name] }).to eq([ :watchers ])
@@ -325,10 +325,10 @@ RSpec.describe RailsAiContext::ConcernMacros do
       end
     RUBY
 
-    uncalled, = described_class.collect(tmpdir, mixin("Attachable"), keys: %i[associations callbacks])
+    uncalled, = *described_class.collect(tmpdir, mixin("Attachable"), keys: %i[associations callbacks])
     expect(uncalled).to eq({})
 
-    called, = described_class.collect(tmpdir, mixin("Attachable"), keys: %i[associations callbacks],
+    called, = *described_class.collect(tmpdir, mixin("Attachable"), keys: %i[associations callbacks],
                                       calls: singleton_lookup(%w[acts_as_attachable]))
     expect(called[:associations].map { |a| a[:name] }).to eq([ :attachments ])
     expect(called[:callbacks].map { |c| [ c[:method], c[:from_concern] ] })
@@ -365,7 +365,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
       end
     RUBY
 
-    collected, = described_class.collect(tmpdir, mixin("Relayable"), keys: %i[associations validations callbacks])
+    collected, = *described_class.collect(tmpdir, mixin("Relayable"), keys: %i[associations validations callbacks])
 
     # `prepended` runs on prepend, not on this include.
     expect(collected[:associations].map { |a| a[:name] }).to eq(%i[author likes])
@@ -397,7 +397,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     allow(RailsAiContext::Introspectors::CallSiteExpansion).to receive(:entries)
       .with(having_attributes(name: :plugin_settings), anything, anything, includer: anything).and_raise(NoMethodError, "each_char for nil")
 
-    collected, unresolved = described_class.collect(tmpdir, mixin("Settings"), keys: %i[associations],
+    collected, unresolved = *described_class.collect(tmpdir, mixin("Settings"), keys: %i[associations],
                                                     calls: singleton_lookup(%w[plugin_settings owned]))
 
     expect(collected[:associations].map { |a| a[:name] }).to eq([ :owners ])
@@ -426,7 +426,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
       end
     RUBY
 
-    collected, unresolved = described_class.collect(tmpdir, mixin("CollectionRestrictor"), keys: %i[validations])
+    collected, unresolved = *described_class.collect(tmpdir, mixin("CollectionRestrictor"), keys: %i[validations])
 
     expect(unresolved).to eq([])
     expect(collected[:validations].map { |v| [ v[:attributes], v[:from_concern] ] }).to eq([ [ [ "title" ], "Restrictor::CommonMethods" ] ])
@@ -459,7 +459,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
       end
     RUBY
 
-    collected, = described_class.collect(tmpdir, mixin("Hooked"), keys: %i[associations])
+    collected, = *described_class.collect(tmpdir, mixin("Hooked"), keys: %i[associations])
 
     expect(collected[:associations].map { |a| [ a[:type], a[:name] ] })
       .to contain_exactly([ "has_many", :hook_items ], [ "has_one", :hook_owner ])
@@ -485,7 +485,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     end
 
     it "applies the included hook to an includer, and not the extended one" do
-      collected, = described_class.collect(tmpdir, mixin("Dual"), keys: %i[associations scopes macros])
+      collected, = *described_class.collect(tmpdir, mixin("Dual"), keys: %i[associations scopes macros])
 
       expect(collected[:associations].map { |a| a[:name] }).to eq([ :included_items ])
       expect(collected[:scopes].map { |scope| scope[:name] }).to eq([ "recent" ])
@@ -495,7 +495,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     it "applies the extended hook to a class that extends it, and not the included one" do
       path = File.join(concern_dir, "dual.rb")
       extra = [ RailsAiContext::BaseMixins::Mixin.new("Dual", path, :extend) ]
-      collected, = described_class.collect(tmpdir, [], keys: %i[associations], extra: extra)
+      collected, = *described_class.collect(tmpdir, [], keys: %i[associations], extra: extra)
 
       expect(collected[:associations].map { |a| a[:name] }).to eq([ :extended_items ])
     end
@@ -504,7 +504,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
       FileUtils.mkdir_p(File.join(concern_dir, "admin"))
       File.write(File.join(concern_dir, "admin", "dual.rb"), "module Admin\n  module Dual\n    def self.included(base)\n      base.has_many :admin_items\n    end\n  end\nend\n")
       extra = [ RailsAiContext::BaseMixins::Mixin.new("Dual", File.join(concern_dir, "dual.rb"), :extend) ]
-      collected, = described_class.collect(tmpdir, mixin("Dual"), keys: %i[associations], extra: extra, within: "Admin")
+      collected, = *described_class.collect(tmpdir, mixin("Dual"), keys: %i[associations], extra: extra, within: "Admin")
 
       expect(collected[:associations].map { |a| a[:name] }).to contain_exactly(:admin_items, :extended_items)
     end
@@ -534,7 +534,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     end
 
     it "applies only the included block to a class that includes it" do
-      collected, = described_class.collect(tmpdir, mixin("Stamped"), keys: %i[associations scopes callbacks])
+      collected, = *described_class.collect(tmpdir, mixin("Stamped"), keys: %i[associations scopes callbacks])
 
       expect(collected[:associations].map { |a| a[:name] }).to eq([ :included_items ])
       expect(collected[:scopes]).to be_nil
@@ -548,7 +548,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
           prepend Stamped
         end
       RUBY
-      collected, = described_class.collect(tmpdir, mixin("Outer"), keys: %i[associations callbacks])
+      collected, = *described_class.collect(tmpdir, mixin("Outer"), keys: %i[associations callbacks])
 
       expect(collected[:associations].map { |a| a[:name] }).to eq([ :included_items ])
       expect(collected[:callbacks]).to be_nil
@@ -556,7 +556,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
 
     it "applies only the prepended block to a class that prepends it" do
       prepended = [ { name: "Stamped", macro: :prepend, ancestor: true } ]
-      collected, = described_class.collect(tmpdir, prepended, keys: %i[associations scopes callbacks])
+      collected, = *described_class.collect(tmpdir, prepended, keys: %i[associations scopes callbacks])
 
       expect(collected[:associations].map { |a| a[:name] }).to eq([ :tags ])
       expect(collected[:scopes].map { |s| s[:name] }).to eq([ "stamped" ])
@@ -573,7 +573,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     RUBY
     File.write(File.join(concern_dir, "inner.rb"), "module Inner\n  has_many :inners\nend\n")
 
-    collected, = described_class.collect(tmpdir, mixin("Outer"), keys: %i[associations])
+    collected, = *described_class.collect(tmpdir, mixin("Outer"), keys: %i[associations])
 
     expect(collected[:associations].map { |a| a[:name] }).to contain_exactly(:outers, :inners)
   end
@@ -582,13 +582,13 @@ RSpec.describe RailsAiContext::ConcernMacros do
     File.write(File.join(concern_dir, "left.rb"), "module Left\n  include Right\n  has_many :lefts\nend\n")
     File.write(File.join(concern_dir, "right.rb"), "module Right\n  include Left\n  has_many :rights\nend\n")
 
-    collected, = described_class.collect(tmpdir, mixin("Left"), keys: %i[associations])
+    collected, = *described_class.collect(tmpdir, mixin("Left"), keys: %i[associations])
 
     expect(collected[:associations].map { |a| a[:name] }).to contain_exactly(:lefts, :rights)
   end
 
   it "names a concern whose file it cannot find" do
-    _collected, unresolved = described_class.collect(tmpdir, mixin("Discard::Model"), keys: %i[associations])
+    _collected, unresolved = *described_class.collect(tmpdir, mixin("Discard::Model"), keys: %i[associations])
 
     expect(unresolved).to eq([ "Discard::Model" ])
   end
@@ -601,7 +601,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     File.write(path, "module Publishable\n  has_many :revisions\nend\n")
     make_unreadable(path)
 
-    collected, unresolved = described_class.collect(tmpdir, mixin("Publishable"), keys: %i[associations])
+    collected, unresolved = *described_class.collect(tmpdir, mixin("Publishable"), keys: %i[associations])
 
     expect(unresolved).to eq([ "Publishable" ])
     expect(collected).to eq({})
@@ -614,7 +614,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
   it "names a concern whose path is not a readable file" do
     FileUtils.mkdir_p(File.join(concern_dir, "publishable.rb"))
 
-    collected, unresolved = described_class.collect(tmpdir, mixin("Publishable"), keys: %i[associations])
+    collected, unresolved = *described_class.collect(tmpdir, mixin("Publishable"), keys: %i[associations])
 
     expect(unresolved).to eq([ "Publishable" ])
     expect(collected).to eq({})
@@ -625,7 +625,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     FileUtils.mkdir_p(File.join(concern_dir, "blocked.rb"))
     mixins = mixin("Blocked") + mixin("Readable")
 
-    collected, unresolved = described_class.collect(tmpdir, mixins, keys: %i[associations])
+    collected, unresolved = *described_class.collect(tmpdir, mixins, keys: %i[associations])
 
     expect(unresolved).to eq([ "Blocked" ])
     expect(collected[:associations].map { |a| a[:name] }).to eq([ :notes ])
@@ -639,7 +639,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk).and_call_original
 
     2.times { described_class.collect(tmpdir, mixin("Publishable"), keys: %i[associations], cache: cache) }
-    collected, = described_class.collect(tmpdir, mixin("Publishable"), keys: %i[associations], cache: cache)
+    collected, = *described_class.collect(tmpdir, mixin("Publishable"), keys: %i[associations], cache: cache)
 
     expect(RailsAiContext::Introspectors::SourceIntrospector).to have_received(:walk).once
     expect(collected[:associations].map { |a| a[:name] }).to eq([ :revisions ])
@@ -722,15 +722,15 @@ RSpec.describe RailsAiContext::ConcernMacros do
       runs = 0
       allow(described_class::Run).to receive(:new).and_wrap_original { |original, *args| runs += 1; original.call(*args) }
 
-      first, = collect_for([ "validates" ], cache)
-      second, = collect_for([ "scope" ], cache)
+      first = collect_for([ "validates" ], cache).collected
+      second = collect_for([ "scope" ], cache).collected
       expect(runs).to eq(1)
       expect(second).to eq(first)
 
-      calling, = collect_for({ "tracks" => [ nil ] }, cache)
+      calling = collect_for({ "tracks" => [ nil ] }, cache).collected
       expect(runs).to eq(2)
       expect(calling).to eq(described_class.collect(tmpdir, mixin("Trackable"), keys: %i[associations], within: "Base",
-                                                    calls: singleton_lookup({ "tracks" => [ nil ] })).first)
+                                                    calls: singleton_lookup({ "tracks" => [ nil ] })).collected)
     end
 
     # OpenProject's authorization concern overrides `before_action`, which every
@@ -772,9 +772,9 @@ RSpec.describe RailsAiContext::ConcernMacros do
     runs = 0
     allow(described_class::Run).to receive(:new).and_wrap_original { |original, *args, **opts| runs += 1; original.call(*args, **opts) }
 
-    first, = collect.call([ "validates" ], cache)
+    first = collect.call([ "validates" ], cache).collected
     walked = runs
-    second, = collect.call([ "scope" ], cache)
+    second = collect.call([ "scope" ], cache).collected
 
     expect(first[:associations].map { |a| a[:name] }).to eq([ :watchers ])
     expect(second).to eq(first)
@@ -794,7 +794,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     it "is named apart from the ones it could not read" do
       File.write(File.join(concern_dir, "auditable.rb"), "module Auditable\n  has_many :audits\nend\n")
 
-      collected, unresolved, hidden = described_class.collect(tmpdir, mixin("Auditable"), keys: %i[associations])
+      collected, unresolved, hidden = *described_class.collect(tmpdir, mixin("Auditable"), keys: %i[associations])
 
       expect(hidden).to eq([ "Auditable" ])
       expect(unresolved).to be_empty
@@ -802,7 +802,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     end
 
     it "is not named when the app has no file for it" do
-      _collected, _unresolved, hidden = described_class.collect(tmpdir, mixin("Auditable"), keys: %i[associations])
+      _collected, _unresolved, hidden = *described_class.collect(tmpdir, mixin("Auditable"), keys: %i[associations])
 
       expect(hidden).to be_empty
     end
@@ -811,7 +811,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
       File.write(File.join(concern_dir, "outer.rb"), "module Outer\n  include Auditable\n  has_many :things\nend\n")
       File.write(File.join(concern_dir, "auditable.rb"), "module Auditable\n  has_many :audits\nend\n")
 
-      collected, _unresolved, hidden = described_class.collect(tmpdir, mixin("Outer"), keys: %i[associations])
+      collected, _unresolved, hidden = *described_class.collect(tmpdir, mixin("Outer"), keys: %i[associations])
 
       expect(hidden).to eq([ "Auditable" ])
       expect(collected[:associations].map { |a| a[:name] }).to eq([ :things ])
@@ -824,7 +824,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
       File.write(File.join(concern_dir, "billing", "auditable.rb"), "module Billing\n  module Auditable\n  end\nend\n")
       RailsAiContext.configuration.excluded_concerns = [ /Auditable\z/ ]
 
-      _collected, _unresolved, hidden = described_class.collect(
+      _collected, _unresolved, hidden = *described_class.collect(
         tmpdir, mixin("Auditable"), keys: %i[associations], within: "Billing"
       )
 
@@ -847,7 +847,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     original_debug = ENV["DEBUG"]
     ENV["DEBUG"] = "1"
     begin
-      _collected, unresolved = described_class.collect(tmpdir, mixin("Publishable"), keys: %i[associations])
+      _collected, unresolved = *described_class.collect(tmpdir, mixin("Publishable"), keys: %i[associations])
     ensure
       $stderr = original
       original_debug.nil? ? ENV.delete("DEBUG") : ENV["DEBUG"] = original_debug
@@ -1007,7 +1007,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
       "module Searchable\n  before_action :require_login\nend\n")
     File.write(File.join(concern_dir, "searchable.rb"), "module Searchable\n  scope :search, -> { all }\nend\n")
 
-    collected, = described_class.collect(tmpdir, mixin("Searchable"), keys: %i[scopes], prefer: "model")
+    collected, = *described_class.collect(tmpdir, mixin("Searchable"), keys: %i[scopes], prefer: "model")
 
     expect(collected[:scopes].map { |s| s[:name] }).to eq([ "search" ])
   end

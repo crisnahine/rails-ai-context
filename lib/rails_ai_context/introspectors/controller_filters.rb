@@ -97,9 +97,10 @@ module RailsAiContext
         chain_defs = nil
         calls = CallSites.new(source, -> { chain_defs ||= class_method_defs(source, mixins, within, root, cache) })
         # One walk, so a concern two includes reach is added once, as Ruby does.
-        collected, unread, _hidden, block_calls, placement, _skipped, block_sites = ConcernMacros.collect(
+        found = ConcernMacros.collect(
           root, mixins, keys: [ :filters ], prefer: "controller", within: within, cache: cache, calls: calls, listeners: LISTENERS
         )
+        collected, placement, block_sites = found.collected, found.placement, found.block_sites
         own_defs = singleton_expansions(source, walked, calls, Set.new)
         defined = own_defs.map { |entry| entry[:site].name }.to_set
         # A concern method the body calls declares for the body; one a concern's own block calls stays the concern's.
@@ -114,7 +115,7 @@ module RailsAiContext
         defined.merge(called.map { |entry| entry[:site].name })
         defined.merge(by_concern.filter_map { |entry| entry[:site]&.name })
         base_unread = []
-        inherited = base_expansions(source, within, root, Sites.new(calls, block_calls), defined, cache, base_unread)
+        inherited = base_expansions(source, within, root, Sites.new(calls, found.included_calls), defined, cache, base_unread)
         # A base's method a concern's block calls declares where that concern is included.
         from_blocks, inherited = inherited.partition { |entry| block_sites.key?(entry[:site].__id__) }
         by_concern += from_blocks.map { |entry| entry.merge(from_concern: block_sites[entry[:site].__id__].first) }
@@ -131,7 +132,7 @@ module RailsAiContext
         filters = entries.flat_map do |entry|
           record(entry, root).map { |filter| entry[:from_concern] ? filter.merge(from_concern: entry[:from_concern]) : filter }
         end
-        [ filters, unread | outside_modules(mixins, root, within) | base_unread ]
+        [ filters, found.unread | outside_modules(mixins, root, within) | base_unread ]
       rescue => e
         RailsAiContext.debug_fail(e, [ [], [] ], label: "controller filter read with concerns")
       end

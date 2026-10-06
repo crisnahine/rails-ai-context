@@ -1691,21 +1691,22 @@ module RailsAiContext
       end
 
       def walk_class(own, class_name, calls, extra: [], file: nil, rank: 0)
-        collected, unread, hidden, included, placement, skipped, blocks, mixed = ConcernMacros.collect(
+        found = ConcernMacros.collect(
           app.root.to_s, own[:mixins] || [],
           keys: [ *WALKED_KEYS, :expanded ], prefer: "model", within: class_name,
           cache: @source_cache, calls: calls, extra: extra, file: file
         )
+        placement = found.placement
         included_at = included_at(own, placement)
         every = extra.map(&:name).to_set
         bodies = method_bodies(own)
-        mixins = mixed.map do |label, macro, defs, in_module|
+        mixins = found.mixins.map do |label, macro, defs, in_module|
           line, order = included_at.call(label)
           added, line = in_module || [ ConcernMacros::SingletonLookup.added_in(rank, line, bodies), line ]
           ConcernMacros::SingletonLookup::Mixin.new(label, macro, defs, added, [ line, order ], every.include?(placement.dig(label, 0)))
         end
-        calls.add(rank, included, blocks, mixins)
-        Walk.new(own, collected, unread, hidden, skipped, rank)
+        calls.add(rank, found.included_calls, found.block_sites, mixins)
+        Walk.new(own, found.collected, found.unread, found.hidden, found.skipped, rank)
       end
 
       # Where a concern the walk read joins the class's chain: at the line
@@ -2202,8 +2203,8 @@ module RailsAiContext
           mixins: Listeners::MixinsListener
         })
         # A concern's `included` block declares into the document before the body that follows it.
-        from_concerns, = ConcernMacros.collect(app.root.to_s, data[:mixins], keys: %i[mongoid], prefer: "model", within: class_name,
-                                               listeners: { mongoid: MONGOID_MACROS, mixins: Listeners::MixinsListener }, file: path)
+        from_concerns = ConcernMacros.collect(app.root.to_s, data[:mixins], keys: %i[mongoid], prefer: "model", within: class_name,
+                                              listeners: { mongoid: MONGOID_MACROS, mixins: Listeners::MixinsListener }, file: path).collected
         macros = Array(from_concerns[:mongoid]) + Array(data[:mongoid])
         calls = singleton_lookup([ [ class_name, path ] ])
         calls.add(0, {}, {}, [])
