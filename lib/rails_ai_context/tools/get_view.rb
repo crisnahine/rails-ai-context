@@ -121,11 +121,11 @@ module RailsAiContext
               stim = meta[:stimulus]&.any? ? " stimulus: #{meta[:stimulus].join(', ')}" : ""
               comps = meta[:components]&.any? ? " components: #{meta[:components].join(', ')}" : ""
               phlex_tag = meta[:phlex] ? " [phlex]" : ""
-              alternate = (note = RailsAiContext::ViewFile.alternate_of(name)) ? " #{note}" : ""
+              alternate = (note = alternate_of(name)) ? " #{note}" : ""
               lines << "- #{name} (#{count_phrase(meta[:lines], "line")}#{phlex_tag})#{alternate}#{parts}#{comps}#{stim}"
             end
             ctrl_partials.sort.each do |name, meta|
-              alternate = (note = RailsAiContext::ViewFile.alternate_of(name)) ? " #{note}" : ""
+              alternate = (note = alternate_of(name)) ? " #{note}" : ""
               lines << "- #{name} (#{count_phrase(meta[:lines], "line")})#{alternate}"
             end
             lines << ""
@@ -156,7 +156,7 @@ module RailsAiContext
 
             lines << "## #{group_heading(ctrl)}" unless controller && all_dirs.size == 1
             ctrl_templates.sort.each do |name, meta|
-              detail_parts = [ RailsAiContext::ViewFile.alternate_of(name) ].compact
+              detail_parts = [ alternate_of(name) ].compact
               extra = metadata[name]
 
               if meta[:phlex]
@@ -186,7 +186,7 @@ module RailsAiContext
               helpers = meta[:helpers]&.any? ? " helpers: #{meta[:helpers].join(', ')}" : ""
               locals = extract_partial_locals(name, templates)
               locals_str = locals&.any? ? " **locals:** #{locals.join(', ')}" : ""
-              alternate = (note = RailsAiContext::ViewFile.alternate_of(name)) ? " #{note}" : ""
+              alternate = (note = alternate_of(name)) ? " #{note}" : ""
               lines << "- #{name} (#{count_phrase(meta[:lines], "line")})#{alternate}#{fields}#{helpers}#{locals_str}"
             end
             lines << ""
@@ -243,6 +243,18 @@ module RailsAiContext
       # its key on "/" made its own filename the group name: the group matched
       # no file, the row was dropped, and the header went on counting it.
       ROOT_GROUP = "(app/views root)"
+
+      private_class_method def self.alternate_of(name)
+        RailsAiContext::ViewFile.alternate_of(name, RailsAiContext::RunCache.fetch([ :view_locales ]) { available_locales })
+      end
+
+      # Booted, as I18n holds them; unbooted, as the i18n section read them from config or the locale files.
+      private_class_method def self.available_locales
+        booted = !RailsAiContext.static_tier? && !rails_app.is_a?(RailsAiContext::StaticApp)
+        return I18n.available_locales.map(&:to_s) if booted && defined?(I18n)
+
+        Array(RailsAiContext::Payload.section(cached_context, :i18n)&.dig(:available_locales)).map(&:to_s)
+      end
 
       private_class_method def self.view_group(key)
         key.include?("/") ? key.split("/").first : ROOT_GROUP
@@ -475,7 +487,7 @@ module RailsAiContext
 
         templates, partials = files.partition { |f| !File.basename(f).start_with?("_") }
         lines = views_header_lines(templates, partials, controller ? [] : layout_files, controller: controller)
-        files.each { |f| lines << [ "- #{f}", RailsAiContext::ViewFile.alternate_of(f) ].compact.join(" - ") }
+        files.each { |f| lines << [ "- #{f}", alternate_of(f) ].compact.join(" - ") }
         text_response(lines.join("\n"))
       end
     end
