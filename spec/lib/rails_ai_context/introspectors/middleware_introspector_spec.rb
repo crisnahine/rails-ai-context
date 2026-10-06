@@ -470,12 +470,16 @@ RSpec.describe RailsAiContext::Introspectors::MiddlewareIntrospector do
         require_relative "config/environment"
         map (subdir || "/") do
           use Rack::Protection::JsonCsrf
+          map "/health" do
+            run ->(env) { [200, {}, []] }
+          end
           run Rails.application
         end
       RUBY
       expected = [
         { call: "use", target: "Yabeda::Prometheus::Exporter", line: 2, condition: 'if ENV["PROMETHEUS"] == "true"' },
-        { call: "use", target: "Rack::Protection::JsonCsrf", line: 6, within: '(subdir || "/")' }
+        { call: "use", target: "Rack::Protection::JsonCsrf", line: 6, within: '(subdir || "/")' },
+        { call: "map", target: "/health", line: 7, within: '(subdir || "/")' }
       ]
 
       expect(introspector.call[:rackup]).to eq(expected)

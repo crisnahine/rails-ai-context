@@ -137,7 +137,7 @@ module RailsAiContext
 
       # config.ru's own `use` and `map` run before Rails.application, so
       # app.middleware never lists them. A `map` that runs the app itself only
-      # puts a path prefix and its own `use` calls in front of it.
+      # puts a path prefix, its own `use` calls and its nested Rack apps in front of it.
       def self.rackup(root)
         path = File.join(root, "config.ru")
         # Most config.ru files only `run` the app, and loading the parser to learn that costs more than the read.
@@ -146,15 +146,15 @@ module RailsAiContext
         calls = SourceIntrospector.walk(path, { calls: -> { Listeners::ConditionalMacroListener.new(:use, :map, :run) } })[:calls]
         inside = calls.group_by { |call| call[:parent_offset] }
         rails = [ "Rails.application", AppKind.application_class(root) ].compact
+        runs_app = ->(map) { Array(inside[map[:offset]]).any? { |c| c[:macro] == :run && rails.include?(c[:values].first.to_s.delete_prefix("::")) } }
         calls.flat_map do |call|
           target = call[:values].first
           next [] if call[:parent_offset] || call[:macro] == :run || !target.is_a?(String)
+          next [ rackup_entry(call) ] unless call[:macro] == :map && runs_app.call(call)
 
-          entry = rackup_entry(call)
-          nested = Array(inside[call[:offset]])
-          next [ entry ] unless call[:macro] == :map && nested.any? { |c| c[:macro] == :run && rails.include?(c[:values].first.to_s.delete_prefix("::")) }
-
-          nested.filter_map { |c| rackup_entry(c).merge(within: target) if c[:macro] == :use && c[:values].first.is_a?(String) }
+          inside[call[:offset]].filter_map do |c|
+            rackup_entry(c).merge(within: target) if %i[use map].include?(c[:macro]) && c[:values].first.is_a?(String) && !(c[:macro] == :map && runs_app.call(c))
+          end
         end
       end
 
