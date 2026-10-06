@@ -66,7 +66,12 @@ module RailsAiContext
       def qualified_table(name, database: nil, live: false)
         return unless name.to_s.include?(".")
 
-        found = live ? [ name, live_qualified_table(name) ] : dump_lookup(database)&.table(name)
+        if live
+          data = live_qualified_table(name) or return
+          return [ live_listed_name(name) || name, data ]
+        end
+
+        found = dump_lookup(database)&.table(name)
         found if found&.last
       end
 
@@ -157,6 +162,16 @@ module RailsAiContext
         found unless found == PgNaming::DEFAULT_SEARCH_PATH
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "search_path")
+      end
+
+      # The bare name, when the search path resolves it to this same table, as connection.tables lists it.
+      def live_listed_name(name)
+        bare = name.split(".").last
+        same = connection.select_value("SELECT to_regclass(#{connection.quote(connection.quote_table_name(bare))}) = " \
+                                       "to_regclass(#{connection.quote(connection.quote_table_name(name))})")
+        bare if same
+      rescue => e
+        RailsAiContext.debug_fail(e, nil, label: "listed_name")
       end
 
       # quoted_scope reads a qualified name's own schema (schema_statements.rb:1179-1191).

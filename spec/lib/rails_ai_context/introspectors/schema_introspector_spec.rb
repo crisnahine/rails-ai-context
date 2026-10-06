@@ -3023,6 +3023,20 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       expect(introspector.send(:live_search_path)).to be_nil
     end
 
+    it "names the listed table a qualified name finds, so its models link to it" do
+      column = ActiveRecord::ConnectionAdapters::Column.new("kind", nil, ActiveRecord::ConnectionAdapters::SqlTypeMetadata.new(sql_type: "text", type: :text))
+      connection = double("pg", indexes: [], foreign_keys: [], primary_key: "id", supports_comments?: false, supports_check_constraints?: false,
+                                native_database_types: {}, data_source_exists?: true, columns: [ column ])
+      allow(connection).to receive(:quote_table_name) { |name| name.split(".").map { |part| %("#{part}") }.join(".") }
+      allow(connection).to receive(:quote) { |text| "'#{text}'" }
+      allow(connection).to receive(:select_value).with(%(SELECT to_regclass('"users"') = to_regclass('"app"."users"'))).and_return(true)
+      allow(connection).to receive(:select_value).with(%(SELECT to_regclass('"events"') = to_regclass('"audit"."events"'))).and_return(nil)
+      allow(introspector).to receive_messages(connection: connection, adapter_name: "PostgreSQL")
+
+      expect(introspector.qualified_table("app.users", live: true).first).to eq("users")
+      expect(introspector.qualified_table("audit.events", live: true).first).to eq("audit.events")
+    end
+
     it "introspects a table outside the search path only when asked for it by name" do
       column = ActiveRecord::ConnectionAdapters::Column.new("kind", nil, ActiveRecord::ConnectionAdapters::SqlTypeMetadata.new(sql_type: "text", type: :text))
       connection = double("pg", indexes: [], foreign_keys: [], primary_key: "id", supports_comments?: false, supports_check_constraints?: false,
@@ -3030,6 +3044,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       allow(connection).to receive(:data_source_exists?).with("audit.events").and_return(true)
       allow(connection).to receive(:data_source_exists?).with("audit.missing").and_return(false)
       allow(connection).to receive(:columns).with("audit.events").and_return([ column ])
+      allow(connection).to receive_messages(quote_table_name: "", quote: "''", select_value: nil)
       allow(introspector).to receive_messages(connection: connection, adapter_name: "PostgreSQL")
 
       expect(introspector.qualified_table("audit.events", live: true).last[:columns].map { |c| c[:name] }).to eq(%w[kind])
