@@ -293,9 +293,7 @@ module RailsAiContext
         @config_file_walks ||= {}
         @config_file_walks.fetch(relative) do
           source = RecurringSchedules.read_file(app.root, relative)
-          walked = source ? SourceIntrospector.walk_source(source, CONFIG_FILE_LISTENERS) : {}
-          (@config_walks ||= {})[relative] = Array(walked[:config])
-          @config_file_walks[relative] = walked
+          @config_file_walks[relative] = source ? SourceIntrospector.walk_source(source, CONFIG_FILE_LISTENERS) : {}
         end
       end
 
@@ -660,8 +658,7 @@ module RailsAiContext
       end
 
       def recurring_jobs
-        app_config_files.each { |relative| config_walk(relative) }
-        RecurringSchedules.read(app.root, @config_walks ||= {})
+        RecurringSchedules.read(app.root, ->(file) { config_assignments(file) })
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "recurring_jobs")
       end

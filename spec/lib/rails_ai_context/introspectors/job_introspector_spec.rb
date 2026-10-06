@@ -363,6 +363,24 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(walks).to eq(1)
     end
 
+    it "walks an initializer once for the GoodJob cron and the mailer settings, mailers or not" do
+      source = "Rails.application.configure do\n  config.good_job.cron = { sweep: { cron: \"0 * * * *\", class: \"SweepJob\" } }\n" \
+               "  config.action_mailer.deliver_later_queue_name = :mail\nend\n"
+      walks = 0
+      allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source).and_wrap_original do |original, src, *rest|
+        walks += 1 if src == source
+        original.call(src, *rest)
+      end
+
+      result = static_result do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "initializers", "both.rb"), source)
+      end
+
+      expect(result[:recurring_jobs]).to include(include(name: "sweep", class: "SweepJob"))
+      expect(walks).to eq(1)
+    end
+
     it "finds mailers and their actions from source" do
       result = static_result do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "mailers"))
