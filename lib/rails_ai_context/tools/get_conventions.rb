@@ -170,6 +170,7 @@ module RailsAiContext
         [ "esbuild", %w[esbuild] ],
         [ "Vite", %w[vite] ],
         [ "Webpack", %w[webpack] ],
+        [ "Rollup", %w[rollup] ],
         [ "React", %w[react] ],
         [ "Vue", %w[vue] ],
         [ "Svelte", %w[svelte @sveltejs/kit] ],
