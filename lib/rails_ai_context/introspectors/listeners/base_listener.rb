@@ -21,18 +21,20 @@ module RailsAiContext
         private
 
         # A node's source with its comments removed, folded onto one line.
-        def one_line_source(node)
+        # `upto` ends the text at that offset (a call without its block).
+        def one_line_source(node, upto: nil)
           start = node.location.start_offset
-          finish = node.location.end_offset
+          finish = upto || node.location.end_offset
           cuts = Array(@comments).filter_map do |comment|
             location = comment.location
             [ location.start_offset, location.end_offset, "" ] if location.start_offset >= start && location.end_offset <= finish
           end
-          cuts.concat(multiline_literals(node))
+          cuts.concat(multiline_literals(node).select { |_, to, _| to <= finish })
 
           # The node's text runs on past its end when it opens a heredoc, and
           # every cut sits inside the node, so the offsets still line up.
           text = NodeSource.text(node).dup
+          text = text[0, finish - start] if upto
           cuts.sort_by(&:first).reverse_each do |from, to, replacement|
             text[(from - start)...(to - start)] = replacement
           end
@@ -62,6 +64,9 @@ module RailsAiContext
           # A heredoc body only exists on its own lines, so there is no one
           # line to fold it onto.
           return text.strip if tokens.any? { |token| token.type == :HEREDOC_START }
+
+          # Outside a heredoc a backslash ending a line only continues it; blanked in place, the offsets hold.
+          text = text.gsub("\\\n", "  ") if text.include?("\\\n")
 
           kinds = newline_kinds(tokens)
           folded = +""

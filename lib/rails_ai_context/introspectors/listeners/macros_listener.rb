@@ -144,7 +144,7 @@ module RailsAiContext
         end
 
         def record_gem_macro(node)
-          text = node.block ? node.slice[0, node.block.location.start_offset - node.location.start_offset] : node.slice
+          text = one_line_source(node, upto: node.block&.location&.start_offset)
           text = text.gsub(/\s+/, " ").strip
           adds = monetized_names(node) if node.name == :monetize
           @results << { macro: :gem_macro, name: node.name, text: text, adds: adds.presence,

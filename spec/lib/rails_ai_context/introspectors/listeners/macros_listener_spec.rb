@@ -171,6 +171,25 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "gem ma
     expect(results.find { |r| r[:text] == "has_paper_trail" }[:name]).to eq(:has_paper_trail)
     expect(results.filter_map { |r| r[:adds] }).to eq([ %w[price], %w[fee] ])
   end
+
+  it "folds a gem macro onto one line without its comments or line continuations" do
+    results = parse_and_dispatch(<<~RUBY)
+      class Txn < ApplicationRecord
+        pg_search_scope :search, lambda { |query|
+          {
+            query: query,
+            # Keep in sync
+            order_within_rank: 'txns.completed_at DESC, ' \\
+                               'txns.created_at DESC'
+          }
+        }
+      end
+    RUBY
+
+    expect(results.find { |r| r[:macro] == :gem_macro }[:text]).to eq(
+      "pg_search_scope :search, lambda { |query| { query: query, order_within_rank: 'txns.completed_at DESC, ' 'txns.created_at DESC' } }"
+    )
+  end
 end
 
 RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "model settings" do
