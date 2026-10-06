@@ -351,7 +351,7 @@ module RailsAiContext
           @found = []
         end
 
-        # Whether a written include names a constant some lib file could hold, as its own file or its outer one's.
+        # Prefilter before the MixinsListener walk: whether a written include names a constant a lib file could hold.
         def may_include?(source)
           return false if @basenames.empty?
 
