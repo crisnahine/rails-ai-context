@@ -217,7 +217,7 @@ module RailsAiContext
 
     def read_namespaced_roots(root)
       real_root = File.realpath(root)
-      files = [ "config/application.rb", *Dir.glob("config/initializers/**/*.rb", base: root).sort ]
+      files = [ "config/application.rb", *initializer_paths(root).map { |path| path.delete_prefix(SafePath.dir_prefix(root)) } ]
       sources = files.filter_map { |relative| SafePath.read(relative, under: root).first }.select { |source| source.include?("push_dir") }
       sources.flat_map do |source|
         Introspectors::SourceIntrospector.walk_source(source, { roots: Introspectors::Listeners::NamespacedRootsListener })[:roots]
