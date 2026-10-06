@@ -129,9 +129,7 @@ module RailsAiContext
         end
 
         def scope_name(node)
-          path = node.constant_path.slice
-          outer = @scopes.last
-          path.start_with?("::") || outer.nil? ? path.delete_prefix("::") : "#{outer}::#{path}"
+          nested_name(node.constant_path, @scopes.last)
         end
       end
     end

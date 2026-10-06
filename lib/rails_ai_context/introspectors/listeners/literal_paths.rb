@@ -36,7 +36,7 @@ module RailsAiContext
         # `Rails.root.join("lib_static")` and its `.to_s`, whose arguments are
         # the path relative to the app root.
         def collect_call_path(node)
-          return collect_file_path(node) if @file && node.receiver.is_a?(Prism::ConstantReadNode) && node.receiver.name == :File
+          return collect_file_path(node) if @file && file_constant?(node.receiver)
           return collect_paths(node.receiver) unless node.name == :join
 
           segments = app_root_join(node)
@@ -73,7 +73,7 @@ module RailsAiContext
         def file_anchor(node)
           case node
           when Prism::SourceFileNode then @file
-          when Prism::CallNode then File.dirname(@file) if node.name == :__dir__ && node.receiver.nil?
+          when Prism::CallNode then File.dirname(@file) if dir_call?(node)
           end
         end
 

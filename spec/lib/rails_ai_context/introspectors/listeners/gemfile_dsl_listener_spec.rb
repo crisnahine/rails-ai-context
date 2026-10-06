@@ -103,4 +103,14 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::GemfileDslListener do
     expect(results.find { |r| r[:type] == :ruby }).to include(version: "3.1.4", engine: "jruby", engine_version: "9.4.8.0")
     expect(results.select { |r| r[:type] == :unknown_gems }.map { |r| r[:call] }).to eq(%i[gemspec gem eval_gemfile])
   end
+
+  it "reads an eval_gemfile path File.expand_path anchors at __dir__, written with ::File too" do
+    results = parse_and_dispatch(<<~RUBY)
+      eval_gemfile File.expand_path("a.rb", __dir__)
+      eval_gemfile ::File.expand_path("b.rb", __dir__)
+      eval_gemfile File.expand_path("c.rb", other.__dir__)
+    RUBY
+
+    expect(results.map { |r| r[:path] || r[:type] }).to eq([ "a.rb", "b.rb", :unknown_gems ])
+  end
 end

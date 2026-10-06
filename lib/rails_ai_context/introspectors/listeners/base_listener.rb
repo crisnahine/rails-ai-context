@@ -339,6 +339,21 @@ module RailsAiContext
           node.slice.delete_prefix("::")
         end
 
+        # `File` or `::File`, and a bare `__dir__`, as a path anchored at the walked file is written.
+        def file_constant?(node)
+          (node.is_a?(Prism::ConstantReadNode) || node.is_a?(Prism::ConstantPathNode)) && constant_path_string(node) == "File"
+        end
+
+        def dir_call?(node)
+          node.is_a?(Prism::CallNode) && node.name == :__dir__ && node.receiver.nil? && node.arguments.nil?
+        end
+
+        # A class or module's full name: `::A` is top level, `A` nests under the open `outer`.
+        def nested_name(constant_path, outer)
+          path = constant_path.slice
+          path.start_with?("::") || outer.nil? ? path.delete_prefix("::") : "#{outer}::#{path}"
+        end
+
         def hash_node_to_hash(node, source: false)
           elements = node.respond_to?(:elements) ? node.elements : []
           elements.each_with_object({}) do |assoc, h|
