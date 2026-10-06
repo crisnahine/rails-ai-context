@@ -5,6 +5,11 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge cases" do
   let(:introspector) { described_class.new(Rails.application) }
 
+  # The formats a controller lists of its own, as both tiers read them.
+  def own_formats(source)
+    introspector.send(:own_class_declarations, "Controller", source, introspector.send(:class_body_walk, source))[:respond_to_formats]
+  end
+
   # ────────────────────────────────────────────────────────────
   # Edge case 1: Inline before_action block (no symbol arg)
   # The old regex matched `before_action :symbol_name`.
@@ -454,7 +459,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
           end
         end
       RUBY
-      formats = introspector.send(:extract_respond_to, source)
+      formats = own_formats(source)
       expect(formats).to contain_exactly("html", "json", "pdf")
     end
   end
@@ -480,7 +485,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
           end
         end
       RUBY
-      formats = introspector.send(:extract_respond_to, source)
+      formats = own_formats(source)
       # The AST version only captures formats inside respond_to blocks.
       # csv should NOT appear.
       expect(formats).to contain_exactly("html", "json")
@@ -499,7 +504,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
           end
         end
       RUBY
-      formats = introspector.send(:extract_respond_to, source)
+      formats = own_formats(source)
       expect(formats).to eq(%w[html json xml])
     end
 
@@ -512,7 +517,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
           end
         end
       RUBY
-      expect(introspector.send(:extract_respond_to, source)).to eq([])
+      expect(own_formats(source)).to eq([])
     end
   end
 

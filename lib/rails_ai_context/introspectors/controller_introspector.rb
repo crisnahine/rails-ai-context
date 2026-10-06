@@ -793,12 +793,6 @@ module RailsAiContext
         end
       end
 
-      # The class body's own formats: the responders gem's class-level `respond_to :json`, and each
-      # `format.x` in an action's `respond_to` block.
-      def extract_respond_to(source, walked = class_body_walk(source))
-        (fold_formats(Set.new, class_declarations(source, walked)[:formats]).to_a | block_formats(source)).sort
-      end
-
       def block_formats(source)
         return [] if source.nil?
 
