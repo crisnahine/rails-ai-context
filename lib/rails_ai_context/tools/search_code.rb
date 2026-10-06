@@ -744,21 +744,17 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, nil, label: "extract_class_context")
       end
 
-      # Extract sibling methods in the same file (other public methods)
-      private_class_method def self.extract_sibling_methods(file_path, def_line, exclude_method)
+      # The other public defs in the file, in every form the definition search finds.
+      private_class_method def self.extract_sibling_methods(file_path, _def_line, exclude_method)
         source = RailsAiContext::SafeFile.read(file_path)
         return [] unless source
-        methods = []
-        in_private = false
-        source.each_line do |line|
-          in_private = true if line.match?(/\A\s*private\s*$/)
-          next if in_private
-          if (m = line.match(/\A\s*def\s+((?:self\.)?\w+[?!=]?)/))
-            name = m[1]
-            methods << name unless name.delete_prefix("self.") == exclude_method || name.start_with?("initialize")
-          end
-        end
-        methods
+
+        found = Introspectors::SourceIntrospector.walk_source(source, { methods: -> { Introspectors::Listeners::MethodsListener.new } })
+        found[:methods].filter_map do |method|
+          next unless method[:end_location] && method[:visibility] == :public && method[:name] != exclude_method
+
+          method[:scope] == :class ? "self.#{method[:name]}" : method[:name]
+        end.uniq
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "extract_sibling_methods")
       end

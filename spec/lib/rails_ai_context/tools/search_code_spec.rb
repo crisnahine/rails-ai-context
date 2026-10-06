@@ -1439,6 +1439,17 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
           end
         end
 
+        it "lists the siblings of a traced def in every form, leaving out the private ones" do
+          ledger = "class Billing::Ledger\n  private def secret_total = 1\n  def Ledger.build = new\n" \
+                   "  ruby2_keywords def forward(*args); end\n  def endless = secret_total\nend\n"
+          with_search_app(files.merge("app/models/billing/ledger.rb" => ledger)) do
+            traced = text(pattern: "secret_total", match_type: "trace")
+            siblings = traced[/## Sibling methods \(same file\)\n(.*?)\n\n/m, 1].lines.map(&:strip)
+
+            expect(siblings).to eq([ "- `self.build`", "- `forward`", "- `endless`" ])
+          end
+        end
+
         it "finds a compact class name, a rooted one and a Data.define constant" do
           with_search_app(files) do
             expect(text(pattern: "Ledger", match_type: "class")).to include("lib/billing/money.rb:5")
