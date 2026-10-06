@@ -997,8 +997,8 @@ RSpec.describe RailsAiContext::ConcernMacros do
     end
   end
 
-  it "exposes collect, and the body lookup and call expansion its classes share" do
-    expect(described_class.singleton_methods(false)).to contain_exactly(:collect, :enclosing, :expand_calls)
+  it "exposes collect, and the body lookup, call expansion and include order its classes share" do
+    expect(described_class.singleton_methods(false)).to contain_exactly(:collect, :enclosing, :expand_calls, :at_includes, :in_include_order)
   end
 
   it "does not reach outside the owner kind's concerns directory" do
