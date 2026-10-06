@@ -33,8 +33,9 @@ module RailsAiContext
 
     # Each database keeps its own migrations: the migrations_paths its
     # database.yml entry names, else db/migrate or db/<name>_migrate, as Rails
-    # runs them. The schema replay also reads db/post_migrate and in-repo
-    # engines' migrations, whose copies in db/migrate would read as pending here.
+    # runs them. The schema replay also reads in-repo engines' migrations, whose
+    # renumbered copies in db/migrate would read as pending here, and
+    # db/post_migrate, which Rails' migrator runs only when the app adds it.
     def migrate_dirs_for(root, dump_path = nil)
       name = Introspectors::SchemaDumpPath.database_name(root, dump_path)
       entry = RailsAiContext::DatabaseYml.entry(root, name)
