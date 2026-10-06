@@ -204,6 +204,18 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).to include("- **path** | string | NOT NULL")
       expect(text).not_to include("legacy_only")
     end
+
+    it "names the shard its columns come from when the shards' tables differ" do
+      orders = ->(*names) { { tables: { "orders" => { columns: names.map { |n| { name: n, type: "string" } } } } } }
+      allow(described_class).to receive(:cached_context).and_return({
+        models: { "Order" => { table_name: "orders", database: { connects_to: "connects_to shards: { ... }" } } },
+        schema: { tables: {}, secondary_databases: { "shard_one" => orders.call("id"), "shard_two" => orders.call("id", "extra") } }
+      })
+
+      text = described_class.call(model: "Order").content.first[:text]
+
+      expect(text).to include("Columns of `orders` in shard_one; the table differs in shard_two: `rails_get_schema(table:\"orders\")` lists each.")
+    end
   end
 
   describe ".call with specific model" do

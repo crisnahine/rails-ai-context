@@ -76,6 +76,20 @@ RSpec.describe RailsAiContext::Payload do
     end
   end
 
+  describe ".model_tables" do
+    let(:orders) { ->(column) { { tables: { "orders" => { columns: [ { name: column } ] } } } } }
+    let(:schema) { { tables: { "users" => { columns: [] } }, secondary_databases: { "shard_one" => orders.call("a"), "shard_two" => orders.call("b") } } }
+
+    it "pairs the writing database with its table, or every holder for a sharded model" do
+      written = { table_name: "orders", database: { writing: "shard_two" } }
+      sharded = { table_name: "orders", database: { connects_to: "connects_to shards: {}" } }
+      expect(described_class.model_tables(schema, written)).to eq([ [ "shard_two", { columns: [ { name: "b" } ] } ] ])
+      expect(described_class.model_tables(schema, sharded).map(&:first)).to eq(%w[shard_one shard_two])
+      expect(described_class.model_table(schema, sharded)).to eq(columns: [ { name: "a" } ])
+      expect(described_class.model_tables(schema, { table_name: "users" })).to eq([ [ "primary", { columns: [] } ] ])
+    end
+  end
+
   describe ".section" do
     it "answers the section only when it is a healthy hash" do
       expect(described_class.section({ turbo: { turbo_frames: [] } }, :turbo)).to eq({ turbo_frames: [] })
