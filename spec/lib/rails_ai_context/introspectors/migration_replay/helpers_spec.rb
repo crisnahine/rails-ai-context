@@ -104,6 +104,22 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay::Helpers do
       expect(entries).to contain_exactly(a_hash_including(action: :add_column, table: "users", column: "admin", location: 4))
     end
 
+    it "substitutes a parameter read after multibyte text in the helper at its own place" do
+      FileUtils.mkdir_p(File.join(@root, "lib"))
+      File.write(File.join(@root, "lib", "migration_helpers.rb"), <<~RUBY)
+        module MigrationHelpers
+          def add_note(table, name)
+            add_column table, :note, :string, comment: "é", default: name
+          end
+        end
+      RUBY
+      source = "class X < ActiveRecord::Migration[7.1]\n  include MigrationHelpers\n  def change\n    add_note :posts, \"x\"\n  end\nend\n"
+
+      entries = described_class.module_helper_entries(tree(source), @root)
+
+      expect(entries).to contain_exactly(a_hash_including(action: :add_column, table: "posts", column: "note", options: { comment: "é", default: "x" }))
+    end
+
     it "marks a larger helper that reaches the schema as not replayed" do
       FileUtils.mkdir_p(File.join(@root, "lib"))
       File.write(File.join(@root, "lib", "migration_helpers.rb"), <<~RUBY)

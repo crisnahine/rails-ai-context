@@ -246,12 +246,13 @@ module RailsAiContext
           reads = AstWalk.each(inner).grep(Prism::LocalVariableReadNode)
           return nil unless reads.all? { |read| values.key?(read.name) }
 
-          source = inner.slice.dup
+          # Prism's offsets count bytes, so the splice is done on bytes.
+          source = inner.slice.b
           base = inner.location.start_offset
           reads.sort_by { |read| -read.location.start_offset }.each do |read|
-            source[read.location.start_offset - base, read.location.length] = values[read.name]
+            source[read.location.start_offset - base, read.location.length] = values[read.name].b
           end
-          source
+          source.force_encoding(inner.slice.encoding)
         end
       end
     end
