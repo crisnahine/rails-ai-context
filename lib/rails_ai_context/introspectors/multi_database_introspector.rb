@@ -131,9 +131,7 @@ module RailsAiContext
         # Rails builds the primary from DATABASE_URL when the file has no entry for the env.
         return ENV["DATABASE_URL"].to_s.empty? ? [] : [ database_entry("primary", {}) ] if databases.empty?
 
-        # The file's order, which the booted configurations keep; databases moves the primary first.
-        order = Array(database_yml_env&.keys)
-        databases.sort_by { |name, _| order.index(name) || 0 }.map { |name, entry| database_entry(name, entry) }
+        databases.map { |name, entry| database_entry(name, entry) }
       end
 
       def database_entry(name, entry)
@@ -156,10 +154,6 @@ module RailsAiContext
 
         literal = text.delete_prefix(ERB_SENTINEL)
         literal.empty? ? [ nil, false ] : [ literal, true ]
-      end
-
-      def database_yml_env
-        RailsAiContext::DatabaseYml.env(root)
       end
 
       def anonymize_db_name(name)
