@@ -112,6 +112,28 @@ RSpec.describe RailsAiContext::ActionFilters do
       end
     end
 
+    # The reflected chain runs the prepend first; a base filter it leaves out sits before the next one it carries.
+    it "places a base filter the reflected chain leaves out after the subclass's prepend" do
+      Dir.mktmpdir do |dir|
+        app_with_base(dir)
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"), <<~RUBY)
+          class ApplicationController < ActionController::Base
+            before_action :test_only if Rails.env.test?
+            before_action :always
+          end
+        RUBY
+        ctx = { controllers: { controllers: {
+          "WidgetsController" => { parent_class: "ApplicationController", file: "app/controllers/widgets_controller.rb",
+                                   filters: [ { kind: "before", name: "p", declared: true, prepend: true },
+                                              { kind: "before", name: "always" } ] }
+        } } }
+
+        chain = described_class.for_controller(ctx, "WidgetsController", root: dir)[:chain]
+
+        expect(chain.map { |f| f[:name] }).to eq(%w[p test_only always])
+      end
+    end
+
     it "carries its filters into a child's chain" do
       Dir.mktmpdir do |dir|
         app_with_base(dir)

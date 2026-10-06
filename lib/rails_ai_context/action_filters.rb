@@ -100,8 +100,8 @@ module RailsAiContext
     end
 
     # The runtime tier's list is the reflection list, already in run order; a filter it
-    # does not carry keeps its place. The static tier's lists are declarations, which
-    # Rails appends in turn and a prepend_* macro unshifts.
+    # does not carry runs just before the next declared filter it does. The static tier's
+    # lists are declarations, which Rails appends in turn and a prepend_* macro unshifts.
     def run_sequence(filters, info)
       if RailsAiContext.static_tier?
         return filters.each_with_object([]) { |f, list| f[:prepend] ? list.unshift(f) : list.push(f) }
@@ -109,9 +109,16 @@ module RailsAiContext
 
       rank = {}
       Array(info[:filters]).grep(Hash).reject { |f| f[:skipped] }.each_with_index { |f, i| rank[entry_key(f)] ||= i }
-      slots = filters.each_index.select { |i| rank.key?(entry_key(filters[i])) }
-      ranked = slots.map { |i| filters[i] }.each_with_index.sort_by { |f, i| [ rank[entry_key(f)], i ] }.map(&:first)
-      filters.dup.tap { |out| slots.zip(ranked) { |i, f| out[i] = f } }
+      ahead = {}.compare_by_identity
+      pending = []
+      filters.each do |f|
+        next pending << f unless rank.key?(entry_key(f))
+
+        ahead[f] = pending
+        pending = []
+      end
+      ranked = ahead.keys.each_with_index.sort_by { |f, i| [ rank[entry_key(f)], i ] }.map(&:first)
+      ranked.flat_map { |f| ahead[f] + [ f ] } + pending
     end
 
     BLOCK_NUMBER = /#\d+\z/
