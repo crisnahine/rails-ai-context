@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "set"
 require "yaml"
 
 module RailsAiContext
@@ -319,7 +320,9 @@ module RailsAiContext
       def async_methods
         found = []
         modules = {}
+        sources = []
         model_sources(skip_concerns: false) do |record|
+          sources << [ record.path, record.source ]
           next unless record.source.include?("handle_asynchronously")
 
           # app/models/concerns is an autoload root of its own.
@@ -327,13 +330,31 @@ module RailsAiContext
           calls = async_calls(record)
           DeclaredConstant.declared_names(record.source).include?(owner) ? found.concat(calls.map { |call| { owner: owner, **call } }) : modules[owner] = calls
         end
-        return found if modules.empty?
+        found + mixin_async_methods(sources, modules)
+      end
 
-        sources = model_sources.map { |record| [ record.path, record.source ] }
-        Includers.of(app.root, sources, modules.keys, macros: %i[include prepend]).each do |name, includers|
-          includers.uniq.each { |includer| found.concat(modules[name].map { |call| { owner: includer, **call } }) }
+      # A concern that includes the concern runs its `included` block on its own includers, so
+      # the walk follows each module includer until it reaches classes.
+      def mixin_async_methods(sources, modules)
+        return [] if modules.empty?
+
+        mixins = sources.flat_map { |_path, source| DeclaredConstant.declared_module_names(source) }.to_set -
+          sources.flat_map { |_path, source| DeclaredConstant.declared_names(source) }
+        found = []
+        seen = modules.keys.to_set
+        until modules.empty?
+          reached = Hash.new { |hash, key| hash[key] = [] }
+          Includers.of(app.root, sources, modules.keys, macros: %i[include prepend]).each do |name, includers|
+            includers.uniq.each do |includer|
+              next reached[includer].concat(modules[name]) if mixins.include?(includer)
+
+              found.concat(modules[name].map { |call| { owner: includer, **call } })
+            end
+          end
+          modules = reached.reject { |name, _| seen.include?(name) }
+          seen.merge(modules.keys)
         end
-        found
+        found.uniq
       end
 
       def async_calls(record)
