@@ -560,6 +560,16 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         expect(text).to eq("Brakeman scan failed: No such file @ rb_sysopen - x.rb and y.rb")
       end
 
+      it "names a file outside the app by its base name when a folder below a root or outside every root has a space" do
+        allow(Dir).to receive(:home).and_return("/home/dev")
+        allow(Brakeman).to receive(:run).and_raise(RuntimeError,
+          "Error in /home/dev/My Projects/gems/x.rb:3 and /opt/My Stuff/secret/y.rb then /tmp/plain/z.rb " \
+          "via /home/dev/.rbenv/gems/brakeman-7.0/lib/b.rb")
+        text = described_class.call.content.first[:text]
+
+        expect(text).to eq("Brakeman scan failed: Error in x.rb:3 and y.rb then z.rb via b.rb")
+      end
+
       it "keeps the prose between a file outside the app and a file in it" do
         root = Rails.root.to_s
         allow(Brakeman).to receive(:run).and_raise(RuntimeError,

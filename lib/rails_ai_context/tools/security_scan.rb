@@ -222,19 +222,22 @@ module RailsAiContext
       BACKTRACE_FRAME = /\A(?:from\s+)?\S+:\d+:in\s/
       ERROR_LOCATION = /\A\S+:\d+:in\s+[`'][^`']*[`']:\s+/
 
-      PATH_TAIL = %r{(?:[^\s'"`:,/]+/)*([^\s'"`:,/]+)}
-      ABSOLUTE_PATH = %r{(?<![\w.:/~])/(?:[^\s'"`:,/]+/)+([^\s'"`:,/]+)}
+      # A folder may hold a space but never starts or ends with one, and the run must end in a file name.
+      SPACED_FOLDER = %r{[^\s'"`:,/](?:[^\n'"`:,/]*[^\s'"`:,/])?/}
+      FILE_NAME = %r{([^\s'"`:,/]+\.\w+)(?![\w/])}
+      PATH_TAIL = %r{(?:#{SPACED_FOLDER})*?#{FILE_NAME}|(?:[^\s'"`:,/]+/)*([^\s'"`:,/]+)}
+      ABSOLUTE_PATH = %r{(?<![\w.:/~])/(?:(?:#{SPACED_FOLDER})+?#{FILE_NAME}|(?:[^\s'"`:,/]+/)+([^\s'"`:,/]+))}
 
       # The answer leaves the machine: a file in the app is named from its root, any other by its base name.
-      # A pattern cannot tell a folder with a space from prose, so the roots that may hold one go by name first.
+      # The roots go by name first, since a space in one (/home/John Doe) breaks the folder run before it.
       private_class_method def self.portable_error(message)
         text = RailsAiContext::PortablePath.relativize_text(message, rails_app.root)
         roots = [ Dir.home, *Gem.path, Gem.dir ].map(&:to_s).reject { |root| root.empty? || root == "/" }
         unless roots.empty?
-          under_root = %r{(?:#{roots.uniq.sort_by { |root| -root.length }.map { |root| Regexp.escape(root) }.join("|")})/#{PATH_TAIL}}
-          text = text.gsub(under_root, '\1')
+          under_root = %r{(?:#{roots.uniq.sort_by { |root| -root.length }.map { |root| Regexp.escape(root) }.join("|")})/(?:#{PATH_TAIL})}
+          text = text.gsub(under_root) { Regexp.last_match.captures.compact.first }
         end
-        text.gsub(ABSOLUTE_PATH, '\1')
+        text.gsub(ABSOLUTE_PATH) { Regexp.last_match.captures.compact.first }
       end
 
       private_class_method def self.brakeman_error_line(err)
