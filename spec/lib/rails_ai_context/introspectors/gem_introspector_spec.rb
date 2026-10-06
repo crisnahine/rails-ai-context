@@ -116,12 +116,12 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
             expect(note_for("stimulus-rails")).to eq("Stimulus.js controllers.")
           end
 
-          it "says rswag-api serves from its openapi_root, swagger/ as rswag's installer sets it" do
-            expect(note_for("rswag-api")).to eq("Serves OpenAPI specs from its openapi_root, swagger/ as rswag's installer sets it.")
+          it "says rswag-api serves from its configured openapi_root, never naming a directory the app may not use" do
+            expect(note_for("rswag-api")).to eq("Serves OpenAPI specs from its configured openapi_root.")
 
             FileUtils.mkdir_p(File.join(tmpdir, "config/initializers"))
-            File.write(File.join(tmpdir, "config/initializers/rswag_api.rb"), "")
-            expect(note_for("rswag-api")).to end_with("Set in config/initializers/rswag_api.rb.")
+            File.write(File.join(tmpdir, "config/initializers/rswag_api.rb"), "c.openapi_root = Rails.root.join('public', 'api-docs').to_s\n")
+            expect(note_for("rswag-api")).to eq("Serves OpenAPI specs from its configured openapi_root. Set in config/initializers/rswag_api.rb.")
           end
 
           it "keeps a path the note names because the app does not have it" do

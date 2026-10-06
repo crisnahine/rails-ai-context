@@ -57,6 +57,45 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     expect(account).to include("- `default_scope` → where.not(state: \"banned\") (all_queries: true) _(applies to every query on Account)_")
   end
 
+  it "lists a default scope defined as a class method, the form the Rails docs describe" do
+    text = details_for("Tag", "tag.rb" => <<~RUBY, "badge.rb" => <<~BADGE)
+      class Tag < ApplicationRecord
+        def self.default_scope
+          where.not(name: nil)
+        end
+      end
+    RUBY
+      class Badge < ApplicationRecord
+        class << self
+          def default_scope = where(active: true)
+        end
+      end
+    BADGE
+
+    expect(text).to include("- `default_scope` → where.not(name: nil) _(applies to every query on Tag)_")
+    expect(described_class.call(model: "Badge").content.first[:text]).to include("- `default_scope` → where(active: true) _(applies to every query on Badge)_")
+  end
+
+  it "does not list a default scope a nested class or module declares" do
+    text = details_for("Tag", "tag.rb" => <<~RUBY)
+      class Tag < ApplicationRecord
+        class Archived < Tag
+          default_scope { where(archived: true) }
+        end
+        class Finder
+          def self.default_scope = :nope
+        end
+        module Helpers
+          class << self
+            def default_scope = 1
+          end
+        end
+      end
+    RUBY
+
+    expect(text).not_to include("default_scope")
+  end
+
   it "lists a base's default scope ahead of the model's own, the order Rails stacks them, and the model's named scope over the base's" do
     text = details_for("Category", "application_record.rb" => <<~BASE, "category.rb" => <<~RUBY)
       class ApplicationRecord < ActiveRecord::Base
@@ -387,5 +426,22 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     expect(text).to include("- `belongs_to` **noteable** [polymorphic] dependent: destroy (delegated types: Memo, Reminder) (fk: noteable_id)\n")
     expect(text).to include("- `has_secure_token` :share_token, :token\n")
     expect(text).to include("- `accepts_nested_attributes_for` :comments, :tags (allow_destroy: true)\n")
+  end
+
+  it "names the expression a delegated_type's types come from when the source holds no literal list" do
+    text = details_for("Entry", "entry.rb" => "class Entry < ApplicationRecord\n  delegated_type :entryable, types: Entryable::TYPES\nend\n")
+
+    expect(text).to include("- `belongs_to` **entryable** [polymorphic] (delegated types: from `Entryable::TYPES`, not read statically) (fk: entryable_id)\n")
+  end
+
+  it "reads a delegated_type's types from the booted model when the source holds no literal list" do
+    introspector = RailsAiContext::Introspectors::ModelIntrospector.new(Rails.application)
+    model = double("Entry", entryable_types: %w[Memo Reminder])
+    source = { type: "belongs_to", name: :entryable, delegated: true, delegated_types_source: "Entryable::TYPES", options: { polymorphic: "true" } }
+
+    detail = introspector.send(:with_declared_options, { type: "belongs_to", name: "entryable" }, source, model)
+
+    expect(detail[:delegated_types]).to eq(%w[Memo Reminder])
+    expect(detail).not_to have_key(:delegated_types_source)
   end
 end

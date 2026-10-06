@@ -32,10 +32,11 @@ module RailsAiContext
       "mruby" => "mruby", "rbx" => "Rubinius"
     }.freeze
     # mise's project files, highest precedence first (mise docs, configuration).
-    MISE_FILES = [ "mise.local.toml", "mise.toml", ".mise.toml", "mise/config.toml", ".config/mise.toml" ].freeze
+    MISE_FILES = [ "mise.local.toml", "mise.toml", ".mise.toml", "mise/config.toml", ".mise/config.toml", ".config/mise.toml",
+                   ".config/mise/config.toml" ].freeze
     VERSION_FILES = [ ".ruby-version", ".tool-versions", *MISE_FILES ].freeze
     # The line `rails new` and `rails plugin new` write into config/boot.rb.
-    BOOT_GEMFILE = /^\s*ENV\[["']BUNDLE_GEMFILE["']\]\s*\|\|=\s*File\.expand_path\(\s*["']([^"']+)["']\s*,\s*__dir__\s*\)/
+    BOOT_GEMFILE = /^\s*ENV\[["']BUNDLE_GEMFILE["']\]\s*(?:\|\|)?=\s*File\.expand_path\(\s*["']([^"']+)["']\s*,\s*(__dir__|__FILE__)\s*\)/
     MISE_TOOLS = /^[ \t]*\[tools\][ \t]*$(.*?)(?=^[ \t]*\[|\z)/m
     # ruby = "3.3.6", ruby = ["3.3.6", ...] or ruby = { version = "3.3.6" }
     MISE_RUBY = /^[ \t]*["']?ruby["']?[ \t]*=[ \t]*(?:\[[ \t]*|\{[^}\n]*?version[ \t]*=[ \t]*)?["']([^"'\n]+)["']/
@@ -184,11 +185,13 @@ module RailsAiContext
 
     # The BUNDLE_GEMFILE config/boot.rb sets, when it is outside the app root.
     def boot_gemfile(root)
-      literal = read_inside(root, "config/boot.rb")&.[](BOOT_GEMFILE, 1)
-      return nil unless literal
+      match = read_inside(root, "config/boot.rb")&.match(BOOT_GEMFILE)
+      return nil unless match
 
       real_root = File.realpath(root)
-      target = File.expand_path(literal, File.join(real_root, "config"))
+      # Relative to __FILE__ the path starts from boot.rb itself, one level below __dir__.
+      base = match[2] == "__FILE__" ? File.join(real_root, "config", "boot.rb") : File.join(real_root, "config")
+      target = File.expand_path(match[1], base)
       target unless target.start_with?(SafePath.dir_prefix(real_root))
     end
     private_class_method :boot_gemfile

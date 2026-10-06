@@ -288,7 +288,7 @@ RSpec.describe RailsAiContext::Tools::GetApi do
         expect(text).to include("**Mode:** Full-stack app (config.api_only = false)")
         expect(text).to include("**Serialization:** Jbuilder (3 templates)")
         expect(text).to include("**GraphQL:** not detected (no app/graphql directory)")
-        expect(text).to include("**Versioning:** not detected (no api/v* directories under app/controllers, app/api or lib/api)")
+        expect(text).to include("**Versioning:** not detected (no api/v* directory with Ruby code under app/controllers, app/api or lib/api)")
         expect(text).to include("**Rate limiting:** not detected (no Rack::Attack initializer, no rate_limit macro)")
         expect(text).to include("**CORS:** not detected (no CORS initializer)")
         expect(text).to include("**Pagination:** no pagination gem detected (pagy/kaminari/will_paginate)")

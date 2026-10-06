@@ -77,7 +77,7 @@ module RailsAiContext
         unless app_present?(root)
           return absent(root, messages, command: command) unless allow_static
 
-          return enter_static("no config/environment.rb in #{root}", :source_only, root, messages)
+          return enter_static("no config/environment.rb in the app root", :source_only, root, messages)
         end
 
         # Bundler.setup (in config/boot.rb) strips $LOAD_PATH and the spec
@@ -180,7 +180,8 @@ module RailsAiContext
       def self.enter_static(reason, kind, root, messages)
         require_gem_without_app!
         RailsAiContext.tier = :static
-        RailsAiContext.static_reason = reason
+        # Every tool response carries this in its footer, so an absolute path in a boot error goes root-relative.
+        RailsAiContext.static_reason = RailsAiContext::PortablePath.relativize_text(reason, root)
         RailsAiContext.static_kind = kind
         RailsAiContext.configuration.app_root = root
         Configuration.auto_load!(root)

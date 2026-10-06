@@ -44,6 +44,15 @@ RSpec.describe RailsAiContext::Introspectors::EnvIntrospector do
       end
     end
 
+    it "describes the cache prefix and Kamal's host as their sources do" do
+      docs = described_class::KNOWN_ENV_VARS.to_h { |spec| [ spec[:name], spec[:doc] ] }
+
+      expect(docs["RAILS_CACHE_ID"]).to include("expand_cache_key").and include("not Rails.cache")
+      expect(docs["RAILS_APP_VERSION"]).to include("expand_cache_key")
+      expect(docs["KAMAL_HOST"]).to include("Kamal sets")
+      expect(docs["KAMAL_HOST"]).not_to include("override")
+    end
+
     context "when RAILS_ENV is explicitly set" do
       before do
         @original = ENV["RAILS_ENV"]

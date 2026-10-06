@@ -163,8 +163,9 @@ module RailsAiContext
       SEVERITY = "DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL|UNKNOWN|ANY"
       # Only where a formatter writes a severity: Logger::Formatter's "I, [ts]  INFO --",
       # a leading "INFO"/"[INFO]", "[ts] INFO", "<timestamp> INFO", Sidekiq 6/7's
-      # "pid=.. tid=.. INFO: ", or logfmt level=.
+      # "pid=.. tid=.. INFO: ", logfmt level=, or semantic_logger's "<timestamp> E [pid:thread]".
       SEVERITY_FIELD = Regexp.union(
+        /\A\d{4}-\d\d-\d\d[T ][\d:.]+ ([TDIWEF]) \[/,
         /\A[DIWEFA], \[[^\]]*\]\s+(#{SEVERITY}) -- /o,
         /\A\[?(#{SEVERITY})\]?(?=[\s:]|\z)/o,
         /\A\[[^\]]*\]\s+\[?(#{SEVERITY})\]?\s/o,
@@ -173,6 +174,8 @@ module RailsAiContext
         /\b(?:level|severity)=(#{SEVERITY})\b/io
       )
 
+      # semantic_logger writes the first letter of its level; trace sits below debug.
+      LEVEL_ALIASES = { "WARNING" => "WARN", "T" => "DEBUG", "D" => "DEBUG", "I" => "INFO", "W" => "WARN", "E" => "ERROR", "F" => "FATAL" }.freeze
       ANSI_COLOR = /\e\[[\d;]*m/
       BACKTRACE_FRAME = /\S:\d+:in /
 
@@ -192,7 +195,7 @@ module RailsAiContext
         when :standard
           match = line.gsub(ANSI_COLOR, "").match(SEVERITY_FIELD)
           level = match&.captures&.compact&.first&.upcase
-          level == "WARNING" ? "WARN" : level
+          LEVEL_ALIASES.fetch(level, level)
         end
       end
 

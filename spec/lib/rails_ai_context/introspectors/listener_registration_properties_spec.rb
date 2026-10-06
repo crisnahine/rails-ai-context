@@ -48,6 +48,7 @@ RSpec.describe "Listener registration properties" do
             config.autoload_paths += %w[lib_static]
             config.log_tags ||= [ :request_id ]
             config.force_ssl &&= false
+            config.hosts << "probe" rescue nil
 
             if @state == 1
               config.cache_store = :memory_store

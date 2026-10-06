@@ -291,6 +291,7 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
         expect(outcome.kind).to eq(:source_only)
         expect(outcome.reason).to include("config/environment.rb")
         expect(outcome.messages).not_to include(a_string_starting_with("[rails-ai-context] App boot failed:"))
+        expect(RailsAiContext.static_reason).to eq("no config/environment.rb in the app root")
       end
     end
 

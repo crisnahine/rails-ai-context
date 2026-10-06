@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require "ipaddr"
+require "uri"
+
 module RailsAiContext
   module Tools
     class GetEnv < BaseTool
@@ -332,7 +335,10 @@ module RailsAiContext
 
       # The config gem merges config/settings.yml, then config/settings/<env>.yml
       # and config/environments/<env>.yml over it; *.local.yml is on sensitive_patterns.
+      # Without the gem a config/settings.yml is the app's own file and no Settings constant exists.
       private_class_method def self.scan_settings(root)
+        return [] unless RailsAiContext::GemLock.for(root).present?("config")
+
         files = [ "config/settings.yml" ] +
           %w[settings environments].flat_map { |dir| Dir.glob(File.join(root, "config", dir, "*.yml")).sort.map { |path| path.delete_prefix("#{root}/") } }
         files.filter_map do |file|
@@ -568,8 +574,16 @@ module RailsAiContext
       HTTP_CLIENT_CALLS = {
         "Faraday" => /Faraday\.\w+#{HTTP_URL_ARG.source}/,
         "Net::HTTP" => /Net::HTTP\.\w+#{HTTP_URL_ARG.source}/,
-        "HTTParty" => /HTTParty\.\w+#{HTTP_URL_ARG.source}/
+        "HTTParty" => /HTTParty\.\w+#{HTTP_URL_ARG.source}/,
+        "RestClient" => /RestClient\.\w+#{HTTP_URL_ARG.source}/,
+        "HTTP" => /(?<![\w:])HTTP\.\w+#{HTTP_URL_ARG.source}/,
+        "Excon" => /Excon\.\w+#{HTTP_URL_ARG.source}/,
+        "Typhoeus" => /Typhoeus\.\w+#{HTTP_URL_ARG.source}/,
+        "URI.open" => /URI\.open#{HTTP_URL_ARG.source}/
       }.freeze
+      # Net::HTTP.start("api.example.com", 443) takes a host, not a URL.
+      NET_HTTP_HOST_ARG = /Net::HTTP\.(?:start|new)\s*\(?\s*["']([^"']+)["']/
+      BARE_HOST = /\A[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\z/i
       HTTP_CLIENT_NAME = Regexp.union(HTTP_CLIENT_CALLS.keys)
 
       private_class_method def self.detect_http_clients(root)
@@ -585,11 +599,16 @@ module RailsAiContext
             next unless source&.match?(HTTP_CLIENT_NAME)
 
             relative = file.sub("#{real_root}/", "")
+            code = source.gsub(/^[ \t]*#.*$/, "")
             HTTP_CLIENT_CALLS.each do |detection, pattern|
-              source.scan(pattern).each do |(url)|
+              code.scan(pattern).each do |(url)|
                 name = extract_service_name_from_url(url)
                 services << { name: name, detection: detection, file: relative } if name
               end
+            end
+            code.scan(NET_HTTP_HOST_ARG).each do |(host)|
+              name = host.match?(BARE_HOST) && service_name_from_host(host)
+              services << { name: name, detection: "Net::HTTP", file: relative } if name
             end
           end
         end
@@ -603,18 +622,23 @@ module RailsAiContext
         return nil if url.start_with?("ENV") || url.include?("#" + "{")
 
         begin
-          uri = URI.parse(url)
-          return nil unless uri&.host
-          # Extract meaningful service name from hostname
-          host = uri.host
-          # Remove common TLDs and subdomains
-          parts = host.split(".")
-          return nil if parts.size < 2
-          # Use the main domain part
-          parts[-2]&.capitalize
+          host = URI.parse(url).host
+          host && service_name_from_host(host)
         rescue => e
           RailsAiContext.debug_fail(e, nil, label: "extract_service_name_from_url")
         end
+      end
+
+      private_class_method def self.service_name_from_host(host)
+        # An address names no service; a loopback, private or unspecified one is not external at all.
+        if (ip = (IPAddr.new(host.delete("[]")) rescue nil))
+          return ip.loopback? || ip.private? || ip.link_local? || ip.to_i.zero? ? nil : host
+        end
+
+        parts = host.split(".")
+        return nil if parts.size < 2
+
+        parts[-2]&.capitalize
       end
 
       # An encrypted credentials file the tool could not open is a different

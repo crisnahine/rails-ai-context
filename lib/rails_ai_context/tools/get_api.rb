@@ -114,7 +114,7 @@ module RailsAiContext
             source = dirs.any? ? dirs.join(", ") : "app/controllers/api/"
             return "#{data[:api_versioning].join(', ')} (#{source})"
           end
-          "not detected (no api/v* directories under app/controllers, app/api or lib/api)"
+          "not detected (no api/v* directory with Ruby code under app/controllers, app/api or lib/api)"
         end
 
         def rate_limiting_line(data)

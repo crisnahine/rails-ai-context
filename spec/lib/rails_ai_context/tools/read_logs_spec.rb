@@ -285,6 +285,11 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
         \e[1;31mERROR\e[0m 2026-10-05T10:00:01.000Z pid=1 tid=abc class=HardJob jid=f00: kaboom
         \e[1;34mINFO \e[0m 2026-10-05T10:00:02.000Z pid=1 tid=abc: done
       LOG
+      "rails_semantic_logger" => <<~LOG,
+        2026-10-06 06:32:32.042138 I [76177:puma srv tp 001] Rails -- start
+        2026-10-06 06:32:32.062138 E [76177:puma srv tp 001] Rails -- Exception: RuntimeError: kaboom
+        2026-10-06 06:32:32.072138 T [76177:puma srv tp 001] Rails -- done
+      LOG
       "Sidekiq JSON" => <<~LOG
         {"ts":"2026-10-05T10:00:00.000Z","pid":1,"tid":"abc","lvl":"INFO","msg":"start"}
         {"ts":"2026-10-05T10:00:01.000Z","pid":1,"tid":"abc","lvl":"ERROR","msg":"kaboom"}

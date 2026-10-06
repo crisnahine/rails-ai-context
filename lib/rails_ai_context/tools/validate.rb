@@ -169,7 +169,7 @@ module RailsAiContext
           errors = result.errors.first(5).map do |e|
             "#{basename}:#{e.location.start_line}:#{e.location.start_column}: #{e.message}"
           end
-          [ false, errors.join("\n"), warnings ]
+          [ false, errors.join("\n") + grammar_note, warnings ]
         end
       rescue => _e
         validate_ruby_subprocess(full_path)
@@ -178,6 +178,18 @@ module RailsAiContext
       # Booted, the interpreter running this is the app's own; statically the app's declared Ruby, else this one.
       private_class_method def self.app_ruby_version
         (GemLock.for(rails_app.root.to_s).ruby_version if RailsAiContext.static_tier?) || RUBY_VERSION
+      end
+
+      # JRuby or TruffleRuby names its own version, not the Ruby it implements, so the
+      # running Ruby's grammar may reject what the app's engine accepts.
+      private_class_method def self.grammar_note
+        return "" unless RailsAiContext.static_tier?
+
+        lock = GemLock.for(rails_app.root.to_s)
+        return "" if lock.ruby_version || lock.ruby_engine.nil?
+
+        "\n(checked with Ruby #{RUBY_VERSION}'s grammar; the app declares #{lock.ruby_engine} and no Ruby version, " \
+          "and that engine may implement an older Ruby)"
       end
 
       private_class_method def self.validate_ruby_subprocess(full_path)
@@ -212,7 +224,7 @@ module RailsAiContext
           error = result.errors.first(5).map do |e|
             "line #{[ e.location.start_line - 2, 1 ].max}: #{e.message}"
           end.join("\n")
-          [ false, error, [] ]
+          [ false, error + grammar_note, [] ]
         end
       rescue => e
         [ false, "ERB check error: #{e.message}", [] ]

@@ -59,20 +59,29 @@ module RailsAiContext
       end
 
       CONFIG_FOR = /\A(?:(?:::)?Rails\.application\.)?config_for\(\s*:?["']?([\w\/]+)/
+      CONFIG_FOR_ENV = /(?:\benv:|:env\s*=>)\s*([^,)]+)/
+      LITERAL_ENV = /\A(?:(["'])(\w+)\1|:(\w+))\z/
 
-      # The keys config_for gives this environment: `shared` deep-merged under the
-      # environment's section. Names only: a value is often a secret.
+      # The keys config_for gives the environment it reads (`env:`, else this one):
+      # `shared` deep-merged under that environment's section. Names only: a value is often a secret.
       def config_for_files(assignments)
         assignments.filter_map do |key, entries|
-          name = entries.last[:source].to_s[CONFIG_FOR, 1] or next
+          source = entries.last[:source].to_s
+          name = source[CONFIG_FOR, 1] or next
           file = "config/#{name}.yml"
           entry = { key: key, file: file }
+          environment = current_environment
+          if (env = source[CONFIG_FOR_ENV, 1]&.strip) && env != "Rails.env"
+            literal = env.match(LITERAL_ENV) or next entry.merge(environment_unread: true)
+            environment = literal[2] || literal[3]
+            entry[:environment] = environment
+          end
           next entry.merge(missing: true) unless File.file?(File.join(root, file))
 
           data = RecurringSchedules.yaml(root, file)
           next entry.merge(unreadable: true) unless data.is_a?(Hash)
 
-          sections = [ data["shared"], data[current_environment] ].select { |section| section.is_a?(Hash) }
+          sections = [ data["shared"], data[environment] ].select { |section| section.is_a?(Hash) }
           entry.merge(keys: sections.flat_map(&:keys).uniq.sort)
         end
       end

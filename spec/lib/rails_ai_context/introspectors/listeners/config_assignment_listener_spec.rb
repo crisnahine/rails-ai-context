@@ -146,6 +146,51 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
     ])
   end
 
+  it "records a chained << and a write under a rescue modifier" do
+    writes = parse_and_dispatch(<<~RUBY).select { |r| r[:write] }.map { |r| r[:path] }
+      config.hosts << "a" << "b"
+      config.middleware.push("x") rescue nil
+    RUBY
+
+    expect(writes).to eq([ [ :hosts, :<< ], [ :middleware, :push ] ])
+  end
+
+  it "records a write through an index read as a write of the indexed setting" do
+    writes = parse_and_dispatch(<<~RUBY).select { |r| r[:write] }.map { |r| r[:path] }
+      config.paths["config/routes.rb"] << "config/extra_routes.rb"
+      config.paths["app/views"].unshift "custom/views"
+    RUBY
+
+    expect(writes).to eq([ [ :paths, :<< ], [ :paths, :unshift ] ])
+  end
+
+  it "reads a call whose value is used, not run as a statement, as a read" do
+    writes = parse_and_dispatch(<<~RUBY).select { |r| r[:write] }.map { |r| r[:path] }
+      local_secret_path = config.root.join("tmp/local_secret.txt")
+      config.paths["db/migrate"] << config.root.join("db/native").to_s if ENV["NATIVE"]
+      File.read(config.root.join("VERSION"))
+    RUBY
+
+    expect(writes).to eq([ [ :paths, :<< ] ])
+  end
+
+  it "ignores a method parameter that happens to be named config" do
+    results = parse_and_dispatch(<<~RUBY)
+      module PostgreSQLEarlyExtensions
+        def initialize(config)
+          config = config.dup
+          config[:prepared_statements] = false
+          super
+        end
+      end
+      Devise.setup do |config|
+        config.timeout_in = 5
+      end
+    RUBY
+
+    expect(results.map { |r| r[:path] }).to eq([ [ :timeout_in ] ])
+  end
+
   it "ignores assignments on other receivers" do
     expect(assignments("settings.timeout_in = 5")).to be_empty
   end

@@ -29,6 +29,15 @@ RSpec.describe RailsAiContext::Introspectors::ConventionIntrospector do
       expect(result[:config_files]).to be_an(Array)
     end
 
+    it "names the .erb-lint.yml erb_lint still loads under its old name" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".erb-lint.yml"), "")
+        app = double("app", root: Pathname.new(dir), config: double(api_only: false))
+
+        expect(described_class.new(app).call[:config_files]).to include(".erb-lint.yml")
+      end
+    end
+
     it "names the linter and type-checker config files beside .rubocop.yml" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "sorbet"))
@@ -431,6 +440,19 @@ end
         File.write(File.join(dir, path), source)
         app = double("app", root: Pathname.new(dir), config: double(api_only: false))
         described_class.new(app).call[:architecture]
+      end
+    end
+
+    it "claims Grape only when the bundle has grape, never from an app/api directory alone" do
+      expect(architecture_for("app/api/v0/openapi.json", "{}")).not_to include("grape_api")
+      expect(architecture_for("app/api/v1/base.rb", "class Base; end\n")).not_to include("grape_api")
+
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/api"))
+        File.write(File.join(dir, "app/api/base.rb"), "class Base < Grape::API; end\n")
+        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    grape (2.0.0)\n\nDEPENDENCIES\n  grape\n")
+        app = double("app", root: Pathname.new(dir), config: double(api_only: false))
+        expect(described_class.new(app).call[:architecture]).to include("grape_api")
       end
     end
 

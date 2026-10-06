@@ -26,7 +26,7 @@ module RailsAiContext
         arch << "api_only" if app.config.api_only
         arch << "hotwire" if stimulus? || gem_present?("turbo-rails")
         arch << "graphql" if dir_exists?("app/graphql")
-        arch << "grape_api" if dir_exists?("app/api")
+        arch << "grape_api" if dir_exists?("app/api") && gem_present?("grape")
         arch << "service_objects" if dir_exists?("app/services")
         arch << "form_objects" if dir_exists?("app/forms")
         arch << "query_objects" if dir_exists?("app/queries")
@@ -218,7 +218,7 @@ module RailsAiContext
           config/locales/en.yml
           package.json Gemfile
           Procfile Procfile.dev
-          .rubocop.yml .standard.yml .erb_lint.yml .rspec
+          .rubocop.yml .standard.yml .erb_lint.yml .erb-lint.yml .rspec
           sorbet/config Steepfile
           Dockerfile docker-compose.yml
           .github/workflows/ci.yml

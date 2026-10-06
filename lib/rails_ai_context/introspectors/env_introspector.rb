@@ -58,13 +58,13 @@ module RailsAiContext
         { name: "REDIS_URL",                    safe: false, category: :cache,      doc: "Redis URL (cache / Sidekiq / Action Cable)." },
         { name: "REDIS_CACHE_URL",              safe: false, category: :cache,      doc: "Dedicated Redis URL for caching." },
         { name: "MEMCACHED_URL",                safe: false, category: :cache,      doc: "Memcached URL." },
-        { name: "RAILS_CACHE_ID",               safe: true,  category: :cache,      doc: "Prefix on every cache key." },
-        { name: "RAILS_APP_VERSION",            safe: true,  category: :cache,      doc: "Prefix on every cache key when RAILS_CACHE_ID is unset." },
+        { name: "RAILS_CACHE_ID",               safe: true,  category: :cache,      doc: "Prefix ActiveSupport::Cache.expand_cache_key adds (fragment and view caching), not Rails.cache keys." },
+        { name: "RAILS_APP_VERSION",            safe: true,  category: :cache,      doc: "The expand_cache_key prefix when RAILS_CACHE_ID is unset." },
         { name: "SOLID_QUEUE_IN_PUMA",          safe: true,  category: :jobs,       doc: "Run the Solid Queue supervisor inside Puma (generated config/puma.rb)." },
 
         # Kamal / deployment
         { name: "KAMAL_REGISTRY_PASSWORD",      safe: false, category: :deploy,     doc: "Kamal container registry password." },
-        { name: "KAMAL_HOST",                   safe: true,  category: :deploy,     doc: "Kamal target host override." },
+        { name: "KAMAL_HOST",                   safe: true,  category: :deploy,     doc: "The host the container runs on; Kamal sets it, never reads it." },
 
         # Heroku
         { name: "DYNO",                         safe: true,  category: :platform,   doc: "Heroku dyno name." },

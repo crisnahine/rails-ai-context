@@ -79,7 +79,8 @@ module RailsAiContext
           config_for.each do |entry|
             found = if entry[:missing] then "does not exist"
             elsif entry[:unreadable] then "could not be read as YAML"
-            else "keys for #{current}: #{Array(entry[:keys]).join(', ').presence || 'none'}"
+            elsif entry[:environment_unread] then "keys not read: its env: is not a literal"
+            else "keys for #{entry[:environment] || current}: #{Array(entry[:keys]).join(', ').presence || 'none'}"
             end
             lines << "- `#{entry[:key]}` = config_for(:#{entry[:file].delete_prefix('config/').delete_suffix('.yml')}), `#{entry[:file]}` #{found}"
           end

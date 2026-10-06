@@ -822,6 +822,37 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     end
   end
 
+  describe "HTTP clients beyond Faraday, Net::HTTP and HTTParty, and hosts that are not names" do
+    it "detects RestClient, http.rb, Excon, Typhoeus, URI.open and a Net::HTTP host argument, and skips a local or private IP" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/clients"))
+        FileUtils.mkdir_p(File.join(dir, "config/initializers"))
+        File.write(File.join(dir, "app/clients/sibling_client.rb"), <<~RUBY)
+          class SiblingClient
+            def c = RestClient.get("https://api.kappa.example/x")
+            def d = HTTP.get("https://api.lambda.example/x")
+            def g = Excon.get("https://api.xi.example")
+            def h = Net::HTTP.start("api.omicron.example", 443) { }
+            def i = URI.open("https://api.pi.example/feed")
+            def j = Typhoeus.get("https://api.rho.example/x")
+            def k = Net::HTTP.get(URI("http://10.0.0.5:9200/x"))
+            def l = Net::HTTP.get(URI("http://8.8.8.8/x"))
+            def m = Net::HTTP.get(URI("http://0.0.0.0:3000/x"))
+            def n = URI.open("report.pdf")
+            def o = HTTP.get("index.html")
+            # response = Net::HTTP.start('api.commented.example', :use_ssl => true)
+          end
+        RUBY
+        File.write(File.join(dir, "config/initializers/health.rb"), 'HEALTH = -> { Net::HTTP.get(URI("http://127.0.0.1:9200/_cluster/health")) }' + "\n")
+        allow(described_class).to receive(:detect_external_services).and_call_original
+
+        services = described_class.send(:detect_external_services, dir, [])
+
+        expect(services.map { |s| s[:name] }).to contain_exactly(*%w[Kappa Lambda Xi Omicron Pi Rho 8.8.8.8])
+      end
+    end
+  end
+
   describe "a service the Gemfile only names in a comment" do
     it "is not detected" do
       Dir.mktmpdir do |dir|
@@ -996,6 +1027,7 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     end
 
     it "lists the setting keys each file gives and each config class's attributes with their env names, never a value" do
+      write("Gemfile.lock", "GEM\n  remote: https://rubygems.org/\n  specs:\n    config (5.5.1)\n\nDEPENDENCIES\n  config\n")
       write("config/settings.yml", "payments:\n  provider: stripe\n  timeout: 30\n")
       write("config/settings/production.yml", "payments:\n  timeout: 10\n")
       write("config/settings.local.yml", "payments:\n  secret: shh\n")
@@ -1022,6 +1054,15 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
         expect(text).to include("- `PaymentConfig` (`config/configs/payment_config.rb`): `api_key` (`PAYMENT_API_KEY`, required), `timeout` (`PAYMENT_TIMEOUT`)")
         expect(text).to include("- `GeoConfig` (`app/configs/geo_config.rb`): `token` (`MAPS_TOKEN`)")
         expect(text).not_to include("stripe")
+      end
+    end
+
+    it "lists no settings when the bundle has no config gem, since no Settings constant exists" do
+      write("Gemfile.lock", "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (8.1.0)\n\nDEPENDENCIES\n  rails\n")
+      write("config/settings.yml", "payments:\n  provider: stripe\n")
+
+      %w[standard full].each do |detail|
+        expect(described_class.call(detail: detail).content.first[:text]).not_to include("Settings")
       end
     end
 

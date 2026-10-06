@@ -40,11 +40,11 @@ RSpec.describe RailsAiContext::Tools::Validate do
 
       after { FileUtils.rm_f(grid) }
 
-      def validate_as(ruby, static:, interpreter: ruby)
+      def validate_as(ruby, static:, interpreter: ruby, engine: nil)
         allow(RailsAiContext).to receive(:static_tier?).and_return(static)
         allow(described_class).to receive(:rails_app).and_return(Rails.application)
         stub_const("RUBY_VERSION", interpreter) if interpreter
-        lock = instance_double(RailsAiContext::GemLock::Spec, ruby_version: ruby)
+        lock = instance_double(RailsAiContext::GemLock::Spec, ruby_version: ruby, ruby_engine: engine)
         allow(RailsAiContext::GemLock).to receive(:for).and_call_original
         allow(RailsAiContext::GemLock).to receive(:for).with(Rails.root.to_s).and_return(lock)
         described_class.call(files: [ "tmp/grid_index_kwargs.rb" ]).content.first[:text]
@@ -58,6 +58,12 @@ RSpec.describe RailsAiContext::Tools::Validate do
       it "parses statically with the running Ruby's grammar when the app declares none, as booted does" do
         expect(validate_as(nil, static: true, interpreter: "3.3.9")).to include("1/1 files passed")
         expect(validate_as(nil, static: false, interpreter: "3.3.9")).to include("1/1 files passed")
+      end
+
+      it "says which grammar it used when the app declares another engine and no Ruby version" do
+        text = validate_as(nil, static: true, interpreter: "3.4.9", engine: "JRuby 9.4.5.0")
+        expect(text).to include("checked with Ruby 3.4.9's grammar; the app declares JRuby 9.4.5.0 and no Ruby version")
+        expect(validate_as("3.4.9", static: true)).not_to include("grammar")
       end
 
       it "passes it booted on Ruby 3.3, and fails it for an app on Ruby 3.4" do

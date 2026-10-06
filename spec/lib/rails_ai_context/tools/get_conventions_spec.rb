@@ -515,6 +515,10 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
       expect(result).to eq([ "Vite" ])
     end
 
+    it "names Rollup, the third jsbundling-rails bundler" do
+      expect(stack("devDependencies" => { "rollup" => "^4.0.0" })).to eq([ "Rollup" ])
+    end
+
     it "names a tool reached only through a scoped plugin package" do
       result = stack("devDependencies" => { "@tailwindcss/vite" => "^4.0.0", "@hotwired/turbo-rails" => "^8.0.0" })
       expect(result).to contain_exactly("Tailwind CSS", "Turbo")
