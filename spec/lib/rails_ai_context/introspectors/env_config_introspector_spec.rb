@@ -471,5 +471,14 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
         { key: "other", call: 'Rails.root.join(dir, "x.yml")', path_unread: true }
       ])
     end
+
+    it "does not read a config_for file on sensitive_patterns, and says so" do
+      result = application(
+        "config/application.rb" => "module App\n  class Application < Rails::Application\n    config.redis = config_for(:redis)\n  end\nend\n",
+        "config/redis.yml" => "shared:\n  url: redis://x\n"
+      )
+
+      expect(result[:config_for]).to eq([ { key: "redis", call: ":redis", file: "config/redis.yml", withheld: true } ])
+    end
   end
 end

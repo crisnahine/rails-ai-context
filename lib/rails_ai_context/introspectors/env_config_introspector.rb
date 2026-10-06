@@ -72,6 +72,7 @@ module RailsAiContext
           when String then environment = entry[:environment] = call[:env]
           end
           next entry.merge(missing: true) unless File.file?(File.join(root, call[:file]))
+          next entry.merge(withheld: true) if SafePath.sensitive?(call[:file])
 
           data = RecurringSchedules.yaml(root, call[:file])
           next entry.merge(unreadable: true) unless data.is_a?(Hash)
