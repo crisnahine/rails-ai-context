@@ -244,6 +244,20 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         end
       end
 
+      it "names no dump for an app whose tables come from the migrations" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db", "migrate"))
+          File.write(File.join(dir, "db", "migrate", "20240101000000_create_users.rb"),
+                     "class CreateUsers < ActiveRecord::Migration[8.0]\n  def change\n    create_table :users\n  end\nend\n")
+
+          result = described_class.new(RailsAiContext::StaticApp.new(dir)).send(:static_schema_parse)
+
+          expect(result[:tables]).to have_key("users")
+          expect(result[:declared_tables]).to be_nil
+          expect(result[:declared_in]).to be_nil
+        end
+      end
+
       it "claims no db/schema.rb declaration for a structure.sql app" do
         result = introspector.call
 
