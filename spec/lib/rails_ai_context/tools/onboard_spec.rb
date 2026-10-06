@@ -22,6 +22,31 @@ RSpec.describe RailsAiContext::Tools::Onboard do
     end
   end
 
+  describe "an engine's test/dummy whose bundle is outside the repository" do
+    it "says the engine's tests are not read, not that there are none" do
+      Dir.mktmpdir do |engine|
+        dummy = File.join(engine, "test", "dummy")
+        FileUtils.mkdir_p(File.join(dummy, "config"))
+        File.write(File.join(dummy, "config", "boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n))
+        File.write(File.join(engine, "shop.gemspec"), "")
+        File.write(File.join(engine, "Gemfile"), "gemspec\n")
+        File.write(File.join(engine, "test", "test_helper.rb"), "")
+        allow(RailsAiContext::PathResolver).to receive(:enclosing_engine_roots).and_return([])
+        app = RailsAiContext::StaticApp.new(dummy)
+        allow(described_class).to receive(:rails_app).and_return(app)
+        tests = RailsAiContext::Introspectors::TestIntrospector.new(app).call
+        allow(described_class).to receive(:cached_context).and_return({ app_name: "Dummy", models: {}, tests: tests })
+
+        standard = described_class.call(detail: "standard").content.first[:text]
+        quick = described_class.call(detail: "quick").content.first[:text]
+
+        expect(standard).to include("Framework: not read.")
+        expect(standard).not_to include("no tests yet", "Data setup: inline")
+        expect(quick).to include("with its tests not read")
+      end
+    end
+  end
+
   describe "an app with no tables yet" do
     it "names the adapter database.yml declares" do
       Dir.mktmpdir do |dir|

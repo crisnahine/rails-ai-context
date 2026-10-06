@@ -6,6 +6,7 @@ module RailsAiContext
   module TestFramework
     BASES = %w[spec test].freeze
     NO_TESTS = "no tests yet"
+    NOT_READ = "not read"
     RSPEC_MARKERS = %w[spec/spec_helper.rb spec/rails_helper.rb spec/factories].freeze
     MINITEST_MARKERS = %w[test/test_helper.rb].freeze
 
@@ -16,13 +17,23 @@ module RailsAiContext
     #
     # @return [String] "rspec", "minitest", "rspec, minitest", or
     #   "no tests yet", with "(rspec-rails in the bundle)" or
-    #   "(minitest in the bundle)" when the bundle names one
+    #   "(minitest in the bundle)" when the bundle names one, or "not read"
+    #   for a suite left unread (see `unread_gemfile`)
     def for(root)
       found = suites(root)
       return found.join(", ") if found.any?
+      return NOT_READ if unread_gemfile(root)
 
       bundled = from_lockfile(GemLock.for(root))
       bundled ? "#{NO_TESTS} (#{bundled == "rspec" ? "rspec-rails" : bundled} in the bundle)" : NO_TESTS
+    end
+
+    # The Gemfile config/boot.rb names outside the git repository, for an app with no
+    # suite of its own (an engine's test/dummy): the engine's suite there is not read.
+    def unread_gemfile(root)
+      return nil if BASES.any? { |dir| Dir.exist?(File.join(root.to_s, dir)) }
+
+      GemLock.for(root).outside_gemfile
     end
 
     def none?(framework)
