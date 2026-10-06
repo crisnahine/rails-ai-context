@@ -33,6 +33,24 @@ module RailsAiContext
           }
         end
 
+        # Rails calls a `def self.default_scope` the model defines, as it does the macro's lambda.
+        def on_def_node_enter(node)
+          own = node.receiver.is_a?(Prism::SelfNode) || (node.receiver.nil? && @singleton_depth.to_i.positive?)
+          if own && node.name == :default_scope && node.body
+            @results << { name: "default_scope", default: true, body: one_line_source(node.body),
+                          location: node.location.start_line, confidence: Confidence::VERIFIED }
+          end
+          super if defined?(super)
+        end
+
+        def on_singleton_class_node_enter(_node)
+          @singleton_depth = @singleton_depth.to_i + 1
+        end
+
+        def on_singleton_class_node_leave(_node)
+          @singleton_depth -= 1
+        end
+
         private
 
         # Named `default_scope` and marked `default`: it is no method to call,

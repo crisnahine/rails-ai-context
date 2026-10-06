@@ -56,6 +56,25 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     expect(account).to include("- `default_scope` → where.not(state: \"banned\") (all_queries: true) _(applies to every query on Account)_")
   end
 
+  it "lists a default scope defined as a class method, the form the Rails docs describe" do
+    text = details_for("Tag", "tag.rb" => <<~RUBY, "badge.rb" => <<~BADGE)
+      class Tag < ApplicationRecord
+        def self.default_scope
+          where.not(name: nil)
+        end
+      end
+    RUBY
+      class Badge < ApplicationRecord
+        class << self
+          def default_scope = where(active: true)
+        end
+      end
+    BADGE
+
+    expect(text).to include("- `default_scope` → where.not(name: nil) _(applies to every query on Tag)_")
+    expect(described_class.call(model: "Badge").content.first[:text]).to include("- `default_scope` → where(active: true) _(applies to every query on Badge)_")
+  end
+
   it "lists a base's default scope ahead of the model's own, the order Rails stacks them, and the model's named scope over the base's" do
     text = details_for("Category", "application_record.rb" => <<~BASE, "category.rb" => <<~RUBY)
       class ApplicationRecord < ActiveRecord::Base
