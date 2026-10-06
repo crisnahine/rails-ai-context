@@ -454,6 +454,42 @@ RSpec.describe RailsAiContext::ActionFilters do
           RailsAiContext.tier = previous
         end
       end
+
+      it "follows the method through a class method a concern of the base defines" do
+        Dir.mktmpdir do |dir|
+          app_with_authentication(dir)
+          File.write(File.join(dir, "app", "controllers", "concerns", "publicity.rb"), <<~RUBY)
+            module Publicity
+              extend ActiveSupport::Concern
+
+              class_methods do
+                def public_page
+                  allow_unauthenticated_access only: :show
+                end
+              end
+            end
+          RUBY
+          File.write(File.join(dir, "app", "controllers", "application_controller.rb"),
+                     "class ApplicationController < ActionController::Base\n  include Authentication\n  include Publicity\nend\n")
+          File.write(File.join(dir, "app", "controllers", "pages_controller.rb"), <<~RUBY)
+            class PagesController < ApplicationController
+              public_page
+              def home; end
+              def show; end
+            end
+          RUBY
+          ctx = static_context(dir)
+          previous = RailsAiContext.tier
+          RailsAiContext.tier = :static
+
+          expect(described_class.for(ctx, "PagesController", "show", root: dir)[:skipped]).to eq([ "require_authentication" ])
+          home = described_class.for(ctx, "PagesController", "home", root: dir)
+          expect(home[:skipped]).to eq([])
+          expect(home[:chain].map { |f| f[:name] }).to eq(%w[require_authentication])
+        ensure
+          RailsAiContext.tier = previous
+        end
+      end
     end
 
     it "reads the initializers once per run, however many gem controllers ask" do

@@ -16,6 +16,12 @@ module RailsAiContext
       def arguments = node.arguments
       def location = node.location
       def name = node.name
+
+      # The call outside any method a chain of relayed calls starts from.
+      def self.root(site)
+        site = site.outer while site.is_a?(Relayed)
+        site
+      end
     end
 
     # Ruby's class-method lookup over a class (rank 0), its bases nearest first and the modules
@@ -32,8 +38,8 @@ module RailsAiContext
 
       # A class method; `owner` is a class file's rank or a module's label, `alias_of` the name an alias copies,
       # `at` its place in the owner's lookup when not its line (a base body's, after the base's file),
-      # `joined` [line, argument index] of the hook's call adding the nested module it is in.
-      Def = Struct.new(:owner, :name, :line, :super_line, :calls, :alias_of, :at, :joined) do
+      # `joined` [line, argument index] of the hook's call adding the nested module it is in; `node` the def itself.
+      Def = Struct.new(:owner, :name, :line, :super_line, :calls, :alias_of, :at, :joined, :node) do
         def key = at ? [ owner, *at ] : [ owner, line ]
       end
       # One step of a singleton ancestry, existing from `at` ([line, order, ...]).
@@ -53,7 +59,7 @@ module RailsAiContext
           inner.is_a?(Prism::SuperNode) || inner.is_a?(Prism::ForwardingSuperNode)
         end
         calls = node.body ? Introspectors::SourceIntrospector.calls_outside_methods(node.body, self_receiver: true) : {}
-        Def.new(owner, node.name.to_s, node.location.start_line, super_node&.location&.start_line, calls)
+        Def.new(owner, node.name.to_s, node.location.start_line, super_node&.location&.start_line, calls).tap { |found| found.node = node }
       end
 
       # Where a base body's def sits in the lookup: after every class file's, then by load order and line.
@@ -489,10 +495,7 @@ module RailsAiContext
         @defs_named.fetch(name, [])
       end
 
-      def root(site)
-        site = site.outer while site.is_a?(Relayed)
-        site
-      end
+      def root(site) = Relayed.root(site)
 
       def forget
         @sites_by_name = @running = @defs_named = @signature = nil
