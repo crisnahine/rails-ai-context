@@ -1021,6 +1021,20 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
       )
     end
 
+    it "says which && or || guard a route is drawn under" do
+      records = route_records(<<~RUBY)
+        Rails.application.routes.draw do
+          Rails.env.local? && get("andand", to: "posts#andand")
+          ENV["OFF"] || get("oror", to: "posts#oror")
+          get "always", to: "posts#index"
+        end
+      RUBY
+
+      expect(records.to_h { |r| [ r[:path], r[:condition] ] }).to eq(
+        "/andand" => "if Rails.env.local?", "/oror" => 'unless ENV["OFF"]', "/always" => nil
+      )
+    end
+
     it "says which case branch a route is drawn under" do
       records = route_records(<<~RUBY)
         Rails.application.routes.draw do

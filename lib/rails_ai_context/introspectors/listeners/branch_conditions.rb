@@ -16,6 +16,23 @@ module RailsAiContext
           enter_condition(node, "unless", node.else_clause)
         end
 
+        # `Rails.env.local? && get(...)` draws only when the left side holds.
+        def on_and_node_enter(node)
+          enter_guard(node, "if")
+        end
+
+        def on_or_node_enter(node)
+          enter_guard(node, "unless")
+        end
+
+        def on_and_node_leave(node)
+          on_if_node_leave(node)
+        end
+
+        def on_or_node_leave(node)
+          on_if_node_leave(node)
+        end
+
         def on_else_node_enter(node)
           current = branch_conditions.last
           current[:negated] = true if current && current[:other].equal?(node)
@@ -78,6 +95,14 @@ module RailsAiContext
           return unless @statements
 
           Array(statements&.body).each { |statement| @statements[statement] = true } if statements.is_a?(Prism::StatementsNode)
+        end
+
+        # ponytail: the guard covers both operands; a route on the left of `&&` would be mislabelled.
+        def enter_guard(node, keyword)
+          return unless branch_statement?(node)
+
+          @statements[node.right] = true if @statements
+          branch_conditions << { node: node, text: "#{keyword} #{node.left.slice.gsub(/\s+/, " ")}" }
         end
 
         def enter_condition(node, keyword, other)
