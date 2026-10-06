@@ -185,7 +185,7 @@ module RailsAiContext
 
         # Schema columns - inline from schema introspection
         if data[:table_name]
-          table_data = Payload.model_table(Payload.section(cached_context, :schema), data)
+          (source, table_data), *others = Payload.model_tables(Payload.section(cached_context, :schema), data)
           if table_data
             ignored = Array(data[:ignored_columns])
             cols = (table_data[:columns] || []).reject { |c| ignored.include?(c[:name].to_s) }
@@ -204,6 +204,11 @@ module RailsAiContext
                 parts << "default: #{c[:default]}" if c[:default] && !c[:default].to_s.empty?
                 parts << "array" if c[:array]
                 lines << "- #{parts.join(' | ')}"
+              end
+              differ = others.reject { |_, other| other[:columns] == table_data[:columns] }.map(&:first)
+              if differ.any?
+                lines << "" << "Columns of `#{data[:table_name]}` in #{source}; the table differs in #{differ.join(", ")}: " \
+                               "`rails_get_schema(table:\"#{data[:table_name]}\")` lists each."
               end
             end
             lines << ignored_columns_line(ignored) if ignored.any?

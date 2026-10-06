@@ -152,10 +152,8 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
     end
   end
 
-  # The four declarations are one question about one class body, and asking
-  # them one at a time parsed and descended the same file three times.
   describe ".declarations" do
-    it "reads all four out of one body" do
+    it "reads every declaration out of one body" do
       source = <<~RUBY
         module Legacy
           def self.table_name_prefix

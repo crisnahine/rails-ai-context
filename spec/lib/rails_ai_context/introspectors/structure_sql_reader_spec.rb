@@ -94,7 +94,6 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
     expect(idx[:columns]).to eq(%w[title user_id])
   end
 
-  # schema.rb carries these options; the dump reader kept only name, keys, unique and where.
   describe "index options" do
     it "reads the method, sort order, operator class and INCLUDE list as the schema.rb reader does" do
       gin, desc, ops, nulls = indexes_for(<<~SQL)

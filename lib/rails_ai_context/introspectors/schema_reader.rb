@@ -40,7 +40,7 @@ module RailsAiContext
           else
             content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
             parsed = content && StructureSqlReader.parse(content)
-            return from_tables(parsed[:tables], source: :structure_sql, path: path) if parsed && parsed[:tables].any?
+            return from_tables(parsed[:tables], source: :structure_sql, path: path, views: parsed[:views]) if parsed && parsed[:tables].any?
           end
         end
 
@@ -56,9 +56,9 @@ module RailsAiContext
 
       # A reader over an already-parsed tables hash, for the sources that do
       # not go through the schema.rb event fold.
-      def self.from_tables(tables, source:, path:)
+      def self.from_tables(tables, source:, path:, views: {})
         reader = allocate
-        reader.send(:initialize_from_tables, tables, source, path)
+        reader.send(:initialize_from_tables, tables, source, path, views)
         reader
       end
 
@@ -139,7 +139,7 @@ module RailsAiContext
 
       attr_reader :path
 
-      def initialize_from_tables(tables, source, path)
+      def initialize_from_tables(tables, source, path, views)
         @path = path
         @pk_type = nil
         @source = source
@@ -154,7 +154,7 @@ module RailsAiContext
           enums: [],
           check_constraints: [],
           extensions: [],
-          views: {},
+          views: views,
           virtual_tables: {},
           not_dumped: {}
         }

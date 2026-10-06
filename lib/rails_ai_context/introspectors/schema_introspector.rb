@@ -78,6 +78,19 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, "unknown", label: "adapter_name")
       end
 
+      def sqlite?
+        adapter_name.to_s.match?(/sqlite/i)
+      end
+
+      def postgres?
+        adapter_name.to_s.match?(/postg/i)
+      end
+
+      # Every MySQL adapter inherits mariadb? from AbstractMysqlAdapter.
+      def mysql?
+        connection.respond_to?(:mariadb?)
+      end
+
       def connection
         ActiveRecord::Base.connection
       end
@@ -109,7 +122,7 @@ module RailsAiContext
         (connection.views - tables.keys - extension_owned).each do |view|
           # Only a materialized view holds rows, so only it can carry an index.
           indexes = materialized.include?(view) ? extract_indexes(view) : []
-          tables[view] = SchemaConventions.view_entry(schema_reader.views.dig(view, :sql), materialized: materialized.include?(view),
+          tables[view] = SchemaConventions.view_entry(declared_dump.views.dig(view, :sql), materialized: materialized.include?(view),
                                                       columns: extract_columns(view), indexes: indexes)
         end
         sqlite_virtual_tables.each do |name, (mod, arguments)|
@@ -119,11 +132,11 @@ module RailsAiContext
       end
 
       def sqlite_virtual_tables
-        adapter_name.to_s.match?(/sqlite/i) ? SqliteVirtualTables.of(connection) : {}
+        sqlite? ? SqliteVirtualTables.of(connection) : {}
       end
 
       def sqlite_hidden_tables
-        adapter_name.to_s.match?(/sqlite/i) ? SqliteVirtualTables.hidden(connection) : []
+        sqlite? ? SqliteVirtualTables.hidden(connection) : []
       end
 
       PG_VIEWS = <<~SQL
@@ -135,7 +148,7 @@ module RailsAiContext
       # PostgreSQL lists materialized views among the views, and an extension's own
       # (PostGIS geometry_columns, pg_stat_statements) beside the app's.
       def pg_view_names
-        return [ [], [] ] unless adapter_name.to_s.match?(/postg/i)
+        return [ [], [] ] unless postgres?
 
         rows = connection.select_rows(PG_VIEWS)
         [ rows.select { |_, kind, _| kind == "m" }.map(&:first), rows.select { |*, owned| owned == true || owned == "t" }.map(&:first) ]
@@ -196,7 +209,7 @@ module RailsAiContext
           precision: precision,
           scale: col.scale,
           unsigned: (true if col.respond_to?(:unsigned?) && col.unsigned?),
-          size: (SchemaConventions.mysql_text_size(col.sql_type) if connection.respond_to?(:mariadb?)),
+          size: (SchemaConventions.mysql_text_size(col.sql_type) if mysql?),
           collation: (col.collation unless col.collation.nil? || col.collation == table_collation(table))
         }
       end
@@ -205,7 +218,7 @@ module RailsAiContext
 
       # MySQL gives every text column the table's collation; the dump names only a different one.
       def table_collation(table)
-        return unless connection.respond_to?(:mariadb?)
+        return unless mysql?
 
         @table_collations ||= connection.select_rows(TABLE_COLLATIONS).to_h
         @table_collations[table]
@@ -247,7 +260,7 @@ module RailsAiContext
 
       # MySQL's dumper writes an enum or set column by its full SQL type, and a timestamp as one.
       def dumped_type(col)
-        return col.type.to_s unless connection.respond_to?(:mariadb?)
+        return col.type.to_s unless mysql?
         return col.sql_type.to_s if col.sql_type.to_s.match?(/\A(?:enum|set)\b/)
 
         col.sql_type.to_s.match?(/\Atimestamp\b/) ? "timestamp" : col.type.to_s
@@ -288,10 +301,16 @@ module RailsAiContext
         @schema_reader ||= SchemaReader.new(schema_file_path, partitions: @partitions.to_a)
       end
 
+      # The configured dump, whatever its format: a view's SQL and a MySQL generated expression are not on the connection.
+      def declared_dump
+        format, = present_dump
+        format == :sql ? SchemaReader.for(app.root) : schema_reader
+      end
+
       # MySQL keeps a generated column's expression out of the column, so the dump says it.
       def declared_generated(table, name)
-        column = schema_reader.tables.dig(table, :columns)&.find { |c| c[:name] == name }
-        column&.dig(:options, :as)
+        column = declared_dump.tables.dig(table, :columns)&.find { |c| c[:name] == name }
+        column && (column.dig(:options, :as) || column[:generated])
       end
 
       # PostgreSQL before Rails 7.1 had only stored generated columns.
@@ -348,9 +367,19 @@ module RailsAiContext
         @dump_candidates ||= SchemaDumpPath.candidates(app.root)
       end
 
-      # The schema.rb dump Rails loads for this app, or nil when it loads structure.sql or nothing.
+      # The dump Rails loads for this app, whether or not it is on disk.
+      def schema_dump_name
+        dump_candidates.first.last
+      end
+
+      # The first dump on disk, as the static tier reads it; the configured name when none is.
+      def present_dump
+        @present_dump ||= SchemaDumpPath.present(app.root) || dump_candidates.first
+      end
+
+      # The schema.rb dump the readers answer from, or nil when it is structure.sql.
       def schema_file_path
-        format, path = dump_candidates.first
+        format, path = present_dump
         path if format == :ruby
       end
 
@@ -401,7 +430,7 @@ module RailsAiContext
 
         present = dump_candidates.select { |_, path| File.exist?(path) }
         present.each do |format, path|
-          result = format == :ruby ? parse_schema_rb(path) : parse_structure_sql(path)
+          result = parse_dump(format, path)
           return result if result[:tables].present? || result[:error]
         end
 
@@ -425,12 +454,12 @@ module RailsAiContext
         end
 
         if secondary_database_dumps.any?
-          return { total_tables: 0, tables: {}, note: "The primary database has no tables yet: no db/schema.rb, db/structure.sql, or migrations found." }
+          return { total_tables: 0, tables: {}, note: "The primary database has no tables yet: no #{relative_dump_path(schema_dump_name)} or migrations found." }
         end
 
         # An absent data source, not a failure: :unavailable keeps a fresh
         # greenfield app out of the "introspection failed" warnings banner.
-        { unavailable: "No db/schema.rb, db/structure.sql, or migrations found" }
+        { unavailable: "No #{relative_dump_path(schema_dump_name)} or migrations found" }
       end
 
       # Rails multi-database setups dump each secondary database to its own
@@ -446,8 +475,8 @@ module RailsAiContext
         primary = dump_candidates.map(&:last)
         configured = SchemaDumpPath.secondaries(app.root).map { |name, (format, path)| [ name, format, path ] }
         taken = primary + configured.map(&:last)
-        globbed = { "rb" => :ruby, "sql" => :sql }.flat_map do |ext, format|
-          kind = format == :ruby ? "schema" : "structure"
+        globbed = SchemaDumpPath::FILE_NAMES.flat_map do |format, file|
+          kind, ext = file.split(".")
           Dir.glob(File.join(app.root.to_s, "db", "*_#{kind}.#{ext}")).sort
             .reject { |path| taken.include?(path) }
             .map { |path| [ File.basename(path, ".#{ext}").delete_suffix("_#{kind}"), format, path ] }
@@ -455,7 +484,7 @@ module RailsAiContext
         dumps = (configured + globbed).each_with_object({}) do |(name, format, path), found|
           next if found.key?(name) || primary.include?(path) || !File.exist?(path)
 
-          parsed = format == :ruby ? parse_schema_rb(path) : parse_structure_sql(path)
+          parsed = parse_dump(format, path)
           next if parsed[:tables].blank?
 
           parsed[:note] = "Parsed from #{relative_dump_path(path)} (from committed dump, not a live connection)"
@@ -470,7 +499,7 @@ module RailsAiContext
           next if dumps.key?(name)
 
           dirs = MigrationReplay.configured_dirs(app.root.to_s, entry) or next
-          pk_type = SchemaConventions.implicit_pk_type(app.root.to_s, "#{name}_schema.rb")
+          pk_type = SchemaConventions.implicit_pk_type(app.root.to_s, database: name)
           tables = MigrationReplay.tables(dirs, pk_type: pk_type, root: app.root.to_s)
           next if tables.empty?
 
@@ -531,6 +560,10 @@ module RailsAiContext
         detail = options.slice(:using, :type, :include, :order, :opclass, :length, :nulls_not_distinct)
                         .reject { |_, value| value == RailsAiContext::Confidence::INFERRED }
         entry.compact.merge(SchemaConventions.index_detail(columns, **detail))
+      end
+
+      def parse_dump(format, path)
+        format == :ruby ? parse_schema_rb(path) : parse_structure_sql(path)
       end
 
       def parse_schema_rb(path)

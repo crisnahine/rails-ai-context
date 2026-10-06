@@ -71,9 +71,6 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     end
   end
 
-  # A composite unique index constrains the pair, not each column: a blog's
-  # articles read series_id and position as unique on their own, and lost the
-  # plain index on series_id.
   # A migration or validation written from the table view needs what the dump declares.
   describe "what the table view shows beyond name and type" do
     before do
@@ -209,6 +206,9 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     end
   end
 
+  # A composite unique index constrains the pair, not each column: a blog's
+  # articles read series_id and position as unique on their own, and lost the
+  # plain index on series_id.
   describe "column hints for a composite unique index" do
     before do
       allow(described_class).to receive(:cached_context).and_return({

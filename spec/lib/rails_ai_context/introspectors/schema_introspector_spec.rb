@@ -44,7 +44,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
       it "reports the source as unavailable, not failed" do
         result = introspector.call
-        expect(result[:unavailable]).to include("No db/schema.rb, db/structure.sql, or migrations found")
+        expect(result[:unavailable]).to include("No db/schema.rb or migrations found")
         expect(result[:error]).to be_nil
       end
     end
@@ -286,7 +286,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(introspector.send(:extract_columns, "pa_v_posts")).to eq([ { name: "body", type: "text", null: true, size: "medium" } ])
       end
 
-      # LIKE reads `_` as any character, so user_roles matched userXroles too.
+      # Collations are matched by exact table name; user_roles and userxroles are different tables.
       it "takes a MySQL table's own collation, read once for every table" do
         column = double(name: "name", type: :string, null: true, default: nil, limit: nil, precision: nil,
                         scale: nil, comment: nil, collation: "utf8mb4_bin", sql_type: "varchar(255)", array?: false)
@@ -1954,6 +1954,24 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       connection.execute("DROP TABLE IF EXISTS pa_v_fts")
       connection.drop_table(:pa_v_users, if_exists: true)
     end
+
+    it "reads a booted view's SQL and a generated column's expression from structure.sql" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "config/application.rb"), "class App < Rails::Application\n  config.active_record.schema_format = :sql\nend\n")
+        File.write(File.join(dir, "db/structure.sql"), <<~SQL)
+          CREATE TABLE pa_s_users (id integer PRIMARY KEY, name varchar, upper_name varchar GENERATED ALWAYS AS (upper(name)) VIRTUAL);
+          CREATE VIEW pa_s_active AS SELECT id, name FROM pa_s_users;
+        SQL
+        booted = described_class.new(double("app", root: Pathname.new(dir)))
+        connection = double("mysql", views: %w[pa_s_active], columns: [])
+        allow(booted).to receive_messages(connection: connection, adapter_name: "Mysql2")
+
+        expect(booted.send(:add_live_relations, {})["pa_s_active"]).to include(sql: "SELECT id, name FROM pa_s_users")
+        expect(booted.send(:declared_generated, "pa_s_users", "upper_name")).to eq("upper(name)")
+      end
+    end
   end
 
   describe "the dump file the app configures" do
@@ -1979,6 +1997,25 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(result[:tables].keys).to eq(%w[widgets])
         expect(result[:note]).to start_with("Parsed from db/schema_sqlite.rb")
         expect(RailsAiContext::Introspectors::SchemaReader.for(dir).tables.keys).to eq(%w[widgets])
+      end
+    end
+
+    it "names the configured dump when neither it nor a migration exists" do
+      files = { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  schema_dump: main_schema.rb\n" }
+      static_with(files) { |result, _| expect(result[:unavailable]).to eq("No db/main_schema.rb or migrations found") }
+      static_with(files.merge("db/queue_schema.rb" => one_table_rb.call("jobs"))) do |result, _|
+        expect(result[:note]).to eq("The primary database has no tables yet: no db/main_schema.rb or migrations found.")
+      end
+    end
+
+    it "reads the dump on disk in both tiers when the configured one is missing" do
+      files = { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  schema_dump: main_schema.rb\n",
+                "db/schema.rb" => one_table_rb.call("widgets") }
+      static_with(files) do |result, dir|
+        expect(result[:tables].keys).to eq(%w[widgets])
+        booted = described_class.new(double("app", root: Pathname.new(dir)))
+        expect(booted.send(:schema_reader).tables.keys).to eq(%w[widgets])
+        expect(booted.send(:declared_dump).tables.keys).to eq(%w[widgets])
       end
     end
 

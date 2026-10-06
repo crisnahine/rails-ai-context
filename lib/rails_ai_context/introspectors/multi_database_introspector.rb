@@ -8,8 +8,6 @@ module RailsAiContext
       extend StaticTier
       static_tier :files_only
 
-      ERB_SENTINEL = RailsAiContext::DatabaseYml::ERB_SENTINEL
-
       # @return [Hash] multi-database configuration
       def call
         dbs = discover_databases
@@ -135,25 +133,11 @@ module RailsAiContext
       end
 
       def database_entry(name, entry)
-        url_adapter = RailsAiContext::DatabaseYml.url_adapter(name.to_s, entry["url"])
-        adapter, from_default = url_adapter ? [ url_adapter, false ] : adapter_value(entry["adapter"])
+        adapter, from_default = RailsAiContext::DatabaseYml.adapter(name, entry)
         info = { name: name.to_s, adapter: adapter }
         info[:adapter_default] = true if from_default
         info[:replica] = true if entry["replica"] == true
         info
-      end
-
-      # An ERB-computed value is unknown, unless the whole value is one tag carrying its own
-      # literal default, which the sentinel keeps; two tags compose into something neither said.
-      def adapter_value(value)
-        return [ nil, false ] if value.nil?
-
-        text = value.to_s
-        return [ text, false ] unless text.include?(ERB_SENTINEL)
-        return [ nil, false ] unless text.start_with?(ERB_SENTINEL) && text.scan(ERB_SENTINEL).size == 1
-
-        literal = text.delete_prefix(ERB_SENTINEL)
-        literal.empty? ? [ nil, false ] : [ literal, true ]
       end
 
       def anonymize_db_name(name)

@@ -169,17 +169,28 @@ RSpec.describe RailsAiContext::Introspectors::SchemaConventions do
     end
 
     it "types the implicit key integer on SQLite and bigint elsewhere" do
-      database_yml("development:\n  adapter: sqlite3\n")
+      database_yml("#{Rails.env}:\n  adapter: sqlite3\n")
       expect(described_class.implicit_pk_type(@root, "db/schema.rb")).to eq("integer")
-      database_yml("development:\n  adapter: postgresql\n")
+      database_yml("#{Rails.env}:\n  adapter: postgresql\n")
       expect(described_class.implicit_pk_type(@root, "db/schema.rb")).to eq("bigint")
     end
 
+    it "reads the running environment's adapter, not another environment's" do
+      database_yml("other:\n  adapter: sqlite3\n#{Rails.env}:\n  adapter: postgresql\n")
+      expect(described_class.database_adapter_for(@root, "primary")).to eq("postgresql")
+    end
+
+    it "reads the literal default of an ERB-computed adapter" do
+      database_yml("#{Rails.env}:\n  adapter: <%= ENV[\"DB\"].presence || \"sqlite3\" %>\n")
+      expect(described_class.database_adapter_for(@root, "primary")).to eq("sqlite3")
+    end
+
     it "types each dump of a multi-db app by its own database" do
-      database_yml("development:\n  primary:\n    adapter: postgresql\n\n  queue:\n    adapter: sqlite3\n")
+      database_yml("#{Rails.env}:\n  primary:\n    adapter: postgresql\n\n  queue:\n    adapter: sqlite3\n")
       expect(described_class.database_adapter_for(@root, "queue")).to eq("sqlite3")
       expect(described_class.implicit_pk_type(@root, "db/queue_schema.rb")).to eq("integer")
       expect(described_class.implicit_pk_type(@root, "db/structure.sql")).to eq("bigint")
+      expect(described_class.implicit_pk_type(@root, database: "queue")).to eq("integer")
     end
 
     it "takes the adapter a DATABASE_URL names over database.yml, as Rails merges it" do
@@ -190,11 +201,6 @@ RSpec.describe RailsAiContext::Introspectors::SchemaConventions do
 
     it "is nil with no database.yml" do
       expect(described_class.database_adapter_for(@root, "primary")).to be_nil
-    end
-
-    it "normalizes Windows endings and a missing final newline" do
-      database_yml("development:\r\n  adapter: mysql2")
-      expect(described_class.database_yml_content(@root)).to eq("development:\n  adapter: mysql2\n")
     end
   end
 

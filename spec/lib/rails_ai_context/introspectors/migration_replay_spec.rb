@@ -2000,7 +2000,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
     end
   end
 
-  # What db:migrate dumps for these statements, which the replay dropped or mistyped.
+  # What db:migrate dumps for these statements.
   describe "statements a dump records in full" do
     let(:tables) do
       replay([ <<~RUBY ])
@@ -2106,6 +2106,14 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       RUBY
 
       expect(reverted["posts"][:check_constraints].to_a).to eq([])
+    end
+  end
+
+  describe "an app root that cannot be resolved" do
+    it "reads no migrations instead of raising" do
+      missing = File.join(Dir.tmpdir, "rac-no-such-app-#{Process.pid}")
+      expect(described_class.configured_dirs(missing, { "migrations_paths" => "db/other_migrate" })).to eq([])
+      expect(described_class.migration_files([ File.join(missing, "db/migrate") ], root: missing)).to eq([])
     end
   end
 end

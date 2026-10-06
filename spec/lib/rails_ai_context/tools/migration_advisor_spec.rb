@@ -495,6 +495,7 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
 
     it "generates the migration into the database that holds the table" do
       allow(described_class).to receive(:cached_context).and_return(shard_context)
+      allow(RailsAiContext::DatabaseYml).to receive(:entry).and_return({ "database" => "x" })
       text = described_class.call(action: "add_column", table: "page_views", column: "referrer", type: "string").content.first[:text]
       expect(text).to include("`page_views` is in analytics, not the primary database",
                               "**Run:** `bin/rails generate migration AddReferrerToPageViews referrer:string --database analytics`")
@@ -519,6 +520,14 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
 
       same = described_class.call(action: "add_association", table: "users", column: "user").content.first[:text]
       expect(same).to include("add_reference :users, :user, foreign_key: true")
+    end
+
+    it "gives no --database for a dump whose database this environment does not configure" do
+      allow(described_class).to receive(:cached_context).and_return(shard_context)
+      allow(RailsAiContext::DatabaseYml).to receive(:entry).and_return(nil)
+      text = described_class.call(action: "add_column", table: "page_views", column: "referrer", type: "string").content.first[:text]
+      expect(text).to include("`page_views` is in the analytics dump, which this environment's config/database.yml does not configure")
+      expect(text).not_to include("--database analytics")
     end
 
     it "asks for one migration per database when their migrations_paths differ" do

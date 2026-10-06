@@ -169,17 +169,30 @@ module RailsAiContext
       end
 
       private_class_method def self.association_callback_lines(data)
+        hooked_associations(data).map do |a, hooks|
+          "- **#{a[:name]}** #{hooks.map { |hook, target| "#{hook} → #{target}" }.join(', ')}"
+        end
+      end
+
+      private_class_method def self.association_list(data)
+        hooked = association_callback_lines(data)
+        hooked.any? ? [ "_Association callbacks:_", *hooked ] : []
+      end
+
+      private_class_method def self.hooked_associations(data)
         Array(data[:associations]).filter_map do |a|
           hooks = (a[:declared_options] || {}).slice(*ASSOCIATION_CALLBACKS)
-          "- **#{a[:name]}** #{hooks.map { |hook, target| "#{hook} → #{target}" }.join(', ')}" if hooks.any?
+          [ a, hooks ] if hooks.any?
         end
       end
 
       private_class_method def self.list_all_callbacks(models, detail, ctx)
-        # Filter to models that have callbacks
-        models_with_callbacks = models.select do |_name, data|
-          data.is_a?(Hash) && !data[:error] && data[:callbacks].is_a?(Hash) && data[:callbacks].any?
-        end
+        models_with_callbacks = models.filter_map do |name, data|
+          next unless data.is_a?(Hash) && !data[:error]
+
+          data = data.merge(callbacks: data[:callbacks].is_a?(Hash) ? data[:callbacks] : {})
+          [ name, data ] if data[:callbacks].any? || hooked_associations(data).any?
+        end.to_h
 
         if models_with_callbacks.empty?
           return text_response("No models with callbacks found.")
@@ -194,7 +207,11 @@ module RailsAiContext
           by_count.each do |name, data|
             total = data[:callbacks].values.flatten.size
             types = data[:callbacks].keys.map { |t| callback_type_label(t) }.join(", ")
-            lines << "- **#{name}** - #{count_phrase(total, "callback")} (#{types})"
+            parts = []
+            parts << "#{count_phrase(total, "callback")} (#{types})" if total.positive?
+            hooked = hooked_associations(data).map { |a, _| a[:name] }
+            parts << "association callbacks on #{hooked.join(", ")}" if hooked.any?
+            lines << "- **#{name}** - #{parts.join("; ")}"
           end
           lines << "" << "_Use `model:\"Name\"` for callbacks by type._"
 
@@ -205,7 +222,7 @@ module RailsAiContext
             ordered.each do |type, methods|
               lines << "- **#{callback_type_label(type)}** → #{format_targets(methods, data, type)}"
             end
-            lines << ""
+            lines.concat(association_list(data)) << ""
           end
           lines << "_Use `model:\"Name\"` with `detail:\"full\"` for callback source code._"
 
@@ -224,7 +241,7 @@ module RailsAiContext
                 end
               end
             end
-            lines << ""
+            lines.concat(association_list(data)) << ""
           end
         end
 
