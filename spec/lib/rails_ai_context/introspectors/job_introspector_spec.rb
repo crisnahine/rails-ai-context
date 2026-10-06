@@ -320,10 +320,15 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
 
     it "reads a base's class body from the candidate walk, with no second traversal" do
       base = "class ApplicationJob < ActiveJob::Base\n  queue_with_priority 5\n  before_perform :log\nend\n"
-      traversals = 0
-      allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:calls_outside_methods).and_wrap_original do |original, root, *rest, **opts|
-        traversals += 1
-        original.call(root, *rest, **opts)
+      walks = 0
+      parses = 0
+      allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source).and_wrap_original do |original, src, *rest|
+        walks += 1 if src == base
+        original.call(src, *rest)
+      end
+      allow(Prism).to receive(:parse).and_wrap_original do |original, src, *rest, **opts|
+        parses += 1 if src == base
+        original.call(src, *rest, **opts)
       end
       jobs = static_result do |dir|
         FileUtils.mkdir_p(File.join(dir, "app/jobs"))
@@ -332,7 +337,8 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       end[:jobs]
 
       expect(jobs.map { |job| job[:priority] }.uniq).to eq([ 5 ])
-      expect(traversals).to eq(0)
+      expect(walks).to eq(1)
+      expect(parses).to be <= 1
     end
 
     # The worker's calls came from a second walk of a tree the candidate walk
