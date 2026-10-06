@@ -455,7 +455,7 @@ RSpec.describe RailsAiContext::Introspectors::MiddlewareIntrospector do
       expected = [
         { call: "use", target: "Rack::ContentLength", line: 2 },
         { call: "use", target: "Rack::Static", line: 3 },
-        { call: "map", target: "/health", line: 4 }
+        { call: "map", target: '"/health"', line: 4 }
       ]
 
       expect(introspector.call[:rackup]).to eq(expected)
@@ -479,11 +479,29 @@ RSpec.describe RailsAiContext::Introspectors::MiddlewareIntrospector do
       expected = [
         { call: "use", target: "Yabeda::Prometheus::Exporter", line: 2, condition: 'if ENV["PROMETHEUS"] == "true"' },
         { call: "use", target: "Rack::Protection::JsonCsrf", line: 6, within: '(subdir || "/")' },
-        { call: "map", target: "/health", line: 7, within: '(subdir || "/")' }
+        { call: "map", target: '"/health"', line: 7, within: '(subdir || "/")' }
       ]
 
       expect(introspector.call[:rackup]).to eq(expected)
       expect(described_class.new(RailsAiContext::StaticApp.new(app.root.to_s)).static_call[:rackup]).to eq(expected)
+    end
+
+    it "gives a map's path as written, quoted when it is a string, wherever it is named" do
+      File.write(rackup, <<~RUBY)
+        require_relative "config/environment"
+        map "/admin" do
+          use Rack::Auth::Basic
+          run Rails.application
+        end
+        map ENV.fetch("HEALTH", "/up") do
+          run ->(env) { [200, {}, []] }
+        end
+      RUBY
+
+      expect(introspector.call[:rackup]).to eq([
+        { call: "use", target: "Rack::Auth::Basic", line: 3, within: '"/admin"' },
+        { call: "map", target: 'ENV.fetch("HEALTH", "/up")', line: 6 }
+      ])
     end
 
     it "lists nothing for a map whose only job is to run the app's own class under a path" do
