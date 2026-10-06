@@ -1131,6 +1131,14 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       write_deploy("service: app\n")
       expect(described_class.call.content.first[:text]).not_to include("Set by Kamal")
     end
+
+    it "adds nothing when only a destination file exists and config/deploy.yml does not" do
+      File.write(File.join(@root, "config", "deploy.staging.yml"), "env:\n  secret:\n    - STAGING_TOKEN\n")
+
+      text = described_class.call(detail: "full").content.first[:text]
+      expect(text).not_to include("Set by Kamal")
+      expect(text).not_to include("deploy.staging.yml")
+    end
   end
 
   describe "an app whose config/boot.rb points Bundler outside its git repository" do

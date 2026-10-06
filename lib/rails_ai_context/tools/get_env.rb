@@ -311,6 +311,8 @@ module RailsAiContext
       KAMAL_DEPLOY = "config/deploy.yml"
 
       private_class_method def self.kamal_lines(kamal_env, root)
+        return [] unless File.file?(File.join(root, KAMAL_DEPLOY))
+
         destinations = Dir.glob("config/deploy.*.yml", base: root).sort
         return [] if kamal_env.empty? && destinations.empty?
 
