@@ -72,6 +72,13 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ScopesListener do
     expect(results.first[:confidence]).to eq("[VERIFIED]")
   end
 
+  it "joins a string split by a backslash continuation with one space" do
+    source = "scope :unbooked, -> {\n  where('availability = ' \\\n        'COALESCE(x, 0)')\n}"
+    results = parse_and_dispatch(source)
+
+    expect(results.first[:body]).to eq("where('availability = ' 'COALESCE(x, 0)')")
+  end
+
   it "leaves no space in front of a leading-dot continuation" do
     results = parse_and_dispatch("scope :ordered, lambda { where(y: 2)\n  .order(:id) }")
 

@@ -67,10 +67,12 @@ module RailsAiContext
           # line to fold it onto.
           return text.strip if tokens.any? { |token| token.type == :HEREDOC_START }
 
-          # Outside a heredoc a backslash ending a line only continues it; blanked in place, the offsets hold.
-          text = text.gsub("\\\n", "  ") if text.include?("\\\n")
-
           kinds = newline_kinds(tokens)
+          # Outside a heredoc a backslash ending a line only continues it, so it folds as a continuation; the offsets hold.
+          text = text.gsub("\\\n") do
+            kinds[Regexp.last_match.begin(0) + 1] = :continuation
+            " \n"
+          end
           folded = +""
           index = 0
           while index < text.length
