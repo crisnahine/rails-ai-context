@@ -1690,7 +1690,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
           RUBY
         end
 
-        expect(result[:job_bases]).to eq([ { name: "ImportJobBase", file: "app/jobs/import_job_base.rb",
+        expect(result[:job_bases]).to eq([ { name: "ImportJobBase", file: "app/jobs/import_job_base.rb", active_job: true,
                                              inherited_by: %w[ImportUsersJob] } ])
       end
 
@@ -1712,7 +1712,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
         end
 
         expect(result[:job_bases]).to eq([
-          { name: "ImportJobBase", file: "app/jobs/import_job_base.rb", queue: "imports",
+          { name: "ImportJobBase", file: "app/jobs/import_job_base.rb", active_job: true, queue: "imports",
             retries: [ "discard_on ActiveJob::DeserializationError" ], inherited_by: %w[ImportUsersJob] }
         ])
       end
