@@ -118,7 +118,7 @@ end
 | GemIntrospector | `:gems` | Notable gems with versions and categories |
 | ConventionIntrospector | `:conventions` | Auth patterns, flash messages, test patterns |
 | I18nIntrospector | `:i18n` | Locale files, translation keys |
-| MiddlewareIntrospector | `:middleware` | Rack middleware stack. The static tier declares an alternate source rather than an empty stack: without a booted app it answers only the file facts it can read. `config.ru`'s top-level `use` and `map` calls (`rackup`) are read on both tiers with `GenericMacroListener` |
+| MiddlewareIntrospector | `:middleware` | Rack middleware stack. The static tier declares an alternate source rather than an empty stack: without a booted app it answers only the file facts it can read. `config.ru`'s top-level `use` and `map` calls (`rackup`) are read on both tiers with `ConditionalMacroListener`, each with the `if` it sits under; a `map` whose block runs the app itself is a path prefix, so the `use` calls inside it are listed instead of the map |
 | EngineIntrospector | `:engines` | Mounted engines |
 | EnvConfigIntrospector | `:env_config` | Per-environment config files: notable toggles (`force_ssl`, `eager_load`, caching, queue adapter), assigned config keys, plus the keys `config/application.rb` sets and each `config_for` file's keys |
 | DevopsIntrospector | `:devops` | Dockerfile, CI config, deployment |

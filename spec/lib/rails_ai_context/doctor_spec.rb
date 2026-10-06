@@ -183,6 +183,20 @@ RSpec.describe RailsAiContext::Doctor do
       expect(check.fix).not_to include("stimulus")
     end
 
+    it "runs every introspector inside one run, so they share its file lists and stats" do
+      only_introspectors(:gems, :routes)
+      stores = []
+      [ RailsAiContext::Introspectors::GemIntrospector, RailsAiContext::Introspectors::RouteIntrospector ].each do |klass|
+        allow_any_instance_of(klass).to receive(:call) { stores << Thread.current[RailsAiContext::RunCache::KEY] && {} }
+      end
+
+      check
+
+      expect(stores.size).to eq(2)
+      expect(stores).to all(be_a(Hash))
+      expect(stores.first).to equal(stores.last)
+    end
+
     it "keeps the message line to names when an introspector raises" do
       only_introspectors(:gems)
       allow_any_instance_of(RailsAiContext::Introspectors::GemIntrospector)

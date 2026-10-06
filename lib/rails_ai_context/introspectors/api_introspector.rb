@@ -262,7 +262,8 @@ module RailsAiContext
       ].freeze
       OPENAPI_EXTENSIONS = %w[.json .yaml .yml].freeze
       OPENAPI_YAML_KEY = /^["']?(?:openapi|swagger)["']?[ \t]*:/
-      OPENAPI_SKIP = %r{(?:\A|/)(?:node_modules|packs|assets|vite)/}
+      # Locale files are most of the YAML under config/ and app/, and none is a spec.
+      OPENAPI_SKIP = %r{(?:\A|/)(?:node_modules|packs|assets|vite|locales)/}
 
       # A file is a spec by its top-level `openapi` or `swagger` key, never by where it is.
       # Braces expand to one glob each, so the extension is checked after a single walk per tree.

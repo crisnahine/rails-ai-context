@@ -133,7 +133,13 @@ module RailsAiContext
         # Cache introspection results with TTL + fingerprint invalidation.
         # Uses SHARED_CACHE so all tool subclasses share one introspection
         # result instead of each caching independently.
+        # One copy per tool call: a tool reads the context from many helpers,
+        # and each copy deep-dups every section.
         def cached_context
+          RunCache.fetch([ :tool_context ]) { shared_context_copy }
+        end
+
+        private def shared_context_copy
           SHARED_CACHE[:mutex].synchronize do
             now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
             ttl = RailsAiContext.configuration.cache_ttl

@@ -5,6 +5,30 @@ require "open3"
 require "tmpdir"
 
 RSpec.describe RailsAiContext::Tools::BaseTool do
+  describe ".cached_context" do
+    let(:cache) { described_class::SHARED_CACHE }
+
+    before do
+      described_class.reset_cache!
+      cache[:context] = { models: { "User" => { table_name: "users" } } }
+      cache[:timestamp] = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    end
+
+    after { described_class.reset_cache! }
+
+    it "copies the context once per tool call, however many helpers read it" do
+      first, second = RailsAiContext::RunCache.around { [ described_class.cached_context, described_class.cached_context ] }
+
+      expect(first).to equal(second)
+      expect(first).not_to equal(cache[:context])
+      expect(RailsAiContext::RunCache.around { described_class.cached_context }).not_to equal(first)
+    end
+
+    it "copies it on every read outside a tool call" do
+      expect(described_class.cached_context).not_to equal(described_class.cached_context)
+    end
+  end
+
   describe ".abstract?" do
     it "is abstract (excluded from registry)" do
       expect(described_class).to be_abstract

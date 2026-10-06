@@ -170,13 +170,47 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
         expect(text).to include("- `map \"/health\"` (line 3) - its own Rack app; requests under it never reach Rails' router")
       end
 
-      it "still lists them when the static tier cannot answer the rest" do
+      it "still lists them when the static tier cannot answer the rest, reading config.ru alone" do
+        root = Dir.mktmpdir
+        File.write(File.join(root, "config.ru"), "use Rack::ContentLength\nmap \"/health\" do\n  run ->(env) { [200, {}, []] }\nend\n")
+        allow(RailsAiContext.configuration).to receive(:app_root).and_return(root)
         allow(RailsAiContext).to receive(:static_tier?).and_return(true)
         text = described_class.call.content.first[:text]
 
+        expect(described_class).not_to have_received(:cached_context)
         expect(text).to include("[UNAVAILABLE")
-        expect(text).to include("## config.ru (runs before the Rails middleware stack)\n- `use Rack::ContentLength` (line 2)")
+        expect(text).to include("## config.ru (runs before the Rails middleware stack)\n- `use Rack::ContentLength` (line 1)")
         expect(text).not_to include("## Initializers")
+      ensure
+        FileUtils.rm_rf(root)
+      end
+
+      it "reads no config.ru in the static tier when the middleware introspector is off, as the booted tier does" do
+        root = Dir.mktmpdir
+        File.write(File.join(root, "config.ru"), "use Rack::ContentLength\n")
+        allow(RailsAiContext.configuration).to receive(:app_root).and_return(root)
+        allow(RailsAiContext.configuration).to receive(:introspectors).and_return(RailsAiContext::Configuration::PRESETS[:standard])
+        allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+
+        expect(described_class.call.content.first[:text]).not_to include("## config.ru")
+      ensure
+        FileUtils.rm_rf(root)
+      end
+
+      it "says which map a middleware sits inside and the condition it runs under" do
+        allow(described_class).to receive(:cached_context).and_return({
+          config: config_data,
+          middleware: {
+            rackup: [
+              { call: "use", target: "Yabeda::Prometheus::Exporter", line: 2, condition: 'if ENV["PROMETHEUS"] == "true"' },
+              { call: "use", target: "Rack::Protection::JsonCsrf", line: 6, within: '(subdir || "/")' }
+            ]
+          }
+        })
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include('- `use Yabeda::Prometheus::Exporter` (line 2, if ENV["PROMETHEUS"] == "true")')
+        expect(text).to include('- `use Rack::Protection::JsonCsrf` (line 6, inside `map (subdir || "/")`)')
       end
     end
 

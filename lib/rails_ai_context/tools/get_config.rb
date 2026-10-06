@@ -19,7 +19,6 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(server_context: nil)
-        # config.ru is read from source, so the static tier still shows it under the refusal.
         if static_refusal_for(:config) && (rackup = rackup_lines).any?
           return text_response(([ unavailable_text ] + rackup).join("\n"))
         end
@@ -126,16 +125,23 @@ module RailsAiContext
         lines
       end
 
+      # The static refusal reads config.ru alone rather than building every section,
+      # and only when the middleware introspector the booted tier reads it through is on.
       private_class_method def self.rackup_lines
-        calls = Array(Payload.section(cached_context, :middleware)&.dig(:rackup))
+        calls = if RailsAiContext.static_tier?
+          RailsAiContext.configuration.introspectors.include?(:middleware) ? Introspectors::MiddlewareIntrospector.rackup(rails_app.root.to_s) : []
+        else
+          Array(Payload.section(cached_context, :middleware)&.dig(:rackup))
+        end
         return [] if calls.empty?
 
         lines = [ "", "## config.ru (runs before the Rails middleware stack)" ]
         calls.each do |call|
+          where = [ "line #{call[:line]}", ("inside `map #{call[:within]}`" if call[:within]), call[:condition] ].compact.join(", ")
           lines << if call[:call] == "map"
-            "- `map \"#{call[:target]}\"` (line #{call[:line]}) - its own Rack app; requests under it never reach Rails' router"
+            "- `map \"#{call[:target]}\"` (#{where}) - its own Rack app; requests under it never reach Rails' router"
           else
-            "- `use #{call[:target]}` (line #{call[:line]})"
+            "- `use #{call[:target]}` (#{where})"
           end
         end
         lines

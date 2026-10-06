@@ -158,6 +158,45 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
     end
   end
 
+  it "reads a superclass as the class its own namespace declares before an outer model of that name" do
+    Dir.mktmpdir do |dir|
+      {
+        "app/models/reviewable.rb" => "class Reviewable < ApplicationRecord\nend\n",
+        "app/seeders/dev/record.rb" => "module Dev\n  class Record\n  end\nend\n",
+        "app/seeders/dev/reviewable.rb" => "module Dev\n  class Reviewable < Record\n  end\nend\n",
+        "app/seeders/dev/reviewable_post.rb" => "module Dev\n  class ReviewablePost < Reviewable\n  end\nend\n",
+        "app/seeders/dev/base.rb" => "module Dev\n  class Base\n  end\nend\n",
+        "app/seeders/dev/topic.rb" => "module Dev\n  class Topic < Base\n  end\nend\n",
+        "app/models/base.rb" => "class Base < ApplicationRecord\nend\n",
+        "app/seeders/flagged.rb" => "class Flagged < Reviewable\nend\n"
+      }.each do |name, source|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+        File.write(File.join(dir, name), source)
+      end
+
+      expect(described_class.model_paths(dir).map(&:file)).to contain_exactly(
+        "app/models/base.rb", "app/models/reviewable.rb", "app/seeders/flagged.rb"
+      )
+    end
+  end
+
+  it "reads a compact declaration's superclass from the top level, where Ruby looks it up" do
+    Dir.mktmpdir do |dir|
+      {
+        "app/models/report.rb" => "class Report < ApplicationRecord\nend\n",
+        "app/services/admin/report.rb" => "module Admin\n  class Report\n  end\nend\n",
+        "app/services/admin/summary.rb" => "class Admin::Summary < Report\nend\n"
+      }.each do |name, source|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+        File.write(File.join(dir, name), source)
+      end
+
+      expect(described_class.model_paths(dir).map(&:file)).to contain_exactly(
+        "app/models/report.rb", "app/services/admin/summary.rb"
+      )
+    end
+  end
+
   it "follows a symlinked directory or file in app/models to a target inside the app, as Zeitwerk does" do
     Dir.mktmpdir do |dir|
       Dir.mktmpdir do |elsewhere|

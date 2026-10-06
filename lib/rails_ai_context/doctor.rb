@@ -437,13 +437,16 @@ module RailsAiContext
       introspector = RailsAiContext::Introspector.new(app)
       failures = []
 
-      config.introspectors.each do |name|
-        result = introspector.send(:resolve_introspector, name).call
-        failures << [ name.to_s, result[:error].to_s ] if result.is_a?(Hash) && result[:error]
-      rescue StandardError, ScriptError => e
-        # ScriptError included: a syntax-broken app file must cost one
-        # introspector, not the diagnosis the user ran doctor for.
-        failures << [ name.to_s, "#{e.class}: #{e.message}" ]
+      # One run, as introspection has: the file lists and stats each introspector asks for are shared.
+      RunCache.around do
+        config.introspectors.each do |name|
+          result = introspector.send(:resolve_introspector, name).call
+          failures << [ name.to_s, result[:error].to_s ] if result.is_a?(Hash) && result[:error]
+        rescue StandardError, ScriptError => e
+          # ScriptError included: a syntax-broken app file must cost one
+          # introspector, not the diagnosis the user ran doctor for.
+          failures << [ name.to_s, "#{e.class}: #{e.message}" ]
+        end
       end
 
       if failures.empty?

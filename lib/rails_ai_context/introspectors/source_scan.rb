@@ -119,16 +119,18 @@ module RailsAiContext
       # a model or a class already kept; the listing still decides modelhood, but a
       # thousand services are not parsed.
       def extra_model_candidates(root, model_records, base_model = nil)
-        pending = RunCache.fetch([ :source_scan_model_declarations, root ]) { extra_model_declarations(root, File.realpath(root)) }
+        pending, declared = RunCache.fetch([ :source_scan_model_declarations, root ]) { extra_model_declarations(root, File.realpath(root)) }
         known = model_records.to_set(&:path_name).merge(MODEL_BASES)
+        declared = declared | known
         loaded = Hash.new { |cache, pair| cache[pair] = base_model ? base_model.call(*pair) : false }
         kept = Set.new
         loop do
           added = pending.select do |record, pairs|
             !kept.include?(record) && pairs.any? do |name, base|
-              # A nested `class Item < Base` names no namespace; the path does.
-              lookup(record.path_name, base).any? { |candidate| known.include?(candidate) } ||
-                loaded[[ name.include?("::") ? name : record.path_name, base ]]
+              # Ruby takes the innermost lexical scope that declares the name;
+              # a compact `class Admin::Item < Base` has none, a nested one has the path's.
+              resolved = lookup(record.path_name, name, base).reverse.find { |candidate| declared.include?(candidate) }
+              resolved ? known.include?(resolved) : loaded[[ name.include?("::") ? name : record.path_name, base ]]
             end
           end
           break if added.empty?
@@ -143,25 +145,32 @@ module RailsAiContext
         []
       end
 
-      # The names `base` can mean inside the namespace `path_name` sits in, outermost first.
-      def lookup(path_name, base)
-        scopes = path_name.split("::")[0...-1]
+      # The names `base` can mean where `name` is declared in the file `path_name` names, outermost first.
+      def lookup(path_name, name, base = name)
+        scopes = path_name.split("::")[0...-name.split("::").size]
         (0..scopes.size).map { |depth| [ *scopes.first(depth), base ].join("::") }
       end
 
       # ponytail: the app/* kinds Rails generates for other code are skipped by name.
+      # The candidates, and every name the scanned files declare by path or by a superclassed class.
       def extra_model_declarations(root, real_root)
         seen = Set.new
+        declared = Set.new
         ignored = PathResolver.ignored_dirs(root).map { |dir| PathResolver.root_key(dir) }
-        PathResolver.extra_model_roots(root).each_with_object([]) do |dir, found|
+        found = PathResolver.extra_model_roots(root).each_with_object([]) do |dir, records|
           scan_dir(dir, root, real_root, true) do |record|
             next unless seen.add?(record.path)
             next if ignored.any? { |ignored_dir| SafePath.contained?(record.path, ignored_dir) }
 
+            declared << record.path_name
             pairs = class_declarations(SafeFile.read(record.path).to_s)
-            found << [ record, pairs ] if pairs.any?
+            next if pairs.empty?
+
+            records << [ record, pairs ]
+            pairs.each { |name, _| declared << (name.include?("::") ? name : lookup(record.path_name, name).last) }
           end
         end
+        [ found, declared ]
       end
 
       # [name, superclass] of each `class X < Y` that starts its line. A `^` anchor

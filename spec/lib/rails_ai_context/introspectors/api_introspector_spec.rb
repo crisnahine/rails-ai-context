@@ -123,6 +123,14 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
           ])
         end
 
+        it "does not open a locale file to look for a spec key" do
+          allow(RailsAiContext::SafePath).to receive(:locate).and_call_original
+          result
+
+          expect(RailsAiContext::SafePath).not_to have_received(:locate).with(%r{(?:\A|/)locales/}, any_args)
+          expect(RailsAiContext::SafePath).to have_received(:locate).with("openapi/v1.yaml", any_args)
+        end
+
         it "lists a spec over the per-file read limit by its head" do
           allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(1_000)
           paths = (1..2_000).to_h { |i| [ "/items/#{i}", { "get" => { "summary" => "Item #{i}" } } ] }
