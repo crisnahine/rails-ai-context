@@ -1021,6 +1021,12 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       expect(text).not_to include("RAC_ERB_OUTPUT")
     end
 
+    it "lists each variable an ERB tag names, however many share one mapping" do
+      write_deploy("env:\n  clear:\n    <%= ENV[\"A\"] %>: 1\n    <%= ENV[\"B\"] %>: 2\n")
+
+      expect(described_class.call.content.first[:text].scan("a variable whose name an ERB tag sets at deploy time").size).to eq(2)
+    end
+
     it "says an ERB tag on its own line under a key or a block scalar sets that value at deploy time" do
       write_deploy("env:\n  clear:\n    FROM_ERB:\n      <%= ENV[\"X\"] %>\n    FOLDED: >-\n      <%= ENV[\"Y\"] %>\n    PLAIN: 1\n")
 
