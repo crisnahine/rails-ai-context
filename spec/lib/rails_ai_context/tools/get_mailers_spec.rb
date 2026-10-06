@@ -127,6 +127,15 @@ RSpec.describe RailsAiContext::Tools::GetMailers do
       expect(text).to include("**Observers:** DeliveryLogObserver (`config/initializers/mail.rb`)")
     end
 
+    it "names a namespaced constant and the namespaced class a call builds with .new" do
+      write("config/application.rb", "module App\n  class Application < Rails::Application\n    config.action_mailer.interceptors = [Admin::Sandbox]\n  end\nend\n")
+      write("config/initializers/mail.rb", "Mail.register_interceptor(::Admin::Audit.new(ENV[\"TO\"]))\nMail.register_observer(Ops::Log)\n")
+      text = static_text
+
+      expect(text).to include("**Interceptors:** Admin::Sandbox (`config/application.rb`), Admin::Audit (`config/initializers/mail.rb`)")
+      expect(text).to include("**Observers:** Ops::Log (`config/initializers/mail.rb`)")
+    end
+
     it "names the class ActionMailer camelizes from a symbol or string, and leaves a computed one unread" do
       write("config/application.rb", <<~RUBY)
         module App

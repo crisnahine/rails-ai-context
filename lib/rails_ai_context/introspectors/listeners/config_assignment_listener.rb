@@ -214,12 +214,15 @@ module RailsAiContext
             condition:  @conditions.compact.last,
             location:   node.location.start_line
           }
+          entry[:literal] = true if LITERAL_NODES.any? { |kind| value_node.is_a?(kind) } && value != RailsAiContext::Confidence::INFERRED
           # Read off the node rather than the source, which is redacted under a secret-shaped key.
           if (call = config_for(value_node))
             entry[:config_for] = call
           end
           @results << entry
         end
+
+        LITERAL_NODES = [ Prism::StringNode, Prism::SymbolNode, Prism::InterpolatedStringNode ].freeze
 
         # One value pulled out of the result still names the file: `config_for(:redis)[:url]`.
         CONFIG_FOR_READERS = %i[[] fetch dig].freeze

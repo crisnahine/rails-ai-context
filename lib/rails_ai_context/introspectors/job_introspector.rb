@@ -263,13 +263,10 @@ module RailsAiContext
           end
       end
 
-      # The listener turns a constant into its name and anything computed into a
-      # marker, so only a string or symbol written as one is the value Rails sees.
+      # Only a string or symbol written as one is the value Rails sees.
       def queue_setting(key, hit)
-        value = hit[:value]
-        literal = value.is_a?(Symbol) ||
-          (value.is_a?(String) && value != RailsAiContext::Confidence::INFERRED && !hit[:source].to_s.match?(/\A(?:::)?[A-Z]/))
-        text = literal ? value.to_s : "`#{hit[:source]}`"
+        literal = hit[:literal]
+        text = literal ? hit[:value].to_s : "`#{hit[:source]}`"
         note = if hit[:condition] then "#{key} set only when `#{hit[:condition]}`"
         elsif !literal then "computed"
         end
@@ -1023,7 +1020,10 @@ module RailsAiContext
               version = defaults_version(call[:arguments].first) if relative == "config/application.rb"
             else
               computed = Array(call[:computed])
-              call[:arguments].flatten.each { |name| settings[REGISTER_CALLS[call[:name]]] << registered(name, relative, computed: computed) }
+              constants = call[:constants] || {}
+              call[:arguments].flatten.each do |name|
+                settings[REGISTER_CALLS[call[:name]]] << registered(name, relative, computed: computed, constants: constants)
+              end
             end
           end
         end
@@ -1037,20 +1037,19 @@ module RailsAiContext
         settings.merge(deliver_later_queue: queue, preview_paths: mailer_preview_dirs)
       end
 
-      # The class an interceptor or observer is, or is built from with `.new`; a symbol or
-      # string literal is the class ActionMailer camelizes it to. Any other argument (a
-      # local variable, a method call) is named as written.
-      def registered(name, relative, computed: [])
+      # The class an interceptor or observer is, or is built from with `.new`; a symbol, string
+      # or constant name is the class ActionMailer camelizes it to. Anything else is named as written.
+      def registered(name, relative, computed: [], constants: {})
         text = name.to_s
-        constant = text[/\A(?:::)?([A-Z]\w*(?:::[A-Z]\w*)*)(?:\.new\b.*)?\z/m, 1]
-        return { name: constant, file: relative } if constant
+        return { name: constants[text], file: relative } if constants[text]
         return { name: text.camelize, file: relative } if name.is_a?(Symbol) || (literal_name?(text) && !computed.include?(text))
 
         { name: text, file: relative, unresolved: true }
       end
 
+      # A string value's characters, not Ruby source.
       def literal_name?(text)
-        text.match?(/\A\w+(?:\/\w+)*\z/)
+        text.match?(%r{\A\w+(?:(?:/|::)\w+)*\z})
       end
 
       # A version that is not a literal is the running Rails's, past every cutoff.
