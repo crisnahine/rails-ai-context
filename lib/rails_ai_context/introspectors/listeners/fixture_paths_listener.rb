@@ -16,7 +16,9 @@ module RailsAiContext
       # `file`, relative to the app root.
       # The path forms are the autoload listener's, so both read one way. A write
       # whose path it cannot read records :unread, so a caller still knows the setting is set.
-      class FixturePathsListener < AutoloadPathsListener
+      class FixturePathsListener < BaseListener
+        include LiteralPaths
+
         SETTINGS = %i[fixture_paths fixture_path].to_set.freeze
         ASSIGNING = %i[fixture_paths= fixture_path=].to_set.freeze
 

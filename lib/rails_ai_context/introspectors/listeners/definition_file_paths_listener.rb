@@ -9,8 +9,10 @@ module RailsAiContext
       #   FactoryBot.definition_file_paths << "lib/factories"      → { replace: false, paths: ["lib/factories"] }
       #   FactoryBot.find_definitions / FactoryBot.reload           → { load: :find_definitions } / { load: :reload }
       #
-      # The path forms are the autoload listener's.
-      class DefinitionFilePathsListener < AutoloadPathsListener
+      # The path forms are LiteralPaths'.
+      class DefinitionFilePathsListener < BaseListener
+        include LiteralPaths
+
         LOADS = %i[find_definitions reload].freeze
 
         def on_call_node_enter(node)

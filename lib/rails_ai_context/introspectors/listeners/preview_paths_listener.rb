@@ -11,7 +11,9 @@ module RailsAiContext
       #   config.action_mailer.preview_paths << "#{root}/lib/mailer_previews"
       #
       # The path forms are the autoload listener's, so both read one way.
-      class PreviewPathsListener < AutoloadPathsListener
+      class PreviewPathsListener < BaseListener
+        include LiteralPaths
+
         ASSIGNING = %i[preview_paths= preview_path= paths=].to_set.freeze
 
         def initialize(framework: :view_component)

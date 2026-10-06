@@ -8,7 +8,9 @@ module RailsAiContext
       #
       #   config.paths["app/views"].unshift(Rails.root.join("app/views/custom").to_s) → [:prepend, "app/views/custom"]
       #   config.paths["app/views"] << "enterprise/app/views"                         → [:append, "enterprise/app/views"]
-      class ViewPathsListener < AutoloadPathsListener
+      class ViewPathsListener < BaseListener
+        include LiteralPaths
+
         def on_call_node_enter(node)
           direction = node.name == :unshift ? :prepend : (:append if APPENDING.include?(node.name))
           return unless direction && views_path?(node.receiver)
@@ -16,8 +18,6 @@ module RailsAiContext
           @direction = direction
           Array(node.arguments&.arguments).each { |argument| collect_paths(argument) }
         end
-
-        def on_call_operator_write_node_enter(_node); end
 
         private
 
