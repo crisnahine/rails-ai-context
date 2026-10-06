@@ -46,8 +46,12 @@ RSpec.describe "Prism parsing discipline" do
 
     pattern = /\bPrism\.(parse|parse_file|parse_string)\b/
 
+    # GemLock reads the Gemfile before the boot too, where loading AstCache's
+    # concurrent-ruby would put the gem's copy ahead of the app's bundle.
+    preboot = File.join(lib_root, "rails_ai_context", "gem_lock.rb")
+
     offenders = DisciplineWalk.ruby_files(lib_root)
-      .reject { |f| f == ast_cache_path }
+      .reject { |f| [ ast_cache_path, preboot ].include?(f) }
       .select { |f| DisciplineWalk.uncommented_lines(f).any? { |l| l.match?(pattern) } }
       .map { |f| f.sub("#{lib_root}/", "") }
 
