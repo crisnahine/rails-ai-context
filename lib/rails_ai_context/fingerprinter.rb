@@ -105,8 +105,10 @@ module RailsAiContext
         conventional = WATCHED_DIRS.map { |dir| File.join(root, dir) }
         resolved = RESOLVED_KINDS.flat_map { |kind| PathResolver.dirs_for(root, kind) }
 
-        (conventional + resolved + ConcernPaths.resolve(root) + stimulus_dirs(root))
-          .uniq.select { |dir| Dir.exist?(dir) }
+        dirs = (conventional + resolved + ConcernPaths.resolve(root) + stimulus_dirs(root))
+               .uniq.select { |dir| Dir.exist?(dir) }
+        # A dir under another one is already globbed and watched through it.
+        dirs.reject { |dir| dirs.any? { |other| dir.start_with?("#{other}/") } }
       end
 
       # The controller homes the Stimulus introspector reads, so an edit under

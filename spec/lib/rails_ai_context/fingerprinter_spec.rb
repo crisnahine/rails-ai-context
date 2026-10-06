@@ -150,6 +150,18 @@ RSpec.describe RailsAiContext::Fingerprinter do
       end
     end
 
+    it "watches a dir once, through the watched dir that holds it" do
+      require "tmpdir"
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "lib", "api"))
+        File.write(File.join(root, "lib", "api", "base.rb"), "")
+        dirs = described_class.send(:watched_dirs, root)
+        expect(dirs).to include(File.join(root, "lib"))
+        expect(dirs).not_to include(File.join(root, "lib", "api"))
+        expect(described_class.changed_since(root, Time.now - 60)).to eq([ "lib" ])
+      end
+    end
+
     it "detects changes to package.json" do
       package_json = File.join(app.root, "package.json")
       File.write(package_json, "{}\n") unless File.exist?(package_json)
