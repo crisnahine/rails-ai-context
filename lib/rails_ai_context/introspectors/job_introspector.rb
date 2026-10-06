@@ -45,7 +45,7 @@ module RailsAiContext
           recurring_jobs: recurring_jobs,
           sidekiq_config: extract_sidekiq_config,
           solid_queue_config: extract_solid_queue_config,
-          mailer_settings: mailer_settings(booted: true)
+          mailer_settings: mailer_settings(booted_mailers[:mailers], booted: true)
         }
       end
 
@@ -66,7 +66,7 @@ module RailsAiContext
           recurring_jobs: recurring_jobs,
           sidekiq_config: extract_sidekiq_config,
           solid_queue_config: extract_solid_queue_config,
-          mailer_settings: mailer_settings
+          mailer_settings: mailer_settings(source_mailers[:mailers])
         }
       end
 
@@ -968,7 +968,8 @@ module RailsAiContext
       # The queue deliver_later uses, and the interceptors and observers the config registers.
       # Booted, the queue is ActionMailer's own setting; statically it is the config's, else
       # `load_defaults` 6.1 or later sets it to nil, which is ActiveJob's default queue.
-      def mailer_settings(booted: false)
+      # An app with no mailers has no queue to name.
+      def mailer_settings(mailers, booted: false)
         settings = { interceptors: [], observers: [] }
         queue = nil
         queue_set = false
@@ -998,7 +999,8 @@ module RailsAiContext
           queue = version && version >= 6.1 ? nil : "mailers"
         end
         settings.transform_values! { |list| list.uniq { |entry| entry[:name] } }
-        settings.merge(deliver_later_queue: queue_name_from_part(queue.presence), preview_paths: mailer_preview_dirs)
+        queue = Array(mailers).any? ? queue_name_from_part(queue.presence) : nil
+        settings.merge(deliver_later_queue: queue, preview_paths: mailer_preview_dirs)
       rescue StandardError, ScriptError => e
         RailsAiContext.debug_fail(e, {}, label: "mailer_settings")
       end

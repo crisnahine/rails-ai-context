@@ -127,6 +127,11 @@ RSpec.describe RailsAiContext::Tools::GetMailers do
       expect(text).to include("**Observers:** DeliveryLogObserver (`config/initializers/mail.rb`)")
     end
 
+    it "gives no deliver_later queue to an app with no mailers" do
+      FileUtils.rm_rf(File.join(tmpdir, "app/mailers"))
+      expect(static_text).not_to include("deliver_later queue")
+    end
+
     # load_defaults 6.1 sets deliver_later_queue_name to nil, so mail goes to ActiveJob's default queue.
     it "names ActiveJob's default queue under load_defaults 6.1 or later" do
       write("config/application.rb", "module App\n  class Application < Rails::Application\n    config.load_defaults 7.1\n  end\nend\n")
