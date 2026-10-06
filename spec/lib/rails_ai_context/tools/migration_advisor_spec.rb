@@ -522,12 +522,21 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       expect(same).to include("add_reference :users, :user, foreign_key: true")
     end
 
-    it "gives no --database for a dump whose database this environment does not configure" do
+    it "gives no command for a dump whose database no environment configures" do
       allow(described_class).to receive(:cached_context).and_return(shard_context)
-      allow(RailsAiContext::DatabaseYml).to receive(:entry).and_return(nil)
+      allow(RailsAiContext::DatabaseYml).to receive_messages(entry: nil, elsewhere: nil)
       text = described_class.call(action: "add_column", table: "page_views", column: "referrer", type: "string").content.first[:text]
-      expect(text).to include("`page_views` is in the analytics dump, which this environment's config/database.yml does not configure")
+      expect(text).to include("`page_views` is in the analytics dump, which no environment in config/database.yml configures")
       expect(text).not_to include("--database analytics")
+      expect(text).not_to include("bin/rails generate")
+    end
+
+    it "generates under the environment that configures a database the running one does not" do
+      allow(described_class).to receive(:cached_context).and_return(shard_context)
+      allow(RailsAiContext::DatabaseYml).to receive_messages(entry: nil, elsewhere: [ "production", { "migrations_paths" => "db/analytics_migrate" } ])
+      text = described_class.call(action: "remove_column", table: "orders", column: "total_cents").content.first[:text]
+      expect(text).to include("which production configures and this environment does not: generate with `RAILS_ENV=production` and `--database shard_one` so the migration lands in db/analytics_migrate and production's `bin/rails db:migrate`",
+                              "**Run:** `RAILS_ENV=production bin/rails generate migration RemoveTotalCentsFromOrders total_cents:integer --database shard_one`")
     end
 
     it "asks for one migration per database when their migrations_paths differ" do
