@@ -2796,6 +2796,38 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       FileUtils.rm_rf(dir)
     end
 
+    it "finds no Rails 7.0 schema.rb table by a qualified name when the path names two schemas" do
+      dump = <<~RUBY
+        ActiveRecord::Schema[7.0].define(version: 2026_01_01_000001) do
+          create_table "posts", force: :cascade do |t|
+          end
+
+          create_table "users", force: :cascade do |t|
+            t.string "tenant_name"
+          end
+
+          create_table "users", force: :cascade do |t|
+            t.string "tenant_name"
+          end
+        end
+      RUBY
+      dir = pg_app({ "db/schema.rb" => dump }, rails: "7.0.10")
+
+      expect(ask(dir, table: "public.users")).to include("Table 'public.users' not found.")
+      expect(ask(dir, table: "public.posts")).to include("Table 'public.posts' not found.")
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+
+    it "finds a Rails 7.0 schema.rb table by its qualified name on the default path, whose $user schema rarely exists" do
+      dump = public_only.sub("Schema[8.0]", "Schema[7.0]")
+      dir = pg_app({ "db/schema.rb" => dump }, rails: "7.0.10", yml: "  username: deploy\n")
+
+      expect(ask(dir, table: "public.events")).to include("## Table: public.events")
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+
     it "finds a Rails 8.0 schema.rb table by its qualified name only when the search path has one schema" do
       dump = public_only.sub("create_table \"events\"", "create_schema \"app\"\n  create_table \"users\"")
       multi = pg_app({ "db/schema.rb" => dump }, rails: "8.0.5.1")

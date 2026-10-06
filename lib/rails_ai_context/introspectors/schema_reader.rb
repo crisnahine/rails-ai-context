@@ -29,6 +29,7 @@ module RailsAiContext
 
       def self.choose(root)
         search_path = RailsAiContext::DatabaseYml.schema_search_path(root)
+        user_schema = RailsAiContext::DatabaseYml.user_schema(root)
         version = PgNaming.rails_version(root)
         return from_tables({}, source: :none, path: nil) if RailsAiContext::AppKind.sequel_schema(root)
 
@@ -37,7 +38,8 @@ module RailsAiContext
           next unless File.exist?(path)
 
           if format == :ruby
-            reader = new(path, pk_type: SchemaConventions.implicit_pk_type(root), search_path: search_path, rails_version: version)
+            reader = new(path, pk_type: SchemaConventions.implicit_pk_type(root), search_path: search_path, user_schema: user_schema,
+                                    rails_version: version)
             return reader.with_source(:schema_rb) if reader.tables.any?
           else
             content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
@@ -71,10 +73,11 @@ module RailsAiContext
       # partitions: the tables the database says are partitions, which a
       # schema.rb from before Rails 8 dumps as plain tables.
       # search_path: the database's configured schema_search_path; rails_version: the app's, else the
-      # dump's stamp. Together they decide the names the booted app reads.
-      def initialize(path, pk_type: nil, partitions: [], search_path: PgNaming::DEFAULT_SEARCH_PATH, rails_version: nil)
+      # dump's stamp. Together they decide the names the booted app reads. user_schema: the one "$user" names.
+      def initialize(path, pk_type: nil, partitions: [], search_path: PgNaming::DEFAULT_SEARCH_PATH, user_schema: nil, rails_version: nil)
         @path = path
         @search_path = search_path
+        @user_schema = user_schema
         @rails_version = rails_version
         @pk_type = pk_type
         @partitions = partitions
@@ -274,7 +277,9 @@ module RailsAiContext
       def name_relations(schema)
         stamp = schema.delete(:stamp)
         version = schema[:rails_version] ||= stamp
-        path = PgNaming.existing_path(@search_path, schema[:schemas])
+        # A 7.0 dump names no schema, so only the "$user" one, which rarely exists, is taken as missing.
+        created = PgNaming.dump_lists_schemas?(version) ? schema[:schemas] : @search_path - [ @user_schema ]
+        path = PgNaming.existing_path(@search_path, created)
         schema[:names] = PgNaming.names(path)
         return unless PgNaming.dump_qualifies_names?(version)
 

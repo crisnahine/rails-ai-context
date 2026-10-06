@@ -73,10 +73,20 @@ module RailsAiContext
     # A database's schema_search_path as PostgreSQL reads it: an unquoted name folds to
     # lowercase and "$user" is the configured username. Unset, PostgreSQL's "$user", public.
     def schema_search_path(root, name = "primary")
+      search_path_entries(root, name).map(&:first)
+    end
+
+    # The schema the search path's "$user" names, or nil.
+    def user_schema(root, name = "primary")
+      search_path_entries(root, name).find(&:last)&.first
+    end
+
+    # [schema, from_user] per search path entry.
+    def search_path_entries(root, name)
       settings = entry(root, name)
       settings = {} unless settings.is_a?(Hash)
       known = adapter(name, settings).first
-      return %w[public] if known && !known.start_with?("postg")
+      return [ [ "public", false ] ] if known && !known.start_with?("postg")
 
       settings = settings.merge(url_settings(name, settings["url"]))
       # postgresql_adapter.rb:984 (8.1), :865 (7.0): schema_order is the older name.
@@ -86,9 +96,9 @@ module RailsAiContext
       text.split(",").filter_map do |part|
         part = part.strip
         next if part.empty? || computed?(part)
-        next (user unless user.empty? || computed?(user)) if part.delete('"') == "$user"
+        next ([ user, true ] unless user.empty? || computed?(user)) if part.delete('"') == "$user"
 
-        part.start_with?('"') ? part.delete('"') : part.downcase
+        [ part.start_with?('"') ? part.delete('"') : part.downcase, false ]
       end
     end
 

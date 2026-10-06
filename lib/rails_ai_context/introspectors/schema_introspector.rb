@@ -345,6 +345,7 @@ module RailsAiContext
 
       def schema_reader
         @schema_reader ||= SchemaReader.new(schema_file_path, partitions: @partitions.to_a, search_path: RailsAiContext::DatabaseYml.schema_search_path(app.root),
+                                                              user_schema: RailsAiContext::DatabaseYml.user_schema(app.root),
                                                               rails_version: rails_version)
       end
 
@@ -655,7 +656,7 @@ module RailsAiContext
 
         search_path = search_path_for(path)
         schema = SchemaReader.new(path, pk_type: SchemaConventions.implicit_pk_type(app.root.to_s, secondary_dump(path)), search_path: search_path,
-                                        rails_version: rails_version)
+                                        user_schema: RailsAiContext::DatabaseYml.user_schema(app.root, database_name_for(path)), rails_version: rails_version)
 
         tables = static_tables(schema.tables)
         qualified = static_tables(schema.qualified_tables)
@@ -763,7 +764,11 @@ module RailsAiContext
       end
 
       def search_path_for(dump_path)
-        RailsAiContext::DatabaseYml.schema_search_path(app.root, SchemaDumpPath.database_name(app.root.to_s, secondary_dump(dump_path)))
+        RailsAiContext::DatabaseYml.schema_search_path(app.root, database_name_for(dump_path))
+      end
+
+      def database_name_for(dump_path)
+        SchemaDumpPath.database_name(app.root.to_s, secondary_dump(dump_path))
       end
 
       def connection_state

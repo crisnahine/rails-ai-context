@@ -332,8 +332,8 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   table.** It names each table bare, whichever search path schema holds it,
   so without a boot a schema-qualified name such as `app.users` finds a listed
   table only when the search path has one schema. A Rails 7.0 schema.rb names
-  no schema at all, so the static tier takes the search path as `public`
-  alone.
+  no schema at all, so the static tier takes every schema the search path
+  names as existing, except the one `"$user"` stands for.
 - **A dump made with a `schema_search_path` holds only those schemas.** By
   default Rails passes each search path schema to pg_dump, so structure.sql
   holds no other schema's tables and no extension, and a Rails 8.1 schema.rb
