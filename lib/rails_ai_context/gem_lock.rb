@@ -39,10 +39,7 @@ module RailsAiContext
     MISE_RUBY = /^[ \t]*["']?ruby["']?[ \t]*=[ \t]*(?:\[[ \t]*|\{[^}\n]*?version[ \t]*=[ \t]*)?["']([^"'\n]+)["']/
 
     class Spec
-      # `remote:` of each PATH section, as the lockfile writes it.
-      # `ruby_engine` names a non-CRuby engine and its own version ("JRuby 9.4.8.0"), else nil.
-      # The Gemfile config/boot.rb names outside the app root and its git repository,
-      # relative to the root; never read.
+      # `ruby_engine` is a non-CRuby engine with its own version ("JRuby 9.4.8.0"); `outside_gemfile` is never read.
       attr_reader :ruby_versions, :ruby_engine, :reason, :path_remotes, :outside_gemfile
       # With no lockfile, the gems the Gemfile names; nil when it names only some of them.
       attr_reader :gemfile_gems
@@ -269,8 +266,7 @@ module RailsAiContext
     end
     private_class_method :parse
 
-    # What the Gemfile itself declares, off its AST: the `ruby` call's [version, engine]
-    # and the gems it names, nil when `gemspec` or `eval_gemfile` adds gems it does not name.
+    # `gems` is nil when `gemspec` or `eval_gemfile` adds gems the file does not name.
     def gemfile(path)
       result = gemfile_parse(path) or return { ruby: nil, gems: nil }
 
@@ -289,8 +285,7 @@ module RailsAiContext
       facts
     end
 
-    # The gem's AstCache once it is loaded, so GemfileGems' walk shares the parse;
-    # before the boot only Prism itself, on the one path that reads a Gemfile there.
+    # AstCache once the gem is loaded, so GemfileGems' walk shares the parse; before the boot, Prism alone.
     def gemfile_parse(path)
       return AstCache.parse(File.realpath(path)) if defined?(AstCache)
 
@@ -318,10 +313,7 @@ module RailsAiContext
     end
     private_class_method :literal
 
-    # Each source answers [version, engine], in Bundler's order: what the lockfile
-    # resolved, what the Gemfile asked for, then the version-manager files, mise's last.
-    # The engine comes from the first source that declares anything, and its Ruby
-    # version only from that same source: JRuby 9.4 runs Ruby 3.1 whatever .tool-versions says.
+    # Sources in Bundler's order; an engine's Ruby version comes only from its own source (JRuby 9.4 runs Ruby 3.1).
     def declared_ruby(locked, root, bundle, facts)
       declared = {
         bundle[:lock_label] => locked,

@@ -70,8 +70,7 @@ module RailsAiContext
         text_response([ text, unread_bundle_note(root) ].compact.join("\n\n"))
       end
 
-      # Service gems and the config gem are read from the Gemfile and lockfile, so a bundle
-      # left unread is named, or the answer reads as an app that declares none.
+      # Without it, an unread bundle reads as an app that declares no service gems.
       private_class_method def self.unread_bundle_note(root)
         outside = RailsAiContext::GemLock.for(root).outside_gemfile or return nil
 
@@ -334,8 +333,7 @@ module RailsAiContext
         lines << ""
       end
 
-      # The app container's env as Kamal::Configuration::Role#env merges it: the
-      # top-level env, then a role's own `servers.<role>.env`, then each `env.tags.<tag>`.
+      # As Kamal's Role#env merges it: top-level env, `servers.<role>.env`, then each `env.tags.<tag>`.
       private_class_method def self.scan_kamal_env(root)
         config = RailsAiContext::ConfigYaml.read(root, KAMAL_DEPLOY, label: "Kamal", marker: RailsAiContext::ConfigYaml::ERB_OUTPUT)
         return [] unless config.is_a?(Hash)
@@ -362,8 +360,7 @@ module RailsAiContext
       # A run of letters and digits this long is a key or token, whatever the variable is called.
       OPAQUE_TOKEN = /(?=[A-Za-z0-9+\/=_-]*\d)(?=[A-Za-z0-9+\/=_-]*[A-Za-z])[A-Za-z0-9+\/=_-]{16,}/
 
-      # Webhook URLs and DSNs carry their secret in the path or the user part, where
-      # Redaction does not look, so only a value with neither a URL nor a token is printed.
+      # Webhook URLs and DSNs hide their secret in the path or user part, where Redaction does not look.
       private_class_method def self.kamal_clear_value(name, value)
         return :computed if RailsAiContext::ConfigYaml.marked?(value)
 
@@ -374,9 +371,7 @@ module RailsAiContext
         text
       end
 
-      # The config gem merges config/settings.yml, then config/settings/<env>.yml
-      # and config/environments/<env>.yml over it; *.local.yml is on sensitive_patterns.
-      # Without the gem a config/settings.yml is the app's own file and no Settings constant exists.
+      # Without the config gem, config/settings.yml is the app's own file and no Settings constant exists.
       private_class_method def self.scan_settings(root)
         return [] unless RailsAiContext::GemLock.for(root).present?("config")
 
@@ -407,9 +402,7 @@ module RailsAiContext
       ANYWAY_CONFIG_DIRS = %w[config/configs app/configs].freeze
       ANYWAY_BASES = %w[Anyway::Config ApplicationConfig].freeze
 
-      # Each Anyway::Config class's attributes, with the env name anyway_config
-      # reads: "#{env_prefix}_#{ATTR}", the prefix defaulting to the class name
-      # before `Config`, downcased (PaymentConfig reads PAYMENT_*).
+      # anyway_config reads "#{env_prefix}_#{ATTR}"; the prefix defaults to the class name before `Config` (PAYMENT_*).
       private_class_method def self.scan_anyway_configs(root)
         ANYWAY_CONFIG_DIRS.flat_map { |dir| Dir.glob(File.join(root, dir, "**", "*.rb")).sort }.filter_map do |path|
           file = path.delete_prefix("#{root}/")
