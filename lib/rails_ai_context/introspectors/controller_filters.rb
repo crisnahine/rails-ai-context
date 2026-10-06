@@ -356,10 +356,33 @@ module RailsAiContext
           text = value.to_s
           if value.is_a?(Symbol) || literals.include?(text) then text
           elsif text.start_with?("->") then blocks.shift
-          elsif (const = text[/\A(?:::)?([A-Z]\w*(?:::[A-Z]\w*)*)\.new\b/, 1]) then "#{const} (object)"
+          elsif (const = object_name(text)) then "#{const} (object)"
           elsif text.match?(/\A(?:::)?[A-Z]\w*(?:::[A-Z]\w*)*\z/) then text.delete_prefix("::")
           end
         end + blocks
+      end
+
+      # The class the booted tier names an object filter by: `Class` for an anonymous class,
+      # an instance's nearest named class (`Class.new(Base) {}.new` is Base's, `Class.new {}.new` Object's).
+      def object_name(text)
+        node = AstCache.parse_string(text)&.value&.statements&.body&.first
+        return nil unless node.is_a?(Prism::CallNode) && node.name == :new && node.receiver
+        return "Class" if %w[Class Struct].include?(constant_name(node.receiver))
+
+        named_class(node.receiver)
+      end
+
+      def named_class(node)
+        return constant_name(node) unless node.is_a?(Prism::CallNode) && node.name == :new
+
+        case constant_name(node.receiver)
+        when "Class" then (superclass = node.arguments&.arguments&.first) ? named_class(superclass) : "Object"
+        when "Struct" then "Struct"
+        end
+      end
+
+      def constant_name(node)
+        node.slice.delete_prefix("::") if node.is_a?(Prism::ConstantReadNode) || node.is_a?(Prism::ConstantPathNode)
       end
 
       def constraints(entry)
@@ -420,7 +443,7 @@ module RailsAiContext
       end
 
       private_class_method :walk, :class_level, :singleton_expansions, :declares_filters?, :base_expansions, :each_base,
-                           :class_method_defs,
+                           :class_method_defs, :object_name, :named_class, :constant_name,
                            :superclass_of, :base_source, :constant_source, :with_file, :body_call?, :record, :positional_names, :constraints, :condition_text, :normalize, :action_condition, :lambda_body
     end
   end

@@ -930,18 +930,23 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
           class WidgetsController < ApplicationController
             after_action Class.new { def self.after(c); end }
             before_action Struct.new(:x) { def before(c); end }.new(1)
+            before_action Class.new { def before(c); end }.new
+            before_action Class.new(Struct.new(:y)) { def before(c); end }.new(1)
           end
         RUBY
         ctrl = Class.new(ActionController::Base) do
           after_action Class.new { def self.after(c); end }
           before_action Struct.new(:x) { def before(c); end }.new(1)
+          before_action Class.new { def before(c); end }.new
+          before_action Class.new(Struct.new(:y)) { def before(c); end }.new(1)
         end
         ctrl.define_singleton_method(:name) { "WidgetsController" }
 
         booted = introspector.send(:extract_filters, ctrl, source).map { |f| [ f[:kind], f[:name], f[:declared] ] }
         static = introspector.send(:extract_filters_from_source, source).map { |f| [ f[:kind], f[:name], f[:declared] ] }
 
-        expect(static).to eq([ [ "after", "Class (object)", true ], [ "before", "Struct (object)", true ] ])
+        expect(static).to eq([ [ "after", "Class (object)", true ], [ "before", "Struct (object)", true ],
+                               [ "before", "Object (object)", true ], [ "before", "Struct (object)", true ] ])
         expect(booted.sort).to eq(static.sort)
       end
 
