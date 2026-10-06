@@ -33,7 +33,7 @@ module RailsAiContext
       # @param path_name [String] the name the file's path camelizes to
       # @return [String] the constant to call this file's class
       def resolve(source, path_name)
-        declared_names(source).find { |name| name.casecmp?(path_name) } ||
+        declared_names(source, assignments: true).find { |name| name.casecmp?(path_name) } ||
           declared_module_names(source).find { |name| name.casecmp?(path_name) } ||
           path_name
       end
@@ -43,7 +43,7 @@ module RailsAiContext
       #
       # @return [String] the declared constant, or `path_name` when none fits
       def named(source, path_name)
-        names = declared_names(source) + declared_module_names(source)
+        names = declared_names(source, assignments: true) + declared_module_names(source)
         suffix = "::#{path_name.to_s.downcase}"
         names.find { |name| name.casecmp?(path_name.to_s) } ||
           names.select { |name| name.downcase.end_with?(suffix) }.min_by(&:length) ||
@@ -113,13 +113,13 @@ module RailsAiContext
       # @return [Boolean] whether the source declares a class at all. A file
       #   that declares only modules is a mixin, whatever directory it sits in.
       def declares_class?(source)
-        declared_names(source).any?
+        declared_names(source, assignments: true).any?
       end
 
       # Fully qualified name of every class the source declares, module
       # nesting included. Empty when nothing parses.
-      def declared_names(source)
-        declarations(source).map(&:name)
+      def declared_names(source, assignments: false)
+        declarations(source, assignments: assignments).map(&:name)
       end
 
       # The same for modules, for a file that declares no class: a mixin is
@@ -170,8 +170,8 @@ module RailsAiContext
       # Every class the source declares, with the superclass it names -
       # nil for a class with no superclass or a computed one. A module
       # declares no class and so appears here not at all. `assignments: true`
-      # adds each `X = Class.new(Base)`, which only the model and config
-      # listings read: elsewhere the first declaration is the file's class.
+      # adds each `X = Class.new(Base)`, for a reader that asks whether or by
+      # what name a class is declared, never for one that takes the first as the file's class.
       def declarations(source, assignments: false)
         return [] unless source
 

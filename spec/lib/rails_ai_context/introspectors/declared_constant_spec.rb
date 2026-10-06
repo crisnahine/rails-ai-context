@@ -300,6 +300,16 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
     end
   end
 
+  describe "a file whose only class is a Class.new assignment" do
+    it "declares a class, and resolves to the name the assignment writes" do
+      source = "APIKey = Class.new(ApplicationRecord) do\n  has_one_attached :photo\nend\n"
+
+      expect(described_class.declares_class?(source)).to be true
+      expect(described_class.resolve(source, "ApiKey")).to eq("APIKey")
+      expect(described_class.named(source, "ApiKey")).to eq("APIKey")
+    end
+  end
+
   describe ".class_bodies of a Class.new assignment" do
     it "is the block body, under the name the assignment writes" do
       source = <<~RUBY

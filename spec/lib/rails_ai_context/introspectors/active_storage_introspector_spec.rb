@@ -152,6 +152,17 @@ RSpec.describe RailsAiContext::Introspectors::ActiveStorageIntrospector do
       FileUtils.rm_rf(domain)
     end
 
+    it "finds the attachment of a model whose file only assigns Class.new(ApplicationRecord)" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "widget.rb"),
+                   "Widget = Class.new(ApplicationRecord) do\n  has_one_attached :photo\nend\n")
+
+        attachments = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:attachments]
+        expect(attachments).to eq([ { model: "Widget", name: "photo", type: "has_one_attached" } ])
+      end
+    end
+
     it "finds the attachment of a model outside app/models that model_details lists" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "domain"))
