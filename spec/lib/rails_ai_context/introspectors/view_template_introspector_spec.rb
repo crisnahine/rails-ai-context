@@ -139,6 +139,20 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
       expect(introspector.send(:extract_partial_refs, "<%= render current_account.widgets %>")).to be_empty
     end
 
+    it "names the records of an association named apart from its class by that class" do
+      Dir.mktmpdir("rendered") do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/models"))
+        File.write(File.join(dir, "app/models/post.rb"),
+                   "class Post < ApplicationRecord\n  has_many :replies, class_name: \"Comment\"\n  belongs_to :writer, class_name: \"User\"\nend\n")
+        File.write(File.join(dir, "app/models/comment.rb"), "class Comment < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app/models/user.rb"), "class User < ApplicationRecord\nend\n")
+        allow(introspector).to receive(:root).and_return(dir)
+
+        refs = introspector.send(:extract_partial_refs, "<%= render @post.replies %>\n<%= render @post.writer %>\n<%= render @posts %>")
+        expect(refs).to eq(%w[comments user posts])
+      end
+    end
+
     it "still detects render @ivar" do
       source = "<%= render @article %>"
       expect(introspector.send(:extract_partial_refs, source)).to include("article")
