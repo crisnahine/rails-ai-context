@@ -506,7 +506,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   association extension block, a `concern :Name do` block, or a `Struct.new`,
   `Data.define`, `Class.new` or `Module.new` block is not the enclosing class's;
   one assigned to a constant is that constant's, and a `Module.new` held in a
-  local is the enclosing class's, where it is included. (#297, #298, #308, #388)
+  local is the enclosing class's, where it is included. In `model_details` the
+  methods written with `def` come first, so a long run of delegations no longer
+  pushes them past the 25-row cap. (#297, #298, #308, #388)
 - **A one-line or endless method is cut at its own line.** `callbacks` and
   `concern --detail full` show `def strip_name; end` or `def wrap_save = yield`
   under `(line N)` instead of running to the end of the class, and `search_code`

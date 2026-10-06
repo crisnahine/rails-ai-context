@@ -625,6 +625,49 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  # Delegations and accessors sit at the top of a model, so listing them in
+  # source order filled the 25-row cap before the first def.
+  describe "a model whose generated methods outnumber the cap" do
+    around do |example|
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "app", "models", "member.rb")
+        FileUtils.mkdir_p(File.dirname(path))
+        names = (1..26).map { |i| ":field_#{i}" }.join(", ")
+        File.write(path, <<~RUBY)
+          class Member < ApplicationRecord
+            delegate #{names}, to: :user, prefix: true
+            attr_accessor :draft_note
+
+            def acct
+              username
+            end
+
+            def refresh!
+              touch
+            end
+          end
+        RUBY
+        @root = dir
+        example.run
+      end
+    end
+
+    it "lists the methods the class writes with def first" do
+      described_class.reset_cache!
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Member" => { table_name: "members", file: "app/models/member.rb" } }
+      )
+
+      text = described_class.call(model: "Member").content.first[:text]
+      rows = text[/## Key instance methods.*?\n(.*?)(\n\n|\z)/m, 1].lines.map(&:strip)
+
+      expect(text).to include("## Key instance methods (25 of 30)")
+      expect(rows.first(2)).to eq([ "- `acct`", "- `refresh!`" ])
+      expect(rows.drop(2)).to all(start_with("- `user_field_"))
+    end
+  end
+
   describe "model gem macros" do
     it "prints a line per gem macro and the aasm states, events and transitions" do
       described_class.reset_cache!

@@ -679,7 +679,9 @@ module RailsAiContext
 
       private_class_method def self.extract_method_signatures(model_name)
         source = model_source(model_name) or return nil
-        Introspectors::ActionResolver.public_methods_from_source(source, owner: model_name)
+        # A def carries an end line; delegate and attr_* names do not, and they lead a model, so they go after the cap's defs.
+        written, generated = Introspectors::ActionResolver.public_methods_in(source, owner: model_name).partition { |m| m[:end_location] }
+        (written + generated).map { |m| Introspectors::ActionResolver.signature(m) }.uniq
       end
 
       # On the booted tier reflection has already answered associations,
