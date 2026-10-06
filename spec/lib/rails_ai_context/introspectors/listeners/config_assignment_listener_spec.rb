@@ -282,6 +282,10 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
     expect(writes.map { |r| [ r[:path], r[:value], r[:source] ] }).to eq([ [ %i[hosts <<], nil, %(config.hosts << "a.com" << "b.com") ] ])
   end
 
+  it "reads what a chain takes off config_for by byte offset, after a multibyte name" do
+    expect(assignments(%(config.x = config_for("réglages").fetch(:api)\n)).first[:config_for][:read]).to eq(".fetch(:api)")
+  end
+
   it "redacts an element write under a secret-named key" do
     writes = parse_and_dispatch(<<~RUBY).select { |r| r[:write] }
       config.action_mailer.smtp_settings[:password] = "hunter2pass"

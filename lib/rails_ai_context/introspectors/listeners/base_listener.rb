@@ -33,12 +33,14 @@ module RailsAiContext
 
           # The node's text runs on past its end when it opens a heredoc, and
           # every cut sits inside the node, so the offsets still line up.
-          text = NodeSource.text(node).dup
-          text = text[0, finish - start] if upto
+          # Offsets count bytes, so the cuts work on the bytes and the text gets its encoding back after.
+          source = NodeSource.text(node)
+          text = source.b
+          text = text.byteslice(0, finish - start) if upto
           cuts.sort_by(&:first).reverse_each do |from, to, replacement|
-            text[(from - start)...(to - start)] = replacement
+            text[(from - start)...(to - start)] = replacement.b
           end
-          fold_newlines(text)
+          fold_newlines(text.force_encoding(source.encoding))
         end
 
         # A plain multi-line string literal (a SQL fragment) is respelt on one line as `inspect`

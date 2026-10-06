@@ -244,7 +244,7 @@ module RailsAiContext
         def chained_read(value, call)
           return nil if value.equal?(call)
 
-          text = value.location.slice[(call.location.end_offset - value.location.start_offset)..]
+          text = value.location.slice.byteslice((call.location.end_offset - value.location.start_offset)..)
           RailsAiContext::Redaction.call(text)
         end
 

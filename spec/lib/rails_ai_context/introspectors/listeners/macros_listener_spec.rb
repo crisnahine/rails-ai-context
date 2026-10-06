@@ -241,6 +241,28 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "option
   end
 end
 
+RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "multibyte source" do
+  it "cuts a gem macro at its block by byte offset, past a multibyte label and comment" do
+    results = parse_and_dispatch(<<~RUBY)
+      class Car < ApplicationRecord
+        state_machine :status, initial: :brouillon, label: "état créé" do # étiquette
+        end
+      end
+    RUBY
+    expect(results.map { |r| r[:text] }).to eq([ 'state_machine :status, initial: :brouillon, label: "état créé"' ])
+  end
+
+  it "cuts a comment out of a call by byte offset, after a multibyte string" do
+    results = parse_and_dispatch(<<~RUBY)
+      class Car < ApplicationRecord
+        has_paper_trail meta: { a: "é" }, # note
+          on: [:update]
+      end
+    RUBY
+    expect(results.map { |r| r[:text] }).to eq([ 'has_paper_trail meta: { a: "é" }, on: [:update]' ])
+  end
+end
+
 RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "connects_to" do
   it "records the call as written" do
     results = parse_and_dispatch(<<~RUBY)
