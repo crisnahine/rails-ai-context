@@ -147,6 +147,14 @@ module RailsAiContext
         def database_option(table, databases)
           return [ [], nil ] if databases.empty? || databases.include?("primary")
 
+          # A dump found only by its file name has no database.yml entry, so the generator would write to the primary.
+          unconfigured, databases = databases.partition { |db| RailsAiContext::DatabaseYml.entry(rails_app.root, db).nil? }
+          if databases.empty?
+            note = "**Database:** `#{table}` is in the #{unconfigured.join(", ")} dump, which this environment's config/database.yml does not configure: " \
+                   "there is no `--database` to generate into, and a migration generated here runs on the primary."
+            return [ [ note, "" ], nil ]
+          end
+
           flag = " --database #{databases.first}"
           note = "**Database:** `#{table}` is in #{[ databases[0..-2].join(", "), databases.last ].reject(&:empty?).join(" and ")}, not the primary database: generate with `#{flag.strip}` " \
                  "so the migration lands in that database's migrations_paths and `bin/rails db:migrate` runs it there."
