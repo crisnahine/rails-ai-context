@@ -1047,8 +1047,10 @@ module RailsAiContext
       # Most walks never look at the class's calls, so a base's walk is the
       # same for every subclass: kept in the caller's per-run cache.
       memo_key = cache && [ :collect, root.to_s, mixins, keys, prefer, within, listeners, extra, file ]
+      # A walk is the class's own only where it asked about a method the class itself calls.
+      own_calls = memo_key ? Run.merge_calls({}, calls&.sites_by_name).keys.to_set : Set.new
       if memo_key && (consulted, result = cache[memo_key])
-        return fresh(result) if consulted.empty? || !consulted.intersect?(Run.merge_calls({}, calls&.sites_by_name).keys.to_set)
+        return fresh(result) unless consulted.intersect?(own_calls)
       end
 
       # Resolved once per call and held by the run: the configured paths
@@ -1073,9 +1075,7 @@ module RailsAiContext
 
       result = Collected.new(run.collected, run.unresolved, run.hidden, run.included_calls, run.placement, run.skipped_methods,
                              run.block_sites, run.mixins)
-      # The repeat walks follow the concerns' own included calls, the same for every
-      # class; only a method the class itself calls makes the answer its own.
-      own_calls = Run.merge_calls({}, calls&.sites_by_name).keys.to_set
+      # The repeat walks follow the concerns' own included calls, the same for every class.
       cache[memo_key] = [ consulted, fresh(result) ] if memo_key && !consulted.intersect?(own_calls)
       result
     end
