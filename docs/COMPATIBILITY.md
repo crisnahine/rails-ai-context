@@ -234,6 +234,11 @@ Proof sources:
    Sinatra and a plain gem); the lab regressions on SQLite in all three tiers,
    PostgreSQL and MySQL; and the unit suite on Ruby 3.1 with Rails 7.0 through
    Ruby 4.0 with Rails 8.1.
+   In the v5.32.1 release QA: a PostgreSQL 17 lab on Rails 8.1 and 8.0 with a
+   two-schema search path, answered booted and static from schema.rb and
+   structure.sql side by side; the small apps and the same private app
+   answering as v5.32.0 did; and the unit suite on Ruby 3.1 with Rails 7.0
+   through Ruby 4.0 with Rails 8.1.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified
