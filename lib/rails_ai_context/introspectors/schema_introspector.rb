@@ -445,7 +445,9 @@ module RailsAiContext
       def read_secondary_database_dumps
         dumps = {}
         primary = dump_candidates.map(&:last)
-        SchemaDumpPath.secondaries(app.root).each do |name, (format, path)|
+        secondaries = SchemaDumpPath.secondaries(app.root)
+        taken = primary + secondaries.values.map(&:last)
+        secondaries.each do |name, (format, path)|
           next if primary.include?(path) || !File.exist?(path)
 
           parsed = format == :ruby ? parse_schema_rb(path) : parse_structure_sql(path)
@@ -456,7 +458,7 @@ module RailsAiContext
         end
         Dir.glob(File.join(app.root.to_s, "db", "*_schema.rb")).sort.each do |path|
           name = File.basename(path, ".rb").sub(/_schema\z/, "")
-          next if dumps.key?(name) || primary.include?(path)
+          next if dumps.key?(name) || taken.include?(path)
 
           parsed = parse_schema_rb(path)
           next if parsed[:tables].blank?
@@ -466,7 +468,7 @@ module RailsAiContext
         end
         Dir.glob(File.join(app.root.to_s, "db", "*_structure.sql")).sort.each do |path|
           name = File.basename(path, ".sql").sub(/_structure\z/, "")
-          next if dumps.key?(name) || primary.include?(path)
+          next if dumps.key?(name) || taken.include?(path)
 
           parsed = parse_structure_sql(path)
           next if parsed[:tables].blank?

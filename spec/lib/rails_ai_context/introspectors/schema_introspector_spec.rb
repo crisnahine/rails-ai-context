@@ -1191,6 +1191,27 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
+    it "lists a secondary once when its schema_dump file ends in _schema.rb under another name" do
+      Dir.mktmpdir do |dir|
+        write_app(dir, "config/database.yml" => <<~YAML,
+                    #{RailsAiContext.environment_name}:
+                      primary:
+                        adapter: sqlite3
+                        database: db/dev.sqlite3
+                      analytics:
+                        adapter: sqlite3
+                        database: db/analytics.sqlite3
+                        schema_dump: warehouse_schema.rb
+                  YAML
+                       "db/schema.rb" => "ActiveRecord::Schema[8.1].define(version: 1) do\n  create_table \"users\" do |t|\n  end\nend\n",
+                       "db/warehouse_schema.rb" => "ActiveRecord::Schema[8.1].define(version: 2) do\n  create_table \"page_views\" do |t|\n  end\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:secondary_databases].keys).to eq([ "analytics" ])
+      end
+    end
+
     it "reads no migrations_paths outside the app" do
       Dir.mktmpdir do |outside|
         write_app(outside, "20240101000000_create_posts.rb" => create_posts)
