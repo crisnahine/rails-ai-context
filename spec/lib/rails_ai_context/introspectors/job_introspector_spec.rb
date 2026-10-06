@@ -278,6 +278,20 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
         expect(found).to eq([ { owner: "Post", method: "notify_all", file: "app/models/concerns/notifiable.rb:4", options: "queue: notify" } ])
       end
     end
+
+    it "still treats the concern as a mixin when it nests an error class" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/models/concerns"))
+        File.write(File.join(dir, "app/models/concerns/notifiable.rb"),
+          "module Notifiable\n  extend ActiveSupport::Concern\n  class DeliveryError < StandardError; end\n  included do\n    handle_asynchronously :notify_all\n  end\n  def notify_all; end\nend\n")
+        File.write(File.join(dir, "app/models/application_record.rb"), "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n")
+        File.write(File.join(dir, "app/models/post.rb"), "class Post < ApplicationRecord\n  include Notifiable\nend\n")
+
+        found = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:async_methods]
+
+        expect(found).to eq([ { owner: "Post", method: "notify_all", file: "app/models/concerns/notifiable.rb:5" } ])
+      end
+    end
   end
 
   describe "#static_call" do

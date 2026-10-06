@@ -325,7 +325,7 @@ module RailsAiContext
           # app/models/concerns is an autoload root of its own.
           owner = DeclaredConstant.resolve(record.source, record.path_name.delete_prefix("Concerns::"))
           calls = async_calls(record)
-          DeclaredConstant.declares_class?(record.source) ? found.concat(calls.map { |call| { owner: owner, **call } }) : modules[owner] = calls
+          DeclaredConstant.declared_names(record.source).include?(owner) ? found.concat(calls.map { |call| { owner: owner, **call } }) : modules[owner] = calls
         end
         return found if modules.empty?
 
