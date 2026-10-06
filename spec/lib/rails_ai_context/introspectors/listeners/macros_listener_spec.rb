@@ -277,6 +277,25 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "scope"
     expect(results.map { |r| [ r[:macro], r[:attribute] ] }).to eq([ [ :encrypts, "ssn" ] ])
   end
 
+  it "reads the macros a mixin hook's class_eval block declares on the includer" do
+    results = parse_and_dispatch(<<~RUBY)
+      module Tokened
+        def self.included(base)
+          base.class_eval do
+            serialize :prefs, coder: JSON
+            has_secure_token :api_key
+            self.ignored_columns += %w[legacy]
+            def rotate
+              encrypts :never
+            end
+          end
+          encrypts :not_on_includer
+        end
+      end
+    RUBY
+    expect(results.map { |r| r[:macro] }).to eq(%i[serialize has_secure_token ignored_columns])
+  end
+
   it "names the class each record is written in, so a nested class keeps its own" do
     results = parse_and_dispatch(<<~RUBY)
       class Gadget < ApplicationRecord

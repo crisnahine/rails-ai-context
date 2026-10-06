@@ -46,6 +46,7 @@ module RailsAiContext
         def initialize
           super
           @def_depth = 0
+          @eval_depths = []
         end
 
         def on_def_node_enter(_node)
@@ -62,9 +63,15 @@ module RailsAiContext
           return if @def_depth.positive? && !(node.receiver && in_scope?(node))
 
           owned { record_call(node) }
+          # `base.class_eval do` in a hook runs its block on the includer, as a class body.
+          return unless @def_depth.positive? && node.block && WithOptionsScope::EVALS.include?(node.name)
+
+          @eval_depths.push([ node, @def_depth ])
+          @def_depth = 0
         end
 
         def on_call_node_leave(node)
+          @def_depth = @eval_depths.pop.last if @eval_depths.last&.first.equal?(node)
           @aasm = nil if @aasm && @aasm[:node].equal?(node)
           @event = nil if @event && @event[:node].equal?(node)
         end
