@@ -720,6 +720,22 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
 
+    it "advises gitignoring only the files no app commits on purpose when there is no .gitignore" do
+      app_with("config/master.key" => "x\n", "config/credentials.yml.enc" => "x\n", "config/database.yml" => "x\n") do |dir|
+        check = gitignore_check_for(dir)
+
+        expect(check.status).to eq(:fail)
+        expect(check.message).to eq("No .gitignore found - config/master.key would be committed; also committed: config/credentials.yml.enc, config/database.yml")
+        expect(check.fix).to eq("Create .gitignore with: `config/master.key`")
+      end
+      app_with("config/credentials.yml.enc" => "x\n") do |dir|
+        check = gitignore_check_for(dir)
+
+        expect(check.status).to eq(:warn)
+        expect(check.message).to eq("Committed, and never read by the tools: config/credentials.yml.enc")
+      end
+    end
+
     # The Codex config carries this machine's PATH and GEM_HOME, which is why
     # install gitignores it; the check never asked whether that survived.
     it "reports the Codex config as unignored, and passes once .gitignore covers it" do

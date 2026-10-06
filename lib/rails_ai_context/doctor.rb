@@ -579,21 +579,15 @@ module RailsAiContext
 
       return Check.new(name: "Secrets in .gitignore", status: :pass, message: "No sensitive files found", fix: nil) if sensitive_files.empty?
 
-      unless File.exist?(gitignore_path)
-        return Check.new(name: "Secrets in .gitignore", status: :fail,
-          message: "No .gitignore found - #{sensitive_files.join(', ')} would be committed to version control",
-          fix: "Create .gitignore with: #{sensitive_files.map { |f| "`#{f}`" }.join(', ')}")
-      end
-
-      gitignore = File.read(gitignore_path)
-      exposed = sensitive_files.reject { |file| gitignore_covers?(gitignore, file) }
+      gitignore = File.read(gitignore_path) if File.exist?(gitignore_path)
+      exposed = gitignore ? sensitive_files.reject { |file| gitignore_covers?(gitignore, file) } : sensitive_files
       never, others = exposed.partition { |file| NEVER_COMMIT.any? { |pattern| File.fnmatch(pattern, file, File::FNM_PATHNAME | File::FNM_DOTMATCH) } }
 
       if never.any?
-        message = never.map { |file| "#{file} not in .gitignore" }.join("; ")
+        message = gitignore ? never.map { |file| "#{file} not in .gitignore" }.join("; ") : "No .gitignore found - #{never.join(', ')} would be committed"
         message += "; also committed: #{others.join(', ')}" if others.any?
         Check.new(name: "Secrets in .gitignore", status: :fail, message: message,
-          fix: "Add to .gitignore: #{never.map { |file| "`#{file}`" }.join(', ')}")
+          fix: "#{gitignore ? 'Add to .gitignore' : 'Create .gitignore with'}: #{never.map { |file| "`#{file}`" }.join(', ')}")
       elsif others.any?
         Check.new(name: "Secrets in .gitignore", status: :warn,
           message: "Committed, and never read by the tools: #{others.join(', ')}",
