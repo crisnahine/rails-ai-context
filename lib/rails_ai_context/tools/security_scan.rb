@@ -222,12 +222,19 @@ module RailsAiContext
       BACKTRACE_FRAME = /\A(?:from\s+)?\S+:\d+:in\s/
       ERROR_LOCATION = /\A\S+:\d+:in\s+[`'][^`']*[`']:\s+/
 
-      # A folder may hold single spaces ("Macintosh HD"), but never ends on one, so prose between two paths stays.
-      ABSOLUTE_PATH = %r{(?<![\w.:/~])/(?:[^\s'"`:,/]+(?: [^\s'"`:,/]+)*/)+([^\s'"`:,/]+)}
+      PATH_TAIL = %r{(?:[^\s'"`:,/]+/)*([^\s'"`:,/]+)}
+      ABSOLUTE_PATH = %r{(?<![\w.:/~])/(?:[^\s'"`:,/]+/)+([^\s'"`:,/]+)}
 
       # The answer leaves the machine: a file in the app is named from its root, any other by its base name.
+      # A pattern cannot tell a folder with a space from prose, so the roots that may hold one go by name first.
       private_class_method def self.portable_error(message)
-        RailsAiContext::PortablePath.relativize_text(message, rails_app.root).gsub(ABSOLUTE_PATH, '\1')
+        text = RailsAiContext::PortablePath.relativize_text(message, rails_app.root)
+        roots = [ Dir.home, *Gem.path, Gem.dir ].map(&:to_s).reject { |root| root.empty? || root == "/" }
+        unless roots.empty?
+          under_root = %r{(?:#{roots.uniq.sort_by { |root| -root.length }.map { |root| Regexp.escape(root) }.join("|")})/#{PATH_TAIL}}
+          text = text.gsub(under_root, '\1')
+        end
+        text.gsub(ABSOLUTE_PATH, '\1')
       end
 
       private_class_method def self.brakeman_error_line(err)
