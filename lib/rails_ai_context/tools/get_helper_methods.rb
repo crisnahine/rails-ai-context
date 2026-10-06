@@ -327,7 +327,7 @@ module RailsAiContext
         listeners[:mixins] = Introspectors::Listeners::MixinsListener if lib&.may_include?(source)
         return [] if listeners.empty?
 
-        result = Introspectors::SourceIntrospector.walk(path, listeners)
+        result = Introspectors::SourceIntrospector.walk_source(source, listeners)
         lib&.note(result[:mixins])
         calls = Array(result[:calls])
         calls = calls.select { |call| call[:offset] && range.cover?(call[:offset]) } if range

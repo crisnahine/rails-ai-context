@@ -492,6 +492,16 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
         expect(text).to include("- `current_widget=` (WidgetsController")
       end
 
+      it "parses a controller declaring helpers once" do
+        source = "class WidgetsController < ApplicationController\n  helper_method def current_widget = nil\nend\n"
+        File.write(File.join(@root, "app/controllers/widgets_controller.rb"), source)
+        allow(Prism).to receive(:parse).and_call_original
+
+        described_class.call(detail: "full")
+
+        expect(Prism).to have_received(:parse).with(source).once
+      end
+
       it "counts them in the summary" do
         text = described_class.call(detail: "summary").content.first[:text]
 
