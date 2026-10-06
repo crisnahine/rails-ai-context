@@ -125,10 +125,11 @@ module RailsAiContext
         lines
       end
 
-      # The static refusal reads config.ru alone rather than building every section.
+      # The static refusal reads config.ru alone rather than building every section,
+      # and only when the middleware introspector the booted tier reads it through is on.
       private_class_method def self.rackup_lines
         calls = if RailsAiContext.static_tier?
-          Introspectors::MiddlewareIntrospector.rackup(rails_app.root.to_s)
+          RailsAiContext.configuration.introspectors.include?(:middleware) ? Introspectors::MiddlewareIntrospector.rackup(rails_app.root.to_s) : []
         else
           Array(Payload.section(cached_context, :middleware)&.dig(:rackup))
         end

@@ -185,6 +185,18 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
         FileUtils.rm_rf(root)
       end
 
+      it "reads no config.ru in the static tier when the middleware introspector is off, as the booted tier does" do
+        root = Dir.mktmpdir
+        File.write(File.join(root, "config.ru"), "use Rack::ContentLength\n")
+        allow(RailsAiContext.configuration).to receive(:app_root).and_return(root)
+        allow(RailsAiContext.configuration).to receive(:introspectors).and_return(RailsAiContext::Configuration::PRESETS[:standard])
+        allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+
+        expect(described_class.call.content.first[:text]).not_to include("## config.ru")
+      ensure
+        FileUtils.rm_rf(root)
+      end
+
       it "says which map a middleware sits inside and the condition it runs under" do
         allow(described_class).to receive(:cached_context).and_return({
           config: config_data,
