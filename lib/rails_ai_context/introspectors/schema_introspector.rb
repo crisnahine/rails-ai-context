@@ -8,6 +8,10 @@ module RailsAiContext
       extend StaticTier
       static_tier :alternate_source
 
+      # dump path => [what the dump was read under, its DumpLookup], kept across runs for a later lookup.
+      DUMP_LOOKUPS = Concurrent::Map.new
+      private_constant :DUMP_LOOKUPS
+
       # @return [Hash] database schema context
       def call
         return attach_secondary_databases(static_schema_parse) unless active_record_connected?
@@ -627,7 +631,15 @@ module RailsAiContext
 
       # [the schema answer, a DumpLookup over the same parse]
       def read_dump(format, path)
-        format == :ruby ? read_schema_rb(path) : read_structure_sql(path)
+        stamp = lookup_stamp(path)
+        found = format == :ruby ? read_schema_rb(path) : read_structure_sql(path)
+        DUMP_LOOKUPS[path] = [ stamp, found.last ] if found.last
+        found
+      end
+
+      def lookup_stamp(path)
+        stat = File.stat(path)
+        [ stat.mtime, stat.size, stat.ino, search_path_for(path), rails_version ]
       end
 
       # The tables of one dump by the names a lookup may ask for.
@@ -647,7 +659,8 @@ module RailsAiContext
         _, format, path = database ? secondary_dump_files.find { |name, _, _| name == database } : [ nil, *present_dump ]
         return unless path && File.exist?(path)
 
-        RailsAiContext::RunCache.fetch([ :dump_lookup, path ]) { read_dump(format, path).last }
+        cached = DUMP_LOOKUPS[path]
+        cached && cached.first == lookup_stamp(path) ? cached.last : read_dump(format, path).last
       end
 
       def read_schema_rb(path)

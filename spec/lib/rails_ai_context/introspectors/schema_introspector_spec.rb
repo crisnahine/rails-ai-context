@@ -2951,6 +2951,24 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       FileUtils.rm_rf(dir)
     end
 
+    it "answers a qualified lookup from the parse the introspection already made" do
+      sql = pg_app({ "db/structure.sql" => shadowing_sql }, rails: "8.1.4")
+      rb = pg_app({ "db/schema.rb" => rails72_enums.sub("Schema[7.2]", "Schema[8.1]").sub(/^end\n\z/, "  create_table \"audit.events\" do |t|\n  end\nend\n") }, rails: "8.1.4")
+      allow(RailsAiContext::Introspectors::StructureSqlReader).to receive(:parse).and_call_original
+      allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk).and_call_original
+
+      expect(ask(sql, table: "audit.events")).to include("kind")
+      expect(RailsAiContext::Introspectors::StructureSqlReader).to have_received(:parse).once
+      walks = -> { RSpec::Mocks.space.proxy_for(RailsAiContext::Introspectors::SourceIntrospector).messages_arg_list.count { |args| args.first == File.join(rb, "db/schema.rb") } }
+      schema_at(rb)
+      introspection = walks.call
+      expect(ask(rb, table: "audit.events")).to include("## Table: audit.events")
+      expect(walks.call).to eq(introspection * 2)
+    ensure
+      FileUtils.rm_rf(sql)
+      FileUtils.rm_rf(rb)
+    end
+
     it "takes a schema.rb's schemas from the one walk over it" do
       dump = rails72_enums.sub("Schema[7.2]", "Schema[8.1]")
       dir = pg_app({ "db/schema.rb" => dump })
