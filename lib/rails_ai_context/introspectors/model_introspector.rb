@@ -854,13 +854,23 @@ module RailsAiContext
       # it. A module the source includes, or one the app defines, stays.
       def base_gem_modules(model, mixins)
         written = ConcernMembership.from_mixins(mixins)
-        abstract_bases(model).flat_map { |base| base.ancestors - every_model_modules }.uniq.select do |mod|
+        gem_bases(model).flat_map { |base| base.ancestors - every_model_modules }.uniq.select do |mod|
           !mod.is_a?(Class) && mod.name && !written.include?(mod.name) && !ConcernPaths.find_file(app.root.to_s, mod.name)
         end
       end
 
       def abstract_bases(model)
         model.ancestors.select { |klass| klass.is_a?(Class) && klass < ActiveRecord::Base && klass != model && klass.abstract_class? }
+      end
+
+      # The bases a gem's inherited hook reaches as it reaches the model. Kaminari's
+      # reaches every direct ActiveRecord::Base child, so a model that is one is
+      # measured against the app's abstract bases that are one too.
+      def gem_bases(model)
+        bases = abstract_bases(model)
+        return bases unless model.superclass == ActiveRecord::Base
+
+        bases | ActiveRecord::Base.subclasses.select { |klass| klass.name && klass.abstract_class? }
       end
 
       def every_model_modules
@@ -1123,7 +1133,7 @@ module RailsAiContext
         # Reflection-discovered class methods (for completeness)
         # The abstract bases' class methods reach every model, the static tier reads none of
         # them, and a gem's (Kaminari's `page`) would otherwise be listed on each model.
-        base_methods = abstract_bases(model).flat_map(&:methods)
+        base_methods = gem_bases(model).flat_map(&:methods)
         all_methods = (model.methods - ActiveRecord::Base.methods - Object.methods - base_methods)
           .reject { |m|
             ms = m.to_s

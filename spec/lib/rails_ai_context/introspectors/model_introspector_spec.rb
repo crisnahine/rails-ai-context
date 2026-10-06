@@ -3061,6 +3061,32 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  # Kaminari's hook includes into every direct ActiveRecord::Base child, so a
+  # model with no abstract base of its own gets what the app's base gets.
+  describe "what a gem puts into a model that is a direct ActiveRecord::Base child" do
+    it "is neither a concern nor a class method of the model" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "legacy.rb"), "class Legacy < ActiveRecord::Base\nend\n")
+        stub_const("PagerGem::ModelExtension", Module.new)
+        base = Class.new(ActiveRecord::Base) { self.abstract_class = true }
+        stub_const("AppBase", base)
+        model = Class.new(ActiveRecord::Base) { self.table_name = "posts" }
+        model.define_singleton_method(:name) { "Legacy" }
+        [ base, model ].each do |klass|
+          klass.include(PagerGem::ModelExtension)
+          klass.define_singleton_method(:page) { |*| all }
+        end
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+
+        booted = introspector.send(:extract_model_details, model)
+
+        expect(booted[:concerns]).to eq([])
+        expect(booted[:class_methods]).not_to include("page")
+      end
+    end
+  end
+
   describe "a custom validate method with a condition" do
     it "keeps the condition in both tiers" do
       Dir.mktmpdir do |dir|
