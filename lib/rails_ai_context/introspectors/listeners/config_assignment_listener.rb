@@ -36,6 +36,10 @@ module RailsAiContext
           @statements.merge(node.body)
         end
 
+        def on_rescue_modifier_node_enter(node)
+          @statements << node.expression if @statements.include?(node)
+        end
+
         # Inside `def initialize(config)` the local is that argument, not the app's config.
         def on_def_node_enter(node)
           params = node.parameters
@@ -83,6 +87,9 @@ module RailsAiContext
           elsif node.arguments
             return unless node.name.to_s.match?(MUTATOR) && @statements.include?(node)
 
+            # `config.hosts << "a" << "b"` writes through the inner call.
+            receiver = node.receiver
+            @statements << receiver if receiver.is_a?(Prism::CallNode) && receiver.arguments && receiver.name.to_s.match?(MUTATOR)
             record_write(node.receiver, node.name, :call, node)
           else
             record_reference(node)

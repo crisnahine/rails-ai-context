@@ -146,6 +146,15 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
     ])
   end
 
+  it "records a chained << and a write under a rescue modifier" do
+    writes = parse_and_dispatch(<<~RUBY).select { |r| r[:write] }.map { |r| r[:path] }
+      config.hosts << "a" << "b"
+      config.middleware.push("x") rescue nil
+    RUBY
+
+    expect(writes).to eq([ [ :hosts, :<< ], [ :middleware, :push ] ])
+  end
+
   it "records a write through an index read as a write of the indexed setting" do
     writes = parse_and_dispatch(<<~RUBY).select { |r| r[:write] }.map { |r| r[:path] }
       config.paths["config/routes.rb"] << "config/extra_routes.rb"
