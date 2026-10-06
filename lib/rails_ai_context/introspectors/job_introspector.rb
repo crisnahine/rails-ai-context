@@ -689,7 +689,7 @@ module RailsAiContext
       def extract_solid_queue_config
         return nil unless solid_queue_adapter?
 
-        data = RecurringSchedules.yaml(app.root, SOLID_QUEUE_FILE)
+        data = ConfigYaml.read(app.root, SOLID_QUEUE_FILE, label: "Solid Queue")
         return nil unless data.is_a?(Hash)
 
         section = data[RailsAiContext.environment_name].is_a?(Hash) ? data[RailsAiContext.environment_name] : data

@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require "yaml"
-
 module RailsAiContext
   module Introspectors
     # Recurring tasks from each scheduler's own file, in the shape each gem reads it:
@@ -28,7 +26,7 @@ module RailsAiContext
       # and keeps only the entries that carry a `schedule`.
       def solid_queue(root)
         file = "config/recurring.yml"
-        data = yaml(root, file, marker: ERB_OUTPUT)
+        data = yaml(root, file)
         return [] unless data.is_a?(Hash)
 
         data.flat_map do |key, value|
@@ -41,14 +39,14 @@ module RailsAiContext
 
       def sidekiq_cron(root)
         %w[config/schedule.yml config/schedule.yaml config/sidekiq_cron.yml].flat_map do |file|
-          named_tasks(yaml(root, file, marker: ERB_OUTPUT)).filter_map { |name, options| task(file, name, options, :cron) }
+          named_tasks(yaml(root, file)).filter_map { |name, options| task(file, name, options, :cron) }
         end
       end
 
       # sidekiq-scheduler runs a job by its entry's name when no class is given.
       def sidekiq_scheduler(root)
         file = "config/sidekiq.yml"
-        data = yaml(root, file, marker: ERB_OUTPUT)
+        data = yaml(root, file)
         return [] unless data.is_a?(Hash)
 
         section = data["scheduler"].is_a?(Hash) ? data["scheduler"]["schedule"] : data["schedule"]
@@ -133,10 +131,10 @@ module RailsAiContext
           schedule: schedule.to_s, env: computed?(env.to_s) ? "computed" : env&.to_s, file: file }.compact
       end
 
-      ERB_OUTPUT = "RAC_ERB_OUTPUT"
+      ERB_OUTPUT = ConfigYaml::ERB_OUTPUT
 
       def computed?(value)
-        value == RailsAiContext::Confidence::INFERRED || (value.is_a?(String) && value.include?(ERB_OUTPUT)) ||
+        value == RailsAiContext::Confidence::INFERRED || ConfigYaml.marked?(value) ||
           (value.is_a?(Array) && value.any? { |part| computed?(part) }) ||
           (value.is_a?(Hash) && value.values.any? { |part| computed?(part) })
       end
@@ -154,21 +152,8 @@ module RailsAiContext
         value.is_a?(Hash) ? value.to_h { |key, inner| [ key.to_s, inner ] } : value
       end
 
-      # With `marker` an output tag reads as that marker, which computed? finds; without it, as empty.
-      def yaml(root, file, marker: nil)
-        content = read_file(root, file) or return nil
-        content = marker ? ErbSource.with_output_marked(content, marker) : ErbSource.without_tags(content)
-        stringify_keys(YAML.safe_load(content, aliases: true, permitted_classes: [ Symbol ]))
-      rescue StandardError, ScriptError => e
-        RailsAiContext.debug_fail(e, nil, label: "schedule #{file}")
-      end
-
-      def stringify_keys(value)
-        case value
-        when Hash then value.to_h { |key, inner| [ key.to_s.delete_prefix(":"), stringify_keys(inner) ] }
-        when Array then value.map { |inner| stringify_keys(inner) }
-        else value
-        end
+      def yaml(root, file)
+        ConfigYaml.read(root, file, label: "schedule", marker: ERB_OUTPUT)
       end
 
       def read_file(root, file)

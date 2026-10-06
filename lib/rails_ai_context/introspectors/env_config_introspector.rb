@@ -67,7 +67,7 @@ module RailsAiContext
           next entry.merge(missing: true) unless File.file?(File.join(root, call[:file]))
           next entry.merge(withheld: true) if SafePath.sensitive?(call[:file])
 
-          data = RecurringSchedules.yaml(root, call[:file])
+          data = ConfigYaml.read(root, call[:file], label: "config_for")
           next entry.merge(unreadable: true) unless data.is_a?(Hash)
 
           sections = [ data["shared"], data[environment] ].select { |section| section.is_a?(Hash) }

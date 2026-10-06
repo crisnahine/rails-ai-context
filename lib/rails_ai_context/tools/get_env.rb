@@ -337,7 +337,7 @@ module RailsAiContext
       # The app container's env as Kamal::Configuration::Role#env merges it: the
       # top-level env, then a role's own `servers.<role>.env`, then each `env.tags.<tag>`.
       private_class_method def self.scan_kamal_env(root)
-        config = Introspectors::RecurringSchedules.yaml(root, KAMAL_DEPLOY, marker: Introspectors::RecurringSchedules::ERB_OUTPUT)
+        config = RailsAiContext::ConfigYaml.read(root, KAMAL_DEPLOY, label: "Kamal", marker: RailsAiContext::ConfigYaml::ERB_OUTPUT)
         return [] unless config.is_a?(Hash)
 
         env = config["env"].is_a?(Hash) ? config["env"] : {}
@@ -365,7 +365,7 @@ module RailsAiContext
       # Webhook URLs and DSNs carry their secret in the path or the user part, where
       # Redaction does not look, so only a value with neither a URL nor a token is printed.
       private_class_method def self.kamal_clear_value(name, value)
-        return :computed if Introspectors::RecurringSchedules.computed?(value)
+        return :computed if RailsAiContext::ConfigYaml.marked?(value)
 
         text = value.to_s
         return RailsAiContext::Redaction.value(name, text) if SAFE_ENV_NAMES.include?(name)
@@ -383,7 +383,7 @@ module RailsAiContext
         files = [ "config/settings.yml" ] +
           %w[settings environments].flat_map { |dir| Dir.glob(File.join(root, "config", dir, "*.yml")).sort.map { |path| path.delete_prefix("#{root}/") } }
         files.filter_map do |file|
-          data = Introspectors::RecurringSchedules.yaml(root, file)
+          data = RailsAiContext::ConfigYaml.read(root, file, label: "config gem settings")
           next unless data.is_a?(Hash) && data.any?
 
           { file: file, keys: setting_keys(data) }
