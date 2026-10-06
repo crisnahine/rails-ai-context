@@ -45,6 +45,8 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::LiteralPaths do
     expect(read(%(probe File.expand_path("../lib", __dir__)), file: "config/application.rb").results).to eq([ "lib" ])
     expect(read(%(probe File.join(__dir__, "extras")), file: "config/application.rb").results).to eq([ "config/extras" ])
     expect(read(%(probe File.join(__dir__, "extras"))).results).to eq([])
+    expect(read(%(probe File.join(File.dirname(__FILE__), "fx")), file: "spec/rails_helper.rb").results).to eq([ "spec/fx" ])
+    expect(read(%(probe File.expand_path("fx", File.dirname(__FILE__))), file: "spec/rails_helper.rb").results).to eq([ "spec/fx" ])
   end
 
   it "says when part of an array stayed unread" do
@@ -52,5 +54,16 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::LiteralPaths do
 
     expect(listener.results).to eq([ "lib" ])
     expect(listener.complete).to eq([ false ])
+  end
+
+  it "reports a read as whole when the includer records its own shape" do
+    shaped = Class.new(listener_class) do
+      def record_path(path) = @results << [ :tagged, path ]
+    end
+    listener = shaped.new
+    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(Prism.parse(%(probe ["/", "/lib"])).value)
+
+    expect(listener.results).to eq([ [ :tagged, "lib" ] ])
+    expect(listener.complete).to eq([ true ])
   end
 end

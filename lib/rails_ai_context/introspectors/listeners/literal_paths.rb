@@ -74,8 +74,14 @@ module RailsAiContext
         def file_anchor(node)
           case node
           when Prism::SourceFileNode then @file
-          when Prism::CallNode then File.dirname(@file) if dir_call?(node)
+          when Prism::CallNode then File.dirname(@file) if dir_call?(node) || file_dirname_call?(node)
           end
+        end
+
+        # `File.dirname(__FILE__)`, the older spelling of `__dir__`.
+        def file_dirname_call?(node)
+          arguments = Array(node.arguments&.arguments)
+          node.name == :dirname && file_constant?(node.receiver) && arguments.size == 1 && arguments.first.is_a?(Prism::SourceFileNode)
         end
 
         # The segments of `Rails.root.join("a", "b")`, nil unless every one is a literal.
@@ -104,8 +110,12 @@ module RailsAiContext
 
         def push_path(value)
           cleaned = value.to_s.strip.delete_prefix("/")
-          @results << cleaned unless cleaned.empty?
+          record_path(cleaned) unless cleaned.empty?
           true
+        end
+
+        def record_path(path)
+          @results << path
         end
       end
     end

@@ -312,20 +312,31 @@ module RailsAiContext
           # which names the secret: `smtp_settings[:password] = ...`.
           key = literal_string(args.first) if args&.size == 2
           value = extract_value(args.last) if args&.size == 1 || key
-          # The written setting's own name counts too (`config.x.mail.password << ...`): the call's name may be an operator.
-          judged = if key then setting + [ key.to_sym ]
-          elsif RailsAiContext::Redaction.secret_name?(setting) then setting
-          else path
-          end
-          redacted = RailsAiContext::Redaction.redact_assignment(judged, value: value, source: NodeSource.text(head || node))
+          # An operator write's value only decides the redaction; the record keeps none.
+          judged_value = kind == :operator ? extract_value(node.value) : value
+          # Every name the write goes through can mark it secret: the setting, each index key, the written name.
+          names = [ key, *index_keys(receiver) ].compact.map { |k| setting + [ k.to_sym ] }
+          names += [ setting, setting + [ name.to_s.delete_suffix("=").to_sym ] ]
+          judged = names.find { |n| RailsAiContext::Redaction.secret_name?(n) } || path
+          redacted = RailsAiContext::Redaction.redact_assignment(judged, value: judged_value, source: NodeSource.text(head || node))
           @results << {
             path:       path,
             assignment: false,
             write:      kind,
-            value:      (redacted[:value] unless key),
+            value:      (redacted[:value] unless key || kind == :operator),
             source:     redacted[:source],
             location:   node.location.start_line
           }
+        end
+
+        # The literal keys of every `[]` read in the chain, the elements a write goes through.
+        def index_keys(node)
+          keys = []
+          while node.is_a?(Prism::CallNode)
+            keys << literal_string(node.arguments&.arguments&.first) if node.name == :[]
+            node = node.receiver
+          end
+          keys.compact
         end
 
         # Returns the path segments after the root, or nil when the chain is not

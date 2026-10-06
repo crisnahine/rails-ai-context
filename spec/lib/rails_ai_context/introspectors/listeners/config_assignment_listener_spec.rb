@@ -319,6 +319,33 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
     expect(writes.map { |r| [ r[:value], r[:source] ] }).to eq([ %w[[FILTERED] [FILTERED]], %w[[FILTERED] [FILTERED]] ])
   end
 
+  it "redacts an operator write to a secret-named setting and keeps a policy value" do
+    writes = parse_and_dispatch(<<~RUBY).select { |r| r[:write] }
+      config.x.api_key ||= "sk_plain"
+      config.x.secret_token += "tokplain"
+      config.x.region ||= "eu"
+      config.x.api_key ||= nil
+    RUBY
+
+    expect(writes.map { |r| r[:source] }).to eq(
+      [ "[FILTERED]", "[FILTERED]", %(config.x.region ||= "eu"), "config.x.api_key ||= nil" ]
+    )
+  end
+
+  it "redacts a write through an index read under a secret-named key" do
+    writes = parse_and_dispatch(<<~RUBY).select { |r| r[:write] }
+      config.x.mail["password"] << "pw2"
+      config.x.api_key["primary"] << "sk"
+      config.x.mail["smtp"]["password"] << "pw"
+      config.x.mail["smtp"].password = "pw"
+      config.x.mail["host"] << "smtp"
+    RUBY
+
+    expect(writes.map { |r| [ r[:value], r[:source] ] }).to eq(
+      [ *Array.new(4) { %w[[FILTERED] [FILTERED]] }, [ "smtp", %(config.x.mail["host"] << "smtp") ] ]
+    )
+  end
+
   it "records a write through an index read as a write of the indexed setting" do
     writes = parse_and_dispatch(<<~RUBY).select { |r| r[:write] }.map { |r| r[:path] }
       config.paths["config/routes.rb"] << "config/extra_routes.rb"

@@ -67,13 +67,15 @@ module RailsAiContext
           # line to fold it onto.
           return text.strip if tokens.any? { |token| token.type == :HEREDOC_START }
 
+          encoding = text.encoding
           kinds = newline_kinds(tokens)
-          # Outside a heredoc a backslash ending a line only continues it, so it folds as a continuation; the offsets hold.
-          text = text.gsub("\\\n") do
+          # Token offsets count bytes, so the fold walks the bytes; everything it compares is ASCII.
+          # Outside a heredoc a backslash ending a line only continues it, so it folds as a continuation.
+          text = text.b.gsub("\\\n") do
             kinds[Regexp.last_match.begin(0) + 1] = :continuation
             " \n"
           end
-          folded = +""
+          folded = "".b
           index = 0
           while index < text.length
             unless text[index] == "\n" && kinds.key?(index)
@@ -97,7 +99,7 @@ module RailsAiContext
             end
             folded << joiner
           end
-          folded.strip.sub(/;\z/, "").strip
+          folded.strip.sub(/;\z/, "").strip.force_encoding(encoding)
         end
 
         # No statement begins with one of these, so a newline in front of one

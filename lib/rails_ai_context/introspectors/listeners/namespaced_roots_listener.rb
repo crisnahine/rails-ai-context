@@ -26,9 +26,8 @@ module RailsAiContext
           value.slice.delete_prefix("::") if value.is_a?(Prism::ConstantReadNode) || value.is_a?(Prism::ConstantPathNode)
         end
 
-        def push_path(value)
-          cleaned = value.to_s.strip.delete_prefix("/")
-          @results << [ cleaned, @namespace ] unless cleaned.empty?
+        def record_path(path)
+          @results << [ path, @namespace ]
         end
       end
     end

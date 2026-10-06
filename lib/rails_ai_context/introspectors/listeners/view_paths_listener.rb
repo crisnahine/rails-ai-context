@@ -28,9 +28,8 @@ module RailsAiContext
           key.is_a?(Prism::StringNode) && key.unescaped == "app/views"
         end
 
-        def push_path(value)
-          cleaned = value.to_s.strip.delete_prefix("/")
-          @results << [ @direction, cleaned ] unless cleaned.empty?
+        def record_path(path)
+          @results << [ @direction, path ]
         end
       end
     end
