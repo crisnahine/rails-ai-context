@@ -178,10 +178,8 @@ module RailsAiContext
           return if @frames.last.kind == :extension || class_methods_module_own?(node.receiver)
           return if method_name == "initialize" && scope == :instance && !@include_initialize
 
-          frame = @frames.last
           # A bare `private` reaches only defs written without a receiver.
-          visibility = frame.marks[[ scope, method_name ]] || (node.receiver ? :public : frame.visibility)
-          visibility = :private if scope == :instance && ALWAYS_PRIVATE.include?(method_name) && !frame.marks.key?([ scope, method_name ])
+          visibility = ruby_visibility(scope, method_name, node.receiver ? :public : @frames.last.visibility)
           if visibility == :module_function
             record(node, method_name, :instance, :private, prefixed: false)
             @results.last[:module_function] = true
@@ -238,6 +236,10 @@ module RailsAiContext
 
         def open_frame(kind)
           @frames.push(Frame.new(kind, :public, {}))
+        end
+
+        def ruby_visibility(scope, name, visibility)
+          @frames.last.marks.fetch([ scope, name ]) { scope == :instance && ALWAYS_PRIVATE.include?(name) ? :private : visibility }
         end
 
         def frame_scope
@@ -372,7 +374,7 @@ module RailsAiContext
           entry = {
             name:         name,
             scope:        scope,
-            visibility:   @frames.last.marks[[ scope, name ]] || visibility,
+            visibility:   ruby_visibility(scope, name, visibility),
             params:       params,
             owner:        @owner_stack.dup,
             signature:    signature,

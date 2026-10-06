@@ -36,6 +36,31 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener do
     ])
   end
 
+  it "records the always-private hooks as private when an alias, define_method or attr names them" do
+    source = <<~RUBY
+      class User
+        def real_one = 1
+        alias_method :respond_to_missing?, :real_one
+        alias initialize_clone real_one
+        define_method(:initialize_dup) { |other| nil }
+        attr_reader :initialize_copy
+        define_method(:respond_to_missing?) { |*| false }
+        public :respond_to_missing?
+        class << self
+          define_method(:initialize_dup) { |other| nil }
+        end
+      end
+    RUBY
+    results = parse_and_dispatch(source)
+
+    expect(results.map { |r| [ r[:name], r[:scope], r[:visibility] ] }).to eq([
+      [ "real_one", :instance, :public ], [ "respond_to_missing?", :instance, :private ],
+      [ "initialize_clone", :instance, :private ], [ "initialize_dup", :instance, :private ],
+      [ "initialize_copy", :instance, :private ], [ "respond_to_missing?", :instance, :public ],
+      [ "initialize_dup", :class, :public ]
+    ])
+  end
+
   it "detects class methods with self." do
     source = <<~RUBY
       class User
