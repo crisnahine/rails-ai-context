@@ -587,6 +587,7 @@ module RailsAiContext
         # reflection's own list is inflated by an attribute method per column
         # as soon as anything instantiates the model.
         source_instance_methods = own_source_methods(model, source_data)
+        concerns = booted_concerns(model, source_data[:mixins])
 
         details = {
           table_name:       model.table_name,
@@ -602,8 +603,8 @@ module RailsAiContext
           # hold no block callbacks, so both tiers read the model's source.
           callbacks:        group_callbacks_by_type(source_data[:callbacks]),
           callback_conditions: callback_conditions(source_data[:callbacks]),
-          concerns:         booted_concerns(model, source_data[:mixins]),
-          concern_sources:  concern_sources(booted_concerns(model, source_data[:mixins]), source_data[:mixins], booted: true),
+          concerns:         concerns,
+          concern_sources:  concern_sources(concerns, source_data[:mixins], booted: true),
           concerns_hidden:  (hidden.size if hidden.any?),
           concern_callbacks: concern_callbacks(source_data[:callbacks]),
           concerns_unread:  (unread if unread.any?),

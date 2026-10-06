@@ -2572,6 +2572,21 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
   # while the walk dropped `validates_with` and `validates_date` entirely.
   # Discourse's Chat::NullUser < User: a subclass of a concrete model, with
   # no type column, so no STI entry either.
+  describe "a booted model's concerns" do
+    it "are resolved once for both the list and its sources" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "user.rb"), "class User < ApplicationRecord\nend\n")
+        model = Class.new(ApplicationRecord) { self.table_name = "users" }
+        model.define_singleton_method(:name) { "User" }
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        expect(introspector).to receive(:booted_concerns).once.and_call_original
+
+        introspector.send(:extract_model_details, model)
+      end
+    end
+  end
+
   describe "the parent model a subclass names" do
     it "is the concrete parent in both tiers, and absent under an abstract base" do
       Dir.mktmpdir do |dir|
