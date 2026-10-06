@@ -156,6 +156,13 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
 
             def self.throttle = rate_limit(to: 1, within: 1.second)
 
+            class CsvExport < ActionController::Base
+              layout "export"
+              allow_browser versions: :modern
+              respond_to :csv
+              rate_limit to: 1, within: 1.minute
+            end
+
             def index
               render plain: "ok"
             end
@@ -164,6 +171,13 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
 
       after { FileUtils.rm_f(fixture_ctrl) }
+
+      it "leaves out what a class nested in the body declares, as the filter reader does" do
+        entry = result[:controllers]["RateLimitedController"]
+
+        expect(entry.slice(:layout, :settings)).to eq({})
+        expect(entry[:respond_to_formats]).not_to include("csv")
+      end
 
       # `name:` exists so one controller can declare several limits (rate_limiting.rb).
       it "extracts every rate_limit the class body declares, a call split over lines whole" do

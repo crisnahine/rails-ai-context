@@ -67,6 +67,13 @@ module RailsAiContext
         Array(calls).reject { |call| call[:offset] && bodies.any? { |range| range.cover?(call[:offset]) } }
       end
 
+      # The calls a class body makes itself, out of a walk that ran MethodsListener as `methods:` and
+      # NestedConstantsListener as `nested:`: a class or module it nests declares only for itself.
+      def self.class_level(calls, walked)
+        nested = Array(walked[:nested])
+        outside_defs(calls, walked[:methods]).reject { |call| call[:offset] && nested.any? { |range| range.cover?(call[:offset]) } }
+      end
+
       # Walk a parse result the caller already holds, so a second reader of the
       # same source does not parse it again.
       def self.walk_dispatch(parse_result, listener_map)

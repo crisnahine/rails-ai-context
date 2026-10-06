@@ -198,7 +198,7 @@ module RailsAiContext
 
       # { formats: [[format...] per respond_to, nil per clear_respond_to], rate_limits: [...] }
       def class_declarations(source, walked)
-        calls = walked ? SourceIntrospector.outside_defs(walked[:respond_to], walked[:methods]) : []
+        calls = walked ? SourceIntrospector.class_level(walked[:respond_to], walked) : []
         formats = calls.map { |call| call[:macro] == :clear_respond_to ? nil : Array(call[:args]).map(&:to_s) }
         { formats: formats, rate_limits: extract_rate_limits(source, walked) }
       end
@@ -899,7 +899,7 @@ module RailsAiContext
       def extract_rate_limits(source, walked = class_body_walk(source))
         return [] if walked.nil?
 
-        SourceIntrospector.outside_defs(walked[:rate_limit], walked[:methods]).map do |entry|
+        SourceIntrospector.class_level(walked[:rate_limit], walked).map do |entry|
           options = entry[:options] || {}
           sources = entry[:option_values] || {}
           text = options.map { |key, value| "#{key}: #{inferred?(value) ? sources[key] : value.inspect}" }.join(", ")

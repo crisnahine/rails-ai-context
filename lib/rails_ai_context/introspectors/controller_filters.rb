@@ -75,7 +75,8 @@ module RailsAiContext
       # @param source [String] one controller's Ruby source
       # @return [Array<Hash>] { name:, kind:, skipped:/declared:, only:, except:, if:, unless: }
       def from_source(source, root: nil)
-        class_level(walk(source)).flat_map { |entry| record(entry, root) }
+        walked = walk(source)
+        SourceIntrospector.class_level(walked[:filters], walked).flat_map { |entry| record(entry, root) }
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "controller filter read")
       end
@@ -119,7 +120,7 @@ module RailsAiContext
         from_blocks, inherited = inherited.partition { |entry| block_sites.key?(entry[:site].__id__) }
         by_concern += from_blocks.map { |entry| entry.merge(from_concern: block_sites[entry[:site].__id__].first) }
         # A class method the chain defines answers the call, not the gem's macro of that name.
-        own_level = class_level(walked)
+        own_level = SourceIntrospector.class_level(walked[:filters], walked)
         if own_level.any? { |entry| GEM_FILTERS.key?(entry[:macro]) }
           shadowed = calls.defs.call.keys.to_set(&:to_s)
           own_level = own_level.reject { |entry| GEM_FILTERS.key?(entry[:macro]) && shadowed.include?(entry[:macro].to_s) }
@@ -153,14 +154,6 @@ module RailsAiContext
 
       def walk(source)
         SourceIntrospector.walk_source(source, LISTENERS.slice(:filters, :methods, :nested))
-      end
-
-      # The filters the class body declares itself: one inside a `def` runs only when the method is called.
-      def class_level(walked)
-        nested = Array(walked[:nested])
-        SourceIntrospector.outside_defs(walked[:filters], walked[:methods]).reject do |entry|
-          entry[:offset] && nested.any? { |range| range.cover?(entry[:offset]) }
-        end
       end
 
       # What the class methods `source` defines itself (`def self.x`, `class << self`) declare at
@@ -449,7 +442,7 @@ module RailsAiContext
         statements.body.first
       end
 
-      private_class_method :walk, :outside_modules, :class_level, :singleton_expansions, :declares_filters?, :base_expansions, :each_base,
+      private_class_method :walk, :outside_modules, :singleton_expansions, :declares_filters?, :base_expansions, :each_base,
                            :class_method_defs,
                            :superclass_of, :base_source, :constant_source, :with_file, :body_call?, :record, :bundled?, :positional_names, :constraints, :condition_text, :normalize, :action_condition, :lambda_body
     end

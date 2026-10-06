@@ -15,6 +15,7 @@ module RailsAiContext
       LISTENERS = {
         settings_calls: -> { Listeners::GenericMacroListener.new(:layout, *MACROS, call_source: MACROS) },
         methods: Listeners::MethodsListener,
+        nested: Listeners::NestedConstantsListener,
         mixins: Listeners::MixinsListener
       }.freeze
 
@@ -25,7 +26,7 @@ module RailsAiContext
         return {} if source.nil?
 
         walked ||= SourceIntrospector.walk_source(source, LISTENERS)
-        placed = SourceIntrospector.outside_defs(walked[:settings_calls], walked[:methods]).map { |call| [ call[:location].to_i, -1, 0, call ] }
+        placed = SourceIntrospector.class_level(walked[:settings_calls], walked).map { |call| [ call[:location].to_i, -1, 0, call ] }
         placed += concern_calls(walked, root, within) if root
         layout_call, settings = ConcernMacros.in_include_order(placed).partition { |call| call[:macro] == :layout }
         {
