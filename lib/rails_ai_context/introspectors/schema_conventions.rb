@@ -174,10 +174,9 @@ module RailsAiContext
       # not record it, but config/database.yml names the adapter - looked up
       # per database, because a multi-db app can mix adapters (postgres
       # primary, sqlite queue) and each dump must be typed by its own. dump_path
-      # names a secondary database's dump; nil is the primary's.
-      def implicit_pk_type(root, dump_path = nil)
-        db_name = SchemaDumpPath.database_name(root, dump_path)
-        adapter = database_adapter_for(root, db_name)
+      # names a secondary database's dump, nil the primary's; database: names the database outright.
+      def implicit_pk_type(root, dump_path = nil, database: SchemaDumpPath.database_name(root, dump_path))
+        adapter = database_adapter_for(root, database)
         adapter&.start_with?("sqlite") ? "integer" : "bigint"
       end
 

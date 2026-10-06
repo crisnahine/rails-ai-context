@@ -476,7 +476,7 @@ module RailsAiContext
           next if dumps.key?(name)
 
           dirs = MigrationReplay.configured_dirs(app.root.to_s, entry) or next
-          pk_type = SchemaConventions.implicit_pk_type(app.root.to_s, "#{name}_schema.rb")
+          pk_type = SchemaConventions.implicit_pk_type(app.root.to_s, database: name)
           tables = MigrationReplay.tables(dirs, pk_type: pk_type, root: app.root.to_s)
           next if tables.empty?
 

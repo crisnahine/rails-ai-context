@@ -190,6 +190,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaConventions do
       expect(described_class.database_adapter_for(@root, "queue")).to eq("sqlite3")
       expect(described_class.implicit_pk_type(@root, "db/queue_schema.rb")).to eq("integer")
       expect(described_class.implicit_pk_type(@root, "db/structure.sql")).to eq("bigint")
+      expect(described_class.implicit_pk_type(@root, database: "queue")).to eq("integer")
     end
 
     it "takes the adapter a DATABASE_URL names over database.yml, as Rails merges it" do
