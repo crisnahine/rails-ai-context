@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "pathname"
+
 module RailsAiContext
   module Introspectors
     module Listeners
@@ -225,7 +227,7 @@ module RailsAiContext
         # One value pulled out of the result still names the file: `config_for(:redis)[:url]`.
         CONFIG_FOR_READERS = %i[[] fetch dig].freeze
 
-        # `config_for(:name, env: "production")`: the YAML file it reads, nil for a path
+        # `config_for(:name, env: "production")`: its arguments as written, the YAML file it reads, nil for a path
         # that is not a literal, and its env:, :expression when that is not a literal.
         def config_for(value)
           node = value
@@ -236,7 +238,7 @@ module RailsAiContext
           argument = node.arguments&.arguments&.first
           env = extract_keyword_nodes(node)[:env]
           env = nil if env && rails_call?(env, "Rails.env")
-          { argument: argument && RailsAiContext::Redaction.call(NodeSource.text(argument)), file: config_for_file(argument),
+          { arguments: node.arguments && RailsAiContext::Redaction.call(NodeSource.text(node.arguments)), file: config_for_file(argument),
             env: env && (literal_string(env) || :expression), read: chained_read(value, node) }.compact
         end
 
@@ -253,9 +255,9 @@ module RailsAiContext
           return nil if node.nil? || node.is_a?(Prism::KeywordHashNode)
 
           name = literal_string(node)
-          return "config/#{name}.yml" if name
-          segments = app_root_join(node)
-          File.join(*segments) if segments
+          path = name ? "config/#{name}.yml" : (segments = app_root_join(node)) && File.join(*segments)
+          # Rails reads `config/../x.yml` as `x.yml`, inside the app; only a path still climbing leaves it.
+          Pathname.new(path).cleanpath.to_s if path
         end
 
         def rails_call?(node, text)

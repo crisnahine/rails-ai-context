@@ -30,7 +30,7 @@ module RailsAiContext
 
         key = [ bundle.dir, gemfile ]
         cached = MUTEX.synchronize { CACHE[key] }
-        return cached[:entries] if cached && cached[:stamps].all? { |path, stamp| mtime(path) == stamp }
+        return cached[:entries] if cached && cached[:stamps].all? { |path, stamp| GemLock.mtime(path) == stamp }
 
         stamps = {}
         # A failed walk is kept too: the same files fail the same way until they change.
@@ -49,11 +49,9 @@ module RailsAiContext
         MUTEX.synchronize { CACHE[[ bundle.dir, bundle.gemfile ]]&.fetch(:stamps) }
       end
 
-      # Bundler evaluates an eval_gemfile file into the same Gemfile, inside
-      # the groups around the call. Never read outside the bundle's directory,
-      # and a file left unread adds gems no one can name.
+      # Bundler evaluates it in place, under the surrounding groups; never read outside the bundle's directory.
       def read(root, relative, groups, seen, stamps)
-        stamps[File.join(root, relative)] = mtime(File.join(root, relative))
+        stamps[File.join(root, relative)] = GemLock.mtime(File.join(root, relative))
         resolution = SafePath.locate(relative, under: root)
         return [ { type: :unknown_gems, call: :eval_gemfile } ] unless resolution.ok?
         return [] if seen.include?(resolution.realpath)
@@ -72,13 +70,6 @@ module RailsAiContext
         end
       end
       private_class_method :read
-
-      def mtime(path)
-        File.mtime(path)
-      rescue SystemCallError
-        nil
-      end
-      private_class_method :mtime
     end
   end
 end

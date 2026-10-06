@@ -157,7 +157,7 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
           auth: auth_data,
           middleware: {
             custom_middleware: [],
-            rackup: [ { call: "use", target: "Rack::ContentLength", line: 2 }, { call: "map", target: "/health", line: 3 } ]
+            rackup: [ { call: "use", target: "Rack::ContentLength", line: 2 }, { call: "map", target: '"/health"', line: 3 } ]
           }
         })
       end

@@ -141,7 +141,7 @@ module RailsAiContext
 
           where = [ "line #{call[:line]}", ("inside `map #{call[:within]}`" if call[:within]), call[:condition] ].compact.join(", ")
           lines << if call[:call] == "map"
-            "- `map \"#{call[:target]}\"` (#{where}) - its own Rack app; requests under it never reach Rails' router"
+            "- `map #{call[:target]}` (#{where}) - its own Rack app; requests under it never reach Rails' router"
           else
             "- `use #{call[:target]}` (#{where})"
           end

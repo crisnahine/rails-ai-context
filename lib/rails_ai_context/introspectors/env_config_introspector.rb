@@ -57,7 +57,7 @@ module RailsAiContext
       def config_for_files(assignments)
         assignments.filter_map do |key, entries|
           call = entries.last[:config_for] or next
-          entry = { key: key, call: call[:argument], read: call[:read], file: call[:file] }.compact
+          entry = { key: key, call: call[:arguments], read: call[:read], file: call[:file] }.compact
           next entry.merge(path_unread: true) unless call[:file]
 
           environment = current_environment

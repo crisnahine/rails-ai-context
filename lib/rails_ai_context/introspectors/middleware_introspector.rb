@@ -158,13 +158,19 @@ module RailsAiContext
           next [ rackup_entry(call) ] unless call[:macro] == :map && runs_app.call(call)
 
           inside[call[:offset]].filter_map do |c|
-            rackup_entry(c).merge(within: target) if %i[use map].include?(c[:macro]) && c[:values].first.is_a?(String) && !(c[:macro] == :map && runs_app.call(c))
+            rackup_entry(c).merge(within: written(call)) if %i[use map].include?(c[:macro]) && c[:values].first.is_a?(String) && !(c[:macro] == :map && runs_app.call(c))
           end
         end
       end
 
       private_class_method def self.rackup_entry(call)
-        { call: call[:macro].to_s, target: call[:values].first, line: call[:location], condition: call[:condition] }.compact
+        { call: call[:macro].to_s, target: call[:macro] == :map ? written(call) : call[:values].first, line: call[:location], condition: call[:condition] }.compact
+      end
+
+      # A map path as the file writes it: a string literal quoted, an expression as its source.
+      private_class_method def self.written(call)
+        target = call[:values].first
+        call[:args].first.to_s == target ? target.inspect : target
       end
 
       def rackup
