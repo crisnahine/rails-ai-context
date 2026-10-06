@@ -23,6 +23,7 @@ module RailsAiContext
       # a dump that parses to zero tables falls through to the next source.
       def self.for(root)
         root = root.to_s
+        return from_tables({}, source: :none, path: nil) if RailsAiContext::AppKind.sequel_schema(root)
 
         candidates = SchemaDumpPath.candidates(root)
         candidates.each do |format, path|

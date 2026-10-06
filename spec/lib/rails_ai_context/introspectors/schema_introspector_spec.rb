@@ -1205,6 +1205,36 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
     end
   end
 
+  # sequel-rails keeps its schema and migrations where Active Record's go, in Sequel's DSL.
+  describe "an app whose schema files are Sequel's" do
+    def sequel_app(dir, schema: true)
+      files = {
+        "Gemfile" => "source \"https://rubygems.org\"\ngem \"rails\"\ngem \"sequel-rails\"\n",
+        "config/application.rb" => "require \"rails\"\nrequire \"active_record/railtie\"\nrequire \"sequel_rails\"\n",
+        "db/migrate/20260101000001_create_artists.rb" => "Sequel.migration do\n  change do\n    create_table(:artists) do\n      primary_key :id\n      String :name, null: false\n    end\n  end\nend\n"
+      }
+      files["db/schema.rb"] = "Sequel.migration do\n  change do\n    create_table(:artists) do\n      primary_key :id\n    end\n  end\nend\n" if schema
+      files.each do |path, body|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+        File.write(File.join(dir, path), body)
+      end
+    end
+
+    it "says the schema is Sequel's instead of reading it as Active Record's" do
+      [ true, false ].each do |schema|
+        Dir.mktmpdir do |dir|
+          sequel_app(dir, schema: schema)
+
+          result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+          expect(result[:tables]).to be_nil
+          expect(result[:unavailable]).to include("Sequel")
+          expect(RailsAiContext::Introspectors::SchemaReader.for(dir).tables).to eq({})
+        end
+      end
+    end
+  end
+
   describe "secondary database dumps" do
     it "reports db/*_schema.rb dumps under secondary_databases" do
       Dir.mktmpdir do |dir|

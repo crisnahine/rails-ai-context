@@ -394,7 +394,7 @@ module RailsAiContext
 
       # The configured dump first (database.yml's schema_dump, schema_format), then the default files.
       def static_schema_sources
-        if (reason = RailsAiContext::AppKind.without_active_record(app.root))
+        if (reason = RailsAiContext::AppKind.without_active_record(app.root) || RailsAiContext::AppKind.sequel_schema(app.root))
           return { unavailable: "#{reason}; ActiveRecord schema introspection does not apply" }
         end
 
