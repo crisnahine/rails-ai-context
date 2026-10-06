@@ -173,7 +173,7 @@ filter either runs or is struck through.
 | `max_validate_files` | Integer | `50` | Maximum files for validation |
 | `search_extensions` | Array | `nil` | Narrows the Ruby fallback to these extensions. Unset, the fallback searches every non-hidden, non-binary file, as ripgrep does, so both backends return the same lines |
 | `concern_paths` | Array | `nil` (discovers `app/concerns` and `app/*/concerns`) | Paths to scan for concerns. Setting it replaces discovery, so it can narrow as well as widen |
-| `frontend_paths` | Array | `nil` (auto-detect) | Frontend directories, e.g. `["app/frontend", "../web-client"]`. One outside the app root is read for its package.json, lockfiles and bundler config only, and frontend_stack names it |
+| `frontend_paths` | Array | `nil` (auto-detect) | Frontend directories, e.g. `["app/frontend", "../web-client"]`. One outside the app root is read for its package.json, lockfiles and bundler config, plus its tsconfig.json and the configs it extends inside that directory, and frontend_stack names it |
 | `extra_app_paths` | Array | `[]` | Extra directories under the app root to treat as application code |
 
 Directories that carry their own Rails tree - `plugins/*`, `modules/*`,

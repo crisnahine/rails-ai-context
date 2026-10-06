@@ -14,30 +14,26 @@ module RailsAiContext
 
       module_function
 
-      # [the segment naming the records, the model] for a chain such as "post.comments.reverse": the
+      # [the model, whether it is a collection] for a chain such as "post.comments.reverse": the
       # receiver, then each association its model declares. A call that is no association keeps a
       # collection's records (`.first`, `.recent`); on a single record it returns who knows what, so nil.
       # A receiver that is no model (`current_user.posts`) is read from the next name, as `render @posts`
       # is; nil when the app holds no model for that either.
       def resolve(chain, root, memo = {})
         segments = chain.split(".")
-        return [ segments.first, segments.first.singularize ] if segments.size == 1
+        return [ segments.first.singularize, segments.first != segments.first.singularize ] if segments.size == 1
 
         segments = segments.drop(1) unless read(segments.first.singularize, root, memo)
-        name = segments.first
-        model = name.singularize
+        model = segments.first.singularize
         return nil unless read(model, root, memo)
 
-        collection = name != model
+        collection = segments.first != model
         segments.drop(1).each do |segment|
           target = read(model, root, memo)&.associations&.[](segment)
           return nil if target == :unknown || (target.nil? && !collection)
-          next unless target
-
-          name = segment
-          model, collection = target
+          model, collection = target if target
         end
-        [ name, model ]
+        [ model, collection ]
       end
 
       # The model's own literal to_partial_path, else ActiveModel's default; nil when it computes one.

@@ -2,9 +2,13 @@
 
 module RailsAiContext
   module Introspectors
-    # Which classes under app/services are services and which are only a base. The tool's
+    # Which classes under the service roots are services and which are only a base. The tool's
     # listing and the generated Services line both ask here, so they name one set.
     module ServiceClasses
+      # active_interaction recommends app/interactions, and interactor-rails
+      # autoloads and generates into app/interactors.
+      ROOTS = %w[app/services app/interactions app/interactors].freeze
+
       module_function
 
       # The declared constant and its superclass from one parse; the path fills in a
@@ -82,14 +86,16 @@ module RailsAiContext
         pairs = []
         modules = []
         lookup = SuperclassChain.lookup_for(root)
-        SourceScan.each(root, kind: "app/services") do |record|
-          next if concern?(record.file, record.source)
+        ROOTS.each do |kind|
+          SourceScan.each(root, kind: kind) do |record|
+            next if concern?(record.file, record.source)
 
-          name, superclass, nesting = declaration(record.source, record.path_name)
-          next if mailer?(record.source, name, superclass, lookup)
+            name, superclass, nesting = declaration(record.source, record.path_name)
+            next if mailer?(record.source, name, superclass, lookup)
 
-          pairs << [ name, superclass, nesting ]
-          modules << name if entryless_module?(record.source, name)
+            pairs << [ name, superclass, nesting ]
+            modules << name if entryless_module?(record.source, name)
+          end
         end
         left_out = abstract_names(pairs) + mixed_in(root, modules)
         pairs.map(&:first).reject { |name| left_out.include?(name) }.uniq.sort

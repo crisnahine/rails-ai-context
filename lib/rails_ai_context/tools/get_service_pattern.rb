@@ -26,9 +26,7 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
-      # active_interaction recommends app/interactions, and interactor-rails
-      # autoloads and generates into app/interactors.
-      SERVICE_ROOTS = %w[app/services app/interactions app/interactors].freeze
+      SERVICE_ROOTS = Introspectors::ServiceClasses::ROOTS
 
       def self.call(service: nil, detail: "standard", server_context: nil)
         blank = blank_name_response("service", service)

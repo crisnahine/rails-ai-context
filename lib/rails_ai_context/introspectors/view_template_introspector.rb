@@ -376,10 +376,9 @@ module RailsAiContext
           # An interpolated name is decided at runtime, not a partial on disk.
           refs.concat(named.select { |name| name.match?(PARTIAL_NAME) })
           chain = self.class.render_line(args)[IMPLICIT_RENDER, 1] if named.empty?
-          record, model = chain && !RENDER_KEYWORD_ARGS.include?(chain) && RenderedRecord.resolve(chain, root, @rendered_models ||= {})
-          # An association named apart from its class (`replies` holding Comment) renders that class's partial.
-          record = record == record.singularize ? model : model.pluralize if record && record.singularize != model
-          refs << record if record
+          model, collection = chain && !RENDER_KEYWORD_ARGS.include?(chain) && RenderedRecord.resolve(chain, root, @rendered_models ||= {})
+          # The records' model names the partial; `replies` with class_name "Comment" renders comments/_comment.
+          refs << (collection ? model.pluralize : model) if model
         end
         # Phlex: render ComponentName.new(...) or render(ComponentName.new(...))
         content.scan(/render[\s(]+([A-Z]\w+(?:::\w+)*)\.new/).each { |m| refs << m[0] }

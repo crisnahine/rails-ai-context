@@ -37,6 +37,19 @@ RSpec.describe RailsAiContext::Fingerprinter do
       expect(before).not_to eq(after)
     end
 
+    it "detects a change to every source the rake task introspector reads" do
+      root = app.root.to_s
+      %w[rakelib lib/generators/widget lib/templates/erb/scaffold lib/acme].each { |dir| FileUtils.mkdir_p(File.join(root, dir)) }
+      files = %w[Rakefile config.ru rakelib/deploy.rake lib/generators/widget/widget_generator.rb
+                 lib/templates/erb/scaffold/index.html.erb.tt lib/acme/railtie.rb]
+      files.each { |file| File.write(File.join(root, file), "\n") }
+      files.each do |file|
+        before = described_class.compute(app)
+        File.utime(Time.now + 5, Time.now + 5, File.join(root, file))
+        expect(described_class.compute(app)).not_to eq(before), file
+      end
+    end
+
     it "detects changes to .erb view files" do
       before = described_class.compute(app)
       File.utime(Time.now + 5, Time.now + 5, File.join(app.root, "app/views/posts/index.html.erb"))
@@ -134,6 +147,18 @@ RSpec.describe RailsAiContext::Fingerprinter do
         FileUtils.mkdir_p(File.join(root, "app", "serializers", "concerns"))
         dirs = described_class.send(:watched_dirs, root)
         expect(dirs).to include(File.join(root, "app", "serializers", "concerns"))
+      end
+    end
+
+    it "watches a dir once, through the watched dir that holds it" do
+      require "tmpdir"
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "lib", "api"))
+        File.write(File.join(root, "lib", "api", "base.rb"), "")
+        dirs = described_class.send(:watched_dirs, root)
+        expect(dirs).to include(File.join(root, "lib"))
+        expect(dirs).not_to include(File.join(root, "lib", "api"))
+        expect(described_class.changed_since(root, Time.now - 60)).to eq([ "lib" ])
       end
     end
 

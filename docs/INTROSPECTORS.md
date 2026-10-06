@@ -277,7 +277,7 @@ same wherever it is asked. Those live as their own modules under
 | `Includers` | Which classes and modules mix a module in, by `include`, `prepend` or `extend`: a written name resolves from the includer's namespace outward, and the nearest module the app declares decides. `rails_get_concern`'s "Included by", the service listing and the HABTM join-table owners all ask it |
 | `RetryPolicy` | What a job does when it raises, as a reader would write it: the macro, its exceptions, then `attempts:` and `wait:` whatever order the source put them in |
 | `SourceCalls` | Which other classes a file hands work to, off the call nodes: the verb list, the framework receivers left out, and the call or the class alone |
-| `ServiceClasses` | Which classes under `app/services` are services and which are only the base of one, for the tool's listing and the generated files' line alike |
+| `ServiceClasses` | Which classes under `app/services`, `app/interactions` and `app/interactors` are services and which are only the base of one, for the tool's listing and the generated files' line alike |
 | `EnvReferences` | Every ENV name the app's source reads, file by file, for `rails_get_env` and the context file's `env` section alike: `app`, `config` and `lib` Ruby, ERB and config YAML, `config.ru`, `db/seeds` and the `bin/` scripts whose shebang is Ruby, with config YAML on `sensitive_patterns` read for the names in its ERB tags only |
 | `AnywayConfigs` | Each Anyway::Config class under `config/configs` and `app/configs`, every class in a file, with the attributes its own body declares (a nested class keeps its macros) and the env name anyway_config reads each from: `env_prefix`, else `config_name`, else the name before `Config`. `rails_get_env` lists them |
 | `GemfileGems` | The one Gemfile read, off `GemfileDslListener`: its entries with options and groups (the gems section's local gems and groups) and the gem names (every other asker), so a commented-out `gem` line is no gem anywhere; a file named by `eval_gemfile` is followed when it is inside the bundle's directory (the app root, or the directory of the Gemfile `config/boot.rb` points at), and one it cannot read is an `:unknown_gems` entry. GemLock takes the declared Ruby and the gem names from it once the gem is loaded; the walk is kept until one of the files changes. Before the boot, GemLock walks the one Gemfile with `AstWalk` instead and leaves `eval_gemfile` unread |
@@ -325,7 +325,7 @@ Introspection results are cached at three levels:
 2. **AST cache** - Per-file parse results, invalidated by file content change (SHA256), with a stat shortcut for a file older than the read
 3. **Run cache** - File lists, stats and directory answers for one introspection run, dropped when it ends
 
-The **Fingerprinter** computes a composite SHA256 from all watched directories (`app/`, `config/`, `db/`, `lib/tasks/`, `Gemfile.lock`). When the fingerprint changes, the introspection cache is invalidated even if TTL hasn't expired.
+The **Fingerprinter** computes a composite SHA256 from all watched directories (`app/`, `config/`, `db/`, `lib/`, `rakelib/`, `Gemfile.lock`, `config.ru`, the Rakefile). When the fingerprint changes, the introspection cache is invalidated even if TTL hasn't expired.
 
 **Live Reload** watches these directories and calls `reset_all_caches!` when changes are detected, then notifies connected MCP clients via `notify_resources_list_changed`.
 

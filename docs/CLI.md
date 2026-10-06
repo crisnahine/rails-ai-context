@@ -175,7 +175,7 @@ rails ai:watch
 rails-ai-context watch
 ```
 
-Requires the `listen` gem. Watches `app/`, `config/`, `db/`, `lib/tasks/`.
+Requires the `listen` gem. Watches `app/`, `config/`, `db/`, `lib/`, `rakelib/`.
 
 ### `init` (standalone only)
 

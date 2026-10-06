@@ -140,13 +140,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Read from `app/api` and `lib/api` in both tiers; an edit there refreshes the
   MCP server's cached answer. (#411)
 - **`service_pattern` reads more service shapes.** It reads `app/interactions`
-  and `app/interactors` as well as `app/services`, lists an interactor
-  organizer's steps in order, and shows an Initialize line and an Inputs section
-  for a service whose constructor comes from T::Struct `const`/`prop`,
-  Dry::Struct `attribute`, dry-initializer `param`/`option` or the attr_extras
-  initializers. Dry::Struct attributes and dry-initializer params and options an
-  app superclass declares are included, marked with the class they come from.
-  (#402, #403)
+  and `app/interactors` as well as `app/services` (so does the generated files'
+  Services line), lists an interactor organizer's steps in order, and shows an
+  Initialize line and an Inputs section for a service whose constructor comes
+  from T::Struct `const`/`prop`, Dry::Struct `attribute`, dry-initializer
+  `param`/`option` or the attr_extras initializers. Dry::Struct attributes and
+  dry-initializer params and options an app superclass declares are included,
+  marked with the class they come from. (#402, #403)
 - **`conventions` and `analyze_feature` list the models an admin gem exposes**:
   ActiveAdmin (with the params it permits), Administrate, Avo (2 and 3 resource
   naming), Madmin and Trestle. (#405)
@@ -401,10 +401,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configures: database.yml's `schema_dump` name and `schema_format = :sql`
   (database.yml on Rails 8.0.3 and later, else
   `config.active_record.schema_format`, which Rails applies after every
-  initializer, and only then `ActiveRecord.schema_format`); the doctor, schema version, tool guide, onboarding
-  setup command and missing-table messages name the same file, a configured dump
-  over `max_schema_file_size` is reported as too large, and a change to any
-  `.sql` dump under `db/` refreshes the MCP cache. (#355, #357)
+  initializer, and only then `ActiveRecord.schema_format`); the doctor, schema
+  version, tool guide, onboarding setup command and missing-table messages name
+  the same file, a configured dump over `max_schema_file_size` is reported as
+  too large, and a change to any `.sql` dump under `db/` refreshes the MCP
+  cache. (#355, #357)
 - **A table in a secondary database is found** by `schema --table`,
   `model_details`, `analyze_feature`, `diagnose`, `migration_advisor`, the
   controllers schema hint and the model resource. The table view names every
@@ -524,13 +525,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shows as the `verify_authenticity_token` skip it is. An object filter
   (`around_action TimingFilter.new`) reads `TimingFilter (object)` in both
   tiers, where the booted tier printed a memory address. The booted tier leaves
-  out a gem's block filter (`allow_browser`, `rate_limit`), even when the bundle
-  is installed under the app root. The static tier names a gem module the
-  controller or one of its app bases includes (`include ActiveStorage::SetBlob`)
-  as an included module not read, where a filter it adds would be missing, and
-  leaves out a Rails module whose include adds no filter (`ActionController::Live`).
-  `http_basic_authenticate_with` is a before filter with its `only:`/`except:`,
-  never its credentials. (#293, #332, #335)
+  out a block filter Rails or a gem adds (`allow_browser`, `rate_limit`), even
+  when the bundle is installed under the app root. The static tier names a gem
+  module the controller or one of its app bases includes
+  (`include ActiveStorage::SetBlob`) as an included module not read, where a
+  filter it adds would be missing, and leaves out a Rails module whose include
+  adds no filter (`ActionController::Live`). `http_basic_authenticate_with` is a
+  before filter with its `only:`/`except:`, never its credentials. (#293, #332,
+  #335)
 - **`controllers` reads strong params and delegated actions.**
   `params.expect(user: [tags: []])` reads as an array of scalars, and the
   summary lists nested keys, arrays and `key: {}` hashes beside the flat

@@ -2,6 +2,8 @@
 
 require "spec_helper"
 require "open3"
+require "tmpdir"
+require "fileutils"
 
 RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
   let(:introspector) { described_class.new(Rails.application) }
@@ -132,6 +134,17 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
     it "names the records under a trailing call, and no name for a chain on something that is no model" do
       source = "<%= render @posts.first %>\n<%= render @post.comments.reverse %>\n<%= render current_account.widgets %>"
       expect(introspector.send(:extract_partial_refs, source)).to contain_exactly("posts", "comments")
+    end
+
+    it "names the records a class_name association holds, not the association" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/models"))
+        File.write(File.join(root, "app/models/post.rb"), "class Post < ApplicationRecord\n  has_many :replies, class_name: \"Comment\"\n  belongs_to :starter, class_name: \"Comment\"\n  has_many :staff, class_name: \"Employee\"\nend\n")
+        File.write(File.join(root, "app/models/comment.rb"), "class Comment < ApplicationRecord; end\n")
+        File.write(File.join(root, "app/models/employee.rb"), "class Employee < ApplicationRecord; end\n")
+        refs = described_class.new(RailsAiContext::StaticApp.new(root)).send(:extract_partial_refs, "<%= render @post.replies %>\n<%= render @post.starter %>\n<%= render @post.staff %>")
+        expect(refs).to contain_exactly("comments", "comment", "employees")
+      end
     end
 
     it "reads a chain on a receiver that is no model from the records it names, when the app has that model" do

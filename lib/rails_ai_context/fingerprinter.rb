@@ -7,14 +7,15 @@ module RailsAiContext
   # Used by BaseTool to invalidate cached introspection when files change.
   class Fingerprinter
     # The root manifests.
-    WATCHED_FILES = %w[
+    WATCHED_FILES = (%w[
       Gemfile
       Gemfile.lock
       gems.rb
       gems.locked
       package.json
       tsconfig.json
-    ].freeze
+      config.ru
+    ] + Introspectors::RakeTaskIntrospector::RAKEFILES).freeze
 
     # The one scope: everything the fingerprint walks is also everything the
     # watcher watches.
@@ -26,13 +27,13 @@ module RailsAiContext
       app/channels
       app/components
       app/helpers
-      app/services
       app/javascript/controllers
       app/middleware
       config
       db
-      lib/tasks
-    ] + Introspectors::JobIntrospector::JOB_DIRS + Introspectors::GrapeEndpoints::DIRS).freeze
+      lib
+      rakelib
+    ] + Introspectors::ServiceClasses::ROOTS + Introspectors::JobIntrospector::JOB_DIRS + Introspectors::GrapeEndpoints::DIRS).freeze
 
     # The kinds whose homes PathResolver resolves beyond the conventional
     # tree - packs/*, engines/* and configured extras. Derived at compute
@@ -41,13 +42,14 @@ module RailsAiContext
     # prevent.
     RESOLVED_KINDS = (%w[
       app/models app/controllers app/views app/mailers
-      app/channels app/components app/helpers app/services
-    ] + Introspectors::JobIntrospector::JOB_DIRS).freeze
+      app/channels app/components app/helpers
+    ] + Introspectors::ServiceClasses::ROOTS + Introspectors::JobIntrospector::JOB_DIRS).freeze
 
     # The file kinds a change can hide in. One list, so a walk that reports
     # a change and a walk that names it read the same tree.
     # sql: a structure dump, under whatever name database.yml's schema_dump gives it.
-    WATCHED_EXTENSIONS = "**/*.{rb,rake,js,ts,erb,haml,slim,yml,sql}"
+    # tt: a generator template override under lib/templates.
+    WATCHED_EXTENSIONS = "**/*.{rb,rake,js,ts,erb,haml,slim,yml,sql,tt}"
 
     # What a reader holds so it can ask later whether the app moved. Taken
     # before the read it protects: a mark taken after introspection records
@@ -103,8 +105,10 @@ module RailsAiContext
         conventional = WATCHED_DIRS.map { |dir| File.join(root, dir) }
         resolved = RESOLVED_KINDS.flat_map { |kind| PathResolver.dirs_for(root, kind) }
 
-        (conventional + resolved + ConcernPaths.resolve(root) + stimulus_dirs(root))
-          .uniq.select { |dir| Dir.exist?(dir) }
+        dirs = (conventional + resolved + ConcernPaths.resolve(root) + stimulus_dirs(root))
+               .uniq.select { |dir| Dir.exist?(dir) }
+        # A dir under another one is already globbed and watched through it.
+        dirs.reject { |dir| dirs.any? { |other| dir.start_with?("#{other}/") } }
       end
 
       # The controller homes the Stimulus introspector reads, so an edit under
