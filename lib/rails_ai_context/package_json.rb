@@ -42,22 +42,26 @@ module RailsAiContext
       (outside + inside).reduce({}) { |merged, path| merged.merge(read(path)) }
     end
 
-    # The first lockfile found in the app root, then in each directory outside
-    # it, with that directory's label (nil for the app root).
+    # The first lockfile found in the app root, then in each frontend directory,
+    # with that directory's label (nil for the app root).
     def package_manager(root)
       root = root.to_s
       name = LOCKFILES.find { |file, _| File.exist?(File.join(root, file)) }&.last
       return [ name, nil ] if name
 
-      outside_roots(root).each do |outside|
-        name = LOCKFILES.find { |file, _| outside_file(outside[:dir], file) }&.last
-        return [ name, outside[:label] ] if name
+      (frontend_roots(root) + [ workspace_root(root) ].compact).each do |dir|
+        name = LOCKFILES.find { |file, _| outside_file(dir[:dir], file) }&.last
+        return [ name, dir[:label] ] if name
       end
       nil
     end
 
-    def outside_roots(root)
-      configured_outside(root) + [ workspace_root(root) ].compact
+    # Every directory besides the app root that holds frontend config: the
+    # frontend dirs inside it, then the declared ones outside it.
+    def frontend_roots(root)
+      root = root.to_s
+      inside = manifest_dirs(root)[0...-1].map { |dir| { dir: dir, label: dir.delete_prefix("#{root}/") } }
+      inside + configured_outside(root)
     end
 
     # Declared frontend_paths entries that resolve to a directory outside the

@@ -176,7 +176,8 @@ Two directories outside `Rails.root` are read, for frontend manifests only: each
 above the app (the nearest ancestor holding a lockfile or declaring `workspaces`,
 never above the git root and never outside a git repository). Only `package.json`,
 lockfiles and the presence of a bundler config (`vite.config.*` and similar) are
-read there. Sensitive patterns and symlink containment apply relative to that
+read there, plus a configured entry's `tsconfig.json` and the configs it extends
+inside that same directory. Sensitive patterns and symlink containment apply relative to that
 directory, and frontend_stack names it in its answer.
 
 ### The bundle config/boot.rb declares

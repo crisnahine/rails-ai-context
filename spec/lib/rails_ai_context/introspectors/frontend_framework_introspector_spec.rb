@@ -586,6 +586,19 @@ RSpec.describe RailsAiContext::Introspectors::FrontendFrameworkIntrospector do
       end
     end
 
+    it "reads its tsconfig.json, and only what it extends inside that directory" do
+      web_client do |root, client|
+        File.write(File.join(client, "tsconfig.json"), JSON.generate("compilerOptions" => { "strict" => true }))
+        result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+        expect(result[:typescript]).to include(enabled: true, strict: true)
+
+        File.write(File.join(File.dirname(client), "base.json"), JSON.generate("compilerOptions" => { "strict" => true }))
+        File.write(File.join(client, "tsconfig.json"), JSON.generate("extends" => "../base.json", "compilerOptions" => {}))
+        result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+        expect(result[:typescript]).to include(enabled: true, strict: false)
+      end
+    end
+
     it "refuses a manifest symlinked out of that directory" do
       web_client do |root, client|
         Dir.mktmpdir do |elsewhere|
@@ -607,6 +620,24 @@ RSpec.describe RailsAiContext::Introspectors::FrontendFrameworkIntrospector do
         expect(result[:outside_frontend_roots]).to eq([])
         expect(result[:frameworks]).to be_empty
       end
+    end
+  end
+
+  it "reads the build tool and lockfile of a frontend_paths entry inside the app root" do
+    Dir.mktmpdir do |tmp|
+      root = File.realpath(tmp)
+      web = File.join(root, "web")
+      FileUtils.mkdir_p(web)
+      File.write(File.join(web, "package.json"), JSON.generate("devDependencies" => { "vite" => "^7.0.0" }))
+      File.write(File.join(web, "vite.config.ts"), "export default {}\n")
+      File.write(File.join(web, "pnpm-lock.yaml"), "")
+      allow(RailsAiContext.configuration).to receive(:frontend_paths).and_return([ "web" ])
+
+      result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+
+      expect(result[:build_tool]).to eq("vite")
+      expect(result[:package_manager]).to eq("pnpm")
+      expect(result[:package_manager_dir]).to eq("web")
     end
   end
 
