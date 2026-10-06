@@ -80,6 +80,22 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       expect(rendered_from("admin/posts/post")).to be_nil
     end
 
+    it "reads the environment file RACK_ENV names when RAILS_ENV is unset, as Rails does" do
+      FileUtils.mkdir_p(File.join(@root, "config/environments"))
+      File.write(File.join(@root, "config/environments/production.rb"),
+                 "Rails.application.configure do\n  config.action_view.prefix_partial_path_with_controller_namespace = false\nend\n")
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      saved = ENV.to_h.slice("RAILS_ENV", "RACK_ENV")
+      begin
+        ENV.delete("RAILS_ENV")
+        ENV["RACK_ENV"] = "production"
+        expect(rendered_from("admin/posts/post")).to be_nil
+      ensure
+        ENV.delete("RACK_ENV")
+        ENV.update(saved)
+      end
+    end
+
     it "asks ActionView::Base when the app is booted" do
       allow(RailsAiContext).to receive(:default_app).and_return(Struct.new(:root).new(Pathname.new(@root)))
       allow(ActionView::Base).to receive(:prefix_partial_path_with_controller_namespace).and_return(false)

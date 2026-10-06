@@ -474,9 +474,9 @@ module RailsAiContext
         booted = !RailsAiContext.static_tier? && !rails_app.is_a?(RailsAiContext::StaticApp)
         return ActionView::Base.prefix_partial_path_with_controller_namespace != false if booted && defined?(ActionView::Base)
 
-        env = ENV["RAILS_ENV"] || "development"
-        files = [ "config/application.rb", "config/environments/#{env}.rb" ] +
-          Dir.glob("config/initializers/**/*.rb", base: root).sort
+        prefix = "#{root.to_s.chomp('/')}/"
+        files = [ "config/application.rb", "config/environments/#{rails_env_name}.rb" ] +
+          RailsAiContext::PathResolver.initializer_paths(root).map { |path| path.delete_prefix(prefix) }
         last = nil
         # The setter name is ActionView's own, so config.action_view, ActionView::Base and an on_load `self.` all match.
         listener = -> { Introspectors::Listeners::MethodCallListener.new(names: [ PREFIX_SETTER ]) }
