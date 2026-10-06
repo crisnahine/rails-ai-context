@@ -95,6 +95,21 @@ RSpec.describe RailsAiContext::Fingerprinter do
       expect(described_class.changed_since(root, Time.now + 1)).to eq([])
     end
 
+    it "ignores a re-recorded VCR cassette, and counts one added or removed" do
+      root = app.root.to_s
+      cassette = File.join(root, "spec/fixtures/vcr_cassettes/stripe.yml")
+      FileUtils.mkdir_p(File.dirname(cassette))
+      File.write(cassette, "---\n")
+      before = described_class.compute(app)
+      File.utime(Time.now + 5, Time.now + 5, cassette)
+
+      expect(described_class.compute(app)).to eq(before)
+      expect(described_class.changed_since(root, Time.now + 1)).to eq([])
+
+      File.write(File.join(File.dirname(cassette), "github.yml"), "---\n")
+      expect(described_class.compute(app)).not_to eq(before)
+    end
+
     it "detects a change to a controller outside app/javascript" do
       Dir.mktmpdir do |root|
         FileUtils.mkdir_p(File.join(root, "app/webpacker/controllers"))

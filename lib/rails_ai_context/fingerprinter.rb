@@ -54,6 +54,8 @@ module RailsAiContext
 
     # jsbundling and cssbundling rewrite this on every frontend save, and no reader reads it.
     BUILD_OUTPUT = "/app/assets/builds/"
+    # A test run re-records these; the VCR reader counts them and never opens one.
+    CASSETTES = %r{/(?:vcr_)?cassettes/}
 
     # What a reader holds so it can ask later whether the app moved. Taken
     # before the read it protects: a mark taken after introspection records
@@ -93,7 +95,7 @@ module RailsAiContext
 
         watched_dirs(root).each do |full_dir|
           watched_files(full_dir).sort.each do |path|
-            digest.update(File.mtime(path).to_f.to_s)
+            digest.update(path.match?(CASSETTES) ? path : File.mtime(path).to_f.to_s)
           rescue Errno::ENOENT
             # File deleted between glob and mtime read - skip
           end
@@ -130,7 +132,7 @@ module RailsAiContext
       def changed_since(root, time)
         base = File.expand_path(root.to_s)
         named = scope_dirs(base)
-        watched_dirs(base).flat_map { |dir| watched_files(dir).select { |path| newer?(path, time) } }
+        watched_dirs(base).flat_map { |dir| watched_files(dir).select { |path| !path.match?(CASSETTES) && newer?(path, time) } }
                           .map { |path| named.select { |dir| path.start_with?("#{dir}/") }.max_by(&:size) }
                           .uniq.map { |dir| dir.delete_prefix(SafePath.dir_prefix(base)) }
       end
