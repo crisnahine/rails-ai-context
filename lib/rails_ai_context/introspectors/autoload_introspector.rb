@@ -103,14 +103,15 @@ module RailsAiContext
         loader ? root_dirs_with_namespaces(loader) : {}
       end
 
-      # { dir => namespace name }; Zeitwerk before 2.6 has no dirs(namespaces:).
+      # { dir => namespace name }; Zeitwerk before 2.6 has no dirs(namespaces:), but its
+      # @root_dirs is that hash, so the namespaces are read there before the bare dirs.
       def root_dirs_with_namespaces(loader)
+        keyword = loader.respond_to?(:dirs) && loader.method(:dirs).parameters.any? { |_, name| name == :namespaces }
         roots =
-          if loader.respond_to?(:dirs)
-            keyword = loader.method(:dirs).parameters.any? { |_, name| name == :namespaces }
-            keyword ? loader.dirs(namespaces: true) : loader.dirs
+          if keyword then loader.dirs(namespaces: true)
           else
-            loader.instance_variable_get(:@root_dirs) || loader.instance_variable_get(:@roots)
+            internal = loader.instance_variable_get(:@root_dirs) || loader.instance_variable_get(:@roots)
+            internal.is_a?(Hash) || !loader.respond_to?(:dirs) ? internal : loader.dirs
           end
         roots = roots.to_h { |dir| [ dir, nil ] } if roots.is_a?(Array)
         return {} unless roots.respond_to?(:each_pair)

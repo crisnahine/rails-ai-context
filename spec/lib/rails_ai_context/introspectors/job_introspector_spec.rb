@@ -2111,10 +2111,12 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       RUBY
       Object.autoload(:ServicesProbeMailer, path)
       loader = Rails.autoloaders.main
-      allow(loader).to receive(:cpath_expected_at).and_call_original
+      # Zeitwerk before 2.6.9 cannot name a file, and the file's own declaration names it instead.
+      asks_loader = loader.respond_to?(:cpath_expected_at)
+      allow(loader).to receive(:cpath_expected_at).and_call_original if asks_loader
 
       expect(mailers.find { |m| m[:name] == "ServicesProbeMailer" }&.dig(:actions)).to eq(%w[weekly])
-      expect(loader).to have_received(:cpath_expected_at).with(path)
+      expect(loader).to have_received(:cpath_expected_at).with(path) if asks_loader
     ensure
       FileUtils.rm_f(path)
       Object.send(:remove_const, :ServicesProbeMailer) if Object.const_defined?(:ServicesProbeMailer, false)
