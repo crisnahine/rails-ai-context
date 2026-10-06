@@ -262,7 +262,6 @@ module RailsAiContext
     rescue SystemCallError
       nil
     end
-    private_class_method :mtime
 
     def parse(bundle, root)
       path = bundle.lockfile
