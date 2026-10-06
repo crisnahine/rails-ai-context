@@ -17,6 +17,8 @@ module RailsAiContext
       # `Rails.application.config.assets.paths = x` reports [:assets, :paths].
       # The root `on_load(:active_record)` reads `self`, or the block's one parameter, inside that hook's block.
       class ConfigAssignmentListener < BaseListener
+        include LiteralPaths
+
         DEFAULT_ROOTS = %w[config].freeze
         SETTER = /\A[A-Za-z_]\w*=\z/
         # A predicate or comparison with arguments reads a setting rather than changing it.
@@ -185,16 +187,14 @@ module RailsAiContext
             env: env && (literal_string(env) || :expression) }.compact
         end
 
-        # Rails reads `config/<name>.yml` for a name, and the Pathname itself for `Rails.root.join(...)`.
+        # Rails reads `config/<name>.yml` for a name, and the Pathname itself for `Rails.root.join(...)` or `config.root.join(...)`.
         def config_for_file(node)
           return nil if node.nil? || node.is_a?(Prism::KeywordHashNode)
 
           name = literal_string(node)
           return "config/#{name}.yml" if name
-          return nil unless node.is_a?(Prism::CallNode) && node.name == :join && rails_call?(node.receiver, "Rails.root")
-
-          parts = (node.arguments&.arguments || []).map { |part| literal_string(part) }
-          File.join(*parts) if parts.any? && parts.all?
+          segments = app_root_join(node)
+          File.join(*segments) if segments
         end
 
         def rails_call?(node, text)

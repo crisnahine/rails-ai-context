@@ -57,8 +57,21 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::AutoloadPathsListener d
     source = <<~RUBY
       config.autoload_paths << Dir["plugins/*/lib"].max
       config.autoload_paths += discovered_roots
+      config.autoload_paths << Rails.root.join("lib", ENV["EXTRA"])
+      config.autoload_paths << Rails.root(true).join("lib")
     RUBY
 
     expect(paths_in(source)).to eq([])
+  end
+
+  it "reads the app root at the node, however it is spelled" do
+    source = <<~RUBY
+      config.autoload_paths << ::Rails.root.join("lib", "rooted")
+      config.autoload_paths << Rails  .root.join("spaced")
+      config.autoload_paths << config.root.join("from_config")
+      config.autoload_paths << app.config.root.join("other_config")
+    RUBY
+
+    expect(paths_in(source)).to eq(%w[lib/rooted spaced from_config])
   end
 end

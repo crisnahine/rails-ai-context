@@ -22,6 +22,8 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
       config.api_token_settings = Rails.application.config_for("tokens", env: "production")
       config.x.stripe = config_for(Rails.root.join("config", "stripe.yml"), env: Rails.env)
       config.other = config_for(Rails.root.join(dir, "x.yml"), env: ENV["DEPLOY_ENV"])
+      config.rooted = config_for(config.root.join("config", "rooted.yml"))
+      config.gem = config_for(Gem.root.join("config", "gem.yml"))
       config.plain = 3
     RUBY
 
@@ -30,6 +32,8 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
       { argument: '"tokens"', file: "config/tokens.yml", env: "production" },
       { argument: 'Rails.root.join("config", "stripe.yml")', file: "config/stripe.yml" },
       { argument: 'Rails.root.join(dir, "x.yml")', env: :expression },
+      { argument: 'config.root.join("config", "rooted.yml")', file: "config/rooted.yml" },
+      { argument: 'Gem.root.join("config", "gem.yml")' },
       nil
     ])
   end
