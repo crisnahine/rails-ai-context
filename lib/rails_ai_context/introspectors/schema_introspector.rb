@@ -354,6 +354,11 @@ module RailsAiContext
         @dump_candidates ||= SchemaDumpPath.candidates(app.root)
       end
 
+      # The dump Rails loads for this app, whether or not it is on disk.
+      def schema_dump_name
+        dump_candidates.first.last
+      end
+
       # The schema.rb dump Rails loads for this app, or nil when it loads structure.sql or nothing.
       def schema_file_path
         format, path = dump_candidates.first
@@ -431,12 +436,12 @@ module RailsAiContext
         end
 
         if secondary_database_dumps.any?
-          return { total_tables: 0, tables: {}, note: "The primary database has no tables yet: no db/schema.rb, db/structure.sql, or migrations found." }
+          return { total_tables: 0, tables: {}, note: "The primary database has no tables yet: no #{relative_dump_path(schema_dump_name)} or migrations found." }
         end
 
         # An absent data source, not a failure: :unavailable keeps a fresh
         # greenfield app out of the "introspection failed" warnings banner.
-        { unavailable: "No db/schema.rb, db/structure.sql, or migrations found" }
+        { unavailable: "No #{relative_dump_path(schema_dump_name)} or migrations found" }
       end
 
       # Rails multi-database setups dump each secondary database to its own

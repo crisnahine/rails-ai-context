@@ -44,7 +44,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
       it "reports the source as unavailable, not failed" do
         result = introspector.call
-        expect(result[:unavailable]).to include("No db/schema.rb, db/structure.sql, or migrations found")
+        expect(result[:unavailable]).to include("No db/schema.rb or migrations found")
         expect(result[:error]).to be_nil
       end
     end
@@ -1997,6 +1997,14 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(result[:tables].keys).to eq(%w[widgets])
         expect(result[:note]).to start_with("Parsed from db/schema_sqlite.rb")
         expect(RailsAiContext::Introspectors::SchemaReader.for(dir).tables.keys).to eq(%w[widgets])
+      end
+    end
+
+    it "names the configured dump when neither it nor a migration exists" do
+      files = { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  schema_dump: main_schema.rb\n" }
+      static_with(files) { |result, _| expect(result[:unavailable]).to eq("No db/main_schema.rb or migrations found") }
+      static_with(files.merge("db/queue_schema.rb" => one_table_rb.call("jobs"))) do |result, _|
+        expect(result[:note]).to eq("The primary database has no tables yet: no db/main_schema.rb or migrations found.")
       end
     end
 
