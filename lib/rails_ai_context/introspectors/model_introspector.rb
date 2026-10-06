@@ -176,10 +176,9 @@ module RailsAiContext
       end
 
       # Rails' default column, the literal a class sets, or nil where `inheritance_column = nil` turns STI off.
-      def static_type_column(literals)
-        return "type" unless literals&.key?("inheritance_column")
-
-        literals["inheritance_column"].presence
+      def static_type_column(source_data)
+        setting = Array(source_data[:macros]).select { |m| m[:macro] == :model_setting && m[:setting] == "inheritance_column" }.last
+        setting ? setting[:literal].presence : "type"
       end
 
       # A model file the app cannot load leaves its class out of reflection,
@@ -636,7 +635,7 @@ module RailsAiContext
 
         # AST-based macro extractions (replaces regex)
         macros = extract_macros_from_ast(source_data, model_source_path(model))
-        details.merge!(macros.except(:setting_literals))
+        details.merge!(macros)
 
         # AST-based detailed macros (replaces regex)
         detailed = extract_detailed_macros_from_ast(source_data)
@@ -1260,7 +1259,6 @@ module RailsAiContext
           elsif macro == :model_setting
             # Bases arrive first, so the class's own assignment wins.
             (macros[:model_settings] ||= {})[m[:setting]] = m[:value]
-            (macros[:setting_literals] ||= {})[m[:setting]] = m[:literal]
           elsif macro == :connects_to
             macros[:database] = { connects_to: m[:text], condition: m[:condition], declared_in: m[:declared_in], writing: m[:writing] }.compact
           elsif macro == :gem_macro
@@ -1672,7 +1670,7 @@ module RailsAiContext
         }
         details.merge!(extract_macros_from_ast(data, path))
         details.merge!(extract_detailed_macros_from_ast(data))
-        type_column = static_type_column(details.delete(:setting_literals))
+        type_column = static_type_column(data)
         details[:sti] = sti && type_column && !lacks_column?(details[:table_name], type_column) ? sti.merge(type_column: type_column) : nil
         downgrade_records(details.compact)
       end
