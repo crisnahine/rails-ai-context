@@ -515,9 +515,10 @@ module RailsAiContext
           # The path does not name the class: an app inflection only changes
           # case, so activitypub/activity.rb camelizes to a constant the app
           # does not have and the file was listed as a model that will not
-          # load. Read only where the camelized name is not already loaded, so
+          # load. A root pushed under a namespace declares a prefix the path
+          # lacks. Read only where the camelized name is not already loaded, so
           # a booted run does not parse every model file to learn nothing.
-          class_name = DeclaredConstant.resolve(model_source(record.path).to_s, record.path_name)
+          class_name = DeclaredConstant.named(model_source(record.path).to_s, record.path_name)
           next if known.include?(class_name)
           next if config.excluded_models.include?(class_name)
 

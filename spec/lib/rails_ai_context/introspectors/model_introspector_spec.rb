@@ -5300,6 +5300,37 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  describe "the booted listing over a root the app pushes under a namespace" do
+    it "names the file by the namespaced class it declares" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "domain", "billing"))
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "initializers", "autoloading.rb"), <<~RUBY)
+          module Domain; end
+          Rails.autoloaders.main.push_dir(Rails.root.join("app/domain"), namespace: Domain)
+        RUBY
+        File.write(File.join(dir, "app", "domain", "billing", "invoice.rb"), <<~RUBY)
+          module Domain
+            module Billing
+              class Invoice < ApplicationRecord
+              end
+            end
+          end
+        RUBY
+
+        invoice = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          def self.name = "Domain::Billing::Invoice"
+        end
+        stub_const("Domain::Billing::Invoice", invoice)
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        allow(ActiveRecord::Base).to receive(:descendants).and_return([])
+
+        expect(introspector.call.keys).to eq([ "Domain::Billing::Invoice" ])
+      end
+    end
+  end
+
   # Rails reads the prefix off the innermost namespace that declares one and
   # falls back to the class itself, so a model declaring its own is the case
   # `full_table_name_prefix` ends on. The walk read the namespaces only.
