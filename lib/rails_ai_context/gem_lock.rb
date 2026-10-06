@@ -165,9 +165,7 @@ module RailsAiContext
       boot_bundle(root, own) || own
     end
 
-    # Read only inside the app's git repository: that bundle is the app's
-    # declared one, the same trust as its own Gemfile.lock. Anything else is
-    # named as outside and left unread.
+    # Read only inside the app's git repository, the trust its own Gemfile.lock has; anything else is named and left unread.
     def boot_bundle(root, own)
       target = boot_gemfile(root)
       return nil unless target
@@ -318,9 +316,7 @@ module RailsAiContext
     end
     private_class_method :gemfile
 
-    # GemfileGems is the one Gemfile reader once the gem is loaded. Before the boot
-    # its listener cannot load, so the same entries come from a plain walk of the
-    # one file, and an eval_gemfile there is left unread.
+    # Before the gem loads, a plain walk of the one Gemfile; eval_gemfile is left unread.
     def gemfile_entries(bundle)
       return Introspectors::GemfileGems.read_bundle(bundle) if loaded?
 
