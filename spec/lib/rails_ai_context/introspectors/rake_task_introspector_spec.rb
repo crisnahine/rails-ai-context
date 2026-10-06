@@ -156,6 +156,36 @@ RSpec.describe RailsAiContext::Introspectors::RakeTaskIntrospector do
 
     subject(:result) { described_class.new(RailsAiContext::StaticApp.new(@root)).call }
 
+    it "merges tasks Rake defines as one and gives each description as rake -T prints it" do
+      write("Rakefile", "desc \"Top level\"\ntask :rakefile_task, [:a, :b] do |t, args|\nend\ntask default: :spec\n")
+      write("lib/tasks/icon.rake", <<~RUBY)
+        namespace :icon do
+          desc "Build every icon"
+          task :all => :ios
+          task :all => :android
+          desc "
+            Removes all icons. Then rebuilds them.
+            Usage:
+              rake icon:clean
+            "
+          task :clean
+        end
+        task default: :lint
+        desc "Run cucumber"
+        task :cucumber
+        desc "cucumber is not installed"
+        task :cucumber
+      RUBY
+
+      tasks = result[:tasks]
+      expect(tasks.map { |t| t[:name] }).to eq(%w[rakefile_task default icon:all icon:clean cucumber])
+      expect(tasks.find { |t| t[:name] == "rakefile_task" }).to include(args: %w[a b], description: "Top level")
+      expect(tasks.find { |t| t[:name] == "default" }).to include(dependencies: %w[spec lint], file: "Rakefile")
+      expect(tasks.find { |t| t[:name] == "icon:all" }).to include(dependencies: %w[ios android], description: "Build every icon")
+      expect(tasks.find { |t| t[:name] == "icon:clean" }[:description]).to eq("Removes all icons")
+      expect(tasks.find { |t| t[:name] == "cucumber" }[:description]).to eq("Run cucumber / cucumber is not installed")
+    end
+
     it "names the app's generators, the built-in templates it overrides and its Railties" do
       write("lib/generators/service/service_generator.rb", "class ServiceGenerator < Rails::Generators::NamedBase\nend\n")
       write("lib/generators/service/templates/service.rb.tt", "class <%= class_name %>; end\n")

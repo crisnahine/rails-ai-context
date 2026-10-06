@@ -103,6 +103,55 @@ RSpec.describe RailsAiContext::Tools::GetMailers do
       end
     end
 
+    def static_text(**args)
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+      described_class.call(**args).content.first[:text]
+    end
+
+    it "reads the format after a template's locale, and no format from a locale alone" do
+      %w[alert.html.erb alert.es.text.erb notice.es.erb digest.text+phone.erb].each { |f| write("app/views/user_mailer/#{f}", "hi") }
+      expect(static_text(mailer: "UserMailer")).to include("alert (html, text)", "notice (any format)", "digest (text)")
+    end
+
+    it "names the class an interceptor is built from, and says when the argument is not read" do
+      write("config/initializers/mail.rb", <<~RUBY)
+        interceptor = RecipientInterceptor.new(ENV["TO"])
+        Mail.register_interceptor(interceptor)
+        Mail.register_interceptor(StagingInterceptor.new)
+        ActionMailer::Base.register_observer(DeliveryLogObserver)
+      RUBY
+      text = static_text
+      expect(text).to include("**Interceptors:** SandboxInterceptor (`config/application.rb`), " \
+                              "`interceptor`, not read (`config/initializers/mail.rb`), StagingInterceptor (`config/initializers/mail.rb`)")
+      expect(text).to include("**Observers:** DeliveryLogObserver (`config/initializers/mail.rb`)")
+    end
+
+    it "names the class ActionMailer camelizes from a symbol or string, and leaves a computed one unread" do
+      write("config/application.rb", <<~RUBY)
+        module App
+          class Application < Rails::Application
+            config.action_mailer.interceptors = [:sandbox_interceptor, "staging_interceptor", interceptor_for(env)]
+          end
+        end
+      RUBY
+      write("config/initializers/mail.rb", <<~RUBY)
+        name = "audit_interceptor"
+        ActionMailer::Base.register_interceptor(:audit_interceptor)
+        ActionMailer::Base.register_interceptor(name)
+        ActionMailer::Base.register_observer("delivery_log_observer")
+      RUBY
+      text = static_text
+      expect(text).to include("SandboxInterceptor (`config/application.rb`), StagingInterceptor (`config/application.rb`)")
+      expect(text).to include("AuditInterceptor (`config/initializers/mail.rb`), `name`, not read (`config/initializers/mail.rb`)")
+      expect(text).to include("**Observers:** DeliveryLogObserver (`config/initializers/mail.rb`)")
+    end
+
+    it "gives no deliver_later queue to an app with no mailers" do
+      FileUtils.rm_rf(File.join(tmpdir, "app/mailers"))
+      expect(static_text).not_to include("deliver_later queue")
+    end
+
     # load_defaults 6.1 sets deliver_later_queue_name to nil, so mail goes to ActiveJob's default queue.
     it "names ActiveJob's default queue under load_defaults 6.1 or later" do
       write("config/application.rb", "module App\n  class Application < Rails::Application\n    config.load_defaults 7.1\n  end\nend\n")

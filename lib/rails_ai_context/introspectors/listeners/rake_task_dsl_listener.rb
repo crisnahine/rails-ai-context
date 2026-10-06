@@ -63,6 +63,7 @@ module RailsAiContext
             # Prism parses this as SymbolNode + KeywordHashNode where key is ArrayNode
             task_args, extra_deps = extract_args_from_keyword_hash(args)
             deps = extra_deps if extra_deps.any?
+            task_args = positional_args(args.drop(1)) if task_args.empty?
           when Prism::KeywordHashNode, Prism::HashNode
             # task name: :dep or task name: [:dep1, :dep2]
             name, deps = extract_hash_task(first)
@@ -99,6 +100,13 @@ module RailsAiContext
             end
           end
           [ [], [] ]
+        end
+
+        # Rake's resolve_args without dependencies: `task :go, [:a, :b]`, or the older `task :go, :a, :b`.
+        def positional_args(rest)
+          rest = rest.reject { |arg| arg.is_a?(Prism::KeywordHashNode) || arg.is_a?(Prism::HashNode) }
+          rest = rest.first.elements if rest.one? && rest.first.is_a?(Prism::ArrayNode)
+          rest.filter_map { |arg| literal_string(arg) }
         end
 
         def extract_task_deps(args)

@@ -20,7 +20,7 @@ module RailsAiContext
         sources += Dir.glob(File.join(root, "rakelib", "*.rake")).sort
 
         {
-          tasks: sources.flat_map { |path| parse_rake_file(path) },
+          tasks: merge_by_name(sources.flat_map { |path| parse_rake_file(path) }),
           generators: lib_classes[:generators].sort_by { |g| g[:command] }.presence,
           generator_templates: generator_templates.presence,
           railties: lib_classes[:railties].presence
@@ -81,6 +81,32 @@ module RailsAiContext
 
           { file: "lib/templates/#{relative}", generator: namespace.tr("/", ":") }
         end
+      end
+
+      # Rake keeps one task per name: a later definition adds its prerequisites and
+      # description, and replaces the arguments only when it names some.
+      def merge_by_name(entries)
+        merged = {}
+        entries.each do |entry|
+          next merged[entry.object_id] = entry if entry[:error]
+
+          task = merged[entry[:name]] ||= { name: entry[:name], comments: [], file: entry[:file] }
+          comment = entry[:description]&.strip
+          task[:comments] << comment if comment.present? && !task[:comments].include?(comment)
+          task[:dependencies] = Array(task[:dependencies]) | entry[:dependencies] if entry[:dependencies]
+          task[:args] = entry[:args] if entry[:args]
+        end
+        merged.values.map do |task|
+          next task if task[:error]
+
+          comments = task.delete(:comments)
+          task.merge(description: comments.filter_map { |c| first_sentence(c) }.join(" / ").presence).compact
+        end
+      end
+
+      # Rake::Task#first_sentence, which rake -T prints.
+      def first_sentence(text)
+        text.split(/(?<=\w)(\.|!)[ \t]|(\.$|!)|\n/).first
       end
 
       def parse_rake_file(path)

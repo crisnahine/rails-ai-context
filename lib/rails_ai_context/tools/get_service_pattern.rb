@@ -138,7 +138,7 @@ module RailsAiContext
         lines << "**Initialize:** `#{init_params}`" if init_params
         if built
           lines << "" << "## Inputs (#{built[:library]})"
-          built[:inputs].each { |input| lines << "- `#{input}`" }
+          built[:inputs].each { |input| lines << "- #{input}" }
         end
 
         if steps.any?
@@ -224,11 +224,13 @@ module RailsAiContext
       end
 
       private_class_method def self.format_service_listing(service_files, service_dirs, root, detail, lookup)
-        service_data = service_records(service_files, service_dirs, root, lookup).filter_map do |record|
-          next unless record[:source]
-
+        read = service_records(service_files, service_dirs, root, lookup).select { |record| record[:source] }.map do |record|
+          [ record, *class_interface(record[:source], constant_for(record[:path], service_dirs)) ]
+        end
+        # A listed parent's macros are already read, so its children's constructors reuse them.
+        walks = read.to_h { |record, _, macros| [ record[:class_name], { name: record[:class_name], superclass: record[:superclass], macros: macros } ] }
+        service_data = read.map do |record, owned, macros|
           file, source = record.values_at(:path, :source)
-          owned, macros = class_interface(source, constant_for(file, service_dirs))
 
           {
             file: file.sub("#{root}/", ""),
@@ -237,7 +239,7 @@ module RailsAiContext
             nesting: record[:nesting],
             line_count: source.lines.size,
             public_methods: extract_public_methods(owned),
-            init_params: extract_initialize_params(owned) || macro_constructor(macros, record, lookup)&.dig(:signature),
+            init_params: extract_initialize_params(owned) || macro_constructor(macros, record, lookup, walks)&.dig(:signature),
             class_method_call: owned.any? { |m| m[:scope] == :class && m[:name] == "call" },
             result_object: source.match?(/Result\.new|OpenStruct\.new|Struct\.new|\.success|\.failure/),
             active_interaction: Introspectors::Interaction.interaction?(source, lookup: lookup),
@@ -421,7 +423,15 @@ module RailsAiContext
 
       # The constructor a library's macros define, kept only when the class is
       # that library's: `attribute` is also ActiveModel's, `param` anybody's.
-      private_class_method def self.macro_constructor(macros, record, lookup)
+      # Dry::Struct attributes and dry-initializer params and options add to the
+      # parent's, so the app's own superclasses contribute theirs, farthest first.
+      INHERITED_MACROS = %i[extend attribute attribute? param option].freeze
+
+      private_class_method def self.macro_constructor(macros, record, lookup, walks = {})
+        inherited = inherited_macros(record, lookup, walks).reverse.flat_map do |parent|
+          parent[:macros].select { |m| INHERITED_MACROS.include?(m[:macro]) }.map { |m| m.merge(from: parent[:name]) }
+        end
+        macros = inherited + macros
         return nil if macros.empty?
 
         dry_initializer = macros.any? { |m| m[:macro] == :extend && Array(m[:values]).include?("Dry::Initializer") }
@@ -437,11 +447,32 @@ module RailsAiContext
         end
         return nil if kept.empty?
 
+        kept = kept.partition { |m| m[:macro] != :option }.flatten if dry_initializer
         names = { const: "T::Struct", prop: "T::Struct", attribute: "Dry::Struct", attribute?: "Dry::Struct",
                   param: "dry-initializer", option: "dry-initializer" }
         { library: kept.map { |m| names.fetch(m[:macro], "attr_extras") }.uniq.join(", "),
           signature: "initialize(#{kept.flat_map { |m| m[:params] }.map { |param| param_text(param) }.join(', ')})",
-          inputs: kept.map { |m| m[:source] } }
+          inputs: kept.map { |m| m[:from] ? "`#{m[:source]}` (from `#{m[:from]}`)" : "`#{m[:source]}`" } }
+      end
+
+      # The app's own superclasses, nearest first, each with the constructor macros its body declares.
+      private_class_method def self.inherited_macros(record, lookup, walks)
+        chain = []
+        seen = [ record[:class_name] ]
+        parent = record[:superclass]
+        while parent && lookup && chain.size < Introspectors::SuperclassChain::MAX_DEPTH && !seen.include?(parent)
+          seen << parent
+          entry = walks[parent] ||= begin
+            source = lookup.call(parent)
+            declared = source && Introspectors::DeclaredConstant.declaration_named(Introspectors::DeclaredConstant.declarations(source), parent)
+            declared ? { name: declared.name, superclass: declared.superclass, macros: class_interface(source, declared.name)[1] } : {}
+          end
+          break unless entry[:name]
+
+          chain << entry
+          parent = entry[:superclass]
+        end
+        chain
       end
 
       private_class_method def self.reaches?(record, bases, lookup)

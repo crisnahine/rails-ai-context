@@ -53,8 +53,21 @@ module RailsAiContext
         registers.each_with_index.map do |register, index|
           stop = registers[index + 1]&.dig(:offset) || Float::INFINITY
           params = calls.select { |c| c[:name] == "permit_params" && c[:offset] > register[:offset] && c[:offset] < stop }
-                        .flat_map { |c| c[:arguments] }.select { |arg| arg.is_a?(Symbol) }.map(&:to_s)
+                        .flat_map { |c| c[:arguments].select { |arg| arg.is_a?(Symbol) }.map(&:to_s) + permitted_keywords(c[:options]) }
           [ "ActiveAdmin", register[:arguments].first, params ]
+        end
+      end
+
+      # permit_params forwards to params.permit: `tags: []` is an array, `meta: [:a, :b]` nested keys.
+      def permitted_keywords(options)
+        Array(options).filter_map do |key, value|
+          next unless key.is_a?(Symbol)
+
+          inner = case value
+          when Array then value.empty? ? "array" : value.map { |v| v.is_a?(Hash) ? v.keys.join(", ") : v.to_s }.join(", ")
+          when Hash then value.empty? ? "hash" : value.keys.join(", ")
+          end
+          inner ? "#{key} (#{inner})" : key.to_s
         end
       end
 
@@ -82,7 +95,7 @@ module RailsAiContext
         end
         model.empty? ? [] : [ [ "Avo", model, [] ] ]
       end
-      private_class_method :resources, :registered, :trestle, :named, :avo
+      private_class_method :resources, :registered, :permitted_keywords, :trestle, :named, :avo
     end
   end
 end

@@ -94,7 +94,7 @@ module RailsAiContext
         lines << "**deliver_later queue:** `#{settings[:deliver_later_queue]}`" if settings[:deliver_later_queue]
         { "Interceptors" => settings[:interceptors], "Observers" => settings[:observers] }.each do |label, list|
           list = Array(list)
-          lines << "**#{label}:** #{list.map { |e| "#{e[:name]} (`#{e[:file]}`)" }.join(', ')}" if list.any?
+          lines << "**#{label}:** #{list.map { |e| "#{e[:unresolved] ? "`#{e[:name]}`, not read" : e[:name]} (`#{e[:file]}`)" }.join(', ')}" if list.any?
         end
         paths = Array(settings[:preview_paths])
         lines << "**Preview paths:** #{paths.map { |p| "`#{p}`" }.join(', ')}" if paths.any?

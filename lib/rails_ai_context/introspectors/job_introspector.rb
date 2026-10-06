@@ -46,7 +46,7 @@ module RailsAiContext
           recurring_jobs: recurring_jobs,
           sidekiq_config: extract_sidekiq_config,
           solid_queue_config: extract_solid_queue_config,
-          mailer_settings: mailer_settings(booted: true)
+          mailer_settings: mailer_settings(booted_mailers[:mailers], booted: true)
         }
       end
 
@@ -67,7 +67,7 @@ module RailsAiContext
           recurring_jobs: recurring_jobs,
           sidekiq_config: extract_sidekiq_config,
           solid_queue_config: extract_solid_queue_config,
-          mailer_settings: mailer_settings
+          mailer_settings: mailer_settings(source_mailers[:mailers])
         }
       end
 
@@ -223,10 +223,11 @@ module RailsAiContext
         source.match?(PROC_LITERAL) ? labelled(PROC_QUEUE, source) : "`#{source}` (computed)"
       end
 
-      # Resque reads @queue off the class itself, so a subclass does not inherit it;
-      # Que resolves self.queue up the superclass chain.
+      # Resque reads @queue off the class itself, so a subclass does not inherit it, and
+      # asks `def self.queue` only when @queue is unset; Que resolves self.queue up the superclass chain.
       def assigned_queue(ast, own)
-        hit = Array(ast[:queue_assignments]).reverse.find { |a| own || a[:form] == :self } or return nil
+        hits = Array(ast[:queue_assignments]).reverse
+        hit = (own && hits.find { |a| a[:form] == :ivar }) || hits.find { |a| a[:form] != :ivar } or return nil
         hit[:queue] || "`#{hit[:source]}` (computed)"
       end
 
@@ -937,8 +938,18 @@ module RailsAiContext
           action, *middle, handler = File.basename(path).split(".")
           next if action.start_with?("_") || handler.nil?
 
-          (found[action] ||= []) << (middle.first || "any format")
+          (found[action] ||= []) << (template_format(middle) || "any format")
         end.transform_values { |formats| formats.uniq.sort }.sort.to_h
+      end
+
+      # action.locale.format+variant.handler: the format is the last part, and a lone
+      # part that reads as a locale and names no format is the locale.
+      def template_format(middle)
+        format = middle.last&.sub(/\+.*\z/, "")
+        return nil if format.blank?
+        return nil if middle.one? && format.match?(ViewFile::LOCALE) && !ViewFile::FORMAT_EXTENSIONS.include?(format)
+
+        format
       end
 
       DEFAULT_MAILER_PREVIEW_DIRS = %w[test/mailers/previews spec/mailers/previews].freeze
@@ -995,7 +1006,8 @@ module RailsAiContext
       # The queue deliver_later uses, and the interceptors and observers the config registers.
       # Booted, the queue is ActionMailer's own setting; statically it is the config's, else
       # `load_defaults` 6.1 or later sets it to nil, which is ActiveJob's default queue.
-      def mailer_settings(booted: false)
+      # An app with no mailers has no queue to name.
+      def mailer_settings(mailers, booted: false)
         settings = { interceptors: [], observers: [] }
         queue = nil
         queue_set = false
@@ -1009,13 +1021,14 @@ module RailsAiContext
               queue_set = true
               queue = hit[:value]&.to_s
             end
-            Array(hit[:value]).each { |name| settings[key] << { name: name.to_s, file: relative } } if settings.key?(key)
+            Array(hit[:value]).each { |name| settings[key] << registered(name, relative) } if settings.key?(key)
           end
           Array(walked[:calls]).each do |call|
             if call[:name] == "load_defaults"
               version = defaults_version(call[:arguments].first) if relative == "config/application.rb"
             else
-              call[:arguments].flatten.each { |name| settings[REGISTER_CALLS[call[:name]]] << { name: name.to_s, file: relative } }
+              computed = Array(call[:computed])
+              call[:arguments].flatten.each { |name| settings[REGISTER_CALLS[call[:name]]] << registered(name, relative, computed: computed) }
             end
           end
         end
@@ -1025,9 +1038,26 @@ module RailsAiContext
           queue = version && version >= 6.1 ? nil : "mailers"
         end
         settings.transform_values! { |list| list.uniq { |entry| entry[:name] } }
-        settings.merge(deliver_later_queue: queue_name_from_part(queue.presence), preview_paths: mailer_preview_dirs)
+        queue = Array(mailers).any? ? queue_name_from_part(queue.presence) : nil
+        settings.merge(deliver_later_queue: queue, preview_paths: mailer_preview_dirs)
       rescue StandardError, ScriptError => e
         RailsAiContext.debug_fail(e, {}, label: "mailer_settings")
+      end
+
+      # The class an interceptor or observer is, or is built from with `.new`; a symbol or
+      # string literal is the class ActionMailer camelizes it to. Any other argument (a
+      # local variable, a method call) is named as written.
+      def registered(name, relative, computed: [])
+        text = name.to_s
+        constant = text[/\A(?:::)?([A-Z]\w*(?:::[A-Z]\w*)*)(?:\.new\b.*)?\z/m, 1]
+        return { name: constant, file: relative } if constant
+        return { name: text.camelize, file: relative } if name.is_a?(Symbol) || (literal_name?(text) && !computed.include?(text))
+
+        { name: text, file: relative, unresolved: true }
+      end
+
+      def literal_name?(text)
+        text.match?(/\A\w+(?:\/\w+)*\z/)
       end
 
       # A version that is not a literal is the running Rails's, past every cutoff.

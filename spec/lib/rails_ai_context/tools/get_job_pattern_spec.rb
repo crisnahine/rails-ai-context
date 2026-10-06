@@ -862,6 +862,25 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text_for(job: "NightlyJob")).to include("**Schedule:** 15 1 * * * (from config/initializers/cronjobs.rb)")
     end
 
+    it "reads GoodJob cron from an initializer in a subdirectory" do
+      write("config/initializers/good_job/cron.rb", "Rails.application.configure { config.good_job.cron = { cleanup: { cron: \"0 * * * *\", class: \"CleanupJob\" } } }\n")
+      expect(text_for(job: "CleanupJob")).to include("**Schedule:** 0 * * * * (from config/initializers/good_job/cron.rb)")
+    end
+
+    it "drops the cron an initializer's assignment replaces, and keeps what merge! adds" do
+      %w[WeeklyJob DailyJob].each { |name| write("app/jobs/#{name.underscore}.rb", "class #{name} < ApplicationJob\n  def perform; end\nend\n") }
+      write("config/application.rb", "config.good_job.cron = { nightly: { cron: \"0 3 * * *\", class: \"NightlyJob\" } }\n")
+      write("config/initializers/good_job.rb", <<~RUBY)
+        Rails.application.configure do
+          config.good_job.cron = { weekly: { cron: "0 4 * * 0", class: "WeeklyJob" } }
+        end
+        Rails.application.config.good_job.cron.merge!(daily: { cron: "0 5 * * *", class: "DailyJob" })
+      RUBY
+      expect(text_for(job: "NightlyJob")).not_to include("**Schedule:**")
+      expect(text_for(job: "WeeklyJob")).to include("**Schedule:** 0 4 * * 0 (from config/initializers/good_job.rb)")
+      expect(text_for(job: "DailyJob")).to include("**Schedule:** 0 5 * * * (from config/initializers/good_job.rb)")
+    end
+
     it "reads a GoodJob cron held in a constant as no schedule" do
       write("config/initializers/good_job.rb", "Rails.application.configure { config.good_job.cron = CRON }\n")
       expect(text_for(job: "NightlyJob")).not_to include("**Schedule:**")
@@ -995,6 +1014,22 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
 
       expect(text).to include("- Archive [file_serve] [unknown base]")
       expect(text).to include("**Queues:** file_serve(1), default(1)")
+    end
+
+    it "reads a Resque queue a class method returns" do
+      File.write(File.join(tmpdir, "app", "jobs", "export_job.rb"), "class ExportJob\n  def self.queue\n    :exports\n  end\n  def self.perform(id); end\nend\n")
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+      expect(described_class.call(job: "ExportJob").content.first[:text]).to include("**Queue:** `exports`")
+    end
+
+    it "reads a Resque @queue over a def self.queue, the way Resque asks for it" do
+      File.write(File.join(tmpdir, "app", "jobs", "export_job.rb"), "class ExportJob\n  @queue = :exports\n  def self.queue\n    @queue\n  end\n  def self.perform(id); end\nend\n")
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+      expect(described_class.call(job: "ExportJob").content.first[:text]).to include("**Queue:** `exports`")
     end
 
     it "says so on the job's own page" do

@@ -1222,6 +1222,15 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
           def call = b
         end
       RUBY
+      File.write(File.join(dir, "child_money.rb"), "class ChildMoney < MoneyValue\n  attribute :rate, Types::Float\nend\n")
+      File.write(File.join(dir, "application_service.rb"), "class ApplicationService\n  extend Dry::Initializer\n  option :logger, optional: true\nend\n")
+      File.write(File.join(dir, "refund_service.rb"), <<~RUBY)
+        class RefundService < ApplicationService
+          param :order
+          option :reason, default: -> { "none" }
+          def call = order
+        end
+      RUBY
       allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
       described_class.reset_cache!
     end
@@ -1230,6 +1239,27 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
 
     def single(name)
       described_class.call(service: name).content.first[:text]
+    end
+
+    it "reads the attributes a Dry::Struct inherits from its parent first" do
+      text = single("ChildMoney")
+      expect(text).to include("**Initialize:** `initialize(amount:, currency: \"USD\", memo: nil, rate:)`")
+      expect(text).to include("- `attribute :amount, Types::Integer` (from `MoneyValue`)", "- `attribute :rate, Types::Float`")
+    end
+
+    it "reads dry-initializer macros on a class whose superclass extends Dry::Initializer, params first" do
+      text = single("RefundService")
+      expect(text).to include("**Initialize:** `initialize(order, logger: nil, reason: \"none\")`")
+      expect(text).to include("## Inputs (dry-initializer)", "- `option :logger, optional: true` (from `ApplicationService`)")
+      expect(described_class.call(detail: "full").content.first[:text]).to include("- **Initialize:** `initialize(amount:, currency: \"USD\", memo: nil, rate:)`")
+    end
+
+    it "reads a listed parent's class body once, for its own record and its children's constructors" do
+      walks = []
+      allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source).and_wrap_original { |m, source, map| walks << source if map.key?(:organize); m.call(source, map) }
+      described_class.call(detail: "full")
+
+      expect(walks.count { |source| source.include?("option :logger, optional: true") }).to eq(1)
     end
 
     it "reads a T::Struct's const and prop declarations" do
