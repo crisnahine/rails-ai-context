@@ -40,7 +40,7 @@ module RailsAiContext
         dockerfile_vars = scan_dockerfile(root)
         kamal_env = scan_kamal_env(root)
         settings = scan_settings(root)
-        anyway_configs = scan_anyway_configs(root)
+        anyway_configs = Introspectors::AnywayConfigs.scan(root)
         external_services = detect_external_services(root, env_vars.values.flatten.map { |v| v[:name] }.uniq)
         credentials_keys = detect_credentials_keys
         encrypted_columns = detect_encrypted_columns
@@ -411,37 +411,6 @@ module RailsAiContext
 
         [ "## Settings (config gem, read as `Settings.<key>`; values hidden)" ] +
           settings.map { |s| "- `#{s[:file]}`: #{s[:keys].map { |k| "`#{k}`" }.join(', ')}" } + [ "" ]
-      end
-
-      ANYWAY_CONFIG_DIRS = %w[config/configs app/configs].freeze
-      ANYWAY_BASES = %w[Anyway::Config ApplicationConfig].freeze
-
-      # anyway_config reads "#{env_prefix}_#{ATTR}"; the prefix defaults to the class name before `Config` (PAYMENT_*).
-      # declarations is the shared reader cached per tree; the macro walk runs on a matching class only.
-      private_class_method def self.scan_anyway_configs(root)
-        ANYWAY_CONFIG_DIRS.flat_map { |dir| Dir.glob(File.join(root, dir, "**", "*.rb")).sort }.filter_map do |path|
-          file = path.delete_prefix("#{root}/")
-          source = SafePath.read(file, under: root).first or next
-          declared = Introspectors::DeclaredConstant.declarations(source).find { |d| ANYWAY_BASES.include?(d.superclass.to_s.delete_prefix("::")) } or next
-          calls = Introspectors::SourceIntrospector.walk_source(source, {
-            calls: -> { Introspectors::Listeners::GenericMacroListener.new(:attr_config, :required, :config_name, :env_prefix) }
-          })[:calls]
-          by_macro = calls.group_by { |c| c[:macro] }
-          names = Array(by_macro[:attr_config]).flat_map { |c| c[:args].map(&:to_s) + c[:options].keys.map(&:to_s) }.uniq
-          next if names.empty?
-
-          required = Array(by_macro[:required]).flat_map { |c| c[:args].map(&:to_s) }
-          prefix = anyway_env_prefix(declared.name, by_macro)
-          attributes = names.map { |name| { name: name, env: ("#{prefix}_#{name.upcase}" if prefix), required: required.include?(name) } }
-          { name: declared.name, file: file, attributes: attributes }
-        end
-      end
-
-      private_class_method def self.anyway_env_prefix(class_name, by_macro)
-        explicit = Array(by_macro[:env_prefix]).last&.dig(:args, 0) || Array(by_macro[:config_name]).last&.dig(:args, 0)
-        return explicit.to_s.upcase if explicit
-
-        class_name[/\A(\w+)(?:::)?Config\z/, 1]&.upcase
       end
 
       private_class_method def self.anyway_lines(configs)
