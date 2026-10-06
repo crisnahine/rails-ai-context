@@ -117,7 +117,7 @@ module RailsAiContext
               return text_response("No tables at offset #{page[:offset]}. Total: #{total}. Use `offset:0` to start over.")
             end
 
-            lines = [ "# Schema Summary (#{relations_phrase(tables)})", "" ]
+            lines = [ "# Schema Summary (#{Introspectors::SchemaConventions.relations_phrase(tables)})", "" ]
             lines << "**Adapter:** #{adapter_label(ctx)}" if schema[:adapter]
             lines.concat(static_source_lines(schema))
             paginated.each do |name|
@@ -146,7 +146,7 @@ module RailsAiContext
               return text_response("No tables at offset #{page[:offset]}. Total tables: #{total}. Use `offset:0` to start from the beginning.")
             end
 
-            lines = [ "# Schema (#{relations_phrase(tables)}, showing #{paginated.size})", "" ]
+            lines = [ "# Schema (#{Introspectors::SchemaConventions.relations_phrase(tables)}, showing #{paginated.size})", "" ]
             lines.concat(static_source_lines(schema))
             paginated.each do |name|
               data = tables[name]
@@ -237,7 +237,7 @@ module RailsAiContext
             coverage = model_coverage_lines(tables, models_data)
             lines.concat(coverage + [ "" ]) if coverage.any?
             lines.concat(secondary_databases_lines(schema))
-            lines << "_Use `detail:\"summary\"` for all #{relations_phrase(tables)}, `detail:\"full\"` for indexes/FKs, or `table:\"name\"` for one table._" if total > page[:limit]
+            lines << "_Use `detail:\"summary\"` for all #{Introspectors::SchemaConventions.relations_phrase(tables)}, `detail:\"full\"` for indexes/FKs, or `table:\"name\"` for one table._" if total > page[:limit]
             text_response(lines.join("\n"))
 
           when "full"
@@ -249,7 +249,7 @@ module RailsAiContext
               return text_response("No tables at offset #{page[:offset]}. Total: #{total}. Use `offset:0` to start over.")
             end
 
-            lines = [ "# Schema Full Detail (#{paginated.size} of #{relations_phrase(tables)})", "" ]
+            lines = [ "# Schema Full Detail (#{paginated.size} of #{Introspectors::SchemaConventions.relations_phrase(tables)})", "" ]
             lines.concat(note_lines(schema))
             paginated.each do |name|
               lines << format_table_markdown(name, tables[name], models_data, schema[:enum_types])
@@ -405,7 +405,7 @@ module RailsAiContext
         secondary.each do |name, db|
           pending = Array(db[:pending_migrations])
           pending_text = pending.any? ? "; pending migrations: #{pending_phrase(pending)}" : ""
-          lines << "- **#{name}**: #{relations_phrase(db[:tables])} (#{db[:tables].keys.join(', ')}) - #{db[:note]}#{pending_text}"
+          lines << "- **#{name}**: #{Introspectors::SchemaConventions.relations_phrase(db[:tables])} (#{db[:tables].keys.join(', ')}) - #{db[:note]}#{pending_text}"
         end
         lines
       end
@@ -489,10 +489,6 @@ module RailsAiContext
       end
 
       RELATION_KINDS = { "view" => "View", "materialized_view" => "Materialized view", "virtual_table" => "Virtual table" }.freeze
-
-      private_class_method def self.relations_phrase(tables)
-        RailsAiContext::Introspectors::SchemaConventions.relations_phrase(tables)
-      end
 
       # What a listed name is when it is not a plain table.
       private_class_method def self.relation_suffix(data)

@@ -96,8 +96,7 @@ module RailsAiContext
         lines = [ "# #{name} - Callbacks", "" ]
         if callbacks.empty?
           lines << "No record callbacks defined."
-          lines << "" << "## Association callbacks" << "_Run when a record is added to or removed from the collection:_"
-          lines.concat(association_lines)
+          lines.concat(association_section(association_lines))
           lines << "" << "_Next: `rails_get_model_details(model:\"#{name}\")` for associations and validations_"
           return lines.join("\n")
         end
@@ -151,10 +150,7 @@ module RailsAiContext
           end
         end
 
-        if association_lines.any?
-          lines << "" << "## Association callbacks" << "_Run when a record is added to or removed from the collection:_"
-          lines.concat(association_lines)
-        end
+        lines.concat(association_section(association_lines))
 
         # Cross-reference hints
         lines << ""
@@ -165,6 +161,12 @@ module RailsAiContext
       end
 
       ASSOCIATION_CALLBACKS = %w[before_add after_add before_remove after_remove].freeze
+
+      private_class_method def self.association_section(association_lines)
+        return [] if association_lines.empty?
+
+        [ "", "## Association callbacks", "_Run when a record is added to or removed from the collection:_", *association_lines ]
+      end
 
       private_class_method def self.association_callback_lines(data)
         Array(data[:associations]).filter_map do |a|
