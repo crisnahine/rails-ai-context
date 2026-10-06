@@ -200,12 +200,11 @@ module RailsAiContext
 
       # Files config.i18n.load_path adds, from literal paths and globs under the app root.
       def load_path_files
-        real_root = File.realpath(root)
         patterns = config_candidate_files.flat_map { |path, _| config_walk(path)&.dig(:load_path) || [] }
         patterns.reject { |pattern| SafePath.traversal?(pattern) }.flat_map do |pattern|
           Dir.glob(File.join(root, pattern)).select do |file|
-            LOAD_PATH_EXTENSIONS.include?(File.extname(file)) && File.file?(file) &&
-              File.realpath(file).start_with?("#{real_root}/")
+            LOAD_PATH_EXTENSIONS.include?(File.extname(file)) &&
+              SafePath.locate(file.delete_prefix("#{root}/"), under: root, max_size: Float::INFINITY, listed: true).ok?
           end
         end
       rescue SystemCallError
