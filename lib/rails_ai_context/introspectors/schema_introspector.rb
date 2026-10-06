@@ -62,12 +62,12 @@ module RailsAiContext
         new(RailsAiContext.default_app).qualified_table_note(name)
       end
 
-      # The connection's table by that name, or the dump's, whichever tier answers.
+      # [the name the listing shows it under, the table] from the connection or the dump, whichever tier answers.
       def qualified_table(name, database: nil, live: false)
         return unless name.to_s.include?(".")
-        return live_qualified_table(name) if live
 
-        dump_lookup(database)&.table(name)
+        found = live ? [ name, live_qualified_table(name) ] : dump_lookup(database)&.table(name)
+        found if found&.last
       end
 
       # Why the primary's schema.rb leaves out a schema-qualified table, or nil.
@@ -646,9 +646,9 @@ module RailsAiContext
       DumpLookup = Struct.new(:listed, :qualified, :names, :missing, :placed) do
         def table(name)
           shown = names.relation(name)
-          return qualified[shown] if shown.include?(".")
+          return [ name, qualified[shown] ] if shown.include?(".")
 
-          listed[shown] if placed
+          [ shown, listed[shown] ] if placed
         end
       end
 

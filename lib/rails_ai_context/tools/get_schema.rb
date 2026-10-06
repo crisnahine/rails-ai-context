@@ -65,7 +65,7 @@ module RailsAiContext
             # "Post" and "Admin::ActionLog" are model names here, and the model
             # tier knows the table each of them reads.
             table_as_table = RailsAiContext::Introspectors::TableName.for_model_name(table, models_data)
-            _, table_key, table_data = Payload.schema_tables(schema).find { |_, k, _|
+            _, table_key, table_data, listed_as = Payload.schema_tables(schema).find { |_, k, _|
               k.downcase == table_down || k == table_as_table || k == table.underscore
             } || Payload.table_holders(schema, table).first
             databases = table_data ? Payload.schema_databases(schema, table_key) : []
@@ -109,11 +109,11 @@ module RailsAiContext
             else
               return json_response(table_data.except(:unread_calls).merge({ database: database }.compact)) if format == "json"
 
-              output = format_table_markdown(table_key, table_data, models_data, schema[:enum_types], schema[:search_path])
+              output = format_table_markdown(table_key, table_data, models_data, schema[:enum_types], schema[:search_path], listed_as: listed_as)
               output = output.sub("\n\n", "\n\n**Database:** #{database}\n") if database
             end
             # Cross-reference hint for AI: suggest next tool call
-            model_refs = models_for_table(table_key, models_data)
+            model_refs = models_for_table([ table_key, listed_as ], models_data)
             if model_refs.any?
               output += "\n\n_Next: `rails_get_model_details(model:\"#{model_refs.first}\")` for associations, validations, scopes._"
             end
@@ -343,8 +343,8 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, Set.new, label: "declared_join_tables")
       end
 
-      private_class_method def self.models_for_table(table_name, models)
-        models.select { |_, d| d.is_a?(Hash) && d[:table_name] == table_name }.keys
+      private_class_method def self.models_for_table(table_names, models)
+        models.select { |_, d| d.is_a?(Hash) && Array(table_names).compact.include?(d[:table_name]) }.keys
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "models_for_table")
       end
@@ -523,12 +523,13 @@ module RailsAiContext
         end
       end
 
-      private_class_method def self.format_table_markdown(name, data, models, enum_types = nil, search_path = nil)
+      # listed_as: the listing's name for a table asked for by its qualified name.
+      private_class_method def self.format_table_markdown(name, data, models, enum_types = nil, search_path = nil, listed_as: nil)
         columns = data[:columns] || []
         # Always show Nullable and Default - agents need these for migrations and validations
         has_defaults = columns.any? { |c| c.key?(:default) && !c[:default].nil? }
 
-        model_refs = models_for_table(name, models)
+        model_refs = models_for_table([ name, listed_as ], models)
         lines = [ "## #{RELATION_KINDS.fetch(data[:kind].to_s, "Table")}: #{name}", "" ]
         lines << "**Models:** #{model_refs.join(', ')}" if model_refs.any?
         lines << "**Module:** #{data[:module]}" if data[:module]

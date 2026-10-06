@@ -1828,7 +1828,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
         expect(result[:tables].keys).to eq(%w[posts users])
         expect(result.keys).not_to include(:qualified_tables)
-        expect(described_class.new(RailsAiContext::StaticApp.new(dir)).qualified_table("other.widgets")[:columns].map { |c| c[:name] }).to eq(%w[id n])
+        expect(described_class.new(RailsAiContext::StaticApp.new(dir)).qualified_table("other.widgets").last[:columns].map { |c| c[:name] }).to eq(%w[id n])
         expect(result[:tables]["users"][:columns].map { |c| c[:name] }).to eq(%w[id email])
         expect(result[:tables]["posts"][:indexes].map { |i| i[:name] }).to eq(%w[idx_posts_user])
         expect(result[:tables]["posts"][:foreign_keys]).to eq([ { from_table: "posts", to_table: "users", column: "user_id", primary_key: "id" } ])
@@ -2694,9 +2694,9 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
     # The schema and model tools over this app, as an MCP call answers them.
     # The context names the database's adapter and keeps the parse under adapter_source (Introspector#resolve_schema_adapter).
-    def ask(dir, table: nil, model_table: nil, **options)
+    def ask(dir, table: nil, model_table: nil, models: {}, **options)
       schema = schema_at(dir).then { |found| found.merge(adapter: "PostgreSQL", adapter_source: found[:adapter]) }
-      models = model_table ? { "Thing" => { table_name: model_table, associations: [], validations: [] } } : {}
+      models = { "Thing" => { table_name: model_table, associations: [], validations: [] } } if model_table
       allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(dir))
       [ RailsAiContext::Tools::GetSchema, RailsAiContext::Tools::GetModelDetails ].each do |tool|
         tool.reset_cache!
@@ -2932,6 +2932,17 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       FileUtils.rm_rf(dir)
     end
 
+    it "links a listed table asked for by its qualified name to its models, as the bare name does" do
+      dir = pg_app({ "db/structure.sql" => shadowing_sql }, rails: "8.1.4")
+      models = { "User" => { table_name: "users", associations: [], validations: [] } }
+      text = ask(dir, table: "app.users", models: models)
+
+      expect(text).to include("## Table: app.users", "**Models:** User", "rails_get_model_details(model:\"User\")")
+      expect(ask(dir, table: "public.users", models: models)).not_to include("**Models:** User")
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+
     it "keeps tables outside the search path out of the JSON listing" do
       dir = pg_app({ "db/structure.sql" => shadowing_sql }, rails: "8.1.4")
       json = JSON.parse(ask(dir, detail: "summary", format: "json", limit: 1))
@@ -3009,7 +3020,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       allow(connection).to receive(:columns).with("audit.events").and_return([ column ])
       allow(introspector).to receive_messages(connection: connection, adapter_name: "PostgreSQL")
 
-      expect(introspector.qualified_table("audit.events", live: true)[:columns].map { |c| c[:name] }).to eq(%w[kind])
+      expect(introspector.qualified_table("audit.events", live: true).last[:columns].map { |c| c[:name] }).to eq(%w[kind])
       expect(introspector.qualified_table("audit.missing", live: true)).to be_nil
     end
   end
