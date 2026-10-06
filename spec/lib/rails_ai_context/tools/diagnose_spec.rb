@@ -215,6 +215,24 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
       end
     end
 
+    context "a model whose table_name is schema-qualified" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return(
+          models: { "Customer" => { table_name: "app.customers", associations: [], scopes: [], class_methods: [], instance_methods: [] } },
+          schema: { adapter: "postgresql", adapter_source: "static_parse", tables: { "customers" => { columns: [] } } }
+        )
+        allow(RailsAiContext::Introspectors::SchemaIntrospector).to receive(:qualified_table)
+          .and_return([ "customers", { columns: [ { name: "email", type: "string" } ] } ])
+      end
+
+      it "diagnoses against the table's columns" do
+        text = described_class.call(error: "NoMethodError: undefined method `frobnicate' for an instance of Customer").content.first[:text]
+
+        expect(text).not_to include("Diagnosis error")
+        expect(text).to include("undefined_method_on_model")
+      end
+    end
+
     # A concern's methods are reflection's to report, and that list is the
     # capped one, so a model that includes concerns cannot support a negative
     # claim about a name its own file does not define.

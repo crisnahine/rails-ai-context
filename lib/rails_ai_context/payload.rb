@@ -96,7 +96,7 @@ module RailsAiContext
     # A name in two databases answers `database`'s when given, else the primary's.
     def schema_table(schema, name, database: nil)
       found = table_holders(schema, name)
-      (found.find { |db, _, _| database && db == database.to_s } || found.first)&.last
+      (found.find { |db, _, _| database && db == database.to_s } || found.first)&.[](2)
     end
 
     # The table a model reads, from the database its `connects_to` writes to.

@@ -440,5 +440,13 @@ RSpec.describe RailsAiContext::Payload do
       expect(described_class.schema_table(nil, "users")).to be_nil
       expect(described_class.schema_table({ tables: nil, secondary_databases: { "x" => nil } }, "users")).to be_nil
     end
+
+    it "answers the table, not its listed name, for a qualified name the listing holds bare" do
+      allow(RailsAiContext::Introspectors::SchemaIntrospector).to receive(:qualified_table)
+        .with("app.customers", database: nil, live: false).and_return([ "customers", { columns: [ { name: "email" } ] } ])
+      schema = { adapter: "postgresql", adapter_source: "static_parse", tables: { "customers" => { columns: [] } } }
+
+      expect(described_class.schema_table(schema, "app.customers")).to eq({ columns: [ { name: "email" } ] })
+    end
   end
 end
