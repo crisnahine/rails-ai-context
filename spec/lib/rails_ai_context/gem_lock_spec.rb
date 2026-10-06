@@ -310,16 +310,34 @@ RSpec.describe RailsAiContext::GemLock do
         File.write(File.join(engine, "Gemfile.lock"), "GEM\n  specs:\n    rails (8.1.4)\n")
         dummy = File.join(engine, "test/dummy")
         FileUtils.mkdir_p(File.join(dummy, "config"))
+        FileUtils.mkdir_p(File.join(dummy, ".git"))
         File.write(File.join(dummy, "config/boot.rb"), boot)
 
         spec = described_class.for(dummy)
 
         expect(spec.present?("rails")).to be false
-        expect(spec.reason).to eq("No Gemfile.lock in the app; config/boot.rb points Bundler at ../../Gemfile, outside the app's git repository, which is not read")
+        expect(spec.unread_bundle).to eq("config/boot.rb points Bundler at `../../Gemfile`, outside the app's git repository")
+        expect(spec.reason).to eq("No Gemfile.lock in the app; #{spec.unread_bundle}, so that bundle is not read")
         expect(spec.outside_gemfile).to eq("../../Gemfile")
         bundle = described_class.bundle(dummy)
         expect(bundle).to be_a(described_class::Bundle)
         expect([ bundle.lockfile, bundle.outside, bundle.dir ]).to eq([ nil, "../../Gemfile", dummy ])
+      end
+    end
+
+    it "says the app is in no git repository when none holds it" do
+      Dir.mktmpdir do |engine|
+        File.write(File.join(engine, "Gemfile.lock"), "GEM\n  specs:\n    rails (8.1.4)\n")
+        dummy = File.join(engine, "test/dummy")
+        FileUtils.mkdir_p(File.join(dummy, "config"))
+        File.write(File.join(dummy, "config/boot.rb"), boot)
+        skip "the temp dir sits inside a git repository" if RailsAiContext::SafePath.git_root(File.realpath(dummy))
+
+        spec = described_class.for(dummy)
+
+        expect(spec.present?("rails")).to be false
+        expect(spec.unread_bundle).to eq("config/boot.rb points Bundler at `../../Gemfile`, and the app is in no git repository")
+        expect(spec.outside_gemfile).to eq("../../Gemfile")
       end
     end
 

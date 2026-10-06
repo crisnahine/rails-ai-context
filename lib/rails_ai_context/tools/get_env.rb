@@ -72,9 +72,9 @@ module RailsAiContext
 
       # Without it, an unread bundle reads as an app that declares no service gems.
       private_class_method def self.unread_bundle_note(root)
-        outside = RailsAiContext::GemLock.for(root).outside_gemfile or return nil
+        unread = RailsAiContext::GemLock.for(root).unread_bundle or return nil
 
-        "_Gem-based services and config gem settings not read: config/boot.rb points Bundler at `#{outside}`, outside the app's git repository._"
+        "_Gem-based services and config gem settings not read: #{unread}._"
       end
 
       private_class_method def self.format_summary(all_var_names, external_services, credentials_keys)

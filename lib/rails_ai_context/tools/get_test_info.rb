@@ -198,8 +198,7 @@ module RailsAiContext
       private_class_method def self.suite_lines
         app_root = rails_app.root.to_s
         if suite_root == app_root
-          outside = unread_suite_gemfile
-          return outside ? [ "- **Suite:** not read: config/boot.rb points Bundler at #{outside}, outside the app's git repository" ] : []
+          return unread_suite_gemfile ? [ "- **Suite:** not read: #{RailsAiContext::GemLock.for(app_root).unread_bundle}" ] : []
         end
 
         [ "- **Suite:** the engine's, at `#{RailsAiContext::PathResolver.suite_relative(app_root, ".")}`; the paths below are under it" ]
@@ -269,7 +268,7 @@ module RailsAiContext
         end
 
         unread = unread_suite_gemfile
-        unread &&= "\n\nNot searched: the engine's suite at `#{File.dirname(unread)}` is not read, config/boot.rb points Bundler at #{unread}, outside the app's git repository."
+        unread &&= "\n\nNot searched: the engine's suite at `#{File.dirname(unread)}` is not read, #{RailsAiContext::GemLock.for(suite_root).unread_bundle}."
         empty_response("No test file found for #{name}. Searched: #{contained.map { |rel| shown(rel) }.join(', ')}#{nearby_tests_hint(contained)}#{unread}")
       end
 

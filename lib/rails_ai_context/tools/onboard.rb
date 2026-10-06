@@ -110,8 +110,8 @@ module RailsAiContext
         end
 
         def unread_bundle(rails)
-          outside = RailsAiContext::GemLock.for(rails_app.root).outside_gemfile unless rails
-          "Its gems and Rails version are not read: config/boot.rb points Bundler at `#{outside}`, outside the app's git repository." if outside
+          unread = RailsAiContext::GemLock.for(rails_app.root).unread_bundle unless rails
+          "Its gems and Rails version are not read: #{unread}." if unread
         end
 
         def compose_standard(ctx)

@@ -1152,7 +1152,7 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       Dir.mktmpdir do |engine|
         File.write(File.join(engine, "Gemfile"), %(gem "stripe"\n))
         dummy = File.join(engine, "test/dummy")
-        FileUtils.mkdir_p(File.join(dummy, "config"))
+        FileUtils.mkdir_p([ File.join(dummy, "config"), File.join(dummy, ".git") ])
         File.write(File.join(dummy, "config/boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n))
         allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dummy)))
 

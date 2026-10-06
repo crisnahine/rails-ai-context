@@ -44,16 +44,22 @@ module RailsAiContext
       attr_reader :gemfile_gems
 
       def initialize(versions, ruby_versions: {}, ruby_engine: nil, reason: nil, absent: false, direct: nil, path_remotes: [],
-                     outside_gemfile: nil, gemfile_gems: nil)
+                     outside_gemfile: nil, no_repo: false, gemfile_gems: nil)
         @versions = versions
         @gemfile_gems = gemfile_gems
         @outside_gemfile = outside_gemfile
+        @no_repo = no_repo
         @path_remotes = path_remotes
         @ruby_versions = ruby_versions
         @ruby_engine = ruby_engine
         @reason = reason
         @absent = absent
         @direct = direct || Set.new
+      end
+
+      # Why the bundle config/boot.rb names went unread, worded the same by every tool.
+      def unread_bundle
+        GemLock.unread_bundle(@outside_gemfile, @no_repo) if @outside_gemfile
       end
 
       # Several files may name a version and they often disagree, so the source is kept too.
@@ -105,8 +111,8 @@ module RailsAiContext
     end
 
     # `dir` holds the Gemfile and lockfile; `trusted` is the tree a path gem of theirs must stay
-    # inside; `outside` names a bundle config/boot.rb points at that is never read.
-    Bundle = Data.define(:lockfile, :gemfile, :lock_label, :gemfile_label, :dir, :trusted, :outside)
+    # inside; `outside` names a bundle config/boot.rb points at that is never read, `no_repo` says no git repository holds the app.
+    Bundle = Data.define(:lockfile, :gemfile, :lock_label, :gemfile_label, :dir, :trusted, :outside, :no_repo)
 
     MUTEX = Mutex.new
     CACHE = {}
@@ -153,7 +159,7 @@ module RailsAiContext
     def bundle(root)
       root = root.to_s
       own = Bundle.new(lockfile: File.join(root, lockfile_name(root)), gemfile: File.join(root, gemfile_name(root)),
-                       lock_label: lockfile_name(root), gemfile_label: gemfile_name(root), dir: root, trusted: root, outside: nil)
+                       lock_label: lockfile_name(root), gemfile_label: gemfile_name(root), dir: root, trusted: root, outside: nil, no_repo: false)
       return own if File.file?(own.lockfile)
 
       boot_bundle(root, own) || own
@@ -173,11 +179,11 @@ module RailsAiContext
       lockfile = gemfile == "gems.rb" ? "gems.locked" : "#{gemfile}.lock"
       repo = SafePath.git_root(real_root)
       unless repo && File.directory?(dir) && SafePath.contained?(File.realpath(dir), repo)
-        return own.with(lockfile: nil, outside: label.(gemfile))
+        return own.with(lockfile: nil, outside: label.(gemfile), no_repo: repo.nil?)
       end
 
       Bundle.new(lockfile: inside_file(dir, lockfile), gemfile: inside_file(dir, gemfile), lock_label: label.(lockfile),
-                 gemfile_label: label.(gemfile), dir: File.realpath(dir), trusted: repo, outside: nil)
+                 gemfile_label: label.(gemfile), dir: File.realpath(dir), trusted: repo, outside: nil, no_repo: false)
     rescue SystemCallError
       nil
     end
@@ -234,16 +240,20 @@ module RailsAiContext
     end
     private_class_method :inside_file
 
+    def unread_bundle(outside, no_repo)
+      where = no_repo ? "and the app is in no git repository" : "outside the app's git repository"
+      "config/boot.rb points Bundler at `#{outside}`, #{where}"
+    end
+
     def absent_spec(root, bundle)
-      outside = bundle.outside
-      reason = if outside
-        "No #{lockfile_name(root)} in the app; config/boot.rb points Bundler at #{outside}, outside the app's git repository, which is not read"
+      reason = if bundle.outside
+        "No #{lockfile_name(root)} in the app; #{unread_bundle(bundle.outside, bundle.no_repo)}, so that bundle is not read"
       else
         "No #{bundle.lock_label} found"
       end
       facts = gemfile(bundle)
-      Spec.new({}, **declared_ruby(nil, root, bundle, facts), reason: reason, absent: true, outside_gemfile: outside,
-               gemfile_gems: facts[:gems])
+      Spec.new({}, **declared_ruby(nil, root, bundle, facts), reason: reason, absent: true, outside_gemfile: bundle.outside,
+               no_repo: bundle.no_repo, gemfile_gems: facts[:gems])
     end
     private_class_method :absent_spec
 
