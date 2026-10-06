@@ -428,7 +428,7 @@ module RailsAiContext
       # view_dir, which stands in for the controller's path; nil when the
       # model's to_partial_path or the chain cannot be read.
       private_class_method def self.implicit_partial(chain, view_dir, prefixed, root, memo)
-        _, model = Introspectors::RenderedRecord.resolve(chain, root, memo)
+        model, = Introspectors::RenderedRecord.resolve(chain, root, memo)
         path = model && Introspectors::RenderedRecord.partial_path(model, root, memo)
         return path unless path && prefixed
 

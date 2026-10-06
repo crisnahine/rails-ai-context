@@ -139,10 +139,11 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
     it "names the records a class_name association holds, not the association" do
       Dir.mktmpdir do |root|
         FileUtils.mkdir_p(File.join(root, "app/models"))
-        File.write(File.join(root, "app/models/post.rb"), "class Post < ApplicationRecord\n  has_many :replies, class_name: \"Comment\"\n  belongs_to :starter, class_name: \"Comment\"\nend\n")
+        File.write(File.join(root, "app/models/post.rb"), "class Post < ApplicationRecord\n  has_many :replies, class_name: \"Comment\"\n  belongs_to :starter, class_name: \"Comment\"\n  has_many :staff, class_name: \"Employee\"\nend\n")
         File.write(File.join(root, "app/models/comment.rb"), "class Comment < ApplicationRecord; end\n")
-        refs = described_class.new(RailsAiContext::StaticApp.new(root)).send(:extract_partial_refs, "<%= render @post.replies %>\n<%= render @post.starter %>")
-        expect(refs).to contain_exactly("comments", "comment")
+        File.write(File.join(root, "app/models/employee.rb"), "class Employee < ApplicationRecord; end\n")
+        refs = described_class.new(RailsAiContext::StaticApp.new(root)).send(:extract_partial_refs, "<%= render @post.replies %>\n<%= render @post.starter %>\n<%= render @post.staff %>")
+        expect(refs).to contain_exactly("comments", "comment", "employees")
       end
     end
 
