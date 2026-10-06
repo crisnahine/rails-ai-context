@@ -1964,19 +1964,6 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       expect(tables["user_stats"]).to include(kind: "materialized_view", sql: "SELECT count(*) AS total\n   FROM public.users")
     end
 
-    it "names the extensions a structure.sql dump creates, as the connection names them" do
-      result = static_of("structure.sql", <<~SQL)
-        CREATE EXTENSION IF NOT EXISTS hstore WITH SCHEMA public;
-        CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA extensions;
-        CREATE EXTENSION pg_trgm;
-        CREATE TABLE public.users (
-            id bigint NOT NULL
-        );
-      SQL
-
-      expect(result[:extensions]).to eq(%w[extensions.uuid-ossp hstore pg_catalog.plpgsql pg_trgm])
-    end
-
     describe "extension names against the connection's current schema" do
       around do |example|
         RailsAiContext.tier = :static
@@ -2076,6 +2063,25 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
       it "names plpgsql bare before Rails 8.0" do
         expect(extensions_of(dump, rails: "7.2.2")).to eq(%w[plpgsql])
+      end
+
+      let(:three_schemas) do
+        <<~SQL
+          CREATE EXTENSION IF NOT EXISTS hstore WITH SCHEMA public;
+          CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA extensions;
+          CREATE EXTENSION pg_trgm;
+          CREATE TABLE public.users (
+              id bigint NOT NULL
+          );
+        SQL
+      end
+
+      it "names the extensions a structure.sql dump creates as a Rails 8 connection names them" do
+        expect(extensions_of(three_schemas, rails: "8.1.4")).to eq(%w[extensions.uuid-ossp hstore pg_catalog.plpgsql pg_trgm])
+      end
+
+      it "names the same extensions bare as a Rails 7 connection names them" do
+        expect(extensions_of(three_schemas, rails: "7.1.6")).to eq(%w[hstore pg_trgm plpgsql uuid-ossp])
       end
 
       it "leaves plpgsql out when the dump drops it" do
