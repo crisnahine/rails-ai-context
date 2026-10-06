@@ -929,9 +929,7 @@ module RailsAiContext
       def in_file(entry, shift)
         return entry unless shift.positive? && entry.is_a?(Hash) && entry[:location]
 
-        moved = entry.merge(location: entry[:location] + shift)
-        moved[:proc_lines] = entry[:proc_lines].map { |line| line + shift } if entry[:proc_lines].is_a?(Array)
-        moved
+        ConcernMacros.moved(entry) { |line| line + shift }
       end
 
       # A mixin hook runs again for a subclass that includes the module again; a Concern's block does not.
@@ -1001,6 +999,13 @@ module RailsAiContext
     # The entries of [line, order, at, entry] tuples in the order Rails adds them; a tie keeps its place.
     def in_include_order(placed)
       placed.each_with_index.sort_by { |(line, order, at, _), index| [ line, order, at, index ] }.map { |(_, _, _, entry), _| entry }
+    end
+
+    # `entry` with every line it carries mapped through the block.
+    def moved(entry)
+      moved = entry.merge(location: yield(entry[:location]))
+      moved[:proc_lines] = entry[:proc_lines].map { |line| yield(line) } if entry[:proc_lines].is_a?(Array)
+      moved
     end
 
     # The innermost of `bodies`, [range, name] pairs, around `line`.

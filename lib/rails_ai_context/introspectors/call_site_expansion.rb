@@ -201,9 +201,7 @@ module RailsAiContext
       def relocated(entry, out)
         return entry unless entry.is_a?(Hash) && entry[:location]
 
-        moved = entry.merge(location: out.source_line(entry[:location]) || entry[:location])
-        moved[:proc_lines] = entry[:proc_lines].map { |line| out.source_line(line) || line } if entry[:proc_lines].is_a?(Array)
-        moved
+        ConcernMacros.moved(entry) { |line| out.source_line(line) || line }
       end
 
       def identity(key, entry)
