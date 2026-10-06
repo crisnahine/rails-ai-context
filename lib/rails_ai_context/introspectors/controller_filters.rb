@@ -50,9 +50,6 @@ module RailsAiContext
         methods: Listeners::MethodsListener
       }.freeze
 
-      # How deep the walk follows a class's app-defined bases for a class method its body calls.
-      MAX_BASES = 8
-
       # The class body's receiverless calls by name, read only once a mixin's class method declares a filter.
       # A class method the chain defines makes its own calls where a call of it runs
       # (`def self.public_page = allow_unauthenticated_access only: :show`), each listed as Relayed.
@@ -203,10 +200,11 @@ module RailsAiContext
       end
 
       # Each app-defined base of the class, nearest first: [constant, source, realpath, app-relative path, walk].
+      # Like the other chain walks it ends at the framework or a base it cannot read; `seen` ends a cycle.
       def each_base(source, within, root, cache)
         seen = Set.new
         name, scope = superclass_of(source, within)
-        MAX_BASES.times do
+        loop do
           break unless name && root
 
           label, base, path, file = base_source(root, name, scope)

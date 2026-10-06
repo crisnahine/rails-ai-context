@@ -39,6 +39,23 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
     end
 
     # The block opens in the method's file; the expansion re-reads the method's body on its own.
+    # The other chain walks stop only at the framework or a class they cannot read.
+    it "reads a class method a base nine levels up defines" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        File.write(File.join(dir, "app", "controllers", "base0_controller.rb"),
+                   "class Base0Controller < ActionController::Base\n  def self.guarded(**opts)\n    before_action :guard, **opts\n  end\nend\n")
+        (1..9).each do |i|
+          File.write(File.join(dir, "app", "controllers", "base#{i}_controller.rb"), "class Base#{i}Controller < Base#{i - 1}Controller\nend\n")
+        end
+        source = "class LeafController < Base9Controller\n  guarded only: :show\nend\n"
+
+        filters, = described_class.with_concerns(source, root: dir, within: "LeafController")
+
+        expect(filters.map { |f| [ f[:name], f[:only] ] }).to eq([ [ "guard", [ "show" ] ] ])
+      end
+    end
+
     it "names a block a class method declares by its line in the file that defines the method, and that file when it is not the class's" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
