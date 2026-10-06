@@ -1954,6 +1954,24 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       connection.execute("DROP TABLE IF EXISTS pa_v_fts")
       connection.drop_table(:pa_v_users, if_exists: true)
     end
+
+    it "reads a booted view's SQL and a generated column's expression from structure.sql" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "config/application.rb"), "class App < Rails::Application\n  config.active_record.schema_format = :sql\nend\n")
+        File.write(File.join(dir, "db/structure.sql"), <<~SQL)
+          CREATE TABLE pa_s_users (id integer PRIMARY KEY, name varchar, upper_name varchar GENERATED ALWAYS AS (upper(name)) VIRTUAL);
+          CREATE VIEW pa_s_active AS SELECT id, name FROM pa_s_users;
+        SQL
+        booted = described_class.new(double("app", root: Pathname.new(dir)))
+        connection = double("mysql", views: %w[pa_s_active], columns: [])
+        allow(booted).to receive_messages(connection: connection, adapter_name: "Mysql2")
+
+        expect(booted.send(:add_live_relations, {})["pa_s_active"]).to include(sql: "SELECT id, name FROM pa_s_users")
+        expect(booted.send(:declared_generated, "pa_s_users", "upper_name")).to eq("upper(name)")
+      end
+    end
   end
 
   describe "the dump file the app configures" do

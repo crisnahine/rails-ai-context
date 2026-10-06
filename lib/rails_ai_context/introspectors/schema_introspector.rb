@@ -109,7 +109,7 @@ module RailsAiContext
         (connection.views - tables.keys - extension_owned).each do |view|
           # Only a materialized view holds rows, so only it can carry an index.
           indexes = materialized.include?(view) ? extract_indexes(view) : []
-          tables[view] = SchemaConventions.view_entry(schema_reader.views.dig(view, :sql), materialized: materialized.include?(view),
+          tables[view] = SchemaConventions.view_entry(declared_dump.views.dig(view, :sql), materialized: materialized.include?(view),
                                                       columns: extract_columns(view), indexes: indexes)
         end
         sqlite_virtual_tables.each do |name, (mod, arguments)|
@@ -288,10 +288,16 @@ module RailsAiContext
         @schema_reader ||= SchemaReader.new(schema_file_path, partitions: @partitions.to_a)
       end
 
+      # The configured dump, whatever its format: a view's SQL and a MySQL generated expression are not on the connection.
+      def declared_dump
+        format, = dump_candidates.first
+        format == :sql ? SchemaReader.for(app.root) : schema_reader
+      end
+
       # MySQL keeps a generated column's expression out of the column, so the dump says it.
       def declared_generated(table, name)
-        column = schema_reader.tables.dig(table, :columns)&.find { |c| c[:name] == name }
-        column&.dig(:options, :as)
+        column = declared_dump.tables.dig(table, :columns)&.find { |c| c[:name] == name }
+        column && (column.dig(:options, :as) || column[:generated])
       end
 
       # PostgreSQL before Rails 7.1 had only stored generated columns.
