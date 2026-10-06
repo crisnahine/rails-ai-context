@@ -194,7 +194,7 @@ module RailsAiContext
           # thing an unbooted answer must not do. All three detail levels share
           # this label. Gated on `controller` because the caveat is about the
           # whole table, and a filtered answer is not that.
-          count_label += RailsAiContext::RouteCoverage.suffix(routes) if controller.nil?
+          count_label += RailsAiContext::RouteCoverage.suffix(routes, false) if controller.nil?
 
           case detail
           when "summary"

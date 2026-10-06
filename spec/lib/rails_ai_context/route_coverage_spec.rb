@@ -23,6 +23,12 @@ RSpec.describe RailsAiContext::RouteCoverage do
       expect(described_class.suffix(routes)).to eq(", 2 dynamic constructs not expanded, 3 more in engine tables")
     end
 
+    it "says a table read from source leaves out the routes gems draw at boot" do
+      routes = { total_routes: 2, confidence: RailsAiContext::Confidence::STATIC }
+      expect(described_class.suffix(routes)).to eq(", routes gems draw at boot not read without booting")
+      expect(described_class.suffix(routes, false)).to eq("")
+    end
+
     it "is empty when the count is the whole table" do
       expect(described_class.suffix(total_routes: 20)).to eq("")
     end
