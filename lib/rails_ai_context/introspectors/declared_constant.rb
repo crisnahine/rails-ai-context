@@ -282,7 +282,7 @@ module RailsAiContext
         node.slice.delete_prefix("::")
       end
 
-      private_class_method :only_own_class, :scoped, :segment, :superclass_name, :class_new?
+      private_class_method :only_own_class, :scoped, :segment, :superclass_name, :class_new?, :declarations_in
     end
   end
 end

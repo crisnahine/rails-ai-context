@@ -3,6 +3,10 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
+  it "keeps the raw declaration cache behind .declarations" do
+    expect(described_class).not_to respond_to(:declarations_in)
+  end
+
   # A file that declares only a module names a constant too, and the path
   # camelization is wrong for it in exactly the way it is wrong for a class:
   # an app inflection only changes case.
