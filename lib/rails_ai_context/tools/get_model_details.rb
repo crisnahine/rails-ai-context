@@ -725,13 +725,17 @@ module RailsAiContext
         source = RailsAiContext::SafeFile.read(full_path) or return nil
 
         source_lines = source.lines
+        # A def's kind comes from the walk: a regex cannot see `class << self`,
+        # `def Name.x`, or a def that only extends a scope.
+        def_scopes = Introspectors::ActionResolver.methods_in(source).to_h { |m| [ m[:location], m[:scope] ] }
         sections = []
         current_section = nil
         current_start = nil
 
         source_lines.each_with_index do |line, idx|
           label = case line
-          when /\A\s*class\s/ then "class definition"
+          when /\A\s*(?:[a-z_]+\s+)*def\s/ then { class: "class methods", instance: "instance methods" }[def_scopes[idx + 1]]
+          when /\A\s*class\s+(?!<<)/ then "class definition"
           when /\A\s*(include|extend|prepend)\s/ then "includes"
           when /\A\s*[A-Z_]+\s*=/ then "constants"
           when /\A\s*(belongs_to|has_many|has_one|has_and_belongs_to_many)\s/ then "associations"
@@ -739,8 +743,6 @@ module RailsAiContext
           when /\A\s*scope\s/ then "scopes"
           when /\A\s*(enum|encrypts|normalizes|has_secure_password|has_one_attached|has_many_attached)\s/ then "macros"
           when /\A\s*(before_|after_|around_)/ then "callbacks"
-          when /\A\s*def\s+self\./ then "class methods"
-          when /\A\s*def\s/ then "instance methods"
           when /\A\s*private\s*$/ then "private"
           end
 
