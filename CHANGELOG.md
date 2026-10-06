@@ -406,13 +406,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same file, a configured dump over `max_schema_file_size` is reported as
   too large, and a change to any `.sql` dump under `db/` refreshes the MCP
   cache. (#355, #357)
+- **The MCP cache, live reload and `watch` cover all of `app/`, `test/` and
+  `spec/`.** An edit to a mailer preview, a fixture, a factory, a spec or any
+  file under `app/` that a tool reads refreshes the cached answer. A bundler's
+  output in `app/assets/builds` does not.
 - **A table in a secondary database is found** by `schema --table`,
   `model_details`, `analyze_feature`, `diagnose`, `migration_advisor`, the
   controllers schema hint and the model resource. The table view names every
   database that holds it, and where one name holds different tables in two
   databases it shows each database's columns and models. `migration_advisor`
   passes `--database <name>` so the migration lands in that database's
-  migrations_paths, and leaves out `foreign_key: true` on a reference between
+  migrations_paths. For a database only another environment configures (Rails
+  8's queue, cache and cable outside production), the Run line sets that
+  `RAILS_ENV` and names its migrations_paths; when no environment configures
+  it, no Run line is given. It also leaves out `foreign_key: true` on a reference between
   tables in different databases. A replica or a `database_tasks: false` entry is
   not listed as a database of its own. (#356)
 - **Migration replay follows what Rails runs.** It reads migrations in
