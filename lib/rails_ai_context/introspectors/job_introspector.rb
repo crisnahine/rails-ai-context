@@ -314,18 +314,34 @@ module RailsAiContext
       end
 
       # delayed_job's handle_asynchronously wraps a model method so every call is
-      # queued; the app has no job class for it at all.
+      # queued; the app has no job class for it at all. Called from a module, it
+      # wraps the method on each model that includes the module.
       def async_methods
-        model_sources.flat_map do |record|
-          next [] unless record.source.include?("handle_asynchronously")
+        found = []
+        modules = {}
+        model_sources(skip_concerns: false) do |record|
+          next unless record.source.include?("handle_asynchronously")
 
-          owner = DeclaredConstant.resolve(record.source, record.path_name)
-          walked = SourceIntrospector.walk_source(record.source, { calls: -> { Listeners::GenericMacroListener.new(:handle_asynchronously) } })
-          walked[:calls].filter_map do |call|
-            method = call[:args].first or next
-            options = call[:option_values].map { |key, value| "#{key}: #{value}" }
-            { owner: owner, method: method.to_s, file: "#{record.file}:#{call[:location]}", options: options.join(", ").presence }.compact
-          end
+          # app/models/concerns is an autoload root of its own.
+          owner = DeclaredConstant.resolve(record.source, record.path_name.delete_prefix("Concerns::"))
+          calls = async_calls(record)
+          DeclaredConstant.declares_class?(record.source) ? found.concat(calls.map { |call| { owner: owner, **call } }) : modules[owner] = calls
+        end
+        return found if modules.empty?
+
+        sources = model_sources.map { |record| [ record.path, record.source ] }
+        Includers.of(app.root, sources, modules.keys, macros: %i[include prepend]).each do |name, includers|
+          includers.uniq.each { |includer| found.concat(modules[name].map { |call| { owner: includer, **call } }) }
+        end
+        found
+      end
+
+      def async_calls(record)
+        walked = SourceIntrospector.walk_source(record.source, { calls: -> { Listeners::GenericMacroListener.new(:handle_asynchronously) } })
+        walked[:calls].filter_map do |call|
+          method = call[:args].first or next
+          options = call[:option_values].map { |key, value| "#{key}: #{value}" }
+          { method: method.to_s, file: "#{record.file}:#{call[:location]}", options: options.join(", ").presence }.compact
         end
       end
 

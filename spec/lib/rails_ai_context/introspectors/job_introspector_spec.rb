@@ -261,6 +261,25 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
     end
   end
 
+  # delayed_job's handle_asynchronously in a concern's `included do` wraps the
+  # method on every class that includes it.
+  describe "handle_asynchronously in a concern" do
+    it "lists the method under each model that includes the concern, not the concern" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/models/concerns"))
+        File.write(File.join(dir, "app/models/concerns/notifiable.rb"),
+          "module Notifiable\n  extend ActiveSupport::Concern\n  included do\n    handle_asynchronously :notify_all, queue: \"notify\"\n  end\n  def notify_all; end\nend\n")
+        File.write(File.join(dir, "app/models/application_record.rb"), "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n")
+        File.write(File.join(dir, "app/models/post.rb"), "class Post < ApplicationRecord\n  include Notifiable\nend\n")
+        File.write(File.join(dir, "app/models/comment.rb"), "class Comment < ApplicationRecord\nend\n")
+
+        found = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:async_methods]
+
+        expect(found).to eq([ { owner: "Post", method: "notify_all", file: "app/models/concerns/notifiable.rb:4", options: "queue: notify" } ])
+      end
+    end
+  end
+
   describe "#static_call" do
     def static_result(&build)
       Dir.mktmpdir do |dir|
