@@ -43,6 +43,13 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       expect(rendered_from("session_row")).to eq("## Rendered From (1)\n- `app/views/sessions/index.html.erb:1`")
     end
 
+    it "reads to_partial_path only off the model's own class, not a class nested in its file" do
+      File.write(File.join(@root, "app/models/post.rb"),
+                 "class Post < ApplicationRecord\n  class Row\n    def to_partial_path = \"shared/session_row\"\n  end\nend\n")
+
+      expect(rendered_from("posts/post")).to eq("## Rendered From (1)\n- `app/views/posts/show.html.erb:3`")
+    end
+
     it "drops the namespace when the app turns the prefix off" do
       FileUtils.mkdir_p(File.join(@root, "config"))
       File.write(File.join(@root, "config/application.rb"), <<~RUBY)

@@ -456,9 +456,15 @@ module RailsAiContext
         default = "#{singular.pluralize}/#{singular}"
         return default unless RailsAiContext::SafePath.locate(relative, under: root).ok?
 
-        tree = RailsAiContext::AstCache.parse(File.join(root, relative)).value
-        defn = tree.breadth_first_search { |n| n.is_a?(Prism::DefNode) && n.name == :to_partial_path && n.receiver.nil? }
-        return default unless defn
+        path = File.join(root, relative)
+        methods = Introspectors::SourceIntrospector.walk(path, { methods: Introspectors::Listeners::MethodsListener })[:methods]
+        own = Introspectors::ActionResolver.own_methods(methods, singular.camelize)
+                                           .find { |m| m[:scope] == :instance && m[:name].to_s == "to_partial_path" }
+        return default unless own
+
+        tree = RailsAiContext::AstCache.parse(path).value
+        defn = Introspectors::AstWalk.each(tree).find { |n| n.is_a?(Prism::DefNode) && n.location.start_offset == own[:offset] }
+        return nil unless defn
 
         body = defn.body&.body
         body&.size == 1 && body.first.is_a?(Prism::StringNode) ? body.first.unescaped : nil
