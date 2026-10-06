@@ -1684,6 +1684,9 @@ module RailsAiContext
       # associations, on that tier.
       MERGED_CONCERN_KEYS = %i[associations validations scopes enums callbacks macros].freeze
 
+      # The class's own declarations a method body can hold; MacrosListener skips method bodies itself.
+      METHOD_PLACED_KEYS = %i[validations associations scopes enums].freeze
+
       # The merged keys, plus what a mixin's macro methods declare only under a
       # condition the call cannot decide.
       WALKED_KEYS = [ *MERGED_CONCERN_KEYS, :conditional, :foreign ].freeze
@@ -1741,7 +1744,18 @@ module RailsAiContext
           calls.placed(cb, [ rank, method[:location] ], [ cb[:location] ])
         end
         own = own.merge(callbacks: callbacks + Array(collected.delete(:callbacks)))
+        own = own.merge(METHOD_PLACED_KEYS.to_h { |key| [ key, Array(own[key]).select { |entry| runs?(own, entry, rank, calls) } ] }.compact)
         [ collected.empty? ? own : merge_inherited(own, collected), walk.unread, walk.hidden ]
+      end
+
+      # A declaration in a method body holds only where a call runs that method.
+      def runs?(own, entry, rank, calls)
+        line = entry[:location] if entry.is_a?(Hash)
+        method = line && own_method(own, line)
+        # A `def self.default_scope` is the declaration itself, not a body holding one.
+        return true unless method && !(method[:name] == entry[:name] && method[:location] == line)
+
+        method[:scope] == :class && calls.placed(entry, [ rank, method[:location] ], [ line ]).any?
       end
 
       def place(entry, rank, calls)
