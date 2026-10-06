@@ -2853,6 +2853,28 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       FileUtils.rm_rf(dir)
     end
 
+    it "reads a schema.rb Rails 6.1 wrote, which has no stamp, by its rules after the lockfile moves to 7.2" do
+      dump = <<~RUBY
+        ActiveRecord::Schema.define(version: 2026_01_01_000001) do
+          create_table "app_only", force: :cascade do |t|
+            t.string "secret"
+          end
+
+          create_table "users", force: :cascade do |t|
+          end
+
+          create_table "users", force: :cascade do |t|
+          end
+        end
+      RUBY
+      dir = pg_app({ "db/schema.rb" => dump }, rails: "7.2.4")
+
+      expect(ask(dir, table: "public.users")).to include("Table 'public.users' not found.")
+      expect(ask(dir, table: "public.app_only")).to include("Table 'public.app_only' not found.")
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+
     it "finds a Rails 7.0 schema.rb table by its qualified name on the default path, whose $user schema rarely exists" do
       dump = public_only.sub("Schema[8.0]", "Schema[7.0]")
       dir = pg_app({ "db/schema.rb" => dump }, rails: "7.0.10", yml: "  username: deploy\n")

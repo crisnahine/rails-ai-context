@@ -7,6 +7,8 @@ module RailsAiContext
     # Each rule cites the activerecord source it mirrors.
     module PgNaming
       DEFAULT_SEARCH_PATH = %w[public].freeze
+      # 6.1 schema_dumper.rb:89 writes Schema.define, 7.0 :90 Schema[x.y]; every rule here starts at 7.0 or later.
+      UNSTAMPED_DUMP = "6.1"
 
       module_function
 

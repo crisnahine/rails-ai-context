@@ -76,6 +76,9 @@ module RailsAiContext
             # ActiveRecord::Schema[8.1].define: the Rails version that wrote the dump.
             stamp = node.arguments&.arguments&.first
             @results << { type: :stamp, version: stamp.slice, location: node.location.start_line } if stamp.is_a?(Prism::FloatNode)
+          elsif node.name == :define && node.receiver.is_a?(Prism::ConstantPathNode) && node.receiver.slice == "ActiveRecord::Schema"
+            # Rails before 7.0 writes no stamp.
+            @results << { type: :stamp, version: nil, location: node.location.start_line }
           elsif column_call?(node)
             extract_column(node)
           elsif index_call?(node)

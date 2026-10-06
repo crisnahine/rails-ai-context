@@ -339,7 +339,7 @@ module RailsAiContext
         when :create_schema
           schema[:schemas] << event[:name]
         when :stamp
-          schema[:stamp] = event[:version]
+          schema[:stamp] = event[:version] || PgNaming::UNSTAMPED_DUMP
         when :check_constraint
           schema[:check_constraints] << { table: current, **event.slice(:name, :expression) } if current
         when :add_check_constraint
