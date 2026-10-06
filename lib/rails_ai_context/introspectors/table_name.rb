@@ -34,11 +34,11 @@ module RailsAiContext
         statements&.size == 1 ? affixed_node(statements.first, own, root) : nil
       end
 
-      # All four declarations of one class body, read in one walk.
+      # Every declaration of one class body, read in one walk.
       #
       # @param source [String] the file's source
       # @param name [String] the qualified name of the class or module
-      # @return [Hash] the four, each nil when this scope declares none
+      # @return [Hash] the five, each nil when this scope declares none
       # @param root [String, nil] the app, whose configured affixes a table
       #   name interpolating table_name_prefix or table_name_suffix reads
       def declarations(source, name, root = nil)
