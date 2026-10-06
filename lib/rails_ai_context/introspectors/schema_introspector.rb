@@ -635,6 +635,8 @@ module RailsAiContext
           note: "Parsed from #{relative_dump_path(path)} (#{connection_state})"
         }
         result[:qualified_tables] = qualified if qualified.any?
+        found = search_path_dump(path, content) unless secondary_dump(path)
+        result[:search_path_dump] = found if found
         result[:extensions] = schema.extensions.sort if schema.extensions.any?
         # schema.rb records only the max applied version, so pending here
         # means "migration files newer than the schema version" - exact for
@@ -645,6 +647,18 @@ module RailsAiContext
           result[:pending_migrations] = RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: version, root: app.root)
         end
         result
+      end
+
+      # A PostgreSQL schema.rb as Rails writes it by default holds only the search path schemas,
+      # so a table in another schema is not missing from the database, only from the dump.
+      def search_path_dump(path, content)
+        return unless SchemaConventions.database_adapter_for(app.root.to_s, "primary").to_s.start_with?("postg")
+
+        search_path = search_path_for(path)
+        created = content.scan(/^\s*create_schema\s+"([^"]+)"/).flatten
+        return unless (created - search_path).empty?
+
+        { path: relative_dump_path(path), schemas: created | (search_path & %w[public]) }
       end
 
       def static_tables(declared_tables)

@@ -88,6 +88,9 @@ module RailsAiContext
                 )
               end
 
+              why = Payload.missing_qualified_table(schema, table)
+              return text_response(why) if why
+
               recovery = "Call rails_get_schema(detail:\"summary\") to see all tables"
               # Rails' own schema.rb dumper writes no view; only a gem such as scenic adds them.
               if [ schema[:adapter], schema[:adapter_source] ].include?("static_parse")

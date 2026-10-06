@@ -132,6 +132,16 @@ module RailsAiContext
       qualified_tables(schema).select { |_, table, _| table.to_s == name.to_s }
     end
 
+    # Why a schema-qualified table is missing from a schema.rb holding only the search path schemas, or nil.
+    def missing_qualified_table(schema, name)
+      dump = schema[:search_path_dump] if schema.is_a?(Hash)
+      table_schema, dot, = name.to_s.rpartition(".")
+      return nil unless dump.is_a?(Hash) && !dot.empty? && !Array(dump[:schemas]).include?(table_schema)
+
+      "Table '#{name}' is not in #{dump[:path]}: Rails dumps only the schemas on the search path there by default. " \
+        "structure.sql, or `config.active_record.dump_schemas = :all`, includes it."
+    end
+
     # [database, name, data] for each table outside the search path, nil database for the primary's.
     def qualified_tables(schema)
       return [] unless schema.is_a?(Hash)

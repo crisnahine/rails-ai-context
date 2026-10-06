@@ -42,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it out of the list in both dump formats, and both find it by its
   schema-qualified name: `schema --table audit.events`, and the columns of a
   model whose `table_name` is `audit.events`. Before, no tier found it there.
+  When a schema.rb holds only the search path schemas, which is what Rails
+  writes by default, the static tier says the table is not in db/schema.rb
+  and that structure.sql or `config.active_record.dump_schemas = :all`
+  includes it, in place of a bare "not found".
 - **`"$user"` on the search path reads the user from a database URL too.** A
   `DATABASE_URL`, `<NAME>_DATABASE_URL` or the entry's `url:` now supplies the
   username, and a `schema_search_path` in its query, over the entry's own

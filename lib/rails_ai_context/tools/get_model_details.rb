@@ -212,6 +212,8 @@ module RailsAiContext
               end
             end
             lines << ignored_columns_line(ignored) if ignored.any?
+          elsif (why = Payload.missing_qualified_table(Payload.section(cached_context, :schema), data[:table_name]))
+            lines << "" << why
           end
         end
 

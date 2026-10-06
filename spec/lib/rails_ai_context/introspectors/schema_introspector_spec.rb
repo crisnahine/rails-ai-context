@@ -2202,6 +2202,50 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         it_behaves_like "a table outside the search path"
       end
 
+      context "from a schema.rb holding only the search path schemas" do
+        let(:schema) do
+          schema_of("schema.rb", <<~RUBY)
+            ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+              create_schema "app"
+
+              create_table "public.notes", force: :cascade do |t|
+              end
+            end
+          RUBY
+        end
+
+        it "says why a table in another schema is missing, for the schema tool and a model" do
+          table, model = answers(schema)
+          why = "not in db/schema.rb: Rails dumps only the schemas on the search path there by default"
+
+          expect(table).to include("Table 'audit.events' is #{why}")
+          expect(table).to include("config.active_record.dump_schemas = :all")
+          expect(model).to include(why)
+        end
+      end
+
+      context "from a schema.rb that dumps other schemas too" do
+        let(:schema) do
+          schema_of("schema.rb", <<~RUBY)
+            ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+              create_schema "app"
+              create_schema "billing"
+
+              create_table "public.notes", force: :cascade do |t|
+              end
+            end
+          RUBY
+        end
+
+        it "says only that the table is not found" do
+          table, model = answers(schema)
+
+          expect(table).to include("Table 'audit.events' not found")
+          expect(table).not_to include("dump_schemas")
+          expect(model).not_to include("dump_schemas")
+        end
+      end
+
       context "from schema.rb" do
         let(:schema) do
           schema_of("schema.rb", <<~RUBY)
