@@ -79,6 +79,25 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ScopesListener do
     expect(results.first[:body]).to eq("where('availability = ' 'COALESCE(x, 0)')")
   end
 
+  it "folds the lines after a multibyte literal" do
+    results = parse_and_dispatch("scope :a, -> {\n  where(n: \"\u00e9\")\n    .order(:y)\n}")
+
+    expect(results.first[:body]).to eq("where(n: \"\u00e9\").order(:y)")
+    expect(results.first[:body].encoding).to eq(Encoding::UTF_8)
+  end
+
+  it "joins statements after a multibyte literal with a semicolon" do
+    results = parse_and_dispatch("scope :b, -> {\n  where(a: \"\u00e9\")\n  where(b: 1).limit(2)\n}")
+
+    expect(results.first[:body]).to eq("where(a: \"\u00e9\"); where(b: 1).limit(2)")
+  end
+
+  it "joins a backslash continuation after a multibyte literal" do
+    results = parse_and_dispatch("scope :c, -> {\n  where('\u00e9 = ' \\\n        'x').order(:id)\n}")
+
+    expect(results.first[:body]).to eq("where('\u00e9 = ' 'x').order(:id)")
+  end
+
   it "leaves no space in front of a leading-dot continuation" do
     results = parse_and_dispatch("scope :ordered, lambda { where(y: 2)\n  .order(:id) }")
 
