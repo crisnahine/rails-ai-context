@@ -34,8 +34,10 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, Set.new, label: "HelperNames")
       end
 
-      # `helper :all` mixes in modules; a class kept under app/helpers reaches no view.
+      # `helper :all` mixes in the modules of `**/*_helper.rb` files only; a class there reaches no view.
       def view_helper?(source, path, dir)
+        return false unless path.end_with?("_helper.rb")
+
         path_name = path.delete_prefix("#{dir}/").delete_prefix("concerns/").delete_suffix(".rb").camelize
         !DeclaredConstant.declared_names(source).include?(DeclaredConstant.named(source, path_name))
       end
