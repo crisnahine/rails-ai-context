@@ -37,6 +37,24 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
       end
     end
 
+    it "keeps a gem macro a class nested in the file defines a class method of the same name for" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        source = <<~RUBY
+          class WidgetsController < ApplicationController
+            class Exporter
+              def self.load_and_authorize_resource; end
+            end
+            load_and_authorize_resource
+          end
+        RUBY
+
+        filters, = described_class.with_concerns(source, root: dir, within: "WidgetsController")
+
+        expect(filters.map { |f| f[:name] }).to eq(%w[load_and_authorize_resource])
+      end
+    end
+
     # actionpack and actionview declare their callbacks in class macros (allow_browser), never in an included block.
     it "leaves out a Rails framework module, whose include adds no filter" do
       Dir.mktmpdir do |dir|

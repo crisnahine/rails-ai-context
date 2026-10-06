@@ -242,7 +242,10 @@ module RailsAiContext
         found = {}
         add = lambda do |text, owner, modules, label|
           tree = AstCache.parse_string(text)&.value
-          ConcernMacros::SingletonLookup.own_defs(tree ? AstWalk.each(tree).to_a : [], owner).each { |definition| found[definition.name] ||= definition }
+          bodies = tree ? DeclaredConstant.class_bodies(tree, label) : []
+          # A file whose class is spelled other than its constant still defines its methods somewhere in it.
+          scope = bodies.empty? ? Array(tree && AstWalk.each(tree).to_a) : bodies.flat_map { |body| AstWalk.scope(body) }
+          ConcernMacros::SingletonLookup.own_defs(scope, owner).each { |definition| found[definition.name] ||= definition }
           given = ConcernMacros.collect(root, modules, keys: [ :filters ], prefer: "controller", within: label, cache: cache, listeners: LISTENERS).mixins
           Array(given).reverse_each { |_, _, defs, _| defs.each_value { |list| list.each { |definition| found[definition.name] ||= definition } } }
         end
