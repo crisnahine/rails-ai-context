@@ -1094,6 +1094,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
         get "/str", to: "photos#str", format: "json"
         scope format: true do
           get "/inner", to: "photos#inner"
+          get "/f", to: "photos#f", format: false
         end
         get "/plain", to: "photos#plain"
       end
@@ -1105,6 +1106,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
       "/re" => "{format: /json|xml/}",
       "/str" => '{format: /json/}',
       "/inner.:format" => "{format: /.+/}",
+      "/f" => nil,
       "/plain" => nil
     )
   end

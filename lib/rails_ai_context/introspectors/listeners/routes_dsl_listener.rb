@@ -281,7 +281,7 @@ module RailsAiContext
           defaults = (own[:url] || {}).merge(scopes.map { |c| c[:url].merge(c[:defaults]) }.reduce({}, :merge)).merge(own[:defaults] || {})
           defaults = defaults.merge(scopes.map { |c| c[:options] }.reduce({}, :merge)).merge(own[:options] || {})
           params = path.scan(/[:*](\w+)/).flatten << "format"
-          segments = scopes.map { |c| c[:segment] }.reduce({}, :merge).merge(own[:segment] || {}).select { |key, _| params.include?(key) }
+          segments = scopes.map { |c| c[:segment] }.reduce({}, :merge).merge(own[:segment] || {}).select { |key, value| value && params.include?(key) }
           all = defaults.merge(segments)
           "{#{all.map { |key, value| "#{key}: #{value}" }.join(', ')}}" if all.any?
         end
@@ -332,10 +332,11 @@ module RailsAiContext
           end
         end
 
-        # Mapping#normalize_format: `true` requires a format, a string also defaults it.
+        # Mapping#normalize_format: `true` requires a format, a string also defaults it, `false` clears a scope's.
         def read_format(value, found)
           case value
           when Prism::TrueNode then found[:segment]["format"] = "/.+/"
+          when Prism::FalseNode then found[:segment]["format"] = nil
           when Prism::RegularExpressionNode then found[:segment]["format"] = constraint_value(value)
           when Prism::StringNode
             found[:defaults]["format"] = constraint_value(value)
