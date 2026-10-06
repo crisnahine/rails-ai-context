@@ -96,9 +96,21 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
         expect(text).to include("config/queue.yml workers poll 2 queues: default, mailers. No worker polls maintenance (CleanupJob).")
       end
 
-      it "never names the ERB marker as a queue" do
+      it "says a queue list ERB computes is unknown and flags no queue" do
         text = answer("workers:\n  - queues: <%= ENV.fetch(\"QUEUES\", \"default\") %>\n")
+
+        expect(text).to include("config/queue.yml sets worker queues with ERB, so which queues they poll is not known from source.")
         expect(text).not_to include("RAC_ERB_OUTPUT")
+        expect(text).not_to include("No worker polls")
+        expect(text).not_to include("poll 0 queues")
+        expect(answer("workers:\n  - queues: <%= ENV[\"Q\"] %>\n", job: "CleanupJob")).to include("**Queue:** `maintenance`\n")
+      end
+
+      it "reads an empty queue list as every queue, as Solid Queue does" do
+        text = answer("test:\n  workers:\n    - queues:\n    - queues: []\n")
+
+        expect(text).to include("config/queue.yml workers poll 1 queue: *.")
+        expect(text).not_to include("No worker polls")
       end
 
       it "says so on the page of a job whose queue no worker polls" do

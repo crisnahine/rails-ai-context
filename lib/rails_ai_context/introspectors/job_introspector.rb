@@ -683,19 +683,22 @@ module RailsAiContext
       SOLID_QUEUE_FILE = "config/queue.yml"
 
       # The queues Solid Queue's workers poll, from this environment's section or the
-      # whole file; a worker that names none polls every queue.
+      # whole file; a worker that names none polls every queue, as QueueSelector reads it.
       def extract_solid_queue_config
         return nil unless solid_queue_adapter?
 
-        data = ConfigYaml.read(app.root, SOLID_QUEUE_FILE, label: "Solid Queue")
+        data = ConfigYaml.read(app.root, SOLID_QUEUE_FILE, label: "Solid Queue", marker: ConfigYaml::ERB_OUTPUT)
         return nil unless data.is_a?(Hash)
 
         section = data[RailsAiContext.environment_name].is_a?(Hash) ? data[RailsAiContext.environment_name] : data
         workers = Array(section["workers"]).select { |worker| worker.is_a?(Hash) }
         return nil if workers.empty?
 
-        queues = workers.flat_map { |worker| worker.key?("queues") ? Array(worker["queues"]).map { |queue| queue.to_s.strip } : [ "*" ] }
-        { file: SOLID_QUEUE_FILE, queues: queues.uniq }
+        queues = workers.flat_map { |worker| Array(worker["queues"]).map { |queue| queue.to_s.strip }.presence || [ "*" ] }
+        computed, named = queues.uniq.partition { |queue| ConfigYaml.marked?(queue) }
+        config = { file: SOLID_QUEUE_FILE, queues: named }
+        config[:queues_computed] = true if computed.any?
+        config
       end
 
       # Read from source in both tiers: production's adapter is the one queue.yml is for,

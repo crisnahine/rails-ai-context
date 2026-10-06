@@ -199,6 +199,8 @@ module RailsAiContext
         config = data[:solid_queue_config]
         return nil unless config.is_a?(Hash)
 
+        return "#{config[:file]} sets worker queues with ERB, so which queues they poll is not known from source." if config[:queues_computed]
+
         queues = Array(config[:queues])
         line = "#{config[:file]} workers poll #{count_phrase(queues.size, "queue")}: #{queues.join(', ')}."
         missed = unpolled_queues(data, jobs).group_by { |job| job[:queue] }
@@ -210,7 +212,7 @@ module RailsAiContext
       # A plain queue name no worker pattern matches: "*" polls all, "name*" a prefix.
       private_class_method def self.unpolled_queues(data, jobs)
         config = data[:solid_queue_config]
-        return [] unless config.is_a?(Hash)
+        return [] if !config.is_a?(Hash) || config[:queues_computed]
 
         patterns = Array(config[:queues])
         jobs.select do |job|
