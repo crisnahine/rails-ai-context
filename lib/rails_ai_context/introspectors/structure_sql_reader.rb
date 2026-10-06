@@ -144,7 +144,7 @@ module RailsAiContext
       # Where a statement with no semicolon ends: the next one starting a line.
       NEXT_STATEMENT = /\n\s*(?:CREATE|ALTER|COMMENT|INSERT|DROP|SET|SELECT)\b/i
       # A view's body runs on to a SELECT line, so only another statement's keyword ends it.
-      NEXT_DDL = /\n\s*(?:CREATE|ALTER|COMMENT|INSERT|DROP|SET)\b/i
+      NEXT_DDL = /\n\s*(?:CREATE\s+(?:(?:OR\s+REPLACE|UNIQUE|TEMP(?:ORARY)?|MATERIALIZED|VIRTUAL)\s+)*(?:TABLE|VIEW|INDEX|TRIGGER|SEQUENCE|TYPE|FUNCTION|EXTENSION|SCHEMA)\b|ALTER\s+(?:TABLE|SEQUENCE|TYPE|VIEW|INDEX)\b|COMMENT\s+ON\b|INSERT\s+INTO\b|DROP\s+(?:TABLE|VIEW|INDEX|TRIGGER)\b|SET\s+[\w.]+\s*(?:=|TO\b))/i
 
       # Each CREATE TABLE's name, body and INHERITS list. The body ends at the
       # parenthesis that closes it, whatever the line layout or terminator: SQLite
