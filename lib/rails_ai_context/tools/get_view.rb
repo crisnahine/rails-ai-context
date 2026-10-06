@@ -232,6 +232,7 @@ module RailsAiContext
               count = views_in_group(templates, ctrl).size + views_in_group(partials, ctrl).size
               lines << "- `controller:\"#{ctrl}\"` (#{count_phrase(count, "file")})"
             end
+            lines << "- `controller:\"layouts\"` (#{count_phrase(layouts.size, "layout")})" if layouts.any?
             lines << "" << "_Or use `path:\"controller/action.html.erb\"` for a specific file._"
             text_response(lines.join("\n"))
           end

@@ -362,7 +362,7 @@ RSpec.describe RailsAiContext::Tools::GetView do
         # The old grouping offered the template's own filename as a directory,
         # which matched nothing when passed back.
         expect(text).not_to include("controller:\"notice.text.erb\"")
-        expect(text.scan(/controller:"/).size).to eq(1)
+        expect(text.scan(/controller:"(?!layouts")/).size).to eq(1)
         expect(text).to include("`path:")
       end
     end
@@ -469,6 +469,12 @@ RSpec.describe RailsAiContext::Tools::GetView do
 
         expect(text).not_to include("does not exist")
         expect(text).to include("# Views (0 templates, 0 partials, 2 layouts)")
+      end
+
+      it "points the full listing at the layouts" do
+        text = described_class.call(detail: "full").content.first[:text]
+
+        expect(text).to include("- `controller:\"layouts\"` (2 layouts)")
       end
 
       it "says a controller filter miss is a miss, not a missing directory" do
