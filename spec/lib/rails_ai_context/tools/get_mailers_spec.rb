@@ -156,6 +156,23 @@ RSpec.describe RailsAiContext::Tools::GetMailers do
       expect(text).to include("**Observers:** DeliveryLogObserver (`config/initializers/mail.rb`)")
     end
 
+    it "lists only the class-body declarations, not calls made inside initialize" do
+      write("app/mailers/init_mailer.rb", <<~RUBY)
+        class InitMailer < ApplicationMailer
+          default from: "a@b.c"
+          def initialize(*)
+            super
+            layout "special"
+            default reply_to: "x@y.z"
+          end
+          def welcome = mail
+        end
+      RUBY
+      text = static_text(mailer: "InitMailer")
+      expect(text).to include("- **Declares:** `default from: \"a@b.c\"`")
+      expect(text).not_to include("special", "x@y.z")
+    end
+
     it "gives no deliver_later queue to an app with no mailers" do
       FileUtils.rm_rf(File.join(tmpdir, "app/mailers"))
       expect(static_text).not_to include("deliver_later queue")
