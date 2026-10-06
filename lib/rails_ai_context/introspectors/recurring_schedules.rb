@@ -12,15 +12,9 @@ module RailsAiContext
     module RecurringSchedules
       module_function
 
-      # `assignments` maps a config file to its ConfigAssignmentListener hits, so a caller
-      # that walks the file for other readers too hands over that one walk.
-      def read(root, assignments = ->(file) { config_assignments(root, file) })
+      # `assignments` returns a config file's ConfigAssignmentListener hits from the caller's own walk.
+      def read(root, assignments)
         solid_queue(root) + sidekiq_cron(root) + sidekiq_scheduler(root) + good_job(root, assignments) + whenever(root)
-      end
-
-      def config_assignments(root, file)
-        source = read_file(root, file)
-        source ? Array(SourceIntrospector.walk_source(source, { config: Listeners::ConfigAssignmentListener })[:config]) : []
       end
 
       # Solid Queue takes the section named for the environment, else the whole file,
