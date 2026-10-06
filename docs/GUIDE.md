@@ -1625,7 +1625,7 @@ Requires the `listen` gem:
 gem "listen", group: :development
 ```
 
-Watches for changes in: `app/`, `config/`, `db/`, `lib/`, `rakelib/`, and regenerates only the files that changed (diff-aware, skips unchanged files).
+Watches for changes in: `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `spec/`, and regenerates only the files that changed (diff-aware, skips unchanged files).
 
 ---
 
