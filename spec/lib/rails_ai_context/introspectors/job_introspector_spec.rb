@@ -318,11 +318,11 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       end
     end
 
-    it "reads a base's class body once however many jobs inherit it" do
+    it "reads a base's class body from the candidate walk, with no second traversal" do
       base = "class ApplicationJob < ActiveJob::Base\n  queue_with_priority 5\n  before_perform :log\nend\n"
       traversals = 0
       allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:calls_outside_methods).and_wrap_original do |original, root, *rest, **opts|
-        traversals += 1 if rest.empty? && root.slice.strip == base.strip
+        traversals += 1
         original.call(root, *rest, **opts)
       end
       jobs = static_result do |dir|
@@ -332,7 +332,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       end[:jobs]
 
       expect(jobs.map { |job| job[:priority] }.uniq).to eq([ 5 ])
-      expect(traversals).to eq(1)
+      expect(traversals).to eq(0)
     end
 
     # The worker's calls came from a second walk of a tree the candidate walk

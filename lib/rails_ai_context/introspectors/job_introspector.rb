@@ -909,14 +909,18 @@ module RailsAiContext
 
       # A mailer's own declarations as written, the template formats of each action, and
       # its preview class: read from source in both tiers.
-      def mailer_extras(name, file, source = nil, macros = nil)
+      def mailer_extras(name, file, source = nil, macros = nil, methods = nil)
         source ||= file && SafeFile.read(File.join(app.root.to_s, file))
         extras = {}
         if source
-          macros ||= SourceIntrospector.walk_source(source, {
-            macros: -> { Listeners::GenericMacroListener.new(ACTION_CALLBACKS + MAILER_DECLARATIONS) }
-          })[:macros]
-          declares = class_body(Array(macros), source).select { |m| (MAILER_DECLARATIONS + ACTION_CALLBACKS).include?(m[:macro]) }
+          unless macros
+            walked = SourceIntrospector.walk_source(source, {
+              macros: -> { Listeners::GenericMacroListener.new(ACTION_CALLBACKS + MAILER_DECLARATIONS) },
+              methods: Listeners::MethodsListener
+            })
+            macros, methods = walked.values_at(:macros, :methods)
+          end
+          declares = SourceIntrospector.outside_defs(macros, methods).select { |m| (MAILER_DECLARATIONS + ACTION_CALLBACKS).include?(m[:macro]) }
                                                      .sort_by { |m| m[:offset] }.map { |m| written(source, m) }
           extras[:declares] = declares if declares.any?
         end
@@ -1066,7 +1070,7 @@ module RailsAiContext
       MAILER_DECLARATIONS = %i[layout helper helper_method include default default_url_options=].freeze
 
       def mailer_base_record(name, file, source, macros, methods, heirs)
-        declares = class_body(macros, source).select { |m| (MAILER_DECLARATIONS + ACTION_CALLBACKS).include?(m[:macro]) }
+        declares = SourceIntrospector.outside_defs(macros, methods).select { |m| (MAILER_DECLARATIONS + ACTION_CALLBACKS).include?(m[:macro]) }
           .sort_by { |m| m[:offset] }.map { |m| written(source, m) }
         defined = ActionResolver.own_methods(methods, name).select { |m| m[:scope] == :instance }.map { |m| m[:name] }.uniq
         { name: name, file: file, declares: declares.presence, methods: defined.presence,
@@ -1087,19 +1091,11 @@ module RailsAiContext
         text.gsub(/\s+/, " ").gsub(/\(\s+/, "(").sub(/,?\s*\)\z/, ")").strip
       end
 
-      # Every job below a base reads its body, so each candidate's is traversed once.
-      def candidate_body(name)
-        @candidate_bodies ||= {}
-        @candidate_bodies[name] ||= class_body(job_candidates[name].ast[:macros], job_candidates[name].source)
-      end
-
       # A declaration is a call in the class body; the same name inside a
       # method - `default[:from]` in a `class << self` reader - is a use.
-      def class_body(macros, source)
-        root = AstCache.parse_string(source)&.value or return macros
-        outside = SourceIntrospector.calls_outside_methods(root, self_receiver: true).values.flatten
-                                    .map { |call| call.location.start_offset }
-        macros.select { |m| outside.include?(m[:offset]) }
+      def candidate_body(name)
+        @candidate_bodies ||= {}
+        @candidate_bodies[name] ||= SourceIntrospector.outside_defs(job_candidates[name].ast[:macros], job_candidates[name].ast[:methods])
       end
 
       def inherits_from?(name, base, parent_of, seen = [])
@@ -1169,7 +1165,7 @@ module RailsAiContext
         )
 
         entry = { name: klass.name, file: klass.file, actions: actions,
-                  confidence: RailsAiContext::Confidence::STATIC }.merge(mailer_extras(klass.name, klass.file, klass.source, klass.macros))
+                  confidence: RailsAiContext::Confidence::STATIC }.merge(mailer_extras(klass.name, klass.file, klass.source, klass.macros, klass.methods))
         return entry if actions.any?
 
         class_actions = ActionResolver.own_methods(klass.methods, klass.name)
