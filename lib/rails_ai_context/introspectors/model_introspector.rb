@@ -1735,34 +1735,27 @@ module RailsAiContext
           [ key, entries.flat_map { |entry| place(entry, rank, calls) }.then { |found| key == :callbacks ? found : found.map { |entry| entry.except(*CHAIN_KEYS) }.uniq } ]
         end
         own = without_expanded_calls(own, Array(collected.delete(:expanded)) + Array(expanded))
-        callbacks = Array(own[:callbacks]).flat_map do |cb|
-          method = own_method(own, cb[:location])
-          next [ cb.merge(rank: rank) ] unless method
-          next [] unless method[:scope] == :class
-
-          calls.placed(cb, [ rank, method[:location] ], [ cb[:location] ])
-        end
+        bodies = method_bodies(own)
+        callbacks = Array(own[:callbacks]).flat_map { |cb| placed_in_method(cb, bodies, rank, calls) || [ cb.merge(rank: rank) ] }
         own = own.merge(callbacks: callbacks + Array(collected.delete(:callbacks)))
-        own = own.merge(METHOD_PLACED_KEYS.to_h { |key| [ key, Array(own[key]).select { |entry| runs?(own, entry, rank, calls) } ] }.compact)
+        own = own.merge(METHOD_PLACED_KEYS.to_h { |key| [ key, Array(own[key]).select { |entry| (placed_in_method(entry, bodies, rank, calls) || [ entry ]).any? } ] })
         [ collected.empty? ? own : merge_inherited(own, collected), walk.unread, walk.hidden ]
       end
 
-      # A declaration in a method body holds only where a call runs that method.
-      def runs?(own, entry, rank, calls)
+      # Nil outside a method body; else where the calls running that method place the
+      # declaration, none for an instance method.
+      def placed_in_method(entry, bodies, rank, calls)
         line = entry[:location] if entry.is_a?(Hash)
-        method = line && own_method(own, line)
+        method = line && ConcernMacros.enclosing(bodies, line)&.last
         # A `def self.default_scope` is the declaration itself, not a body holding one.
-        return true unless method && !(method[:name] == entry[:name] && method[:location] == line)
+        return nil if method.nil? || (method[:name] == entry[:name] && method[:location] == line)
+        return [] unless method[:scope] == :class
 
-        method[:scope] == :class && calls.placed(entry, [ rank, method[:location] ], [ line ]).any?
+        calls.placed(entry, [ rank, method[:location] ], [ line ])
       end
 
       def place(entry, rank, calls)
         entry.is_a?(Hash) ? calls.mixed_in(entry, rank) : [ entry ]
-      end
-
-      def own_method(own, line)
-        ConcernMacros.enclosing(method_bodies(own), line)&.last
       end
 
       def method_bodies(own)
