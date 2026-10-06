@@ -736,6 +736,7 @@ module RailsAiContext
         current_start = nil
 
         source_lines.each_with_index do |line, idx|
+          # Anything the listeners cannot scope: a section is a run of lines, which no node carries.
           label = case line
           when /\A\s*(?:[a-z_]+\s+)*def\s/ then { class: "class methods", instance: "instance methods" }[def_scopes[idx + 1]]
           when /\A\s*class\s+(?!<<)/, /\A\s*[A-Z][\w:]*\s*=\s*Class\.new\b/ then "class definition"
