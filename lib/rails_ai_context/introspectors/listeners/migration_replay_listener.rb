@@ -44,10 +44,12 @@ module RailsAiContext
           elsif %i[remove_columns add_timestamps rename_index add_check_constraint remove_check_constraint].include?(node.name) && node.receiver.nil?
             @results << top_level(node, args)
           elsif node.name == :execute && node.receiver.nil?
-            statements = sql_statements(args.first)
+            sql_node = args.first
+            sql_node = sql_node.receiver if sql_node.is_a?(Prism::CallNode) && sql_node.name == :squish && sql_node.arguments.nil?
+            statements = sql_statements(sql_node)
             # SQL built at run time that creates or drops a table is counted as not replayed.
             if statements.nil?
-              literal = args.first.respond_to?(:parts) ? args.first.parts.grep(Prism::StringNode).map(&:unescaped).join : ""
+              literal = sql_node.respond_to?(:parts) ? sql_node.parts.grep(Prism::StringNode).map(&:unescaped).join : ""
               @results << { kind: :not_replayed, location: node.location.start_line } if literal.match?(/\b(?:CREATE|DROP)\s+TABLE\b/i)
               return
             end
@@ -70,7 +72,6 @@ module RailsAiContext
 
         # A literal SQL string's statements, which drop or create tables here; nil for a string built at run time.
         def sql_statements(node)
-          node = node.receiver if node.is_a?(Prism::CallNode) && node.name == :squish && node.arguments.nil?
           sql = case node
           when Prism::StringNode then node.unescaped
           # A squiggly heredoc over several lines parses as one string per line.

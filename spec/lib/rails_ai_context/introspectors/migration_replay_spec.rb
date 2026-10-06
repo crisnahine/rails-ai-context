@@ -2062,7 +2062,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(tables["heredoc_things"][:columns].map { |c| c[:name] }).to eq(%w[id label])
     end
 
-    it "counts a CREATE TABLE built at run time as not replayed" do
+    it "counts a CREATE TABLE built at run time as not replayed, squished or not" do
       Dir.mktmpdir do |dir|
         File.write(File.join(dir, "20240101000000_raw.rb"), <<~'RUBY')
           class Raw < ActiveRecord::Migration[8.1]
@@ -2075,7 +2075,18 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
             end
           end
         RUBY
-        expect(described_class.replayed(dir, pk_type: "bigint").counts.helper_calls).to eq(1)
+        File.write(File.join(dir, "20240101000001_squished.rb"), <<~'RUBY')
+          class Squished < ActiveRecord::Migration[8.1]
+            def up
+              execute <<~SQL.squish
+                CREATE TABLE #{name} (
+                  id integer primary key
+                )
+              SQL
+            end
+          end
+        RUBY
+        expect(described_class.replayed(dir, pk_type: "bigint").counts.helper_calls).to eq(2)
       end
     end
 
