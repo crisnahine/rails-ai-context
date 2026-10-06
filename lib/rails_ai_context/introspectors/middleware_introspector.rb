@@ -140,7 +140,8 @@ module RailsAiContext
       # puts a path prefix and its own `use` calls in front of it.
       def self.rackup(root)
         path = File.join(root, "config.ru")
-        return [] unless File.file?(path)
+        # Most config.ru files only `run` the app, and loading the parser to learn that costs more than the read.
+        return [] unless File.file?(path) && SafeFile.read(path)&.match?(/\b(?:use|map)\b/)
 
         calls = SourceIntrospector.walk(path, { calls: -> { Listeners::ConditionalMacroListener.new(:use, :map, :run) } })[:calls]
         inside = calls.group_by { |call| call[:parent_offset] }

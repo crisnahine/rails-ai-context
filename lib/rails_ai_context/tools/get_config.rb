@@ -19,7 +19,6 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(server_context: nil)
-        # config.ru is read from source, so the static tier still shows it under the refusal.
         if static_refusal_for(:config) && (rackup = rackup_lines).any?
           return text_response(([ unavailable_text ] + rackup).join("\n"))
         end
@@ -126,8 +125,13 @@ module RailsAiContext
         lines
       end
 
+      # The static refusal reads config.ru alone rather than building every section.
       private_class_method def self.rackup_lines
-        calls = Array(Payload.section(cached_context, :middleware)&.dig(:rackup))
+        calls = if RailsAiContext.static_tier?
+          Introspectors::MiddlewareIntrospector.rackup(rails_app.root.to_s)
+        else
+          Array(Payload.section(cached_context, :middleware)&.dig(:rackup))
+        end
         return [] if calls.empty?
 
         lines = [ "", "## config.ru (runs before the Rails middleware stack)" ]

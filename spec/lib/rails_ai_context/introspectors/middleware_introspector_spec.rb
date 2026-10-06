@@ -496,6 +496,14 @@ RSpec.describe RailsAiContext::Introspectors::MiddlewareIntrospector do
       FileUtils.rm_f(application)
     end
 
+    it "does not parse a config.ru that only runs the app" do
+      File.write(rackup, "# This file is used by Rack-based servers.\nrun Rails.application\n")
+      allow(RailsAiContext::AstCache).to receive(:parse).and_call_original
+
+      expect(described_class.rackup(app.root.to_s)).to eq([])
+      expect(RailsAiContext::AstCache).not_to have_received(:parse).with(rackup)
+    end
+
     it "gives nothing for a config.ru Prism cannot make sense of" do
       File.write(rackup, "use (((\n\xFF\n")
 
