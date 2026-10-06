@@ -115,7 +115,7 @@ module RailsAiContext
         when "add_index"
           lines.concat(generate_add_index(table, column, options))
         when "add_association"
-          lines.concat(generate_add_association(table, column, type, options))
+          lines.concat(generate_add_association(table, column, type, options, schema))
         when "change_type"
           lines.concat(generate_change_type(table, column, type, options))
         when "create_table"
@@ -293,7 +293,7 @@ module RailsAiContext
           lines
         end
 
-        def generate_add_association(table, column, type, options)
+        def generate_add_association(table, column, type, options, schema = nil)
           foreign_table = column || type
           return [ "**Error:** Specify the associated table in column param (e.g., column: 'users')" ] unless foreign_table
 
@@ -304,10 +304,20 @@ module RailsAiContext
             lines << ""
           end
 
+          to_table = foreign_table.singularize.pluralize
+          own = RailsAiContext::Payload.schema_databases(schema, table)
+          theirs = RailsAiContext::Payload.schema_databases(schema, to_table)
+          across = own.any? && theirs.any? && !own.intersect?(theirs)
+          if across
+            lines << "**Foreign key:** `#{to_table}` is in #{theirs.join(' and ')} and `#{table}` in #{own.join(' and ')}; " \
+                     "a foreign key cannot reach another database, so the reference below has none."
+            lines << ""
+          end
+
           lines << "```ruby"
           lines << "class Add#{foreign_table.camelize}To#{table.camelize} < ActiveRecord::Migration[#{rails_version}]"
           lines << "  def change"
-          lines << "    add_reference :#{table}, :#{foreign_table.singularize}, foreign_key: true"
+          lines << "    add_reference :#{table}, :#{foreign_table.singularize}#{", foreign_key: true" unless across}"
           lines << "  end"
           lines << "end"
           lines << "```"

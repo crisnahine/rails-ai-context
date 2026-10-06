@@ -11,10 +11,10 @@ module RailsAiContext
     # applied: the applied versions, a single newest version, or nil when
     # nothing is known. Unknown answers nil - an empty Array is the different
     # claim that nothing has been applied, and every file is then pending.
-    def for(migrate_dir:, applied: nil)
+    def for(migrate_dir:, applied: nil, root: nil)
       return nil if applied.nil?
 
-      files = migration_files(migrate_dir)
+      files = migration_files(migrate_dir, root: root)
       unapplied = if applied.is_a?(Array)
         known = applied.map(&:to_i)
         files.reject { |m| known.include?(m[:version].to_i) }
@@ -35,18 +35,18 @@ module RailsAiContext
     # database.yml entry names, else db/migrate or db/<name>_migrate. The
     # schema replay reads the same list.
     def migrate_dirs_for(root, dump_path = nil)
-      base = dump_path ? File.basename(dump_path.to_s).sub(/\.(rb|sql)\z/, "").sub(/_?(schema|structure)\z/, "") : ""
-      entry = RailsAiContext::DatabaseYml.entry(root, base.empty? ? "primary" : base)
+      name = Introspectors::SchemaDumpPath.database_name(root, dump_path)
+      entry = RailsAiContext::DatabaseYml.entry(root, name)
       Introspectors::MigrationReplay.configured_dirs(root, entry) ||
-        [ File.join(root.to_s, "db", base.empty? ? "migrate" : "#{base}_migrate") ]
+        [ File.join(root.to_s, "db", name == "primary" ? "migrate" : "#{name}_migrate") ]
     end
 
     # Every versioned migration file under the directory or directories. One file scan behind
     # both the pending derivation and the migrations listing, so the two
     # cannot disagree on which files count.
-    def migration_files(migrate_dir)
+    def migration_files(migrate_dir, root: nil)
       dirs = Array(migrate_dir).select { |dir| Dir.exist?(dir) }
-      Introspectors::MigrationReplay.migration_files(dirs).filter_map do |path|
+      Introspectors::MigrationReplay.migration_files(dirs, root: root).filter_map do |path|
         base = File.basename(path, ".rb")
         version = base[/\A\d+/] or next
         # The class name, so a static entry names the migration the way the

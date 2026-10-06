@@ -32,7 +32,7 @@ module RailsAiContext
       # The same file scan the pending derivation runs, with each file's
       # actions read on top.
       def all_migrations
-        @all_migrations ||= RailsAiContext::PendingMigrations.migration_files(migrate_dir).map do |file|
+        @all_migrations ||= RailsAiContext::PendingMigrations.migration_files(migrate_dir, root: root).map do |file|
           content = RailsAiContext::SafeFile.read(file[:path])
 
           {
@@ -55,7 +55,7 @@ module RailsAiContext
       # (CI, static analysis, no db:create yet).
       def pending_migrations
         RailsAiContext::PendingMigrations.live(migrate_dir) ||
-          RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: applied_versions)
+          RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: applied_versions, root: root)
       end
 
       # structure.sql records the whole applied set, which catches an

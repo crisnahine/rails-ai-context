@@ -73,6 +73,20 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
         expect(with_config(config) { |dir| described_class.explicit(source, "Principal", dir) }).to eq("op_users_v2")
       end
 
+      it "takes what the environment file and the initializers set after config/application.rb" do
+        result = with_config("class Application < Rails::Application\n  config.active_record.table_name_prefix = \"op_\"\nend\n") do |dir|
+          FileUtils.mkdir_p(File.join(dir, "config/initializers"))
+          FileUtils.mkdir_p(File.join(dir, "config/environments"))
+          File.write(File.join(dir, "config/environments/#{RailsAiContext.environment_name}.rb"),
+                     "Rails.application.configure do\n  config.active_record.table_name_suffix = \"_v1\"\nend\n")
+          File.write(File.join(dir, "config/initializers/ar.rb"), "ActiveRecord::Base.pluralize_table_names = false\n")
+          File.write(File.join(dir, "config/initializers/z.rb"), "Rails.application.config.active_record.table_name_suffix = \"_v2\"\n")
+          described_class.app_affixes(dir)
+        end
+
+        expect(result).to eq(table_name_prefix: "op_", table_name_suffix: "_v2", pluralize_table_names: false)
+      end
+
       it "takes a prefix the class declares itself" do
         own = "class Principal < ApplicationRecord\n  self.table_name_prefix = \"p_\"\n" \
               "  self.table_name = \"\#{table_name_prefix}users\"\nend\n"

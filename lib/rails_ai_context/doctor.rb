@@ -182,7 +182,7 @@ module RailsAiContext
     end
 
     def check_migrations
-      count = RailsAiContext::PendingMigrations.migration_files(RailsAiContext::PendingMigrations.migrate_dirs_for(app.root)).size
+      count = RailsAiContext::PendingMigrations.migration_files(RailsAiContext::PendingMigrations.migrate_dirs_for(app.root), root: app.root).size
       if count.positive?
         Check.new(name: "Migrations", status: :pass, message: count_phrase(count, "migration file"), fix: nil)
       else

@@ -269,7 +269,8 @@ module RailsAiContext
       def extract_foreign_keys(table)
         # PostgreSQL clones a key that references a partitioned table once per partition.
         connection.foreign_keys(table).reject { |fk| @partitions.to_a.include?(fk.to_table) }.map do |fk|
-          SchemaConventions.foreign_key_entry(fk.from_table, fk.to_table, fk.column, fk.primary_key, on_delete: fk.on_delete, on_update: fk.on_update)
+          SchemaConventions.foreign_key_entry(fk.from_table, fk.to_table, fk.column, fk.primary_key, on_delete: fk.on_delete, on_update: fk.on_update,
+                                                                                                    deferrable: fk.deferrable, validate: fk.validate?)
         end
       rescue => e
         # Some adapters don't support foreign_keys.
@@ -377,7 +378,7 @@ module RailsAiContext
       end
 
       def migration_files
-        @migration_files ||= MigrationReplay.migration_files(migrations_dirs)
+        @migration_files ||= MigrationReplay.migration_files(migrations_dirs, root: app.root)
       end
 
       # Fallback when no database answers: the dump file, then the migrations.
@@ -394,7 +395,7 @@ module RailsAiContext
 
       # The configured dump first (database.yml's schema_dump, schema_format), then the default files.
       def static_schema_sources
-        if (reason = RailsAiContext::AppKind.without_active_record(app.root))
+        if (reason = RailsAiContext::AppKind.without_active_record(app.root) || RailsAiContext::AppKind.sequel_schema(app.root))
           return { unavailable: "#{reason}; ActiveRecord schema introspection does not apply" }
         end
 
@@ -444,10 +445,21 @@ module RailsAiContext
       def read_secondary_database_dumps
         dumps = {}
         primary = dump_candidates.map(&:last)
-        Dir.glob(File.join(app.root.to_s, "db", "*_schema.rb")).sort.each do |path|
-          next if primary.include?(path)
+        secondaries = SchemaDumpPath.secondaries(app.root)
+        taken = primary + secondaries.values.map(&:last)
+        secondaries.each do |name, (format, path)|
+          next if primary.include?(path) || !File.exist?(path)
 
+          parsed = format == :ruby ? parse_schema_rb(path) : parse_structure_sql(path)
+          next if parsed[:tables].blank?
+
+          parsed[:note] = "Parsed from #{relative_dump_path(path)} (from committed dump, not a live connection)"
+          dumps[name] = parsed
+        end
+        Dir.glob(File.join(app.root.to_s, "db", "*_schema.rb")).sort.each do |path|
           name = File.basename(path, ".rb").sub(/_schema\z/, "")
+          next if dumps.key?(name) || taken.include?(path)
+
           parsed = parse_schema_rb(path)
           next if parsed[:tables].blank?
 
@@ -456,7 +468,7 @@ module RailsAiContext
         end
         Dir.glob(File.join(app.root.to_s, "db", "*_structure.sql")).sort.each do |path|
           name = File.basename(path, ".sql").sub(/_structure\z/, "")
-          next if dumps.key?(name) || primary.include?(path)
+          next if dumps.key?(name) || taken.include?(path)
 
           parsed = parse_structure_sql(path)
           next if parsed[:tables].blank?
@@ -482,9 +494,10 @@ module RailsAiContext
           next if tables.empty?
 
           tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
+          _, dump = SchemaDumpPath.secondaries(app.root)[name]
           dumps[name] = {
             adapter: "static_parse", tables: tables, total_tables: SchemaConventions.table_count(tables),
-            note: "Reconstructed from the migrations in #{dirs.map { |dir| relative_dump_path(dir) }.join(', ')} (#{connection_state}, no #{name}_schema.rb)"
+            note: "Reconstructed from the migrations in #{dirs.map { |dir| relative_dump_path(dir) }.join(', ')} (#{connection_state}, no #{dump ? relative_dump_path(dump) : "#{name}_schema.rb"})"
           }
         end
         dumps
@@ -568,7 +581,7 @@ module RailsAiContext
 
         schema.foreign_keys.each do |fk|
           tables[fk[:from]]&.dig(:foreign_keys)&.push(
-            SchemaConventions.foreign_key_entry(fk[:from], fk[:to], fk[:column], fk[:primary_key], on_delete: fk[:on_delete], on_update: fk[:on_update])
+            SchemaConventions.foreign_key_entry(fk[:from], fk[:to], fk[:column], fk[:primary_key], **fk.slice(*SchemaConventions::FOREIGN_KEY_OPTIONS))
           )
         end
 
@@ -598,7 +611,7 @@ module RailsAiContext
         # version recorded there is no answer, so the key stays absent.
         if version
           migrate_dir = migrate_dir_for_dump(path)
-          result[:pending_migrations] = RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: version)
+          result[:pending_migrations] = RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: version, root: app.root)
         end
         result
       end
@@ -629,7 +642,7 @@ module RailsAiContext
         if applied.any?
           result[:schema_version] = applied.map(&:to_i).max.to_s
           migrate_dir = migrate_dir_for_dump(path)
-          result[:pending_migrations] = RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: applied)
+          result[:pending_migrations] = RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: applied, root: app.root)
         end
         result
       end

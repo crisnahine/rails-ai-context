@@ -24,6 +24,31 @@ module RailsAiContext
         end
       end
 
+      # Each secondary database's dump by its database.yml name, as schema_dump_path names it:
+      # its schema_dump, else <name>_schema.rb or <name>_structure.sql in its format.
+      def secondaries(root)
+        root = root.to_s
+        RailsAiContext::RunCache.fetch([ :secondary_schema_dumps, root ]) do
+          config = RailsAiContext::DatabaseYml.env(root)
+          next {} unless config.is_a?(Hash) && config.size > 1 && config.values.all?(Hash)
+
+          primary = config.key?("primary") ? "primary" : config.keys.first
+          config.except(primary).each_with_object({}) do |(name, entry), found|
+            format = schema_format(root, entry)
+            dump = entry.key?("schema_dump") ? configured(root, entry, format) : [ format, File.join(root, "db", "#{name}_#{FILE_NAMES[format]}") ]
+            found[name] = dump if dump
+          end
+        end
+      end
+
+      # The database a dump belongs to: the secondary whose dump it is, else the one its file name says.
+      def database_name(root, dump_path)
+        return "primary" if dump_path.nil?
+
+        named = secondaries(root).find { |_, (_, path)| path == dump_path.to_s }&.first
+        named || File.basename(dump_path.to_s).sub(/\.(rb|sql)\z/, "").sub(/_?(schema|structure)\z/, "").then { |name| name.empty? ? "primary" : name }
+      end
+
       # The first candidate on disk, which the readers answer from.
       def present(root)
         candidates(root).find { |_, path| File.exist?(path) }

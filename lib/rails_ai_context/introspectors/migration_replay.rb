@@ -27,7 +27,7 @@ module RailsAiContext
         run = new_run(dirs, pk_type: pk_type, root: root)
         tables = {}
         # Rails orders every migrations path by version, not one directory at a time.
-        migration_files(dirs).each { |path| replay_file(path, tables, run) }
+        migration_files(dirs, root: run.root).each { |path| replay_file(path, tables, run) }
 
         tables.delete("ar_internal_metadata")
         tables.delete("schema_migrations")
@@ -68,10 +68,21 @@ module RailsAiContext
         end
       end
 
-      # Rails' own glob: versioned files at any depth, run in version order.
-      def migration_files(dirs)
-        Array(dirs).flat_map { |dir| Dir.glob(File.join(dir.to_s, "**", "[0-9]*_*.rb")) }
+      # Rails' own glob: versioned files at any depth, run in version order. With a root, a
+      # file whose real path leaves the app is not read, so every reader counts the same files.
+      def migration_files(dirs, root: nil)
+        files = Array(dirs).flat_map { |dir| Dir.glob(File.join(dir.to_s, "**", "[0-9]*_*.rb")) }
           .sort_by { |path| [ File.basename(path), path ] }
+        return files unless root
+
+        real_root = File.realpath(root.to_s)
+        files.select do |path|
+          SafePath.contained?(File.realpath(path), real_root)
+        rescue SystemCallError
+          false
+        end
+      rescue SystemCallError
+        []
       end
 
       # A migration may require from the app's db/ or the one holding its migrations path.
@@ -249,7 +260,7 @@ module RailsAiContext
 
       INVERSE = { create_table: :drop_table, add_column: :remove_column, add_index: :remove_index,
                   add_reference: :remove_reference, add_belongs_to: :remove_reference,
-                  add_foreign_key: :remove_foreign_key }.freeze
+                  add_foreign_key: :remove_foreign_key, add_check_constraint: :remove_check_constraint }.freeze
 
       # Migration#revert runs its block's statements inverted and last first.
       # CommandRecorder#revert flips reverting, so a revert inside one runs forward.

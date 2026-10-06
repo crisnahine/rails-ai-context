@@ -28,6 +28,8 @@ module RailsAiContext
       end
 
       def self.choose(root)
+        return from_tables({}, source: :none, path: nil) if RailsAiContext::AppKind.sequel_schema(root)
+
         candidates = SchemaDumpPath.candidates(root)
         candidates.each do |format, path|
           next unless File.exist?(path)
@@ -43,7 +45,7 @@ module RailsAiContext
         end
 
         migrate_dirs = MigrationReplay.migration_dirs(root)
-        if MigrationReplay.migration_files(migrate_dirs).any?
+        if MigrationReplay.migration_files(migrate_dirs, root: root).any?
           pk_type = SchemaConventions.implicit_pk_type(root)
           return from_tables(MigrationReplay.tables(migrate_dirs, pk_type: pk_type, root: root),
                              source: :migrations, path: migrate_dirs.first)
@@ -244,7 +246,7 @@ module RailsAiContext
           target = schema[:tables][event[:table]] || schema[:views][event[:table]]
           (target[:indexes] ||= []) << index_entry(event) if target
         when :foreign_key
-          schema[:foreign_keys] << event.slice(:from, :to, :column, :primary_key, :on_delete, :on_update)
+          schema[:foreign_keys] << event.slice(:from, :to, :column, :primary_key, *SchemaConventions::FOREIGN_KEY_OPTIONS)
         when :unique_constraint
           table = schema[:tables][current] if current
           (table[:unique_constraints] ||= []) << event.slice(:columns, :options) if table

@@ -39,10 +39,21 @@ module RailsAiContext
           keys = index_keys(group)
           next if keys.empty?
 
-          # The condition follows the key list, never inside it.
-          where = rest[(rest.index("(") + group.length + 2)..][/\bWHERE\s+(.+)\z/mi, 1]&.strip
+          # The method precedes the key list; INCLUDE, NULLS NOT DISTINCT and the condition follow it.
+          open = rest.index("(")
+          after = rest[(open + group.length + 2)..]
+          where = after[/\bWHERE\s+(.+)\z/mi, 1]&.strip
+          options = after.sub(/\bWHERE\b.*\z/mi, "")
+          include = options[/\A\s*INCLUDE\s*\(([^)]*)\)/i, 1]
+          detail = SchemaConventions.index_detail(keys, using: rest[0, open][/\bUSING\s+(\w+)/i, 1]&.downcase, include: include && index_keys(include),
+                                                        nulls_not_distinct: options.match?(/\bNULLS\s+NOT\s+DISTINCT\b/i), **key_options(group))
           target = all.dig(qualified_name(table), :table) || found_views[shown_name(qualified_name(table))]
-          (target[:indexes] ||= []) << { name: idx_name, columns: keys, unique: !!unique, where: where }.compact if target
+          (target[:indexes] ||= []) << { name: idx_name, columns: keys, unique: !!unique, where: where }.compact.merge(detail) if target
+        end
+
+        content.scan(/ALTER TABLE\s+(?:ONLY\s+)?#{QUALIFIED_NAME}\s+ADD CONSTRAINT\s+("[^"]+"|\w+)\s+UNIQUE\s*(?:NULLS\s+(?:NOT\s+)?DISTINCT\s*)?\(([^)]*)\)([^;]*)/m) do |table, name, cols, tail|
+          table = all.dig(qualified_name(table), :table) or next
+          (table[:unique_constraints] ||= []) << SchemaConventions.unique_constraint_entry(name.delete('"'), cols.scan(/\w+/), deferrable_mode(tail))
         end
 
         content.scan(/ALTER TABLE\s+(?:ONLY\s+)?#{QUALIFIED_NAME}\s+ADD CONSTRAINT[^;]*?PRIMARY KEY\s*\(([^)]*)\)/m) do |table, cols|
@@ -117,9 +128,17 @@ module RailsAiContext
       FK_ACTIONS = { "CASCADE" => "cascade", "SET NULL" => "nullify", "RESTRICT" => "restrict" }.freeze
 
       def foreign_key_actions(text)
-        { on_delete: :DELETE, on_update: :UPDATE }.to_h do |key, word|
+        actions = { on_delete: :DELETE, on_update: :UPDATE }.to_h do |key, word|
           [ key, FK_ACTIONS[text.to_s[/\bON\s+#{word}\s+(CASCADE|SET\s+NULL|RESTRICT)\b/i, 1]&.upcase&.squeeze(" ")] ]
-        end.compact
+        end
+        actions.merge(deferrable: deferrable_mode(text), validate: (false if text.to_s.match?(/\bNOT\s+VALID\b/i))).compact
+      end
+
+      # How Rails names a DEFERRABLE clause; nil for NOT DEFERRABLE or none.
+      def deferrable_mode(text)
+        return nil unless text.to_s.match?(/(?<!NOT )\bDEFERRABLE\b/i)
+
+        text.to_s.match?(/\bINITIALLY\s+DEFERRED\b/i) ? "deferred" : "immediate"
       end
 
       # Where a statement with no semicolon ends: the next one starting a line.
@@ -172,8 +191,9 @@ module RailsAiContext
       # The optional INHERITS list after a CREATE TABLE body.
       INHERITS = /(?:#{INHERITS_KEYWORD}\s*\(([^)]*)\))?/
       CREATE_TABLE = /CREATE TABLE\s+(?:IF NOT EXISTS\s+)?#{QUALIFIED_NAME}\s*(?=\()/i
-      # mysqldump wraps the statement in version comments and names an algorithm, definer and security first.
-      VIEW = /\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:ALGORITHM|DEFINER|SQL\s+SECURITY)\b[^;]*?\s)?(?:TEMP(?:ORARY)?\s+)?(MATERIALIZED\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?#{QUALIFIED_NAME}(?:\s*\([^)]*\))?\s+AS\s+(.*?)(?:\s+WITH\s+(?:NO\s+)?DATA)?\s*(?:\*\/)?\s*;/im
+      # mysqldump wraps the statement in version comments and names an algorithm, definer and security first;
+      # sqlite3 closes it with a /* name(columns) */ comment.
+      VIEW = /\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:ALGORITHM|DEFINER|SQL\s+SECURITY)\b[^;]*?\s)?(?:TEMP(?:ORARY)?\s+)?(MATERIALIZED\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?#{QUALIFIED_NAME}(?:\s*\([^)]*\))?\s+AS\s+(.*?)(?:\s+WITH\s+(?:NO\s+)?DATA)?(?:\s*\/\*\s*[\w"`]+\([^)]*\)\s*\*\/)?\s*(?:\*\/)?\s*;/im
       VIRTUAL_TABLE = /CREATE\s+VIRTUAL\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?#{QUALIFIED_NAME}\s+USING\s+(\w+)\s*(?:\(([^)]*)\))?/i
 
       # "schema.name" with quotes removed; an unqualified name is in public.
@@ -278,10 +298,14 @@ module RailsAiContext
             # which would clobber $~ before the hash literal reads it.
             kind = $1.to_s.strip.downcase
             idx_name = $2
-            keys = index_keys(first_paren_group($3))
-            # Rails names a MySQL fulltext or spatial index by type:.
+            rest = $3
+            group = first_paren_group(rest)
+            keys = index_keys(group)
+            # Rails names a MySQL fulltext or spatial index by type:, any other by its method.
+            typed = %w[fulltext spatial].include?(kind)
+            using = rest[(group.to_s.length + 2)..].to_s[/\bUSING\s+(\w+)/i, 1]&.downcase unless typed
             index = { name: idx_name, columns: keys, unique: kind == "unique" }
-            index[:type] = kind if %w[fulltext spatial].include?(kind)
+            index.merge!(SchemaConventions.index_detail(keys, type: (kind if typed), using: using, **key_options(group)))
             table[:indexes] << index if keys.any?
           end
         end
@@ -291,7 +315,24 @@ module RailsAiContext
 
       # A key that is a column, with any prefix length, operator class, sort
       # order or collation after it. Anything else is an expression.
-      COLUMN_KEY = /\A[`"]?(\w+)[`"]?(?:\s*\(\d+\))?(?:\s+(?:[\w.]+|"[^"]*"))*\z/
+      COLUMN_KEY = /\A[`"]?(\w+)[`"]?(?:\s*\((\d+)\))?((?:\s+(?:[\w.]+|"[^"]*"))*)\z/
+
+      # Each column key's prefix length, sort order and operator class, as the connection reads them.
+      def key_options(list)
+        options = { length: {}, order: {}, opclass: {} }
+        split_top_level(list.to_s).each do |key|
+          match = COLUMN_KEY.match(key.strip) or next
+          column, length, words = match[1], match[2], match[3].split
+          options[:length][column] = length.to_i if length
+          opclass = words.map { |word| word.split(".").last }.find { |word| word.match?(/\A\w+_ops(?:_\w+)?\z/) }
+          options[:opclass][column] = opclass if opclass
+          desc = "DESC" if words.any? { |word| word.casecmp?("DESC") }
+          nulls = match[3][/\bNULLS\s+(?:FIRST|LAST)\b/i]&.upcase&.squeeze(" ")
+          order = nulls ? [ desc, nulls ].compact.join(" ") : desc&.downcase
+          options[:order][column] = order if order
+        end
+        options
+      end
 
       # An index's keys, split on top-level commas: a column name, or an
       # expression as the dump spells it (COALESCE(a, '-1'::integer) is one key).

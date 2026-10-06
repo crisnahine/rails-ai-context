@@ -862,7 +862,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         allow(RailsAiContext::Introspectors::PgPartitions).to receive(:names).and_return([ "pa_p_events_2026" ])
         allow(connection).to receive(:foreign_keys).and_call_original
         allow(connection).to receive(:foreign_keys).with("pa_p_refs").and_return(
-          %w[pa_p_events pa_p_events_2026].map { |to| double(from_table: "pa_p_refs", to_table: to, column: "event_id", primary_key: "id", on_delete: nil, on_update: nil) }
+          %w[pa_p_events pa_p_events_2026].map { |to| double(from_table: "pa_p_refs", to_table: to, column: "event_id", primary_key: "id", on_delete: nil, on_update: nil, deferrable: nil, validate?: true) }
         )
 
         keys = introspector.call[:tables]["pa_p_refs"][:foreign_keys]
@@ -1164,6 +1164,54 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
+    it "reads a secondary database's dump under the name its schema_dump gives" do
+      Dir.mktmpdir do |dir|
+        write_app(dir, "config/database.yml" => <<~YAML,
+                    #{RailsAiContext.environment_name}:
+                      primary:
+                        adapter: sqlite3
+                        database: db/dev.sqlite3
+                      analytics:
+                        adapter: sqlite3
+                        database: db/analytics.sqlite3
+                        migrations_paths: db/analytics_migrate
+                        schema_dump: analytics_custom.rb
+                  YAML
+                       "db/schema.rb" => "ActiveRecord::Schema[8.1].define(version: 1) do\n  create_table \"users\" do |t|\n  end\nend\n",
+                       "db/analytics_custom.rb" => "ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do\n  create_table \"page_views\" do |t|\n    t.string \"path\", null: false\n  end\nend\n",
+                       "db/analytics_migrate/20260101000001_create_page_views.rb" => create_posts,
+                       "db/analytics_migrate/20260101000002_add_x.rb" => create_posts.sub("CreatePosts", "AddX"))
+
+        analytics = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:secondary_databases]["analytics"]
+
+        expect(analytics[:tables].keys).to eq([ "page_views" ])
+        expect(analytics[:tables]["page_views"][:columns].first).to include(name: "id", type: "integer")
+        expect(analytics[:note]).to include("db/analytics_custom.rb")
+        expect(analytics[:pending_migrations].map { |m| m[:version] }).to eq([ "20260101000002" ])
+      end
+    end
+
+    it "lists a secondary once when its schema_dump file ends in _schema.rb under another name" do
+      Dir.mktmpdir do |dir|
+        write_app(dir, "config/database.yml" => <<~YAML,
+                    #{RailsAiContext.environment_name}:
+                      primary:
+                        adapter: sqlite3
+                        database: db/dev.sqlite3
+                      analytics:
+                        adapter: sqlite3
+                        database: db/analytics.sqlite3
+                        schema_dump: warehouse_schema.rb
+                  YAML
+                       "db/schema.rb" => "ActiveRecord::Schema[8.1].define(version: 1) do\n  create_table \"users\" do |t|\n  end\nend\n",
+                       "db/warehouse_schema.rb" => "ActiveRecord::Schema[8.1].define(version: 2) do\n  create_table \"page_views\" do |t|\n  end\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:secondary_databases].keys).to eq([ "analytics" ])
+      end
+    end
+
     it "reads no migrations_paths outside the app" do
       Dir.mktmpdir do |outside|
         write_app(outside, "20240101000000_create_posts.rb" => create_posts)
@@ -1173,6 +1221,36 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
           result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
           expect(result).to have_key(:unavailable)
+        end
+      end
+    end
+  end
+
+  # sequel-rails keeps its schema and migrations where Active Record's go, in Sequel's DSL.
+  describe "an app whose schema files are Sequel's" do
+    def sequel_app(dir, schema: true)
+      files = {
+        "Gemfile" => "source \"https://rubygems.org\"\ngem \"rails\"\ngem \"sequel-rails\"\n",
+        "config/application.rb" => "require \"rails\"\nrequire \"active_record/railtie\"\nrequire \"sequel_rails\"\n",
+        "db/migrate/20260101000001_create_artists.rb" => "Sequel.migration do\n  change do\n    create_table(:artists) do\n      primary_key :id\n      String :name, null: false\n    end\n  end\nend\n"
+      }
+      files["db/schema.rb"] = "Sequel.migration do\n  change do\n    create_table(:artists) do\n      primary_key :id\n    end\n  end\nend\n" if schema
+      files.each do |path, body|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+        File.write(File.join(dir, path), body)
+      end
+    end
+
+    it "says the schema is Sequel's instead of reading it as Active Record's" do
+      [ true, false ].each do |schema|
+        Dir.mktmpdir do |dir|
+          sequel_app(dir, schema: schema)
+
+          result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+          expect(result[:tables]).to be_nil
+          expect(result[:unavailable]).to include("Sequel")
+          expect(RailsAiContext::Introspectors::SchemaReader.for(dir).tables).to eq({})
         end
       end
     end
@@ -1382,7 +1460,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
             t.index ["data"], name: "index_users_on_data", using: :gin
             t.index ["account_id"], name: "idx_acct", include: ["data"], order: { account_id: :desc }
           end
-          add_foreign_key "users", "accounts", on_delete: :cascade
+          add_foreign_key "users", "accounts", on_delete: :cascade, deferrable: :deferred, validate: false
         end
       RUBY
     end
@@ -1410,9 +1488,9 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       expect(indexes["idx_acct"]).to include(include: [ "data" ], order: { "account_id" => "desc" })
     end
 
-    it "keeps a foreign key's on_delete action" do
+    it "keeps a foreign key's on_delete action, deferrable mode and validate: false" do
       expect(result[:tables]["users"][:foreign_keys]).to eq([
-        { from_table: "users", to_table: "accounts", column: "account_id", primary_key: "id", on_delete: "cascade" }
+        { from_table: "users", to_table: "accounts", column: "account_id", primary_key: "id", on_delete: "cascade", deferrable: "deferred", validate: false }
       ])
     end
 

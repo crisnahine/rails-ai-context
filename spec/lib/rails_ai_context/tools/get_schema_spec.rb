@@ -996,7 +996,8 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
             "queue" => {
               tables: { "solid_queue_jobs" => { columns: [], indexes: [], foreign_keys: [] } },
               total_tables: 1,
-              note: "Parsed from db/queue_schema.rb (from committed dump, not a live connection)"
+              note: "Parsed from db/queue_schema.rb (from committed dump, not a live connection)",
+              pending_migrations: [ { version: "20250101000001", name: "AddX" } ]
             }
           }
         },
@@ -1010,6 +1011,7 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(text).to include("Secondary databases")
       expect(text).to include("queue")
       expect(text).to include("solid_queue_jobs")
+      expect(text).to include("pending migrations: 1 - 20250101000001")
     end
   end
 
