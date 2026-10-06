@@ -93,6 +93,60 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
     idx = described_class.parse(sql)[:tables]["posts"][:indexes].first
     expect(idx[:columns]).to eq(%w[title user_id])
   end
+
+  # schema.rb carries these options; the dump reader kept only name, keys, unique and where.
+  describe "index options" do
+    it "reads the method, sort order, operator class and INCLUDE list as the schema.rb reader does" do
+      gin, desc, ops, nulls = indexes_for(<<~SQL)
+        CREATE INDEX index_categories_on_name ON public.categories USING gin (name);
+        CREATE INDEX idx_parent ON public.categories USING btree (parent_category_id DESC, id DESC NULLS LAST) INCLUDE (name, slug);
+        CREATE INDEX idx_trgm ON public.categories USING gin (slug public.gin_trgm_ops);
+        CREATE UNIQUE INDEX idx_slug ON public.categories USING btree (slug) NULLS NOT DISTINCT WHERE (slug IS NOT NULL);
+      SQL
+
+      expect(gin).to include(using: "gin")
+      expect(desc).to include(order: { "parent_category_id" => "desc", "id" => "DESC NULLS LAST" }, include: %w[name slug])
+      expect(desc).not_to have_key(:using)
+      expect(ops).to include(opclass: { "slug" => "gin_trgm_ops" })
+      expect(nulls).to include(nulls_not_distinct: true, where: "(slug IS NOT NULL)")
+    end
+
+    it "reads a MySQL key's prefix lengths, order and method" do
+      sql = <<~SQL
+        CREATE TABLE `posts` (
+          `id` bigint NOT NULL AUTO_INCREMENT,
+          `title` varchar(255) DEFAULT NULL,
+          `body` text,
+          PRIMARY KEY (`id`),
+          KEY `index_posts_on_title_body` (`title`(10),`body`(20)),
+          UNIQUE KEY `uniq_desc` (`title` DESC) USING HASH
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+      SQL
+
+      lengths, desc = described_class.parse(sql)[:tables]["posts"][:indexes]
+      expect(lengths).to include(columns: %w[title body], length: { "title" => 10, "body" => 20 })
+      expect(desc).to include(order: { "title" => "desc" }, using: "hash")
+    end
+  end
+
+  describe "unique constraints" do
+    it "reads pg_dump's ADD CONSTRAINT ... UNIQUE with its deferrable mode" do
+      sql = <<~SQL
+        CREATE TABLE public.accounts (id bigint NOT NULL, name character varying, code integer, slug text);
+        ALTER TABLE ONLY public.accounts ADD CONSTRAINT accounts_pkey PRIMARY KEY (id);
+        ALTER TABLE ONLY public.accounts ADD CONSTRAINT uniq_name UNIQUE (name) DEFERRABLE;
+        ALTER TABLE ONLY public.accounts
+            ADD CONSTRAINT uniq_code UNIQUE (code, name) DEFERRABLE INITIALLY DEFERRED;
+        ALTER TABLE ONLY public.accounts ADD CONSTRAINT uniq_slug UNIQUE (slug);
+      SQL
+
+      expect(described_class.parse(sql)[:tables]["accounts"][:unique_constraints]).to eq([
+        { name: "uniq_name", columns: %w[name], deferrable: "immediate" },
+        { name: "uniq_code", columns: %w[code name], deferrable: "deferred" },
+        { name: "uniq_slug", columns: %w[slug] }
+      ])
+    end
+  end
   # The reader dropped every DEFAULT, so a structure.sql app showed no
   # [default: ...] hint at all. Defaults read the way the schema.rb reader
   # reports them: a literal's value, an expression as `-> { "expr" }`, and a
