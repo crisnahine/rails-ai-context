@@ -96,7 +96,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
           end
         RUBY
         "profile.rb" => "class Profile < ApplicationRecord\n  belongs_to :user, required: false\n  belongs_to :owner\n  belongs_to :team, optional: true, required: true\nend\n",
-        "ticket.rb" => "class Ticket < ApplicationRecord\n  belongs_to :order, query_constraints: [:shop_id, :order_id], optional: true\nend\n"
+        "ticket.rb" => "class Ticket < ApplicationRecord\n  belongs_to :order, query_constraints: [:shop_id, :order_id], optional: true\n  has_many :lines, query_constraints: [:shop_id, :ticket_id]\nend\n"
       }
     end
 
@@ -123,6 +123,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(profile).to include("- `belongs_to` **owner** (fk: owner_id)")
       expect(profile).to include("- `belongs_to` **team** (fk: team_id)")
       expect(ticket).to include("- `belongs_to` **order** [optional] (fk: (shop_id, order_id))")
+      expect(ticket).to include("- `has_many` **lines** (query_constraints: [:shop_id, :ticket_id])")
     end
   end
 
