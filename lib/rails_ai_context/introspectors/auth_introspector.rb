@@ -68,9 +68,10 @@ module RailsAiContext
 
         auth[:rodauth] = { classes: rodauth_classes } if gem_present?("rodauth-rails")
 
-        # has_secure_password
-        secure_pw = scan_models_for_macro(:has_secure_password)
-        auth[:has_secure_password] = secure_pw.map { |m| m[:model] } if secure_pw.any?
+        # Only the default attribute is the login password; a named one hashes a code or token.
+        login, digests = secure_password_attributes
+        auth[:has_secure_password] = login if login.any?
+        auth[:secure_password_digests] = digests if digests.any?
 
         # OmniAuth providers
         omniauth = detect_omniauth_providers
@@ -364,15 +365,15 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "scan_models_for_devise")
       end
 
-      def scan_models_for_macro(macro_name)
-        results = model_asts.filter_map do |model_name, ast|
-          next if ast[:macros].none? { |m| m[:macro] == macro_name }
-
-          { model: model_name }
+      def secure_password_attributes
+        attributes = model_asts.to_h do |model_name, ast|
+          [ model_name, ast[:macros].select { |m| m[:macro] == :has_secure_password }.map { |m| m[:attribute] } ]
         end
-        results.sort_by { |r| r[:model] }
+        login = attributes.select { |_, attrs| attrs.include?("password") }.keys.sort
+        digests = attributes.transform_values { |attrs| attrs - [ "password" ] }.reject { |_, attrs| attrs.empty? }
+        [ login, digests.sort.to_h ]
       rescue => e
-        RailsAiContext.debug_fail(e, [], label: "scan_models_for_macro")
+        RailsAiContext.debug_fail(e, [ [], {} ], label: "secure_password_attributes")
       end
 
       def gem_present?(name)

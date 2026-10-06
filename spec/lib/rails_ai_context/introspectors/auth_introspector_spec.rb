@@ -97,6 +97,38 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
       end
     end
 
+    # A named attribute (`has_secure_password :six_digit_code`) hashes a code or token, not the login password.
+    context "with a named has_secure_password" do
+      let(:models_dir) { File.join(Rails.root, "app/models") }
+
+      before do
+        File.write(File.join(models_dir, "email_code.rb"), <<~RUBY)
+          class EmailCode < ApplicationRecord
+            has_secure_password :six_digit_code, validations: false
+          end
+        RUBY
+        File.write(File.join(models_dir, "account.rb"), <<~RUBY)
+          class Account < ApplicationRecord
+            has_secure_password
+            has_secure_password :recovery_password
+          end
+        RUBY
+      end
+
+      after { %w[email_code.rb account.rb].each { |f| FileUtils.rm_f(File.join(models_dir, f)) } }
+
+      it "counts only the default password as password authentication" do
+        expect(result[:authentication][:has_secure_password]).to include("Account")
+        expect(result[:authentication][:has_secure_password]).not_to include("EmailCode")
+      end
+
+      it "lists the named attributes on their own" do
+        expect(result[:authentication][:secure_password_digests]).to include(
+          "EmailCode" => [ "six_digit_code" ], "Account" => [ "recovery_password" ]
+        )
+      end
+    end
+
     context "with Devise in a model" do
       let(:fixture_model) { File.join(Rails.root, "app/models/admin.rb") }
 

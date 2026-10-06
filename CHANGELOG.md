@@ -661,7 +661,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Authentication & Authorization" section covers Rodauth, Action Policy and
   Rails 8 generated authentication; the Devise model is named with its modules,
   those a concern's `included` block adds too; the authentication gem is still
-  named when the only auth finding is policy classes. The API section names the
+  named when the only auth finding is policy classes. A named
+  `has_secure_password :six_digit_code` is listed as a digest, not as login,
+  there and in the generated context. The API section names the
   serialization as `api` does and is left out when there is none. `gems` lists
   `action_policy` and `rolify` under auth. (#369)
 - **`conventions` names more model patterns**: full-text search, tree structures

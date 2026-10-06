@@ -211,6 +211,16 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       expect(text).to include("has_secure_password on User.")
     end
 
+    it "does not call a named has_secure_password a login" do
+      text = onboard_with(auth: { authentication: { has_secure_password: [ "User" ],
+                                                    secure_password_digests: { "Email" => [ "six_digit_code" ] } },
+                                  authorization: {} })
+
+      expect(text).to include("has_secure_password on User.")
+      expect(text).to include("has_secure_password :six_digit_code on Email (a named digest, not the login password).")
+      expect(text).not_to include("has_secure_password on Email")
+    end
+
     it "still names the authentication gem when the introspector found only policy classes" do
       text = onboard_with(auth: { authentication: {}, authorization: { policies: %w[APolicy BPolicy] } },
                           gems: { notable_gems: [ { name: "omniauth", version: "1.9.2", category: "auth" } ] })
