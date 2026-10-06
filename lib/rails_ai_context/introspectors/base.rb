@@ -35,11 +35,20 @@ module RailsAiContext
       def loaded_record_base?(name, base)
         scopes = name.split("::")[0...-1]
         scopes.size.downto(0).any? do |depth|
-          klass = [ *scopes.first(depth), base ].join("::").safe_constantize
-          break klass < ActiveRecord::Base if klass.is_a?(Class)
+          klass = loaded_constant([ *scopes.first(depth), *base.split("::") ])
+          break klass < ActiveRecord::Base || false if klass.is_a?(Class)
         end
-      rescue StandardError, LoadError, ScriptError
+      rescue NameError
         false
+      end
+
+      # A constant the process already holds; a name still behind an autoload would run an app file to answer.
+      def loaded_constant(segments)
+        segments.reduce(Object) do |scope, segment|
+          return unless scope.is_a?(Module) && scope.const_defined?(segment, false) && !scope.autoload?(segment, false)
+
+          scope.const_get(segment, false)
+        end
       end
     end
   end
