@@ -509,9 +509,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`around_action TimingFilter.new`) reads `TimingFilter (object)` in both
   tiers, where the booted tier printed a memory address. The booted tier leaves
   out a gem's block filter (`allow_browser`, `rate_limit`), even when the bundle
-  is installed under the app root. The static tier names a framework or gem
-  module the controller includes (`include ActiveStorage::SetBlob`) as an
-  included module not read, where a filter it adds would be missing.
+  is installed under the app root. The static tier names a gem module the
+  controller or one of its app bases includes (`include ActiveStorage::SetBlob`)
+  as an included module not read, where a filter it adds would be missing, and
+  leaves out a Rails module whose include adds no filter (`ActionController::Live`).
   `http_basic_authenticate_with` is a before filter with its `only:`/`except:`,
   never its credentials. (#293, #332, #335)
 - **`controllers` reads strong params and delegated actions.**

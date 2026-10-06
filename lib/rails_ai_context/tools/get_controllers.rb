@@ -478,7 +478,7 @@ module RailsAiContext
         if info[:concerns_unread]&.any?
           lines << "" << "_#{RailsAiContext::Confidence::UNAVAILABLE} " \
                          "#{CountPhrase.call(info[:concerns_unread].size, "included module")} not read, " \
-                         "so a filter declared there is missing from this list: #{info[:concerns_unread].join(', ')}_"
+                         "so a filter declared there would be missing from this list: #{info[:concerns_unread].join(', ')}_"
         end
 
         if info[:strong_params]&.any?

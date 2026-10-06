@@ -114,7 +114,8 @@ module RailsAiContext
         called = by_body.reject { |entry| defined.include?(entry[:site].name) }
         defined.merge(called.map { |entry| entry[:site].name })
         defined.merge(by_concern.filter_map { |entry| entry[:site]&.name })
-        inherited = base_expansions(source, within, root, Sites.new(calls, block_calls), defined, cache)
+        base_unread = []
+        inherited = base_expansions(source, within, root, Sites.new(calls, block_calls), defined, cache, base_unread)
         # A base's method a concern's block calls declares where that concern is included.
         from_blocks, inherited = inherited.partition { |entry| block_sites.key?(entry[:site].__id__) }
         by_concern += from_blocks.map { |entry| entry.merge(from_concern: block_sites[entry[:site].__id__].first) }
@@ -134,18 +135,21 @@ module RailsAiContext
         filters = entries.flat_map do |entry|
           record(entry, root).map { |filter| entry[:from_concern] ? filter.merge(from_concern: entry[:from_concern]) : filter }
         end
-        [ filters, unread | outside_modules(mixins, root, within) ]
+        [ filters, unread | outside_modules(mixins, root, within) | base_unread ]
       rescue => e
         RailsAiContext.debug_fail(e, [ [], [] ], label: "controller filter read with concerns")
       end
 
-      # The walk skips a framework module and one excluded_concerns names, but a filter
-      # one adds (ActiveStorage::SetBlob's set_blob) still runs.
+      # actionpack and actionview declare callbacks only in class macros (allow_browser), so including one of theirs adds none.
+      SILENT_FRAMEWORK = "ActionView::"
+
+      # The walk skips a module excluded_concerns names, but a filter one adds
+      # (ActiveStorage::SetBlob's set_blob) still runs.
       def outside_modules(mixins, root, within)
         mixins.filter_map do |mixin|
           name = mixin[:name].to_s
           next unless mixin[:ancestor] && !mixin[:inline]
-          next if ConcernMembership.payload?(name) || ConcernMembership::STDLIB.any? { |lib| name == lib || name.start_with?("#{lib}::") }
+          next unless ConcernMembership.candidate?(name) && ConcernMembership.excluded?(name) && !name.start_with?(SILENT_FRAMEWORK)
 
           name unless ConcernPaths.module_source(root.to_s, name, prefer: "controller", within: within)
         end
@@ -195,8 +199,9 @@ module RailsAiContext
       end
 
       # What a class method an app-defined base or one of its concerns defines declares at
-      # each call this class makes of it, nearest base first.
-      def base_expansions(source, within, root, calls, taken, cache)
+      # each call this class makes of it, nearest base first. Adds to `unread` the modules
+      # a base includes that the walk could not read, as their filters reach this class too.
+      def base_expansions(source, within, root, calls, taken, cache, unread = [])
         found = []
         each_base(source, within, root, cache) do |label, base, _path, file, walked|
           own = singleton_expansions(base, walked, calls, taken).map { |entry| entry.merge(file: file) }
@@ -207,6 +212,7 @@ module RailsAiContext
                                                      .map { |entry| with_file(entry, found_in.placement.dig(entry[:from_concern], 2), root) }
           taken.merge(mixed.map { |entry| entry[:site].name })
           found.concat(own + mixed)
+          unread.concat(Array(found_in.unread) | outside_modules(Array(walked[:mixins]), root, label))
         end
         found
       end

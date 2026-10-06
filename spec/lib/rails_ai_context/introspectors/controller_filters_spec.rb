@@ -33,7 +33,43 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
 
         _, unread = described_class.with_concerns(source, root: dir, within: "BlobsController")
 
-        expect(unread).to eq(%w[ActiveStorage::SetBlob ActionController::MimeResponds])
+        expect(unread).to eq(%w[ActiveStorage::SetBlob])
+      end
+    end
+
+    # actionpack and actionview declare their callbacks in class macros (allow_browser), never in an included block.
+    it "leaves out a Rails framework module, whose include adds no filter" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        source = <<~RUBY
+          class LiveController < ApplicationController
+            include ActionController::Live
+            include ActionController::HttpAuthentication::Token::ControllerMethods
+            include ActionView::Helpers::NumberHelper
+            include AbstractController::Translation
+          end
+        RUBY
+
+        _, unread = described_class.with_concerns(source, root: dir, within: "LiveController")
+
+        expect(unread).to eq([])
+      end
+    end
+
+    it "lists a module an app-defined base includes and no file declares as unread" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"), <<~RUBY)
+          class ApplicationController < ActionController::Base
+            include ActiveStorage::SetBlob
+            include ActionController::Live
+          end
+        RUBY
+        source = "class KidsController < ApplicationController\n  def show; end\nend\n"
+
+        _, unread = described_class.with_concerns(source, root: dir, within: "KidsController")
+
+        expect(unread).to eq(%w[ActiveStorage::SetBlob])
       end
     end
 

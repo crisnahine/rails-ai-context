@@ -39,7 +39,7 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       text = described_class.call(controller: "AboutController").content.first[:text]
 
       expect(text).to include("- `before` **set_referer_header** _(from WebAppControllerConcern)_")
-      expect(text).to include("1 included module not read, so a filter declared there is missing " \
+      expect(text).to include("1 included module not read, so a filter declared there would be missing " \
                               "from this list: Pundit::Authorization")
     end
   end
@@ -69,7 +69,7 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
 
         text = described_class.call(controller: "BlobsController").content.first[:text]
 
-        expect(text).to include("1 included module not read, so a filter declared there is missing " \
+        expect(text).to include("1 included module not read, so a filter declared there would be missing " \
                                 "from this list: ActiveStorage::SetBlob")
       end
     end
