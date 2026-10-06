@@ -20,7 +20,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerSettings do
 
       expect(described_class.from_source(source)).to eq(
         layout: { name: "admin", only: [ "index" ] },
-        settings: [ "wrap_parameters :user, include: [:name, :email_address]", "allow_browser versions: :modern" ]
+        settings: [ { text: "wrap_parameters :user, include: [:name, :email_address]" }, { text: "allow_browser versions: :modern" } ]
       )
     end
 
@@ -52,7 +52,8 @@ RSpec.describe RailsAiContext::Introspectors::ControllerSettings do
         later = "class CommentsController < ApplicationController\n  include AdminLayout\n  layout \"plain\"\nend\n"
 
         expect(described_class.from_source(source, root: root, within: "CommentsController"))
-          .to eq(layout: { name: "admin", via: "AdminLayout" }, settings: [ "allow_browser versions: :modern", "add_flash_types :info" ])
+          .to eq(layout: { name: "admin", via: "AdminLayout" },
+                 settings: [ { text: "allow_browser versions: :modern", via: "AdminLayout" }, { text: "add_flash_types :info" } ])
         expect(described_class.from_source(later, root: root, within: "CommentsController")[:layout]).to eq(name: "plain")
       end
     end
@@ -89,7 +90,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerSettings do
 
     it "names a declared layout and the settings inherited from ApplicationController" do
       context = ctx("UsersController" => { parent_class: "ApplicationController", layout: { name: "admin", only: [ "index" ] },
-                                           settings: [ "wrap_parameters :user" ] })
+                                           settings: [ { text: "wrap_parameters :user" } ] })
 
       resolved = described_class.resolve(context, "UsersController", root: @root)
 

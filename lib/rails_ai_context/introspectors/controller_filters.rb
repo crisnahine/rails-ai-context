@@ -100,7 +100,6 @@ module RailsAiContext
         collected, unread, _hidden, block_calls, placement, _skipped, block_sites = ConcernMacros.collect(
           root, mixins, keys: [ :filters ], prefer: "controller", within: within, cache: cache, calls: calls, listeners: LISTENERS
         )
-        line_of = mixins.reverse.to_h { |mixin| [ mixin[:name], mixin[:location].to_i ] }
         own_defs = singleton_expansions(source, walked, calls, Set.new)
         defined = own_defs.map { |entry| entry[:site].name }.to_set
         # A concern method the body calls declares for the body; one a concern's own block calls stays the concern's.
@@ -127,11 +126,8 @@ module RailsAiContext
         end
         placed = own_level.map { |entry| [ entry[:location].to_i, -1, 0, entry ] } +
                  (own_defs + called + inherited).map { |entry| [ ConcernMacros::Relayed.root(entry[:site]).location.start_line, -1, 0, entry.except(:site, :definer, :from_concern) ] } +
-                 by_concern.map do |entry|
-                   top, order = placement[entry[:from_concern]]
-                   [ line_of[top].to_i, order.to_i, entry[:site] ? entry[:site].location.start_line : entry[:location].to_i, entry ]
-                 end
-        entries = placed.each_with_index.sort_by { |(line, order, at, _), index| [ line, order, at, index ] }.map { |(_, _, _, entry), _| entry }
+                 ConcernMacros.at_includes(by_concern, placement, mixins) { |entry| entry[:site] ? entry[:site].location.start_line : entry[:location].to_i }
+        entries = ConcernMacros.in_include_order(placed)
         filters = entries.flat_map do |entry|
           record(entry, root).map { |filter| entry[:from_concern] ? filter.merge(from_concern: entry[:from_concern]) : filter }
         end

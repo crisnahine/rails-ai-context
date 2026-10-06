@@ -18,20 +18,19 @@ module RailsAiContext
         mixins: Listeners::MixinsListener
       }.freeze
 
-      # { layout: {...}, settings: ["allow_browser versions: :modern"] } for one class body, with what the
-      # app's concerns it includes declare where each `include` stands. A caller already walking the body
-      # with LISTENERS passes that walk.
+      # { layout: {...}, settings: [{ text: "allow_browser versions: :modern", via: }] } for one class body, with
+      # what the app's concerns it includes declare where each `include` stands, `via` naming that concern.
+      # A caller already walking the body with LISTENERS passes that walk.
       def from_source(source, walked = nil, root: nil, within: nil)
         return {} if source.nil?
 
         walked ||= SourceIntrospector.walk_source(source, LISTENERS)
         placed = SourceIntrospector.outside_defs(walked[:settings_calls], walked[:methods]).map { |call| [ call[:location].to_i, -1, 0, call ] }
         placed += concern_calls(walked, root, within) if root
-        calls = placed.each_with_index.sort_by { |(line, order, at, _), index| [ line, order, at, index ] }.map { |(_, _, _, call), _| call }
-        layout_call, settings = calls.partition { |call| call[:macro] == :layout }
+        layout_call, settings = ConcernMacros.in_include_order(placed).partition { |call| call[:macro] == :layout }
         {
           layout: layout_call.last && layout_of(layout_call.last),
-          settings: settings.map { |call| call[:text] }.presence
+          settings: settings.map { |call| { text: call[:text], via: call[:from_concern] }.compact }.presence
         }.compact
       rescue => e
         RailsAiContext.debug_fail(e, {}, label: "ControllerSettings.from_source")
@@ -42,11 +41,7 @@ module RailsAiContext
         mixins = Array(walked[:mixins])
         found = ConcernMacros.collect(root, mixins, keys: [ :settings_calls ], prefer: "controller", within: within,
                                       cache: RunCache.fetch([ :controller_concern_walks ]) { {} }, listeners: LISTENERS)
-        line_of = mixins.reverse.to_h { |mixin| [ mixin[:name], mixin[:location].to_i ] }
-        Array(found.collected[:settings_calls]).map do |call|
-          top, order = found.placement[call[:from_concern]]
-          [ line_of[top].to_i, order.to_i, call[:location].to_i, call ]
-        end
+        ConcernMacros.at_includes(Array(found.collected[:settings_calls]), found.placement, mixins) { |call| call[:location].to_i }
       end
 
       # A literal string is the layout, a literal symbol the method that picks it; `nil`
@@ -70,13 +65,13 @@ module RailsAiContext
         found
       end
 
-      # { layout: {...}, settings: [{ text:, from: }] } for a controller in the listing, its
+      # { layout: {...}, settings: [{ text:, from:, via: }] } for a controller in the listing, its
       # ancestors' declarations included. An ancestor the app holds no source for ends the
       # walk, and the layout then names it rather than guessing.
       def resolve(ctx, controller_name, root:)
         controllers = Payload.controllers(ctx)
         chain, stop = chain_for(controllers, controller_name, root)
-        settings = chain.reverse.flat_map { |name, decl| Array(decl[:settings]).map { |text| { text: text, from: name } } }
+        settings = chain.reverse.flat_map { |name, decl| Array(decl[:settings]).map { |setting| setting.merge(from: name) } }
         api = controllers.dig(controller_name, :api_controller) || stop == "ActionController::API"
         return { settings: settings } if api
 

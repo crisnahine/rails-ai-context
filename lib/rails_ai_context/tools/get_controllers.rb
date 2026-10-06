@@ -498,7 +498,10 @@ module RailsAiContext
 
         if declared[:settings].any?
           lines << "" << "## Settings"
-          declared[:settings].each { |setting| lines << "- `#{setting[:text]}`#{" _(from #{setting[:from]})_" unless setting[:from] == name}" }
+          declared[:settings].each do |setting|
+            origin = [ ("from #{setting[:from]}" unless setting[:from] == name), ("through #{setting[:via]}" if setting[:via]) ].compact
+            lines << "- `#{setting[:text]}`#{" _(#{origin.join(' ')})_" if origin.any?}"
+          end
         end
 
         # Rescue handlers

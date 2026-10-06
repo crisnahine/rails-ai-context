@@ -453,14 +453,16 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
                    "class ApplicationController < ActionController::Base\n  allow_browser versions: :modern\n  add_flash_types :warning, :info\nend\n")
         allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
         stub_controllers({ "UsersController" => { actions: %w[index], filters: [], parent_class: "ApplicationController",
-                                                  layout: { name: "admin" }, settings: [ "wrap_parameters :user, include: [:name, :email_address]" ] } })
+                                                  layout: { name: "admin" }, settings: [ { text: "wrap_parameters :user, include: [:name, :email_address]" },
+                                                                                 { text: "add_flash_types :x", via: "Flashy" } ] } })
 
         text = described_class.call(controller: "UsersController", detail: "full").content.first[:text]
 
         expect(text).to include("**Layout:** `admin` (declared in UsersController)")
         expect(text).to include("## Settings\n- `allow_browser versions: :modern` _(from ApplicationController)_\n" \
                                 "- `add_flash_types :warning, :info` _(from ApplicationController)_\n" \
-                                "- `wrap_parameters :user, include: [:name, :email_address]`")
+                                "- `wrap_parameters :user, include: [:name, :email_address]`\n" \
+                                "- `add_flash_types :x` _(through Flashy)_")
       end
     end
 
