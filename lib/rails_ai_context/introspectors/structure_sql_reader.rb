@@ -12,16 +12,18 @@ module RailsAiContext
 
       # @return [Hash] { dialect: Symbol, tables: { name => { columns:, indexes:, foreign_keys: } } }
       # search_path: the database's configured schema_search_path. rails_version: the app's,
-      # whose connection names extensions and enum types differently before 8.0 and 7.1.
-      def parse(content, search_path: SchemaConventions::DEFAULT_SEARCH_PATH, rails_version: nil)
+      # whose connection names extensions and enum types (PgNaming).
+      def parse(content, search_path: PgNaming::DEFAULT_SEARCH_PATH, rails_version: nil)
         tables = {}
         # The tables the search path does not show bare, findable only by schema-qualified name.
         qualified_tables = {}
         dialect = detect_sql_dialect(content)
         enums = enum_types(content)
-        path = SchemaConventions.existing_search_path(search_path, content.scan(CREATE_SCHEMA).map { |(name)| name.delete('"') })
+        path = PgNaming.existing_path(search_path, content.scan(CREATE_SCHEMA).map { |(name)| name.delete('"') })
         view_matches = content.scan(VIEW)
-        local = relation_namer(content, view_matches, path)
+        relations = content.scan(CREATE_TABLE) + view_matches.map { |match| [ match[1] ] } + content.scan(VIRTUAL_TABLE).map { |match| [ match[0] ] }
+        names = PgNaming.names(path, relations: relations.map { |(name)| qualified_name(name) }, types: enums.keys)
+        local = names.method(:relation)
 
         # Every table the file creates, by schema-qualified name, so a parent
         # outside the listed tables still resolves.
@@ -86,7 +88,9 @@ module RailsAiContext
         end
         resolved = {}
         all.each_key { |name| resolve_columns(name, all, alters, resolved, local) }
-        name_enum_columns(all, enums, path)
+        all.each_value do |entry|
+          entry[:table][:columns].each { |column| column[:enum_type] = names.type(column[:enum_type]) if column[:enum_type] }
+        end
 
         content.scan(/^COMMENT ON TABLE #{QUALIFIED_NAME} IS '((?:[^']|'')*)';/) do |table, text|
           table = all.dig(qualified_name(table), :table)
@@ -104,27 +108,12 @@ module RailsAiContext
           (shown.include?(".") ? qualified_tables : tables).delete(shown)
         end
 
-        { dialect: dialect, tables: tables, qualified_tables: qualified_tables, search_path: path, enums: SchemaConventions.enum_list(enums, path, legacy: before_rails?(rails_version, "7.1")),
-          views: found_views, virtual_tables: virtual_tables(content, local),
-          extensions: extensions(content, (path.first || "public" unless before_rails?(rails_version, "8.0")), dialect) }
+        { dialect: dialect, tables: tables, qualified_tables: qualified_tables, names: names, enums: PgNaming.enum_list(enums, path, rails_version),
+          views: found_views, virtual_tables: virtual_tables(content, local), extensions: extensions(content, path, dialect, rails_version) }
       end
 
-      def before_rails?(version, release)
-        !version.nil? && Gem::Version.new(version) < Gem::Version.new(release)
-      end
-
-      # A column's enum type as format_type gives it: bare when the search path finds it first.
-      def name_enum_columns(all, enums, path)
-        shadowed = SchemaConventions.shadowed_names(enums.keys, path) if path.size > 1
-        all.each_value do |entry|
-          entry[:table][:columns].each do |column|
-            column[:enum_type] = SchemaConventions.local_name(column[:enum_type], path, shadowed) if column[:enum_type]
-          end
-        end
-      end
-
-      # As PostgreSQL's connection names them: qualified unless in its current schema.
-      def extensions(content, current_schema = "public", dialect = nil)
+      # As PostgreSQL's connection names them (PgNaming.extension_name).
+      def extensions(content, path, dialect, rails_version)
         found = content.scan(/^CREATE EXTENSION (?:IF NOT EXISTS )?("[^"]+"|\w+)(?: WITH SCHEMA ("[^"]+"|\w+))?/).map do |name, schema|
           [ name.delete('"'), schema&.delete('"') ]
         end
@@ -132,25 +121,18 @@ module RailsAiContext
         if dialect == :postgresql && found.none? { |name, _| name == "plpgsql" } && !content.match?(/^DROP EXTENSION (?:IF EXISTS )?"?plpgsql\b/)
           found.unshift([ "plpgsql", "pg_catalog" ])
         end
-        found.map { |name, schema| [ (schema unless current_schema.nil? || schema == current_schema), name ].compact.join(".") }
-      end
-
-      # Each relation's name as the app reads it, given the schemas on its search path.
-      def relation_namer(content, view_matches, path)
-        names = (content.scan(CREATE_TABLE) + view_matches.map { |match| [ match[1] ] } + content.scan(VIRTUAL_TABLE).map { |match| [ match[0] ] })
-        shadowed = SchemaConventions.shadowed_names(names.map { |(name)| qualified_name(name) }, path) if path.size > 1
-        ->(name) { SchemaConventions.local_name(name, path, shadowed) }
+        found.map { |name, schema| PgNaming.extension_name(name, schema, path, rails_version) }
       end
 
       # Each view by the name the app reads it under, a later definition of a name replacing a placeholder.
-      def views(content, local = SchemaConventions.method(:local_name), view_matches = content.scan(VIEW))
+      def views(content, local = PgNaming.names(PgNaming::DEFAULT_SEARCH_PATH).method(:relation), view_matches = content.scan(VIEW))
         view_matches.each_with_object({}) do |(materialized, name, sql), found|
           name = local.(qualified_name(name))
           found[name] = { materialized: !materialized.nil?, sql: sql.strip } if name.match?(/\A\w+\z/)
         end
       end
 
-      def virtual_tables(content, local = SchemaConventions.method(:local_name))
+      def virtual_tables(content, local)
         content.scan(VIRTUAL_TABLE).to_h do |name, mod, arguments|
           [ local.(qualified_name(name)), { module: mod, arguments: split_top_level(arguments.to_s) } ]
         end

@@ -88,15 +88,13 @@ module RailsAiContext
                 )
               end
 
-              why = Payload.missing_qualified_table(schema, table)
-              return text_response(why) if why
-
               recovery = "Call rails_get_schema(detail:\"summary\") to see all tables"
               # Rails' own schema.rb dumper writes no view; only a gem such as scenic adds them.
-              if [ schema[:adapter], schema[:adapter_source] ].include?("static_parse")
+              if Payload.parsed_schema?(schema)
                 recovery += ". Without a connection a view is listed only when the dump records it: structure.sql does, schema.rb only through a gem such as scenic"
               end
-              return not_found_response("Table", table, Payload.schema_tables(schema).map { |_, name, _| name }.uniq.sort, recovery_tool: recovery)
+              return not_found_response("Table", table, Payload.schema_tables(schema).map { |_, name, _| name }.uniq.sort, recovery_tool: recovery,
+                                                                                                         note: Payload.missing_qualified_table(schema, table))
             end
             # Databases holding the same table read as one; ones that differ each show their own.
             groups = Payload.schema_tables(schema).select { |_, name, _| name == table_key }
@@ -603,7 +601,7 @@ module RailsAiContext
           end
         end
 
-        enums = RailsAiContext::Introspectors::SchemaConventions.enums_used(enum_types, columns.filter_map { |c| c[:enum_type]&.to_s }, search_path)
+        enums = RailsAiContext::Introspectors::PgNaming.enums_used(enum_types, columns.filter_map { |c| c[:enum_type]&.to_s }, search_path)
         if enums.any?
           lines << "" << "### Enum types"
           enums.each { |enum| lines << "- `#{enum[:name]}`: #{Array(enum[:values]).join(', ')}" }

@@ -52,10 +52,10 @@ module RailsAiContext
         # The dumper writes a comment, not a create_table, for a table it could not describe.
         NOT_DUMPED = /\A#\s*Could not dump table "([^"]+)" because of following (\S+)/
 
-        def initialize(search_path: SchemaConventions::DEFAULT_SEARCH_PATH, shadowed: nil)
+        # raw_names: each name as the dump writes it, for a reader that names them after the walk.
+        def initialize(raw_names: false)
           super()
-          @search_path = search_path
-          @shadowed = shadowed
+          @raw_names = raw_names
         end
 
         def on_program_node_enter(_node)
@@ -72,6 +72,10 @@ module RailsAiContext
           note_block(node)
           if node.receiver.nil?
             extract_top_level_call(node)
+          elsif node.name == :[] && node.receiver.is_a?(Prism::ConstantPathNode) && node.receiver.slice == "ActiveRecord::Schema"
+            # ActiveRecord::Schema[8.1].define: the Rails version that wrote the dump.
+            stamp = node.arguments&.arguments&.first
+            @results << { type: :stamp, version: stamp.slice, location: node.location.start_line } if stamp.is_a?(Prism::FloatNode)
           elsif column_call?(node)
             extract_column(node)
           elsif index_call?(node)
@@ -93,8 +97,9 @@ module RailsAiContext
 
         private
 
+        # Without a search path to read, public's are the bare names.
         def local_name(name)
-          SchemaConventions.local_name(name, @search_path, @shadowed)
+          @raw_names ? name : name.delete_prefix("public.")
         end
 
         def read_elsewhere?(name)
@@ -114,6 +119,9 @@ module RailsAiContext
             extract_foreign_key(node)
           when :create_enum
             extract_enum(node)
+          when :create_schema
+            name = literal_string(node.arguments&.arguments&.first)
+            @results << { type: :create_schema, name: name, location: node.location.start_line } if name
           when :add_index
             extract_top_level_add_index(node)
           when :add_check_constraint
@@ -201,7 +209,7 @@ module RailsAiContext
 
           @results << {
             type:     :enum,
-            name:     name_arg.unescaped,
+            name:     local_name(name_arg.unescaped),
             values:   values,
             location: node.location.start_line
           }
@@ -298,6 +306,7 @@ module RailsAiContext
 
           options = braced.map { |hash| hash_node_to_hash(hash) }.reduce(extract_keyword_options(node), :merge)
           virtual = node.name == :virtual
+          options[:enum_type] = local_name(options[:enum_type]) if options[:enum_type].is_a?(String)
           # A generated column takes its own type from type: (each adapter's virtual, 7.0 to 8.1).
           column_type = options[:type].to_s if virtual && (options[:type].is_a?(Symbol) || options[:type].is_a?(String))
           names.each do |col_name|

@@ -79,7 +79,8 @@ module RailsAiContext
       return %w[public] if known && !known.start_with?("postg")
 
       settings = settings.merge(url_settings(name, settings["url"]))
-      text = settings["schema_search_path"].to_s
+      # postgresql_adapter.rb:984 (8.1), :865 (7.0): schema_order is the older name.
+      text = (settings["schema_search_path"] || settings["schema_order"]).to_s
       text = '"$user", public' if text.strip.empty?
       user = settings["username"].to_s
       text.split(",").filter_map do |part|

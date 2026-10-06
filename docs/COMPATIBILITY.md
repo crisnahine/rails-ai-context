@@ -328,6 +328,18 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   types with one name in different schemas come back from the connection as
   one type holding both label lists; the static tier keeps the first type's
   labels.
+- **A schema.rb from before Rails 8.1 does not say which schema holds a
+  table.** It names each table bare, whichever search path schema holds it,
+  so without a boot a schema-qualified name such as `app.users` finds a listed
+  table only when the search path has one schema. A Rails 7.0 schema.rb names
+  no schema at all, so the static tier takes the search path as `public`
+  alone.
+- **A dump made with a `schema_search_path` holds only those schemas.** By
+  default Rails passes each search path schema to pg_dump, so structure.sql
+  holds no other schema's tables and no extension, and a Rails 8.1 schema.rb
+  holds no other schema's tables. Without a boot those tables are not found and
+  the extension list is plpgsql alone. `config.active_record.dump_schemas =
+  :all` dumps everything.
 - **Inherited controller actions and filters are resolved by parent name, so
   some walks end early.** A controller that defines no action of its own takes
   the actions of the nearest app ancestor the listing holds, walked through the

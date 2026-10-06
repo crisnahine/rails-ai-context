@@ -124,33 +124,30 @@ module RailsAiContext
       table_holders(schema, name).map { |db, _, _| db || "primary" }
     end
 
-    # A schema-qualified name the search path does not show bare is found only when asked for by that name.
+    # A schema-qualified name the listing does not hold is looked up when asked for: a table outside
+    # the search path, or a listed one by its qualified name, as Rails resolves both.
     def table_holders(schema, name)
       found = schema_tables(schema).select { |_, table, _| table.to_s == name.to_s }
-      return found if found.any? || !name.to_s.include?(".")
+      return found if found.any? || !name.to_s.include?(".") || !schema.is_a?(Hash)
 
-      qualified_tables(schema).select { |_, table, _| table.to_s == name.to_s }
-    end
-
-    # Why a schema-qualified table is missing from a schema.rb holding only the search path schemas, or nil.
-    def missing_qualified_table(schema, name)
-      dump = schema[:search_path_dump] if schema.is_a?(Hash)
-      table_schema, dot, = name.to_s.rpartition(".")
-      return nil unless dump.is_a?(Hash) && !dot.empty? && !Array(dump[:schemas]).include?(table_schema)
-
-      "Table '#{name}' is not in #{dump[:path]}: Rails dumps only the schemas on the search path there by default. " \
-        "structure.sql, or `config.active_record.dump_schemas = :all`, includes it."
-    end
-
-    # [database, name, data] for each table outside the search path, nil database for the primary's.
-    def qualified_tables(schema)
-      return [] unless schema.is_a?(Hash)
-
-      dbs = { nil => schema }.merge(schema[:secondary_databases].is_a?(Hash) ? schema[:secondary_databases] : {})
-      dbs.flat_map do |db, info|
-        tables = info.is_a?(Hash) && info[:qualified_tables].is_a?(Hash) ? info[:qualified_tables] : {}
-        tables.map { |name, data| [ db&.to_s, name, data ] }
+      secondary = schema[:secondary_databases].is_a?(Hash) ? schema[:secondary_databases].keys : []
+      [ nil, *secondary ].filter_map do |db|
+        live = db.nil? && !parsed_schema?(schema) && schema[:adapter].to_s.match?(/postg/i)
+        data = Introspectors::SchemaIntrospector.qualified_table(name.to_s, database: db&.to_s, live: live)
+        [ db&.to_s, name.to_s, data ] if data
       end
+    end
+
+    # Why the primary's dump leaves out a schema-qualified table, or nil.
+    def missing_qualified_table(schema, name)
+      return unless schema.is_a?(Hash) && parsed_schema?(schema) && name.to_s.include?(".")
+
+      Introspectors::SchemaIntrospector.qualified_table_note(name.to_s)
+    end
+
+    # Read from the dump: the context names the adapter and keeps "static_parse" under adapter_source.
+    def parsed_schema?(schema)
+      [ schema[:adapter], schema[:adapter_source] ].include?("static_parse")
     end
 
     def models(ctx)

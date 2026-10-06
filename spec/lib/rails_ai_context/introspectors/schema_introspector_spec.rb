@@ -146,7 +146,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         path = File.join(dir, "db", "structure.sql")
         File.write(path, sql)
         fixture_introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
-        return fixture_introspector.send(:parse_structure_sql, path)
+        return fixture_introspector.send(:parse_dump, :sql, path)
       end
     end
 
@@ -1796,6 +1796,13 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
   end
 
   describe "a schema.rb dumped with more than one schema" do
+    around do |example|
+      RailsAiContext.tier = :static
+      example.run
+    ensure
+      RailsAiContext.tier = nil
+    end
+
     it "names a table in public by its bare name, as the app sees it" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "db"))
@@ -1820,7 +1827,8 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
         expect(result[:tables].keys).to eq(%w[posts users])
-        expect(result[:qualified_tables].keys).to eq(%w[other.widgets])
+        expect(result.keys).not_to include(:qualified_tables)
+        expect(described_class.new(RailsAiContext::StaticApp.new(dir)).qualified_table("other.widgets")[:columns].map { |c| c[:name] }).to eq(%w[id n])
         expect(result[:tables]["users"][:columns].map { |c| c[:name] }).to eq(%w[id email])
         expect(result[:tables]["posts"][:indexes].map { |i| i[:name] }).to eq(%w[idx_posts_user])
         expect(result[:tables]["posts"][:foreign_keys]).to eq([ { from_table: "posts", to_table: "users", column: "user_id", primary_key: "id" } ])
@@ -1970,6 +1978,13 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
     end
 
     describe "extension names against the connection's current schema" do
+      around do |example|
+        RailsAiContext.tier = :static
+        example.run
+      ensure
+        RailsAiContext.tier = nil
+      end
+
       let(:dump) do
         <<~SQL
           CREATE SCHEMA app;
@@ -2034,6 +2049,13 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
     end
 
     describe "plpgsql, which pg_dump leaves out" do
+      around do |example|
+        RailsAiContext.tier = :static
+        example.run
+      ensure
+        RailsAiContext.tier = nil
+      end
+
       def extensions_of(dump, rails: nil)
         Dir.mktmpdir do |dir|
           FileUtils.mkdir_p(File.join(dir, "db"))
@@ -2070,6 +2092,13 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
     end
 
     describe "enum type names against the search path" do
+      around do |example|
+        RailsAiContext.tier = :static
+        example.run
+      ensure
+        RailsAiContext.tier = nil
+      end
+
       def enums_of(file, content, database_yml, rails: nil)
         Dir.mktmpdir do |dir|
           FileUtils.mkdir_p(File.join(dir, "db"))
@@ -2166,14 +2195,23 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
     end
 
     describe "tables outside the search path" do
+      around do |example|
+        RailsAiContext.tier = :static
+        example.run
+      ensure
+        RailsAiContext.tier = nil
+      end
+
+      after { FileUtils.rm_rf(@dir) if @dir }
+
+      # The app stays on disk: a table outside the search path is read from the dump when asked for.
       def schema_of(file, content)
-        Dir.mktmpdir do |dir|
-          FileUtils.mkdir_p(File.join(dir, "db"))
-          FileUtils.mkdir_p(File.join(dir, "config"))
-          File.write(File.join(dir, "db", file), content)
-          File.write(File.join(dir, "config", "database.yml"), "#{RailsAiContext.environment_name}:\n  adapter: postgresql\n  schema_search_path: \"app,public\"\n")
-          described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
-        end
+        @dir = Dir.mktmpdir
+        FileUtils.mkdir_p(File.join(@dir, "db"))
+        FileUtils.mkdir_p(File.join(@dir, "config"))
+        File.write(File.join(@dir, "db", file), content)
+        File.write(File.join(@dir, "config", "database.yml"), "#{RailsAiContext.environment_name}:\n  adapter: postgresql\n  schema_search_path: \"app,public\"\n")
+        described_class.new(RailsAiContext::StaticApp.new(@dir)).static_call
       end
 
       def answers(schema)
@@ -2182,6 +2220,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         models = { "AuditEvent" => { table_name: "audit.events", associations: [], validations: [] } }
         allow(RailsAiContext::Tools::GetSchema).to receive(:cached_context).and_return({ schema: schema, models: models })
         allow(RailsAiContext::Tools::GetModelDetails).to receive(:cached_context).and_return({ schema: schema, models: models })
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@dir))
         [ RailsAiContext::Tools::GetSchema.call(table: "audit.events").content.first[:text],
           RailsAiContext::Tools::GetModelDetails.call(model: "AuditEvent").content.first[:text] ]
       end
@@ -2232,10 +2271,9 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
         it "says why a table in another schema is missing, for the schema tool and a model" do
           table, model = answers(schema)
-          why = "not in db/schema.rb: Rails dumps only the schemas on the search path there by default"
+          why = "If schema 'audit' exists, db/schema.rb leaves it out: Rails 8.1 dumps only the search path schemas there by default"
 
-          expect(table).to include("Table 'audit.events' is #{why}")
-          expect(table).to include("config.active_record.dump_schemas = :all")
+          expect(table).to include("Table 'audit.events' not found.", why, "config.active_record.dump_schemas = :all")
           expect(model).to include(why)
         end
       end
@@ -2284,6 +2322,13 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
     end
 
     describe "tables in the schemas on the search path" do
+      around do |example|
+        RailsAiContext.tier = :static
+        example.run
+      ensure
+        RailsAiContext.tier = nil
+      end
+
       def static_with(file, content, database_yml)
         Dir.mktmpdir do |dir|
           FileUtils.mkdir_p(File.join(dir, "db"))
@@ -2613,6 +2658,269 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       files = { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: sqlite3\n  schema_dump: ../../outside.rb\n",
                 "db/schema.rb" => one_table_rb.call("things") }
       static_with(files) { |result, _| expect(result[:tables].keys).to eq(%w[things]) }
+    end
+  end
+
+  describe "PostgreSQL naming by Rails version" do
+    around do |example|
+      RailsAiContext.tier = :static
+      example.run
+    ensure
+      RailsAiContext.tier = nil
+    end
+
+    def pg_app(files, rails: nil, yml: "  schema_search_path: \"app,public\"\n")
+      dir = Dir.mktmpdir
+      files.merge("config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: postgresql\n#{yml}").each do |file, content|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, file)))
+        File.write(File.join(dir, file), content)
+      end
+      if rails
+        File.write(File.join(dir, "Gemfile"), "gem \"rails\"\n")
+        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (#{rails})\n\nDEPENDENCIES\n  rails\n")
+      end
+      dir
+    end
+
+    def schema_at(dir)
+      described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+    end
+
+    # The schema and model tools over this app, as an MCP call answers them.
+    # The context names the database's adapter and keeps the parse under adapter_source (Introspector#resolve_schema_adapter).
+    def ask(dir, table: nil, model_table: nil, **options)
+      schema = schema_at(dir).then { |found| found.merge(adapter: "PostgreSQL", adapter_source: found[:adapter]) }
+      models = model_table ? { "Thing" => { table_name: model_table, associations: [], validations: [] } } : {}
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(dir))
+      [ RailsAiContext::Tools::GetSchema, RailsAiContext::Tools::GetModelDetails ].each do |tool|
+        tool.reset_cache!
+        allow(tool).to receive(:cached_context).and_return({ schema: schema, models: models })
+      end
+      return RailsAiContext::Tools::GetModelDetails.call(model: "Thing").content.first[:text] if model_table
+
+      RailsAiContext::Tools::GetSchema.call(table: table, **options).content.first[:text]
+    end
+
+    def enum_section(text)
+      text[/### Enum types\n(?:- .*\n?)*/].to_s.lines.drop(1).map(&:strip)
+    end
+
+    let(:rails72_enums) do
+      <<~RUBY
+        ActiveRecord::Schema[7.2].define(version: 2026_01_01_000001) do
+          create_schema "app"
+
+          create_enum "mood", ["happy", "sad"]
+          create_enum "public.mood", ["ok", "meh"]
+
+          create_table "posts", force: :cascade do |t|
+            t.enum "mood", enum_type: "public.mood"
+            t.enum "feel", enum_type: "mood"
+          end
+        end
+      RUBY
+    end
+
+    it "keeps a Rails 7.2 schema.rb's enum names, which the connection itself wrote" do
+      dir = pg_app({ "db/schema.rb" => rails72_enums }, rails: "7.2.4")
+      schema = schema_at(dir)
+      columns = schema[:tables]["posts"][:columns].to_h { |c| [ c[:name], c[:enum_type] ] }
+
+      expect(schema[:enum_types].map { |e| e[:name] }).to eq(%w[mood public.mood])
+      expect(columns).to include("mood" => "public.mood", "feel" => "mood")
+      expect(enum_section(ask(dir, table: "posts"))).to eq([ "- `mood`: happy, sad", "- `public.mood`: ok, meh" ])
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+
+    it "keeps a Rails 7.2 foreign key to a table the search path hides qualified, as the connection wrote it" do
+      dump = rails72_enums.sub(/  create_enum.*?\n\n/m, "").sub("t.enum \"mood\", enum_type: \"public.mood\"", "t.bigint \"user_id\"")
+                          .sub(/    t.enum "feel".*\n/, "").sub(/^end\n\z/, "  add_foreign_key \"posts\", \"public.users\"\nend\n")
+      dir = pg_app({ "db/schema.rb" => dump }, rails: "7.2.4")
+
+      expect(schema_at(dir)[:tables]["posts"][:foreign_keys].first).to include(to_table: "public.users")
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+
+    it "reads the Rails version off the dump's stamp when no lockfile names it" do
+      dir = pg_app({ "db/schema.rb" => rails72_enums })
+      columns = schema_at(dir)[:tables]["posts"][:columns].to_h { |c| [ c[:name], c[:enum_type] ] }
+
+      expect(columns).to include("mood" => "public.mood", "feel" => "mood")
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+
+    let(:public_only) do
+      <<~RUBY
+        ActiveRecord::Schema[8.0].define(version: 2026_01_01_000001) do
+          create_table "events", force: :cascade do |t|
+          end
+        end
+      RUBY
+    end
+
+    it "answers a table in another schema plainly before Rails 8.1, keeping the hint" do
+      dir = pg_app({ "db/schema.rb" => public_only }, rails: "8.0.5.1", yml: "")
+      text = ask(dir, table: "audit.events")
+
+      expect(text).to include("Table 'audit.events' not found.", "Did you mean 'events'?")
+      expect(text).not_to include("dump_schemas")
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+
+    it "adds no key to a public-only app's schema" do
+      dir = pg_app({ "db/schema.rb" => public_only }, rails: "8.0.5.1", yml: "  username: deploy\n")
+
+      expect(schema_at(dir).keys).not_to include(:search_path, :search_path_dump, :qualified_tables)
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+
+    it "keeps the plain answer on Rails 7.0, whose schema.rb names no schema" do
+      dump = public_only.sub("Schema[8.0]", "Schema[7.0]")
+      dir = pg_app({ "db/schema.rb" => dump }, rails: "7.0.10")
+      text = ask(dir, table: "app.events")
+
+      expect(text).to include("Table 'app.events' not found.", "Did you mean 'events'?")
+      expect(text).not_to include("dump_schemas")
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+
+    it "finds a Rails 8.0 schema.rb table by its qualified name only when the search path has one schema" do
+      dump = public_only.sub("create_table \"events\"", "create_schema \"app\"\n  create_table \"users\"")
+      multi = pg_app({ "db/schema.rb" => dump }, rails: "8.0.5.1")
+      single = pg_app({ "db/schema.rb" => dump }, rails: "8.0.5.1", yml: "")
+
+      expect(ask(multi, table: "public.users")).to include("Table 'public.users' not found.")
+      expect(ask(single, table: "public.users")).to include("## Table: public.users")
+    ensure
+      FileUtils.rm_rf(multi)
+      FileUtils.rm_rf(single)
+    end
+
+    it "adds why a Rails 8.1 schema.rb leaves another schema out, after the hint" do
+      dump = <<~RUBY
+        ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+          create_schema "app"
+
+          create_table "app.users", force: :cascade do |t|
+          end
+
+          create_table "public.events", force: :cascade do |t|
+          end
+        end
+      RUBY
+      dir = pg_app({ "db/schema.rb" => dump }, rails: "8.1.4")
+      text = ask(dir, table: "audit.events")
+
+      expect(text).to include("Table 'audit.events' not found.", "Did you mean 'events'?",
+                              "If schema 'audit' exists, db/schema.rb leaves it out", "`config.active_record.dump_schemas = :all`")
+      expect(ask(dir, model_table: "audit.events")).to include("If schema 'audit' exists")
+      expect(ask(dir, table: "app.events")).not_to include("dump_schemas")
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+
+    let(:shadowing_sql) do
+      <<~SQL
+        CREATE SCHEMA app;
+        CREATE SCHEMA audit;
+        CREATE TABLE app.users (
+            id bigint NOT NULL,
+            tenant_column text
+        );
+        CREATE TABLE public.users (
+            id bigint NOT NULL,
+            shared_column text
+        );
+        CREATE TABLE public.posts (
+            id bigint NOT NULL,
+            title text
+        );
+        CREATE TABLE audit.events (
+            id bigint NOT NULL,
+            kind text
+        );
+      SQL
+    end
+
+    it "finds a table by its qualified name whether or not the search path shows it" do
+      dir = pg_app({ "db/structure.sql" => shadowing_sql }, rails: "8.1.4")
+
+      expect(ask(dir, table: "app.users")).to include("tenant_column")
+      expect(ask(dir, table: "public.posts")).to include("title")
+      expect(ask(dir, table: "public.users")).to include("shared_column")
+      expect(ask(dir, table: "audit.events")).to include("kind")
+      expect(ask(dir, model_table: "app.users")).to include("tenant_column")
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+
+    it "keeps tables outside the search path out of the JSON listing" do
+      dir = pg_app({ "db/structure.sql" => shadowing_sql }, rails: "8.1.4")
+      json = JSON.parse(ask(dir, detail: "summary", format: "json", limit: 1))
+
+      expect(json.keys).not_to include("qualified_tables", "search_path_dump")
+      expect(json["search_path"]).to eq(%w[app public])
+      expect(json.to_s).not_to include("shared_column", "kind")
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+
+    it "reads the search path from the schema_order alias" do
+      dir = pg_app({ "db/structure.sql" => shadowing_sql }, yml: "  schema_order: \"app,public\"\n")
+
+      expect(schema_at(dir)[:tables]["users"][:columns].map { |c| c[:name] }).to eq(%w[id tenant_column])
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+
+    it "takes a schema.rb's schemas from the one walk over it" do
+      dump = rails72_enums.sub("Schema[7.2]", "Schema[8.1]")
+      dir = pg_app({ "db/schema.rb" => dump })
+      path = File.join(dir, "db/schema.rb")
+      allow(RailsAiContext::SafeFile).to receive(:read).and_call_original
+
+      RailsAiContext::Introspectors::SchemaReader.new(path, search_path: %w[app public]).tables
+
+      expect(RailsAiContext::SafeFile).not_to have_received(:read).with(path, anything)
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+  end
+
+  describe "the booted connection's search path and out-of-path tables" do
+    it "reads the search path by SQL, which every Rails version runs" do
+      connection = double("pg")
+      allow(connection).to receive(:select_value).with("SELECT current_schemas(false)").and_return("{app,public}")
+      allow(introspector).to receive_messages(connection: connection, adapter_name: "PostgreSQL")
+
+      expect(introspector.send(:live_search_path)).to eq(%w[app public])
+    end
+
+    it "takes a decoded array and leaves public alone out" do
+      connection = double("pg")
+      allow(connection).to receive(:select_value).with("SELECT current_schemas(false)").and_return(%w[public])
+      allow(introspector).to receive_messages(connection: connection, adapter_name: "PostgreSQL")
+
+      expect(introspector.send(:live_search_path)).to be_nil
+    end
+
+    it "introspects a table outside the search path only when asked for it by name" do
+      column = ActiveRecord::ConnectionAdapters::Column.new("kind", nil, ActiveRecord::ConnectionAdapters::SqlTypeMetadata.new(sql_type: "text", type: :text))
+      connection = double("pg", indexes: [], foreign_keys: [], primary_key: "id", supports_comments?: false, supports_check_constraints?: false,
+                                native_database_types: {})
+      allow(connection).to receive(:data_source_exists?).with("audit.events").and_return(true)
+      allow(connection).to receive(:data_source_exists?).with("audit.missing").and_return(false)
+      allow(connection).to receive(:columns).with("audit.events").and_return([ column ])
+      allow(introspector).to receive_messages(connection: connection, adapter_name: "PostgreSQL")
+
+      expect(introspector.qualified_table("audit.events", live: true)[:columns].map { |c| c[:name] }).to eq(%w[kind])
+      expect(introspector.qualified_table("audit.missing", live: true)).to be_nil
     end
   end
 end

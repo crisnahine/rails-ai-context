@@ -20,10 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tables in every schema on the search path show without a boot.** The
   static tier listed only the tables in `public`, while the booted app lists
   every table in a schema on `schema_search_path` by its bare name. Both dump
-  formats now read the search path from config/database.yml, take `"$user"` as
-  the configured username when the dump creates that schema, and when two
-  schemas hold the same table name, show the one in the earlier schema, as
-  PostgreSQL resolves it.
+  formats now read the search path from config/database.yml, or its older
+  name `schema_order`, take `"$user"` as the configured username when the dump
+  creates that schema, and when two schemas hold the same table name, show the
+  one in the earlier schema, as PostgreSQL resolves it. The schema answer
+  names the search path when it holds more than `public`.
+- **A table Rails 8.0 dumps twice lists its columns once.** Before Rails 8.1,
+  schema.rb writes a table once per search path schema holding its name, and
+  the static tier listed every column twice.
 - **A structure.sql app lists plpgsql, as the booted app does.** Every
   PostgreSQL database starts with plpgsql, so the booted app lists it, but
   pg_dump leaves it out of the dump. The static tier now adds it, named
@@ -35,19 +39,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holds the types in a schema on the search path, bare in the current schema
   and schema-qualified otherwise, or every type by its bare name before Rails
   7.1. A column's enum type is bare when the search path finds that type first,
-  and qualified otherwise. Both tiers list enum types in name order. A table's
-  Enum types section now pairs each column with the type the search path
-  finds for it, so a column `mood` shows the list entry `public.mood`.
+  and qualified otherwise. A schema.rb from before Rails 8.1 already holds
+  these names and is read as written; a Rails 8.1 schema.rb qualifies every
+  name, and the static tier renames them. The Rails version comes from
+  Gemfile.lock, or the dump's `ActiveRecord::Schema[8.1]` stamp when the lock
+  names none. Both tiers list enum types in name order, and a table's Enum
+  types section pairs each column with the type the search path finds for it,
+  so a column `mood` whose type is `public.mood` shows that entry. A booted app
+  on Rails 7.0 to 8.0 reads its search path too, where before only 8.1 did.
 - **A table outside the search path stays out of the table list but can still
   be looked up.** Without a boot, a schema.rb table in another schema was
   listed and counted, while the booted app leaves it out. Both tiers now leave
   it out of the list in both dump formats, and both find it by its
   schema-qualified name: `schema --table audit.events`, and the columns of a
-  model whose `table_name` is `audit.events`. Before, no tier found it there.
-  When a schema.rb holds only the search path schemas, which is what Rails
-  writes by default, the static tier says the table is not in db/schema.rb
-  and that structure.sql or `config.active_record.dump_schemas = :all`
-  includes it, in place of a bare "not found".
+  model whose `table_name` is `audit.events`. A listed table is found by its
+  qualified name too, so `app.users` answers as `users` does. The booted app
+  reads such a table only when asked for it, so an app with a schema per
+  tenant pays nothing for it at boot. On Rails 8.1, whose schema.rb holds only
+  the search path schemas by default, the not-found answer for another
+  schema's table adds that `config.active_record.dump_schemas = :all`
+  includes it.
 - **`"$user"` on the search path reads the user from a database URL too.** A
   `DATABASE_URL`, `<NAME>_DATABASE_URL` or the entry's `url:` now supplies the
   username, and a `schema_search_path` in its query, over the entry's own

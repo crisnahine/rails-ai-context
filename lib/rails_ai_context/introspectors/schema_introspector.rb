@@ -23,7 +23,6 @@ module RailsAiContext
         attach_secondary_databases({
           adapter: adapter_name,
           tables: tables,
-          qualified_tables: qualified_tables,
           search_path: live_search_path,
           total_tables: SchemaConventions.table_count(tables),
           schema_version: current_schema_version,
@@ -45,6 +44,31 @@ module RailsAiContext
       # schema.rb / structure.sql / migration files.
       def static_call
         attach_secondary_databases(static_schema_parse)
+      end
+
+      # A table asked for by a schema-qualified name the listing does not hold. Read only when
+      # asked, since an app can hold a schema per tenant.
+      def self.qualified_table(name, database: nil, live: false)
+        RailsAiContext::RunCache.fetch([ :qualified_table, name, database, live ]) do
+          new(RailsAiContext.default_app).qualified_table(name, database: database, live: live)
+        end
+      end
+
+      def self.qualified_table_note(name)
+        new(RailsAiContext.default_app).qualified_table_note(name)
+      end
+
+      # The connection's table by that name, or the dump's, whichever tier answers.
+      def qualified_table(name, database: nil, live: false)
+        return unless name.to_s.include?(".")
+        return live_qualified_table(name) if live
+
+        dump_lookup(database)&.table(name)
+      end
+
+      # Why the primary's schema.rb leaves out a schema-qualified table, or nil.
+      def qualified_table_note(name)
+        dump_lookup(nil)&.missing&.call(name)
       end
 
       private
@@ -119,37 +143,23 @@ module RailsAiContext
         entry
       end
 
-      # The tables connection.tables leaves out because the search path does not show them
-      # bare: another schema's, or one an earlier schema's same name hides. pg_dump skips an
-      # extension's own tables, and a partition is listed with its parent.
-      PG_QUALIFIED_TABLES = <<~SQL
-        SELECT n.nspname, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE c.relkind IN ('r', 'p') AND NOT c.relispartition AND NOT pg_table_is_visible(c.oid)
-          AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_(toast|temp_)'
-          AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = c.oid AND d.deptype = 'e')
-      SQL
-
       # The schemas the connection searches, which name its enum types; public alone is the default.
+      # SQL, as 8.1's connection.current_schemas runs it (schema_statements.rb:242-246), which 7.0 to 8.0 lack.
       def live_search_path
-        return unless postgres? && connection.respond_to?(:current_schemas)
+        return unless postgres?
 
-        found = connection.current_schemas
-        found unless found == SchemaConventions::DEFAULT_SEARCH_PATH
+        found = connection.select_value("SELECT current_schemas(false)")
+        found = found.to_s.delete_prefix("{").delete_suffix("}").split(",").map { |schema| schema.delete('"') } unless found.is_a?(Array)
+        found unless found == PgNaming::DEFAULT_SEARCH_PATH
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "search_path")
       end
 
-      # Findable by schema-qualified name, as the static tier reads them from the dump.
-      def qualified_tables
-        return unless postgres?
-
-        found = connection.select_rows(PG_QUALIFIED_TABLES).to_h do |schema, table|
-          name = "#{schema}.#{table}"
-          [ name, table_entry(name) ]
-        end
-        found if found.any?
+      # quoted_scope reads a qualified name's own schema (schema_statements.rb:1179-1191).
+      def live_qualified_table(name)
+        table_entry(name) if postgres? && connection.data_source_exists?(name)
       rescue => e
-        RailsAiContext.debug_fail(e, nil, label: "qualified_tables")
+        RailsAiContext.debug_fail(e, nil, label: "qualified_table")
       end
 
       # connection.tables leaves out views and SQLite's virtual tables; a view's SQL is the dump's.
@@ -334,7 +344,8 @@ module RailsAiContext
       end
 
       def schema_reader
-        @schema_reader ||= SchemaReader.new(schema_file_path, partitions: @partitions.to_a, search_path: RailsAiContext::DatabaseYml.schema_search_path(app.root))
+        @schema_reader ||= SchemaReader.new(schema_file_path, partitions: @partitions.to_a, search_path: RailsAiContext::DatabaseYml.schema_search_path(app.root),
+                                                              rails_version: rails_version)
       end
 
       # The configured dump, whatever its format: a view's SQL and a MySQL generated expression are not on the connection.
@@ -513,7 +524,8 @@ module RailsAiContext
         @secondary_database_dumps ||= read_secondary_database_dumps
       end
 
-      def read_secondary_database_dumps
+      # [name, format, path] for each secondary database's dump on disk, the configured first.
+      def secondary_dump_files
         primary = dump_candidates.map(&:last)
         configured = SchemaDumpPath.secondaries(app.root).map { |name, (format, path)| [ name, format, path ] }
         taken = primary + configured.map(&:last)
@@ -523,8 +535,12 @@ module RailsAiContext
             .reject { |path| taken.include?(path) }
             .map { |path| [ File.basename(path, ".#{ext}").delete_suffix("_#{kind}"), format, path ] }
         end
-        dumps = (configured + globbed).each_with_object({}) do |(name, format, path), found|
-          next if found.key?(name) || primary.include?(path) || !File.exist?(path)
+        (configured + globbed).reject { |_, _, path| primary.include?(path) || !File.exist?(path) }
+      end
+
+      def read_secondary_database_dumps
+        dumps = secondary_dump_files.each_with_object({}) do |(name, format, path), found|
+          next if found.key?(name)
 
           parsed = parse_dump(format, path)
           next if parsed[:tables].blank?
@@ -605,14 +621,41 @@ module RailsAiContext
       end
 
       def parse_dump(format, path)
-        format == :ruby ? parse_schema_rb(path) : parse_structure_sql(path)
+        read_dump(format, path).first
       end
 
-      def parse_schema_rb(path)
-        content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
-        return { error: "#{relative_dump_path(path)} too large (#{File.size(path)} bytes, over max_schema_file_size)" } unless content
+      # [the schema answer, a DumpLookup over the same parse]
+      def read_dump(format, path)
+        format == :ruby ? read_schema_rb(path) : read_structure_sql(path)
+      end
 
-        schema = SchemaReader.new(path, pk_type: SchemaConventions.implicit_pk_type(app.root.to_s, secondary_dump(path)), search_path: search_path_for(path))
+      # The tables of one dump by the names a lookup may ask for.
+      DumpLookup = Struct.new(:listed, :qualified, :names, :missing, :placed) do
+        def table(name)
+          shown = names.relation(name)
+          return qualified[shown] if shown.include?(".")
+
+          listed[shown] if placed
+        end
+      end
+
+      def dump_lookup(database)
+        adapter = SchemaConventions.database_adapter_for(app.root.to_s, database || "primary")
+        return if adapter && !adapter.start_with?("postg")
+
+        _, format, path = database ? secondary_dump_files.find { |name, _, _| name == database } : [ nil, *present_dump ]
+        return unless path && File.exist?(path)
+
+        RailsAiContext::RunCache.fetch([ :dump_lookup, path ]) { read_dump(format, path).last }
+      end
+
+      def read_schema_rb(path)
+        content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
+        return [ { error: "#{relative_dump_path(path)} too large (#{File.size(path)} bytes, over max_schema_file_size)" }, nil ] unless content
+
+        search_path = search_path_for(path)
+        schema = SchemaReader.new(path, pk_type: SchemaConventions.implicit_pk_type(app.root.to_s, secondary_dump(path)), search_path: search_path,
+                                        rails_version: rails_version)
 
         tables = static_tables(schema.tables)
         qualified = static_tables(schema.qualified_tables)
@@ -645,10 +688,7 @@ module RailsAiContext
           generated_columns: SchemaConventions.generated_columns_of(tables),
           note: "Parsed from #{relative_dump_path(path)} (#{connection_state})"
         }
-        result[:qualified_tables] = qualified if qualified.any?
-        result[:search_path] = schema.search_path unless schema.search_path == SchemaConventions::DEFAULT_SEARCH_PATH
-        found = search_path_dump(path, content) unless secondary_dump(path)
-        result[:search_path_dump] = found if found
+        result[:search_path] = schema.search_path unless schema.search_path == PgNaming::DEFAULT_SEARCH_PATH
         result[:extensions] = schema.extensions.sort if schema.extensions.any?
         # schema.rb records only the max applied version, so pending here
         # means "migration files newer than the schema version" - exact for
@@ -658,19 +698,9 @@ module RailsAiContext
           migrate_dir = migrate_dir_for_dump(path)
           result[:pending_migrations] = RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: version, root: app.root)
         end
-        result
-      end
-
-      # A PostgreSQL schema.rb as Rails writes it by default holds only the search path schemas,
-      # so a table in another schema is not missing from the database, only from the dump.
-      def search_path_dump(path, content)
-        return unless SchemaConventions.database_adapter_for(app.root.to_s, "primary").to_s.start_with?("postg")
-
-        search_path = search_path_for(path)
-        created = content.scan(/^\s*create_schema\s+"([^"]+)"/).flatten
-        return unless (created - search_path).empty?
-
-        { path: relative_dump_path(path), schemas: created | (search_path & %w[public]) }
+        missing = ->(name) { PgNaming.missing_from_schema_rb(name, search_path, schema.schemas, schema.rails_version, relative_dump_path(path)) }
+        placed = PgNaming.dump_places_names?(schema.rails_version, schema.search_path)
+        [ result, DumpLookup.new(tables, qualified, schema.names, missing, placed) ]
       end
 
       def static_tables(declared_tables)
@@ -695,11 +725,11 @@ module RailsAiContext
         end
       end
 
-      def parse_structure_sql(path)
+      def read_structure_sql(path)
         content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
-        return { error: "#{relative_dump_path(path)} too large (#{File.size(path)} bytes, over max_schema_file_size)" } unless content
+        return [ { error: "#{relative_dump_path(path)} too large (#{File.size(path)} bytes, over max_schema_file_size)" }, nil ] unless content
 
-        parsed = StructureSqlReader.parse(content, search_path: search_path_for(path), rails_version: locked_rails_version)
+        parsed = StructureSqlReader.parse(content, search_path: search_path_for(path), rails_version: rails_version)
         dialect = parsed[:dialect]
         tables = parsed[:tables]
         tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
@@ -718,20 +748,18 @@ module RailsAiContext
           generated_columns: SchemaConventions.generated_columns_of(tables),
           note: "Parsed from #{relative_dump_path(path)} (#{connection_state})"
         }
-        result[:qualified_tables] = parsed[:qualified_tables] if parsed[:qualified_tables].any?
-        result[:search_path] = parsed[:search_path] unless parsed[:search_path] == SchemaConventions::DEFAULT_SEARCH_PATH
+        result[:search_path] = parsed[:names].path unless parsed[:names].path == PgNaming::DEFAULT_SEARCH_PATH
         result[:extensions] = parsed[:extensions].sort if parsed[:extensions].any?
         if applied.any?
           result[:schema_version] = applied.map(&:to_i).max.to_s
           migrate_dir = migrate_dir_for_dump(path)
           result[:pending_migrations] = RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: applied, root: app.root)
         end
-        result
+        [ result, DumpLookup.new(tables, parsed[:qualified_tables], parsed[:names], ->(_) { }, true) ]
       end
 
-      def locked_rails_version
-        lock = GemLock.for(app.root)
-        lock.version("rails") || lock.version("railties")
+      def rails_version
+        @rails_version ||= PgNaming.rails_version(app.root)
       end
 
       def search_path_for(dump_path)
