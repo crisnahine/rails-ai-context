@@ -12,7 +12,8 @@ module RailsAiContext
   module FixtureKeys
     ANCHOR = "DEFAULTS"
     CONFIG = "_fixture"
-    ERB_VALUE = "erb_value"
+    # A token no fixture writes, so a literal value is never mistaken for printed ERB.
+    ERB_VALUE = "rac_erb_value_5f3a9c"
 
     # A label holding ERB_VALUE was computed by ERB, so its real names are unknown.
     def self.name?(key)

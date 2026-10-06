@@ -129,15 +129,13 @@ module RailsAiContext
             subscribes = (content.include?("subscribe") || content.include?("attach_to")) && content.match?(SUBSCRIPTION_HINT)
             next unless verifies || subscribes
 
-            walked = walk_usage(content, verifies: verifies, subscribes: subscribes) or next
+            walked = walk_usage(content, verifies: verifies, subscribes: subscribes)
             usage = verifier_usage(walked)
             verifier << { file: relative, **usage } if usage.values.any?
             subscriptions.concat(subscriptions_from(walked, relative))
           end
           { message_verifier_usage: verifier, notification_subscriptions: subscriptions.sort_by { |s| [ s[:file], s[:line], s[:event] ] } }
         end
-      rescue => e
-        RailsAiContext.debug_fail(e, { message_verifier_usage: [], notification_subscriptions: [] }, label: "scan_sources")
       end
 
       # Sort before slicing - Dir.glob ordering is filesystem-dependent and
@@ -161,8 +159,6 @@ module RailsAiContext
           listeners[:methods] = Listeners::MethodsListener
         end
         SourceIntrospector.walk_source(content, listeners)
-      rescue StandardError, ScriptError => e
-        RailsAiContext.debug_fail(e, nil, label: "active_support usage walk")
       end
 
       # The class itself, Rails.application.message_verifier(s) or ActiveStorage.verifier.

@@ -290,9 +290,14 @@ module RailsAiContext
       def config_walk(relative)
         @config_file_walks ||= {}
         @config_file_walks.fetch(relative) do
-          source = RecurringSchedules.read_file(app.root, relative)
+          source = config_source(relative)
           @config_file_walks[relative] = source ? SourceIntrospector.walk_source(source, CONFIG_FILE_LISTENERS) : {}
         end
+      end
+
+      def config_source(relative)
+        @config_sources ||= {}
+        @config_sources.fetch(relative) { @config_sources[relative] = SafePath.read(relative, under: app.root.to_s).first }
       end
 
       def sidekiq_options(macros)
@@ -656,9 +661,7 @@ module RailsAiContext
       end
 
       def recurring_jobs
-        RecurringSchedules.read(app.root, ->(file) { config_assignments(file) })
-      rescue => e
-        RailsAiContext.debug_fail(e, [], label: "recurring_jobs")
+        RecurringSchedules.read(app.root, ->(file) { config_source(file)&.include?("good_job") ? config_assignments(file) : [] })
       end
 
       # Read as YAML so a path in a comment is no queue. Sidekiq's keys may be symbols or
@@ -966,10 +969,7 @@ module RailsAiContext
       def mailer_config_walks
         @mailer_config_walks ||= mailer_config_files.filter_map do |path|
           relative = path.delete_prefix("#{app.root}/")
-          unless @config_file_walks&.key?(relative)
-            source = SafeFile.read(path)
-            next unless source&.match?(/action_mailer|register_(?:interceptor|observer)|load_defaults/)
-          end
+          next unless @config_file_walks&.key?(relative) || config_source(relative)&.match?(/action_mailer|register_(?:interceptor|observer)|load_defaults/)
           [ relative, config_walk(relative) ]
         end
       end

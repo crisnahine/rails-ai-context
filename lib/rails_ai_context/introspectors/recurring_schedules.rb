@@ -10,7 +10,7 @@ module RailsAiContext
     module RecurringSchedules
       module_function
 
-      # `assignments` returns a config file's ConfigAssignmentListener hits from the caller's own walk.
+      # `assignments` returns a config file's ConfigAssignmentListener hits from the caller's own walk, [] when it never names good_job.
       def read(root, assignments)
         solid_queue(root) + sidekiq_cron(root) + sidekiq_scheduler(root) + good_job(root, assignments) + whenever(root)
       end
@@ -63,8 +63,6 @@ module RailsAiContext
       # file's assignment drops only that file's earlier entries.
       def good_job(root, assignments)
         GOOD_JOB_FILES.flat_map { |pattern| Dir.glob(pattern, base: root.to_s).sort }.each_with_object([]) do |file, tasks|
-          next unless read_file(root, file)&.include?("good_job")
-
           env = File.basename(file, ".rb") if file.start_with?("config/environments/")
           assignments.call(file).each do |hit|
             next unless GOOD_JOB_CRON.include?(hit[:path])

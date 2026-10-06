@@ -508,11 +508,16 @@ RSpec.describe RailsAiContext::Introspectors::MiddlewareIntrospector do
       expect(RailsAiContext::AstCache).not_to have_received(:parse).with(rackup)
     end
 
-    it "gives nothing for a config.ru Prism cannot make sense of" do
+    it "says a config.ru Prism cannot make sense of was not read" do
       File.write(rackup, "use (((\n\xFF\n")
 
-      expect { introspector.call }.not_to raise_error
-      expect(introspector.call[:rackup]).to be_blank
+      expect(introspector.call[:rackup]).to eq([ { unread: "config.ru does not parse" } ])
+    end
+
+    it "says a config.ru with one unclosed block was not read, rather than listing no middleware" do
+      File.write(rackup, "use Rack::Deflater\nmap \"/x\" do\n  run Rails.application\n")
+
+      expect(described_class.rackup(app.root.to_s)).to eq([ { unread: "config.ru does not parse" } ])
     end
   end
 

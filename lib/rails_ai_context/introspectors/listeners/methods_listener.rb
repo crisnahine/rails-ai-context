@@ -44,6 +44,9 @@ module RailsAiContext
         # only Rails' `private: true` makes one private.
         DELEGATORS = %i[delegate def_delegators def_instance_delegators def_delegator def_instance_delegator instance_delegate].freeze
 
+        # Ruby makes these instance methods private whatever section defines them.
+        ALWAYS_PRIVATE = %w[initialize initialize_copy initialize_clone initialize_dup respond_to_missing?].freeze
+
         # Ruby's own definers: these honor the section's visibility, as `def` does.
         ATTR_DEFINERS = { attr_reader: [ :reader ], attr_writer: [ :writer ], attr_accessor: %i[reader writer], attr: [ :reader ] }.freeze
         # Active Support's: each defines public class and instance accessors from a string `class_eval`.
@@ -175,9 +178,8 @@ module RailsAiContext
           return if @frames.last.kind == :extension || class_methods_module_own?(node.receiver)
           return if method_name == "initialize" && scope == :instance && !@include_initialize
 
-          frame = @frames.last
           # A bare `private` reaches only defs written without a receiver.
-          visibility = frame.marks[[ scope, method_name ]] || (node.receiver ? :public : frame.visibility)
+          visibility = ruby_visibility(scope, method_name, node.receiver ? :public : @frames.last.visibility)
           if visibility == :module_function
             record(node, method_name, :instance, :private, prefixed: false)
             @results.last[:module_function] = true
@@ -234,6 +236,10 @@ module RailsAiContext
 
         def open_frame(kind)
           @frames.push(Frame.new(kind, :public, {}))
+        end
+
+        def ruby_visibility(scope, name, visibility)
+          @frames.last.marks.fetch([ scope, name ]) { scope == :instance && ALWAYS_PRIVATE.include?(name) ? :private : visibility }
         end
 
         def frame_scope
@@ -368,7 +374,7 @@ module RailsAiContext
           entry = {
             name:         name,
             scope:        scope,
-            visibility:   @frames.last.marks[[ scope, name ]] || visibility,
+            visibility:   ruby_visibility(scope, name, visibility),
             params:       params,
             owner:        @owner_stack.dup,
             signature:    signature,
