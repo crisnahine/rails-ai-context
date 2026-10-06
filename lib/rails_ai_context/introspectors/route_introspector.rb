@@ -434,13 +434,6 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [ [], [], [] ], label: "draw target #{target}")
       end
 
-      # `draw(:"admin/users")` is legal and resolves under config/routes/, but
-      # the name reaches here from source text, so the resolved path has to be
-      # confirmed inside that directory before it is read.
-      #
-      # Resolved with realpath, like safe_glob_realpath: expand_path folds
-      # `..` without following links, so a symlink under config/routes/ was
-      # enough to read a file anywhere on disk.
       # Rails 8.1 raises on `get "/a", "/b"`; with no version locked the routes are not guessed.
       def multi_path_routes?
         return @multi_path_routes if defined?(@multi_path_routes)
@@ -449,6 +442,13 @@ module RailsAiContext
         @multi_path_routes = !locked.nil? && Gem::Version.new(locked) < Gem::Version.new("8.1.0.a")
       end
 
+      # `draw(:"admin/users")` is legal and resolves under config/routes/, but
+      # the name reaches here from source text, so the resolved path has to be
+      # confirmed inside that directory before it is read.
+      #
+      # Resolved with realpath, like safe_glob_realpath: expand_path folds
+      # `..` without following links, so a symlink under config/routes/ was
+      # enough to read a file anywhere on disk.
       def draw_target_path(target)
         return nil if target.nil? || target.to_s.empty?
 
