@@ -181,39 +181,9 @@ module RailsAiContext
         adapter&.start_with?("sqlite") ? "integer" : "bigint"
       end
 
-      # Best-effort adapter lookup without booting: a URL Rails would merge in
-      # wins, as DatabaseYml.url_adapter rules; then in database.yml a keyed entry for this database name wins; a file with exactly one
-      # distinct adapter is unambiguous; anything else falls back to the
-      # first adapter (the primary comes first in generated configs).
+      # The running environment's adapter for one database, as database.yml and a merged URL name it.
       def database_adapter_for(root, db_name)
-        entry = RailsAiContext::DatabaseYml.entry(root, db_name)
-        url_adapter = RailsAiContext::DatabaseYml.url_adapter(db_name, entry.is_a?(Hash) ? entry["url"] : nil)
-        return url_adapter if url_adapter
-
-        content = database_yml_content(root)
-        return nil if content.empty?
-
-        adapters = content.scan(/^\s*adapter:\s*(\w+)/).flatten
-        return adapters.first if adapters.uniq.size <= 1
-
-        # Mixed adapters: find the block keyed by this database's name and
-        # take the first adapter that follows at deeper indentation. The
-        # block ends at the first non-blank line at the key's indent or
-        # shallower; blank/whitespace-only lines don't end it (and must not
-        # let it bleed into a sibling block).
-        if (m = content.match(/^([ \t]*)#{Regexp.escape(db_name)}:[ \t]*\n((?:(?:[ \t]*|\1[ \t]+\S[^\n]*)\n)*)/))
-          block_adapter = m[2][/^[ \t]*adapter:[ \t]*(\w+)/, 1]
-          return block_adapter if block_adapter
-        end
-        adapters.first
-      end
-
-      # Normalized so the line-anchored block regex above works on files with
-      # Windows endings or no final newline.
-      def database_yml_content(root)
-        db_yml = File.join(root.to_s, "config", "database.yml")
-        content = RailsAiContext::SafeFile.read(db_yml).to_s.gsub("\r\n", "\n")
-        content.empty? || content.end_with?("\n") ? content : "#{content}\n"
+        RailsAiContext::DatabaseYml.adapter(db_name, RailsAiContext::DatabaseYml.entry(root, db_name)).first
       end
 
       # A dump of more than one schema qualifies every name (relation_name, 8.1);

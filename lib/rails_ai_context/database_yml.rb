@@ -76,6 +76,21 @@ module RailsAiContext
       scheme && URL_SCHEME_ADAPTERS.fetch(scheme, scheme)
     end
 
+    # [adapter, from_default]: the URL's scheme wins, then the entry's adapter. An ERB-computed
+    # value is unknown unless it is one tag carrying its own literal default.
+    def adapter(name, entry)
+      entry = {} unless entry.is_a?(Hash)
+      from_url = url_adapter(name.to_s, entry["url"])
+      return [ from_url, false ] if from_url
+
+      text = entry["adapter"]&.to_s
+      return [ text, false ] unless computed?(text)
+      return [ nil, false ] unless text.start_with?(ERB_SENTINEL) && text.scan(ERB_SENTINEL).size == 1
+
+      literal = text.delete_prefix(ERB_SENTINEL)
+      literal.empty? ? [ nil, false ] : [ literal, true ]
+    end
+
     # An output tag becomes an unknown marker, other tags go, and both keep their
     # newlines so the rest of the file parses at its written indentation.
     def neutralize_erb(content)
