@@ -380,13 +380,15 @@ module RailsAiContext
         @locale_index ||= locale_file_paths.to_h { |path| [ path, index_locale_file(path) ] }
       end
 
+      BACKEND_SETTINGS = [ %w[i18n plural], %w[i18n transliterate] ].freeze
+
       def index_locale_file(path)
         content = RailsAiContext::SafeFile.read(path)
         return REFUSED_LOCALE_FILE unless content
 
         data = path.end_with?(".rb") ? ruby_locale_data(content) : yaml_locale_data(content)
-        # <locale>.i18n holds backend settings (the plural rule, transliteration), not translations.
-        key_paths = nested_key_paths(data).reject { |key_path| key_path.split(".", 3)[1] == "i18n" }
+        # I18n reads <locale>.i18n.plural and .transliterate as backend settings, not translations.
+        key_paths = nested_key_paths(data).reject { |key_path| BACKEND_SETTINGS.include?(key_path.split(".", 4)[1, 2]) }
 
         # Only the locale-rooted paths are kept. The per-locale lists are the
         # same strings without their root, so holding both doubled what an
