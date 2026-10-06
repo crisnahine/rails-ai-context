@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "pathname"
+
 module RailsAiContext
   module Introspectors
     module Listeners
@@ -252,9 +254,9 @@ module RailsAiContext
           return nil if node.nil? || node.is_a?(Prism::KeywordHashNode)
 
           name = literal_string(node)
-          return "config/#{name}.yml" if name
-          segments = app_root_join(node)
-          File.join(*segments) if segments
+          path = name ? "config/#{name}.yml" : (segments = app_root_join(node)) && File.join(*segments)
+          # Rails reads `config/../x.yml` as `x.yml`, inside the app; only a path still climbing leaves it.
+          Pathname.new(path).cleanpath.to_s if path
         end
 
         def rails_call?(node, text)

@@ -554,5 +554,24 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
         ])
       end
     end
+
+    it "reads a config_for name that climbs out of config/ but stays in the app, where Rails reads it" do
+      result = application(
+        "config/application.rb" => <<~RUBY,
+          module App
+            class Application < Rails::Application
+              config.x.out = config_for("../settings")
+              config.x.up = config_for("../../settings")
+            end
+          end
+        RUBY
+        "settings.yml" => "shared:\n  a: 1\n"
+      )
+
+      expect(result[:config_for]).to eq([
+        { key: "x.out", call: '"../settings"', file: "settings.yml", keys: %w[a] },
+        { key: "x.up", call: '"../../settings"', file: "../settings.yml", outside: true }
+      ])
+    end
   end
 end
