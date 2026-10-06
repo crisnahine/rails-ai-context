@@ -568,13 +568,19 @@ module RailsAiContext
       end
 
       def count_controllerless_constructs
-        controllerless_routes.count { |r| dynamic_target?(r) }
+        dynamic_route_count(app.routes)
       rescue => e
         RailsAiContext.debug_fail(e, 0, label: "count_controllerless_constructs")
       end
 
-      def controllerless_routes
-        app.routes.routes.reject do |r|
+      # The redirects and lambdas a route set holds, which no controller#action row lists.
+      def dynamic_route_count(route_set)
+        controllerless_routes(route_set).count { |r| dynamic_target?(r) }
+      end
+      public :dynamic_route_count
+
+      def controllerless_routes(route_set = app.routes)
+        route_set.routes.reject do |r|
           (r.respond_to?(:internal) && r.internal) || r.defaults[:controller].present?
         end
       end

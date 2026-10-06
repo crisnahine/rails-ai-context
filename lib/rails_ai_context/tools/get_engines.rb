@@ -57,6 +57,7 @@ module RailsAiContext
             loaded.each do |e|
               parts = []
               parts << count_phrase(e[:route_count], "route") if e[:route_count]
+              parts << count_phrase(e[:dynamic_route_count], "redirect or lambda route") if e[:dynamic_route_count]
               parts << count_phrase(e[:model_count], "model") if e[:model_count]
               line = "- **#{e[:name]}**"
               line += " - #{parts.join(', ')}" if parts.any?

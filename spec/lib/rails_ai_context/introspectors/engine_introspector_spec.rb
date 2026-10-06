@@ -219,11 +219,12 @@ RSpec.describe RailsAiContext::Introspectors::EngineIntrospector do
   end
 
   describe "a loaded engine's route count" do
-    it "counts the table as the routes section lists it, PATCH and PUT as one" do
+    it "counts the table as the routes section lists it, PATCH and PUT as one, and the redirects apart" do
       set = ActionDispatch::Routing::RouteSet.new.tap do |routes|
         routes.draw do
           resources :widgets
           mount ->(_env) { [ 200, {}, [] ] }, at: "/raw"
+          get "old_widgets" => redirect("widgets")
         end
       end
       engine = double("engine", name: "Shop::Engine", root: Pathname.new(Dir.tmpdir), routes: set)
@@ -231,7 +232,7 @@ RSpec.describe RailsAiContext::Introspectors::EngineIntrospector do
 
       loaded = described_class.new(Rails.application).send(:discover_rails_engines)
 
-      expect(loaded.first[:route_count]).to eq(7)
+      expect(loaded.first).to include(route_count: 7, dynamic_route_count: 2)
     end
   end
 

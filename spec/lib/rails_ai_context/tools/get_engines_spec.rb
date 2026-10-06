@@ -12,7 +12,7 @@ RSpec.describe RailsAiContext::Tools::GetEngines do
         { engine: "Blazer::Engine", path: "/blazer" }
       ],
       rails_engines: [
-        { name: "Devise::Engine", root: "devise-4.9.3", route_count: 12, model_count: 0 },
+        { name: "Devise::Engine", root: "devise-4.9.3", route_count: 12, dynamic_route_count: 2, model_count: 0 },
         { name: "MyEngine", root: "engines/my_engine", model_count: 3 }
       ]
     }
@@ -86,7 +86,7 @@ RSpec.describe RailsAiContext::Tools::GetEngines do
     it "lists loaded engine classes with route and model counts" do
       text = described_class.call.content.first[:text]
       expect(text).to include("## Loaded Engine Classes")
-      expect(text).to include("**Devise::Engine** - 12 routes")
+      expect(text).to include("**Devise::Engine** - 12 routes, 2 redirect or lambda routes")
       expect(text).to include("**MyEngine** - 3 models")
     end
 
