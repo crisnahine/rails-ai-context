@@ -20,6 +20,7 @@ module RailsAiContext
       RAILS_CI = "config/ci.rb"
 
       def call
+        ci_steps, ci_steps_dir = detect_ci_steps
         {
           framework: detect_framework,
           factories: detect_factories,
@@ -37,8 +38,8 @@ module RailsAiContext
           test_files: test_categories,
           vcr_cassettes: detect_vcr,
           ci_config: detect_ci,
-          ci_steps: detect_ci_steps,
-          ci_steps_dir: @ci_steps_dir,
+          ci_steps: ci_steps,
+          ci_steps_dir: ci_steps_dir,
           coverage: detect_coverage,
           factory_traits: detect_factory_traits,
           test_count_by_category: detect_test_count_by_category,
@@ -377,22 +378,20 @@ module RailsAiContext
       end
 
       # The steps bin/ci runs, from the `step title, *command` calls of the
-      # CI DSL Rails 8.1 generates.
+      # CI DSL Rails 8.1 generates, and the directory of config/ci.rb when it is not the suite root.
       def detect_ci_steps
         dir, content = ci_roots.lazy.filter_map { |d| (text = RailsAiContext::SafePath.read(RAILS_CI, under: d).first) && [ d, text ] }.first
         return nil unless content
 
         # Paths in the answer are under the suite root, which for a test/dummy is the engine's.
-        unless dir == suite_root
-          @ci_steps_dir = "#{Pathname.new(PathResolver.root_key(dir)).relative_path_from(Pathname.new(PathResolver.root_key(suite_root)))}/"
-        end
+        ci_dir = "#{Pathname.new(PathResolver.root_key(dir)).relative_path_from(Pathname.new(PathResolver.root_key(suite_root)))}/" unless dir == suite_root
 
         hits = SourceIntrospector.walk_source(content, steps: -> { Listeners::GenericMacroListener.new(:step) })[:steps]
         steps = hits.filter_map do |hit|
           title, *command = hit[:values]
           { name: title, command: command.join(" ") } if title.is_a?(String)
         end
-        steps.presence
+        [ steps.presence, ci_dir ]
       end
 
       def detect_coverage
