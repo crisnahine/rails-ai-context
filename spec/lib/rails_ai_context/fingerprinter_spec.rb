@@ -83,6 +83,18 @@ RSpec.describe RailsAiContext::Fingerprinter do
       expect(before).not_to eq(after)
     end
 
+    it "ignores a bundler's build output under app/assets/builds, which no reader reads" do
+      root = app.root.to_s
+      build = File.join(root, "app/assets/builds/application.js")
+      FileUtils.mkdir_p(File.dirname(build))
+      File.write(build, "console.log(1);\n")
+      before = described_class.compute(app)
+      File.utime(Time.now + 5, Time.now + 5, build)
+
+      expect(described_class.compute(app)).to eq(before)
+      expect(described_class.changed_since(root, Time.now + 1)).to eq([])
+    end
+
     it "detects a change to a controller outside app/javascript" do
       Dir.mktmpdir do |root|
         FileUtils.mkdir_p(File.join(root, "app/webpacker/controllers"))

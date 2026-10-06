@@ -52,6 +52,9 @@ module RailsAiContext
     WATCHED_EXTNAMES = %w[.rb .rake .js .ts .erb .haml .slim .yml .sql .tt].freeze
     WATCHED_EXTENSIONS = "**/*{#{WATCHED_EXTNAMES.join(",")}}"
 
+    # jsbundling and cssbundling rewrite this on every frontend save, and no reader reads it.
+    BUILD_OUTPUT = "/app/assets/builds/"
+
     # What a reader holds so it can ask later whether the app moved. Taken
     # before the read it protects: a mark taken after introspection records
     # edits the answer never saw.
@@ -136,7 +139,7 @@ module RailsAiContext
 
       # One walk with an extension filter: a brace glob walks the tree once per extension.
       def watched_files(dir)
-        Dir.glob(File.join(dir, "**/*")).select { |path| WATCHED_EXTNAMES.include?(File.extname(path)) }
+        Dir.glob(File.join(dir, "**/*")).select { |path| WATCHED_EXTNAMES.include?(File.extname(path)) && !path.include?(BUILD_OUTPUT) }
       end
 
       def newer?(path, time)
