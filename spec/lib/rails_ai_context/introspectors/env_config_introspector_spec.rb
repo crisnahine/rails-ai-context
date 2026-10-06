@@ -485,6 +485,7 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
 
       expect(result[:config_for].map { |entry| entry[:key] }).to eq(%w[x.c x.r x.d])
       expect(result[:config_for].map { |entry| entry[:keys] }.uniq).to eq([ %w[api] ])
+      expect(result[:config_for].map { |entry| entry[:read] }).to eq([ ".fetch(:api)", "[:url]", ".dig(:a, :b)" ])
     end
 
     it "reads a tag on its own line under a key as that key's value, and one followed by siblings as written lines" do

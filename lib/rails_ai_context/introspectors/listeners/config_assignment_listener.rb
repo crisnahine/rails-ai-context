@@ -170,7 +170,8 @@ module RailsAiContext
 
         # `config_for(:name, env: "production")`: the YAML file it reads, nil for a path
         # that is not a literal, and its env:, :expression when that is not a literal.
-        def config_for(node)
+        def config_for(value)
+          node = value
           node = node.receiver while node.is_a?(Prism::CallNode) && CONFIG_FOR_READERS.include?(node.name) && node.receiver
           return nil unless node.is_a?(Prism::CallNode) && node.name == :config_for
           return nil unless node.receiver.nil? || rails_call?(node.receiver, "Rails.application")
@@ -179,7 +180,15 @@ module RailsAiContext
           env = extract_keyword_nodes(node)[:env]
           env = nil if env && rails_call?(env, "Rails.env")
           { argument: argument && RailsAiContext::Redaction.call(NodeSource.text(argument)), file: config_for_file(argument),
-            env: env && (literal_string(env) || :expression) }.compact
+            env: env && (literal_string(env) || :expression), read: chained_read(value, node) }.compact
+        end
+
+        # What the chain reads off the result, `.fetch(:api)`: the value holds that one entry, not the file.
+        def chained_read(value, call)
+          return nil if value.equal?(call)
+
+          text = value.location.slice[(call.location.end_offset - value.location.start_offset)..]
+          RailsAiContext::Redaction.call(text)
         end
 
         # Rails reads `config/<name>.yml` for a name, and the Pathname itself for `Rails.root.join(...)`.
