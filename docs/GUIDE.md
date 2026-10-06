@@ -1435,7 +1435,7 @@ Includes all standard introspectors plus:
 | `active_storage` | Attachments (has_one_attached, has_many_attached per model), storage services, direct upload config. |
 | `action_text` | Rich text fields (has_rich_text per model), Action Text installation status. |
 | `api` | API-only mode, API versioning (from directory structure), serializers (Jbuilder, AMS, etc.), GraphQL (types, mutations), rate limiting (Rack::Attack). |
-| `rake_tasks` | Custom rake tasks in `lib/tasks/` with names, descriptions, namespaces, file paths. |
+| `rake_tasks` | Custom rake tasks from the Rakefile, `lib/tasks/` and `rakelib/` (names, arguments, descriptions, namespaces, file paths); the app's generators under `lib/generators`, `lib/templates` overrides and the Railties under `lib/`. |
 | `assets` | Asset pipeline (Propshaft/Sprockets), JS bundler (importmap/esbuild/webpack/vite), CSS framework, importmap pins, manifest files. |
 | `devops` | Puma config (threads, workers, port), Procfile entries, Docker (multi-stage detection), deployment tools, health check routes. |
 | `action_mailbox` | Action Mailbox mailboxes with routing patterns. |
