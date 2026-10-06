@@ -12,14 +12,16 @@ module RailsAiContext
   module FixtureKeys
     ANCHOR = "DEFAULTS"
     CONFIG = "_fixture"
+    ERB_VALUE = "erb_value"
 
+    # A label holding ERB_VALUE was computed by ERB, so its real names are unknown.
     def self.name?(key)
       key = key.to_s
-      key != ANCHOR && !key.start_with?("_")
+      key != ANCHOR && !key.start_with?("_") && !key.include?(ERB_VALUE)
     end
 
     # The fixtures a file defines, label => attributes, or nil when it does not
-    # read as fixtures. ERB is not run: a tag that prints becomes "erb_value"
+    # read as fixtures. ERB is not run: a tag that prints becomes ERB_VALUE
     # and one that does not is dropped, so a file opening with
     # `<% digest = ... %>` still reads. Aliases are allowed, as Rails allows
     # them, and the labels `_fixture: ignore:` names are dropped. A result is
@@ -60,9 +62,9 @@ module RailsAiContext
     def self.without_erb(content)
       content.to_s
         .gsub(/<%(?![=%]).*?%>/m, "")
-        .gsub(/"<%=.*?%>"/m, '"erb_value"')
-        .gsub(/'<%=.*?%>'/m, "'erb_value'")
-        .gsub(/<%=.*?%>/m, "erb_value")
+        .gsub(/"<%=.*?%>"/m, %("#{ERB_VALUE}"))
+        .gsub(/'<%=.*?%>'/m, "'#{ERB_VALUE}'")
+        .gsub(/<%=.*?%>/m, ERB_VALUE)
     end
     private_class_method :read, :without_erb
   end

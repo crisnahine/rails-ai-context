@@ -285,6 +285,21 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       expect(described_class.send(:fixture_key_for, "posts", {})).to eq("first")
     end
 
+    it "never offers a label ERB computes as a fixture key, and shows it as ERB in the listing" do
+      write("test/fixtures/users.yml", "<% 2.times do |i| %>\nuser_<%= i %>:\n  n: <%= i %>\n<% end %>\n")
+      text = full_text
+
+      expect(described_class.send(:fixture_key_for, "users", { fixture_names: { "users" => [ "user_erb_value" ] } })).to be_nil
+      expect(text).to include("- **users:**\n  - `user_<%= ... %>` _(label set by ERB)_")
+      expect(text).not_to include("users(:user_erb_value)")
+    end
+
+    it "lists a label that starts with an underscore as written, with no ERB note" do
+      write("test/fixtures/unders.yml", "_draft:\n  n: 1\nplain:\n  n: 2\n")
+
+      expect(full_text).to include("- **unders:**\n  - `_draft`: n: 1\n  - `plain`: n: 2")
+    end
+
     it "lists the labels of a set it cannot parse and says so" do
       write("test/fixtures/users.yml", "bob:\n  name: B\n")
       write("test/fixtures/broken.yml", "one:\n  title: [unclosed\n")

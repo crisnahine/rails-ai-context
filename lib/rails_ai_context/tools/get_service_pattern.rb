@@ -471,7 +471,7 @@ module RailsAiContext
       # interface, which is why it is dropped here rather than at the walk.
       private_class_method def self.extract_public_methods(owned)
         owned.select { |m| m[:visibility] == :public && m[:name] != "initialize" }
-             .map { |m| m[:signature] }
+             .map { |m| m[:scope] == :class && !m[:signature].start_with?("self.") ? "self.#{m[:signature]}" : m[:signature] }
       end
 
       private_class_method def self.primary_owner(owners, expected_constant)

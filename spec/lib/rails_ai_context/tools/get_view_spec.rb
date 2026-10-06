@@ -362,7 +362,7 @@ RSpec.describe RailsAiContext::Tools::GetView do
         # The old grouping offered the template's own filename as a directory,
         # which matched nothing when passed back.
         expect(text).not_to include("controller:\"notice.text.erb\"")
-        expect(text.scan(/controller:"/).size).to eq(1)
+        expect(text.scan(/controller:"(?!layouts")/).size).to eq(1)
         expect(text).to include("`path:")
       end
     end
@@ -471,6 +471,12 @@ RSpec.describe RailsAiContext::Tools::GetView do
         expect(text).to include("# Views (0 templates, 0 partials, 2 layouts)")
       end
 
+      it "points the full listing at the layouts" do
+        text = described_class.call(detail: "full").content.first[:text]
+
+        expect(text).to include("- `controller:\"layouts\"` (2 layouts)")
+      end
+
       it "says a controller filter miss is a miss, not a missing directory" do
         text = described_class.call(controller: "users").content.first[:text]
 
@@ -571,6 +577,17 @@ RSpec.describe RailsAiContext::Tools::GetView do
         expect(text).to match(/posts\/show\.html\+mobile\.erb\** \(1 line\).*`mobile` variant of `show`/)
         expect(text).to match(/posts\/show\.fr\.html\.erb\** \(1 line\).*`fr` locale of `show`/)
         expect(text).not_to match(/posts\/show\.html\.erb.*of `show`/)
+      end
+    end
+
+    %w[summary standard].each do |detail|
+      it "ties a partial's variant to its partial in the #{detail} listing" do
+        partials = { "posts/_card.html.erb" => { lines: 1 }, "posts/_card.html+mobile.erb" => { lines: 1, fields: %w[title] } }
+        allow(described_class).to receive(:cached_context).and_return(view_templates: { templates: {}, partials: partials })
+        text = described_class.call(controller: "posts", detail: detail).content.first[:text]
+
+        expect(text).to match(/posts\/_card\.html\+mobile\.erb \(1 line\) `mobile` variant of `card`/)
+        expect(text).not_to match(/posts\/_card\.html\.erb.*of `card`/)
       end
     end
 

@@ -46,6 +46,38 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
       end
     end
 
+    # class_attribute defines a class-side and an instance-side set of the
+    # same names; printed bare, every name showed twice with no way to tell.
+    context "with a class_attribute and a class << self method" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "services"))
+        File.write(File.join(tmpdir, "app", "services", "content_renderer.rb"), <<~RUBY)
+          class ContentRenderer
+            class_attribute :processor
+
+            class << self
+              def build(x); end
+            end
+
+            def process(text); end
+          end
+        RUBY
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+        described_class.reset_cache!
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "marks each class-side method with self." do
+        text = described_class.call(service: "ContentRenderer").content.first[:text]
+
+        methods = text.scan(/^- `(.+)`$/).flatten
+        expect(methods).to eq(%w[self.processor self.processor=(value) self.processor? processor processor=(value) processor? self.build(x) process(text)])
+      end
+    end
+
     # Packs and engines are searched too, so naming app/services/ alone told a
     # packwerk app to look somewhere the tool had not looked.
     it "names every directory it searched when it found none" do

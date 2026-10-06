@@ -125,7 +125,8 @@ module RailsAiContext
               lines << "- #{name} (#{count_phrase(meta[:lines], "line")}#{phlex_tag})#{alternate}#{parts}#{comps}#{stim}"
             end
             ctrl_partials.sort.each do |name, meta|
-              lines << "- #{name} (#{count_phrase(meta[:lines], "line")})"
+              alternate = (note = RailsAiContext::ViewFile.alternate_of(name)) ? " #{note}" : ""
+              lines << "- #{name} (#{count_phrase(meta[:lines], "line")})#{alternate}"
             end
             lines << ""
           end
@@ -185,7 +186,8 @@ module RailsAiContext
               helpers = meta[:helpers]&.any? ? " helpers: #{meta[:helpers].join(', ')}" : ""
               locals = extract_partial_locals(name, templates)
               locals_str = locals&.any? ? " **locals:** #{locals.join(', ')}" : ""
-              lines << "- #{name} (#{count_phrase(meta[:lines], "line")})#{fields}#{helpers}#{locals_str}"
+              alternate = (note = RailsAiContext::ViewFile.alternate_of(name)) ? " #{note}" : ""
+              lines << "- #{name} (#{count_phrase(meta[:lines], "line")})#{alternate}#{fields}#{helpers}#{locals_str}"
             end
             lines << ""
           end
@@ -230,6 +232,7 @@ module RailsAiContext
               count = views_in_group(templates, ctrl).size + views_in_group(partials, ctrl).size
               lines << "- `controller:\"#{ctrl}\"` (#{count_phrase(count, "file")})"
             end
+            lines << "- `controller:\"layouts\"` (#{count_phrase(layouts.size, "layout")})" if layouts.any?
             lines << "" << "_Or use `path:\"controller/action.html.erb\"` for a specific file._"
             text_response(lines.join("\n"))
           end

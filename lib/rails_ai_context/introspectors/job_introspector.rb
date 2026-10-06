@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "set"
 require "yaml"
 
 module RailsAiContext
@@ -314,18 +315,54 @@ module RailsAiContext
       end
 
       # delayed_job's handle_asynchronously wraps a model method so every call is
-      # queued; the app has no job class for it at all.
+      # queued; the app has no job class for it at all. Called from a module, it
+      # wraps the method on each model that includes the module.
       def async_methods
-        model_sources.flat_map do |record|
-          next [] unless record.source.include?("handle_asynchronously")
+        found = []
+        modules = {}
+        sources = []
+        model_sources(skip_concerns: false) do |record|
+          sources << [ record.path, record.source ]
+          next unless record.source.include?("handle_asynchronously")
 
-          owner = DeclaredConstant.resolve(record.source, record.path_name)
-          walked = SourceIntrospector.walk_source(record.source, { calls: -> { Listeners::GenericMacroListener.new(:handle_asynchronously) } })
-          walked[:calls].filter_map do |call|
-            method = call[:args].first or next
-            options = call[:option_values].map { |key, value| "#{key}: #{value}" }
-            { owner: owner, method: method.to_s, file: "#{record.file}:#{call[:location]}", options: options.join(", ").presence }.compact
+          # app/models/concerns is an autoload root of its own.
+          owner = DeclaredConstant.resolve(record.source, record.path_name.delete_prefix("Concerns::"))
+          calls = async_calls(record)
+          DeclaredConstant.declared_names(record.source).include?(owner) ? found.concat(calls.map { |call| { owner: owner, **call } }) : modules[owner] = calls
+        end
+        found + mixin_async_methods(sources, modules)
+      end
+
+      # A concern that includes the concern runs its `included` block on its own includers, so
+      # the walk follows each module includer until it reaches classes.
+      def mixin_async_methods(sources, modules)
+        return [] if modules.empty?
+
+        mixins = sources.flat_map { |_path, source| DeclaredConstant.declared_module_names(source) }.to_set -
+          sources.flat_map { |_path, source| DeclaredConstant.declared_names(source) }
+        found = []
+        seen = modules.keys.to_set
+        until modules.empty?
+          reached = Hash.new { |hash, key| hash[key] = [] }
+          Includers.of(app.root, sources, modules.keys, macros: %i[include prepend]).each do |name, includers|
+            includers.uniq.each do |includer|
+              next reached[includer].concat(modules[name]) if mixins.include?(includer)
+
+              found.concat(modules[name].map { |call| { owner: includer, **call } })
+            end
           end
+          modules = reached.reject { |name, _| seen.include?(name) }
+          seen.merge(modules.keys)
+        end
+        found.uniq
+      end
+
+      def async_calls(record)
+        walked = SourceIntrospector.walk_source(record.source, { calls: -> { Listeners::GenericMacroListener.new(:handle_asynchronously) } })
+        walked[:calls].filter_map do |call|
+          method = call[:args].first or next
+          options = call[:option_values].map { |key, value| "#{key}: #{value}" }
+          { method: method.to_s, file: "#{record.file}:#{call[:location]}", options: options.join(", ").presence }.compact
         end
       end
 
