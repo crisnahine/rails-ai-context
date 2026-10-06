@@ -16,7 +16,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
     expect(results.first[:source]).to eq("30.minutes")
   end
 
-  it "reads a config_for call off its node: the file, the env: literal, and a path or env it cannot read" do
+  it "reads a config_for call off its node: the arguments as written, the file, the env: literal, and a path or env it cannot read" do
     results = assignments(<<~RUBY)
       config.secret_store = config_for(:vault)
       config.api_token_settings = Rails.application.config_for("tokens", env: "production")
@@ -28,12 +28,12 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
     RUBY
 
     expect(results.map { |r| r[:config_for] }).to eq([
-      { argument: ":vault", file: "config/vault.yml" },
-      { argument: '"tokens"', file: "config/tokens.yml", env: "production" },
-      { argument: 'Rails.root.join("config", "stripe.yml")', file: "config/stripe.yml" },
-      { argument: 'Rails.root.join(dir, "x.yml")', env: :expression },
-      { argument: 'config.root.join("config", "rooted.yml")', file: "config/rooted.yml" },
-      { argument: 'Gem.root.join("config", "gem.yml")' },
+      { arguments: ":vault", file: "config/vault.yml" },
+      { arguments: '"tokens", env: "production"', file: "config/tokens.yml", env: "production" },
+      { arguments: 'Rails.root.join("config", "stripe.yml"), env: Rails.env', file: "config/stripe.yml" },
+      { arguments: 'Rails.root.join(dir, "x.yml"), env: ENV["DEPLOY_ENV"]', env: :expression },
+      { arguments: 'config.root.join("config", "rooted.yml")', file: "config/rooted.yml" },
+      { arguments: 'Gem.root.join("config", "gem.yml")' },
       nil
     ])
   end

@@ -434,9 +434,9 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
       )
 
       expect(result[:config_for]).to eq([
-        { key: "feature", call: ":feature", file: "config/feature.yml", environment: "production", keys: %w[flag_a prod_only] },
-        { key: "other", call: ":feature", file: "config/feature.yml", environment_unread: true },
-        { key: "same", call: ":feature", file: "config/feature.yml", keys: %w[dev_only flag_a] }
+        { key: "feature", call: ':feature, env: "production"', file: "config/feature.yml", environment: "production", keys: %w[flag_a prod_only] },
+        { key: "other", call: ':feature, env: ENV["DEPLOY_ENV"]', file: "config/feature.yml", environment_unread: true },
+        { key: "same", call: ":feature, env: Rails.env", file: "config/feature.yml", keys: %w[dev_only flag_a] }
       ])
     end
 
