@@ -109,6 +109,19 @@ RSpec.describe RailsAiContext::PortablePath do
         .to eq("#{name}/app/controllers")
     end
 
+    # The list was kept from the first call, so one taken while a gem set
+    # was stubbed, or before a gem was activated, outlived it and left this
+    # checkout's own files spelled as absolute paths.
+    it "follows the set of loaded gems rather than the one it first saw" do
+      real = Gem.loaded_specs
+      spec = double("Gem::Specification", full_gem_path: "/opt/engine", full_name: "engine-0.1.0", default_gem?: false)
+      allow(Gem).to receive(:loaded_specs).and_return("engine" => spec)
+      expect(described_class.gem_checkouts).to eq([ [ "/opt/engine/", "engine-0.1.0" ] ])
+
+      allow(Gem).to receive(:loaded_specs).and_return(real)
+      expect(described_class.gem_checkouts.map(&:last)).not_to include("engine-0.1.0")
+    end
+
     it "lists no checkout that a gem root already covers" do
       dirs = described_class.gem_checkouts.map(&:first)
 

@@ -172,13 +172,20 @@ module RailsAiContext
 
     # A gem the Gemfile takes from path: or git: is never unpacked under a
     # gem root, so its own checkout is the only prefix that names it. Longest
-    # first, because one checkout can sit inside another.
+    # first, because one checkout can sit inside another. Kept per set of
+    # loaded gems: a gem activated later is a checkout too.
     def gem_checkouts
-      @gem_checkouts ||= Gem.loaded_specs.each_value.filter_map { |spec|
+      specs = Gem.loaded_specs
+      key = [ specs.object_id, specs.size ]
+      return @gem_checkouts if @gem_checkouts_key == key
+
+      @gem_checkouts = specs.each_value.filter_map { |spec|
         dir = spec.full_gem_path.to_s
         next if dir.empty? || gem_roots.any? { |gem_root| dir.start_with?(gem_root) }
         [ dir + File::SEPARATOR, spec.full_name ]
       }.sort_by { |dir, _name| -dir.length }
+      @gem_checkouts_key = key
+      @gem_checkouts
     rescue => e
       RailsAiContext.debug_fail(e, [], label: "PortablePath.gem_checkouts")
     end

@@ -99,29 +99,27 @@ module RailsAiContext
 
       # A backtrace frame is an absolute path, and on an installed gem that is
       # the machine's GEM_HOME. The answer leaves the machine, so the frame is
-      # spelled the way every other path this gem reports is.
+      # spelled the way every other path this gem reports is, and one no
+      # portable form names keeps only its file name.
       def portable_origin(frame)
         path, rest = frame.split(":", 2)
         return frame if path.to_s.empty?
 
-        # No app, or one with no root: relativize still strips the gem prefix,
-        # so an empty root is an answer.
+        # This runs inside the rescue that answers a tool failure, so a raise
+        # here would leave the net and reach the client as a protocol error.
+        # No app, or no root, still strips the gem prefix.
         root = begin
           rails_app.root.to_s
-        rescue NameError
+        rescue StandardError
           ""
         end
-        [ RailsAiContext::PortablePath.relativize(path, root), rest ].compact.join(":")
-      rescue StandardError
-        # This runs inside the rescue that answers a tool failure, so a raise
-        # here leaves the net entirely and the client gets a protocol error.
-        # An empty root is the same answer the no-app branch above gives, and
-        # it still strips the prefix that names the machine.
-        begin
-          [ RailsAiContext::PortablePath.relativize(path, ""), rest ].compact.join(":")
+        relative = begin
+          RailsAiContext::PortablePath.relativize(path, root)
         rescue StandardError
-          frame
+          path
         end
+        relative = File.basename(relative) if File.absolute_path?(relative)
+        [ relative, rest ].compact.join(":")
       end
 
       # The value the caller sent, when this tool takes a DetailLevel detail
