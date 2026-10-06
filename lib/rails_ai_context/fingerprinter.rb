@@ -55,7 +55,7 @@ module RailsAiContext
     # jsbundling and cssbundling rewrite this on every frontend save, and no reader reads it.
     BUILD_OUTPUT = "/app/assets/builds/"
     # A test run re-records these; the VCR reader counts them and never opens one.
-    CASSETTES = %r{/(?:vcr_)?cassettes/}
+    CASSETTES = %r{\A(?:spec|test)/(?:[^/]+/)*(?:vcr_)?cassettes/}
 
     # What a reader holds so it can ask later whether the app moved. Taken
     # before the read it protects: a mark taken after introspection records
@@ -93,9 +93,10 @@ module RailsAiContext
           # File deleted between exist? check and mtime read - skip
         end
 
+        prefix = SafePath.dir_prefix(root)
         watched_dirs(root).each do |full_dir|
           watched_files(full_dir).sort.each do |path|
-            digest.update(path.match?(CASSETTES) ? path : File.mtime(path).to_f.to_s)
+            digest.update(cassette?(path, prefix) ? path : File.mtime(path).to_f.to_s)
           rescue Errno::ENOENT
             # File deleted between glob and mtime read - skip
           end
@@ -132,9 +133,10 @@ module RailsAiContext
       def changed_since(root, time)
         base = File.expand_path(root.to_s)
         named = scope_dirs(base)
-        watched_dirs(base).flat_map { |dir| watched_files(dir).select { |path| !path.match?(CASSETTES) && newer?(path, time) } }
+        prefix = SafePath.dir_prefix(base)
+        watched_dirs(base).flat_map { |dir| watched_files(dir).select { |path| !cassette?(path, prefix) && newer?(path, time) } }
                           .map { |path| named.select { |dir| path.start_with?("#{dir}/") }.max_by(&:size) }
-                          .uniq.map { |dir| dir.delete_prefix(SafePath.dir_prefix(base)) }
+                          .uniq.map { |dir| dir.delete_prefix(prefix) }
       end
 
       private
@@ -142,6 +144,10 @@ module RailsAiContext
       # One walk with an extension filter: a brace glob walks the tree once per extension.
       def watched_files(dir)
         Dir.glob(File.join(dir, "**/*")).select { |path| WATCHED_EXTNAMES.include?(File.extname(path)) && !path.include?(BUILD_OUTPUT) }
+      end
+
+      def cassette?(path, prefix)
+        path.delete_prefix(prefix).match?(CASSETTES)
       end
 
       def newer?(path, time)

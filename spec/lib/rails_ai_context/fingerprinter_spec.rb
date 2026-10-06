@@ -110,6 +110,29 @@ RSpec.describe RailsAiContext::Fingerprinter do
       expect(described_class.compute(app)).not_to eq(before)
     end
 
+    it "keeps mtime staleness for a cassettes folder outside spec/ and test/, and under a root path holding one" do
+      root = app.root.to_s
+      view = File.join(root, "app/views/cassettes/index.html.erb")
+      FileUtils.mkdir_p(File.dirname(view))
+      File.write(view, "\n")
+      before = described_class.compute(app)
+      File.utime(Time.now + 5, Time.now + 5, view)
+      expect(described_class.compute(app)).not_to eq(before)
+
+      Dir.mktmpdir do |dir|
+        nested = File.join(dir, "cassettes", "shop")
+        FileUtils.mkdir_p(File.join(nested, "app/models"))
+        model = File.join(nested, "app/models/post.rb")
+        File.write(model, "class Post < ApplicationRecord\nend\n")
+        nested_app = RailsAiContext::StaticApp.new(nested)
+        before = described_class.compute(nested_app)
+        File.utime(Time.now + 5, Time.now + 5, model)
+
+        expect(described_class.compute(nested_app)).not_to eq(before)
+        expect(described_class.changed_since(nested, Time.now + 1)).to eq([ "app/models" ])
+      end
+    end
+
     it "detects a change to a controller outside app/javascript" do
       Dir.mktmpdir do |root|
         FileUtils.mkdir_p(File.join(root, "app/webpacker/controllers"))
