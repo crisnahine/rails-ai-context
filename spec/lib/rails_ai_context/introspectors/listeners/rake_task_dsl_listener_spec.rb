@@ -41,6 +41,11 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RakeTaskDslListener do
     expect(tasks.first).to include(name: "import", args: [ "limit", "offset" ], deps: [ "environment" ])
   end
 
+  it "reads arguments given without dependencies" do
+    tasks = parse_and_dispatch("task :go, [:a, :b] do |t, args|; end\ntask :old, :x, :y").select { |r| r[:type] == :task }
+    expect(tasks.map { |t| [ t[:name], t[:args], t[:deps] ] }).to eq([ [ "go", %w[a b], [] ], [ "old", %w[x y], [] ] ])
+  end
+
   it "detects a full rake file with namespace, desc, and task" do
     results = parse_and_dispatch(<<~RUBY)
       namespace :db do
