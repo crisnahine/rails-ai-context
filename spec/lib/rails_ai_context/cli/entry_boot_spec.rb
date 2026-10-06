@@ -108,6 +108,10 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
         script = %(require "rails_ai_context/cli/entry_boot"; p RailsAiContext::CLI::EntryBoot.app_present?(#{dir.inspect}))
         out = `ruby -I #{lib.shellescape} -e #{script.shellescape} 2>&1`
         expect(out.strip).to eq("false")
+
+        File.write(File.join(dir, "Gemfile"), %(%w[rails pg].each { |name| gem name }\n))
+        out = `ruby -I #{lib.shellescape} -e #{script.shellescape} 2>&1`
+        expect(out.strip).to eq("true")
       end
     end
   end

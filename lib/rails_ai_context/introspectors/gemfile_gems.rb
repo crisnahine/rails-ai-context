@@ -5,6 +5,10 @@ module RailsAiContext
     # The gems a Gemfile declares, read through the AST: a commented-out
     # `# gem "stripe"` line is not a gem the app uses.
     module GemfileGems
+      MUTEX = Mutex.new
+      CACHE = {}
+      private_constant :MUTEX, :CACHE
+
       module_function
 
       # @return [Array<String>] gem names, in declaration order
@@ -15,33 +19,60 @@ module RailsAiContext
       # Every `gem` and `group` entry, with its options and groups.
       # @return [Array<Hash>] empty when there is no Gemfile or it cannot be read
       def entries(root)
-        bundle = GemLock.bundle(root)
-        gemfile = bundle.gemfile or return []
+        read_bundle(GemLock.bundle(root)) || []
+      end
 
-        read(bundle.dir, File.basename(gemfile), [], [])
-      rescue StandardError => e
-        RailsAiContext.debug_fail(e, [], label: "GemfileGems.entries")
+      # The bundle's Gemfile with the files it evaluates, walked once until any
+      # of them changes or appears; nil when there is no Gemfile.
+      def read_bundle(bundle)
+        gemfile = bundle.gemfile
+        return nil unless gemfile && File.file?(gemfile)
+
+        key = [ bundle.dir, gemfile ]
+        cached = MUTEX.synchronize { CACHE[key] }
+        return cached[:entries] if cached && cached[:stamps].all? { |path, stamp| mtime(path) == stamp }
+
+        stamps = {}
+        # A failed walk is kept too: the same files fail the same way until they change.
+        entries = begin
+          read(bundle.dir, File.basename(gemfile), [], [], stamps)
+        rescue StandardError => e
+          RailsAiContext.debug_fail(e, nil, label: "GemfileGems.read_bundle")
+        end
+        MUTEX.synchronize { CACHE[key] = { entries: entries, stamps: stamps } }
+        entries
       end
 
       # Bundler evaluates an eval_gemfile file into the same Gemfile, inside
-      # the groups around the call. Never read outside the bundle's directory.
-      def read(root, relative, groups, seen)
+      # the groups around the call. Never read outside the bundle's directory,
+      # and a file left unread adds gems no one can name.
+      def read(root, relative, groups, seen, stamps)
+        stamps[File.join(root, relative)] = mtime(File.join(root, relative))
         resolution = SafePath.locate(relative, under: root)
-        return [] if !resolution.ok? || seen.include?(resolution.realpath)
+        return [ { type: :unknown_gems, call: :eval_gemfile } ] unless resolution.ok?
+        return [] if seen.include?(resolution.realpath)
 
         seen << resolution.realpath
         found = Array(SourceIntrospector.walk(resolution.realpath, { gems: -> { Listeners::GemfileDslListener.new } })[:gems])
+        base = File.expand_path(root)
         found.flat_map do |entry|
           entry = entry.merge(groups: (groups + entry[:groups]).uniq) if groups.any? && %i[gem eval_gemfile].include?(entry[:type])
           next [ entry ] unless entry[:type] == :eval_gemfile
 
           nested = File.expand_path(entry[:path], File.dirname(File.join(root, relative)))
-          next [] unless nested.start_with?("#{File.expand_path(root)}/")
+          next [ { type: :unknown_gems, call: :eval_gemfile } ] unless SafePath.contained?(nested, base)
 
-          read(root, nested.delete_prefix("#{File.expand_path(root)}/"), entry[:groups], seen)
+          read(root, nested.delete_prefix(SafePath.dir_prefix(base)), entry[:groups], seen, stamps)
         end
       end
       private_class_method :read
+
+      def mtime(path)
+        File.mtime(path)
+      rescue SystemCallError
+        nil
+      end
+      private_class_method :mtime
     end
   end
 end

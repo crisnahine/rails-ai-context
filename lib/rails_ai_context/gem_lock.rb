@@ -130,7 +130,7 @@ module RailsAiContext
       root = root.to_s
       bundle = bundle(root)
       stamp = [ bundle.lockfile, bundle.gemfile, File.join(root, "config/boot.rb"),
-                *VERSION_FILES.map { |name| File.join(root, name) } ].map { |file| file && mtime(file) }
+                *VERSION_FILES.map { |name| File.join(root, name) } ].map { |file| file && mtime(file) } << loaded?
 
       MUTEX.synchronize do
         cached = CACHE[root]
@@ -213,7 +213,7 @@ module RailsAiContext
       else
         "No #{bundle.lock_label} found"
       end
-      facts = bundle.gemfile ? gemfile(bundle.gemfile) : { gems: nil }
+      facts = gemfile(bundle)
       Spec.new({}, **declared_ruby(nil, root, bundle, facts), reason: reason, absent: true, outside_gemfile: outside,
                gemfile_gems: facts[:gems])
     end
@@ -265,50 +265,66 @@ module RailsAiContext
       # and answering it as an app with no gems denies every gem it holds.
       return Spec.new({}, reason: "#{File.basename(path)} has no specs section") unless specs_section
 
-      facts = bundle.gemfile ? gemfile(bundle.gemfile) : {}
+      facts = gemfile(bundle)
       Spec.new(versions, **declared_ruby(ruby_version, root, bundle, facts), direct: direct, path_remotes: path_remotes)
     end
     private_class_method :parse
 
-    # `gems` is nil when `gemspec` or `eval_gemfile` adds gems the file does not name.
-    def gemfile(path)
-      result = gemfile_parse(path) or return { ruby: nil, gems: nil }
+    # `gems` is nil when a call adds gems the Gemfile does not name (gemspec, a gem
+    # or eval_gemfile whose argument is not a literal, a file left unread).
+    def gemfile(bundle)
+      entries = gemfile_entries(bundle) or return { ruby: nil, gems: nil }
 
-      facts = { ruby: nil, gems: [] }
-      pending = [ result.value ]
-      while (node = pending.shift)
-        pending.concat(node.compact_child_nodes)
+      ruby = entries.find { |entry| entry[:type] == :ruby }
+      gems = entries.filter_map { |entry| entry[:name] if entry[:type] == :gem }.uniq unless entries.any? { |entry| entry[:type] == :unknown_gems }
+      { ruby: ruby && gemfile_ruby(ruby), gems: gems }
+    end
+    private_class_method :gemfile
+
+    # GemfileGems is the one Gemfile reader once the gem is loaded. Before the boot
+    # its listener cannot load, so the same entries come from a plain walk of the
+    # one file, and an eval_gemfile there is left unread.
+    def gemfile_entries(bundle)
+      return Introspectors::GemfileGems.read_bundle(bundle) if loaded?
+
+      result = preboot_parse(bundle.gemfile) or return nil
+      Introspectors::AstWalk.each(result.value).filter_map do |node|
         next unless node.is_a?(Prism::CallNode) && node.receiver.nil?
 
+        args = node.arguments&.arguments || []
         case node.name
-        when :ruby then facts[:ruby] ||= gemfile_ruby(node)
-        when :gem then (name = literal(node.arguments&.arguments&.first)) && facts[:gems]&.push(name)
-        when :gemspec, :eval_gemfile then facts[:gems] = nil
+        when :ruby
+          options = args.grep(Prism::KeywordHashNode).flat_map(&:elements).grep(Prism::AssocNode).to_h { |pair| [ literal(pair.key), literal(pair.value) ] }
+          { type: :ruby, version: literal(args.first), engine: options["engine"], engine_version: options["engine_version"] }
+        when :gem then args.first.is_a?(Prism::StringNode) ? { type: :gem, name: args.first.unescaped } : { type: :unknown_gems }
+        when :gemspec, :eval_gemfile then { type: :unknown_gems }
         end
       end
-      facts
     end
+    private_class_method :gemfile_entries
 
-    # AstCache once the gem is loaded, so GemfileGems' walk shares the parse; before the boot, Prism alone.
-    def gemfile_parse(path)
-      return AstCache.parse(File.realpath(path)) if defined?(AstCache)
+    def loaded?
+      defined?(Introspectors::GemfileGems) ? true : false
+    end
+    private_class_method :loaded?
+
+    # Before the boot, Prism alone: AstCache's concurrent-ruby would load ahead of the app's bundle.
+    def preboot_parse(path)
+      return nil unless path
 
       require "prism"
+      require_relative "introspectors/ast_walk"
       content = SafeFile.read(path, max_size: MAX_SIZE)
       content && Prism.parse(content)
     rescue SystemCallError, ArgumentError, LoadError
       nil
     end
-    private_class_method :gemfile_parse
+    private_class_method :preboot_parse
 
     # A requirement such as `ruby ">= 3.3.0"` names a range, not a version, so it is left unanswered.
-    def gemfile_ruby(node)
-      args = node.arguments&.arguments || []
-      version = literal(args.first)
-      return nil unless version&.match?(PLAIN_VERSION)
-
-      options = args.grep(Prism::KeywordHashNode).flat_map(&:elements).grep(Prism::AssocNode).to_h { |pair| [ literal(pair.key), literal(pair.value) ] }
-      [ version, engine_name(options["engine"], options["engine_version"]) ]
+    def gemfile_ruby(entry)
+      version = entry[:version]
+      [ version, engine_name(entry[:engine], entry[:engine_version]) ] if version&.match?(PLAIN_VERSION)
     end
     private_class_method :gemfile_ruby
 

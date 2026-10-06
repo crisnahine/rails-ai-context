@@ -278,6 +278,18 @@ RSpec.describe RailsAiContext::GemLock do
       expect(described_class.lockfile_name(dir)).to eq("gems.locked")
     end
   end
+  describe "the gems a Gemfile names, with no lockfile" do
+    it "is nil when a gem's name is not a literal, as with gemspec or an unread eval_gemfile" do
+      Dir.mktmpdir do |dir|
+        [ %(%w[rails pg].each { |name| gem name }\n), %(gem "rails"\ngemspec\n), %(gem "rails"\neval_gemfile "../outside.rb"\n) ].each_with_index do |gemfile, i|
+          File.write(File.join(dir, "Gemfile"), gemfile)
+          File.utime(Time.now + i + 1, Time.now + i + 1, File.join(dir, "Gemfile"))
+          expect(described_class.for(dir).gemfile_gems).to be_nil
+        end
+      end
+    end
+  end
+
   describe "a lockfile config/boot.rb points outside the app" do
     let(:boot) { %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n\nrequire "bundler/setup" if File.exist?(ENV["BUNDLE_GEMFILE"])\n) }
 
