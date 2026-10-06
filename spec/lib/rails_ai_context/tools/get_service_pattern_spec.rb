@@ -46,6 +46,29 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
       end
     end
 
+    context "with Class.new error constants under app/services" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "services"))
+        File.write(File.join(tmpdir, "app", "services", "errors.rb"), "PaymentError = Class.new(StandardError)\n")
+        File.write(File.join(tmpdir, "app", "services", "notify.rb"),
+                   "class NotifyError < StandardError; end\n\nNotify = Class.new(ApplicationService) do\n  def call; end\nend\n")
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+        described_class.reset_cache!
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "names each file by the class its path spells, never by an error constant" do
+        text = described_class.call(detail: "summary").content.first[:text]
+
+        expect(text).to include("- Errors").and include("- Notify")
+        expect(text).not_to include("PaymentError")
+        expect(text).not_to include("NotifyError")
+      end
+    end
+
     # class_attribute defines a class-side and an instance-side set of the
     # same names; printed bare, every name showed twice with no way to tell.
     context "with a class_attribute and a class << self method" do

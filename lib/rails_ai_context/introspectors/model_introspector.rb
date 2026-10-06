@@ -222,7 +222,7 @@ module RailsAiContext
 
             next if mixin_path?(record.path_name.underscore, source)
 
-            declarations = DeclaredConstant.declarations(source, assignments: true)
+            declarations = DeclaredConstant.declarations(source, path_name: record.path_name)
             declaration = DeclaredConstant.declaration_for(declarations, record.path_name)
             class_name = declaration&.name || record.path_name
             # Two files can declare one class (an app reopening a model to add methods);
@@ -492,7 +492,7 @@ module RailsAiContext
         return false unless segments.include?("concerns")
         return true if segments.first == "concerns"
 
-        !DeclaredConstant.declares_class?(source)
+        !DeclaredConstant.declares_class?(source, path_name: relative.camelize)
       end
 
       # A class whose file is inside an installed gem (PaperTrail::Version) is
@@ -2095,7 +2095,7 @@ module RailsAiContext
               class_name = DeclaredConstant.resolve(source, relative.camelize)
               next if found.key?(class_name) || config.excluded_models.include?(class_name)
 
-              declaration = DeclaredConstant.file_declaration(source, class_name)
+              declaration = DeclaredConstant.declaration_for(DeclaredConstant.declarations(source, path_name: relative.camelize), class_name)
               found[class_name] = { path: path, source: source, superclass: declaration&.superclass, nesting: declaration&.nesting }
             rescue => e
               found[relative.camelize] ||= { error: e.message }

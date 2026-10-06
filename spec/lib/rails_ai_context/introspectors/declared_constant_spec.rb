@@ -274,7 +274,8 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
         Other = Struct.new(:a)
       RUBY
 
-      found = described_class.declarations(source, assignments: true).to_h { |d| [ d.name, [ d.superclass, d.nesting ] ] }
+      names = %w[AdminNote Admin::Flag Admin::Pin Admin::Mark Plain LIMIT Other]
+      found = names.flat_map { |name| described_class.declarations(source, path_name: name) }.to_h { |d| [ d.name, [ d.superclass, d.nesting ] ] }
 
       expect(found).to eq(
         "AdminNote" => [ "ApplicationRecord", [] ],
@@ -285,7 +286,7 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
       )
     end
 
-    it "leaves them out by default, so a Class.new error constant is never taken for the file's class" do
+    it "counts one only when the path names it, so a Class.new error constant is never taken for the file's class" do
       source = <<~RUBY
         module Tenancy
           Missing = Class.new(StandardError)
@@ -296,7 +297,8 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
 
       expect(described_class.declarations(source).map(&:name)).to eq([ "Tenancy::Current" ])
       expect(described_class.declared_names(source)).to eq([ "Tenancy::Current" ])
-      expect(described_class.declarations(source, assignments: true).map(&:name)).to eq([ "Tenancy::Missing", "Tenancy::Current" ])
+      expect(described_class.declarations(source, path_name: "Tenancy::Current").map(&:name)).to eq([ "Tenancy::Current" ])
+      expect(described_class.declarations(source, path_name: "Tenancy::Missing").map(&:name)).to eq([ "Tenancy::Missing", "Tenancy::Current" ])
     end
   end
 
@@ -304,19 +306,28 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
     it "declares a class, and resolves to the name the assignment writes" do
       source = "APIKey = Class.new(ApplicationRecord) do\n  has_one_attached :photo\nend\n"
 
-      expect(described_class.declares_class?(source)).to be true
+      expect(described_class.declares_class?(source, path_name: "ApiKey")).to be true
       expect(described_class.resolve(source, "ApiKey")).to eq("APIKey")
       expect(described_class.named(source, "ApiKey")).to eq("APIKey")
     end
   end
 
-  describe ".file_declaration" do
-    it "takes a Class.new class the path names, and never an error constant over a class statement" do
-      only_assigned = "SyncJob = Class.new(ApplicationJob) do\nend\n"
-      error_first = "Missing = Class.new(StandardError)\nclass Current < ActiveSupport::CurrentAttributes\nend\n"
+  describe "a Class.new assignment the path does not name" do
+    def file_class(source, path_name)
+      described_class.declaration_for(described_class.declarations(source, path_name: path_name), path_name)&.name
+    end
 
-      expect(described_class.file_declaration(only_assigned, "SyncJob").superclass).to eq("ApplicationJob")
-      expect(described_class.file_declaration(error_first, "Tenancy").name).to eq("Current")
+    it "is never the file's class, and a named Class.new beats an error class statement" do
+      expect(file_class("PaymentError = Class.new(StandardError)\n", "Errors")).to be_nil
+      expect(file_class("Missing = Class.new(StandardError)\nclass Current < ActiveSupport::CurrentAttributes\nend\n", "Tenancy")).to eq("Current")
+      expect(file_class("class ExportError < StandardError; end\nExportJob = Class.new(ApplicationJob) do\nend\n", "ExportJob")).to eq("ExportJob")
+    end
+
+    it "never makes a mixin a class file" do
+      source = "module Lockable\n  extend ActiveSupport::Concern\n  LockedError = Class.new(StandardError)\nend\n"
+
+      expect(described_class.declares_class?(source, path_name: "Lockable")).to be false
+      expect(described_class.declares_class?("module Errors\n  Base = Class.new(StandardError)\nend\n", path_name: "Errors")).to be false
     end
   end
 

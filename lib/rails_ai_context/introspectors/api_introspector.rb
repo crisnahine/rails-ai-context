@@ -104,7 +104,7 @@ module RailsAiContext
 
       def serializer_candidate(kind, record)
         name = DeclaredConstant.resolve(record.source, record.path_name)
-        declared = DeclaredConstant.declarations(record.source, assignments: true)
+        declared = DeclaredConstant.declarations(record.source, path_name: record.path_name)
         own = declared.find { |d| d.name == name }
         mixin = declared.empty? && DeclaredConstant.declared_module_names(record.source).any?
         includes = SourceIntrospector.walk_source(record.source, {

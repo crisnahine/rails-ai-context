@@ -142,7 +142,7 @@ module RailsAiContext
       # rodauth-rails generates its auth class into app/misc.
       def rodauth_classes
         SourceScan.each(root, kind: "app/misc").flat_map { |record|
-          DeclaredConstant.declarations(record.source, assignments: true)
+          DeclaredConstant.declarations(record.source, path_name: record.path_name)
             .select { |d| d.superclass.to_s.delete_prefix("::") == "Rodauth::Rails::Auth" }.map(&:name)
         }.uniq.sort
       rescue => e

@@ -40,11 +40,12 @@ module RailsAiContext
       # @param lookup [#call, nil] constant name -> that class's source
       # @param only [String, nil] answer for this class name alone, ignoring the file's other
       #   declarations (a concern that nests a validator class declares both)
+      # @param path_name [String, nil] the constant the source's path spells, so its Class.new class counts
       # @return [Array<Link>]
-      def to(source, bases:, lookup: nil, seen: [], only: nil)
+      def to(source, bases:, lookup: nil, seen: [], only: nil, path_name: only)
         return [] if source.nil? || seen.size >= MAX_DEPTH
 
-        declarations = DeclaredConstant.declarations(source, assignments: true)
+        declarations = DeclaredConstant.declarations(source, path_name: path_name)
         declarations = [ DeclaredConstant.declaration_named(declarations, only) ].compact if only
         return [] if declarations.empty?
 
@@ -58,7 +59,7 @@ module RailsAiContext
           parent_source = lookup&.call(parent)
           next if parent_source.nil?
 
-          rest = to(parent_source, bases: bases, lookup: lookup, seen: seen + [ parent ])
+          rest = to(parent_source, bases: bases, lookup: lookup, seen: seen + [ parent ], path_name: parent)
           return [ Link.new(name: candidate.name, superclass: parent, source: source) ] + rest if rest.any?
         end
 

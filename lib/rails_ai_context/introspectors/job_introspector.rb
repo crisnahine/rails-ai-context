@@ -328,7 +328,7 @@ module RailsAiContext
           # app/models/concerns is an autoload root of its own.
           owner = DeclaredConstant.resolve(record.source, record.path_name.delete_prefix("Concerns::"))
           calls = async_calls(record)
-          DeclaredConstant.declared_names(record.source, assignments: true).include?(owner) ? found.concat(calls.map { |call| { owner: owner, **call } }) : modules[owner] = calls
+          DeclaredConstant.declared_names(record.source, path_name: owner).include?(owner) ? found.concat(calls.map { |call| { owner: owner, **call } }) : modules[owner] = calls
         end
         found + mixin_async_methods(sources, modules)
       end
@@ -339,7 +339,7 @@ module RailsAiContext
         return [] if modules.empty?
 
         mixins = sources.flat_map { |_path, source| DeclaredConstant.declared_module_names(source) }.to_set -
-          sources.flat_map { |_path, source| DeclaredConstant.declared_names(source, assignments: true) }
+          sources.flat_map { |_path, source| DeclaredConstant.declared_names(source) }
         found = []
         seen = modules.keys.to_set
         until modules.empty?
@@ -548,11 +548,10 @@ module RailsAiContext
       def job_candidates
         @job_candidates ||= JOB_DIRS.each_with_object({}) do |kind, found|
           SourceScan.each(app.root, kind: kind) do |record|
-            declarations = DeclaredConstant.declarations(record.source, assignments: true)
+            declarations = DeclaredConstant.declarations(record.source, path_name: record.path_name)
             next if declarations.empty?
 
-            declaration = DeclaredConstant.file_declaration(record.source, record.path_name) ||
-                          DeclaredConstant.declarations(record.source).first || declarations.first
+            declaration = DeclaredConstant.declaration_for(declarations, record.path_name) || declarations.first
             name = job_name(declaration, record)
             next if found.key?(name)
             found[name] = Candidate.new(
@@ -899,7 +898,7 @@ module RailsAiContext
         return true if parent_of.key?(name)
 
         source = mailer_lookup.call(name) or return false
-        declaration = DeclaredConstant.declaration_named(DeclaredConstant.declarations(source, assignments: true), name)
+        declaration = DeclaredConstant.declaration_named(DeclaredConstant.declarations(source, path_name: name), name)
         return false unless declaration
 
         parent_of[name] = [ declaration.superclass, declaration.nesting ]
@@ -989,7 +988,7 @@ module RailsAiContext
             next unless SafePath.contained?(File.realpath(path), app_root_real)
 
             source = SafeFile.read(path) or next
-            declared = DeclaredConstant.declarations(source, assignments: true).find { |d| d.name.end_with?("Preview") } or next
+            declared = DeclaredConstant.declarations(source, path_name: File.basename(path, ".rb").camelize).find { |d| d.name.end_with?("Preview") } or next
             methods = SourceIntrospector.walk_source(source, { methods: Listeners::MethodsListener })[:methods]
             previews = ActionResolver.own_methods(methods, declared.name)
                                      .select { |m| m[:scope] == :instance && m[:visibility] == :public }.map { |m| m[:name] }
@@ -1241,7 +1240,7 @@ module RailsAiContext
         listeners[:macros] = -> { Listeners::GenericMacroListener.new(macros) } if macros.any?
         walked = SourceIntrospector.walk_source(record.source, listeners)
 
-        declarations = DeclaredConstant.declarations(record.source, assignments: true)
+        declarations = DeclaredConstant.declarations(record.source, path_name: record.path_name)
         name = declarations.map(&:name).find { |n| n.casecmp?(record.path_name) } ||
                DeclaredConstant.resolve(record.source, record.path_name)
         own = declarations.find { |d| d.name == name }

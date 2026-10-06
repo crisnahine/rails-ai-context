@@ -1876,6 +1876,16 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text).to include("sync").and include("perform(id)")
     end
 
+    it "is listed, not the error class written before it, when the file pairs the two" do
+      File.write(File.join(tmpdir, "app/jobs/export_job.rb"),
+                 "class ExportError < StandardError; end\n\nExportJob = Class.new(ApplicationJob) do\n  queue_as :exports\n\n  def perform; end\nend\n")
+      jobs = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: jobs)
+
+      expect(described_class.call(job: "ExportJob").content.first[:text]).to include("exports")
+      expect(described_class.call.content.first[:text]).not_to include("ExportError")
+    end
+
     it "is listed with its queue and perform in the booted tier" do
       stub_const("ApplicationJob", Class.new(ActiveJob::Base))
       load File.join(tmpdir, "app/jobs/sync_job.rb")

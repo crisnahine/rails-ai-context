@@ -22,7 +22,7 @@ module RailsAiContext
       end
 
       def classes(source, file)
-        all = DeclaredConstant.declarations(source, assignments: true)
+        all = DeclaredConstant.declarations(source, path_name: File.basename(file, ".rb").camelize)
         declared = all.select { |d| BASES.include?(d.superclass.to_s.delete_prefix("::")) }
         return [] if declared.empty?
 

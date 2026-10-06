@@ -57,6 +57,13 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
       it "detects serializer classes" do
         expect(result[:serializers][:serializer_classes]).to include("PostSerializer")
       end
+
+      it "does not count a mixin holding a Class.new error constant as a serializer class" do
+        File.write(File.join(serializers_dir, "serialization_helpers.rb"),
+                   "module SerializationHelpers\n  FormatError = Class.new(StandardError)\n\n  def fmt; end\nend\n")
+
+        expect(result[:serializers][:serializer_classes]).to eq([ "PostSerializer" ])
+      end
     end
 
     context "with rack-attack initializer" do

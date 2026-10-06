@@ -210,7 +210,7 @@ module RailsAiContext
       # A caller that names only some files resolves DeclaredConstant itself.
       def classes(root, kind:, base_model: nil)
         each(root, kind: kind, base_model: base_model).filter_map do |record|
-          next unless DeclaredConstant.declares_class?(record.source)
+          next unless DeclaredConstant.declares_class?(record.source, path_name: record.path_name)
 
           [ DeclaredConstant.resolve(record.source, record.path_name), record ]
         end

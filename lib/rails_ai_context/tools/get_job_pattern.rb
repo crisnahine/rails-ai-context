@@ -678,7 +678,7 @@ module RailsAiContext
             relative = real.sub("#{real_root}/", "")
             # Skip the job's own file, matched by constant too: a path spelled through an acronym
             # holds no substring of the underscored name.
-            next if relative == own_file || Introspectors::DeclaredConstant.declared_names(source, assignments: true).include?(class_name)
+            next if relative == own_file || Introspectors::DeclaredConstant.declared_names(source).include?(class_name)
 
             enqueuers << relative
         end

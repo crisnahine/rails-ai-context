@@ -184,7 +184,7 @@ module RailsAiContext
 
         chain = Introspectors::SuperclassChain.resolve_in_scope(klass[:name], parent, nesting: klass[:nesting]) do |candidate|
           source = lookup.call(candidate)
-          source && Introspectors::SuperclassChain.to(source, bases: bases, lookup: lookup).presence
+          source && Introspectors::SuperclassChain.to(source, bases: bases, lookup: lookup, path_name: candidate).presence
         end
         return chain.last.superclass if chain
       end
@@ -203,7 +203,7 @@ module RailsAiContext
           rel = "#{name.underscore}.rb"
           paths = BASES.flat_map { |base| Dir.glob(File.join(root.to_s, base, "**", rel)) }.sort
           sources[name] = paths.lazy.filter_map { |path| SafeFile.read(path) }
-                               .find { |source| Introspectors::DeclaredConstant.declarations(source, assignments: true).any? { |d| d.name == name } }
+                               .find { |source| Introspectors::DeclaredConstant.declarations(source, path_name: name).any? { |d| d.name == name } }
         end
       end
     end

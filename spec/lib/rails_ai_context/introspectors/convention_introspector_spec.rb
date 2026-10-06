@@ -106,6 +106,22 @@ RSpec.describe RailsAiContext::Introspectors::ConventionIntrospector do
       end
     end
 
+    context "with a concern that holds a Class.new error constant" do
+      let(:concerns_dir) { File.join(Rails.root, "app/models/concerns") }
+
+      before do
+        FileUtils.mkdir_p(concerns_dir)
+        File.write(File.join(concerns_dir, "lockable.rb"),
+                   "module Lockable\n  extend ActiveSupport::Concern\n  LockedError = Class.new(StandardError)\nend\n")
+      end
+
+      after { FileUtils.rm_rf(concerns_dir) }
+
+      it "still detects concerns_models" do
+        expect(result[:architecture]).to include("concerns_models")
+      end
+    end
+
     context "with a real concern file in app/models/concerns/" do
       let(:concerns_dir) { File.join(Rails.root, "app/models/concerns") }
 

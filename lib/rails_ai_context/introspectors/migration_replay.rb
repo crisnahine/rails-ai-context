@@ -342,7 +342,7 @@ module RailsAiContext
 
         # Separator-blind: the app's inflections read OAuthApplications as oauth_applications.
         squashed = stem.delete("_").downcase
-        declared = DeclaredConstant.declarations(content, assignments: true)
+        declared = DeclaredConstant.declarations(content, path_name: stem.camelize)
           .map { |d| d.name.to_s.split("::").last.to_s.downcase }
         declared.include?(squashed) ? stem : nil
       end

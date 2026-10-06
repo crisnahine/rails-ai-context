@@ -208,7 +208,7 @@ module RailsAiContext
       def detail_for(record, path_name)
         source = SafeFile.read(record.path)
         return [ path_name, { error: "unreadable" } ] unless source
-        return nil unless record.path.end_with?("_controller.rb") || subclasses_a_controller?(source)
+        return nil unless record.path.end_with?("_controller.rb") || subclasses_a_controller?(source, path_name)
 
         name = DeclaredConstant.resolve(source, path_name)
         [ name, extract_details_from_source(record, name, source) ]
@@ -216,8 +216,8 @@ module RailsAiContext
 
       # A file not named *_controller.rb is a controller only if it subclasses one: a mixin,
       # a plain helper class or a Grape API is not.
-      def subclasses_a_controller?(source)
-        DeclaredConstant.declarations(source, assignments: true).any? { |d| d.superclass.to_s.split("::").last.to_s.end_with?("Controller") }
+      def subclasses_a_controller?(source, path_name)
+        DeclaredConstant.declarations(source, path_name: path_name).any? { |d| d.superclass.to_s.split("::").last.to_s.end_with?("Controller") }
       end
 
       def discover_controllers

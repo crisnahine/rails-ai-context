@@ -33,7 +33,7 @@ module RailsAiContext
       # @param path_name [String] the name the file's path camelizes to
       # @return [String] the constant to call this file's class
       def resolve(source, path_name)
-        declared_names(source, assignments: true).find { |name| name.casecmp?(path_name) } ||
+        declared_names(source, path_name: path_name).find { |name| name.casecmp?(path_name) } ||
           declared_module_names(source).find { |name| name.casecmp?(path_name) } ||
           path_name
       end
@@ -43,7 +43,7 @@ module RailsAiContext
       #
       # @return [String] the declared constant, or `path_name` when none fits
       def named(source, path_name)
-        names = declared_names(source, assignments: true) + declared_module_names(source)
+        names = declared_names(source, path_name: path_name) + declared_module_names(source)
         suffix = "::#{path_name.to_s.downcase}"
         names.find { |name| name.casecmp?(path_name.to_s) } ||
           names.select { |name| name.downcase.end_with?(suffix) }.min_by(&:length) ||
@@ -57,9 +57,17 @@ module RailsAiContext
       # @param path_name [String] the name the file's path camelizes to
       # @return [Declaration, nil]
       def declaration_named(declarations, path_name)
-        segment = path_name.to_s.split("::").last.to_s
         declarations.find { |d| d.name.casecmp?(path_name.to_s) } ||
-          declarations.find { |d| d.name.split("::").last.casecmp?(segment) }
+          declarations.find { |d| names_segment?(d.name, path_name) }
+      end
+
+      # Whether the path spells this constant: in full, or its last segment, ignoring case.
+      def path_names?(name, path_name)
+        name.casecmp?(path_name.to_s) || names_segment?(name, path_name)
+      end
+
+      def names_segment?(name, path_name)
+        name.split("::").last.casecmp?(path_name.to_s.split("::").last.to_s)
       end
 
       # As `declaration_named`, but a file declaring one class is named for it however the
@@ -68,12 +76,6 @@ module RailsAiContext
       # @return [Declaration, nil]
       def declaration_for(declarations, path_name)
         declaration_named(declarations, path_name) || only_own_class(declarations, path_name)
-      end
-
-      # The same over a source, a Class.new class included; class statements answer
-      # first, so an error constant assigned beside the class never stands for the file.
-      def file_declaration(source, path_name)
-        declaration_for(declarations(source), path_name) || declaration_for(declarations(source, assignments: true), path_name)
       end
 
       # The file's one class, when the file can be named for it: not a class reopened with
@@ -118,14 +120,14 @@ module RailsAiContext
 
       # @return [Boolean] whether the source declares a class at all. A file
       #   that declares only modules is a mixin, whatever directory it sits in.
-      def declares_class?(source)
-        declared_names(source, assignments: true).any?
+      def declares_class?(source, path_name:)
+        declared_names(source, path_name: path_name).any?
       end
 
       # Fully qualified name of every class the source declares, module
       # nesting included. Empty when nothing parses.
-      def declared_names(source, assignments: false)
-        declarations(source, assignments: assignments).map(&:name)
+      def declared_names(source, path_name: nil)
+        declarations(source, path_name: path_name).map(&:name)
       end
 
       # The same for modules, for a file that declares no class: a mixin is
@@ -175,10 +177,10 @@ module RailsAiContext
 
       # Every class the source declares, with the superclass it names -
       # nil for a class with no superclass or a computed one. A module
-      # declares no class and so appears here not at all. `assignments: true`
-      # adds each `X = Class.new(Base)`, for a reader that asks whether or by
-      # what name a class is declared, never for one that takes the first as the file's class.
-      def declarations(source, assignments: false)
+      # declares no class and so appears here not at all. An `X = Class.new(Base)`
+      # counts only when `path_name` (the constant the file's path spells) names X,
+      # as Zeitwerk would: an error constant beside a class or in a mixin is never the file's class.
+      def declarations(source, path_name: nil)
         return [] unless source
 
         root = AstCache.parse_string(source)&.value
@@ -187,7 +189,9 @@ module RailsAiContext
         # Keyed by the cached tree, so the entry lives as long as the parse:
         # one run asks the same file three or four times.
         found = (DECLARATIONS[root] ||= declarations_in(root))
-        (assignments ? found[:all] : found[:classes]).dup
+        return found[:classes].dup unless path_name
+
+        found[:all].select { |d| found[:classes].include?(d) || path_names?(d.name, path_name) }
       rescue StandardError, ScriptError => e
         RailsAiContext.debug_fail(e, [], label: "DeclaredConstant")
       end
@@ -288,7 +292,7 @@ module RailsAiContext
         node.slice.delete_prefix("::")
       end
 
-      private_class_method :only_own_class, :scoped, :segment, :superclass_name, :class_new?, :declarations_in
+      private_class_method :names_segment?, :only_own_class, :scoped, :segment, :superclass_name, :class_new?, :declarations_in
     end
   end
 end

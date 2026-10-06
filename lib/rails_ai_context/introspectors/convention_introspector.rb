@@ -71,7 +71,7 @@ module RailsAiContext
           all_association_options = []
 
           app_model_names = model_records.filter_map do |record|
-            DeclaredConstant.resolve(record.source, record.path_name) if DeclaredConstant.declares_class?(record.source)
+            DeclaredConstant.resolve(record.source, record.path_name) if DeclaredConstant.declares_class?(record.source, path_name: record.path_name)
           end
           # Source-choosing, so a structure.sql app answers these schema
           # questions instead of falling to the looser source scans below.
@@ -286,7 +286,7 @@ module RailsAiContext
       def concern_files_exist?(relative_path)
         Dir.glob(File.join(root, relative_path, "**", "*.rb")).any? do |path|
           source = SafeFile.read(path)
-          source && !DeclaredConstant.declares_class?(source)
+          source && !DeclaredConstant.declares_class?(source, path_name: File.basename(path, ".rb").camelize)
         end
       end
 
