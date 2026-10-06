@@ -249,7 +249,7 @@ module RailsAiContext
             detail += " [polymorphic]" if a[:polymorphic]
             detail += (a[:optional] == true ? " [optional]" : " [optional: #{a[:optional]}]") if a[:optional]
             detail += " dependent: #{a[:dependent]}" if a[:dependent]
-            detail += " (#{a[:declared_options].map { |k, v| "#{k}: #{v}" }.join(', ')})" if a[:declared_options]&.any?
+            detail += option_pairs(a[:declared_options])
             detail += " (delegated types: #{a[:delegated_types].join(', ')})" if a[:delegated_types]&.any?
             detail += " (delegated types: from `#{a[:delegated_types_source]}`, not read statically)" if a[:delegated_types_source]
             detail += " extension methods: #{a[:extension_methods].join(', ')}" if a[:extension_methods]&.any?
@@ -331,13 +331,12 @@ module RailsAiContext
           lines << "" << "## Enums"
           enum_options = data[:enum_options] || {}
           data[:enums].each do |attr, values|
+            options = enum_options[attr.to_s] || enum_options[attr.to_sym] || {}
             if values.is_a?(Hash)
               backing = values.values.first.is_a?(Integer) ? "integer" : "string"
               entries = values.map { |k, v| "#{k}(#{v})" }.join(", ")
-              options = enum_options[attr.to_s] || enum_options[attr.to_sym] || {}
               lines << "- `#{attr}`: #{entries} [#{backing}]#{enum_options_text(attr, values.keys, options)}"
             else
-              options = enum_options[attr.to_s] || enum_options[attr.to_sym] || {}
               lines << "- `#{attr}`: #{Serializers::SectionFacts.enum_values(values)}#{enum_options_text(attr, nil, options)}"
             end
           end
@@ -385,8 +384,7 @@ module RailsAiContext
         end
         macro_lines << "- `has_secure_token` #{data[:has_secure_token].map { |f| ":#{f}" }.join(', ')}" if data[:has_secure_token]&.any?
         Array(data[:nested_attributes]).each do |nested|
-          options = nested[:options]&.any? ? " (#{nested[:options].map { |k, v| "#{k}: #{v}" }.join(', ')})" : ""
-          macro_lines << "- `accepts_nested_attributes_for` #{nested[:names].map { |n| ":#{n}" }.join(', ')}#{options}"
+          macro_lines << "- `accepts_nested_attributes_for` #{nested[:names].map { |n| ":#{n}" }.join(', ')}#{option_pairs(nested[:options])}"
         end
         macro_lines << "- `encrypts` #{data[:encrypts].map { |f| ":#{f}" }.join(', ')}" if data[:encrypts]&.any?
         macro_lines << "- `normalizes` #{data[:normalizes].map { |f| ":#{f}" }.join(', ')}" if data[:normalizes]&.any?
@@ -738,6 +736,7 @@ module RailsAiContext
         current_start = nil
 
         source_lines.each_with_index do |line, idx|
+          # Anything the listeners cannot scope: a section is a run of lines, which no node carries.
           label = case line
           when /\A\s*(?:[a-z_]+\s+)*def\s/ then { class: "class methods", instance: "instance methods" }[def_scopes[idx + 1]]
           when /\A\s*class\s+(?!<<)/, /\A\s*[A-Z][\w:]*\s*=\s*Class\.new\b/ then "class definition"

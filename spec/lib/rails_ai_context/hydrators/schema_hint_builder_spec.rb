@@ -54,7 +54,7 @@ RSpec.describe RailsAiContext::Hydrators::SchemaHintBuilder do
   describe "a Mongoid document" do
     let(:mongoid_context) do
       { schema: { unavailable: "this app uses Mongoid; ActiveRecord schema introspection does not apply" },
-        models: { "Book" => { mongoid: true, fields: [ { name: :title, type: "String" } ] },
+        models: { "Book" => { mongoid: true, collection: "books", fields: [ { name: :title, type: "String" } ] },
                   "Admin::Shelf" => { mongoid: true, collection: "legacy_shelves", fields: [] } } }
     end
 

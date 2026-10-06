@@ -286,6 +286,19 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(introspector.send(:extract_columns, "pa_v_posts")).to eq([ { name: "body", type: "text", null: true, size: "medium" } ])
       end
 
+      # LIKE reads `_` as any character, so user_roles matched userXroles too.
+      it "takes a MySQL table's own collation, read once for every table" do
+        column = double(name: "name", type: :string, null: true, default: nil, limit: nil, precision: nil,
+                        scale: nil, comment: nil, collation: "utf8mb4_bin", sql_type: "varchar(255)", array?: false)
+        connection = double("mysql2", columns: [ column ], native_database_types: {}, mariadb?: false)
+        allow(connection).to receive(:select_rows).once
+          .and_return([ [ "userxroles", "utf8mb4_bin" ], [ "user_roles", "utf8mb4_0900_ai_ci" ] ])
+        allow(introspector).to receive(:connection).and_return(connection)
+
+        expect(introspector.send(:extract_columns, "user_roles").first).to include(collation: "utf8mb4_bin")
+        expect(introspector.send(:extract_columns, "userxroles").first).not_to have_key(:collation)
+      end
+
       it "names a MySQL enum, set or timestamp column by the type schema.rb writes" do
         columns = { "kind" => [ :string, "enum('a','b')" ], "flags" => [ :string, "set('x','y')" ], "seen_at" => [ :datetime, "timestamp" ] }.map do |name, (type, sql_type)|
           double(name: name, type: type, null: true, default: nil, limit: nil, precision: nil,
@@ -1164,6 +1177,35 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
+    it "lists no replica or database_tasks: false entry as a database of its own" do
+      Dir.mktmpdir do |dir|
+        write_app(dir, "config/database.yml" => <<~YAML,
+                    #{RailsAiContext.environment_name}:
+                      primary:
+                        adapter: sqlite3
+                        database: db/dev.sqlite3
+                      analytics: &analytics
+                        adapter: sqlite3
+                        database: db/analytics.sqlite3
+                        migrations_paths: db/analytics_migrate
+                      analytics_replica:
+                        <<: *analytics
+                        replica: true
+                      reporting:
+                        <<: *analytics
+                        database_tasks: false
+                  YAML
+                       "db/schema.rb" => "ActiveRecord::Schema[8.1].define(version: 1) do\n  create_table \"users\" do |t|\n  end\nend\n",
+                       "db/analytics_schema.rb" => "ActiveRecord::Schema[8.1].define(version: 1) do\n  create_table \"page_views\" do |t|\n  end\nend\n",
+                       "db/analytics_migrate/20260101000001_create_page_views.rb" => create_posts)
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:secondary_databases].keys).to eq([ "analytics" ])
+        expect(RailsAiContext::Introspectors::SchemaDumpPath.secondaries(dir).keys).to eq([ "analytics" ])
+      end
+    end
+
     it "reads a secondary database's dump under the name its schema_dump gives" do
       Dir.mktmpdir do |dir|
         write_app(dir, "config/database.yml" => <<~YAML,
@@ -1866,7 +1908,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       sql = static_of("structure.sql", <<~SQL)[:tables]
         CREATE TABLE "docs" ("id" integer PRIMARY KEY);
         CREATE VIRTUAL TABLE plain USING rtree;
-        CREATE VIEW broken AS SELECT
+        CREATE VIEW broken
       SQL
 
       expect(rb.keys).to eq(%w[docs bare loose])
@@ -1962,6 +2004,16 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       static_with(files) do |result, dir|
         expect(result[:tables].keys).to eq(%w[fresh_things])
         expect(RailsAiContext::Introspectors::SchemaReader.for(dir).source).to eq(:structure_sql)
+      end
+    end
+
+    it "takes schema_format however the environment file or an initializer spells the assignment" do
+      dump = { "db/schema.rb" => one_table_rb.call("stale_things"),
+               "db/structure.sql" => "CREATE TABLE \"fresh_things\" (\"id\" integer PRIMARY KEY);\n" }
+      [ { "config/environments/#{RailsAiContext.environment_name}.rb" => "Rails.application.config.active_record.schema_format = :sql\n" },
+        { "config/initializers/ar.rb" => "Rails.application.configure do\n  config.active_record.schema_format = :sql\nend\n" },
+        { "config/initializers/ar.rb" => "ActiveRecord.schema_format = :sql\n" } ].each do |config|
+        static_with(dump.merge(config)) { |result, _| expect(result[:tables].keys).to eq(%w[fresh_things]), config.inspect }
       end
     end
 

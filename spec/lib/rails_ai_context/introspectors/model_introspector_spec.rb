@@ -1916,6 +1916,17 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    it "names the collection Mongoid derives when store_in names none" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "admin"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "admin", "shelf.rb"), "module Admin\n  class Shelf\n    include Mongoid::Document\n  end\nend\n")
+
+        expect(described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Admin::Shelf"][:collection]).to eq("admin_shelves")
+      end
+    end
+
     it "reads every embed kind and the store_in collection" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))
@@ -2572,6 +2583,21 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
   # while the walk dropped `validates_with` and `validates_date` entirely.
   # Discourse's Chat::NullUser < User: a subclass of a concrete model, with
   # no type column, so no STI entry either.
+  describe "a booted model's concerns" do
+    it "are resolved once for both the list and its sources" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "user.rb"), "class User < ApplicationRecord\nend\n")
+        model = Class.new(ApplicationRecord) { self.table_name = "users" }
+        model.define_singleton_method(:name) { "User" }
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        expect(introspector).to receive(:booted_concerns).once.and_call_original
+
+        introspector.send(:extract_model_details, model)
+      end
+    end
+  end
+
   describe "the parent model a subclass names" do
     it "is the concrete parent in both tiers, and absent under an abstract base" do
       Dir.mktmpdir do |dir|
@@ -6140,6 +6166,30 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(models["Car"][:model_settings]).to eq("inheritance_column" => ":kind")
         expect(models["Vehicle"][:sti]).to include(type_column: "kind")
         expect(models["Boat"][:sti]).to include(type_column: RailsAiContext::Confidence::INFERRED)
+      end
+    end
+
+    it "reports no STI where a base turns it off, and reads a quoted or escaped column name off the node" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[7.1].define(version: 1) do
+            create_table "vehicles" do |t|
+              t.string "type"
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "vehicle.rb"), "class Vehicle < ApplicationRecord\n  self.inheritance_column = nil\nend\n")
+        File.write(File.join(dir, "app", "models", "car.rb"), "class Car < Vehicle\nend\n")
+        File.write(File.join(dir, "app", "models", "boat.rb"), "class Boat < ApplicationRecord\n  self.inheritance_column = %w[kind].first\n  self.inheritance_column = %s(sort)\nend\n")
+        File.write(File.join(dir, "app", "models", "dinghy.rb"), "class Dinghy < Boat\nend\n")
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["Car"]).not_to have_key(:sti)
+        expect(models["Vehicle"]).not_to have_key(:sti)
+        expect(models["Dinghy"][:sti]).to include(type_column: "sort")
       end
     end
 

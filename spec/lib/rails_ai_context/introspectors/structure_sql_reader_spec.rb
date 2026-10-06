@@ -834,6 +834,29 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
     end
   end
 
+  describe "a view in a dump with no semicolons" do
+    it "reads each view up to the next statement or the end of the file" do
+      sql = <<~SQL
+        CREATE TABLE "codes" ("code" varchar, "label" varchar)
+        CREATE VIEW "v" AS SELECT code FROM codes
+        CREATE TABLE "z" ("a" varchar)
+        CREATE VIEW "w" AS SELECT label
+        FROM codes
+      SQL
+      parsed = described_class.parse(sql)
+
+      expect(parsed[:tables].keys).to eq(%w[codes z])
+      expect(described_class.views(sql)).to eq("v" => { materialized: false, sql: "SELECT code FROM codes" },
+                                               "w" => { materialized: false, sql: "SELECT label\nFROM codes" })
+    end
+
+    it "still reads pg_dump's view whose SELECT starts the next line" do
+      sql = "CREATE VIEW public.v AS\n SELECT posts.id\n   FROM public.posts;\n\nCREATE TABLE public.z (a integer);\n"
+
+      expect(described_class.views(sql)).to eq("v" => { materialized: false, sql: "SELECT posts.id\n   FROM public.posts" })
+    end
+  end
+
   # The same table gives the same types whichever schema_format the app dumps.
   describe "column types as schema.rb names them" do
     it "reads pg_dump's schema-qualified, zoned and sized types" do

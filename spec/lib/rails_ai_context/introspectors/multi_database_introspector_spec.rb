@@ -52,6 +52,25 @@ RSpec.describe RailsAiContext::Introspectors::MultiDatabaseIntrospector do
     end
   end
 
+  describe "a primary that is not the first key" do
+    it "lists the databases in the file's order, as the booted configurations do" do
+      hide_const("ActiveRecord")
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "database.yml"), <<~YAML)
+          #{Rails.env}:
+            analytics:
+              adapter: mysql2
+            primary:
+              adapter: postgresql
+        YAML
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+        expect(result[:databases].map { |d| [ d[:name], d[:adapter] ] }).to eq([ %w[analytics mysql2], %w[primary postgresql] ])
+      end
+    end
+  end
+
   describe "an adapter the file computes in ERB" do
     it "reads the literal fallback and marks it a default" do
       hide_const("ActiveRecord")

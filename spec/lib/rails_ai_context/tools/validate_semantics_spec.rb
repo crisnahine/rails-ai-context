@@ -229,6 +229,45 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
     end
   end
 
+  describe "a model backed by a view, a virtual table or a table the dump left out" do
+    def context_for(table)
+      {
+        schema: { tables: { "published_posts" => table } },
+        models: { "PublishedPost" => { table_name: "published_posts", file: "app/models/published_post.rb",
+                                       associations: [ { type: "belongs_to", name: "user", foreign_key: "user_id" } ] } }
+      }
+    end
+
+    let(:view) { { kind: "view", columns: [], indexes: [], foreign_keys: [], sql: "SELECT id, title, user_id FROM posts" } }
+    let(:booted_view) { view.merge(columns: %w[id title user_id].map { |c| { name: c } }) }
+    let(:not_dumped) { { columns: [], indexes: [], foreign_keys: [], not_dumped: "ignored" } }
+    let(:permit) { double(permit_calls: [ { require_key: :published_post, params: %w[title user_id] } ]) }
+
+    it "asks for no index on it" do
+      [ view, booted_view, not_dumped, { kind: "virtual_table", columns: [ { name: "user_id" } ], indexes: [], foreign_keys: [] } ].each do |table|
+        expect(described_class.send(:check_missing_fk_index, "app/models/published_post.rb", context_for(table))).to eq([])
+      end
+    end
+
+    it "still checks a materialized view whose indexes the dump records" do
+      table = view.merge(kind: "materialized_view", columns: [ { name: "user_id" } ], indexes: [ { columns: %w[title] } ])
+      expect(described_class.send(:check_missing_fk_index, "app/models/published_post.rb", context_for(table)).join)
+        .to include("user_id in published_posts - foreign key without index")
+    end
+
+    it "flags no permitted param when the columns are not known" do
+      [ view, not_dumped ].each do |table|
+        expect(described_class.send(:check_strong_params_ast, "app/controllers/published_posts_controller.rb", permit, context_for(table))).to eq([])
+      end
+    end
+
+    it "checks permitted params against a view's columns when the connection listed them" do
+      table = booted_view.merge(columns: [ { name: "id" }, { name: "user_id" } ])
+      expect(described_class.send(:check_strong_params_ast, "app/controllers/published_posts_controller.rb", permit, context_for(table)).join)
+        .to include("permits :title - not a column in published_posts")
+    end
+  end
+
   describe ".check_rails_semantics" do
     it "answers cleanly for a plain file" do
       with_app_file("app/models/widget.rb", "class Widget < ApplicationRecord\nend\n") do |file, path|

@@ -140,7 +140,16 @@ module RailsAiContext
         def record_setting(node)
           value = node.arguments&.arguments&.first or return
           @results << { macro: :model_setting, setting: node.name.to_s.delete_suffix("="), value: value.slice,
-                        location: node.location.start_line, confidence: confidence_for(node) }
+                        literal: setting_literal(value), location: node.location.start_line, confidence: confidence_for(node) }
+        end
+
+        # A symbol or string names what it spells, nil is nil; anything else is not known without running it.
+        def setting_literal(value)
+          case value
+          when Prism::SymbolNode, Prism::StringNode then value.unescaped
+          when Prism::NilNode then nil
+          else RailsAiContext::Confidence::INFERRED
+          end
         end
 
         def record_gem_macro(node)

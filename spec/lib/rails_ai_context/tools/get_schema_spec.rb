@@ -1068,6 +1068,22 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(JSON.parse(described_class.call(table: "orders", format: "json").content.first[:text])["database"]).to eq("shard_one, shard_two")
     end
 
+    it "shows each database's own columns and models when one name holds different tables" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { tables: { "users" => { columns: [ { name: "email", type: "string" } ] } },
+                  secondary_databases: { "analytics" => { tables: { "users" => { columns: [ { name: "visitor_token", type: "string" } ] } } } } },
+        models: { "User" => { table_name: "users" }, "Visitor" => { table_name: "users", database: { writing: "analytics" } } }
+      })
+      text = described_class.call(table: "users").content.first[:text]
+      primary, analytics = text.split("## Table: users").drop(1)
+
+      expect(primary).to include("**Database:** primary", "**Models:** User\n", "email")
+      expect(primary).not_to include("visitor_token")
+      expect(analytics).to include("**Database:** analytics", "**Models:** Visitor\n", "visitor_token")
+      json = JSON.parse(described_class.call(table: "users", format: "json").content.first[:text])
+      expect(json["databases"].transform_values { |t| t["columns"].map { |c| c["name"] } }).to eq("primary" => %w[email], "analytics" => %w[visitor_token])
+    end
+
     it "lists it among the tables a miss names" do
       expect(described_class.call(table: "nope").content.first[:text]).to include("page_views")
     end

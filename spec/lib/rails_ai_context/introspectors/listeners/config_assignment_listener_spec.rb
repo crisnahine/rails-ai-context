@@ -33,6 +33,24 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
     expect(results.map { |r| r[:value] }).to eq([ "Cron::CleanupJob", RailsAiContext::Confidence::INFERRED, RailsAiContext::Confidence::INFERRED ])
   end
 
+  it "reads self inside an on_load block as that hook's root, and not inside a def" do
+    source = <<~RUBY
+      ActiveSupport.on_load(:active_record) do
+        self.table_name_prefix = "app_"
+        def self.helper
+          self.ignored = 1
+        end
+      end
+      ActiveSupport.on_load(:action_controller) { self.other = 2 }
+      self.outside = 3
+    RUBY
+
+    results = assignments(source, "on_load(:active_record)")
+
+    expect(results.map { |r| [ r[:path], r[:value] ] }).to eq([ [ [ :table_name_prefix ], "app_" ] ])
+    expect(assignments(source)).to eq([])
+  end
+
   it "reads a nested config assignment" do
     results = assignments("config.action_mailer.delivery_method = :smtp")
 

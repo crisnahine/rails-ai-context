@@ -21,7 +21,7 @@ module RailsAiContext
       NONE = { table_name: nil, table_name_prefix: nil, table_name_suffix: nil, pluralize_table_names: nil, primary_key: nil }.freeze
 
       PREFIX_INDEX = Concurrent::Map.new
-      APP_AFFIXES = Concurrent::Map.new
+      AR_SETTINGS = Concurrent::Map.new
 
       # {"RssPolling" => "rss_polling_"}: the engine prefix no model file says.
       # ponytail: reads `lib/**/engine.rb` only; walk lib wholesale if an app needs more.
@@ -39,15 +39,15 @@ module RailsAiContext
 
       def clear_namespace_prefixes
         PREFIX_INDEX.clear
-        APP_AFFIXES.clear
+        AR_SETTINGS.clear
       end
 
-      # {table_name_prefix: "op_"}: the affixes the app's config and initializers set, the class attribute's value in every model.
-      def app_affixes(root)
+      # {table_name_prefix: "op_", schema_format: :sql}: what the app's config and initializers set on Active Record.
+      def active_record_settings(root)
         return {} unless root
 
         root = File.expand_path(root.to_s)
-        APP_AFFIXES.compute_if_absent(root) { read_app_affixes(root) }
+        AR_SETTINGS.compute_if_absent(root) { read_active_record_settings(root) }
       end
 
       # All four declarations of one class body, read in one walk.
@@ -140,27 +140,30 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, {}, label: "namespace_prefixes")
       end
 
-      AFFIXES = %i[table_name_prefix table_name_suffix pluralize_table_names].freeze
+      SETTINGS = { table_name_prefix: String, table_name_suffix: String, pluralize_table_names: [ true, false ], schema_format: %i[ruby sql] }.freeze
+      # ActiveRecord::Base's class attributes, ActiveRecord's module ones (schema_format), and self in the base's load hook.
+      BASE_ROOTS = %w[ActiveRecord::Base ActiveRecord on_load(:active_record)].freeze
 
       # Rails reads config/application.rb, then the environment's file, then each initializer;
-      # the last assignment wins, on config.active_record or on ActiveRecord::Base itself.
-      def read_app_affixes(root)
+      # the last assignment wins, on config.active_record or on Active Record itself.
+      def read_active_record_settings(root)
         files = [ File.join(root, "config", "application.rb"), File.join(root, "config", "environments", "#{RailsAiContext.environment_name}.rb") ]
         files = files.select { |path| File.file?(path) } + PathResolver.initializer_paths(root)
-        listeners = { config: -> { Listeners::ConfigAssignmentListener.new }, base: -> { Listeners::ConfigAssignmentListener.new("ActiveRecord::Base") } }
+        listeners = { config: -> { Listeners::ConfigAssignmentListener.new }, base: -> { Listeners::ConfigAssignmentListener.new(BASE_ROOTS) } }
         files.each_with_object({}) do |file, found|
           walked = SourceIntrospector.walk(file, listeners)
           settings = Array(walked[:config]).filter_map { |entry| [ entry, entry[:path].last ] if entry[:path].size == 2 && entry[:path].first == :active_record } +
                      Array(walked[:base]).filter_map { |entry| [ entry, entry[:path].first ] if entry[:path].size == 1 }
           settings.sort_by { |entry, _| entry[:location] }.each do |entry, name|
-            next unless entry[:assignment] && AFFIXES.include?(name)
+            allowed = SETTINGS[name]
+            next unless entry[:assignment] && allowed
 
             value = entry[:value]
-            found[name] = value if name == :pluralize_table_names ? [ true, false ].include?(value) : value.is_a?(String)
+            found[name] = value if allowed.is_a?(Array) ? allowed.include?(value) : value.is_a?(allowed)
           end
         end
       rescue StandardError, ScriptError => e
-        RailsAiContext.debug_fail(e, {}, label: "app_affixes")
+        RailsAiContext.debug_fail(e, {}, label: "active_record_settings")
       end
 
       def engine_files(root)
@@ -293,7 +296,7 @@ module RailsAiContext
           next part.unescaped if part.is_a?(Prism::StringNode)
 
           key = affix_read(part) or return nil
-          own[key] || app_affixes(root)[key] || ""
+          own[key] || active_record_settings(root)[key] || ""
         end.join
       end
 
@@ -325,7 +328,7 @@ module RailsAiContext
       end
 
       private_class_method :affix, :read, :body_of, :built_body, :descend, :statements, :segment,
-                           :assigned, :boolean_assigned, :primary_key_assigned, :returned, :literal, :read_namespace_prefixes, :read_app_affixes,
+                           :assigned, :boolean_assigned, :primary_key_assigned, :returned, :literal, :read_namespace_prefixes, :read_active_record_settings,
                            :interpolated, :affixed_node, :affix_read,
                            :engine_files, :collect_isolate_calls
     end

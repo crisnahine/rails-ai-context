@@ -201,14 +201,14 @@ module RailsAiContext
         }
       end
 
+      TABLE_COLLATIONS = "SELECT table_name, table_collation FROM information_schema.tables WHERE table_schema = DATABASE()"
+
       # MySQL gives every text column the table's collation; the dump names only a different one.
       def table_collation(table)
         return unless connection.respond_to?(:mariadb?)
 
-        @table_collations ||= {}
-        return @table_collations[table] if @table_collations.key?(table)
-
-        @table_collations[table] = connection.select_all("SHOW TABLE STATUS LIKE #{connection.quote(table)}").first&.fetch("Collation", nil)
+        @table_collations ||= connection.select_rows(TABLE_COLLATIONS).to_h
+        @table_collations[table]
       end
 
       def extract_columns(table)
@@ -443,50 +443,31 @@ module RailsAiContext
       end
 
       def read_secondary_database_dumps
-        dumps = {}
         primary = dump_candidates.map(&:last)
-        secondaries = SchemaDumpPath.secondaries(app.root)
-        taken = primary + secondaries.values.map(&:last)
-        secondaries.each do |name, (format, path)|
-          next if primary.include?(path) || !File.exist?(path)
+        configured = SchemaDumpPath.secondaries(app.root).map { |name, (format, path)| [ name, format, path ] }
+        taken = primary + configured.map(&:last)
+        globbed = { "rb" => :ruby, "sql" => :sql }.flat_map do |ext, format|
+          kind = format == :ruby ? "schema" : "structure"
+          Dir.glob(File.join(app.root.to_s, "db", "*_#{kind}.#{ext}")).sort
+            .reject { |path| taken.include?(path) }
+            .map { |path| [ File.basename(path, ".#{ext}").delete_suffix("_#{kind}"), format, path ] }
+        end
+        dumps = (configured + globbed).each_with_object({}) do |(name, format, path), found|
+          next if found.key?(name) || primary.include?(path) || !File.exist?(path)
 
           parsed = format == :ruby ? parse_schema_rb(path) : parse_structure_sql(path)
           next if parsed[:tables].blank?
 
           parsed[:note] = "Parsed from #{relative_dump_path(path)} (from committed dump, not a live connection)"
-          dumps[name] = parsed
-        end
-        Dir.glob(File.join(app.root.to_s, "db", "*_schema.rb")).sort.each do |path|
-          name = File.basename(path, ".rb").sub(/_schema\z/, "")
-          next if dumps.key?(name) || taken.include?(path)
-
-          parsed = parse_schema_rb(path)
-          next if parsed[:tables].blank?
-
-          parsed[:note] = "Parsed from db/#{File.basename(path)} (from committed dump, not a live connection)"
-          dumps[name] = parsed
-        end
-        Dir.glob(File.join(app.root.to_s, "db", "*_structure.sql")).sort.each do |path|
-          name = File.basename(path, ".sql").sub(/_structure\z/, "")
-          next if dumps.key?(name) || taken.include?(path)
-
-          parsed = parse_structure_sql(path)
-          next if parsed[:tables].blank?
-
-          parsed[:note] = "Parsed from db/#{File.basename(path)} (from committed dump, not a live connection)"
-          dumps[name] = parsed
+          found[name] = parsed
         end
         replay_secondary_migrations(dumps)
       end
 
       # A database whose dump is not written yet answers from its own migrations_paths.
       def replay_secondary_migrations(dumps)
-        config = RailsAiContext::DatabaseYml.env(app.root)
-        return dumps unless config.is_a?(Hash) && config.size > 1 && config.values.all?(Hash)
-
-        primary = config.key?("primary") ? "primary" : config.keys.first
-        config.each do |name, entry|
-          next if name == primary || dumps.key?(name)
+        RailsAiContext::DatabaseYml.task_secondaries(app.root).each do |name, entry|
+          next if dumps.key?(name)
 
           dirs = MigrationReplay.configured_dirs(app.root.to_s, entry) or next
           pk_type = SchemaConventions.implicit_pk_type(app.root.to_s, "#{name}_schema.rb")

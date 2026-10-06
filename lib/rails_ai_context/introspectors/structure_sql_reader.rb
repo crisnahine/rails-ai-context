@@ -143,6 +143,8 @@ module RailsAiContext
 
       # Where a statement with no semicolon ends: the next one starting a line.
       NEXT_STATEMENT = /\n\s*(?:CREATE|ALTER|COMMENT|INSERT|DROP|SET|SELECT)\b/i
+      # A view's body runs on to a SELECT line, so only another statement's keyword ends it.
+      NEXT_DDL = /\n\s*(?:CREATE|ALTER|COMMENT|INSERT|DROP|SET)\b/i
 
       # Each CREATE TABLE's name, body and INHERITS list. The body ends at the
       # parenthesis that closes it, whatever the line layout or terminator: SQLite
@@ -193,7 +195,7 @@ module RailsAiContext
       CREATE_TABLE = /CREATE TABLE\s+(?:IF NOT EXISTS\s+)?#{QUALIFIED_NAME}\s*(?=\()/i
       # mysqldump wraps the statement in version comments and names an algorithm, definer and security first;
       # sqlite3 closes it with a /* name(columns) */ comment.
-      VIEW = /\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:ALGORITHM|DEFINER|SQL\s+SECURITY)\b[^;]*?\s)?(?:TEMP(?:ORARY)?\s+)?(MATERIALIZED\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?#{QUALIFIED_NAME}(?:\s*\([^)]*\))?\s+AS\s+(.*?)(?:\s+WITH\s+(?:NO\s+)?DATA)?(?:\s*\/\*\s*[\w"`]+\([^)]*\)\s*\*\/)?\s*(?:\*\/)?\s*;/im
+      VIEW = /\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:ALGORITHM|DEFINER|SQL\s+SECURITY)\b[^;]*?\s)?(?:TEMP(?:ORARY)?\s+)?(MATERIALIZED\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?#{QUALIFIED_NAME}(?:\s*\([^)]*\))?\s+AS\s+(.*?)(?:\s+WITH\s+(?:NO\s+)?DATA)?(?:\s*\/\*\s*[\w"`]+\([^)]*\)\s*\*\/)?\s*(?:\*\/)?\s*(?:;|(?=#{NEXT_DDL})|\z)/im
       VIRTUAL_TABLE = /CREATE\s+VIRTUAL\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?#{QUALIFIED_NAME}\s+USING\s+(\w+)\s*(?:\(([^)]*)\))?/i
 
       # "schema.name" with quotes removed; an unqualified name is in public.

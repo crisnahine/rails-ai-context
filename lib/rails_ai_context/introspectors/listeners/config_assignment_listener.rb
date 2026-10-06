@@ -15,6 +15,7 @@ module RailsAiContext
       #
       # The chain is matched from a root receiver name, so
       # `Rails.application.config.assets.paths = x` reports [:assets, :paths].
+      # The root `on_load(:active_record)` reads `self` inside that hook's block.
       class ConfigAssignmentListener < BaseListener
         DEFAULT_ROOTS = %w[config].freeze
         SETTER = /\A[A-Za-z_]\w*=\z/
@@ -28,6 +29,7 @@ module RailsAiContext
           @conditions = []
           @statements = Set.new.compare_by_identity
           @def_params = []
+          @self_roots = []
         end
 
         # A call with arguments changes a setting only when it runs as a statement;
@@ -45,10 +47,12 @@ module RailsAiContext
           params = node.parameters
           names = params ? params.child_nodes.flatten.compact.flat_map { |p| p.respond_to?(:name) ? [ p.name ] : [] } : []
           @def_params.push(names)
+          @self_roots.push(nil)
         end
 
         def on_def_node_leave(_node)
           @def_params.pop
+          @self_roots.pop
         end
 
         # The branch an assignment sits in. Rails' own generated
@@ -80,6 +84,7 @@ module RailsAiContext
         end
 
         def on_call_node_enter(node)
+          @self_roots.push(load_hook(node)) if node.block && load_hook(node)
           return if node.receiver.nil?
 
           if node.name.to_s.match?(SETTER)
@@ -96,6 +101,10 @@ module RailsAiContext
           end
         end
 
+        def on_call_node_leave(node)
+          @self_roots.pop if node.block && load_hook(node)
+        end
+
         def on_call_operator_write_node_enter(node)
           record_write(node.receiver, node.read_name, :operator, node)
         end
@@ -109,6 +118,14 @@ module RailsAiContext
         end
 
         private
+
+        # `ActiveSupport.on_load(:active_record)` names the root `on_load(:active_record)`.
+        def load_hook(node)
+          return unless node.name == :on_load && node.receiver.is_a?(Prism::ConstantReadNode) && node.receiver.name == :ActiveSupport
+
+          hook = node.arguments&.arguments&.first
+          "on_load(:#{hook.unescaped})" if hook.is_a?(Prism::SymbolNode)
+        end
 
         def record_assignment(node)
           prefix = chain_path(node.receiver)
@@ -210,6 +227,11 @@ module RailsAiContext
               current = nil
             when Prism::ConstantReadNode, Prism::ConstantPathNode
               parts.unshift(constant_path_string(current).to_sym)
+              current = nil
+            when Prism::SelfNode
+              return nil unless @self_roots.last
+
+              parts.unshift(@self_roots.last.to_sym)
               current = nil
             else
               return nil

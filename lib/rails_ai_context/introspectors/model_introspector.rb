@@ -175,10 +175,11 @@ module RailsAiContext
         reader.tables.key?(table) && column != RailsAiContext::Confidence::INFERRED && !reader.column?(table, column)
       end
 
-      # The value as written, read the way Rails reads it: a symbol or a string names the column.
-      def static_type_column(settings)
-        written = settings&.dig("inheritance_column") or return "type"
-        written[/\A:"?(\w+)"?\z/, 1] || written[/\A["'](\w+)["']\z/, 1] || RailsAiContext::Confidence::INFERRED
+      # Rails' default column, the literal a class sets, or nil where `inheritance_column = nil` turns STI off.
+      def static_type_column(literals)
+        return "type" unless literals&.key?("inheritance_column")
+
+        literals["inheritance_column"].presence
       end
 
       # A model file the app cannot load leaves its class out of reflection,
@@ -370,7 +371,7 @@ module RailsAiContext
         resolved = parent && !seen.include?(class_name) && resolve_superclass(parent, class_name, candidates)
         return pluralize_tables?(resolved, candidates, seen + [ class_name ]) if resolved && candidates.key?(resolved)
 
-        TableName.app_affixes(app.root)[:pluralize_table_names] != false
+        TableName.active_record_settings(app.root)[:pluralize_table_names] != false
       end
 
       # compute_table_name (7.0 and 8.1): a class nested in a concrete model
@@ -464,7 +465,7 @@ module RailsAiContext
 
           scope.pop
         end
-        candidates.dig(class_name, key) || TableName.app_affixes(app.root)[key] || ""
+        candidates.dig(class_name, key) || TableName.active_record_settings(app.root)[key] || ""
       end
 
       def isolated_prefixes
@@ -586,6 +587,7 @@ module RailsAiContext
         # reflection's own list is inflated by an attribute method per column
         # as soon as anything instantiates the model.
         source_instance_methods = own_source_methods(model, source_data)
+        concerns = booted_concerns(model, source_data[:mixins])
 
         details = {
           table_name:       model.table_name,
@@ -601,8 +603,8 @@ module RailsAiContext
           # hold no block callbacks, so both tiers read the model's source.
           callbacks:        group_callbacks_by_type(source_data[:callbacks]),
           callback_conditions: callback_conditions(source_data[:callbacks]),
-          concerns:         booted_concerns(model, source_data[:mixins]),
-          concern_sources:  concern_sources(booted_concerns(model, source_data[:mixins]), source_data[:mixins], booted: true),
+          concerns:         concerns,
+          concern_sources:  concern_sources(concerns, source_data[:mixins], booted: true),
           concerns_hidden:  (hidden.size if hidden.any?),
           concern_callbacks: concern_callbacks(source_data[:callbacks]),
           concerns_unread:  (unread if unread.any?),
@@ -634,7 +636,7 @@ module RailsAiContext
 
         # AST-based macro extractions (replaces regex)
         macros = extract_macros_from_ast(source_data, model_source_path(model))
-        details.merge!(macros)
+        details.merge!(macros.except(:setting_literals))
 
         # AST-based detailed macros (replaces regex)
         detailed = extract_detailed_macros_from_ast(source_data)
@@ -1230,10 +1232,6 @@ module RailsAiContext
         query_constraints: :query_constraints
       }.freeze
 
-      STORE_MACROS = %i[store store_accessor].to_set.freeze
-
-      BROADCAST_MACROS = %i[broadcasts broadcasts_to broadcasts_refreshes_to].to_set.freeze
-
       def extract_macros_from_ast(source_data, source_path = nil)
         macros = {}
         source_data[:macros].each do |m|
@@ -1245,7 +1243,7 @@ module RailsAiContext
           elsif (key = ATTRIBUTE_MACRO_MAP[macro])
             (macros[key] ||= []) << m[:attribute]
             (macros[:serialize_options] ||= {})[m[:attribute]] = m[:written] if macro == :serialize && m[:written]&.any?
-          elsif STORE_MACROS.include?(macro)
+          elsif Listeners::MacrosListener::STORE_MACROS.include?(macro)
             add_store_accessors(macros, m)
           elsif macro == :accepts_nested_attributes_for
             (macros[:nested_attributes] ||= []) << { names: m[:names], options: m[:options] }.compact
@@ -1262,6 +1260,7 @@ module RailsAiContext
           elsif macro == :model_setting
             # Bases arrive first, so the class's own assignment wins.
             (macros[:model_settings] ||= {})[m[:setting]] = m[:value]
+            (macros[:setting_literals] ||= {})[m[:setting]] = m[:literal]
           elsif macro == :connects_to
             macros[:database] = { connects_to: m[:text], condition: m[:condition], declared_in: m[:declared_in], writing: m[:writing] }.compact
           elsif macro == :gem_macro
@@ -1270,7 +1269,7 @@ module RailsAiContext
             (macros[:state_machines] ||= []) << m.slice(:column, :initial, :states, :events)
           end
 
-          if BROADCAST_MACROS.include?(macro)
+          if Listeners::MacrosListener::BROADCAST_MACROS.include?(macro)
             (macros[:broadcasts] ||= []) << macro.to_s
             macros[:broadcasts].uniq!
           end
@@ -1673,8 +1672,8 @@ module RailsAiContext
         }
         details.merge!(extract_macros_from_ast(data, path))
         details.merge!(extract_detailed_macros_from_ast(data))
-        type_column = static_type_column(details[:model_settings]) if sti
-        details[:sti] = sti && !lacks_column?(details[:table_name], type_column) ? sti.merge(type_column: type_column) : nil
+        type_column = static_type_column(details.delete(:setting_literals))
+        details[:sti] = sti && type_column && !lacks_column?(details[:table_name], type_column) ? sti.merge(type_column: type_column) : nil
         downgrade_records(details.compact)
       end
 
@@ -2250,8 +2249,8 @@ module RailsAiContext
           callback_conditions: callback_conditions(callbacks),
           methods: data[:methods]
         }
-        collection = macros.find { |m| m[:macro] == :store_in }&.dig(:options, :collection)
-        details[:collection] = collection if collection
+        # Mongoid's collection_name: store_in's, else the class name tableized with "/" as "_".
+        details[:collection] = macros.find { |m| m[:macro] == :store_in }&.dig(:options, :collection) || class_name.tableize.tr("/", "_")
         downgrade_records(details)
       end
 
