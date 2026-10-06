@@ -565,20 +565,22 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener, "visib
     ])
   end
 
-  it "does not mark a def in class << self inside class_methods as a method the includer gains" do
+  it "leaves out a def self.x or a class << self def inside class_methods, which only ClassMethods responds to" do
     source = <<~RUBY
       module Sluggable
         extend ActiveSupport::Concern
         class_methods do
           def by_slug; end
+          def self.own_of_class_methods; end
           class << self
             def registry; end
+            attr_accessor :setting
           end
         end
       end
     RUBY
     rows = parse_and_dispatch(source).map { |m| [ m[:name], !!m[:class_methods_block] ] }
-    expect(rows).to eq([ [ "by_slug", true ], [ "registry", false ] ])
+    expect(rows).to eq([ [ "by_slug", true ] ])
   end
 end
 

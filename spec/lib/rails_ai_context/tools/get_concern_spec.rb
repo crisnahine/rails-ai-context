@@ -1053,7 +1053,8 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
     expect(class_methods).to eq("## Class Methods\n- `tracked_since(date)`\n")
   end
 
-  # Only class_methods and ClassMethods reach an includer; `def self.x` stays on the module.
+  # Only class_methods and ClassMethods reach an includer; `def self.x` stays on the module,
+  # and one written inside class_methods stays on ClassMethods, which neither lists.
   it "lists the module's own singleton methods apart from the class methods an includer gains" do
     File.write(File.join(model_concerns_dir, "sluggable.rb"), <<~RUBY)
       module Sluggable
@@ -1067,6 +1068,10 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
 
         class_methods do
           def find_by_slug(slug) = find_by(slug: slug)
+          def self.on_class_methods_only; end
+          class << self
+            def also_on_class_methods_only; end
+          end
         end
 
         def self.included(base)

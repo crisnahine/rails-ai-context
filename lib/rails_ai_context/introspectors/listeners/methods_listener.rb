@@ -172,7 +172,7 @@ module RailsAiContext
           scope = def_scope(node)
           method_name = node.name.to_s
           return unless scope
-          return if @frames.last.kind == :extension
+          return if @frames.last.kind == :extension || class_methods_module_own?(node.receiver)
           return if method_name == "initialize" && scope == :instance && !@include_initialize
 
           frame = @frames.last
@@ -217,13 +217,19 @@ module RailsAiContext
         end
 
         # What an includer gains: a `class_methods` def, or a class method written in `included do`.
-        # A `class << self` in `class_methods` opens ClassMethods' own singleton, which no includer gets.
         def includer_gains?(scope)
           frame = @frames.last
           return true if frame.kind == :class_methods
 
           frame = @frames[-2] if frame.kind == :singleton
           frame&.kind == :included && scope == :class
+        end
+
+        # `def self.x` in `class_methods do`, or anything in its `class << self`, is ClassMethods' own:
+        # neither the includer nor the concern responds to it.
+        def class_methods_module_own?(receiver)
+          kinds = @frames.last(2).map(&:kind)
+          (kinds.last == :class_methods && !receiver.nil?) || kinds == %i[class_methods singleton]
         end
 
         def open_frame(kind)
@@ -356,6 +362,8 @@ module RailsAiContext
         end
 
         def record_name(node, name, scope, visibility, signature: name, params: [], slices: [])
+          return if class_methods_module_own?(nil)
+
           visibility = :public if visibility == :module_function
           entry = {
             name:         name,
