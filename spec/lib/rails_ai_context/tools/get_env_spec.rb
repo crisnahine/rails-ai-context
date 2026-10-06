@@ -1223,11 +1223,18 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     end
 
     it "adds nothing for a settings file that is not YAML or a config file that does not parse" do
+      write("Gemfile.lock", "GEM\n  remote: https://rubygems.org/\n  specs:\n    config (5.5.1)\n\nDEPENDENCIES\n  config\n")
       write("config/settings.yml", "payments: [unclosed\n")
+      write("config/settings/production.yml", "payments:\n  timeout: 10\n")
       write("config/configs/bad_config.rb", "class BadConfig < Anyway::Config\n  attr_config (((\n")
 
-      text = described_class.call.content.first[:text]
-      expect(text).not_to include("config/settings.yml")
+      %w[standard full].each do |detail|
+        text = described_class.call(detail: detail).content.first[:text]
+        expect(text).to include("- `config/settings/production.yml`: `payments.timeout`")
+        expect(text).not_to include("config/settings.yml")
+        expect(text).not_to include("BadConfig")
+        expect(text).not_to include("## Anyway::Config")
+      end
     end
   end
 
