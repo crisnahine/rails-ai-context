@@ -95,10 +95,22 @@ module RailsAiContext
               end
               return not_found_response("Table", table, Payload.schema_tables(schema).map { |_, name, _| name }.uniq.sort, recovery_tool: recovery)
             end
-            return json_response(table_data.except(:unread_calls).merge({ database: database }.compact)) if format == "json"
+            # Databases holding the same table read as one; ones that differ each show their own.
+            groups = Payload.schema_tables(schema).select { |_, name, _| name == table_key }
+              .group_by { |_, _, data| data }.map { |data, rows| [ rows.map { |db, _, _| db || "primary" }, data ] }
+            if groups.size > 1
+              return json_response(table: table_key, databases: groups.flat_map { |dbs, data| dbs.map { |db| [ db, data.except(:unread_calls) ] } }.to_h) if format == "json"
 
-            output = format_table_markdown(table_key, table_data, models_data, schema[:enum_types])
-            output = output.sub("\n\n", "\n\n**Database:** #{database}\n") if database
+              output = groups.map do |dbs, data|
+                in_db = models_data.select { |_, model| model.is_a?(Hash) && dbs.include?((model.dig(:database, :writing) || "primary").to_s) }
+                format_table_markdown(table_key, data, in_db, schema[:enum_types]).sub("\n\n", "\n\n**Database:** #{dbs.join(", ")}\n")
+              end.join("\n\n")
+            else
+              return json_response(table_data.except(:unread_calls).merge({ database: database }.compact)) if format == "json"
+
+              output = format_table_markdown(table_key, table_data, models_data, schema[:enum_types])
+              output = output.sub("\n\n", "\n\n**Database:** #{database}\n") if database
+            end
             # Cross-reference hint for AI: suggest next tool call
             model_refs = models_for_table(table_key, models_data)
             if model_refs.any?
