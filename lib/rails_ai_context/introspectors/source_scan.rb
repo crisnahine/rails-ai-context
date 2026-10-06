@@ -99,8 +99,8 @@ module RailsAiContext
       # The model directories plus the classes elsewhere that could be a model.
       # Only the model listing wants the second half: a count or a per-model
       # read of app/models would take in every service with a superclass.
-      # A booted caller passes `base_model`, called with [name, superclass] for a
-      # superclass the scan does not know, since a gem or initializer can define it.
+      # A booted caller passes `base_model`, called with the names a superclass the scan does not
+      # know resolves to, innermost scope first, since a gem or initializer can define it.
       def model_paths(root, base_model: nil, &block)
         return enum_for(:model_paths, root, base_model: base_model) unless block
 
@@ -119,15 +119,16 @@ module RailsAiContext
         pending, declared = RunCache.fetch([ :source_scan_model_declarations, root ]) { extra_model_declarations(root, File.realpath(root)) }
         known = model_records.to_set(&:path_name).merge(MODEL_BASES)
         declared = declared | known
-        loaded = Hash.new { |cache, pair| cache[pair] = base_model ? base_model.call(*pair) : false }
+        loaded = Hash.new { |cache, candidates| cache[candidates] = base_model ? base_model.call(candidates) : false }
         kept = Set.new
         loop do
           added = pending.select do |record, pairs|
             !kept.include?(record) && pairs.any? do |name, base|
               # Ruby takes the innermost lexical scope that declares the name;
               # a compact `class Admin::Item < Base` has none, a nested one has the path's.
-              resolved = lookup(record.path_name, name, base).reverse.find { |candidate| declared.include?(candidate) }
-              resolved ? known.include?(resolved) : loaded[[ name.include?("::") ? name : record.path_name, base ]]
+              candidates = lookup(record.path_name, name, base).reverse
+              resolved = candidates.find { |candidate| declared.include?(candidate) }
+              resolved ? known.include?(resolved) : loaded[candidates]
             end
           end
           break if added.empty?

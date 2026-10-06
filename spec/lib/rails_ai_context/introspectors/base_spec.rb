@@ -29,8 +29,8 @@ RSpec.describe RailsAiContext::Introspectors::Base do
       stub_const("ZzGemBase::Record", Class.new(ActiveRecord::Base) { self.abstract_class = true })
       stub_const("ZzShop", Module.new)
 
-      expect(check.call("ZzShop::Item", "ZzGemBase::Record")).to be(true)
-      expect(check.call("ZzShop::Item", "String")).to be(false)
+      expect(check.call(%w[ZzShop::ZzGemBase::Record ZzGemBase::Record])).to be(true)
+      expect(check.call(%w[ZzShop::String String])).to be(false)
     end
 
     # Resolving a name must not run an app file the boot never loaded.
@@ -43,11 +43,41 @@ RSpec.describe RailsAiContext::Introspectors::Base do
         stub_const("ZzGemBase::Record", Class.new(ActiveRecord::Base) { self.abstract_class = true })
         $zz_lazy_ran = false
 
-        expect(check.call("ZzLazyNs::ZzLazy::Item", "ZzGemBase::Record")).to be(true)
-        expect(check.call("ZzLazyNs::ZzLazy::Item", "Unknown")).to be(false)
-        expect(check.call("ZzLazyNs::ZzLazy::Item", "lowercase")).to be(false)
+        expect(check.call(%w[ZzLazyNs::ZzLazy::ZzGemBase::Record ZzLazyNs::ZzGemBase::Record ZzGemBase::Record])).to be(true)
+        expect(check.call(%w[ZzLazyNs::ZzLazy::Unknown Unknown])).to be(false)
+        expect(check.call(%w[ZzLazyNs::ZzLazy::lowercase lowercase])).to be(false)
         expect($zz_lazy_ran).to be(false)
       end
+    end
+  end
+
+  # Ruby looks up the superclass of a compact `class A::B < X` from the top level, of a nested one from A.
+  describe "a model outside app/models whose base name a namespace also holds" do
+    let(:domain) { Rails.root.join("app", "zz_scope_domain") }
+
+    before do
+      FileUtils.mkdir_p(domain.join("zz_ns"))
+      allow(RailsAiContext::PathResolver).to receive(:extra_model_roots).and_return([ domain.to_s ])
+      stub_const("ZzNs::ZzBase", Class.new)
+      stub_const("ZzBase", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+    end
+
+    after { FileUtils.rm_rf(domain) }
+
+    def listed
+      described_class.new(Rails.application).send(:model_sources).map(&:path_name)
+    end
+
+    it "reads a compact declaration's base from the top level" do
+      File.write(domain.join("zz_ns", "zz_item.rb"), "class ZzNs::ZzItem < ZzBase\nend\n")
+
+      expect(listed).to include("ZzNs::ZzItem")
+    end
+
+    it "reads a nested declaration's base from its namespace" do
+      File.write(domain.join("zz_ns", "zz_item.rb"), "module ZzNs\n  class ZzItem < ZzBase\n  end\nend\n")
+
+      expect(listed).not_to include("ZzNs::ZzItem")
     end
   end
 end

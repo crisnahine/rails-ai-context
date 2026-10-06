@@ -31,11 +31,10 @@ module RailsAiContext
         method(:loaded_record_base?) unless app.is_a?(RailsAiContext::StaticApp) || !defined?(ActiveRecord::Base)
       end
 
-      # The superclass as Ruby resolves it from the class's namespace outward.
-      def loaded_record_base?(name, base)
-        scopes = name.split("::")[0...-1]
-        scopes.size.downto(0).any? do |depth|
-          klass = loaded_constant([ *scopes.first(depth), *base.split("::") ])
+      # The first of the superclass's lexical candidates, innermost first, that is a loaded class.
+      def loaded_record_base?(candidates)
+        candidates.any? do |candidate|
+          klass = loaded_constant(candidate.split("::"))
           break klass < ActiveRecord::Base || false if klass.is_a?(Class)
         end
       rescue NameError
