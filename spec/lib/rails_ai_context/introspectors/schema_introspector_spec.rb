@@ -2892,6 +2892,27 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       FileUtils.rm_rf(dir)
     end
 
+    # 7.1 and later write create_schema for every schema; 7.0 writes none.
+    [ [ "7.0.10", "Schema[7.0]", "" ], [ "7.2.4", "Schema[7.2]", "  create_schema \"app\"\n" ] ].each do |rails, stamp, schemas|
+      it "lists a schema the search path names twice once, as PostgreSQL does, on Rails #{rails}" do
+        dump = public_only.sub("Schema[8.0]", stamp).sub("events", "users").sub("  create_table", "#{schemas}  create_table")
+        dir = pg_app({ "db/schema.rb" => dump }, rails: rails, yml: "  username: app\n  schema_search_path: \"$user,app\"\n")
+        expect(ask(dir, table: "app.users")).to include("## Table: app.users")
+        expect(ask(dir, table: nil)).to include("**Search path:** app\n")
+      ensure
+        FileUtils.rm_rf(dir)
+      end
+    end
+
+    it "lists \"$user,app,public\" with username app as app, public" do
+      dump = public_only.sub("Schema[8.0]", "Schema[7.0]").sub("events", "users")
+      dir = pg_app({ "db/schema.rb" => dump }, rails: "7.0.10", yml: "  username: app\n  schema_search_path: \"$user,app,public\"\n")
+
+      expect(ask(dir, table: nil)).to include("**Search path:** app, public\n")
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+
     def lookup(dir, name)
       described_class.new(RailsAiContext::StaticApp.new(dir)).qualified_table(name)&.first
     end

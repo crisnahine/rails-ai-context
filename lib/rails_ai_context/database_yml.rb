@@ -72,8 +72,9 @@ module RailsAiContext
 
     # A database's schema_search_path as PostgreSQL reads it: an unquoted name folds to
     # lowercase and "$user" is the configured username. Unset, PostgreSQL's "$user", public.
+    # namespace.c recomputeNamespacePath keeps a repeated schema's first place only.
     def schema_search_path(root, name = "primary")
-      search_path_entries(root, name).map(&:first)
+      search_path_entries(root, name).map(&:first).uniq
     end
 
     # The schema only the search path's "$user" names, or nil: one the path also names outright is configured.
