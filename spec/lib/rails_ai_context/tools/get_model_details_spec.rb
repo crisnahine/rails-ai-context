@@ -668,6 +668,41 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  # A section ends on the line before the next one starts.
+  describe "the structure line" do
+    around do |example|
+      Dir.mktmpdir do |dir|
+        models = File.join(dir, "app", "models")
+        FileUtils.mkdir_p(models)
+        File.write(File.join(models, "comment.rb"), "class Comment < ApplicationRecord\n  belongs_to :post\nend\n")
+        File.write(File.join(models, "tag.rb"), "class Tag < ApplicationRecord; end\n")
+        @root = dir
+        example.run
+      end
+    end
+
+    before do
+      described_class.reset_cache!
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Comment" => { table_name: "comments", file: "app/models/comment.rb" },
+                  "Tag" => { table_name: "tags", file: "app/models/tag.rb" } }
+      )
+    end
+
+    it "gives each section of a 3-line model its own lines" do
+      text = described_class.call(model: "Comment").content.first[:text]
+
+      expect(text).to include("**Structure:** class definition(1-1) → associations(2-3)")
+    end
+
+    it "gives a one-line class line 1 only" do
+      text = described_class.call(model: "Tag").content.first[:text]
+
+      expect(text).to include("**Structure:** class definition(1-1)")
+    end
+  end
+
   describe "model gem macros" do
     it "prints a line per gem macro and the aasm states, events and transitions" do
       described_class.reset_cache!

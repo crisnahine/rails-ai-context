@@ -758,7 +758,7 @@ module RailsAiContext
           end
 
           if label && label != current_section
-            sections << { start: current_start, end: idx + 1, label: current_section } if current_section
+            sections << { start: current_start, end: idx, label: current_section } if current_section
             current_section = label
             current_start = idx + 1
           end
