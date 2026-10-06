@@ -514,7 +514,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shows as the `verify_authenticity_token` skip it is. An object filter
   (`around_action TimingFilter.new`) reads `TimingFilter (object)` in both
   tiers, where the booted tier printed a memory address. The booted tier leaves
-  out a gem's block filter (`allow_browser`, `rate_limit`), even when the bundle
+  out a block filter Rails or a gem adds (`allow_browser`, `rate_limit`), even when the bundle
   is installed under the app root. The static tier names a gem module the
   controller or one of its app bases includes (`include ActiveStorage::SetBlob`)
   as an included module not read, where a filter it adds would be missing, and
