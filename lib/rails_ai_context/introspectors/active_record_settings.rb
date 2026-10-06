@@ -10,6 +10,8 @@ module RailsAiContext
 
       CACHE = Concurrent::Map.new
       SETTINGS = { table_name_prefix: String, table_name_suffix: String, pluralize_table_names: [ true, false ], schema_format: %i[ruby sql] }.freeze
+      # Rails copies these from config.active_record onto the ActiveRecord module in an after_initialize hook, so the config wins.
+      MODULE_SETTINGS = %i[schema_format].freeze
       # ActiveRecord::Base's class attributes, ActiveRecord's module ones, and self or the param in the base's load hook.
       BASE_ROOTS = %w[ActiveRecord::Base ActiveRecord on_load(:active_record)].freeze
 
@@ -38,6 +40,7 @@ module RailsAiContext
           collect(Array(walked[:config]).filter_map { |entry| [ entry, entry[:path].last ] if entry[:path].size == 2 && entry[:path].first == :active_record }, configured)
           collect(Array(walked[:base]).filter_map { |entry| [ entry, entry[:path].first ] if entry[:path].size == 1 }, direct)
         end
+        MODULE_SETTINGS.each { |name| direct.delete(name) if configured.key?(name) }
         configured.merge(direct)
       rescue StandardError, ScriptError => e
         RailsAiContext.debug_fail(e, {}, label: "active_record_settings")
