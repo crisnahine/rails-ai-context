@@ -357,7 +357,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
-    context "with options the details used to drop" do
+    context "with macro options" do
       before do
         File.write(fixture_model, <<~RUBY)
           class User < ApplicationRecord

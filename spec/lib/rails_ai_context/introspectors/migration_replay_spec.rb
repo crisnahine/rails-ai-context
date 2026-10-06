@@ -2000,7 +2000,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
     end
   end
 
-  # What db:migrate dumps for these statements, which the replay dropped or mistyped.
+  # What db:migrate dumps for these statements.
   describe "statements a dump records in full" do
     let(:tables) do
       replay([ <<~RUBY ])

@@ -286,7 +286,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(introspector.send(:extract_columns, "pa_v_posts")).to eq([ { name: "body", type: "text", null: true, size: "medium" } ])
       end
 
-      # LIKE reads `_` as any character, so user_roles matched userXroles too.
+      # Collations are matched by exact table name; user_roles and userxroles are different tables.
       it "takes a MySQL table's own collation, read once for every table" do
         column = double(name: "name", type: :string, null: true, default: nil, limit: nil, precision: nil,
                         scale: nil, comment: nil, collation: "utf8mb4_bin", sql_type: "varchar(255)", array?: false)
