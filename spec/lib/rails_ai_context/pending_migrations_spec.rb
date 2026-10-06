@@ -68,6 +68,17 @@ RSpec.describe RailsAiContext::PendingMigrations do
         .to eq(%w[20240101000000 20240102000000 20240201000000 20240301000000])
     end
 
+    it "leaves out a file symlinked from outside the app, as the replay does" do
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "20240105000000_create_secret.rb"), "")
+        File.symlink(File.join(outside, "20240105000000_create_secret.rb"), File.join(@migrate, "20240105000000_create_secret.rb"))
+        root = File.dirname(@migrate, 2)
+
+        expect(described_class.migration_files(@migrate, root: root).map { |m| m[:version] }).not_to include("20240105000000")
+        expect(described_class.for(migrate_dir: @migrate, applied: [], root: root).map { |m| m[:version] }).not_to include("20240105000000")
+      end
+    end
+
     it "carries the path of each file it counted" do
       expect(described_class.migration_files(@migrate).map { |m| File.basename(m[:path]) })
         .to include("20240201000000_add_index.rb")

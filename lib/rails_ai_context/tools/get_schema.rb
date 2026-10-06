@@ -385,9 +385,7 @@ module RailsAiContext
         if schema[:pending_migrations].is_a?(Array)
           pending = schema[:pending_migrations]
           if pending.any?
-            shown = pending.first(5).map { |m| m[:version] }.join(", ")
-            more = pending.size > 5 ? " (+#{pending.size - 5} more)" : ""
-            lines << "**Pending migrations:** #{pending.size} - #{shown}#{more}"
+            lines << "**Pending migrations:** #{pending_phrase(pending)}"
           elsif schema[:schema_version]
             lines << "**Pending migrations:** none"
           end
@@ -405,9 +403,16 @@ module RailsAiContext
 
         lines = [ "", "## Secondary databases", "" ]
         secondary.each do |name, db|
-          lines << "- **#{name}**: #{relations_phrase(db[:tables])} (#{db[:tables].keys.join(', ')}) - #{db[:note]}"
+          pending = Array(db[:pending_migrations])
+          pending_text = pending.any? ? "; pending migrations: #{pending_phrase(pending)}" : ""
+          lines << "- **#{name}**: #{relations_phrase(db[:tables])} (#{db[:tables].keys.join(', ')}) - #{db[:note]}#{pending_text}"
         end
         lines
+      end
+
+      private_class_method def self.pending_phrase(pending)
+        more = pending.size > 5 ? " (+#{pending.size - 5} more)" : ""
+        "#{pending.size} - #{pending.first(5).map { |m| m[:version] }.join(', ')}#{more}"
       end
 
       # One JSON shape for every detail level: the schema as introspected,

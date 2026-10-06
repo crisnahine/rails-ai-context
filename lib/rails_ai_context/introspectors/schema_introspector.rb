@@ -377,7 +377,7 @@ module RailsAiContext
       end
 
       def migration_files
-        @migration_files ||= MigrationReplay.migration_files(migrations_dirs)
+        @migration_files ||= MigrationReplay.migration_files(migrations_dirs, root: app.root)
       end
 
       # Fallback when no database answers: the dump file, then the migrations.
@@ -608,7 +608,7 @@ module RailsAiContext
         # version recorded there is no answer, so the key stays absent.
         if version
           migrate_dir = migrate_dir_for_dump(path)
-          result[:pending_migrations] = RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: version)
+          result[:pending_migrations] = RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: version, root: app.root)
         end
         result
       end
@@ -639,7 +639,7 @@ module RailsAiContext
         if applied.any?
           result[:schema_version] = applied.map(&:to_i).max.to_s
           migrate_dir = migrate_dir_for_dump(path)
-          result[:pending_migrations] = RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: applied)
+          result[:pending_migrations] = RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: applied, root: app.root)
         end
         result
       end
