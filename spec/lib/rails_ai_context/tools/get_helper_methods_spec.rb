@@ -550,6 +550,20 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
         expect(text).not_to include("never")
       end
 
+      it "lists the ones a lib module declares when the controller includes it with parentheses or after another module" do
+        FileUtils.mkdir_p(File.join(@root, "lib"))
+        %w[paren_mod second_mod].each do |name|
+          File.write(File.join(@root, "lib/#{name}.rb"), "module #{name.camelize}\n  def self.included(base)\n    base.helper_method :#{name}_helper\n  end\nend\n")
+        end
+        File.write(File.join(@root, "app/controllers/paren_controller.rb"), "class ParenController < ApplicationController\n  include(ParenMod)\nend\n")
+        File.write(File.join(@root, "app/controllers/second_controller.rb"), "class SecondController < ApplicationController\n  include Comparable, SecondMod\nend\n")
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("- `paren_mod_helper` (ParenMod, `lib/paren_mod.rb`)")
+        expect(text).to include("- `second_mod_helper` (SecondMod, `lib/second_mod.rb`)")
+      end
+
       it "parses a lib module kept in its outer constant's file once" do
         FileUtils.mkdir_p(File.join(@root, "lib"))
         source = "module OuterKit\n  module Helpers\n    extend ActiveSupport::Concern\n    included do\n      helper_method :kit_title\n    end\n  end\nend\n"
