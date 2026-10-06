@@ -148,10 +148,13 @@ module RailsAiContext
         { location: "features", count: features.size, step_definitions: app_files("features/step_definitions/**/*.rb").size }
       end
 
+      # A path a helper builds at run time has no files to count, so the count covers only the paths read.
       def locations_with_count(sources)
         return nil if sources.empty?
 
-        { location: sources.map(&:first).join(", "), count: sources.sum { |_, files| files.size } }
+        read = sources.reject { |location, _| location.equal?(UNREAD_FACTORY_PATH) }
+        found = { location: sources.map(&:first).join(", "), count: (read.sum { |_, files| files.size } if read.any?) }
+        read.size < sources.size ? found.merge(unread: true) : found
       end
 
       # The files a glob under the suite root matches, sorted, leaving out any whose

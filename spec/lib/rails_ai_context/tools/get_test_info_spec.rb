@@ -32,6 +32,18 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
     allow(described_class).to receive(:cached_context).and_return({ tests: test_data })
   end
 
+  describe "a factory path a test helper builds at run time" do
+    it "gives no file count when no path was read, and calls a count beside one the files read" do
+      test_data[:factories] = { location: "a path a test helper builds at run time (not read)", count: nil, unread: true }
+      %w[summary standard].each do |detail|
+        expect(described_class.call(detail: detail).content.first[:text]).not_to match(/Factories:.*files?\b/)
+      end
+
+      test_data[:factories] = { location: "custom/factories, a path a test helper builds at run time (not read)", count: 1, unread: true }
+      expect(described_class.call(detail: "standard").content.first[:text]).to include("(not read) (1 file read)")
+    end
+  end
+
   describe "factory traits" do
     it "renders the file and its trait names, not a Ruby array" do
       text = described_class.call(detail: "standard").content.first[:text]

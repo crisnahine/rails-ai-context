@@ -52,7 +52,7 @@ module RailsAiContext
             lines = [ "# Test Infrastructure", "" ]
             lines << "- **Framework:** #{data[:framework]}"
             lines.concat(suite_lines)
-            lines << "- **Factories:** #{count_phrase(data[:factories][:count], "file")}" if data[:factories]
+            lines << "- **Factories:** #{RailsAiContext::TestFramework.factory_files_phrase(data[:factories]) || data[:factories][:location]}" if data[:factories]
             lines << "- **Fabricators:** #{count_phrase(data[:fabricators][:count], "file")}" if data[:fabricators]
             lines << "- **Cucumber:** #{count_phrase(data[:cucumber][:count], "feature file")}" if data[:cucumber]
             lines << "- **Fixtures:** #{RailsAiContext::TestFramework.fixture_phrase(data[:fixtures])}" if data[:fixtures]
@@ -67,7 +67,7 @@ module RailsAiContext
             lines = [ "# Test Infrastructure", "" ]
             lines << "- **Framework:** #{data[:framework]}"
             lines.concat(suite_lines)
-            lines << "- **Factories:** #{data[:factories][:location]} (#{count_phrase(data[:factories][:count], "file")})" if data[:factories]
+            lines << "- **Factories:** #{RailsAiContext::TestFramework.factory_location(data[:factories])}" if data[:factories]
             lines << "- **Fabricators:** #{data[:fabricators][:location]} (#{count_phrase(data[:fabricators][:count], "file")})" if data[:fabricators]
             lines << cucumber_line(data[:cucumber]) if data[:cucumber]
             lines << "- **Fixtures:** #{data[:fixtures][:location]} (#{RailsAiContext::TestFramework.fixture_phrase(data[:fixtures])})" if data[:fixtures]

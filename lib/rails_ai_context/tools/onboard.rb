@@ -407,9 +407,9 @@ module RailsAiContext
         # The factories a suite defines, and the files they sit in: one file
         # commonly defines several, so the file count is not the factory count.
         def factory_phrase(tests)
-          files = count_phrase(tests[:factories][:count].to_i, "file")
+          files = RailsAiContext::TestFramework.factory_files_phrase(tests[:factories])
           names = tests[:factory_names]
-          return files unless names.is_a?(Hash) && names.any?
+          return files || "files not read" unless names.is_a?(Hash) && names.any?
 
           # A factory named in a loop defines at least one, so the count is a floor.
           computed = tests[:computed_factories].to_i

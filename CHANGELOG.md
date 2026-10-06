@@ -219,6 +219,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `extended`, `prepended`) hook is listed under neither. A `def self.x` or
   `class << self` written inside `class_methods do` belongs to ClassMethods
   alone, so neither section lists it. (#312)
+- **The tests payload's `factories` carries `unread: true`** when a test helper
+  loads factories from a path built at run time. Its `count` is then the files
+  of the paths that were read, and nil when none was; `test_info` and `onboard`
+  print no file count in that case. (#373)
 - **`search_docs` no longer accepts `source: "api"`**, which never had entries.
   The valid sources are all, guides, stimulus, turbo and hotwire. (#322)
 

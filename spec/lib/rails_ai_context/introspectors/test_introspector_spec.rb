@@ -801,6 +801,10 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
         result = payload
         expect(result[:factory_names]).to be_nil
         expect(result[:factories][:location]).to include("not read")
+        expect(result[:factories]).to include(count: nil, unread: true)
+
+        write("spec/support/fb.rb", "FactoryBot.definition_file_paths = [File.expand_path(\"../../custom/factories\", __dir__), ENV[\"X\"]]\nFactoryBot.reload\n")
+        expect(payload[:factories]).to include(count: 1, unread: true)
       end
     end
 
