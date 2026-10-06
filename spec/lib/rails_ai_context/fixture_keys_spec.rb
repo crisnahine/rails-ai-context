@@ -14,6 +14,11 @@ RSpec.describe RailsAiContext::FixtureKeys do
     expect(described_class.name?("_fixture")).to be(false)
   end
 
+  # Rails renders ERB first, so `row_<%= i %>` loads as row_0, row_1 and so on.
+  it "does not read a label ERB computes as a fixture name" do
+    expect(described_class.name?("row_erb_value")).to be(false)
+  end
+
   describe ".parse" do
     it "parses one content once, so every reader of a file shares the parse" do
       content = "shared_once:\n  title: A\n"

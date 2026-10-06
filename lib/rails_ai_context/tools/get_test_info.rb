@@ -121,7 +121,12 @@ module RailsAiContext
                 lines << "- **#{set}:**"
                 entries.each do |entry_name, attrs|
                   attr_str = attrs.map { |k, v| "#{k}: #{v}" }.join(", ")
-                  lines << (attr_str.empty? ? "  - `#{entry_name}`" : "  - `#{entry_name}`: #{attr_str}")
+                  label = if RailsAiContext::FixtureKeys.name?(entry_name)
+                    "`#{entry_name}`"
+                  else
+                    "`#{entry_name.gsub(RailsAiContext::FixtureKeys::ERB_VALUE, '<%= ... %>')}` _(label set by ERB)_"
+                  end
+                  lines << (attr_str.empty? ? "  - #{label}" : "  - #{label}: #{attr_str}")
                 end
               end
 
