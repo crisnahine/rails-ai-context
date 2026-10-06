@@ -15,23 +15,30 @@ RSpec.describe RailsAiContext::Introspectors::SchemaReader do
   after { @paths&.each { |p| FileUtils.rm_f(p) } }
 
   describe "#tables" do
-    it "reads a table Rails 8.0 dumps once per search path schema holding it as one table" do
+    it "reads a table Rails 8.0 dumps once per search path schema holding it as one table, with its keys and constraints once" do
       reader = reader_for(<<~RUBY)
         ActiveRecord::Schema[8.0].define(version: 2024_01_01_000000) do
           create_table "users", force: :cascade do |t|
             t.text "tenant_column"
             t.index ["tenant_column"], name: "index_users_on_tenant_column"
+            t.check_constraint "length(tenant_column) > 0", name: "tenant_len"
           end
 
           create_table "users", force: :cascade do |t|
             t.text "tenant_column"
             t.index ["tenant_column"], name: "index_users_on_tenant_column"
+            t.check_constraint "length(tenant_column) > 0", name: "tenant_len"
           end
+
+          add_foreign_key "users", "users", column: "id"
+          add_foreign_key "users", "users", column: "id"
         end
       RUBY
 
       expect(reader.tables["users"][:columns].map { |c| c[:name] }).to eq(%w[tenant_column])
       expect(reader.tables["users"][:indexes].size).to eq(1)
+      expect(reader.check_constraints.size).to eq(1)
+      expect(reader.foreign_keys.size).to eq(1)
     end
 
     it "groups columns under the table that declares them" do

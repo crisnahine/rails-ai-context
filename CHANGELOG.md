@@ -25,9 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   creates that schema, and when two schemas hold the same table name, show the
   one in the earlier schema, as PostgreSQL resolves it. The schema answer
   names the search path when it holds more than `public`.
-- **A table Rails 8.0 dumps twice lists its columns once.** Before Rails 8.1,
-  schema.rb writes a table once per search path schema holding its name, and
-  the static tier listed every column twice.
+- **A table Rails 8.0 dumps twice lists its columns, foreign keys and check
+  constraints once.** Before Rails 8.1, schema.rb writes a table and its
+  foreign keys once per search path schema holding its name, and the static
+  tier listed each of them twice.
 - **A structure.sql app lists plpgsql, as the booted app does.** Every
   PostgreSQL database starts with plpgsql, so the booted app lists it, but
   pg_dump leaves it out of the dump. The static tier now adds it, named

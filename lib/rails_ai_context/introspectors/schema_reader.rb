@@ -228,6 +228,8 @@ module RailsAiContext
         events.sort_by { |e| e[:location] }.each do |event|
           current = absorb(event, schema, current)
         end
+        # The same loop writes that table's foreign keys twice (8.0 schema_dumper.rb:134-156).
+        schema[:foreign_keys].uniq!
         name_relations(schema)
         # The connection lists a table only when the search path shows it bare.
         schema[:tables].keys.select { |name| name.include?(".") }.each { |name| schema[:qualified_tables][name] = schema[:tables].delete(name) }
@@ -313,6 +315,7 @@ module RailsAiContext
           # convention lives in SchemaConventions, shared with the replay.
           implied = @pk_type ? SchemaConventions.implicit_primary_key(options, @pk_type) : []
           # Before 8.1 the dumper writes a name once per search path schema holding it; loading, the last stands.
+          schema[:check_constraints].reject! { |constraint| constraint[:table] == event[:table] } if schema[:tables].key?(event[:table])
           schema[:tables][event[:table]] = { options: options, columns: implied, indexes: [] }
           return event[:table]
         when :column
