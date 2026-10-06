@@ -1949,6 +1949,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
     describe "extension names against the connection's current schema" do
       let(:dump) do
         <<~SQL
+          CREATE SCHEMA app;
           CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA app;
           CREATE EXTENSION IF NOT EXISTS hstore WITH SCHEMA public;
           CREATE TABLE public.users (
@@ -1992,6 +1993,102 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
       it "names every extension bare before Rails 8.0, whose connection reads extname alone" do
         expect(extensions_with(database_yml: "  adapter: postgresql\n", rails: "7.2.2")).to eq(%w[pg_trgm hstore])
+      end
+    end
+
+    describe "tables in the schemas on the search path" do
+      def static_with(file, content, database_yml)
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          FileUtils.mkdir_p(File.join(dir, "config"))
+          File.write(File.join(dir, "db", file), content)
+          File.write(File.join(dir, "config", "database.yml"), "#{RailsAiContext.environment_name}:\n  adapter: postgresql\n#{database_yml}")
+          described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        end
+      end
+
+      let(:structure) do
+        <<~SQL
+          CREATE SCHEMA app;
+          CREATE SCHEMA audit;
+          CREATE TABLE app.widgets (
+              id bigint NOT NULL,
+              owner_id bigint
+          );
+          CREATE TABLE app.users (
+              id bigint NOT NULL,
+              tenant_column text
+          );
+          CREATE TABLE public.users (
+              id bigint NOT NULL,
+              shared_column text
+          );
+          CREATE TABLE public.notes (
+              id bigint NOT NULL
+          );
+          CREATE TABLE audit.events (
+              id bigint NOT NULL
+          );
+          ALTER TABLE ONLY app.widgets
+              ADD CONSTRAINT fk_owner FOREIGN KEY (owner_id) REFERENCES app.users(id);
+        SQL
+      end
+
+      it "names a structure.sql table in any search path schema bare, the first schema winning a shared name" do
+        tables = static_with("structure.sql", structure, "  schema_search_path: \"app,public\"\n")[:tables]
+
+        expect(tables.keys).to contain_exactly("widgets", "users", "notes")
+        expect(tables["users"][:columns].map { |c| c[:name] }).to eq(%w[id tenant_column])
+        expect(tables["widgets"][:foreign_keys].first).to include(to_table: "users")
+      end
+
+      it "keeps today's tables with no search path" do
+        tables = static_with("structure.sql", structure, "")[:tables]
+
+        expect(tables.keys).to contain_exactly("users", "notes")
+        expect(tables["users"][:columns].map { |c| c[:name] }).to eq(%w[id shared_column])
+      end
+
+      it "reads $user as the configured username when the dump creates that schema" do
+        tables = static_with("structure.sql", structure, "  username: audit\n")[:tables]
+
+        expect(tables.keys).to contain_exactly("users", "notes", "events")
+      end
+
+      it "skips $user when the dump creates no schema by the username" do
+        tables = static_with("structure.sql", structure, "  username: postgres\n")[:tables]
+
+        expect(tables.keys).to contain_exactly("users", "notes")
+      end
+
+      it "names a schema.rb table in any search path schema bare, the first schema winning a shared name" do
+        rb = <<~RUBY
+          ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+            create_schema "app"
+
+            create_table "app.users", force: :cascade do |t|
+              t.string "tenant_column"
+            end
+
+            create_table "app.widgets", force: :cascade do |t|
+              t.bigint "owner_id"
+            end
+
+            create_table "public.notes", force: :cascade do |t|
+            end
+
+            create_table "public.users", force: :cascade do |t|
+              t.string "shared_column"
+            end
+
+            add_foreign_key "app.widgets", "app.users", column: "owner_id"
+          end
+        RUBY
+        tables = static_with("schema.rb", rb, "  schema_search_path: \"app,public\"\n")[:tables]
+
+        expect(tables.keys).to contain_exactly("users", "widgets", "notes")
+        expect(tables["users"][:columns].map { |c| c[:name] }).to eq(%w[id tenant_column])
+        expect(tables["widgets"][:foreign_keys].first).to include(to_table: "users")
       end
     end
 

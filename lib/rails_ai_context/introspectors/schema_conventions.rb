@@ -189,10 +189,31 @@ module RailsAiContext
         yml.adapter(db_name, entry).first || (yml.adapter("primary", yml.primary(root)).first unless entry)
       end
 
-      # A dump of more than one schema qualifies every name (relation_name, 8.1);
-      # the app sees a public table by its bare name under the default search_path.
-      def local_name(name)
-        name.delete_prefix("public.")
+      DEFAULT_SEARCH_PATH = %w[public].freeze
+
+      # A dump of more than one schema qualifies every name (relation_name, 8.1); the app
+      # sees a relation in a search path schema by its bare name (current_schemas(false)),
+      # unless `shadowed` says an earlier schema on the path holds the same name.
+      def local_name(name, search_path = DEFAULT_SEARCH_PATH, shadowed = nil)
+        schema, dot, bare = name.rpartition(".")
+        dot.empty? || !search_path.include?(schema) || shadowed&.include?(name) ? name : bare
+      end
+
+      # The qualified names a schema earlier on the search path hides by holding the same name.
+      def shadowed_names(names, search_path)
+        ranked = names.uniq.filter_map do |name|
+          schema, _, bare = name.rpartition(".")
+          rank = search_path.index(schema)
+          [ rank, bare, name ] if rank
+        end
+        first = ranked.sort_by(&:first).reverse.to_h { |_, bare, name| [ bare, name ] }
+        ranked.filter_map { |_, bare, name| name unless first[bare] == name }.to_set
+      end
+
+      # The configured search path less the schemas the dump never creates, as PostgreSQL
+      # skips a schema that does not exist. public is assumed, since pg_dump does not create it.
+      def existing_search_path(search_path, created)
+        search_path.select { |schema| schema == "public" || created.include?(schema) }
       end
 
       # A primary key as connection.primary_key gives it: the column's name, or

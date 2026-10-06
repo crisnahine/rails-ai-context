@@ -69,14 +69,24 @@ module RailsAiContext
       databases(root)[primary_name(root)]
     end
 
-    # PostgreSQL's current schema: the primary's first search path entry, an unquoted name
-    # folded to lowercase. "$user" is a login static cannot know, so it falls back to public.
-    def current_schema(root)
-      entry = primary(root)
-      first = (entry["schema_search_path"] if entry.is_a?(Hash)).to_s.split(",").first.to_s.strip
-      return "public" if first.empty? || first.delete('"') == "$user" || computed?(first)
+    # A database's schema_search_path as PostgreSQL reads it: an unquoted name folds to
+    # lowercase and "$user" is the configured username. Unset, PostgreSQL's "$user", public.
+    def schema_search_path(root, name = "primary")
+      settings = entry(root, name)
+      settings = {} unless settings.is_a?(Hash)
+      known = adapter(name, settings).first
+      return %w[public] if known && !known.start_with?("postg")
 
-      first.start_with?('"') ? first.delete('"') : first.downcase
+      text = settings["schema_search_path"].to_s
+      text = '"$user", public' if text.strip.empty?
+      user = settings["username"].to_s
+      text.split(",").filter_map do |part|
+        part = part.strip
+        next if part.empty? || computed?(part)
+        next (user unless user.empty? || computed?(user)) if part.delete('"') == "$user"
+
+        part.start_with?('"') ? part.delete('"') : part.downcase
+      end
     end
 
     # The named database's settings in the running environment, or nil.

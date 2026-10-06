@@ -297,7 +297,7 @@ module RailsAiContext
       end
 
       def schema_reader
-        @schema_reader ||= SchemaReader.new(schema_file_path, partitions: @partitions.to_a)
+        @schema_reader ||= SchemaReader.new(schema_file_path, partitions: @partitions.to_a, search_path: RailsAiContext::DatabaseYml.schema_search_path(app.root))
       end
 
       # The configured dump, whatever its format: a view's SQL and a MySQL generated expression are not on the connection.
@@ -575,7 +575,7 @@ module RailsAiContext
         content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
         return { error: "#{relative_dump_path(path)} too large (#{File.size(path)} bytes, over max_schema_file_size)" } unless content
 
-        schema = SchemaReader.new(path, pk_type: SchemaConventions.implicit_pk_type(app.root.to_s, secondary_dump(path)))
+        schema = SchemaReader.new(path, pk_type: SchemaConventions.implicit_pk_type(app.root.to_s, secondary_dump(path)), search_path: search_path_for(path))
 
         tables = {}
         schema.tables.each do |table_name, declared|
@@ -639,7 +639,7 @@ module RailsAiContext
         content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
         return { error: "#{relative_dump_path(path)} too large (#{File.size(path)} bytes, over max_schema_file_size)" } unless content
 
-        parsed = StructureSqlReader.parse(content, current_schema: extension_schema)
+        parsed = StructureSqlReader.parse(content, search_path: search_path_for(path), bare_extensions: bare_extensions?)
         dialect = parsed[:dialect]
         tables = parsed[:tables]
         tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
@@ -667,10 +667,14 @@ module RailsAiContext
       end
 
       # Rails before 8.0 reads extname alone, so its connection names every extension bare.
-      def extension_schema
+      def bare_extensions?
         lock = GemLock.for(app.root)
         version = lock.version("rails") || lock.version("railties")
-        RailsAiContext::DatabaseYml.current_schema(app.root) unless version && Gem::Version.new(version) < Gem::Version.new("8.0")
+        !version.nil? && Gem::Version.new(version) < Gem::Version.new("8.0")
+      end
+
+      def search_path_for(dump_path)
+        RailsAiContext::DatabaseYml.schema_search_path(app.root, SchemaDumpPath.database_name(app.root.to_s, secondary_dump(dump_path)))
       end
 
       def connection_state

@@ -11,18 +11,22 @@ module RailsAiContext
       module_function
 
       # @return [Hash] { dialect: Symbol, tables: { name => { columns:, indexes:, foreign_keys: } } }
-      # current_schema: the schema the connection names an extension bare in; nil names every one bare.
-      def parse(content, current_schema: "public")
+      # search_path: the database's configured schema_search_path. bare_extensions: name
+      # every extension bare, as a connection before Rails 8.0 does.
+      def parse(content, search_path: SchemaConventions::DEFAULT_SEARCH_PATH, bare_extensions: false)
         tables = {}
         dialect = detect_sql_dialect(content)
         enums = enum_types(content)
+        path = SchemaConventions.existing_search_path(search_path, content.scan(CREATE_SCHEMA).map { |(name)| name.delete('"') })
+        view_matches = content.scan(VIEW)
+        local = relation_namer(content, view_matches, path)
 
         # Every table the file creates, by schema-qualified name, so a parent
         # outside the listed tables still resolves.
         all = {}
         each_create_table(content) do |qualified, body, inherits, trailer|
           name = qualified_name(qualified)
-          shown = shown_name(name)
+          shown = local.(name)
           next if shown.start_with?("ar_internal_metadata", "schema_migrations")
           # SQLite's own tables; Rails' data_sources leaves them out.
           next if dialect == :sqlite && shown.start_with?("sqlite_")
@@ -34,7 +38,7 @@ module RailsAiContext
           tables[shown] = table if shown.match?(/\A\w+\z/)
         end
 
-        found_views = views(content)
+        found_views = views(content, local, view_matches)
         content.scan(/CREATE (UNIQUE )?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF NOT EXISTS\s+)?[`"]?(\w+)[`"]?\s+ON\s+(?:ONLY\s+)?#{QUALIFIED_NAME}((?:(?!#{NEXT_STATEMENT})[^;])*)/m) do |unique, idx_name, table, rest|
           group = first_paren_group(rest)
           keys = index_keys(group)
@@ -48,7 +52,7 @@ module RailsAiContext
           include = options[/\A\s*INCLUDE\s*\(([^)]*)\)/i, 1]
           detail = SchemaConventions.index_detail(keys, using: rest[0, open][/\bUSING\s+(\w+)/i, 1]&.downcase, include: include && index_keys(include),
                                                         nulls_not_distinct: options.match?(/\bNULLS\s+NOT\s+DISTINCT\b/i), **key_options(group))
-          target = all.dig(qualified_name(table), :table) || found_views[shown_name(qualified_name(table))]
+          target = all.dig(qualified_name(table), :table) || found_views[local.(qualified_name(table))]
           (target[:indexes] ||= []) << { name: idx_name, columns: keys, unique: !!unique, where: where }.compact.merge(detail) if target
         end
 
@@ -67,7 +71,7 @@ module RailsAiContext
         # statement and attribute the FK to the wrong table.
         content.scan(/ALTER TABLE\s+(?:ONLY\s+)?#{QUALIFIED_NAME}\s+ADD CONSTRAINT[^;]*?FOREIGN KEY\s*\(([^)]*)\)\s*REFERENCES\s+#{QUALIFIED_NAME}\s*\(([^)]*)\)([^;]*)/m) do |from, cols, to, pks, tail|
           from = qualified_name(from)
-          all.dig(from, :table, :foreign_keys)&.push(SchemaConventions.foreign_key_entry(shown_name(from), shown_name(qualified_name(to)), cols.scan(/\w+/), pks.scan(/\w+/), **foreign_key_actions(tail)))
+          all.dig(from, :table, :foreign_keys)&.push(SchemaConventions.foreign_key_entry(local.(from), local.(qualified_name(to)), cols.scan(/\w+/), pks.scan(/\w+/), **foreign_key_actions(tail)))
         end
 
         alters = Hash.new { |h, k| h[k] = [] }
@@ -75,7 +79,7 @@ module RailsAiContext
           alters[qualified_name(table)] << [ column, change ]
         end
         resolved = {}
-        all.each_key { |name| resolve_columns(name, all, alters, resolved) }
+        all.each_key { |name| resolve_columns(name, all, alters, resolved, local) }
 
         content.scan(/^COMMENT ON TABLE #{QUALIFIED_NAME} IS '((?:[^']|'')*)';/) do |table, text|
           table = all.dig(qualified_name(table), :table)
@@ -89,12 +93,13 @@ module RailsAiContext
 
         # pg_dump writes each partition as a table, then attaches it in exactly this form.
         content.scan(/^ALTER TABLE ONLY .+? ATTACH PARTITION #{QUALIFIED_NAME} /) do |(partition)|
-          name = qualified_name(partition)
-          tables.delete(shown_name(name)) if name.start_with?("public.")
+          shown = local.(qualified_name(partition))
+          tables.delete(shown) unless shown.include?(".")
         end
 
         { dialect: dialect, tables: tables, enums: enums.map { |name, values| { name: name, values: values } },
-          views: found_views, virtual_tables: virtual_tables(content), extensions: extensions(content, current_schema) }
+          views: found_views, virtual_tables: virtual_tables(content, local),
+          extensions: extensions(content, (path.first || "public" unless bare_extensions)) }
       end
 
       # As PostgreSQL's connection names them: qualified unless in its current schema.
@@ -105,17 +110,24 @@ module RailsAiContext
         end
       end
 
+      # Each relation's name as the app reads it, given the schemas on its search path.
+      def relation_namer(content, view_matches, path)
+        names = (content.scan(CREATE_TABLE) + view_matches.map { |match| [ match[1] ] } + content.scan(VIRTUAL_TABLE).map { |match| [ match[0] ] })
+        shadowed = SchemaConventions.shadowed_names(names.map { |(name)| qualified_name(name) }, path) if path.size > 1
+        ->(name) { SchemaConventions.local_name(name, path, shadowed) }
+      end
+
       # Each view by the name the app reads it under, a later definition of a name replacing a placeholder.
-      def views(content)
-        content.scan(VIEW).each_with_object({}) do |(materialized, name, sql), found|
-          name = qualified_name(name)
-          found[shown_name(name)] = { materialized: !materialized.nil?, sql: sql.strip } if shown_name(name).match?(/\A\w+\z/)
+      def views(content, local = SchemaConventions.method(:local_name), view_matches = content.scan(VIEW))
+        view_matches.each_with_object({}) do |(materialized, name, sql), found|
+          name = local.(qualified_name(name))
+          found[name] = { materialized: !materialized.nil?, sql: sql.strip } if name.match?(/\A\w+\z/)
         end
       end
 
-      def virtual_tables(content)
+      def virtual_tables(content, local = SchemaConventions.method(:local_name))
         content.scan(VIRTUAL_TABLE).to_h do |name, mod, arguments|
-          [ shown_name(qualified_name(name)), { module: mod, arguments: split_top_level(arguments.to_s) } ]
+          [ local.(qualified_name(name)), { module: mod, arguments: split_top_level(arguments.to_s) } ]
         end
       end
 
@@ -192,6 +204,7 @@ module RailsAiContext
       INHERITS_KEYWORD = /\s*INHERITS\b/i
       # The optional INHERITS list after a CREATE TABLE body.
       INHERITS = /(?:#{INHERITS_KEYWORD}\s*\(([^)]*)\))?/
+      CREATE_SCHEMA = /^CREATE SCHEMA (?:IF NOT EXISTS )?("[^"]+"|\w+)/
       CREATE_TABLE = /CREATE TABLE\s+(?:IF NOT EXISTS\s+)?#{QUALIFIED_NAME}\s*(?=\()/i
       # mysqldump wraps the statement in version comments and names an algorithm, definer and security first;
       # sqlite3 closes it with a /* name(columns) */ comment.
@@ -211,7 +224,7 @@ module RailsAiContext
 
       # Each parent's columns, then the child's own. pg_dump writes only local
       # columns and sets an inherited one's NOT NULL and default by ALTER.
-      def resolve_columns(name, all, alters, resolved)
+      def resolve_columns(name, all, alters, resolved, local)
         entry = all[name]
         return entry if resolved[name]
 
@@ -221,11 +234,11 @@ module RailsAiContext
         unresolved = []
         entry[:parents]&.each do |parent|
           unless all[parent]
-            unresolved << shown_name(parent)
+            unresolved << local.(parent)
             next
           end
 
-          resolved_parent = resolve_columns(parent, all, alters, resolved)
+          resolved_parent = resolve_columns(parent, all, alters, resolved, local)
           resolved_parent[:table][:columns].each { |column| merge_column(columns, column.dup) }
           raw_types = resolved_parent[:raw_types].merge(raw_types)
           unresolved.concat(Array(resolved_parent[:table][:inherits_unresolved]))

@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pg_trgm` with one. The static tier now reads the search path from
   config/database.yml, and on Rails before 8.0 names every extension bare, as
   that connection does.
+- **Tables in every schema on the search path show without a boot.** The
+  static tier listed only the tables in `public`, while the booted app lists
+  every table in a schema on `schema_search_path` by its bare name. Both dump
+  formats now read the search path from config/database.yml, take `"$user"` as
+  the configured username when the dump creates that schema, and when two
+  schemas hold the same table name, show the one in the earlier schema, as
+  PostgreSQL resolves it.
 
 ## [5.32.0] - 2026-10-06
 

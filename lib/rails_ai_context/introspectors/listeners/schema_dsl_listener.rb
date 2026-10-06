@@ -52,12 +52,18 @@ module RailsAiContext
         # The dumper writes a comment, not a create_table, for a table it could not describe.
         NOT_DUMPED = /\A#\s*Could not dump table "([^"]+)" because of following (\S+)/
 
+        def initialize(search_path: SchemaConventions::DEFAULT_SEARCH_PATH, shadowed: nil)
+          super()
+          @search_path = search_path
+          @shadowed = shadowed
+        end
+
         def on_program_node_enter(_node)
           comments = Array(@comments)
           comments.each_with_index do |comment, i|
             match = NOT_DUMPED.match(comment.location.slice) or next
             message = comments[i + 1]&.location&.slice.to_s[/\A#\s+(\S.*)/, 1]
-            @results << { type: :not_dumped, table: SchemaConventions.local_name(match[1]),
+            @results << { type: :not_dumped, table: local_name(match[1]),
                           reason: [ match[2], message ].compact.join(": "), location: comment.location.start_line }
           end
         end
@@ -86,6 +92,10 @@ module RailsAiContext
         ].to_set.freeze
 
         private
+
+        def local_name(name)
+          SchemaConventions.local_name(name, @search_path, @shadowed)
+        end
 
         def read_elsewhere?(name)
           OTHER_TABLE_METHODS.include?(name) || MigrationReplayListener::TABLE_OPS.key?(name)
@@ -123,7 +133,7 @@ module RailsAiContext
           name = literal_string(node.arguments&.arguments&.first) or return
           options = extract_keyword_nodes(node)
           @results << {
-            type: :view, name: SchemaConventions.local_name(name), materialized: options[:materialized].is_a?(Prism::TrueNode),
+            type: :view, name: local_name(name), materialized: options[:materialized].is_a?(Prism::TrueNode),
             sql: literal_string(options[:sql_definition])&.strip, location: node.location.start_line
           }.compact
         end
@@ -143,7 +153,7 @@ module RailsAiContext
 
           @results << {
             type:     :create_table,
-            table:    SchemaConventions.local_name(table_arg.unescaped),
+            table:    local_name(table_arg.unescaped),
             # id: false / id: :uuid / primary_key: ... decide whether the
             # implicit primary-key column exists and what to call it.
             options:  extract_keyword_options(node),
@@ -161,8 +171,8 @@ module RailsAiContext
 
           @results << {
             type:        :foreign_key,
-            from:        SchemaConventions.local_name(from_arg.unescaped),
-            to:          SchemaConventions.local_name(to_arg.unescaped),
+            from:        local_name(from_arg.unescaped),
+            to:          local_name(to_arg.unescaped),
             # Absent means the Rails convention holds; naming it here would
             # make a declared column indistinguishable from a guessed one.
             column:      SchemaConventions.primary_key_value(options[:column]),
@@ -207,7 +217,7 @@ module RailsAiContext
 
           @results << {
             type:     :add_index,
-            table:    SchemaConventions.local_name(table_arg.unescaped),
+            table:    local_name(table_arg.unescaped),
             columns:  columns,
             options:  options,
             location: node.location.start_line
@@ -222,7 +232,7 @@ module RailsAiContext
 
           @results << {
             type:       :add_check_constraint,
-            table:      SchemaConventions.local_name(table_arg.unescaped),
+            table:      local_name(table_arg.unescaped),
             expression: expr_arg.unescaped,
             name:       literal_string(extract_keyword_nodes(node)[:name]),
             location:   node.location.start_line

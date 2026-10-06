@@ -28,6 +28,7 @@ module RailsAiContext
       end
 
       def self.choose(root)
+        search_path = RailsAiContext::DatabaseYml.schema_search_path(root)
         return from_tables({}, source: :none, path: nil) if RailsAiContext::AppKind.sequel_schema(root)
 
         candidates = SchemaDumpPath.candidates(root)
@@ -35,11 +36,11 @@ module RailsAiContext
           next unless File.exist?(path)
 
           if format == :ruby
-            reader = new(path, pk_type: SchemaConventions.implicit_pk_type(root))
+            reader = new(path, pk_type: SchemaConventions.implicit_pk_type(root), search_path: search_path)
             return reader.with_source(:schema_rb) if reader.tables.any?
           else
             content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
-            parsed = content && StructureSqlReader.parse(content)
+            parsed = content && StructureSqlReader.parse(content, search_path: search_path)
             return from_tables(parsed[:tables], source: :structure_sql, path: path, views: parsed[:views]) if parsed && parsed[:tables].any?
           end
         end
@@ -66,8 +67,10 @@ module RailsAiContext
 
       # partitions: the tables the database says are partitions, which a
       # schema.rb from before Rails 8 dumps as plain tables.
-      def initialize(path, pk_type: nil, partitions: [])
+      # search_path: the database's configured schema_search_path, which decides the bare names.
+      def initialize(path, pk_type: nil, partitions: [], search_path: SchemaConventions::DEFAULT_SEARCH_PATH)
         @path = path
+        @search_path = search_path
         @pk_type = pk_type
         @partitions = partitions
         @source = File.exist?(path.to_s) ? :schema_rb : :none
@@ -179,6 +182,8 @@ module RailsAiContext
         events.sort_by { |e| e[:location] }.each do |event|
           current = absorb(event, schema, current)
         end
+        # The connection lists a name once, from the first schema on the search path holding it.
+        schema[:tables].reject! { |name, _| @shadowed.include?(name) } if @shadowed
 
         drop_partitions(schema)
       rescue => e
@@ -215,7 +220,8 @@ module RailsAiContext
         size = File.size(path)
         return [] if size > RailsAiContext.configuration.max_schema_file_size
 
-        listeners = { schema: -> { Listeners::SchemaDslListener.new } }
+        search_path, shadowed = naming
+        listeners = { schema: -> { Listeners::SchemaDslListener.new(search_path: search_path, shadowed: shadowed) } }
         results = if size <= RailsAiContext::AstCache::MAX_PARSE_SIZE
           SourceIntrospector.walk(path, listeners)
         else
@@ -224,6 +230,18 @@ module RailsAiContext
         end
 
         results[:schema] || []
+      end
+
+      # The search path less schemas the dump never creates, and the names an earlier schema hides.
+      def naming
+        return [ @search_path, nil ] if @search_path == SchemaConventions::DEFAULT_SEARCH_PATH
+
+        source = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size).to_s
+
+        path = SchemaConventions.existing_search_path(@search_path, source.scan(/^\s*create_schema\s+"([^"]+)"/).flatten)
+        relations = source.scan(/^\s*create_(?:table|view|virtual_table)\s+"([^"]+\.[^"]+)"/).flatten
+        @shadowed = SchemaConventions.shadowed_names(relations, path) if path.size > 1
+        [ path, @shadowed ]
       end
 
       # Returns the table each subsequent column and index belongs to.
