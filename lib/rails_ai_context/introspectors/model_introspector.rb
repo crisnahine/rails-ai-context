@@ -172,7 +172,7 @@ module RailsAiContext
       # Rails runs no STI on a table without the type column; a table the dump does not hold is not known to lack it.
       def lacks_column?(table, column)
         reader = SchemaReader.for(app.root)
-        reader.tables.key?(table) && column != RailsAiContext::Confidence::INFERRED && !reader.column?(table, column)
+        reader.table?(table) && column != RailsAiContext::Confidence::INFERRED && !reader.column?(table, column)
       end
 
       # Rails' default column, the literal a class sets, or nil where `inheritance_column = nil` turns STI off.

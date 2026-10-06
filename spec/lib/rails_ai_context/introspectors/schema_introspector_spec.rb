@@ -1819,7 +1819,8 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         RUBY
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
-        expect(result[:tables].keys).to eq(%w[other.widgets posts users])
+        expect(result[:tables].keys).to eq(%w[posts users])
+        expect(result[:qualified_tables].keys).to eq(%w[other.widgets])
         expect(result[:tables]["users"][:columns].map { |c| c[:name] }).to eq(%w[id email])
         expect(result[:tables]["posts"][:indexes].map { |i| i[:name] }).to eq(%w[idx_posts_user])
         expect(result[:tables]["posts"][:foreign_keys]).to eq([ { from_table: "posts", to_table: "users", column: "user_id", primary_key: "id" } ])
@@ -2145,6 +2146,80 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
         expect(list).to eq(%w[public.mood public.status status])
         expect(columns).to eq("status" => "status", "mood" => "mood", "pstatus" => "public.status")
+      end
+    end
+
+    describe "tables outside the search path" do
+      def schema_of(file, content)
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          FileUtils.mkdir_p(File.join(dir, "config"))
+          File.write(File.join(dir, "db", file), content)
+          File.write(File.join(dir, "config", "database.yml"), "#{RailsAiContext.environment_name}:\n  adapter: postgresql\n  schema_search_path: \"app,public\"\n")
+          described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        end
+      end
+
+      def answers(schema)
+        RailsAiContext::Tools::GetSchema.reset_cache!
+        RailsAiContext::Tools::GetModelDetails.reset_cache!
+        models = { "AuditEvent" => { table_name: "audit.events", associations: [], validations: [] } }
+        allow(RailsAiContext::Tools::GetSchema).to receive(:cached_context).and_return({ schema: schema, models: models })
+        allow(RailsAiContext::Tools::GetModelDetails).to receive(:cached_context).and_return({ schema: schema, models: models })
+        [ RailsAiContext::Tools::GetSchema.call(table: "audit.events").content.first[:text],
+          RailsAiContext::Tools::GetModelDetails.call(model: "AuditEvent").content.first[:text] ]
+      end
+
+      shared_examples "a table outside the search path" do
+        it "leaves it out of the table list and the count" do
+          expect(schema[:tables].keys).to contain_exactly("notes")
+          expect(schema[:total_tables]).to eq(1)
+        end
+
+        it "still finds it by its qualified name, for the schema tool and a model's columns" do
+          table, model = answers(schema)
+
+          expect(table).to include("kind")
+          expect(model).to include("kind")
+        end
+      end
+
+      context "from structure.sql" do
+        let(:schema) do
+          schema_of("structure.sql", <<~SQL)
+            CREATE SCHEMA app;
+            CREATE SCHEMA audit;
+            CREATE TABLE public.notes (
+                id bigint NOT NULL
+            );
+            CREATE TABLE audit.events (
+                id bigint NOT NULL,
+                kind text
+            );
+          SQL
+        end
+
+        it_behaves_like "a table outside the search path"
+      end
+
+      context "from schema.rb" do
+        let(:schema) do
+          schema_of("schema.rb", <<~RUBY)
+            ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+              create_schema "app"
+              create_schema "audit"
+
+              create_table "audit.events", force: :cascade do |t|
+                t.text "kind"
+              end
+
+              create_table "public.notes", force: :cascade do |t|
+              end
+            end
+          RUBY
+        end
+
+        it_behaves_like "a table outside the search path"
       end
     end
 

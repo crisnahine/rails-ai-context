@@ -67,7 +67,7 @@ module RailsAiContext
             table_as_table = RailsAiContext::Introspectors::TableName.for_model_name(table, models_data)
             _, table_key, table_data = Payload.schema_tables(schema).find { |_, k, _|
               k.downcase == table_down || k == table_as_table || k == table.underscore
-            }
+            } || Payload.table_holders(schema, table).first
             databases = table_data ? Payload.schema_databases(schema, table_key) : []
             database = databases.join(", ") unless databases == [ "primary" ]
             table_key ||= table

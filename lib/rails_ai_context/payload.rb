@@ -124,8 +124,23 @@ module RailsAiContext
       table_holders(schema, name).map { |db, _, _| db || "primary" }
     end
 
+    # A schema-qualified name the search path does not show bare is found only when asked for by that name.
     def table_holders(schema, name)
-      schema_tables(schema).select { |_, table, _| table.to_s == name.to_s }
+      found = schema_tables(schema).select { |_, table, _| table.to_s == name.to_s }
+      return found if found.any? || !name.to_s.include?(".")
+
+      qualified_tables(schema).select { |_, table, _| table.to_s == name.to_s }
+    end
+
+    # [database, name, data] for each table outside the search path, nil database for the primary's.
+    def qualified_tables(schema)
+      return [] unless schema.is_a?(Hash)
+
+      dbs = { nil => schema }.merge(schema[:secondary_databases].is_a?(Hash) ? schema[:secondary_databases] : {})
+      dbs.flat_map do |db, info|
+        tables = info.is_a?(Hash) && info[:qualified_tables].is_a?(Hash) ? info[:qualified_tables] : {}
+        tables.map { |name, data| [ db&.to_s, name, data ] }
+      end
     end
 
     def models(ctx)

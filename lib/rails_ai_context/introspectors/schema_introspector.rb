@@ -23,6 +23,7 @@ module RailsAiContext
         attach_secondary_databases({
           adapter: adapter_name,
           tables: tables,
+          qualified_tables: qualified_tables,
           total_tables: SchemaConventions.table_count(tables),
           schema_version: current_schema_version,
           # The version stamp is read off db/schema.rb and the tables off the
@@ -100,19 +101,44 @@ module RailsAiContext
       end
 
       def extract_tables
-        tables = table_names.each_with_object({}) do |table, hash|
-          hash[table] = {
-            columns: extract_columns(table),
-            indexes: extract_indexes(table),
-            foreign_keys: extract_foreign_keys(table),
-            primary_key: SchemaConventions.primary_key_value(connection.primary_key(table)),
-            comment: table_comment(table),
-            unique_constraints: unique_constraints(table),
-            check_constraints: table_check_constraints(table)
-          }.compact
-          SchemaConventions.mark_primary_key(hash[table])
+        add_live_relations(table_names.to_h { |table| [ table, table_entry(table) ] })
+      end
+
+      def table_entry(table)
+        entry = {
+          columns: extract_columns(table),
+          indexes: extract_indexes(table),
+          foreign_keys: extract_foreign_keys(table),
+          primary_key: SchemaConventions.primary_key_value(connection.primary_key(table)),
+          comment: table_comment(table),
+          unique_constraints: unique_constraints(table),
+          check_constraints: table_check_constraints(table)
+        }.compact
+        SchemaConventions.mark_primary_key(entry)
+        entry
+      end
+
+      # The tables connection.tables leaves out because the search path does not show them
+      # bare: another schema's, or one an earlier schema's same name hides. pg_dump skips an
+      # extension's own tables, and a partition is listed with its parent.
+      PG_QUALIFIED_TABLES = <<~SQL
+        SELECT n.nspname, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relkind IN ('r', 'p') AND NOT c.relispartition AND NOT pg_table_is_visible(c.oid)
+          AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_(toast|temp_)'
+          AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = c.oid AND d.deptype = 'e')
+      SQL
+
+      # Findable by schema-qualified name, as the static tier reads them from the dump.
+      def qualified_tables
+        return unless postgres?
+
+        found = connection.select_rows(PG_QUALIFIED_TABLES).to_h do |schema, table|
+          name = "#{schema}.#{table}"
+          [ name, table_entry(name) ]
         end
-        add_live_relations(tables)
+        found if found.any?
+      rescue => e
+        RailsAiContext.debug_fail(e, nil, label: "qualified_tables")
       end
 
       # connection.tables leaves out views and SQLite's virtual tables; a view's SQL is the dump's.
@@ -577,8 +603,52 @@ module RailsAiContext
 
         schema = SchemaReader.new(path, pk_type: SchemaConventions.implicit_pk_type(app.root.to_s, secondary_dump(path)), search_path: search_path_for(path))
 
-        tables = {}
-        schema.tables.each do |table_name, declared|
+        tables = static_tables(schema.tables)
+        qualified = static_tables(schema.qualified_tables)
+        every = tables.merge(qualified)
+
+        schema.foreign_keys.each do |fk|
+          every[fk[:from]]&.dig(:foreign_keys)&.push(
+            SchemaConventions.foreign_key_entry(fk[:from], fk[:to], fk[:column], fk[:primary_key], **fk.slice(*SchemaConventions::FOREIGN_KEY_OPTIONS))
+          )
+        end
+
+        schema.check_constraints.each do |constraint|
+          table = every[constraint[:table]] or next
+          (table[:check_constraints] ||= []) << constraint.slice(:name, :expression)
+        end
+        views = schema.views.transform_values { |view| view.merge(indexes: Array(view[:indexes]).filter_map { |i| static_index(i) }) }
+        SchemaConventions.add_relations(tables, views: views, virtual_tables: schema.virtual_tables, not_dumped: schema.not_dumped)
+        # A view outside the search path is findable only by its qualified name, as a table is.
+        tables.keys.select { |name| name.include?(".") }.each { |name| qualified[name] = tables.delete(name) }
+
+        version = schema_version_for(path)
+
+        result = {
+          adapter: "static_parse",
+          tables: tables,
+          total_tables: SchemaConventions.table_count(tables),
+          schema_version: version,
+          check_constraints: SchemaConventions.check_constraints_of(tables),
+          enum_types: schema.enums,
+          generated_columns: SchemaConventions.generated_columns_of(tables),
+          note: "Parsed from #{relative_dump_path(path)} (#{connection_state})"
+        }
+        result[:qualified_tables] = qualified if qualified.any?
+        result[:extensions] = schema.extensions.sort if schema.extensions.any?
+        # schema.rb records only the max applied version, so pending here
+        # means "migration files newer than the schema version" - exact for
+        # linear histories, best-effort for out-of-order merges. With no
+        # version recorded there is no answer, so the key stays absent.
+        if version
+          migrate_dir = migrate_dir_for_dump(path)
+          result[:pending_migrations] = RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: version, root: app.root)
+        end
+        result
+      end
+
+      def static_tables(declared_tables)
+        declared_tables.each_with_object({}) do |(table_name, declared), tables|
           next if table_name.start_with?("ar_internal_metadata", "schema_migrations")
 
           comment = declared.dig(:options, :comment)
@@ -597,42 +667,6 @@ module RailsAiContext
           tables[table_name][:primary_key] = SchemaConventions.primary_key_value(key) if key
           SchemaConventions.mark_primary_key(tables[table_name])
         end
-
-        schema.foreign_keys.each do |fk|
-          tables[fk[:from]]&.dig(:foreign_keys)&.push(
-            SchemaConventions.foreign_key_entry(fk[:from], fk[:to], fk[:column], fk[:primary_key], **fk.slice(*SchemaConventions::FOREIGN_KEY_OPTIONS))
-          )
-        end
-
-        schema.check_constraints.each do |constraint|
-          table = tables[constraint[:table]] or next
-          (table[:check_constraints] ||= []) << constraint.slice(:name, :expression)
-        end
-        views = schema.views.transform_values { |view| view.merge(indexes: Array(view[:indexes]).filter_map { |i| static_index(i) }) }
-        SchemaConventions.add_relations(tables, views: views, virtual_tables: schema.virtual_tables, not_dumped: schema.not_dumped)
-
-        version = schema_version_for(path)
-
-        result = {
-          adapter: "static_parse",
-          tables: tables,
-          total_tables: SchemaConventions.table_count(tables),
-          schema_version: version,
-          check_constraints: SchemaConventions.check_constraints_of(tables),
-          enum_types: schema.enums,
-          generated_columns: SchemaConventions.generated_columns_of(tables),
-          note: "Parsed from #{relative_dump_path(path)} (#{connection_state})"
-        }
-        result[:extensions] = schema.extensions.sort if schema.extensions.any?
-        # schema.rb records only the max applied version, so pending here
-        # means "migration files newer than the schema version" - exact for
-        # linear histories, best-effort for out-of-order merges. With no
-        # version recorded there is no answer, so the key stays absent.
-        if version
-          migrate_dir = migrate_dir_for_dump(path)
-          result[:pending_migrations] = RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: version, root: app.root)
-        end
-        result
       end
 
       def parse_structure_sql(path)
@@ -643,6 +677,7 @@ module RailsAiContext
         dialect = parsed[:dialect]
         tables = parsed[:tables]
         tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
+        parsed[:qualified_tables].each_value { |table| SchemaConventions.mark_primary_key(table) }
         SchemaConventions.add_relations(tables, views: parsed[:views], virtual_tables: parsed[:virtual_tables])
 
         applied = RailsAiContext::SchemaVersion.applied_versions(content)
@@ -657,6 +692,7 @@ module RailsAiContext
           generated_columns: SchemaConventions.generated_columns_of(tables),
           note: "Parsed from #{relative_dump_path(path)} (#{connection_state})"
         }
+        result[:qualified_tables] = parsed[:qualified_tables] if parsed[:qualified_tables].any?
         result[:extensions] = parsed[:extensions].sort if parsed[:extensions].any?
         if applied.any?
           result[:schema_version] = applied.map(&:to_i).max.to_s

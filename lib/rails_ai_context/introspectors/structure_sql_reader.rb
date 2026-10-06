@@ -15,6 +15,8 @@ module RailsAiContext
       # whose connection names extensions and enum types differently before 8.0 and 7.1.
       def parse(content, search_path: SchemaConventions::DEFAULT_SEARCH_PATH, rails_version: nil)
         tables = {}
+        # The tables the search path does not show bare, findable only by schema-qualified name.
+        qualified_tables = {}
         dialect = detect_sql_dialect(content)
         enums = enum_types(content)
         path = SchemaConventions.existing_search_path(search_path, content.scan(CREATE_SCHEMA).map { |(name)| name.delete('"') })
@@ -35,7 +37,11 @@ module RailsAiContext
           comment = trailer[/\bCOMMENT\s*=\s*'((?:[^']|'')*)'/i, 1]
           table[:comment] = comment.gsub("''", "'") if comment
           all[name] = { table: table, raw_types: raw_types, parents: inherits && split_top_level(inherits).map { |parent| qualified_name(parent) } }
-          tables[shown] = table if shown.match?(/\A\w+\z/)
+          if shown.match?(/\A\w+\z/)
+            tables[shown] = table
+          elsif shown.include?(".")
+            qualified_tables[shown] = table
+          end
         end
 
         found_views = views(content, local, view_matches)
@@ -95,10 +101,10 @@ module RailsAiContext
         # pg_dump writes each partition as a table, then attaches it in exactly this form.
         content.scan(/^ALTER TABLE ONLY .+? ATTACH PARTITION #{QUALIFIED_NAME} /) do |(partition)|
           shown = local.(qualified_name(partition))
-          tables.delete(shown) unless shown.include?(".")
+          (shown.include?(".") ? qualified_tables : tables).delete(shown)
         end
 
-        { dialect: dialect, tables: tables, enums: SchemaConventions.enum_list(enums, path, legacy: before_rails?(rails_version, "7.1")),
+        { dialect: dialect, tables: tables, qualified_tables: qualified_tables, enums: SchemaConventions.enum_list(enums, path, legacy: before_rails?(rails_version, "7.1")),
           views: found_views, virtual_tables: virtual_tables(content, local),
           extensions: extensions(content, (path.first || "public" unless before_rails?(rails_version, "8.0")), dialect) }
       end

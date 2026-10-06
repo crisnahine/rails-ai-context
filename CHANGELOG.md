@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and schema-qualified otherwise, or every type by its bare name before Rails
   7.1. A column's enum type is bare when the search path finds that type first,
   and qualified otherwise. Both tiers list enum types in name order.
+- **A table outside the search path stays out of the table list but can still
+  be looked up.** Without a boot, a schema.rb table in another schema was
+  listed and counted, while the booted app leaves it out. Both tiers now leave
+  it out of the list in both dump formats, and both find it by its
+  schema-qualified name: `schema --table audit.events`, and the columns of a
+  model whose `table_name` is `audit.events`. Before, no tier found it there.
 
 ## [5.32.0] - 2026-10-06
 

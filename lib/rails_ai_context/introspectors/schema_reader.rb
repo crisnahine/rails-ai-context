@@ -41,7 +41,9 @@ module RailsAiContext
           else
             content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
             parsed = content && StructureSqlReader.parse(content, search_path: search_path)
-            return from_tables(parsed[:tables], source: :structure_sql, path: path, views: parsed[:views]) if parsed && parsed[:tables].any?
+            if parsed && parsed[:tables].any?
+              return from_tables(parsed[:tables], source: :structure_sql, path: path, views: parsed[:views], qualified_tables: parsed[:qualified_tables])
+            end
           end
         end
 
@@ -57,9 +59,9 @@ module RailsAiContext
 
       # A reader over an already-parsed tables hash, for the sources that do
       # not go through the schema.rb event fold.
-      def self.from_tables(tables, source:, path:, views: {})
+      def self.from_tables(tables, source:, path:, views: {}, qualified_tables: {})
         reader = allocate
-        reader.send(:initialize_from_tables, tables, source, path, views)
+        reader.send(:initialize_from_tables, tables, source, path, views, qualified_tables)
         reader
       end
 
@@ -84,6 +86,15 @@ module RailsAiContext
       # @return [Hash] table name => { options:, columns: [...], indexes: [...] }
       def tables
         parse[:tables]
+      end
+
+      # @return [Hash] the tables the search path does not show bare, by schema-qualified name
+      def qualified_tables
+        parse[:qualified_tables]
+      end
+
+      def table?(name)
+        tables.key?(name) || qualified_tables.key?(name)
       end
 
       # @return [Array<Hash>] { from:, to:, column:, primary_key: } per declared
@@ -142,7 +153,7 @@ module RailsAiContext
 
       attr_reader :path
 
-      def initialize_from_tables(tables, source, path, views)
+      def initialize_from_tables(tables, source, path, views, qualified_tables)
         @path = path
         @pk_type = nil
         @source = source
@@ -158,13 +169,14 @@ module RailsAiContext
           check_constraints: [],
           extensions: [],
           views: views,
+          qualified_tables: qualified_tables,
           virtual_tables: {},
           not_dumped: {}
         }
       end
 
       def columns_for(table)
-        tables.dig(table, :columns) || []
+        tables.dig(table, :columns) || qualified_tables.dig(table, :columns) || []
       end
 
       def parse
@@ -172,7 +184,7 @@ module RailsAiContext
       end
 
       def empty_schema
-        { tables: {}, foreign_keys: [], enums: [], check_constraints: [], extensions: [], views: {}, virtual_tables: {}, not_dumped: {} }
+        { tables: {}, qualified_tables: {}, foreign_keys: [], enums: [], check_constraints: [], extensions: [], views: {}, virtual_tables: {}, not_dumped: {} }
       end
 
       def build
@@ -182,8 +194,8 @@ module RailsAiContext
         events.sort_by { |e| e[:location] }.each do |event|
           current = absorb(event, schema, current)
         end
-        # The connection lists a name once, from the first schema on the search path holding it.
-        schema[:tables].reject! { |name, _| @shadowed.include?(name) } if @shadowed
+        # The connection lists a table only when the search path shows it bare.
+        schema[:tables].keys.select { |name| name.include?(".") }.each { |name| schema[:qualified_tables][name] = schema[:tables].delete(name) }
         name_enums(schema)
 
         drop_partitions(schema)
@@ -251,7 +263,7 @@ module RailsAiContext
       def name_enums(schema)
         path = @existing_path || @search_path
         schema[:enums] = SchemaConventions.enum_list(schema[:enums].to_h { |enum| [ enum[:name], enum[:values] ] }, path)
-        schema[:tables].each_value do |table|
+        (schema[:tables].values + schema[:qualified_tables].values).each do |table|
           table[:columns].each do |column|
             type = column.dig(:options, :enum_type)
             column[:options] = column[:options].merge(enum_type: SchemaConventions.local_name(type, path, @shadowed_types)) if type.is_a?(String)
