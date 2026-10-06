@@ -71,7 +71,8 @@ module RailsAiContext
 
       def target(assoc)
         options = assoc[:options] || {}
-        return :unknown if options[:polymorphic]
+        # A through association's class is its source's, declared on another model; a named source is not the name.
+        return :unknown if options[:polymorphic] || (options.key?(:source) && !options.key?(:class_name))
 
         class_name = options[:class_name]
         return :unknown if options.key?(:class_name) && (!class_name.is_a?(String) || class_name == Confidence::INFERRED)

@@ -352,7 +352,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   receiver that is no model (`current_user.posts`) goes to the partial of the
   records it names, a trailing call on a collection (`@posts.first`,
   `@posts.recent`) keeps that collection's records, and a chain the app's
-  models cannot resolve is credited to no partial. The `view` tool's `renders:` list
+  models cannot resolve, or a `through:` association that names its
+  `source:`, is credited to no partial. The `view` tool's `renders:` list
   reads the call the same way. (#323, #324)
 - **`schema` shows more of each column and table**, in both tiers: precision,
   scale, limit, the unsigned flag and collation, the table comment, unique

@@ -29,6 +29,14 @@ RSpec.describe RailsAiContext::Introspectors::RenderedRecord do
     expect(described_class.resolve("current_account.widgets", @root)).to be_nil
   end
 
+  it "credits nothing for a through association that names its source" do
+    File.write(File.join(@root, "app/models/user.rb"),
+               "class User < ApplicationRecord\n  has_many :posts\n  has_many :feedback, through: :posts, source: :comments\nend\n")
+
+    expect(described_class.resolve("user.feedback", @root)).to be_nil
+    expect(described_class.resolve("user.posts", @root)).to eq(%w[posts post])
+  end
+
   it "resolves nothing through a polymorphic association or an unknown call on one record" do
     expect(described_class.resolve("comment.commentable", @root)).to be_nil
     expect(described_class.resolve("comment.summary", @root)).to be_nil
