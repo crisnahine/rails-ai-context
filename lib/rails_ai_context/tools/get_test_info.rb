@@ -189,7 +189,7 @@ module RailsAiContext
       end
 
       private_class_method def self.erb_shown(text)
-        text.to_s.gsub(RailsAiContext::ConfigYaml::ERB_OUTPUT, "<%= ... %>")
+        RailsAiContext::ConfigYaml.shown(text)
       end
 
       private_class_method def self.shown(rel)

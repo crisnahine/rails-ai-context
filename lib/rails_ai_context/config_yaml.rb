@@ -24,6 +24,11 @@ module RailsAiContext
       value.is_a?(String) && value.include?(ERB_OUTPUT)
     end
 
+    # Each output tag reads as a numbered marker; shown, every one is `<%= ... %>` again.
+    def shown(text)
+      text.to_s.gsub(/#{ERB_OUTPUT}(?:_\d+)?/o, "<%= ... %>")
+    end
+
     def stringify_keys(value)
       case value
       when Hash then value.to_h { |key, inner| [ key.to_s.delete_prefix(":"), stringify_keys(inner) ] }

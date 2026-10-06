@@ -39,7 +39,7 @@ RSpec.describe RailsAiContext::FixtureKeys do
           password_digest: <%= password_digest %>
       YAML
 
-      expect(parsed).to eq("one" => { "email_address" => "one@example.com", "password_digest" => RailsAiContext::ConfigYaml::ERB_OUTPUT })
+      expect(parsed).to eq("one" => { "email_address" => "one@example.com", "password_digest" => "#{RailsAiContext::ConfigYaml::ERB_OUTPUT}_1" })
     end
 
     it "drops an output tag alone on its line, which writes lines it cannot see" do

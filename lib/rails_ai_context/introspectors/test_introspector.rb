@@ -316,7 +316,7 @@ module RailsAiContext
                      content.scan(/^(\w+):/).flatten.select { |key| RailsAiContext::FixtureKeys.name?(key) }
             computed, named = labels.partition { |label| RailsAiContext::ConfigYaml.marked?(label) }
             names[set] = named if labels.any?
-            erb[set] = computed.map { |label| label.gsub(RailsAiContext::ConfigYaml::ERB_OUTPUT, "<%= ... %>") } if computed.any?
+            erb[set] = computed.map { |label| RailsAiContext::ConfigYaml.shown(label) } if computed.any?
           end
         end
       end
