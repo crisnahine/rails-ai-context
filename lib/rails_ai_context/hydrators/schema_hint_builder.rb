@@ -20,8 +20,7 @@ module RailsAiContext
         return nil unless model_info.is_a?(Hash)
 
         mongoid = model_info[:mongoid] == true
-        # Mongoid's collection_name: store_in's, else the class name tableized with "/" as "_".
-        table_name = mongoid ? (model_info[:collection] || model_key.to_s.underscore.pluralize.tr("/", "_")) : model_info[:table_name]
+        table_name = mongoid ? model_info[:collection] : model_info[:table_name]
         table_data = Payload.model_table(schema_data, model_info) if table_name && !mongoid
 
         columns = if mongoid

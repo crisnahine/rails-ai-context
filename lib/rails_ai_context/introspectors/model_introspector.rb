@@ -2235,8 +2235,8 @@ module RailsAiContext
           callback_conditions: callback_conditions(callbacks),
           methods: data[:methods]
         }
-        collection = macros.find { |m| m[:macro] == :store_in }&.dig(:options, :collection)
-        details[:collection] = collection if collection
+        # Mongoid's collection_name: store_in's, else the class name tableized with "/" as "_".
+        details[:collection] = macros.find { |m| m[:macro] == :store_in }&.dig(:options, :collection) || class_name.tableize.tr("/", "_")
         downgrade_records(details)
       end
 

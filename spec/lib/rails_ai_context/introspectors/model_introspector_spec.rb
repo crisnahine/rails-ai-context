@@ -1916,6 +1916,17 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    it "names the collection Mongoid derives when store_in names none" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "admin"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "admin", "shelf.rb"), "module Admin\n  class Shelf\n    include Mongoid::Document\n  end\nend\n")
+
+        expect(described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Admin::Shelf"][:collection]).to eq("admin_shelves")
+      end
+    end
+
     it "reads every embed kind and the store_in collection" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))
