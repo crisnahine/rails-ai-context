@@ -17,10 +17,7 @@ module RailsAiContext
       config.ru
     ] + Introspectors::RakeTaskIntrospector::RAKEFILES).freeze
 
-    # The one scope: everything the fingerprint walks is also everything the
-    # watcher watches. All of app/, test/ and spec/ too, since readers scan any
-    # app/** file (notification subscribers) and the suites' fixtures,
-    # factories, mailer previews and test counts; the named dirs name a change.
+    # One scope for fingerprint and watcher; app/, test/ and spec/ whole since readers scan any file there.
     WATCHED_DIRS = (%w[
       app/models
       app/controllers
