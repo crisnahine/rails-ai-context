@@ -136,17 +136,33 @@ module RailsAiContext
       end
 
       # config.ru's own `use` and `map` run before Rails.application, so
-      # app.middleware never lists them. Calls inside a `map` block belong to that mount.
-      def rackup
+      # app.middleware never lists them. A `map` that runs the app itself only
+      # puts a path prefix and its own `use` calls in front of it.
+      def self.rackup(root)
         path = File.join(root, "config.ru")
         return [] unless File.file?(path)
 
-        SourceIntrospector.walk(path, { calls: -> { Listeners::GenericMacroListener.new(:use, :map) } })[:calls].filter_map do |call|
+        calls = SourceIntrospector.walk(path, { calls: -> { Listeners::ConditionalMacroListener.new(:use, :map, :run) } })[:calls]
+        inside = calls.group_by { |call| call[:parent_offset] }
+        rails = [ "Rails.application", AppKind.application_class(root) ].compact
+        calls.flat_map do |call|
           target = call[:values].first
-          next if call[:parent_offset] || !target.is_a?(String)
+          next [] if call[:parent_offset] || call[:macro] == :run || !target.is_a?(String)
 
-          { call: call[:macro].to_s, target: target, line: call[:location] }
+          entry = rackup_entry(call)
+          nested = Array(inside[call[:offset]])
+          next [ entry ] unless call[:macro] == :map && nested.any? { |c| c[:macro] == :run && rails.include?(c[:values].first.to_s.delete_prefix("::")) }
+
+          nested.filter_map { |c| rackup_entry(c).merge(within: target) if c[:macro] == :use && c[:values].first.is_a?(String) }
         end
+      end
+
+      private_class_method def self.rackup_entry(call)
+        { call: call[:macro].to_s, target: call[:values].first, line: call[:location], condition: call[:condition] }.compact
+      end
+
+      def rackup
+        self.class.rackup(root)
       end
 
       def extract_middleware_stack

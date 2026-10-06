@@ -462,6 +462,40 @@ RSpec.describe RailsAiContext::Introspectors::MiddlewareIntrospector do
       expect(described_class.new(RailsAiContext::StaticApp.new(app.root.to_s)).static_call[:rackup]).to eq(expected)
     end
 
+    it "reads a map that runs the app itself as a path prefix, and lists the middleware inside it and its conditions" do
+      File.write(rackup, <<~RUBY)
+        if ENV["PROMETHEUS"] == "true"
+          use Yabeda::Prometheus::Exporter
+        end
+        require_relative "config/environment"
+        map (subdir || "/") do
+          use Rack::Protection::JsonCsrf
+          run Rails.application
+        end
+      RUBY
+      expected = [
+        { call: "use", target: "Yabeda::Prometheus::Exporter", line: 2, condition: 'if ENV["PROMETHEUS"] == "true"' },
+        { call: "use", target: "Rack::Protection::JsonCsrf", line: 6, within: '(subdir || "/")' }
+      ]
+
+      expect(introspector.call[:rackup]).to eq(expected)
+      expect(described_class.new(RailsAiContext::StaticApp.new(app.root.to_s)).static_call[:rackup]).to eq(expected)
+    end
+
+    it "lists nothing for a map whose only job is to run the app's own class under a path" do
+      application = File.join(app.root.to_s, "config/application.rb")
+      File.write(application, "module Forum\n  class Application < Rails::Application\n  end\nend\n")
+      File.write(rackup, <<~RUBY)
+        map ActionController::Base.config.try(:relative_url_root) || "/" do
+          run Forum::Application
+        end
+      RUBY
+
+      expect(introspector.call).not_to have_key(:rackup)
+    ensure
+      FileUtils.rm_f(application)
+    end
+
     it "gives nothing for a config.ru Prism cannot make sense of" do
       File.write(rackup, "use (((\n\xFF\n")
 

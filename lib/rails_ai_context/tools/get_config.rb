@@ -132,10 +132,11 @@ module RailsAiContext
 
         lines = [ "", "## config.ru (runs before the Rails middleware stack)" ]
         calls.each do |call|
+          where = [ "line #{call[:line]}", ("inside `map #{call[:within]}`" if call[:within]), call[:condition] ].compact.join(", ")
           lines << if call[:call] == "map"
-            "- `map \"#{call[:target]}\"` (line #{call[:line]}) - its own Rack app; requests under it never reach Rails' router"
+            "- `map \"#{call[:target]}\"` (#{where}) - its own Rack app; requests under it never reach Rails' router"
           else
-            "- `use #{call[:target]}` (line #{call[:line]})"
+            "- `use #{call[:target]}` (#{where})"
           end
         end
         lines

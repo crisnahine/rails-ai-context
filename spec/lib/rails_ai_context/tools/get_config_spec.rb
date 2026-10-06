@@ -178,6 +178,22 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
         expect(text).to include("## config.ru (runs before the Rails middleware stack)\n- `use Rack::ContentLength` (line 2)")
         expect(text).not_to include("## Initializers")
       end
+
+      it "says which map a middleware sits inside and the condition it runs under" do
+        allow(described_class).to receive(:cached_context).and_return({
+          config: config_data,
+          middleware: {
+            rackup: [
+              { call: "use", target: "Yabeda::Prometheus::Exporter", line: 2, condition: 'if ENV["PROMETHEUS"] == "true"' },
+              { call: "use", target: "Rack::Protection::JsonCsrf", line: 6, within: '(subdir || "/")' }
+            ]
+          }
+        })
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include('- `use Yabeda::Prometheus::Exporter` (line 2, if ENV["PROMETHEUS"] == "true")')
+        expect(text).to include('- `use Rack::Protection::JsonCsrf` (line 6, inside `map (subdir || "/")`)')
+      end
     end
 
     context "with no custom middleware of the app's own" do
