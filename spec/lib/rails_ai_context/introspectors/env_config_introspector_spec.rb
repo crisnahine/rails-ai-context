@@ -440,6 +440,12 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
       ])
     end
 
+    it "lets a failure reading config/application.rb raise, for the introspector loop to record" do
+      allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk).and_raise(ArgumentError, "File too large")
+
+      expect { application("config/application.rb" => application_rb) }.to raise_error(ArgumentError, "File too large")
+    end
+
     it "is nil for an app without config/application.rb" do
       expect(application({})).to be_nil
     end

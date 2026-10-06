@@ -47,15 +47,8 @@ module RailsAiContext
         path = File.join(root, APPLICATION)
         return nil unless File.file?(path)
 
-        entries = SourceIntrospector.walk(path, { config: Listeners::ConfigAssignmentListener })[:config]
-        assignments = config_assignments(entries)
-        {
-          file: APPLICATION,
-          config_keys: (assignments.keys + entries.filter_map { |entry| written_key(entry) }).uniq.sort,
-          config_for: config_for_files(assignments).presence
-        }.compact
-      rescue => e
-        RailsAiContext.debug_fail(e, nil, label: "summarize #{APPLICATION}")
+        assignments, config_keys = read_config(path)
+        { file: APPLICATION, config_keys: config_keys, config_for: config_for_files(assignments).presence }.compact
       end
 
       # The keys config_for gives the environment it reads (`env:`, else this one):
@@ -83,18 +76,16 @@ module RailsAiContext
       end
 
       def summarize(path)
-        relative = path.sub("#{root}/", "")
+        assignments, config_keys = read_config(path)
+        name = File.basename(path, ".rb")
+        { name: name, file: path.sub("#{root}/", ""), config_keys: config_keys, notable: extract_notable(assignments, environment: name) }
+      end
+
+      # The file's config assignments by path, and every key it sets, written or assigned.
+      def read_config(path)
         entries = SourceIntrospector.walk(path, { config: Listeners::ConfigAssignmentListener })[:config]
         assignments = config_assignments(entries)
-        name = File.basename(path, ".rb")
-        {
-          name: name,
-          file: relative,
-          config_keys: (assignments.keys + entries.filter_map { |entry| written_key(entry) }).uniq.sort,
-          notable: extract_notable(assignments, environment: name)
-        }
-      rescue => e
-        RailsAiContext.debug_fail(e, nil, label: "summarize environment #{path}")
+        [ assignments, (assignments.keys + entries.filter_map { |entry| written_key(entry) }).uniq.sort ]
       end
 
       # Assigned `config.*` paths at any depth, mapped to their value source:
