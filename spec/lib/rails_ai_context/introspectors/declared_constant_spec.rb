@@ -323,6 +323,10 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
       expect(file_class("class ExportError < StandardError; end\nExportJob = Class.new(ApplicationJob) do\nend\n", "ExportJob")).to eq("ExportJob")
     end
 
+    it "keeps the path test to itself" do
+      expect(described_class).not_to respond_to(:path_names?)
+    end
+
     it "never makes a mixin a class file" do
       source = "module Lockable\n  extend ActiveSupport::Concern\n  LockedError = Class.new(StandardError)\nend\n"
 
