@@ -88,6 +88,15 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       expect(rendered_from("posts/post")).to include("app/views/admin/posts/index.html.erb:1")
     end
 
+    it "credits an association collection to the partial of the records it holds" do
+      FileUtils.mkdir_p(File.join(@root, "app/views/admin/comments"))
+      File.write(File.join(@root, "app/views/admin/posts/show.html.erb"), "<%= render @post.comments %>\n")
+      File.write(File.join(@root, "app/views/admin/comments/_comment.html.erb"), "<%= comment.body %>\n")
+
+      expect(rendered_from("admin/comments/comment")).to eq("## Rendered From (1)\n- `app/views/admin/posts/show.html.erb:1`")
+      expect(rendered_from("admin/posts/post")).to eq("## Rendered From (1)\n- `app/views/admin/posts/index.html.erb:1`")
+    end
+
     it "counts a partial under a view root declared inside app/views once" do
       FileUtils.mkdir_p(File.join(@root, "config"))
       File.write(File.join(@root, "config/application.rb"), "config.paths[\"app/views\"].unshift(\"app/views/custom\")\n")

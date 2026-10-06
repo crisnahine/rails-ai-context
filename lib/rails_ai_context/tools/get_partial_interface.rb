@@ -423,8 +423,9 @@ module RailsAiContext
       end
 
       # `render @posts`, `render(post)`, `render @posts, cached: true`: a bare
-      # record or collection, which names no partial of its own.
-      IMPLICIT_RENDER = /\Arender\s*\(?\s*@?([a-z_]\w*)\s*(?:[,)]|-?\s*\z)/
+      # record or collection, which names no partial of its own. In `render
+      # @post.comments` the association names the records.
+      IMPLICIT_RENDER = /\Arender\s*\(?\s*@?(?:[a-z_]\w*\.)*([a-z_]\w*)\s*(?:[,)]|-?\s*\z)/
 
       # The partial Rails renders for a record named `var` from a view in
       # view_dir, which stands in for the controller's path; nil when the
