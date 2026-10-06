@@ -171,7 +171,7 @@ module RailsAiContext
       label = ->(file) { Pathname.new(File.join(dir, file)).relative_path_from(Pathname.new(real_root)).to_s }
       gemfile = File.basename(target)
       lockfile = gemfile == "gems.rb" ? "gems.locked" : "#{gemfile}.lock"
-      repo = git_root(real_root)
+      repo = SafePath.git_root(real_root)
       unless repo && File.directory?(dir) && SafePath.contained?(File.realpath(dir), repo)
         return own.merge(lockfile: nil, outside: label.(gemfile))
       end
@@ -195,17 +195,6 @@ module RailsAiContext
       target unless target.start_with?(SafePath.dir_prefix(real_root))
     end
     private_class_method :boot_gemfile
-
-    def git_root(dir)
-      until File.exist?(File.join(dir, ".git"))
-        parent = File.dirname(dir)
-        return nil if parent == dir
-
-        dir = parent
-      end
-      dir
-    end
-    private_class_method :git_root
 
     # The file's real path when it exists and does not link out of its directory.
     def inside_file(dir, name)

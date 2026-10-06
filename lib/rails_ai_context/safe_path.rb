@@ -102,6 +102,18 @@ module RailsAiContext
       real == real_dir || real.start_with?(dir_prefix(real_dir))
     end
 
+    # The nearest directory at or above `dir` that holds `.git` (a directory, or a
+    # file in a worktree or submodule), or nil outside any repository.
+    def git_root(dir)
+      until File.exist?(File.join(dir, ".git"))
+        parent = File.dirname(dir)
+        return nil if parent == dir
+
+        dir = parent
+      end
+      dir
+    end
+
     # The filesystem root already ends in the separator, so it is its own prefix.
     def dir_prefix(dir)
       dir.end_with?(File::SEPARATOR) ? dir : dir + File::SEPARATOR

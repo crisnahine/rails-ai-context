@@ -85,15 +85,10 @@ module RailsAiContext
     # managers write one lockfile at the workspace root.
     def workspace_root(root)
       real_root = File.realpath(root.to_s)
+      repo = SafePath.git_root(real_root) or return nil
       candidates = []
       dir = real_root
-      until File.exist?(File.join(dir, ".git"))
-        parent = File.dirname(dir)
-        return nil if parent == dir
-
-        dir = parent
-        candidates << dir
-      end
+      candidates << (dir = File.dirname(dir)) until dir == repo
       found = candidates.find { |candidate| workspace?(candidate) }
       return nil unless found
 
