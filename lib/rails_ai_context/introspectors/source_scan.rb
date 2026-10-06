@@ -127,9 +127,9 @@ module RailsAiContext
         loop do
           added = pending.select do |record, pairs|
             !kept.include?(record) && pairs.any? do |name, base|
-              # Ruby takes the innermost scope that declares the name; a nested
-              # `class Item < Base` names no namespace, the path does.
-              resolved = lookup(record.path_name, base).reverse.find { |candidate| declared.include?(candidate) }
+              # Ruby takes the innermost lexical scope that declares the name;
+              # a compact `class Admin::Item < Base` has none, a nested one has the path's.
+              resolved = lookup(record.path_name, name, base).reverse.find { |candidate| declared.include?(candidate) }
               resolved ? known.include?(resolved) : loaded[[ name.include?("::") ? name : record.path_name, base ]]
             end
           end
@@ -145,9 +145,9 @@ module RailsAiContext
         []
       end
 
-      # The names `base` can mean inside the namespace `path_name` sits in, outermost first.
-      def lookup(path_name, base)
-        scopes = path_name.split("::")[0...-1]
+      # The names `base` can mean where `name` is declared in the file `path_name` names, outermost first.
+      def lookup(path_name, name, base = name)
+        scopes = path_name.split("::")[0...-name.split("::").size]
         (0..scopes.size).map { |depth| [ *scopes.first(depth), base ].join("::") }
       end
 

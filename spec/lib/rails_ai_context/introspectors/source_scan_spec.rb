@@ -180,6 +180,23 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
     end
   end
 
+  it "reads a compact declaration's superclass from the top level, where Ruby looks it up" do
+    Dir.mktmpdir do |dir|
+      {
+        "app/models/report.rb" => "class Report < ApplicationRecord\nend\n",
+        "app/services/admin/report.rb" => "module Admin\n  class Report\n  end\nend\n",
+        "app/services/admin/summary.rb" => "class Admin::Summary < Report\nend\n"
+      }.each do |name, source|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+        File.write(File.join(dir, name), source)
+      end
+
+      expect(described_class.model_paths(dir).map(&:file)).to contain_exactly(
+        "app/models/report.rb", "app/services/admin/summary.rb"
+      )
+    end
+  end
+
   it "follows a symlinked directory or file in app/models to a target inside the app, as Zeitwerk does" do
     Dir.mktmpdir do |dir|
       Dir.mktmpdir do |elsewhere|
