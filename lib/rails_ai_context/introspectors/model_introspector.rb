@@ -2175,16 +2175,22 @@ module RailsAiContext
         end
       end
 
+      MONGOID_MACROS = -> { Listeners::GenericMacroListener.new(%i[field embeds_many embeds_one embedded_in store_in index], call_source: %i[index]) }
+
       def mongoid_model_details(source, class_name, path)
         data = SourceIntrospector.walk_source(source, {
-          mongoid: -> { Listeners::GenericMacroListener.new(%i[field embeds_many embeds_one embedded_in store_in index], call_source: %i[index]) },
+          mongoid: MONGOID_MACROS,
           associations: Listeners::AssociationsListener,
           validations: Listeners::ValidationsListener,
           scopes: Listeners::ScopesListener,
           callbacks: Listeners::CallbacksListener,
-          methods: Listeners::MethodsListener
+          methods: Listeners::MethodsListener,
+          mixins: Listeners::MixinsListener
         })
-        macros = data[:mongoid] || []
+        # A concern's `included` block declares into the document before the body that follows it.
+        from_concerns, = ConcernMacros.collect(app.root.to_s, data[:mixins], keys: %i[mongoid], prefer: "model", within: class_name,
+                                               listeners: { mongoid: MONGOID_MACROS, mixins: Listeners::MixinsListener }, file: path)
+        macros = Array(from_concerns[:mongoid]) + Array(data[:mongoid])
         calls = singleton_lookup([ [ class_name, path ] ])
         calls.add(0, {}, {}, [])
         own = own_body(data.merge(mixins: []), class_name)

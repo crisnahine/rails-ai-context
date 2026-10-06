@@ -1811,6 +1811,37 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    it "lists the fields and indexes an included concern declares, in both tiers" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "concerns", "taggable.rb"), <<~RUBY)
+          module Taggable
+            extend ActiveSupport::Concern
+            included do
+              field :tags, type: Array
+              index tags: 1
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "book.rb"), <<~RUBY)
+          class Book
+            include Mongoid::Document
+            include Taggable
+            field :title, type: String
+            index title: 1
+          end
+        RUBY
+
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        [ introspector.static_call, introspector.call ].each do |result|
+          expect(result["Book"][:fields].map { |f| f[:name] }).to eq(%i[tags title])
+          expect(result["Book"][:indexes]).to eq([ "index tags: 1", "index title: 1" ])
+        end
+      end
+    end
+
     it "keeps only the later declaration of a callback declared twice" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))
