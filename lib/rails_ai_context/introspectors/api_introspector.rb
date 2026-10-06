@@ -252,7 +252,8 @@ module RailsAiContext
         dirs = RailsAiContext::PathResolver.controller_dirs(root)
           .flat_map { |controllers_dir| Dir.glob(File.join(controllers_dir, "api/v*/")) }
         dirs += Dir.glob(File.join(root, "{app,lib}/api/v*/"))
-        dirs.map { |path| path.chomp("/").sub("#{root}/", "") }.uniq.sort
+        # A directory holding only a spec or assets versions no code.
+        dirs.select { |dir| Dir.glob(File.join(dir, "**", "*.rb")).any? }.map { |path| path.chomp("/").sub("#{root}/", "") }.uniq.sort
       end
 
       # Where apps keep a spec: rswag's swagger/, a docs site, public/ for a served spec,

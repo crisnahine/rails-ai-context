@@ -123,6 +123,10 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
           ])
         end
 
+        it "reads no API version from a version directory that holds only a spec" do
+          expect(result[:api_versioning_dirs]).not_to include("app/api/v0")
+        end
+
         it "lists a spec over the per-file read limit by its head" do
           allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(1_000)
           paths = (1..2_000).to_h { |i| [ "/items/#{i}", { "get" => { "summary" => "Item #{i}" } } ] }
