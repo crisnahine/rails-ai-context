@@ -156,6 +156,22 @@ RSpec.describe RailsAiContext::Tools::GetMailers do
       expect(text).to include("**Observers:** DeliveryLogObserver (`config/initializers/mail.rb`)")
     end
 
+    it "names the namespaced class a string registers, as ActionMailer constantizes it" do
+      write("config/application.rb", <<~RUBY)
+        module App
+          class Application < Rails::Application
+            config.action_mailer.interceptors = ["Admin::Sandbox", "::Top::Guard"]
+          end
+        end
+      RUBY
+      write("config/initializers/mail.rb", <<~RUBY)
+        ActionMailer::Base.register_observers(:audit_observer, "Mail::Logger", Foo::Bar.new)
+      RUBY
+      text = static_text
+      expect(text).to include("Admin::Sandbox (`config/application.rb`), Top::Guard (`config/application.rb`)")
+      expect(text).to include("AuditObserver (`config/initializers/mail.rb`), Mail::Logger (`config/initializers/mail.rb`), Foo::Bar")
+    end
+
     it "lists only the class-body declarations, not calls made inside initialize" do
       write("app/mailers/init_mailer.rb", <<~RUBY)
         class InitMailer < ApplicationMailer

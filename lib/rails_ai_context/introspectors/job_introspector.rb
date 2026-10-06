@@ -1045,14 +1045,14 @@ module RailsAiContext
       def registered(name, relative, computed: [], constants: {})
         text = name.to_s
         return { name: constants[text], file: relative } if constants[text]
-        return { name: text.camelize, file: relative } if name.is_a?(Symbol) || (literal_name?(text) && !computed.include?(text))
+        return { name: text.camelize.delete_prefix("::"), file: relative } if name.is_a?(Symbol) || (literal_name?(text) && !computed.include?(text))
 
         { name: text, file: relative, unresolved: true }
       end
 
       # A string value's characters, not Ruby source.
       def literal_name?(text)
-        text.match?(%r{\A\w+(?:/\w+)*\z})
+        text.match?(%r{\A(?:::)?\w+(?:(?:/|::)\w+)*\z})
       end
 
       # A version that is not a literal is the running Rails's, past every cutoff.
