@@ -96,9 +96,11 @@ module RailsAiContext
       end
     end
 
-    # app/* directories Rails generates for code that is not a model.
+    # app/* directories Rails generates for code that is not a model; the model dirs are dropped by path.
+    # ponytail: skipped by name, so an app/<dir> of one of these names that does hold models is missed;
+    # read config.autoload_paths per dir if that bites.
     NON_MODEL_APP_DIRS = %w[
-      assets javascript views controllers helpers mailers mailboxes jobs channels models
+      assets javascript views controllers helpers mailers mailboxes jobs channels
       components serializers policies decorators presenters workers graphql uploaders validators
     ].freeze
 
