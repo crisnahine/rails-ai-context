@@ -1001,6 +1001,27 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       expect(text).not_to include("RAC_ERB_OUTPUT")
     end
 
+    it "hides a clear value that holds a URL or an opaque token, unless the name is on the safe list" do
+      write_deploy(<<~YAML)
+        env:
+          clear:
+            SLACK_WEBHOOK: https://hooks.slack.com/services/T000/B000/XXXXsecretXXXX
+            SENTRY_DSN: https://abc123def@o1.ingest.sentry.io/1
+            OPAQUE: a8f3k29dk3ls02kd93ks
+            RAILS_RELATIVE_URL_ROOT: /app
+            WEB_CONCURRENCY: 2
+      YAML
+
+      text = described_class.call.content.first[:text]
+      expect(text).to include("- `SLACK_WEBHOOK` - value hidden")
+      expect(text).to include("- `SENTRY_DSN` - value hidden")
+      expect(text).to include("- `OPAQUE` - value hidden")
+      expect(text).to include("- `RAILS_RELATIVE_URL_ROOT` = `/app`")
+      expect(text).to include("- `WEB_CONCURRENCY` = `2`")
+      expect(text).not_to include("XXXXsecretXXXX")
+      expect(text).not_to include("abc123def")
+    end
+
     it "adds nothing for a deploy file that is not valid YAML or has no env" do
       write_deploy("env: [unclosed\n")
       expect(described_class.call.content.first[:text]).not_to include("Set by Kamal")

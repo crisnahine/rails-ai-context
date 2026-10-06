@@ -312,6 +312,8 @@ module RailsAiContext
             "- `#{v[:name]}` - secret, from `.kamal/secrets`#{alias_note}"
           elsif v[:value] == :computed
             "- `#{v[:name]}` - set by ERB at deploy time"
+          elsif v[:value] == :hidden
+            "- `#{v[:name]}` - value hidden"
           else
             "- `#{v[:name]}` = `#{v[:value]}`"
           end
@@ -332,10 +334,23 @@ module RailsAiContext
           name, aliased = key.to_s.split(":", 2)
           { name: name, secret: aliased || name } unless name.to_s.empty?
         end
-        secrets + clear.map do |name, value|
-          computed = Introspectors::RecurringSchedules.computed?(value)
-          { name: name.to_s, value: computed ? :computed : RailsAiContext::Redaction.value(name, value.to_s) }
-        end
+        secrets + clear.map { |name, value| { name: name.to_s, value: kamal_clear_value(name.to_s, value) } }
+      end
+
+      SAFE_ENV_NAMES = Introspectors::EnvIntrospector::KNOWN_ENV_VARS.select { |spec| spec[:safe] }.to_set { |spec| spec[:name] }.freeze
+      # A run of letters and digits this long is a key or token, whatever the variable is called.
+      OPAQUE_TOKEN = /(?=[A-Za-z0-9+\/=_-]*\d)(?=[A-Za-z0-9+\/=_-]*[A-Za-z])[A-Za-z0-9+\/=_-]{16,}/
+
+      # Webhook URLs and DSNs carry their secret in the path or the user part, where
+      # Redaction does not look, so only a value with neither a URL nor a token is printed.
+      private_class_method def self.kamal_clear_value(name, value)
+        return :computed if Introspectors::RecurringSchedules.computed?(value)
+
+        text = value.to_s
+        return RailsAiContext::Redaction.value(name, text) if SAFE_ENV_NAMES.include?(name)
+        return :hidden if text.include?("://") || text.match?(OPAQUE_TOKEN) || RailsAiContext::Redaction.value(name, text) != text
+
+        text
       end
 
       # The config gem merges config/settings.yml, then config/settings/<env>.yml
