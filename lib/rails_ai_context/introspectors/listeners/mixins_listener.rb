@@ -104,7 +104,7 @@ module RailsAiContext
           return unless topic.is_a?(Prism::SymbolNode) && node.block && !@owner_stack.empty?
 
           prepend = node.arguments.arguments.any? do |arg|
-            arg.is_a?(Prism::KeywordHashNode) && arg.elements.any? { |pair| pair.key.is_a?(Prism::SymbolNode) && pair.key.unescaped == "prepend" && pair.value.is_a?(Prism::TrueNode) }
+            arg.is_a?(Prism::KeywordHashNode) && arg.elements.any? { |pair| pair.is_a?(Prism::AssocNode) && pair.key.is_a?(Prism::SymbolNode) && pair.key.unescaped == "prepend" && pair.value.is_a?(Prism::TrueNode) }
           end
           macro = prepend ? :prepend : :include
           name = "#{@owner_stack.join("::")}::#{topic.unescaped}"

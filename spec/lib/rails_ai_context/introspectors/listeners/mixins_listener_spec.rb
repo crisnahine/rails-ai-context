@@ -30,6 +30,17 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MixinsListener do
     )
   end
 
+  it "reads a concerning block whose options are a double splat" do
+    results = parse_and_dispatch(<<~RUBY)
+      class WidgetLog < ApplicationRecord
+        concerning :Exporting, **OPTS do
+        end
+      end
+    RUBY
+
+    expect(results).to contain_exactly(include(macro: :include, name: "WidgetLog::Exporting", inline: true))
+  end
+
   it "detects a prepended module as reaching the ancestor chain" do
     results = parse_and_dispatch("class Post\n  prepend Auditable\nend\n")
 
