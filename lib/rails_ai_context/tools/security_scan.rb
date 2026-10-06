@@ -222,11 +222,11 @@ module RailsAiContext
       BACKTRACE_FRAME = /\A(?:from\s+)?\S+:\d+:in\s/
       ERROR_LOCATION = /\A\S+:\d+:in\s+[`'][^`']*[`']:\s+/
 
-      # A folder may hold a space but never starts or ends with one, and the run must end in a file name.
+      PATH_TAIL = %r{(?:[^\s'"`:,/]+/)*([^\s'"`:,/]+)}
+      ABSOLUTE_PATH = %r{(?<![\w.:/~])/(?:[^\s'"`:,/]+/)+([^\s'"`:,/]+)}
+      # Below a known root, a folder may hold an inner space when the file it leads to exists.
       SPACED_FOLDER = %r{[^\s'"`:,/](?:[^\n'"`:,/]*[^\s'"`:,/])?/}
-      FILE_NAME = %r{([^\s'"`:,/]+\.\w+)(?![\w/])}
-      PATH_TAIL = %r{(?:#{SPACED_FOLDER})*?#{FILE_NAME}|(?:[^\s'"`:,/]+/)*([^\s'"`:,/]+)}
-      ABSOLUTE_PATH = %r{(?<![\w.:/~])/(?:(?:#{SPACED_FOLDER})+?#{FILE_NAME}|(?:[^\s'"`:,/]+/)+([^\s'"`:,/]+))}
+      FILE_NAME = %r{[^\s'"`:,/]+\.\w+(?![^\s'"`:,/]*/)}
 
       # The answer leaves the machine: a file in the app is named from its root, any other by its base name.
       # The roots go by name first, since a space in one (/home/John Doe) breaks the folder run before it.
@@ -234,10 +234,11 @@ module RailsAiContext
         text = RailsAiContext::PortablePath.relativize_text(message, rails_app.root)
         roots = [ Dir.home, *Gem.path, Gem.dir ].map(&:to_s).reject { |root| root.empty? || root == "/" }
         unless roots.empty?
-          under_root = %r{(?:#{roots.uniq.sort_by { |root| -root.length }.map { |root| Regexp.escape(root) }.join("|")})/(?:#{PATH_TAIL})}
-          text = text.gsub(under_root) { Regexp.last_match.captures.compact.first }
+          known = roots.uniq.sort_by { |root| -root.length }.map { |root| Regexp.escape(root) }.join("|")
+          text = text.gsub(%r{(?:#{known})/(?:#{SPACED_FOLDER})*?#{FILE_NAME}}) { |path| File.exist?(path) ? File.basename(path) : path }
+          text = text.gsub(%r{(?:#{known})/#{PATH_TAIL}}, '\1')
         end
-        text.gsub(ABSOLUTE_PATH) { Regexp.last_match.captures.compact.first }
+        text.gsub(ABSOLUTE_PATH, '\1')
       end
 
       private_class_method def self.brakeman_error_line(err)

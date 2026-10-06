@@ -560,14 +560,44 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         expect(text).to eq("Brakeman scan failed: No such file @ rb_sysopen - x.rb and y.rb")
       end
 
-      it "names a file outside the app by its base name when a folder below a root or outside every root has a space" do
-        allow(Dir).to receive(:home).and_return("/home/dev")
-        allow(Brakeman).to receive(:run).and_raise(RuntimeError,
-          "Error in /home/dev/My Projects/gems/x.rb:3 and /opt/My Stuff/secret/y.rb then /tmp/plain/z.rb " \
-          "via /home/dev/.rbenv/gems/brakeman-7.0/lib/b.rb")
-        text = described_class.call.content.first[:text]
+      def scan_error(message)
+        allow(Brakeman).to receive(:run).and_raise(RuntimeError, message)
+        described_class.call.content.first[:text].delete_prefix("Brakeman scan failed: ")
+      end
 
-        expect(text).to eq("Brakeman scan failed: Error in x.rb:3 and y.rb then z.rb via b.rb")
+      it "names a file below home by its base name when a folder on its path has a space and the file exists" do
+        Dir.mktmpdir do |home|
+          FileUtils.mkdir_p(File.join(home, "My Projects/gems"))
+          FileUtils.touch(File.join(home, "My Projects/gems/x.rb"))
+          allow(Dir).to receive(:home).and_return(home)
+
+          expect(scan_error("Error in #{home}/My Projects/gems/x.rb:3 and /tmp/plain/z.rb")).to eq("Error in x.rb:3 and z.rb")
+          expect(scan_error("Error in #{home}/My Projects/gone.rb now")).to eq("Error in My Projects/gone.rb now")
+        end
+      end
+
+      it "names a file under a versioned folder by its base name" do
+        allow(Dir).to receive(:home).and_return("/home/dev")
+
+        expect(scan_error("cannot load /usr/lib/ruby/3.3.0/set.rb")).to eq("cannot load set.rb")
+        expect(scan_error("Error in /opt/bundle/ruby/3.3.0/gems/brakeman-7.0.2/lib/brakeman/scanner.rb:12")).to eq("Error in scanner.rb:12")
+        expect(scan_error("No such file - #{Gem.dir}/gems/parser-3.3.0.5/lib/p.rb")).to eq("No such file - p.rb")
+        expect(scan_error("Error in /home/dev/.gem/ruby/3.3.0/gems/x-1.0/lib/x.rb")).to eq("Error in x.rb")
+      end
+
+      it "keeps the prose after a path that ends in a folder or a file with no extension" do
+        root = Rails.root.to_s
+
+        {
+          "cannot load such file -- /opt/gems/foo (required by lib/tasks/x.rake)" => "cannot load such file -- foo (required by lib/tasks/x.rake)",
+          "Error: /tmp/foo failed while reading the config/app.rb" => "Error: foo failed while reading the config/app.rb",
+          "Parse error in /usr/lib/ruby (version 3.4) near lib/foo.rb" => "Parse error in ruby (version 3.4) near lib/foo.rb",
+          "Error in /usr/lib/ruby while loading #{root}/app/models/post.rb" => "Error in ruby while loading app/models/post.rb",
+          "Brakeman failed under /usr/local/bin because the parser could not read #{root}/app/models/post.rb" =>
+            "Brakeman failed under bin because the parser could not read app/models/post.rb",
+          "Errno::ENOENT No such file - /usr/local/share/data and also config/routes.rb" => "Errno::ENOENT No such file - data and also config/routes.rb",
+          "Error: /usr/bin/ruby exited; see #{root}/log/x.rb" => "Error: ruby exited; see log/x.rb"
+        }.each { |message, expected| expect(scan_error(message)).to eq(expected), message }
       end
 
       it "keeps the prose between a file outside the app and a file in it" do
