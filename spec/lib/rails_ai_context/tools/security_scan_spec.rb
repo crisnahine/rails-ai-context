@@ -529,6 +529,20 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         expect(text).not_to include(root)
       end
 
+      it "answers with the error when brakeman fails to load a file it needs" do
+        allow(Brakeman).to receive(:run).and_raise(LoadError, "cannot load such file -- ruby_parser/legacy")
+        text = described_class.call.content.first[:text]
+
+        expect(text).to eq("Brakeman scan failed: cannot load such file -- ruby_parser/legacy")
+      end
+
+      it "answers with the error when a file brakeman loads does not parse" do
+        allow(Brakeman).to receive(:run).and_raise(SyntaxError, "brakeman/checks/check_x.rb:3: syntax error")
+        text = described_class.call.content.first[:text]
+
+        expect(text).to eq("Brakeman scan failed: brakeman/checks/check_x.rb:3: syntax error")
+      end
+
       it "names a file outside the app by its base name in a scan error" do
         allow(Brakeman).to receive(:run).and_raise(RuntimeError, "cannot load such file -- /home/dev/.gems/ruby_parser/lib/ruby_parser.rb, see https://brakemanscanner.org/docs")
         text = described_class.call.content.first[:text]

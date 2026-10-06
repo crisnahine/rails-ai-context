@@ -128,7 +128,7 @@ module RailsAiContext
           warnings: tracker.filtered_warnings,
           checks_run: tracker.checks.checks_run.map(&:to_s)
         }
-      rescue => e
+      rescue StandardError, ScriptError => e
         { error: e.message }
       end
 
