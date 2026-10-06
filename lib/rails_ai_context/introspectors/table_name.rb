@@ -143,19 +143,25 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, {}, label: "namespace_prefixes")
       end
 
-      def read_app_affixes(root)
-        path = File.join(root, "config", "application.rb")
-        return {} unless File.file?(path)
+      AFFIXES = %i[table_name_prefix table_name_suffix pluralize_table_names].freeze
 
-        Array(SourceIntrospector.walk(path, { config: Listeners::ConfigAssignmentListener })[:config])
-          .each_with_object({}) do |entry, found|
-            path = entry[:path]
-            next unless path.size == 2 && path.first == :active_record
+      # Rails reads config/application.rb, then the environment's file, then each initializer;
+      # the last assignment wins, on config.active_record or on ActiveRecord::Base itself.
+      def read_app_affixes(root)
+        files = [ File.join(root, "config", "application.rb"), File.join(root, "config", "environments", "#{RailsAiContext.environment_name}.rb") ]
+        files = files.select { |path| File.file?(path) } + PathResolver.initializer_paths(root)
+        listeners = { config: -> { Listeners::ConfigAssignmentListener.new }, base: -> { Listeners::ConfigAssignmentListener.new("ActiveRecord::Base") } }
+        files.each_with_object({}) do |file, found|
+          walked = SourceIntrospector.walk(file, listeners)
+          settings = Array(walked[:config]).filter_map { |entry| [ entry, entry[:path].last ] if entry[:path].size == 2 && entry[:path].first == :active_record } +
+                     Array(walked[:base]).filter_map { |entry| [ entry, entry[:path].first ] if entry[:path].size == 1 }
+          settings.sort_by { |entry, _| entry[:location] }.each do |entry, name|
+            next unless entry[:assignment] && AFFIXES.include?(name)
 
             value = entry[:value]
-            found[path.last] = value if %i[table_name_prefix table_name_suffix].include?(path.last) && value.is_a?(String)
-            found[path.last] = value if path.last == :pluralize_table_names && [ true, false ].include?(value)
+            found[name] = value if name == :pluralize_table_names ? [ true, false ].include?(value) : value.is_a?(String)
           end
+        end
       rescue StandardError, ScriptError => e
         RailsAiContext.debug_fail(e, {}, label: "app_affixes")
       end
