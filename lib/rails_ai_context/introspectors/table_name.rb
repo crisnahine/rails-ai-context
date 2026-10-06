@@ -44,8 +44,7 @@ module RailsAiContext
         APP_AFFIXES.clear
       end
 
-      # {table_name_prefix: "op_"}: what config/application.rb sets on
-      # config.active_record, the class attribute's value in every model.
+      # {table_name_prefix: "op_"}: the affixes the app's config and initializers set, the class attribute's value in every model.
       def app_affixes(root)
         return {} unless root
 
