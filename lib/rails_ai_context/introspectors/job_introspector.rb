@@ -982,13 +982,13 @@ module RailsAiContext
               queue_set = true
               queue = hit[:value]&.to_s
             end
-            Array(hit[:value]).each { |name| settings[key] << { name: name.to_s, file: relative } } if settings.key?(key)
+            Array(hit[:value]).each { |name| settings[key] << registered(name, relative) } if settings.key?(key)
           end
           Array(walked[:calls]).each do |call|
             if call[:name] == "load_defaults"
               version = defaults_version(call[:arguments].first) if relative == "config/application.rb"
             else
-              call[:arguments].flatten.each { |name| settings[REGISTER_CALLS[call[:name]]] << { name: name.to_s, file: relative } }
+              call[:arguments].flatten.each { |name| settings[REGISTER_CALLS[call[:name]]] << registered(name, relative) }
             end
           end
         end
@@ -1001,6 +1001,14 @@ module RailsAiContext
         settings.merge(deliver_later_queue: queue_name_from_part(queue.presence), preview_paths: mailer_preview_dirs)
       rescue StandardError, ScriptError => e
         RailsAiContext.debug_fail(e, {}, label: "mailer_settings")
+      end
+
+      # The class an interceptor or observer is, or is built from with `.new`; any
+      # other argument (a local variable, a method call) is named as written.
+      def registered(name, relative)
+        text = name.to_s
+        constant = text[/\A(?:::)?([A-Z]\w*(?:::[A-Z]\w*)*)(?:\.new\b.*)?\z/m, 1]
+        constant ? { name: constant, file: relative } : { name: text, file: relative, unresolved: true }
       end
 
       # A version that is not a literal is the running Rails's, past every cutoff.

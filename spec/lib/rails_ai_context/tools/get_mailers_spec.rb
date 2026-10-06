@@ -114,6 +114,19 @@ RSpec.describe RailsAiContext::Tools::GetMailers do
       expect(static_text(mailer: "UserMailer")).to include("alert (html, text)", "notice (any format)", "digest (text)")
     end
 
+    it "names the class an interceptor is built from, and says when the argument is not read" do
+      write("config/initializers/mail.rb", <<~RUBY)
+        interceptor = RecipientInterceptor.new(ENV["TO"])
+        Mail.register_interceptor(interceptor)
+        Mail.register_interceptor(StagingInterceptor.new)
+        ActionMailer::Base.register_observer(DeliveryLogObserver)
+      RUBY
+      text = static_text
+      expect(text).to include("**Interceptors:** SandboxInterceptor (`config/application.rb`), " \
+                              "`interceptor`, not read (`config/initializers/mail.rb`), StagingInterceptor (`config/initializers/mail.rb`)")
+      expect(text).to include("**Observers:** DeliveryLogObserver (`config/initializers/mail.rb`)")
+    end
+
     # load_defaults 6.1 sets deliver_later_queue_name to nil, so mail goes to ActiveJob's default queue.
     it "names ActiveJob's default queue under load_defaults 6.1 or later" do
       write("config/application.rb", "module App\n  class Application < Rails::Application\n    config.load_defaults 7.1\n  end\nend\n")
