@@ -82,6 +82,11 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::CallbacksListener do
     expect(results.first[:confidence]).to eq("[INFERRED]")
   end
 
+  it "reports every proc spelling as an inline block, Proc.new included" do
+    results = parse_and_dispatch("before_save Proc.new { touch }\nbefore_save proc { x }\nbefore_save ::Proc.new { y }\nbefore_save lambda { z }")
+    expect(results.map { |r| r[:method] }).to eq([ "[inline_block]" ] * 4)
+  end
+
   it "records the declared macro name alongside the resolved type" do
     results = parse_and_dispatch("after_commit :sync, on: :create")
     expect(results.first).to include(name: "after_commit", type: "after_commit_on_create")

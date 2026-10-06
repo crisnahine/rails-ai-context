@@ -199,9 +199,18 @@ module RailsAiContext
         end
 
         def proc_default?(node)
-          value = default_node(node)
-          value.is_a?(Prism::LambdaNode) ||
-            (value.is_a?(Prism::CallNode) && value.receiver.nil? && %i[lambda proc].include?(value.name) && !value.block.nil?)
+          proc_argument?(default_node(node))
+        end
+
+        # `-> {}`, `lambda {}`, `proc {}` or `Proc.new {}`.
+        def proc_argument?(arg)
+          return true if arg.is_a?(Prism::LambdaNode)
+          return false unless arg.is_a?(Prism::CallNode) && arg.block.is_a?(Prism::BlockNode)
+
+          receiver = arg.receiver
+          return %i[lambda proc].include?(arg.name) if receiver.nil?
+
+          arg.name == :new && (receiver.is_a?(Prism::ConstantReadNode) || receiver.is_a?(Prism::ConstantPathNode)) && constant_path_string(receiver) == "Proc"
         end
 
         def default_node(node)

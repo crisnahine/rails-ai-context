@@ -99,7 +99,7 @@ module RailsAiContext
         # it; a lambda names nothing, so it reports as a block.
         def emit_without_symbol_args(node, callback_types, options)
           positional = (node.arguments&.arguments || []).reject { |a| a.is_a?(Prism::KeywordHashNode) }
-          targets = positional.reject { |a| block_like?(a) }.map { |a| one_line_source(a) }
+          targets = positional.reject { |a| proc_argument?(a) }.map { |a| one_line_source(a) }
 
           if targets.any?
             emit(node, callback_types, targets, options, confidence_for(node))
@@ -108,10 +108,6 @@ module RailsAiContext
             # declares no block, so there is none to report.
             emit(node, callback_types, [ INLINE_BLOCK ], options, RailsAiContext::Confidence::INFERRED)
           end
-        end
-
-        def block_like?(arg)
-          arg.is_a?(Prism::LambdaNode) || (arg.is_a?(Prism::CallNode) && %i[lambda proc].include?(arg.name) && arg.receiver.nil?)
         end
 
         def emit(node, callback_types, methods, options, confidence)

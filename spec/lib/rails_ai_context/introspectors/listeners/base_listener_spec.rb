@@ -39,6 +39,19 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::BaseListener do
     expect(read(%(probe :only))[:many]).to eq([ "only" ])
   end
 
+  it "reads every proc spelling as a proc default, and a named callable as not one" do
+    listener = Class.new(described_class) do
+      def on_call_node_enter(node)
+        @results << proc_default?(node) if node.name == :probe
+      end
+    end.new
+    source = "probe default: -> { 1 }\nprobe default: lambda { 1 }\nprobe default: proc { 1 }\n" \
+             "probe default: Proc.new { 1 }\nprobe default: ::Proc.new { 1 }\nprobe default: Clock.new { 1 }\nprobe default: :now"
+    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(Prism.parse(source).value)
+
+    expect(listener.results).to eq([ true, true, true, true, true, false, false ])
+  end
+
   describe "keyword options" do
     let(:options_listener) do
       Class.new(described_class) do
