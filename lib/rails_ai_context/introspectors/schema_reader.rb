@@ -285,7 +285,8 @@ module RailsAiContext
           # With a pk_type, the implied id is a column like any other - the
           # convention lives in SchemaConventions, shared with the replay.
           implied = @pk_type ? SchemaConventions.implicit_primary_key(options, @pk_type) : []
-          schema[:tables][event[:table]] ||= { options: options, columns: implied, indexes: [] }
+          # Before 8.1 the dumper writes a name once per search path schema holding it; loading, the last stands.
+          schema[:tables][event[:table]] = { options: options, columns: implied, indexes: [] }
           return event[:table]
         when :column
           schema[:tables][current]&.dig(:columns)&.push(column_entry(event)) if current
