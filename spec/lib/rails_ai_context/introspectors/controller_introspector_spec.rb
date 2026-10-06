@@ -860,8 +860,8 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
 
           expect(booted).to eq([
             [ "before", "block (line 5 of app/controllers/concerns/cache_concern.rb)", nil ],
-            [ "before", "block (line 4)", [ "create" ] ],
-            [ "before", "block (line 5)", [ "create" ] ],
+            [ "before", "lambda (line 4)", [ "create" ] ],
+            [ "before", "lambda (line 5)", [ "create" ] ],
             [ "around", "block (line 5 of app/controllers/concerns/rate_limited.rb)", [ "create" ] ],
             [ "around", "block (line 5 of app/controllers/concerns/rate_limited.rb)", [ "update" ] ]
           ])
@@ -912,15 +912,15 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       it "lists a call's lambdas and names in argument order, in both tiers" do
         Dir.mktmpdir do |dir|
           path = File.join(dir, "app/controllers/users_controller.rb")
-          source = "class UsersController < ApplicationController\n  before_action -> { head :ok }, :a\nend\n"
+          source = "class UsersController < ApplicationController\n  before_action -> { head :ok }, :a, proc { head :ok } do\n  end\nend\n"
           ctrl = Class.new(ActionController::Base)
           ctrl.define_singleton_method(:name) { "UsersController" }
-          ctrl.class_eval(source.lines[1], path, 2)
+          ctrl.class_eval(source.lines[1, 2].join, path, 2)
           in_dir = described_class.new(double("app", root: Pathname.new(dir)))
 
           booted = in_dir.send(:extract_filters, ctrl, source).map { |f| f[:name] }
 
-          expect(booted).to eq([ "block (line 2)", "a" ])
+          expect(booted).to eq([ "lambda (line 2)", "a", "block (line 2)", "block (line 2)" ])
           expect(in_dir.send(:extract_filters_from_source, source).map { |f| f[:name] }).to eq(booted)
         end
       end

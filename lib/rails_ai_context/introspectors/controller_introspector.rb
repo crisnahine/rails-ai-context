@@ -444,7 +444,7 @@ module RailsAiContext
         file = path && project_relative(path)
         return if file.nil? || file.start_with?("vendor/") || PortablePath.gem_file?(path, app.root)
 
-        ControllerFilters.block_name(line, (file unless own_file.nil? || file == own_file))
+        ControllerFilters.block_name(line, (file unless own_file.nil? || file == own_file), lambda: filter.lambda?)
       end
 
       # A compiled callback keeps only:/except: in private ivars, so the

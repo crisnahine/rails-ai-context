@@ -379,7 +379,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
       expect(described_class.from_source(source).map { |f| [ f[:kind], f[:name], f[:only] || f[:except] ] })
         .to eq([ [ "after", "pa", nil ], [ "around", "par", nil ], [ "around", "aar", nil ],
                  [ "before", "load_user", nil ], [ "before", "audit", nil ],
-                 [ "before", "block (line 6)", [ "index" ] ], [ "after", "block (line 7)", [ "index" ] ] ])
+                 [ "before", "block (line 6)", [ "index" ] ], [ "after", "lambda (line 7)", [ "index" ] ] ])
     end
 
     # callbacks.rb _insert_callbacks: the positional callbacks in order, then the block.
@@ -387,15 +387,21 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
       source = "class C < ApplicationController\n  before_action -> { x }, :a, -> { y }, :b do end\nend\n"
 
       expect(described_class.from_source(source).map { |f| f[:name] })
-        .to eq([ "block (line 2)", "a", "block (line 2)", "b", "block (line 2)" ])
+        .to eq([ "lambda (line 2)", "a", "lambda (line 2)", "b", "block (line 2)" ])
     end
 
-    it "names a lambda, proc or Proc.new argument as the block it is, with its options" do
+    it "tells a lambda from the block on its line" do
+      source = "class C < ApplicationController\n  before_action :a, -> { x }, :b do\n    y\n  end\nend\n"
+
+      expect(described_class.from_source(source).map { |f| f[:name] }).to eq([ "a", "lambda (line 2)", "b", "block (line 2)" ])
+    end
+
+    it "names a lambda as a lambda, and a proc or Proc.new argument as the block it is, with its options" do
       source = "class C < ApplicationController\n  before_action -> { a }\n  before_action lambda { b }\n" \
                "  before_action proc { c }, only: :show\n  before_action Proc.new { d }\n  before_action Gatekeeper, :x\nend\n"
 
       expect(described_class.from_source(source).map { |f| [ f[:name], f[:only] ] })
-        .to eq([ [ "block (line 2)", nil ], [ "block (line 3)", nil ], [ "block (line 4)", [ "show" ] ],
+        .to eq([ [ "lambda (line 2)", nil ], [ "lambda (line 3)", nil ], [ "block (line 4)", [ "show" ] ],
                  [ "block (line 5)", nil ], [ "Gatekeeper", nil ], [ "x", nil ] ])
     end
 

@@ -310,11 +310,12 @@ module RailsAiContext
         file && file != own ? entry.merge(file: file) : entry
       end
 
-      BARE_BLOCK = /\Ablock \(line \d+\)\z/
+      BARE_BLOCK = /\A(?:block|lambda) \(line \d+\)\z/
 
       # A block outside the class's own file names that file: two blocks on one line number are two callbacks.
-      def block_name(line, file = nil)
-        file ? "block (line #{line} of #{file})" : "block (line #{line})"
+      # A lambda says so, as Proc#lambda? tells it from the block it may share a line with.
+      def block_name(line, file = nil, lambda: false)
+        "#{lambda ? 'lambda' : 'block'} (line #{line}#{" of #{file}" if file})"
       end
 
       # A class body's filters as a class elsewhere names them: its own blocks by the file it is in.
@@ -325,7 +326,7 @@ module RailsAiContext
       end
 
       def block?(name)
-        name.to_s.start_with?("block (line ")
+        name.to_s.start_with?("block (line ", "lambda (line ")
       end
 
       # One filter per callback the call adds, a block or lambda named by its line.
@@ -340,7 +341,7 @@ module RailsAiContext
         end
         macro = entry[:macro].to_s
         skipped = macro.start_with?("skip_")
-        names = positional_names(entry, skipped ? [] : Array(entry[:proc_lines]).map { |line| block_name(line, entry[:file]) })
+        names = positional_names(entry, skipped ? [] : Array(entry[:proc_lines]))
         # An excluded name is framework noise only while it runs. A skip of it
         # is the app's own decision, which the per-action answer reports.
         names -= RailsAiContext.configuration.excluded_filters.map(&:to_s) unless skipped
@@ -368,19 +369,19 @@ module RailsAiContext
 
       # Each callback the call gives, in the order Rails adds them: positional arguments as written,
       # the block last, each named by FilterMacroListener.
-      def positional_names(entry, blocks)
+      def positional_names(entry, lines)
         callbacks = entry[:callbacks]
-        return Array(entry[:args]).map(&:to_s) + blocks if callbacks.blank?
-
-        blocks = blocks.dup
-        callbacks.filter_map do |kind, name|
+        lines = lines.dup
+        named = Array(callbacks).filter_map do |kind, name|
           case kind
           when :name then name
-          when :block then blocks.shift
+          when :block, :lambda then block_name(lines.shift, entry[:file], lambda: kind == :lambda)
           when :object then "#{name} (object)"
           when :unread then "#{name} (not read)"
           end
-        end + blocks
+        end
+        named = Array(entry[:args]).map(&:to_s) if callbacks.blank?
+        named + lines.map { |line| block_name(line, entry[:file]) }
       end
 
       def constraints(entry)
