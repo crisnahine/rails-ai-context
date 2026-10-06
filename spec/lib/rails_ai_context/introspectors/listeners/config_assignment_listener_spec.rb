@@ -335,11 +335,14 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
   it "redacts a write through an index read under a secret-named key" do
     writes = parse_and_dispatch(<<~RUBY).select { |r| r[:write] }
       config.x.mail["password"] << "pw2"
+      config.x.api_key["primary"] << "sk"
+      config.x.mail["smtp"]["password"] << "pw"
+      config.x.mail["smtp"].password = "pw"
       config.x.mail["host"] << "smtp"
     RUBY
 
     expect(writes.map { |r| [ r[:value], r[:source] ] }).to eq(
-      [ %w[[FILTERED] [FILTERED]], [ "smtp", %(config.x.mail["host"] << "smtp") ] ]
+      [ *Array.new(4) { %w[[FILTERED] [FILTERED]] }, [ "smtp", %(config.x.mail["host"] << "smtp") ] ]
     )
   end
 
