@@ -55,18 +55,27 @@ module RailsAiContext
         anyway_configs.each { |c| c[:attributes].each { |a| all_var_names << a[:env] if a[:env] } }
         deploy_and_settings = kamal_lines(kamal_env, root) + settings_lines(settings) + anyway_lines(anyway_configs)
 
-        if all_var_names.empty? && external_services.empty? && credentials_keys.empty? && deploy_and_settings.empty?
-          return text_response("No environment variables, external services, or credentials keys detected.")
+        text = if all_var_names.empty? && external_services.empty? && credentials_keys.empty? && deploy_and_settings.empty?
+          "No environment variables, external services, or credentials keys detected."
+        else
+          case detail
+          when "summary"
+            format_summary(all_var_names, external_services, credentials_keys)
+          when "standard"
+            format_standard(env_vars, env_example, deploy_and_settings, external_services, credentials_keys, encrypted_columns)
+          when "full"
+            format_full(env_vars, env_example, deploy_and_settings, dockerfile_vars, external_services, credentials_keys, encrypted_columns, root)
+          end
         end
+        text_response([ text, unread_bundle_note(root) ].compact.join("\n\n"))
+      end
 
-        case detail
-        when "summary"
-          format_summary(all_var_names, external_services, credentials_keys)
-        when "standard"
-          format_standard(env_vars, env_example, deploy_and_settings, external_services, credentials_keys, encrypted_columns)
-        when "full"
-          format_full(env_vars, env_example, deploy_and_settings, dockerfile_vars, external_services, credentials_keys, encrypted_columns, root)
-        end
+      # Service gems and the config gem are read from the Gemfile and lockfile, so a bundle
+      # left unread is named, or the answer reads as an app that declares none.
+      private_class_method def self.unread_bundle_note(root)
+        outside = RailsAiContext::GemLock.for(root).outside_gemfile or return nil
+
+        "_Gem-based services and config gem settings not read: config/boot.rb points Bundler at `#{outside}`, outside the app's git repository._"
       end
 
       private_class_method def self.format_summary(all_var_names, external_services, credentials_keys)
@@ -85,7 +94,7 @@ module RailsAiContext
         end
 
         lines << "" << "_Use `detail:\"standard\"` for sources and external services, or `detail:\"full\"` for per-file locations._"
-        text_response(lines.join("\n"))
+        lines.join("\n")
       end
 
       # Named in the answer, because a name missing from it is otherwise
@@ -159,7 +168,7 @@ module RailsAiContext
         lines.concat(credentials_and_encrypted_lines(credentials_keys, encrypted_columns))
 
         lines << SCAN_NOTE
-        text_response(lines.join("\n"))
+        lines.join("\n")
       end
 
       # Both `standard` and `full` end with these two sections, so a wording
@@ -293,7 +302,7 @@ module RailsAiContext
         lines.concat(credentials_and_encrypted_lines(credentials_keys, encrypted_columns))
 
         lines << SCAN_NOTE
-        text_response(lines.join("\n"))
+        lines.join("\n")
       end
 
       private_class_method def self.scan_env_vars(root)

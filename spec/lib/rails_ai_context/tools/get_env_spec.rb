@@ -1062,6 +1062,23 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     end
   end
 
+  describe "an app whose config/boot.rb points Bundler outside its git repository" do
+    it "says the gem-based answers did not read that bundle, at every detail level" do
+      Dir.mktmpdir do |engine|
+        File.write(File.join(engine, "Gemfile"), %(gem "stripe"\n))
+        dummy = File.join(engine, "test/dummy")
+        FileUtils.mkdir_p(File.join(dummy, "config"))
+        File.write(File.join(dummy, "config/boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n))
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dummy)))
+
+        note = "Gem-based services and config gem settings not read: config/boot.rb points Bundler at `../../Gemfile`, outside the app's git repository."
+        %w[summary standard full].each do |detail|
+          expect(described_class.call(detail: detail).content.first[:text]).to include(note)
+        end
+      end
+    end
+  end
+
   describe "config gem settings and Anyway::Config classes" do
     around do |example|
       Dir.mktmpdir do |dir|
