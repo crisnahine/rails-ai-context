@@ -1021,6 +1021,16 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       expect(text).not_to include("RAC_ERB_OUTPUT")
     end
 
+    it "says an ERB tag on its own line under a key or a block scalar sets that value at deploy time" do
+      write_deploy("env:\n  clear:\n    FROM_ERB:\n      <%= ENV[\"X\"] %>\n    FOLDED: >-\n      <%= ENV[\"Y\"] %>\n    PLAIN: 1\n")
+
+      text = described_class.call(detail: "full").content.first[:text]
+      expect(text).to include("- `FROM_ERB` - set by ERB at deploy time")
+      expect(text).to include("- `FOLDED` - set by ERB at deploy time")
+      expect(text).to include("- `PLAIN` = `1`")
+      expect(text).not_to include("= ``")
+    end
+
     it "hides a clear value that holds a URL or an opaque token, unless the name is on the safe list" do
       write_deploy(<<~YAML)
         env:

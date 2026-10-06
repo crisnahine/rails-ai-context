@@ -50,24 +50,42 @@ module RailsAiContext
 
     # Like without_tags, but an output tag (`<%= %>`) becomes `marker`, so a value
     # or key it builds reads as computed. A tag alone on its line writes lines we
-    # cannot see, and a marker there would break the YAML around it.
+    # cannot see, and a marker there would break the YAML around it, unless the
+    # line above opens a value the tag fills.
     def with_output_marked(source, marker)
       source = source.to_s
       source.gsub(TAG) do
         match = Regexp.last_match
         tag = match[0]
-        next "\n" * tag.count("\n") unless tag.start_with?("<%=") && !own_line?(source, match.begin(0), match.end(0))
+        next "\n" * tag.count("\n") unless tag.start_with?("<%=") && !lines_written?(source, match.begin(0), match.end(0))
 
         marker
       end
     end
 
-    def own_line?(source, from, to)
+    BLOCK_SCALAR = /(?:\A|\s)[|>][-+0-9]*\z/
+    VALUE_OPENER = /:\z/
+    private_constant :BLOCK_SCALAR, :VALUE_OPENER
+
+    def lines_written?(source, from, to)
       line_start = from.zero? ? 0 : (source.rindex("\n", from - 1) || -1) + 1
       line_end = source.index("\n", to) || source.size
-      source[line_start...from].strip.empty? && source[to...line_end].strip.empty?
+      return false unless source[line_start...from].strip.empty? && source[to...line_end].strip.empty?
+
+      above = source[0...line_start].rstrip.lines.last.to_s.rstrip
+      return false if above.match?(BLOCK_SCALAR)
+      return true unless above.match?(VALUE_OPENER)
+
+      # A sibling at the tag's indent below means the tag wrote keys, not the value.
+      below = source[line_end..].to_s.lines.find { |line| !line.strip.empty? }
+      !below.nil? && indent(below) >= from - line_start
     end
-    private_class_method :own_line?
+    private_class_method :lines_written?
+
+    def indent(line)
+      line[/\A */].size
+    end
+    private_class_method :indent
 
     def blank(text)
       text.gsub(/[^\n]/, " ")

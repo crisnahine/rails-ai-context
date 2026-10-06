@@ -487,6 +487,13 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
       expect(result[:config_for].map { |entry| entry[:keys] }.uniq).to eq([ %w[api] ])
     end
 
+    it "reads a tag on its own line under a key as that key's value, and one followed by siblings as written lines" do
+      result = application("config/application.rb" => application_rb,
+                           "config/payment.yml" => "test:\n  <%= File.read(\"x.yml\") %>\n  port: 1\n  host:\n    <%= ENV[\"H\"] %>\n  note: >-\n    <%= ENV[\"N\"] %>\n")
+
+      expect(result[:config_for].first).to eq({ key: "payment", call: ":payment", file: "config/payment.yml", keys: %w[host note port] })
+    end
+
     it "reads a config_for under a secret-shaped key, and a Pathname path, off the node" do
       result = application(
         "config/application.rb" => <<~RUBY,
