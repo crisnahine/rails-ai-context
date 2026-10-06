@@ -11,6 +11,7 @@ module RailsAiContext
       #   config.hosts << "x"                   → path [:hosts, :<<], write :call
       #   config.headers["X"] = "y"             → path [:headers, :[]=], write :call
       #   config.filter_parameters += [:pin]    → path [:filter_parameters], write :operator
+      #   config.paths["app/views"] << "x"      → path [:paths, :<<], write :call
       #
       # The chain is matched from a root receiver name, so
       # `Rails.application.config.assets.paths = x` reports [:assets, :paths].
@@ -25,6 +26,25 @@ module RailsAiContext
           names = roots.flatten.map(&:to_s)
           @roots = (names.empty? ? DEFAULT_ROOTS : names).to_set
           @conditions = []
+          @statements = Set.new.compare_by_identity
+          @def_params = []
+        end
+
+        # A call with arguments changes a setting only when it runs as a statement;
+        # `x = config.root.join("tmp")` reads one.
+        def on_statements_node_enter(node)
+          @statements.merge(node.body)
+        end
+
+        # Inside `def initialize(config)` the local is that argument, not the app's config.
+        def on_def_node_enter(node)
+          params = node.parameters
+          names = params ? params.child_nodes.flatten.compact.flat_map { |p| p.respond_to?(:name) ? [ p.name ] : [] } : []
+          @def_params.push(names)
+        end
+
+        def on_def_node_leave(_node)
+          @def_params.pop
         end
 
         # The branch an assignment sits in. Rails' own generated
@@ -61,7 +81,7 @@ module RailsAiContext
           if node.name.to_s.match?(SETTER)
             record_assignment(node)
           elsif node.arguments
-            return unless node.name.to_s.match?(MUTATOR)
+            return unless node.name.to_s.match?(MUTATOR) && @statements.include?(node)
 
             record_write(node.receiver, node.name, :call, node)
           else
@@ -86,6 +106,7 @@ module RailsAiContext
         def record_assignment(node)
           prefix = chain_path(node.receiver)
           return unless prefix
+          return record_write(node.receiver, node.name, :call, node) if prefix.include?(:[])
 
           value_node = node.arguments&.arguments&.first
           setting = node.name.to_s.delete_suffix("=").to_sym
@@ -125,7 +146,7 @@ module RailsAiContext
         # that a section of the initializer exists at all.
         def record_reference(node)
           prefix = chain_path(node.receiver)
-          return unless prefix
+          return unless prefix && !prefix.include?(:[])
 
           entry = {
             path:       prefix + [ node.name ],
@@ -145,7 +166,11 @@ module RailsAiContext
           prefix = chain_path(receiver)
           return unless prefix
 
-          path = prefix + [ name ]
+          # An element of a setting (`config.paths["app/views"]`) is changed through it.
+          setting = prefix.take_while { |part| part != :[] }
+          return if setting.empty? && prefix.include?(:[])
+
+          path = setting + [ name ]
           # A one-argument call (`<<`, `merge!`) carries what it adds; `[]=` and the like carry a key too.
           args = kind == :call ? node.arguments&.arguments : nil
           value = args&.size == 1 ? extract_value(args.first) : nil
@@ -169,10 +194,11 @@ module RailsAiContext
           while current
             case current
             when Prism::CallNode
-              return nil unless current.arguments.nil? && current.block.nil?
+              return nil unless current.block.nil? && (current.arguments.nil? || current.name == :[])
               parts.unshift(current.name)
               current = current.receiver
             when Prism::LocalVariableReadNode
+              return nil if @def_params.last&.include?(current.name)
               parts.unshift(current.name)
               current = nil
             when Prism::ConstantReadNode, Prism::ConstantPathNode
