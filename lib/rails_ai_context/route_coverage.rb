@@ -87,7 +87,7 @@ module RailsAiContext
     # @param routes [Hash] the :routes section of an introspection context
     # @return [String] a leading-comma clause naming what the count leaves out,
     #   or "" when the count is the whole table
-    def suffix(routes)
+    def suffix(routes, gem_drawn = true)
       return "" unless Tools::SectionFetch.usable?(routes)
 
       parts = []
@@ -99,6 +99,7 @@ module RailsAiContext
       parts << "#{CountPhrase.call(unread, 'in-repo engine route file')} not read" if unread.positive?
       in_engines = Array(routes[:engine_routes]).sum { |group| Array(group[:routes]).size }
       parts << "#{in_engines} more in engine tables" if in_engines.positive?
+      parts << "routes gems draw at boot not read without booting" if gem_drawn && routes[:confidence] == Confidence::STATIC
       return "" if parts.empty?
 
       ", #{parts.join(', ')}"

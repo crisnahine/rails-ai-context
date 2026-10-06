@@ -73,7 +73,7 @@ module RailsAiContext
         unless located
           available = view_dirs.flat_map { |dir| find_available_partials(dir, root) }.uniq.sort.first(30)
           return not_found_response("Partial", partial, available,
-            recovery_tool: "Call rails_get_view(detail:\"summary\") to see all views and partials")
+            recovery_tool: "Call rails_get_view(detail:\"summary\") to see all views and partials", note: static_engine_views_note)
         end
 
         file_path = located.realpath
@@ -85,7 +85,7 @@ module RailsAiContext
         return text_response("Could not read partial file.") unless source
 
         relative_path = located.relative
-        partial_name = view_relative(File.join(root, relative_path), view_dirs)
+        partial_name = view_relative(File.expand_path(relative_path, root), view_dirs)
 
         # Parse the partial's interface
         magic_locals = extract_magic_comment_locals(source)
@@ -363,7 +363,7 @@ module RailsAiContext
           content = safe_read(file)
           next unless content
 
-          relative = file.sub("#{root}/", "")
+          relative = RailsAiContext::PortablePath.relativize(file, root)
 
           lines = content.lines
           # Per call, not per line: `render(` and a call split over lines are
@@ -376,7 +376,7 @@ module RailsAiContext
 
             covered = at + args.length
             line_num = content[0...at].count("\n") + 1
-            line = "render #{args.gsub(/\s+/, " ").strip}"
+            line = Introspectors::ViewTemplateIntrospector.render_line(args)
             spanned = lines[(line_num - 1)..(line_num - 1 + args.chomp.count("\n"))]
             snippet = spanned.size > 1 ? spanned.join(" ").squish : lines[line_num - 1].strip
 
@@ -407,7 +407,7 @@ module RailsAiContext
 
             next if matched_line
 
-            var = line[IMPLICIT_RENDER, 1]
+            var = line[Introspectors::ViewTemplateIntrospector::IMPLICIT_RENDER, 1]
             next unless var && !line.include?("partial:")
 
             view_dir = File.dirname(file.delete_prefix(views_dir + File::SEPARATOR))
@@ -421,10 +421,6 @@ module RailsAiContext
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "find_render_sites")
       end
-
-      # `render @posts`, `render(post)`, `render @posts, cached: true`: a bare
-      # record or collection, which names no partial of its own.
-      IMPLICIT_RENDER = /\Arender\s*\(?\s*@?([a-z_]\w*)\s*(?:[,)]|-?\s*\z)/
 
       # The partial Rails renders for a record named `var` from a view in
       # view_dir, which stands in for the controller's path; nil when the
@@ -469,18 +465,24 @@ module RailsAiContext
       end
 
       # Rails prefixes a record's partial with the controller namespace unless
-      # config.action_view.prefix_partial_path_with_controller_namespace is false.
+      # ActionView::Base.prefix_partial_path_with_controller_namespace is false.
+      PREFIX_SETTER = :prefix_partial_path_with_controller_namespace=
+
       private_class_method def self.prefix_partial_paths?(root)
+        booted = !RailsAiContext.static_tier? && !rails_app.is_a?(RailsAiContext::StaticApp)
+        return ActionView::Base.prefix_partial_path_with_controller_namespace != false if booted && defined?(ActionView::Base)
+
         env = ENV["RAILS_ENV"] || "development"
         files = [ "config/application.rb", "config/environments/#{env}.rb" ] +
           Dir.glob("config/initializers/**/*.rb", base: root).sort
-        setting = [ :action_view, :prefix_partial_path_with_controller_namespace ]
         last = nil
+        # The setter name is ActionView's own, so config.action_view, ActionView::Base and an on_load `self.` all match.
+        listener = -> { Introspectors::Listeners::MethodCallListener.new(names: [ PREFIX_SETTER ]) }
         files.each do |relative|
           next unless RailsAiContext::SafePath.locate(relative, under: root).ok?
 
-          walked = Introspectors::SourceIntrospector.walk(File.join(root, relative), { config: Introspectors::Listeners::ConfigAssignmentListener })
-          walked[:config].each { |entry| last = entry[:value] if entry[:assignment] && entry[:path] == setting }
+          walked = Introspectors::SourceIntrospector.walk(File.join(root, relative), { setting: listener })
+          walked[:setting].each { |call| last = call[:arguments].first if [ true, false ].include?(call[:arguments].first) }
         end
         last != false
       rescue => e

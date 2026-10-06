@@ -1021,6 +1021,20 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
       )
     end
 
+    it "says which && or || guard a route is drawn under" do
+      records = route_records(<<~RUBY)
+        Rails.application.routes.draw do
+          Rails.env.local? && get("andand", to: "posts#andand")
+          ENV["OFF"] || get("oror", to: "posts#oror")
+          get "always", to: "posts#index"
+        end
+      RUBY
+
+      expect(records.to_h { |r| [ r[:path], r[:condition] ] }).to eq(
+        "/andand" => "if Rails.env.local?", "/oror" => 'unless ENV["OFF"]', "/always" => nil
+      )
+    end
+
     it "says which case branch a route is drawn under" do
       records = route_records(<<~RUBY)
         Rails.application.routes.draw do
@@ -1066,6 +1080,34 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
 
     expect(records.to_h { |r| [ r[:path], r[:constraints] ] }).to eq(
       "/a/:id" => "{id: /[/}", "/b/:id" => "{id: ID_FORMAT}", "/c" => nil, "/d" => nil, "/e" => nil
+    )
+  end
+
+  it "reads the defaults a bare defaults block sets and the format a route requires" do
+    records = route_records(<<~'RUBY')
+      Rails.application.routes.draw do
+        defaults format: :json do
+          get "stats", to: "pages#stats"
+        end
+        get "/opt", to: "photos#opt", format: true
+        get "/re", to: "photos#re", format: /json|xml/
+        get "/str", to: "photos#str", format: "json"
+        scope format: true do
+          get "/inner", to: "photos#inner"
+          get "/f", to: "photos#f", format: false
+        end
+        get "/plain", to: "photos#plain"
+      end
+    RUBY
+
+    expect(records.to_h { |r| [ r[:path], r[:constraints] ] }).to eq(
+      "/stats" => "{format: :json}",
+      "/opt.:format" => "{format: /.+/}",
+      "/re" => "{format: /json|xml/}",
+      "/str" => '{format: /json/}',
+      "/inner.:format" => "{format: /.+/}",
+      "/f" => nil,
+      "/plain" => nil
     )
   end
 end

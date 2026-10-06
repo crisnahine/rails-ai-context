@@ -90,6 +90,14 @@ RSpec.describe RailsAiContext::SafePath do
       expect(described_class.contained?(File::SEPARATOR, File::SEPARATOR)).to be true
     end
 
+    it "names a file under a directory outside the root relative to the root, as an engine's view from its test/dummy" do
+      dummy = File.join(@root, "test/dummy")
+      FileUtils.mkdir_p(dummy)
+      result = described_class.locate("posts/index.html.erb", under: views, root: dummy)
+
+      expect(result.relative).to eq("../../app/views/posts/index.html.erb")
+    end
+
     it "names a file relative to a filesystem-root root without a leading separator" do
       result = described_class.locate("posts/index.html.erb", under: views, root: File::SEPARATOR)
 

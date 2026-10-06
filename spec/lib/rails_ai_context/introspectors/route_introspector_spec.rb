@@ -1191,7 +1191,7 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
 
           expect(result[:in_repo_route_files]).to eq(1)
           expect(RailsAiContext::RouteCoverage.suffix(result))
-            .to eq(", 1 in-repo engine route file not read")
+            .to eq(", 1 in-repo engine route file not read, routes gems draw at boot not read without booting")
         end
       end
 

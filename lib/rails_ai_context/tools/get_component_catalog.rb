@@ -210,7 +210,10 @@ module RailsAiContext
           else
             result = "<%= render #{name}.new#{init == ".new" ? "" : init} do |c| %>"
             slots.each do |slot|
-              if slot[:type] == :many
+              if slot[:setters]
+                filler = slot[:type] == :many ? "item" : "content"
+                slot[:setters].each { |setter| result += "\n  <% c.with_#{setter} do %>#{filler}<% end %>" }
+              elsif slot[:type] == :many
                 result += "\n  <% c.with_#{slot[:name].to_s.singularize} do %>item<% end %>"
               else
                 result += "\n  <% c.with_#{slot[:name]} do %>content<% end %>"

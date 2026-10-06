@@ -123,6 +123,11 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
       expect(introspector.send(:extract_partial_refs, source)).to include("article")
     end
 
+    it "reads render @post.comments as the records the association holds, as partial_interface does" do
+      refs = introspector.send(:extract_partial_refs, "<%= render @post.comments %>\n<%= render @notes if @notes.any? -%>")
+      expect(refs).to contain_exactly("comments", "notes")
+    end
+
     it "still detects render @ivar" do
       source = "<%= render @article %>"
       expect(introspector.send(:extract_partial_refs, source)).to include("article")

@@ -87,6 +87,24 @@ RSpec.describe RailsAiContext::Introspectors::ViewIntrospector do
       expect(result[:partials][:shared]).to be_an(Array)
     end
 
+    context "with a class kept under app/helpers" do
+      let(:dir) { File.join(Rails.root, "app/helpers/vi_wiki_pages") }
+
+      before do
+        FileUtils.mkdir_p(dir)
+        File.write(File.join(dir, "at_version.rb"), "class ViWikiPages::AtVersion < SimpleDelegator\n  def latest_version; end\nend\n")
+        File.write(File.join(dir, "titles_helper.rb"), "module ViWikiPages::TitlesHelper\n  def wiki_title; end\nend\n")
+      end
+
+      after { FileUtils.rm_rf(dir) }
+
+      it "lists the module helper and leaves the class out" do
+        files = result[:helpers].map { |h| h[:file] }
+        expect(files).to include("vi_wiki_pages/titles_helper.rb")
+        expect(files).not_to include("vi_wiki_pages/at_version.rb")
+      end
+    end
+
     it "extracts helpers with methods" do
       helper_files = result[:helpers].map { |h| h[:file] }
       expect(helper_files).to include("application_helper.rb", "posts_helper.rb")

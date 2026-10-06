@@ -59,6 +59,9 @@ RSpec.describe "Listener registration properties" do
               config.eager_load = false
             end
 
+            @state && config.eager_load
+            @state || config.eager_load
+
             case @state
             when 1 then :one
             else :other

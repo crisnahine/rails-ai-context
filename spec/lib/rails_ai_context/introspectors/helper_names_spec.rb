@@ -26,6 +26,14 @@ RSpec.describe RailsAiContext::Introspectors::HelperNames do
     expect(described_class.for(@root)).to include("money")
   end
 
+  it "leaves out the methods of a class kept under app/helpers" do
+    write("app/helpers/wiki_pages/at_version.rb", "class WikiPages::AtVersion < SimpleDelegator\n  def latest_version\n  end\nend\n")
+    write("app/helpers/users_helper.rb", "module UsersHelper\n  class Row\n  end\n\n  def full_name\n  end\nend\n")
+
+    expect(described_class.for(@root)).to include("full_name")
+    expect(described_class.for(@root)).not_to include("latest_version")
+  end
+
   it "answers an empty set for an app with no helpers" do
     expect(described_class.for(@root)).to be_empty
   end

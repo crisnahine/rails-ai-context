@@ -175,6 +175,14 @@ RSpec.describe RailsAiContext::Tools::GetComponentCatalog do
       expect(text).to include("<% c.with_header do %>content<% end %>")
     end
 
+    it "sets a polymorphic slot through its per-type setters" do
+      component_data[:components][1][:slots] = [ { name: "entries", type: :many, setters: %w[entry_image entry_text] } ]
+      text = described_class.call(component: "card", detail: "full").content.first[:text]
+
+      expect(text).to include("<% c.with_entry_image do %>item<% end %>\n  <% c.with_entry_text do %>item<% end %>")
+      expect(text).not_to include("c.with_entry do")
+    end
+
     context "no-props no-slots component" do
       before do
         data = {

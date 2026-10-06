@@ -118,7 +118,7 @@ module RailsAiContext
         relative = path.sub("#{root}/", "")
         declaration = component_declaration(content, path)
         return nil unless declaration
-        class_name = display_name(declaration.name)
+        class_name = declaration.name
         full_names[relative] = declaration.name
         declared_classes[relative] = declaration
 
@@ -136,7 +136,7 @@ module RailsAiContext
           slots: extract_slots(structure, type)
         }
 
-        preview = find_preview(path, class_name)
+        preview = find_preview(path, preview_name(class_name))
         component[:preview] = preview if preview
 
         sidecar = find_sidecar_assets(path)
@@ -153,8 +153,8 @@ module RailsAiContext
           declarations.first
       end
 
-      # Drops the namespace every component shares: "RubyUI::Button" -> "Button".
-      def display_name(full_name)
+      # A preview is named without the namespace every component shares: "RubyUI::Button" -> "Button".
+      def preview_name(full_name)
         parts = full_name.split("::")
         if parts.size > 2 && parts.first == "Components"
           parts[1..].join("::")
@@ -259,7 +259,7 @@ module RailsAiContext
 
       def extract_slots(structure, type)
         slots = structure.fetch(:slot_macro, []).map do |entry|
-          entry.slice(:name, :type, :renderer).compact
+          entry.slice(:name, :type, :renderer, :setters).compact
         end
 
         # Phlex slots are plain methods taking a block.

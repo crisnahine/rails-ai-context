@@ -67,7 +67,34 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
 
       expect(rendered_from("posts/post")).to include("app/views/admin/posts/index.html.erb:1")
       expect(RailsAiContext::Introspectors::SourceIntrospector).to have_received(:walk)
-        .with(File.join(@root, "config/application.rb"), { config: RailsAiContext::Introspectors::Listeners::ConfigAssignmentListener }).once
+        .with(File.join(@root, "config/application.rb"), hash_including(:setting)).once
+    end
+
+    it "reads the prefix set on ActionView::Base, directly or in an on_load(:action_view) block" do
+      FileUtils.mkdir_p(File.join(@root, "config/initializers"))
+      File.write(File.join(@root, "config/initializers/pp.rb"), "ActionView::Base.prefix_partial_path_with_controller_namespace = false\n")
+      expect(rendered_from("admin/posts/post")).to be_nil
+
+      File.write(File.join(@root, "config/initializers/pp.rb"),
+                 "ActiveSupport.on_load(:action_view) { self.prefix_partial_path_with_controller_namespace = false }\n")
+      expect(rendered_from("admin/posts/post")).to be_nil
+    end
+
+    it "asks ActionView::Base when the app is booted" do
+      allow(RailsAiContext).to receive(:default_app).and_return(Struct.new(:root).new(Pathname.new(@root)))
+      allow(ActionView::Base).to receive(:prefix_partial_path_with_controller_namespace).and_return(false)
+
+      expect(rendered_from("admin/posts/post")).to be_nil
+      expect(rendered_from("posts/post")).to include("app/views/admin/posts/index.html.erb:1")
+    end
+
+    it "credits an association collection to the partial of the records it holds" do
+      FileUtils.mkdir_p(File.join(@root, "app/views/admin/comments"))
+      File.write(File.join(@root, "app/views/admin/posts/show.html.erb"), "<%= render @post.comments %>\n")
+      File.write(File.join(@root, "app/views/admin/comments/_comment.html.erb"), "<%= comment.body %>\n")
+
+      expect(rendered_from("admin/comments/comment")).to eq("## Rendered From (1)\n- `app/views/admin/posts/show.html.erb:1`")
+      expect(rendered_from("admin/posts/post")).to eq("## Rendered From (1)\n- `app/views/admin/posts/index.html.erb:1`")
     end
 
     it "counts a partial under a view root declared inside app/views once" do
@@ -154,6 +181,14 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
     before do
       allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
       allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    it "says unbooted on a miss that the views of the engine a test/dummy runs in are not read" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      allow(RailsAiContext::PathResolver).to receive(:test_root).and_return("/engine")
+
+      text = described_class.call(partial: "b3eng/widgets/widget").content.first[:text]
+      expect(text).to include("_The views of the engine this app runs in are read only with the app booted._")
     end
 
     it "offers only templates as available partials" do

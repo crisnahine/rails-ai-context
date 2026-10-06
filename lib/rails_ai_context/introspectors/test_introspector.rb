@@ -37,6 +37,7 @@ module RailsAiContext
           vcr_cassettes: detect_vcr,
           ci_config: detect_ci,
           ci_steps: detect_ci_steps,
+          ci_steps_dir: @ci_steps_dir,
           coverage: detect_coverage,
           factory_traits: detect_factory_traits,
           test_count_by_category: detect_test_count_by_category,
@@ -344,8 +345,13 @@ module RailsAiContext
       # The steps bin/ci runs, from the `step title, *command` calls of the
       # CI DSL Rails 8.1 generates.
       def detect_ci_steps
-        content = ci_roots.lazy.filter_map { |dir| RailsAiContext::SafePath.read(RAILS_CI, under: dir).first }.first
+        dir, content = ci_roots.lazy.filter_map { |d| (text = RailsAiContext::SafePath.read(RAILS_CI, under: d).first) && [ d, text ] }.first
         return nil unless content
+
+        # Paths in the answer are under the suite root, which for a test/dummy is the engine's.
+        unless dir == suite_root
+          @ci_steps_dir = "#{Pathname.new(PathResolver.root_key(dir)).relative_path_from(Pathname.new(PathResolver.root_key(suite_root)))}/"
+        end
 
         hits = SourceIntrospector.walk_source(content, steps: -> { Listeners::GenericMacroListener.new(:step) })[:steps]
         steps = hits.filter_map do |hit|

@@ -205,7 +205,7 @@ RSpec.describe RailsAiContext::Introspectors::ComponentIntrospector do
         RUBY
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
-        badge = result[:components].find { |c| c[:name] == "Badge" }
+        badge = result[:components].find { |c| c[:name] == "Components::Badge" }
 
         expect(badge[:type]).to eq(:phlex)
         expect(result[:summary][:phlex]).to eq(1)
@@ -225,7 +225,7 @@ RSpec.describe RailsAiContext::Introspectors::ComponentIntrospector do
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
 
-        expect(result[:components].map { |c| [ c[:name], c[:type] ] }).to eq([ [ "Badge", :phlex ] ])
+        expect(result[:components].map { |c| [ c[:name], c[:type] ] }).to eq([ [ "Components::Badge", :phlex ] ])
         expect(result[:bases].map { |c| c[:file] }).to eq([ "app/views/components/base.rb" ])
       end
     end

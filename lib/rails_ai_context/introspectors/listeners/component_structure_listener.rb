@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "active_support/core_ext/string/inflections"
+
 module RailsAiContext
   module Introspectors
     module Listeners
@@ -69,15 +71,41 @@ module RailsAiContext
           name = extract_symbol_args(node).first
           return unless name
 
-          renderer = extract_arg_values(node).drop(1).map(&:to_s)
           entry = {
             kind:     :slot_macro,
             name:     name.to_s,
             type:     SLOT_MACROS.fetch(node.name),
             location: node.location.start_line
           }
-          entry[:renderer] = renderer.join(", ") if renderer.any?
+          types = polymorphic_types(node)
+          if types
+            entry[:setters] = polymorphic_setters(name.to_s, entry[:type], types)
+          else
+            renderer = extract_arg_values(node).drop(1).map(&:to_s)
+            entry[:renderer] = renderer.join(", ") if renderer.any?
+          end
           @results << entry
+        end
+
+        def polymorphic_types(node)
+          hash = node.arguments&.arguments&.find { |a| a.is_a?(Prism::KeywordHashNode) || a.is_a?(Prism::HashNode) }
+          types = hash&.elements&.find { |e| e.is_a?(Prism::AssocNode) && e.key.is_a?(Prism::SymbolNode) && e.key.unescaped == "types" }
+          types.value if types&.value.is_a?(Prism::HashNode)
+        end
+
+        # Slotable#__vc_register_polymorphic_slot: `as:` names the setter, else slot and type joined.
+        def polymorphic_setters(name, type, types)
+          base = type == :many ? name.singularize : name
+          types.elements.filter_map do |assoc|
+            next unless assoc.is_a?(Prism::AssocNode) && assoc.key.is_a?(Prism::SymbolNode)
+
+            as = assoc.value.is_a?(Prism::HashNode) && assoc.value.elements.find { |e| e.is_a?(Prism::AssocNode) && e.key.is_a?(Prism::SymbolNode) && e.key.unescaped == "as" }
+            as && literal_name(as.value) || "#{base}_#{assoc.key.unescaped}"
+          end
+        end
+
+        def literal_name(node)
+          node.unescaped if node.is_a?(Prism::SymbolNode) || node.is_a?(Prism::StringNode)
         end
 
         # `SIZES[@size]` ties a prop to the constant table that enumerates it.

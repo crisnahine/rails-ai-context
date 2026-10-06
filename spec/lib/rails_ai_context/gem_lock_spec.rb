@@ -402,6 +402,17 @@ RSpec.describe RailsAiContext::GemLock do
       end
     end
 
+    it "reads a bare engine name in .ruby-version as that engine, as RVM and rbenv do" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".ruby-version"), "jruby\n")
+
+        spec = described_class.for(dir)
+
+        expect(spec.ruby_engine).to eq("JRuby")
+        expect(spec.ruby_version).to be_nil
+      end
+    end
+
     it "reads the engine Bundler writes into RUBY VERSION" do
       Dir.mktmpdir do |dir|
         File.write(File.join(dir, "Gemfile.lock"), <<~LOCK)
