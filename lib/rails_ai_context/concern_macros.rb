@@ -718,11 +718,12 @@ module RailsAiContext
       end
 
       def introspect_nested(file, (qualified, node))
-        memo("#{file}##{qualified}") { Introspectors::SourceIntrospector.walk_source(node.slice, @listeners) }
+        memo([ :walk, @listeners, "#{file}##{qualified}" ]) { Introspectors::SourceIntrospector.walk_source(node.slice, @listeners) }
       end
 
       def introspect(path)
-        memo(path) { read(path) }
+        # Keyed by the listener map too: callers reading other macros may share one cache.
+        memo([ :walk, @listeners, path ]) { read(path) }
       end
 
       # A concern too big or unreadable costs its own declarations, not the

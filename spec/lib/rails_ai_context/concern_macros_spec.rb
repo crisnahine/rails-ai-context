@@ -19,6 +19,18 @@ RSpec.describe RailsAiContext::ConcernMacros do
     [ { name: name, kind: :include, ancestor: true } ]
   end
 
+  it "keeps one cache's concern walks apart for two listener maps" do
+    File.write(File.join(concern_dir, "localized.rb"), "module Localized\n  extend ActiveSupport::Concern\n  included do\n    around_action :set_locale\n    layout \"admin\"\n  end\nend\n")
+    cache = {}
+    filters = { filters: -> { RailsAiContext::Introspectors::Listeners::GenericMacroListener.new(:around_action) } }
+    layouts = { layouts: -> { RailsAiContext::Introspectors::Listeners::GenericMacroListener.new(:layout) } }
+
+    described_class.collect(tmpdir, mixin("Localized"), keys: %i[layouts], cache: cache, listeners: layouts)
+    found = described_class.collect(tmpdir, mixin("Localized"), keys: %i[filters], cache: cache, listeners: filters)
+
+    expect(found.collected[:filters].map { |entry| entry[:args] }).to eq([ [ :set_locale ] ])
+  end
+
   it "collects the macros a concern declares inside included do" do
     File.write(File.join(concern_dir, "publishable.rb"), <<~RUBY)
       module Publishable
