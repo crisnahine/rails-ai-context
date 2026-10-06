@@ -27,7 +27,7 @@ module RailsAiContext
         run = new_run(dirs, pk_type: pk_type, root: root)
         tables = {}
         # Rails orders every migrations path by version, not one directory at a time.
-        migration_files(dirs, root: run.root).each { |path| replay_file(path, tables, run) }
+        migration_files(dirs, root: run.real_root).each { |path| replay_file(path, tables, run) }
 
         tables.delete("ar_internal_metadata")
         tables.delete("schema_migrations")
@@ -36,12 +36,7 @@ module RailsAiContext
 
       def new_run(dirs, pk_type:, root: nil)
         root = File.expand_path((root || File.join(dirs.first.to_s, "..", "..")).to_s)
-        real_root = begin
-          File.realpath(root)
-        rescue SystemCallError
-          root
-        end
-        Run.new(pk_type: pk_type, root: root, real_root: real_root, db_dirs: db_dirs(root, dirs), read: [], helpers: Set.new,
+        Run.new(pk_type: pk_type, root: root, real_root: real_root(root), db_dirs: db_dirs(root, dirs), read: [], helpers: Set.new,
                 counts: Counts.new(0, 0, 0, 0))
       end
 
@@ -59,10 +54,10 @@ module RailsAiContext
           .select { |path| path.is_a?(String) && !path.empty? && !RailsAiContext::DatabaseYml.computed?(path) }
         return nil if paths.empty?
 
-        real_root = File.realpath(root.to_s)
+        real = real_root(root)
         paths.filter_map do |path|
           dir = File.expand_path(path, root.to_s)
-          dir if SafePath.contained?(File.realpath(dir), real_root)
+          dir if SafePath.contained?(File.realpath(dir), real)
         rescue SystemCallError
           nil
         end
@@ -75,14 +70,19 @@ module RailsAiContext
           .sort_by { |path| [ File.basename(path), path ] }
         return files unless root
 
-        real_root = File.realpath(root.to_s)
+        real = real_root(root)
         files.select do |path|
-          SafePath.contained?(File.realpath(path), real_root)
+          SafePath.contained?(File.realpath(path), real)
         rescue SystemCallError
           false
         end
+      end
+
+      # The app root as the file system resolves it, or as given when it does not exist.
+      def real_root(root)
+        File.realpath(root.to_s)
       rescue SystemCallError
-        []
+        root.to_s
       end
 
       # A migration may require from the app's db/ or the one holding its migrations path.
