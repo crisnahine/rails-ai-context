@@ -162,8 +162,8 @@ module RailsAiContext
           env_name = found.values.first.first
           target = { flag: " --database #{names.first}", env: env_name }
           paths = Array(found.values.first.last["migrations_paths"]).join(", ")
-          note = "**Database:** `#{table}` is in #{[ names[0..-2].join(", "), names.last ].reject(&:empty?).join(" and ")}, not the primary database" \
-                 "#{", which #{env_name} configures and this environment does not" if env_name}: generate with #{"`RAILS_ENV=#{env_name}` and " if env_name}`#{target[:flag].strip}` " \
+          note = "**Database:** `#{table}` is in #{[ names[0..-2].join(", "), names.last ].reject(&:empty?).join(" and ")}," \
+                 "#{" which #{env_name} configures and this environment does not," if env_name} not the primary database: generate with #{"`RAILS_ENV=#{env_name}` and " if env_name}`#{target[:flag].strip}` " \
                  "so the migration lands in #{env_name && !paths.empty? ? paths : "that database's migrations_paths"} and " \
                  "#{"#{env_name}'s " if env_name}`bin/rails db:migrate` runs it there."
           groups = found.group_by { |_, (_, entry)| Array(entry["migrations_paths"]) }

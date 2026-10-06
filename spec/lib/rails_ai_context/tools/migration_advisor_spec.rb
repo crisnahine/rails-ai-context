@@ -535,7 +535,7 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       allow(described_class).to receive(:cached_context).and_return(shard_context)
       allow(RailsAiContext::DatabaseYml).to receive_messages(entry: nil, elsewhere: [ "production", { "migrations_paths" => "db/analytics_migrate" } ])
       text = described_class.call(action: "remove_column", table: "orders", column: "total_cents").content.first[:text]
-      expect(text).to include("which production configures and this environment does not: generate with `RAILS_ENV=production` and `--database shard_one` so the migration lands in db/analytics_migrate and production's `bin/rails db:migrate`",
+      expect(text).to include("`orders` is in shard_one and shard_two, which production configures and this environment does not, not the primary database: generate with `RAILS_ENV=production` and `--database shard_one` so the migration lands in db/analytics_migrate and production's `bin/rails db:migrate`",
                               "**Run:** `RAILS_ENV=production bin/rails generate migration RemoveTotalCentsFromOrders total_cents:integer --database shard_one`")
     end
 
