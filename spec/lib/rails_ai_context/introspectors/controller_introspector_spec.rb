@@ -1069,6 +1069,41 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
   end
 
   describe "#static_call" do
+    # responders' respond_to copies the class attribute the parent set before adding to it, and
+    # a rate_limit is a before_action every subclass runs.
+    it "hands an ancestor's class-level respond_to and rate_limit down to its subclasses" do
+      Dir.mktmpdir do |dir|
+        controllers_dir = File.join(dir, "app", "controllers")
+        FileUtils.mkdir_p(File.join(controllers_dir, "admin"))
+        File.write(File.join(controllers_dir, "application_controller.rb"),
+                   "class ApplicationController < ActionController::Base\n  respond_to :html\n  rate_limit to: 50, within: 1.hour\nend\n")
+        File.write(File.join(controllers_dir, "posts_controller.rb"), "class PostsController < ApplicationController\n  def index; end\nend\n")
+        File.write(File.join(controllers_dir, "gadgets_controller.rb"),
+                   "class GadgetsController < ApplicationController\n  respond_to :json\n  def index; end\nend\n")
+        File.write(File.join(controllers_dir, "child_gadgets_controller.rb"),
+                   "class ChildGadgetsController < GadgetsController\n  def show; end\nend\n")
+        File.write(File.join(controllers_dir, "feeds_controller.rb"),
+                   "class FeedsController < GadgetsController\n  clear_respond_to\n  respond_to :xml\nend\n")
+        File.write(File.join(controllers_dir, "admin", "base_controller.rb"),
+                   "class Admin::BaseController < ApplicationController\n  rate_limit to: 5, within: 1.minute\nend\n")
+        File.write(File.join(controllers_dir, "admin", "reports_controller.rb"),
+                   "class Admin::ReportsController < Admin::BaseController\n  def index; end\nend\n")
+
+        controllers = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:controllers]
+        formats = controllers.slice("PostsController", "GadgetsController", "ChildGadgetsController", "FeedsController")
+                             .transform_values { |info| info[:respond_to_formats] }
+
+        expect(formats).to eq("PostsController" => %w[html], "GadgetsController" => %w[html json],
+                              "ChildGadgetsController" => %w[html json], "FeedsController" => %w[xml])
+        expect(controllers["Admin::ReportsController"][:rate_limits]).to eq([
+          { text: "to: 50, within: 1.hour", to: 50, within: "1.hour", from: "ApplicationController" },
+          { text: "to: 5, within: 1.minute", to: 5, within: "1.minute", from: "Admin::BaseController" }
+        ])
+        expect(controllers["Admin::BaseController"][:rate_limits].map { |limit| limit[:from] }).to eq([ "ApplicationController", nil ])
+        expect(controllers.values.none? { |info| info.key?(:declared_formats) }).to be true
+      end
+    end
+
     it "reads a compact controller's bare superclass from the top level" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers", "api"))

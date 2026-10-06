@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "set"
+
 module RailsAiContext
   module Introspectors
     # Discovers controllers and extracts filters, strong params,
@@ -38,7 +40,7 @@ module RailsAiContext
           result[name] = details
         end
 
-        { controllers: fill_inherited_actions(result) }
+        { controllers: inherit_class_declarations(fill_inherited_actions(result)) }
       end
 
       # Static tier: every controller goes through the source-only extractor;
@@ -55,7 +57,7 @@ module RailsAiContext
           hash[path_name] = { error: portable_message(e) }
         end
         {
-          controllers: fill_inherited_actions(result),
+          controllers: inherit_class_declarations(fill_inherited_actions(result)),
           note: "Parsed statically from app/controllers (app not booted)"
         }
       end
@@ -149,6 +151,54 @@ module RailsAiContext
         result
       end
 
+      # Class-level declarations Rails hands down: responders' respond_to copies the formats the
+      # parent set before adding its own, and a rate_limit is a before_action every subclass runs.
+      # Folded over the listing as it was, with the bases it leaves out read from their files.
+      def inherit_class_declarations(result)
+        own = @class_declarations || {}
+        folded = result.filter_map do |name, info|
+          next unless info.is_a?(Hash) && own.key?(name)
+
+          links, = ControllerSettings.lineage(result, name, app.root.to_s)
+          lineage = links.reverse.filter_map do |link, entry, source|
+            declared = entry ? own[link] : base_class_declarations(source)
+            [ link, declared ] if declared
+          end
+          formats = lineage.each_with_object(Set.new) { |(_, declared), set| fold_formats(set, declared[:formats]) }
+          limits = lineage.flat_map { |link, declared| link == name ? declared[:rate_limits] : declared[:rate_limits].map { |limit| limit.merge(from: link) } }
+          [ name, (formats.to_a | own[name][:block_formats]).sort, limits ]
+        end
+        folded.each do |name, formats, limits|
+          result[name][:respond_to_formats] = formats
+          limits.any? ? result[name][:rate_limits] = limits : result[name].delete(:rate_limits)
+        end
+        result
+      end
+
+      # `clear_respond_to` empties the class attribute; each `respond_to` adds to it.
+      def fold_formats(set, calls)
+        calls.each { |formats| formats ? set.merge(formats) : set.clear }
+        set
+      end
+
+      def own_class_declarations(name, source, walked)
+        declared = class_declarations(source, walked).merge(block_formats: block_formats(source))
+        (@class_declarations ||= {})[name] = declared
+        declared.merge(respond_to_formats: (fold_formats(Set.new, declared[:formats]).to_a | declared[:block_formats]).sort)
+      end
+
+      # A base the listing leaves out is read once per run however many controllers inherit it.
+      def base_class_declarations(source)
+        (@base_class_declarations ||= {})[source] ||= class_declarations(source, class_body_walk(source))
+      end
+
+      # { formats: [[format...] per respond_to, nil per clear_respond_to], rate_limits: [...] }
+      def class_declarations(source, walked)
+        calls = walked ? SourceIntrospector.outside_defs(walked[:respond_to], walked[:methods]) : []
+        formats = calls.map { |call| call[:macro] == :clear_respond_to ? nil : Array(call[:args]).map(&:to_s) }
+        { formats: formats, rate_limits: extract_rate_limits(source, walked) }
+      end
+
       # What both tiers do with a file: read it, name it by what it declares,
       # and extract. A file it cannot read is an entry saying so, not a gap.
       def detail_for(record, path_name)
@@ -205,6 +255,7 @@ module RailsAiContext
                                                                   cache: (@concern_cache ||= {}))
         concerns = extract_concerns_from_source(source)
         walked = class_body_walk(source)
+        declared = own_class_declarations(class_name, source, walked)
         own = ActionResolver.actions_from_source(source, class_name: class_name, filters: filter_names(filters))
         mixed_in = concern_actions(concerns, class_name, filters) - own
         details = {
@@ -217,9 +268,9 @@ module RailsAiContext
           concerns: concerns,
           concerns_unread: unread.presence,
           strong_params: extract_strong_params(source),
-          respond_to_formats: extract_respond_to(source),
+          respond_to_formats: declared[:respond_to_formats],
           rescue_from: extract_rescue_from(source),
-          rate_limits: extract_rate_limits(source, walked).presence,
+          rate_limits: declared[:rate_limits].presence,
           turbo_stream_actions: extract_turbo_stream_actions(source),
           **ControllerSettings.from_source(source, walked),
           file: relative_file
@@ -243,6 +294,7 @@ module RailsAiContext
         # the routes to settle as they do for a statically read entry.
         own = source ? ActionResolver.actions_from_source(source, class_name: ctrl.name, filters: filter_names(filters)) : actions
         walked = class_body_walk(source)
+        declared = own_class_declarations(ctrl.name, source, walked)
 
         {
           parent_class: ctrl.superclass.name,
@@ -253,9 +305,9 @@ module RailsAiContext
           filters: filters,
           concerns: concerns,
           strong_params: extract_strong_params(source),
-          respond_to_formats: extract_respond_to(source),
+          respond_to_formats: declared[:respond_to_formats],
           rescue_from: extract_rescue_from(source),
-          rate_limits: extract_rate_limits(source, walked).presence,
+          rate_limits: declared[:rate_limits].presence,
           turbo_stream_actions: extract_turbo_stream_actions(source),
           **ControllerSettings.from_source(source, walked),
           file: relative_source_path(ctrl)
@@ -741,30 +793,29 @@ module RailsAiContext
         end
       end
 
-      def extract_respond_to(source)
+      # The class body's own formats: the responders gem's class-level `respond_to :json`, and each
+      # `format.x` in an action's `respond_to` block.
+      def extract_respond_to(source, walked = class_body_walk(source))
+        (fold_formats(Set.new, class_declarations(source, walked)[:formats]).to_a | block_formats(source)).sort
+      end
+
+      def block_formats(source)
         return [] if source.nil?
 
         parse_result = AstCache.parse_string(source)
         respond_to_blocks = []
         formats = []
-        find_respond_to_blocks(parse_result.value, respond_to_blocks, formats)
+        find_respond_to_blocks(parse_result.value, respond_to_blocks)
         respond_to_blocks.each { |block| find_format_calls(block, formats) }
-        formats.uniq.sort
+        formats.uniq
       rescue => e
-        RailsAiContext.debug_fail(e, [], label: "extract_respond_to AST")
+        RailsAiContext.debug_fail(e, [], label: "block_formats AST")
       end
 
-      def find_respond_to_blocks(node, blocks, declared)
+      def find_respond_to_blocks(node, blocks)
         return unless node.respond_to?(:child_nodes)
-        if node.is_a?(Prism::CallNode) && node.name == :respond_to
-          if node.block
-            blocks << node.block
-          elsif node.receiver.nil?
-            # The responders gem's class-level `respond_to :json`.
-            node.arguments&.arguments&.each { |arg| declared << arg.unescaped if arg.is_a?(Prism::SymbolNode) }
-          end
-        end
-        node.child_nodes.compact.each { |child| find_respond_to_blocks(child, blocks, declared) }
+        blocks << node.block if node.is_a?(Prism::CallNode) && node.name == :respond_to && node.block
+        node.child_nodes.compact.each { |child| find_respond_to_blocks(child, blocks) }
       end
 
       def find_format_calls(node, formats)
@@ -800,19 +851,20 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "extract_rescue_from AST")
       end
 
-      # Each `rate_limit` the class body declares (`name:` lets one controller declare
-      # several), as its options read and the literals among them.
-      # One walk of the class body serves the rate limits and the settings.
+      # One walk of the class body serves the rate limits, the respond_to formats and the settings.
       def class_body_walk(source)
         return nil if source.nil?
 
         SourceIntrospector.walk_source(source, ControllerSettings::LISTENERS.merge(
-          rate_limit: -> { Listeners::GenericMacroListener.new(:rate_limit) }
+          rate_limit: -> { Listeners::GenericMacroListener.new(:rate_limit) },
+          respond_to: -> { Listeners::GenericMacroListener.new(:respond_to, :clear_respond_to) }
         ))
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "class_body_walk")
       end
 
+      # Each `rate_limit` the class body declares (`name:` lets one controller declare
+      # several), as its options read and the literals among them.
       def extract_rate_limits(source, walked = class_body_walk(source))
         return [] if walked.nil?
 

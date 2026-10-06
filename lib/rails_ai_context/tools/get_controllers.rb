@@ -501,12 +501,12 @@ module RailsAiContext
         end
 
         # Rate limiting
-        limits = Array(info[:rate_limits])
+        limits = Array(info[:rate_limits]).map { |limit| "#{limit[:text]}#{" _(from #{limit[:from]})_" if limit[:from]}" }
         if limits.one?
-          lines << "" << "**Rate limit:** #{limits.first[:text]}"
+          lines << "" << "**Rate limit:** #{limits.first}"
         elsif limits.any?
           lines << "" << "**Rate limits:**"
-          limits.each { |limit| lines << "- #{limit[:text]}" }
+          limits.each { |limit| lines << "- #{limit}" }
         end
 
         # Turbo Stream actions
