@@ -51,7 +51,7 @@ module RailsAiContext
         end
 
         if view_dirs.empty?
-          note = api_only_note("app/views")
+          note = api_only_note("app/views", dir: "app/views")
           return text_response(note) if note
 
           return text_response("No app/views/ directory found.")

@@ -73,7 +73,7 @@ module RailsAiContext
         if helper_dirs.empty?
           # "not found" invites an agent to add helpers to an app that chose
           # not to have any.
-          note = api_only_note("app/helpers")
+          note = api_only_note("app/helpers", dir: "app/helpers")
           return text_response(note) if note
 
           return text_response("No helpers directory found. Searched app/helpers/, packs/*/app/helpers/ and engines/*/app/helpers/.")

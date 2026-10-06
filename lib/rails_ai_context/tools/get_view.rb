@@ -75,7 +75,7 @@ module RailsAiContext
             # commonly), so a controller filter that simply doesn't match
             # anything must not be reported as "views don't exist here".
             if templates.empty? && partials.empty?
-              note = api_only_note("app/views")
+              note = api_only_note("app/views", dir: "app/views")
               return text_response(note) if note
             end
 
@@ -100,7 +100,7 @@ module RailsAiContext
         # genuinely has no views anywhere (as opposed to a filter simply not
         # matching anything, handled above).
         if controller.nil? && templates.empty? && partials.empty?
-          note = api_only_note("app/views")
+          note = api_only_note("app/views", dir: "app/views")
           return text_response(note) if note
         end
 
@@ -443,7 +443,7 @@ module RailsAiContext
 
       private_class_method def self.read_from_disk(controller:, path:, detail:)
         if RailsAiContext::PathResolver.view_dirs(rails_app.root.to_s).empty?
-          note = api_only_note("app/views")
+          note = api_only_note("app/views", dir: "app/views")
           return text_response(note) if note
 
           return text_response("No app/views directory found.")

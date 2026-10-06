@@ -47,7 +47,7 @@ module RailsAiContext
             component = component.to_s.strip
 
             if components.empty?
-              note = api_only_note("app/components")
+              note = api_only_note("app/components", dir: "app/components")
               return text_response(note) if note
 
               return text_response("Component '#{component}' not found - no components exist in app/components/. Create ViewComponent or Phlex components first.")
@@ -63,7 +63,7 @@ module RailsAiContext
             text_response(render_single(found.first, detail))
           else
             if components.empty?
-              note = api_only_note("app/components")
+              note = api_only_note("app/components", dir: "app/components")
               return text_response(note) if note
 
               return text_response(
