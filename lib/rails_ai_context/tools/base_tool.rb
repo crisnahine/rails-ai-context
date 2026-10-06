@@ -613,12 +613,8 @@ module RailsAiContext
           pattern.match?(/\w\z/) ? "\\b" : ""
         end
 
-        # One method's source and the lines it occupies, as the parser bounds
-        # the def, so a one-line or endless def is its own line. "self.x"
-        # asks for the class method. Returns { code:, start_line:, end_line: }
-        # or nil. The file's own class answers before a nested one; a nested
-        # module (a concern's ClassMethods) answers when the class has none.
-        # Shared by get_callbacks, get_concern.
+        # "self.x" asks for the class method; the file's own class answers before a nested
+        # module (a concern's ClassMethods), which answers only when the class has none.
         def extract_method_source_from_string(source, method_name)
           name = method_name.to_s
           scope = name.start_with?("self.") ? :class : :instance

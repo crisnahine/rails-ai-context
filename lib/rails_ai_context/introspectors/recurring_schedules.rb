@@ -10,16 +10,9 @@ module RailsAiContext
     module RecurringSchedules
       module_function
 
-      def read(root, walks = {})
-        solid_queue(root) + sidekiq_cron(root) + sidekiq_scheduler(root) + good_job(root, walks) + whenever(root)
-      end
-
-      # `walks` memoizes by file, so every reader of one config file in a run shares a walk.
-      def config_assignments(root, file, walks = {})
-        walks.fetch(file) do
-          source = read_file(root, file)
-          walks[file] = source ? Array(SourceIntrospector.walk_source(source, { config: Listeners::ConfigAssignmentListener })[:config]) : []
-        end
+      # `assignments` returns a config file's ConfigAssignmentListener hits from the caller's own walk.
+      def read(root, assignments)
+        solid_queue(root) + sidekiq_cron(root) + sidekiq_scheduler(root) + good_job(root, assignments) + whenever(root)
       end
 
       # Solid Queue takes the section named for the environment, else the whole file,
@@ -68,12 +61,12 @@ module RailsAiContext
 
       # `cron =` replaces the hash, dropping what earlier files set; an environment
       # file's assignment drops only that file's earlier entries.
-      def good_job(root, walks = {})
+      def good_job(root, assignments)
         GOOD_JOB_FILES.flat_map { |pattern| Dir.glob(pattern, base: root.to_s).sort }.each_with_object([]) do |file, tasks|
-          next unless walks.key?(file) || read_file(root, file)&.include?("good_job")
+          next unless read_file(root, file)&.include?("good_job")
 
           env = File.basename(file, ".rb") if file.start_with?("config/environments/")
-          config_assignments(root, file, walks).each do |hit|
+          assignments.call(file).each do |hit|
             next unless GOOD_JOB_CRON.include?(hit[:path])
 
             tasks.reject! { |entry| env.nil? || entry[:file] == file } if hit[:assignment] && !hit[:condition]
@@ -104,8 +97,6 @@ module RailsAiContext
           { class: klass, command: hit[:macro] == :runner ? code : "#{hit[:macro]} #{code}",
             schedule: whenever_schedule(every), file: file }.compact
         end
-      rescue StandardError, ScriptError => e
-        RailsAiContext.debug_fail(e, [], label: "whenever schedule")
       end
 
       def whenever_schedule(every)

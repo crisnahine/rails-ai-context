@@ -120,9 +120,9 @@ module RailsAiContext
 
                 lines << "- **#{set}:**"
                 entries.each do |entry_name, attrs|
-                  attr_str = attrs.map { |k, v| "#{k}: #{v}" }.join(", ")
+                  attr_str = attrs.map { |k, v| "#{k}: #{erb_shown(v)}" }.join(", ")
                   label = if entry_name.to_s.include?(RailsAiContext::FixtureKeys::ERB_VALUE)
-                    "`#{entry_name.to_s.gsub(RailsAiContext::FixtureKeys::ERB_VALUE, '<%= ... %>')}` _(label set by ERB)_"
+                    "`#{erb_shown(entry_name)}` _(label set by ERB)_"
                   else
                     "`#{entry_name}`"
                   end
@@ -187,6 +187,14 @@ module RailsAiContext
         RailsAiContext::PathResolver.test_root(rails_app.root.to_s)
       end
 
+      private_class_method def self.erb_shown(text)
+        text.to_s.gsub(RailsAiContext::FixtureKeys::ERB_VALUE, "<%= ... %>")
+      end
+
+      private_class_method def self.shown(rel)
+        RailsAiContext::PathResolver.suite_relative(rails_app.root.to_s, rel)
+      end
+
       private_class_method def self.suite_lines
         app_root = rails_app.root.to_s
         if suite_root == app_root
@@ -236,15 +244,15 @@ module RailsAiContext
           # Summary/standard: return just test names (saves 2000+ tokens vs full source)
           answer = if names_only?(detail)
             listed = examples(content)
-            "# #{rel} (#{count_phrase(listed.size, "test")})\n\n#{listed.join("\n")}"
+            "# #{shown(rel)} (#{count_phrase(listed.size, "test")})\n\n#{listed.join("\n")}"
           else
-            "# #{rel}\n\n```ruby\n#{content}\n```"
+            "# #{shown(rel)}\n\n```ruby\n#{content}\n```"
           end
           return text_response(answer + exercising_section(exercising, "## Also exercised by"))
         end
 
         if too_large
-          return text_response("# #{too_large.relative}\n\n_The test file exists but was not read: #{human_size(File.size(too_large.realpath))} is over " \
+          return text_response("# #{shown(too_large.relative)}\n\n_The test file exists but was not read: #{human_size(File.size(too_large.realpath))} is over " \
                                "`max_test_file_size` (#{human_size(max_test_file_size)})._" +
                                exercising_section(exercising, "## Also exercised by"))
         end
@@ -262,7 +270,7 @@ module RailsAiContext
 
         unread = unread_suite_gemfile
         unread &&= "\n\nNot searched: the engine's suite at `#{File.dirname(unread)}` is not read, config/boot.rb points Bundler at #{unread}, outside the app's git repository."
-        empty_response("No test file found for #{name}. Searched: #{contained.join(', ')}#{nearby_tests_hint(contained)}#{unread}")
+        empty_response("No test file found for #{name}. Searched: #{contained.map { |rel| shown(rel) }.join(', ')}#{nearby_tests_hint(contained)}#{unread}")
       end
 
       # Where a controller is driven from outside its own test, and what each
@@ -311,7 +319,7 @@ module RailsAiContext
         lines = heading ? [ "", "", heading, "" ] : [ "", "" ]
         found.first(MAX_EXERCISING).each do |rel, kind, source|
           listed = examples(source)
-          lines << "- `#{rel}` (#{kind}, #{count_phrase(listed.size, "test")})"
+          lines << "- `#{shown(rel)}` (#{kind}, #{count_phrase(listed.size, "test")})"
           listed.each { |test| lines << "  #{test}" } if names
         end
         lines << "- ... #{found.size - MAX_EXERCISING} more" if found.size > MAX_EXERCISING
@@ -355,7 +363,7 @@ module RailsAiContext
           real_dir = File.realpath(dir)
           next [] unless RailsAiContext::SafePath.contained?(real_dir, real_root)
 
-          Dir.glob(File.join(real_dir, "*")).map { |f| f.delete_prefix("#{real_root}/") }.first(10)
+          Dir.glob(File.join(real_dir, "*")).map { |f| shown(f.delete_prefix("#{real_root}/")) }.first(10)
         end
 
         nearby.any? ? "\n\nFiles in test directory: #{nearby.join(', ')}" : ""

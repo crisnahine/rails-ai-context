@@ -113,6 +113,8 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
           write("doc/api/openapi.yaml", "openapi: 3.0.0\n")
           write("app/api/v0/openapi.json", '{"openapi":"3.0.0", "paths": {}}')
           write("public/broken.json", '{"openapi": ')
+          write("docs/features.yml", "swagger:\n  enabled: true\n  ui_path: /docs\n")
+          write("docs/settings.json", '{"swagger": {"enabled": true}}')
         end
 
         after { dirs.each { |dir| FileUtils.rm_rf(dir) } }
@@ -141,9 +143,10 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
           write("swagger/v1/big.json", JSON.generate({ "openapi" => "3.0.0", "paths" => paths }))
           write("swagger/v1/big.yaml", "openapi: 3.0.0\npaths:\n" + paths.keys.map { |key| "  #{key}: {}\n" }.join)
           write("swagger/v1/nested_big.json", JSON.generate({ "x" => { "openapi" => "3.0.0" }, "info" => paths }))
+          write("swagger/v1/settings_big.json", JSON.generate({ "swagger" => { "enabled" => true }, "info" => paths }))
 
           expect(result[:openapi_spec]).to include("swagger/v1/big.json", "swagger/v1/big.yaml")
-          expect(result[:openapi_spec]).not_to include("swagger/v1/nested_big.json")
+          expect(result[:openapi_spec]).not_to include("swagger/v1/nested_big.json", "swagger/v1/settings_big.json")
         end
       end
     end

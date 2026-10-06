@@ -263,10 +263,13 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
           password_digest: <%= password_digest %>
       YAML
       write("test/fixtures/posts.yml", "one: { title: A, user: one }\n")
+      write("test/fixtures/admin/notes.yml", "<% 2.times do |i| %>\nnote_<%= i %>:\n  title: T<%= i %>\n<% end %>\n")
 
       text = full_text
 
-      expect(text).to include("- **users:**\n  - `one`: email_address: one@example.com, password_digest: erb_value")
+      expect(text).to include("- **users:**\n  - `one`: email_address: one@example.com, password_digest: <%= ... %>")
+      expect(text).to include("`note_<%= ... %>` _(label set by ERB)_: title: T<%= ... %>")
+      expect(text).not_to include("erb_value")
       expect(text).to include("- **posts:**\n  - `one`: title: A, user: one")
     end
 
@@ -836,6 +839,29 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
         expect(text).not_to include("no tests yet")
         expect(described_class.call(model: "Widget").content.first[:text])
           .to include("Not searched: the engine's suite at `../..` is not read, config/boot.rb points Bundler at ../../Gemfile")
+      end
+    end
+
+    it "prints a test file found in the engine's suite relative to the dummy app root" do
+      Dir.mktmpdir do |engine|
+        dummy = File.join(engine, "test", "dummy")
+        FileUtils.mkdir_p([ File.join(dummy, "config"), File.join(engine, "test", "models"), File.join(engine, ".git") ])
+        File.write(File.join(dummy, "config", "boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n))
+        File.write(File.join(engine, "shop.gemspec"), "")
+        File.write(File.join(engine, "Gemfile"), "gemspec\n")
+        File.write(File.join(engine, "Gemfile.lock"), "GEM\n  specs:\n    minitest (5.25.0)\n")
+        File.write(File.join(engine, "test", "test_helper.rb"), "")
+        File.write(File.join(engine, "test", "models", "widget_test.rb"), "class WidgetTest\n  test \"saves\" do\n  end\nend\n")
+        allow(RailsAiContext::PathResolver).to receive(:enclosing_engine_roots).and_return([])
+        app = RailsAiContext::StaticApp.new(dummy)
+        allow(described_class).to receive(:rails_app).and_return(app)
+        allow(described_class).to receive(:cached_context).and_return({ tests: RailsAiContext::Introspectors::TestIntrospector.new(app).call })
+
+        expect(described_class.call(model: "Widget").content.first[:text]).to start_with("# ../models/widget_test.rb (1 test)")
+        missing = described_class.call(model: "Gadget").content.first[:text]
+        expect(missing).to include("Searched: ../../spec/models/gadget_spec.rb, ../models/gadget_test.rb")
+        expect(missing).to include("Files in test directory: ../models/widget_test.rb")
+        expect(missing).not_to include(" test/models/")
       end
     end
   end

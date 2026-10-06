@@ -228,6 +228,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 | ProcLiteralListener | Proc literals: line, source, assigned constant |
 | QueueAssignmentListener | A queue a class body assigns outside any method: Resque's `@queue = :name`, Que's `self.queue = "name"`, or a `def self.queue` returning one, a literal as its value, anything else as source |
 | HttpClientCallListener | Calls on an HTTP client constant (`Faraday`, `Net::HTTP`, `HTTParty`, `RestClient`, `HTTP`, `Excon`, `Typhoeus`, `URI.open`) with a literal URL, bare, wrapped in `URI(...)`/`URI.parse(...)` or as `url:`, and the host `Net::HTTP.start`/`.new` takes. `rails_get_env` names external services from it |
+| ConstantReferenceListener | References to constants by last name, qualified or not (`ActiveSupport::MessageVerifier`), skipping one that only qualifies a nested constant (`MessageVerifier::InvalidSignature`) and mentions in comments or strings. Used by the ActiveSupport introspector for message verifier and encryptor usage |
 | MethodCallListener | Call sites by name or pattern anywhere in a file, inside a `def`, a lambda or a block included, with arguments, options, receiver, line and offset. Used by the Turbo introspector for broadcast calls, the ActiveSupport introspector for notification subscriptions, and others |
 
 `GenericMacroListener.new(*names, block_source: [:name])` adds `block`, the
@@ -281,6 +282,10 @@ same wherever it is asked. Those live as their own modules under
 | `ModuleAliases` | Which app file a bare JS import specifier names: tsconfig/jsconfig `compilerOptions.paths` followed through `extends` (relative files and installed packages), and a vite/webpack/rspack `resolve.alias` written as a literal object. The Stimulus scan uses it to tie a registration or a base class to the controller file it imports |
 | `HelperNames` | The helper methods a view can call: every method the app's helper modules define in every code root, and those of a module they `include`, found through the app's autoload roots (`lib` among them) or in its enclosing namespace's file (`CanonicalURL::Helpers` in `canonical_url.rb`). `rails_get_partial_interface` uses it so a helper call is not read as a local |
 | `Interaction` | Whether a class runs as an ActiveInteraction, following its superclass chain through the app's own sources, and the filters it takes - inherited ones first, one per name, each carrying the filters nested inside its block. See the **Interaction filter** entry in `CONTEXT.md` |
+| `RecurringSchedules` | The recurring tasks each scheduler reads from its own file: Solid Queue's `config/recurring.yml`, sidekiq-cron's `config/schedule.yml`, sidekiq-scheduler's section of `config/sidekiq.yml`, GoodJob's `config.good_job.cron` and whenever's `config/schedule.rb`. The job introspector hands it its own config walk, so a file it also reads for queue or mailer settings is walked once |
+| `AdminResources` | The models an admin gem exposes (ActiveAdmin, Trestle, Administrate, Avo, Madmin), from the folder each gem's generator writes to, with ActiveAdmin's `permit_params`. `rails_get_conventions` and `rails_analyze_feature` both ask it |
+| `SchemaDumpPath` | The primary database's dump file as `DatabaseTasks.schema_dump_path` names it: `database.yml`'s `schema_dump` in the configured `schema_format`, then each format's default file, and the secondary databases' dumps. Every schema reader, the doctor and the pending-migration check ask it |
+| `ApartmentConfig` | The models an Apartment initializer keeps in the shared schema (`excluded_models`), or the source of a list the file computes. The model introspector asks it to say which models get one table per tenant |
 
 ### Confidence tagging
 

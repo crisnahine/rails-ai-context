@@ -248,8 +248,7 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
-      # Each method's body is cut from its own walked def: looking it up by name
-      # found a same-named private twin or a delegate instead.
+      # The body comes from this def's own walked bounds, so a same-named private method or delegate is never shown.
       private_class_method def self.render_methods(lines, source, detail, title, methods)
         return if methods.empty?
 

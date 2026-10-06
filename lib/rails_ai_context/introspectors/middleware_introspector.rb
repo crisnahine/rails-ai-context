@@ -141,9 +141,14 @@ module RailsAiContext
       def self.rackup(root)
         path = File.join(root, "config.ru")
         # Most config.ru files only `run` the app, and loading the parser to learn that costs more than the read.
-        return [] unless File.file?(path) && SafeFile.read(path)&.match?(/\b(?:use|map)\b/)
+        source = SafeFile.read(path) if File.file?(path)
+        return [] unless source&.match?(/\b(?:use|map)\b/)
 
-        calls = SourceIntrospector.walk(path, { calls: -> { Listeners::ConditionalMacroListener.new(:use, :map, :run) } })[:calls]
+        # Prism recovers from a syntax error with nodes the file does not hold.
+        parsed = AstCache.parse_string(source)
+        return [] if parsed.errors.any?
+
+        calls = SourceIntrospector.walk_dispatch(parsed, { calls: -> { Listeners::ConditionalMacroListener.new(:use, :map, :run) } })[:calls]
         inside = calls.group_by { |call| call[:parent_offset] }
         rails = [ "Rails.application", AppKind.application_class(root) ].compact
         runs_app = ->(map) { Array(inside[map[:offset]]).any? { |c| c[:macro] == :run && rails.include?(c[:values].first.to_s.delete_prefix("::")) } }
