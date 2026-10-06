@@ -611,7 +611,7 @@ module RailsAiContext
       # below it is the thing this pairing exists to prevent.
       def detect_mounted_engines
         # The live table holds only what this environment drew; the source holds the condition it drew it under.
-        conditions = static_mounts.select { |m| m[:condition] }.to_h { |m| [ [ m[:engine], m[:path] ], m[:condition] ] }
+        source = static_mounts
         mounted_routes.map do |r|
           mounted = r.app.respond_to?(:app) ? r.app.app : r.app
           name = mounted.is_a?(Class) ? mounted.name : mounted.class.name
@@ -620,10 +620,25 @@ module RailsAiContext
           # named for what it is rather than dropped into a disagreement
           # between the two numbers.
           path = mount_path(r)
-          { engine: name || "(anonymous Rack app)", path: path, condition: conditions[[ name, path ]] }.compact
+          { engine: name || "(anonymous Rack app)", path: path, condition: source_mount(source, name, path)&.dig(:condition) }.compact
         rescue => e
           RailsAiContext.debug_fail(e, { engine: "(unreadable Rack app)", path: nil }, label: "detect_mounted_engines")
         end
+      end
+
+      # Source names an instance or a factory mount by what it wrote
+      # (`MetricsApp.new`) and a computed path not at all, so after the exact
+      # app and path, the one mount at that path, then the one of that app
+      # with no literal path. Two candidates (an if/else at one path) are a
+      # guess, so neither is taken.
+      def source_mount(source, name, path)
+        source.find { |m| m[:engine] == name && m[:path] == path } ||
+          sole(source.select { |m| m[:path] == path }) ||
+          sole(source.select { |m| m[:engine] == name && m[:path].nil? })
+      end
+
+      def sole(candidates)
+        candidates.first if candidates.one?
       end
 
       # Routable, controller-less, and not a redirect or a lambda: what is

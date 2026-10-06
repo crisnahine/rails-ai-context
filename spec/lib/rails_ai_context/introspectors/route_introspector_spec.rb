@@ -187,6 +187,79 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       end
     end
 
+    # Source names a mount by what it wrote (`MetricsApp.new`, a computed
+    # path) and the live table by the class and the drawn path, so an exact
+    # match missed both and booted printed the mount as unconditional.
+    describe "a conditional mount the live table names differently" do
+      def booted_mounts(routes_rb, &draw)
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "config"))
+          File.write(File.join(dir, "config", "routes.rb"), "Rails.application.routes.draw do\n#{routes_rb}end\n")
+          set = ActionDispatch::Routing::RouteSet.new
+          set.draw(&draw)
+          described_class.new(double("app", routes: set, routes_reloader: nil, root: Pathname(dir))).call[:mounted_engines]
+        end
+      end
+
+      before do
+        stub_const("MetricsInstanceApp", Class.new { def call(_env) = [ 200, {}, [ "ok" ] ] })
+        stub_const("FlagsUI", Module.new { def self.app(*) = Rack::Builder.new { run ->(_env) { [ 200, {}, [ "ok" ] ] } } })
+      end
+
+      it "takes the condition of the one mount at a computed path" do
+        mounts = booted_mounts(%(  mount MetricsApp, at: ENV.fetch("METRICS_PATH", "/metrics") if Rails.env.development?\n)) do
+          mount MetricsApp => "/metrics"
+        end
+
+        expect(mounts).to eq([ { engine: "MetricsApp", path: "/metrics", condition: "if Rails.env.development?" } ])
+      end
+
+      it "takes the condition of the one mount at that path for an instance" do
+        mounts = booted_mounts(%(  mount MetricsInstanceApp.new => "/m" if Rails.env.development?\n)) do
+          mount MetricsInstanceApp.new => "/m"
+        end
+
+        expect(mounts).to eq([ { engine: "MetricsInstanceApp", path: "/m", condition: "if Rails.env.development?" } ])
+      end
+
+      it "takes the condition of the one mount at that path for a factory call" do
+        mounts = booted_mounts(%(  mount FlagsUI.app(:flags) => "/flags" unless Rails.env.production?\n)) do
+          mount FlagsUI.app(:flags) => "/flags"
+        end
+
+        expect(mounts).to eq([ { engine: "Rack::Builder", path: "/flags", condition: "unless Rails.env.production?" } ])
+      end
+
+      it "attaches no condition when two mounts share the path" do
+        routes_rb = <<~RUBY
+          if ENV["LIVE"]
+            mount MetricsInstanceApp.new => "/live"
+          else
+            mount FlagsUI.app(:poll) => "/live"
+          end
+        RUBY
+        mounts = booted_mounts(routes_rb) { mount MetricsInstanceApp.new => "/live" }
+
+        expect(mounts).to eq([ { engine: "MetricsInstanceApp", path: "/live" } ])
+      end
+
+      it "keeps an exact match ahead of the path, conditional or not" do
+        routes_rb = <<~RUBY
+          mount MetricsApp => "/a" if Rails.env.development?
+          mount MetricsApp => "/a2", as: :metrics_two
+        RUBY
+        mounts = booted_mounts(routes_rb) do
+          mount MetricsApp => "/a"
+          mount MetricsApp => "/a2", as: :metrics_two
+        end
+
+        expect(mounts).to contain_exactly(
+          { engine: "MetricsApp", path: "/a", condition: "if Rails.env.development?" },
+          { engine: "MetricsApp", path: "/a2" }
+        )
+      end
+    end
+
     it "counts them as the mounts they are, and leaves the controller route alone" do
       result = described_class.new(app_double).call
 
