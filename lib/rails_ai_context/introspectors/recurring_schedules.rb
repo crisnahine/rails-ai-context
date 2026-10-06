@@ -62,18 +62,26 @@ module RailsAiContext
 
       SCHEDULER_KEYS = %i[cron every at in interval].freeze
 
-      GOOD_JOB_FILES = %w[config/application.rb config/environments/*.rb config/initializers/*.rb].freeze
+      # In the order Rails loads them; initializers at any depth, sorted by path.
+      GOOD_JOB_FILES = %w[config/application.rb config/environments/*.rb config/initializers/**/*.rb].freeze
 
       # `config.good_job.cron = {...}`, or entries merged into it (OpenProject does so in after_initialize).
       GOOD_JOB_CRON = [ %i[good_job cron], %i[good_job cron merge!], %i[good_job cron update] ].freeze
 
+      # `cron =` replaces the hash, dropping what earlier files set; an environment
+      # file's assignment drops only that file's earlier entries.
       def good_job(root, walks = {})
-        GOOD_JOB_FILES.flat_map { |pattern| Dir.glob(pattern, base: root.to_s).sort }.flat_map do |file|
-          next [] unless walks.key?(file) || read_file(root, file)&.include?("good_job")
+        GOOD_JOB_FILES.flat_map { |pattern| Dir.glob(pattern, base: root.to_s).sort }.each_with_object([]) do |file, tasks|
+          next unless walks.key?(file) || read_file(root, file)&.include?("good_job")
 
           env = File.basename(file, ".rb") if file.start_with?("config/environments/")
-          config_assignments(root, file, walks).select { |hit| GOOD_JOB_CRON.include?(hit[:path]) && hit[:value].is_a?(Hash) }.flat_map do |hit|
-            hit[:value].filter_map { |name, options| task(file, name, stringify(options), :cron, env: env) }
+          config_assignments(root, file, walks).each do |hit|
+            next unless GOOD_JOB_CRON.include?(hit[:path])
+
+            tasks.reject! { |entry| env.nil? || entry[:file] == file } if hit[:assignment] && !hit[:condition]
+            next unless hit[:value].is_a?(Hash)
+
+            tasks.concat(hit[:value].filter_map { |name, options| task(file, name, stringify(options), :cron, env: env) })
           end
         end
       end
