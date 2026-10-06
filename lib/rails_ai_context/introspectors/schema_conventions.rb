@@ -181,8 +181,12 @@ module RailsAiContext
       end
 
       # The running environment's adapter for one database, as database.yml and a merged URL name it.
+      # A database it does not configure (Rails 8's queue outside production) takes the adapter of the
+      # environment that does, else the running primary's.
       def database_adapter_for(root, db_name)
-        RailsAiContext::DatabaseYml.adapter(db_name, RailsAiContext::DatabaseYml.entry(root, db_name)).first
+        yml = RailsAiContext::DatabaseYml
+        entry = yml.entry(root, db_name) || yml.elsewhere(root, db_name)&.last
+        yml.adapter(db_name, entry).first || (yml.adapter("primary", yml.primary(root)).first unless entry)
       end
 
       # A dump of more than one schema qualifies every name (relation_name, 8.1);
