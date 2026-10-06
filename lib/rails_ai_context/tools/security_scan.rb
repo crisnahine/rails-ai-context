@@ -222,7 +222,8 @@ module RailsAiContext
       BACKTRACE_FRAME = /\A(?:from\s+)?\S+:\d+:in\s/
       ERROR_LOCATION = /\A\S+:\d+:in\s+[`'][^`']*[`']:\s+/
 
-      ABSOLUTE_PATH = %r{(?<![\w.:/~])/(?:[^\s'"`:,/]+/)+([^\s'"`:,/]+)}
+      # A folder may hold single spaces ("Macintosh HD"), but never ends on one, so prose between two paths stays.
+      ABSOLUTE_PATH = %r{(?<![\w.:/~])/(?:[^\s'"`:,/]+(?: [^\s'"`:,/]+)*/)+([^\s'"`:,/]+)}
 
       # The answer leaves the machine: a file in the app is named from its root, any other by its base name.
       private_class_method def self.portable_error(message)

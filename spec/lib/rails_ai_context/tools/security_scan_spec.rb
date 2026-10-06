@@ -549,6 +549,14 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
 
         expect(text).to include("cannot load such file -- ruby_parser.rb, see https://brakemanscanner.org/docs")
       end
+
+      it "names a file outside the app by its base name when a folder on its path has a space" do
+        allow(Brakeman).to receive(:run).and_raise(RuntimeError,
+          "No such file @ rb_sysopen - /home/John Doe/app/x.rb and /Volumes/Macintosh HD/Users/dev/.gem/y.rb")
+        text = described_class.call.content.first[:text]
+
+        expect(text).to eq("Brakeman scan failed: No such file @ rb_sysopen - x.rb and y.rb")
+      end
     end
   end
 end
