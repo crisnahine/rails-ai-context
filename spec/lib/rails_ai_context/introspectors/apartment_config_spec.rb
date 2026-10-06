@@ -25,6 +25,17 @@ RSpec.describe RailsAiContext::Introspectors::ApartmentConfig do
     expect(found).to eq(excluded_models: %w[Organization Billing::Plan], file: "config/initializers/apartment.rb")
   end
 
+  it "names the block's config by the parameter the call itself takes, not a commented example" do
+    found = read_with("config/initializers/apartment.rb" => <<~RUBY)
+      # Apartment.configure do |example|
+      Apartment.configure() do |c|
+        c.excluded_models = %w[Organization]
+      end
+    RUBY
+
+    expect(found).to eq(excluded_models: %w[Organization], file: "config/initializers/apartment.rb")
+  end
+
   it "keeps a computed list as written" do
     found = read_with("config/initializers/00_tenancy.rb" => "Apartment.configure do |config|\n  config.excluded_models = SHARED.map(&:name)\nend\n")
 

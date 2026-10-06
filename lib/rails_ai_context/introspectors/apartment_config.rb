@@ -13,11 +13,13 @@ module RailsAiContext
         PathResolver.initializer_paths(root).each do |path|
           source = SafeFile.read(path, max_size: RailsAiContext.configuration.max_file_size)
           next unless source&.include?("Apartment.configure")
+          tree = AstCache.parse_string(source)
           # A partial tree would read a cut-off list as no list.
-          next if AstCache.parse_string(source).errors.any?
+          next if tree.errors.any?
 
           file = path.delete_prefix("#{root}/")
-          listener = -> { Listeners::ConfigAssignmentListener.new(block_param(source)) }
+          name = block_param(tree.value)
+          listener = -> { Listeners::ConfigAssignmentListener.new(name) }
           # `+=`, `<<` or `concat` builds on a list the source does not show whole.
           hit = SourceIntrospector.walk_source(source, { config: listener })[:config]
                                   .reverse.find { |h| list_write?(h) }
@@ -31,8 +33,19 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, nil, label: "ApartmentConfig")
       end
 
-      def block_param(source)
-        source[/Apartment\.configure\s*(?:do|\{)\s*\|\s*([a-z_]\w*)\s*\|/, 1] || "config"
+      # The name the `Apartment.configure` block gives its config.
+      def block_param(root)
+        block = configure_call(root)&.block
+        params = block.parameters if block.is_a?(Prism::BlockNode)
+        param = params.parameters&.requireds&.first if params.is_a?(Prism::BlockParametersNode)
+        param.is_a?(Prism::RequiredParameterNode) ? param.name.to_s : "config"
+      end
+
+      def configure_call(node)
+        return node if node.is_a?(Prism::CallNode) && node.name == :configure && node.receiver&.slice&.delete_prefix("::") == "Apartment"
+
+        node.compact_child_nodes.each { |child| (found = configure_call(child)) and return found }
+        nil
       end
 
       # A block on a read (`.each { }`) leaves the list as it was.
