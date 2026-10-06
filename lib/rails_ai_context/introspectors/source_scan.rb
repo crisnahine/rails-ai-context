@@ -110,7 +110,7 @@ module RailsAiContext
         end.each(&block)
       end
 
-      CLASS_WITH_SUPERCLASS = /class[^\S\n]+([\w:]+)[^\S\n]*<[^\S\n]*(?:::)?([\w:]+)/
+      CLASS_WITH_SUPERCLASS = /class[^\S\n]+([\w:]+)[^\S\n]*<[^\S\n]*([\w:]+)/
       MODEL_BASES = %w[ActiveRecord::Base ApplicationRecord].freeze
 
       # A model can live in any autoload root; a class there is kept when its superclass is a model base,
@@ -145,6 +145,8 @@ module RailsAiContext
 
       # The names `base` can mean where `name` is declared in the file `path_name` names, outermost first.
       def lookup(path_name, name, base = name)
+        return [ base.delete_prefix("::") ] if base.start_with?("::")
+
         scopes = path_name.split("::")[0...-name.split("::").size]
         (0..scopes.size).map { |depth| [ *scopes.first(depth), base ].join("::") }
       end

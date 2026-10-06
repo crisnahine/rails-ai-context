@@ -158,6 +158,24 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
     end
   end
 
+  it "reads a superclass written from the root at the top level only" do
+    Dir.mktmpdir do |dir|
+      {
+        "app/models/report.rb" => "class Report < ApplicationRecord\nend\n",
+        "app/services/admin/report.rb" => "module Admin\n  class Report\n  end\nend\n",
+        "app/services/admin/summary.rb" => "module Admin\n  class Summary < ::Report\n  end\nend\n",
+        "app/services/admin/digest.rb" => "module Admin\n  class Digest < Report\n  end\nend\n"
+      }.each do |name, source|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+        File.write(File.join(dir, name), source)
+      end
+
+      expect(described_class.model_paths(dir).map(&:file)).to contain_exactly(
+        "app/models/report.rb", "app/services/admin/summary.rb"
+      )
+    end
+  end
+
   it "reads a superclass as the class its own namespace declares before an outer model of that name" do
     Dir.mktmpdir do |dir|
       {

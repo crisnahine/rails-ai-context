@@ -79,5 +79,19 @@ RSpec.describe RailsAiContext::Introspectors::Base do
 
       expect(listed).not_to include("ZzNs::ZzItem")
     end
+
+    it "reads a base written from the root at the top level only" do
+      File.write(domain.join("zz_ns", "zz_item.rb"), "module ZzNs\n  class ZzItem < ::ZzBase\n  end\nend\n")
+
+      expect(listed).to include("ZzNs::ZzItem")
+    end
+
+    it "does not read a base written from the root in the namespace" do
+      stub_const("ZzNs::ZzBase", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+      stub_const("ZzBase", Class.new)
+      File.write(domain.join("zz_ns", "zz_item.rb"), "module ZzNs\n  class ZzItem < ::ZzBase\n  end\nend\n")
+
+      expect(listed).not_to include("ZzNs::ZzItem")
+    end
   end
 end
