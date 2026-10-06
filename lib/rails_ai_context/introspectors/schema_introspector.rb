@@ -201,14 +201,14 @@ module RailsAiContext
         }
       end
 
+      TABLE_COLLATIONS = "SELECT table_name, table_collation FROM information_schema.tables WHERE table_schema = DATABASE()"
+
       # MySQL gives every text column the table's collation; the dump names only a different one.
       def table_collation(table)
         return unless connection.respond_to?(:mariadb?)
 
-        @table_collations ||= {}
-        return @table_collations[table] if @table_collations.key?(table)
-
-        @table_collations[table] = connection.select_all("SHOW TABLE STATUS LIKE #{connection.quote(table)}").first&.fetch("Collation", nil)
+        @table_collations ||= connection.select_rows(TABLE_COLLATIONS).to_h
+        @table_collations[table]
       end
 
       def extract_columns(table)

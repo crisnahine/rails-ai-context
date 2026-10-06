@@ -286,6 +286,19 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(introspector.send(:extract_columns, "pa_v_posts")).to eq([ { name: "body", type: "text", null: true, size: "medium" } ])
       end
 
+      # LIKE reads `_` as any character, so user_roles matched userXroles too.
+      it "takes a MySQL table's own collation, read once for every table" do
+        column = double(name: "name", type: :string, null: true, default: nil, limit: nil, precision: nil,
+                        scale: nil, comment: nil, collation: "utf8mb4_bin", sql_type: "varchar(255)", array?: false)
+        connection = double("mysql2", columns: [ column ], native_database_types: {}, mariadb?: false)
+        allow(connection).to receive(:select_rows).once
+          .and_return([ [ "userxroles", "utf8mb4_bin" ], [ "user_roles", "utf8mb4_0900_ai_ci" ] ])
+        allow(introspector).to receive(:connection).and_return(connection)
+
+        expect(introspector.send(:extract_columns, "user_roles").first).to include(collation: "utf8mb4_bin")
+        expect(introspector.send(:extract_columns, "userxroles").first).not_to have_key(:collation)
+      end
+
       it "names a MySQL enum, set or timestamp column by the type schema.rb writes" do
         columns = { "kind" => [ :string, "enum('a','b')" ], "flags" => [ :string, "set('x','y')" ], "seen_at" => [ :datetime, "timestamp" ] }.map do |name, (type, sql_type)|
           double(name: name, type: type, null: true, default: nil, limit: nil, precision: nil,
