@@ -169,6 +169,8 @@ module RailsAiContext
             primary_key: SchemaConventions.primary_key_value(options[:primary_key]),
             on_delete:   options[:on_delete],
             on_update:   options[:on_update],
+            deferrable:  options[:deferrable],
+            validate:    options[:validate],
             location:    node.location.start_line
           }.compact
         end

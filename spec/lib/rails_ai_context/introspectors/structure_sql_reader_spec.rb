@@ -681,6 +681,21 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
       expect(described_class.parse(sql)[:tables]["orders"][:foreign_keys].first).to include(on_delete: "cascade", on_update: "restrict")
     end
 
+    it "reads pg_dump's DEFERRABLE and NOT VALID on a foreign key" do
+      sql = <<~SQL
+        CREATE TABLE public.orders (id bigint NOT NULL, account_id bigint, user_id bigint);
+        ALTER TABLE ONLY public.orders
+            ADD CONSTRAINT fk_rails_1 FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED NOT VALID;
+        ALTER TABLE ONLY public.orders
+            ADD CONSTRAINT fk_rails_2 FOREIGN KEY (user_id) REFERENCES public.users(id) DEFERRABLE;
+      SQL
+
+      deferred, immediate = described_class.parse(sql)[:tables]["orders"][:foreign_keys]
+      expect(deferred).to include(on_delete: "nullify", deferrable: "deferred", validate: false)
+      expect(immediate).to include(deferrable: "immediate")
+      expect(immediate).not_to have_key(:validate)
+    end
+
     it "reads them from mysqldump, where varchar(255) and datetime(6) are the defaults" do
       sql = <<~SQL
         CREATE TABLE `orders` (

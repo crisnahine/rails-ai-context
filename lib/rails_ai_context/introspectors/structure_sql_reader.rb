@@ -53,8 +53,7 @@ module RailsAiContext
 
         content.scan(/ALTER TABLE\s+(?:ONLY\s+)?#{QUALIFIED_NAME}\s+ADD CONSTRAINT\s+("[^"]+"|\w+)\s+UNIQUE\s*(?:NULLS\s+(?:NOT\s+)?DISTINCT\s*)?\(([^)]*)\)([^;]*)/m) do |table, name, cols, tail|
           table = all.dig(qualified_name(table), :table) or next
-          deferrable = (tail.match?(/\bINITIALLY\s+DEFERRED\b/i) ? "deferred" : "immediate") if tail.match?(/(?<!NOT )\bDEFERRABLE\b/i)
-          (table[:unique_constraints] ||= []) << SchemaConventions.unique_constraint_entry(name.delete('"'), cols.scan(/\w+/), deferrable)
+          (table[:unique_constraints] ||= []) << SchemaConventions.unique_constraint_entry(name.delete('"'), cols.scan(/\w+/), deferrable_mode(tail))
         end
 
         content.scan(/ALTER TABLE\s+(?:ONLY\s+)?#{QUALIFIED_NAME}\s+ADD CONSTRAINT[^;]*?PRIMARY KEY\s*\(([^)]*)\)/m) do |table, cols|
@@ -129,9 +128,17 @@ module RailsAiContext
       FK_ACTIONS = { "CASCADE" => "cascade", "SET NULL" => "nullify", "RESTRICT" => "restrict" }.freeze
 
       def foreign_key_actions(text)
-        { on_delete: :DELETE, on_update: :UPDATE }.to_h do |key, word|
+        actions = { on_delete: :DELETE, on_update: :UPDATE }.to_h do |key, word|
           [ key, FK_ACTIONS[text.to_s[/\bON\s+#{word}\s+(CASCADE|SET\s+NULL|RESTRICT)\b/i, 1]&.upcase&.squeeze(" ")] ]
-        end.compact
+        end
+        actions.merge(deferrable: deferrable_mode(text), validate: (false if text.to_s.match?(/\bNOT\s+VALID\b/i))).compact
+      end
+
+      # How Rails names a DEFERRABLE clause; nil for NOT DEFERRABLE or none.
+      def deferrable_mode(text)
+        return nil unless text.to_s.match?(/(?<!NOT )\bDEFERRABLE\b/i)
+
+        text.to_s.match?(/\bINITIALLY\s+DEFERRED\b/i) ? "deferred" : "immediate"
       end
 
       # Where a statement with no semicolon ends: the next one starting a line.

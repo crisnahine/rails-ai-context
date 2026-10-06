@@ -33,15 +33,20 @@ module RailsAiContext
 
       # Rails omits column:/primary_key: only where the convention holds, so
       # the fallback is what was declared rather than a guess. PostgreSQL's
-      # convention drops the schema of a qualified target.
-      def foreign_key_entry(from, to, column, primary_key, on_delete: nil, on_update: nil)
+      # convention drops the schema of a qualified target. validate: true and
+      # deferrable: false are the defaults the dump leaves out.
+      def foreign_key_entry(from, to, column, primary_key, on_delete: nil, on_update: nil, deferrable: nil, validate: nil)
+        known = ->(value) { value unless value == RailsAiContext::Confidence::INFERRED }
         {
           from_table: from, to_table: to,
           column: primary_key_value(column) || "#{to.to_s.split('.').last.to_s.singularize}_id",
           primary_key: primary_key_value(primary_key) || "id",
-          on_delete: on_delete&.to_s, on_update: on_update&.to_s
+          on_delete: known.(on_delete)&.to_s, on_update: known.(on_update)&.to_s,
+          deferrable: (known.(deferrable)&.to_s if deferrable), validate: (false if validate == false)
         }.compact
       end
+
+      FOREIGN_KEY_OPTIONS = %i[on_delete on_update deferrable validate].freeze
 
       # An index's options past name, columns, unique and where, as schema.rb
       # writes them; btree is every adapter's default, so the dump leaves it out.

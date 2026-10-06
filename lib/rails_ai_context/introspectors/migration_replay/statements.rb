@@ -51,7 +51,8 @@ module RailsAiContext
             apply_reference(tables, table, entry[:ref], entry[:options], pk_type, version: entry[:migration_version])
           when :remove_foreign_key then remove_foreign_key_from(tables[table], entry[:to_table], options)
           when :add_foreign_key
-            fk = SchemaConventions.foreign_key_entry(table, entry[:to_table], options[:column], options[:primary_key])
+            fk = SchemaConventions.foreign_key_entry(table, entry[:to_table], options[:column], options[:primary_key],
+                                                     **options.slice(*SchemaConventions::FOREIGN_KEY_OPTIONS))
             tables[table][:foreign_keys] << fk if tables[table]
           when :add_check_constraint then add_check_constraint(tables[table], entry[:expression], options)
           when :remove_check_constraint then remove_check_constraint(tables[table], entry[:expression], options)
@@ -338,7 +339,8 @@ module RailsAiContext
           return if to == RailsAiContext::Confidence::INFERRED
 
           (table_data[:foreign_keys] ||= []) <<
-            SchemaConventions.foreign_key_entry(table, to.to_s, SchemaConventions.reference_column_name(name), fk[:primary_key])
+            SchemaConventions.foreign_key_entry(table, to.to_s, SchemaConventions.reference_column_name(name), fk[:primary_key],
+                                                **fk.slice(*SchemaConventions::FOREIGN_KEY_OPTIONS))
         end
 
         def apply_schema_index(entry, current_table, tables)

@@ -2019,6 +2019,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
             remove_check_constraint :boxes, name: "w_small"
             remove_check_constraint :boxes, "h > 0"
             create_table :tokens, id: { type: :string, limit: 36 }
+            add_foreign_key :boxes, :tokens, column: :token_id, on_delete: :cascade, deferrable: :immediate, validate: false
             reversible do |dir|
               dir.up do
                 execute <<~SQL
@@ -2044,6 +2045,12 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(tables["boxes"][:check_constraints]).to eq([
         { name: "w_positive", expression: "w > 0" },
         { expression: "h < 100" }
+      ])
+    end
+
+    it "keeps a foreign key's actions, deferrable mode and validate: false" do
+      expect(tables["boxes"][:foreign_keys]).to eq([
+        { from_table: "boxes", to_table: "tokens", column: "token_id", primary_key: "id", on_delete: "cascade", deferrable: "immediate", validate: false }
       ])
     end
 

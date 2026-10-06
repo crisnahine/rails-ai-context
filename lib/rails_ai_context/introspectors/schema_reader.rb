@@ -241,7 +241,7 @@ module RailsAiContext
           target = schema[:tables][event[:table]] || schema[:views][event[:table]]
           (target[:indexes] ||= []) << index_entry(event) if target
         when :foreign_key
-          schema[:foreign_keys] << event.slice(:from, :to, :column, :primary_key, :on_delete, :on_update)
+          schema[:foreign_keys] << event.slice(:from, :to, :column, :primary_key, *SchemaConventions::FOREIGN_KEY_OPTIONS)
         when :unique_constraint
           table = schema[:tables][current] if current
           (table[:unique_constraints] ||= []) << event.slice(:columns, :options) if table

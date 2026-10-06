@@ -269,7 +269,8 @@ module RailsAiContext
       def extract_foreign_keys(table)
         # PostgreSQL clones a key that references a partitioned table once per partition.
         connection.foreign_keys(table).reject { |fk| @partitions.to_a.include?(fk.to_table) }.map do |fk|
-          SchemaConventions.foreign_key_entry(fk.from_table, fk.to_table, fk.column, fk.primary_key, on_delete: fk.on_delete, on_update: fk.on_update)
+          SchemaConventions.foreign_key_entry(fk.from_table, fk.to_table, fk.column, fk.primary_key, on_delete: fk.on_delete, on_update: fk.on_update,
+                                                                                                    deferrable: fk.deferrable, validate: fk.validate?)
         end
       rescue => e
         # Some adapters don't support foreign_keys.
@@ -578,7 +579,7 @@ module RailsAiContext
 
         schema.foreign_keys.each do |fk|
           tables[fk[:from]]&.dig(:foreign_keys)&.push(
-            SchemaConventions.foreign_key_entry(fk[:from], fk[:to], fk[:column], fk[:primary_key], on_delete: fk[:on_delete], on_update: fk[:on_update])
+            SchemaConventions.foreign_key_entry(fk[:from], fk[:to], fk[:column], fk[:primary_key], **fk.slice(*SchemaConventions::FOREIGN_KEY_OPTIONS))
           )
         end
 

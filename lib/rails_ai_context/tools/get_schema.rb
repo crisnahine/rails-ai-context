@@ -577,7 +577,7 @@ module RailsAiContext
         if data[:foreign_keys]&.any?
           lines << "" << "### Foreign keys"
           data[:foreign_keys].each do |fk|
-            actions = fk.slice(:on_delete, :on_update).map { |key, value| "#{key}: #{value}" }
+            actions = fk.slice(:on_delete, :on_update, :deferrable, :validate).map { |key, value| "#{key}: #{value}" }
             lines << "- `#{RailsAiContext::Introspectors::SchemaConventions.key_text(fk[:column])}` → " \
                      "`#{fk[:to_table]}.#{RailsAiContext::Introspectors::SchemaConventions.key_text(fk[:primary_key])}`" \
                      "#{" (#{actions.join(', ')})" if actions.any?}"

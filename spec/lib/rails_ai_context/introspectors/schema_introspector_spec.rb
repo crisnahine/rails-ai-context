@@ -862,7 +862,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         allow(RailsAiContext::Introspectors::PgPartitions).to receive(:names).and_return([ "pa_p_events_2026" ])
         allow(connection).to receive(:foreign_keys).and_call_original
         allow(connection).to receive(:foreign_keys).with("pa_p_refs").and_return(
-          %w[pa_p_events pa_p_events_2026].map { |to| double(from_table: "pa_p_refs", to_table: to, column: "event_id", primary_key: "id", on_delete: nil, on_update: nil) }
+          %w[pa_p_events pa_p_events_2026].map { |to| double(from_table: "pa_p_refs", to_table: to, column: "event_id", primary_key: "id", on_delete: nil, on_update: nil, deferrable: nil, validate?: true) }
         )
 
         keys = introspector.call[:tables]["pa_p_refs"][:foreign_keys]
@@ -1439,7 +1439,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
             t.index ["data"], name: "index_users_on_data", using: :gin
             t.index ["account_id"], name: "idx_acct", include: ["data"], order: { account_id: :desc }
           end
-          add_foreign_key "users", "accounts", on_delete: :cascade
+          add_foreign_key "users", "accounts", on_delete: :cascade, deferrable: :deferred, validate: false
         end
       RUBY
     end
@@ -1467,9 +1467,9 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       expect(indexes["idx_acct"]).to include(include: [ "data" ], order: { "account_id" => "desc" })
     end
 
-    it "keeps a foreign key's on_delete action" do
+    it "keeps a foreign key's on_delete action, deferrable mode and validate: false" do
       expect(result[:tables]["users"][:foreign_keys]).to eq([
-        { from_table: "users", to_table: "accounts", column: "account_id", primary_key: "id", on_delete: "cascade" }
+        { from_table: "users", to_table: "accounts", column: "account_id", primary_key: "id", on_delete: "cascade", deferrable: "deferred", validate: false }
       ])
     end
 
