@@ -332,7 +332,10 @@ module RailsAiContext
 
       # The config gem merges config/settings.yml, then config/settings/<env>.yml
       # and config/environments/<env>.yml over it; *.local.yml is on sensitive_patterns.
+      # Without the gem a config/settings.yml is the app's own file and no Settings constant exists.
       private_class_method def self.scan_settings(root)
+        return [] unless RailsAiContext::GemLock.for(root).present?("config")
+
         files = [ "config/settings.yml" ] +
           %w[settings environments].flat_map { |dir| Dir.glob(File.join(root, "config", dir, "*.yml")).sort.map { |path| path.delete_prefix("#{root}/") } }
         files.filter_map do |file|

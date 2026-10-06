@@ -996,6 +996,7 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     end
 
     it "lists the setting keys each file gives and each config class's attributes with their env names, never a value" do
+      write("Gemfile.lock", "GEM\n  remote: https://rubygems.org/\n  specs:\n    config (5.5.1)\n\nDEPENDENCIES\n  config\n")
       write("config/settings.yml", "payments:\n  provider: stripe\n  timeout: 30\n")
       write("config/settings/production.yml", "payments:\n  timeout: 10\n")
       write("config/settings.local.yml", "payments:\n  secret: shh\n")
@@ -1022,6 +1023,15 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
         expect(text).to include("- `PaymentConfig` (`config/configs/payment_config.rb`): `api_key` (`PAYMENT_API_KEY`, required), `timeout` (`PAYMENT_TIMEOUT`)")
         expect(text).to include("- `GeoConfig` (`app/configs/geo_config.rb`): `token` (`MAPS_TOKEN`)")
         expect(text).not_to include("stripe")
+      end
+    end
+
+    it "lists no settings when the bundle has no config gem, since no Settings constant exists" do
+      write("Gemfile.lock", "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (8.1.0)\n\nDEPENDENCIES\n  rails\n")
+      write("config/settings.yml", "payments:\n  provider: stripe\n")
+
+      %w[standard full].each do |detail|
+        expect(described_class.call(detail: detail).content.first[:text]).not_to include("Settings")
       end
     end
 
