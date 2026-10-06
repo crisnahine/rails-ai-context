@@ -15,6 +15,28 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
       RUBY
     end
 
+    # excluded_concerns hides ActiveStorage::SetBlob from the walk, but its set_blob filter still runs.
+    it "lists a framework or gem module the class includes and no app file declares as unread" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        concern(dir, "Owned", "included do\n    before_action :check_owner\n  end")
+        source = <<~RUBY
+          class BlobsController < ApplicationController
+            include ActiveStorage::SetBlob
+            include ActionController::MimeResponds
+            include Owned
+            include ERB::Util
+            extend ActiveSupport::Concern
+            before_action :bb
+          end
+        RUBY
+
+        _, unread = described_class.with_concerns(source, root: dir, within: "BlobsController")
+
+        expect(unread).to eq(%w[ActiveStorage::SetBlob ActionController::MimeResponds])
+      end
+    end
+
     # Ruby adds a module to the ancestors once, where it is first included,
     # so a concern reached through two includes runs its filters once.
     it "adds a concern reached through two includes once, at its first include" do

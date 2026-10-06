@@ -134,9 +134,21 @@ module RailsAiContext
         filters = entries.flat_map do |entry|
           record(entry, root).map { |filter| entry[:from_concern] ? filter.merge(from_concern: entry[:from_concern]) : filter }
         end
-        [ filters, unread ]
+        [ filters, unread | outside_modules(mixins, root, within) ]
       rescue => e
         RailsAiContext.debug_fail(e, [ [], [] ], label: "controller filter read with concerns")
+      end
+
+      # The walk skips a framework module and one excluded_concerns names, but a filter
+      # one adds (ActiveStorage::SetBlob's set_blob) still runs.
+      def outside_modules(mixins, root, within)
+        mixins.filter_map do |mixin|
+          name = mixin[:name].to_s
+          next unless mixin[:ancestor] && !mixin[:inline]
+          next if ConcernMembership.payload?(name) || ConcernMembership::STDLIB.any? { |lib| name == lib || name.start_with?("#{lib}::") }
+
+          name unless ConcernPaths.module_source(root.to_s, name, prefer: "controller", within: within)
+        end
       end
 
       def walk(source)
@@ -431,7 +443,7 @@ module RailsAiContext
         statements.body.first
       end
 
-      private_class_method :walk, :class_level, :singleton_expansions, :declares_filters?, :base_expansions, :each_base,
+      private_class_method :walk, :outside_modules, :class_level, :singleton_expansions, :declares_filters?, :base_expansions, :each_base,
                            :class_method_defs,
                            :superclass_of, :base_source, :constant_source, :with_file, :body_call?, :record, :bundled?, :positional_names, :constraints, :condition_text, :normalize, :action_condition, :lambda_body
     end
