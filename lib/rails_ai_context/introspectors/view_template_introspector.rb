@@ -363,9 +363,9 @@ module RailsAiContext
       # A partial or template name: a path, never text with spaces or quotes in it.
       PARTIAL_NAME = %r{\A[\w./-]+\z}
       RENDER_NAMED = /(?:\b(?:partial|template)\s*:|:(?:partial|template)\s*=>)\s*["']([^"']+)["']/
-      # `render @posts`, `render(post)`, `render @posts, cached: true`: a bare record or collection,
-      # matched against "render <args>". In `render @post.comments` the association names the records.
-      IMPLICIT_RENDER = /\Arender\s*\(?\s*@?(?:[a-z_]\w*\.)*([a-z_]\w*)\s*(?:[,)]|\s(?:if|unless)\b|-?\s*\z)/
+      # `render @posts`, `render(post)`, `render @posts, cached: true`: a bare record or collection, or a
+      # chain on one (`@post.comments.recent`), matched against "render <args>"; RenderedRecord reads the chain.
+      IMPLICIT_RENDER = /\Arender\s*\(?\s*@?((?:[a-z_]\w*\.)*[a-z_]\w*)\s*(?:[,)]|\s(?:if|unless)\b|-?\s*\z)/
 
       def extract_partial_refs(content)
         refs = []
@@ -375,8 +375,9 @@ module RailsAiContext
           named = [ args[RENDER_POSITIONAL, 2], *top_level(args).scan(RENDER_NAMED).flatten ].compact
           # An interpolated name is decided at runtime, not a partial on disk.
           refs.concat(named.select { |name| name.match?(PARTIAL_NAME) })
-          record = self.class.render_line(args)[IMPLICIT_RENDER, 1] if named.empty?
-          refs << record if record && !RENDER_KEYWORD_ARGS.include?(record)
+          chain = self.class.render_line(args)[IMPLICIT_RENDER, 1] if named.empty?
+          record, = chain && !RENDER_KEYWORD_ARGS.include?(chain) && RenderedRecord.resolve(chain, root, @rendered_models ||= {})
+          refs << record if record
         end
         # Phlex: render ComponentName.new(...) or render(ComponentName.new(...))
         content.scan(/render[\s(]+([A-Z]\w+(?:::\w+)*)\.new/).each { |m| refs << m[0] }

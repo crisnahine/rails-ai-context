@@ -97,6 +97,7 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
         ENV.delete("RAILS_ENV")
         ENV["RACK_ENV"] = "production"
         expect(rendered_from("admin/posts/post")).to be_nil
+        expect(rendered_from("posts/post")).to include("app/views/admin/posts/index.html.erb:1")
       ensure
         ENV.delete("RACK_ENV")
         ENV.update(saved)
@@ -112,12 +113,27 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
     end
 
     it "credits an association collection to the partial of the records it holds" do
+      File.write(File.join(@root, "app/models/post.rb"), "class Post < ApplicationRecord\n  has_many :comments\nend\n")
       FileUtils.mkdir_p(File.join(@root, "app/views/admin/comments"))
       File.write(File.join(@root, "app/views/admin/posts/show.html.erb"), "<%= render @post.comments %>\n")
       File.write(File.join(@root, "app/views/admin/comments/_comment.html.erb"), "<%= comment.body %>\n")
 
       expect(rendered_from("admin/comments/comment")).to eq("## Rendered From (1)\n- `app/views/admin/posts/show.html.erb:1`")
       expect(rendered_from("admin/posts/post")).to eq("## Rendered From (1)\n- `app/views/admin/posts/index.html.erb:1`")
+    end
+
+    it "reads an association's class_name, and keeps the records a trailing call was made on" do
+      File.write(File.join(@root, "app/models/post.rb"),
+                 "class Post < ApplicationRecord\n  has_many :comments\n  has_many :replies, class_name: \"Comment\"\nend\n")
+      FileUtils.mkdir_p(File.join(@root, "app/views/pages"))
+      FileUtils.mkdir_p(File.join(@root, "app/views/comments"))
+      File.write(File.join(@root, "app/views/comments/_comment.html.erb"), "<%= comment.body %>\n")
+      File.write(File.join(@root, "app/views/pages/home.html.erb"),
+                 "<%= render @posts.first %>\n<%= render @post.comments.reverse %>\n<%= render @post.replies %>\n<%= render @post.firsts %>\n")
+
+      expect(rendered_from("comments/comment")).to eq("## Rendered From (2)\n- `app/views/pages/home.html.erb:2`\n- `app/views/pages/home.html.erb:3`")
+      expect(rendered_from("posts/post")).to include("app/views/pages/home.html.erb:1")
+      expect(rendered_from("posts/post")).not_to include("home.html.erb:4")
     end
 
     it "counts a partial under a view root declared inside app/views once" do
