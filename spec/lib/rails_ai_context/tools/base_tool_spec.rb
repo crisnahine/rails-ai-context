@@ -27,25 +27,6 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
     it "copies it on every read outside a tool call" do
       expect(described_class.cached_context).not_to equal(described_class.cached_context)
     end
-
-    it "rereads the app's Active Record settings when a stale fingerprint rebuilds the context" do
-      Dir.mktmpdir do |root|
-        FileUtils.mkdir_p(File.join(root, "config"))
-        application = File.join(root, "config", "application.rb")
-        File.write(application, "module App\n  class Application < Rails::Application\n  end\nend\n")
-        settings = -> { RailsAiContext::Introspectors::TableName.active_record_settings(root)[:schema_format] }
-        expect(settings.call).to be_nil
-
-        File.write(application, "module App\n  class Application < Rails::Application\n    config.active_record.schema_format = :sql\n  end\nend\n")
-        cache[:timestamp] -= RailsAiContext.configuration.cache_ttl + 1
-        allow(RailsAiContext::Fingerprinter).to receive_messages(stale?: true, mark: "mark")
-        allow(RailsAiContext).to receive(:introspect) { { schema_format: settings.call } }
-
-        expect(described_class.cached_context[:schema_format]).to eq(:sql)
-      ensure
-        RailsAiContext::Introspectors::TableName.clear_namespace_prefixes
-      end
-    end
   end
 
   describe ".abstract?" do

@@ -17,7 +17,14 @@ module RailsAiContext
     #
     # @return [Hash] complete application context
     def call
+      clear_config_caches unless RunCache.active?
       RunCache.around { introspect_all }
+    end
+
+    # Process-wide, so a long-running watcher or server would otherwise keep the config the first build read.
+    private def clear_config_caches
+      Introspectors::ActiveRecordSettings.clear
+      Introspectors::TableName.clear_namespace_prefixes
     end
 
     private def introspect_all

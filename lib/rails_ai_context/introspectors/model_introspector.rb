@@ -371,7 +371,7 @@ module RailsAiContext
         resolved = parent && !seen.include?(class_name) && resolve_superclass(parent, class_name, candidates)
         return pluralize_tables?(resolved, candidates, seen + [ class_name ]) if resolved && candidates.key?(resolved)
 
-        TableName.active_record_settings(app.root)[:pluralize_table_names] != false
+        ActiveRecordSettings.for(app.root)[:pluralize_table_names] != false
       end
 
       # compute_table_name (7.0 and 8.1): a class nested in a concrete model
@@ -465,7 +465,7 @@ module RailsAiContext
 
           scope.pop
         end
-        candidates.dig(class_name, key) || TableName.active_record_settings(app.root)[key] || ""
+        candidates.dig(class_name, key) || ActiveRecordSettings.for(app.root)[key] || ""
       end
 
       def isolated_prefixes

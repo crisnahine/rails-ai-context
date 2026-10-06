@@ -54,7 +54,7 @@ module RailsAiContext
         declared = config["schema_format"].to_s
         return declared.to_sym if FILE_NAMES.key?(declared.to_sym) && reads_database_schema_format?(root)
 
-        TableName.active_record_settings(root)[:schema_format] || :ruby
+        ActiveRecordSettings.for(root)[:schema_format] || :ruby
       end
 
       # An app whose lockfile does not say its Active Record is taken to read it.
