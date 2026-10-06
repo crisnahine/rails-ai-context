@@ -36,7 +36,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::QueueAssignmentListener
     RUBY
 
     expect(results.map { |r| [ r[:form], r[:queue], r[:source] ] })
-      .to eq([ [ :self, "exports", ":exports" ], [ :self, nil, "ENV[\"QUEUE\"]" ] ])
+      .to eq([ [ :method, "exports", ":exports" ], [ :method, nil, "ENV[\"QUEUE\"]" ] ])
   end
 
   it "reads nothing from an empty or broken source" do

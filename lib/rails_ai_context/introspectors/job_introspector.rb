@@ -222,10 +222,11 @@ module RailsAiContext
         source.match?(PROC_LITERAL) ? labelled(PROC_QUEUE, source) : "`#{source}` (computed)"
       end
 
-      # Resque reads @queue off the class itself, so a subclass does not inherit it;
-      # Que resolves self.queue up the superclass chain.
+      # Resque reads @queue off the class itself, so a subclass does not inherit it, and
+      # asks `def self.queue` only when @queue is unset; Que resolves self.queue up the superclass chain.
       def assigned_queue(ast, own)
-        hit = Array(ast[:queue_assignments]).reverse.find { |a| own || a[:form] == :self } or return nil
+        hits = Array(ast[:queue_assignments]).reverse
+        hit = (own && hits.find { |a| a[:form] == :ivar }) || hits.find { |a| a[:form] != :ivar } or return nil
         hit[:queue] || "`#{hit[:source]}` (computed)"
       end
 

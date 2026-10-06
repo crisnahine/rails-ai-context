@@ -18,7 +18,7 @@ module RailsAiContext
           if @def_depth.zero? && node.name == :queue && node.receiver.is_a?(Prism::SelfNode) && node.parameters.nil?
             body = node.body
             body = body.body.first if body.is_a?(Prism::StatementsNode) && body.body.one?
-            record(node, body, :self) if body && !body.is_a?(Prism::StatementsNode)
+            record(node, body, :method) if body && !body.is_a?(Prism::StatementsNode)
           end
           @def_depth += 1
         end
