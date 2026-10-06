@@ -1800,6 +1800,18 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(names_reported_for(base, child)).to eq(%w[ImportUsersJob])
     end
 
+    # Only an Active Job record is checked against the queues a worker polls.
+    it "marks a reflected job and a reflected base as Active Job" do
+      base = job("ImportJobBase", defined_in: app_job_file, subclasses: [ "ImportUsersJob" ])
+      child = job("ImportUsersJob", defined_in: app_job_file)
+      allow(ActiveJob::Base).to receive(:descendants).and_return([ base, child ])
+
+      result = described_class.new(Rails.application).call
+
+      expect(result[:jobs].find { |j| j[:name] == "ImportUsersJob" }).to include(active_job: true)
+      expect(result[:job_bases].find { |b| b[:name] == "ImportJobBase" }).to include(active_job: true)
+    end
+
     it "keeps a job named like a base that nothing inherits from" do
       expect(names_reported_for(job("RebuildBaseJob", defined_in: app_job_file)))
         .to eq(%w[RebuildBaseJob])
