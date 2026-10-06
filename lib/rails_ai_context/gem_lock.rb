@@ -323,12 +323,14 @@ module RailsAiContext
     private_class_method :mise_ruby
 
     # "3.4.9" and "ruby-3.4.9" are CRuby; "jruby-9.4.8.0" names an engine
-    # version, not the Ruby version that engine implements.
+    # version, not the Ruby version that engine implements, and a bare "jruby" its latest.
     def version_string(declared)
       return nil if declared.nil?
 
       if (match = declared.match(ENGINE_PREFIXED)) && match[1] != "ruby"
         [ nil, engine_name(match[1], match[2]) ]
+      elsif ENGINE_NAMES.key?(declared)
+        [ nil, engine_name(declared, nil) ]
       else
         version = declared.sub(/\Aruby-/, "")
         [ version, nil ] if version.match?(PLAIN_VERSION)
