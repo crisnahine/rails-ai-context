@@ -940,6 +940,39 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         FileUtils.rm_rf(db_dir)
       end
 
+      # The connection lists a table the dumper skipped, so the declared side counts it too.
+      it "counts a table schema.rb could not dump as declared" do
+        allow(introspector).to receive(:extract_tables).and_return(
+          "users" => { columns: [], indexes: [], foreign_keys: [] }, "legacy" => { columns: [], indexes: [], foreign_keys: [] }
+        )
+        db_dir = File.join(fixture_path, "db")
+        FileUtils.mkdir_p(db_dir)
+        File.write(File.join(db_dir, "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.0].define(version: 2026_09_20_000000) do
+            create_table "users", force: :cascade do |t|
+              t.string "email"
+            end
+
+            create_table "posts", force: :cascade do |t|
+              t.text "body"
+            end
+
+          # Could not dump table "legacy" because of following StandardError
+          #   Unknown type 'geometry' for column 'shape'
+
+          end
+        RUBY
+
+        result = introspector.call
+        allow(RailsAiContext::Tools::GetSchema).to receive(:cached_context).and_return({ schema: result, models: {} })
+        text = RailsAiContext::Tools::GetSchema.call(detail: "summary").content.first[:text]
+
+        expect(result[:declared_tables]).to contain_exactly("users", "posts", "legacy")
+        expect(text).to include("declares 3 tables; the connected database has 2. Missing: posts")
+      ensure
+        FileUtils.rm_rf(db_dir)
+      end
+
       it "carries the connection's pending migrations, which name what adds the table" do
         pending = [ { version: "20260921000000", name: "CreateOrderComments" } ]
         allow(RailsAiContext::PendingMigrations).to receive(:live)

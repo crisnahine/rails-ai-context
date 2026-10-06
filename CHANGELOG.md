@@ -239,7 +239,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ends on the line before the next one starts, so a 3-line model reads
   `class definition(1-1) → associations(2-3)` where 5.31.0 printed `(1-2)`.
 - **The schema payload's `declared_tables` includes db/schema.rb's
-  `create_virtual_table` names.** The booted `schema` line that compares
+  `create_virtual_table` names and the tables it records as "Could not dump
+  table".** The booted `schema` line that compares
   declared and connected tables counts a virtual table as a table and a view
   as neither, as the header above it does, so the two numbers match.
 
