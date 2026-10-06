@@ -45,7 +45,7 @@ module RailsAiContext
       end
 
       # A literal string is the layout, a literal symbol the method that picks it; `nil`
-      # leaves the class to the lookup by name, as if no call were made.
+      # hands the class back to the lookup by name, starting from its own path.
       def layout_of(call)
         value = Array(call[:values]).first
         found = if Array(call[:args]).any?
@@ -56,6 +56,8 @@ module RailsAiContext
           { block: call[:proc_lines].first }
         elsif !value.nil?
           { expression: value.to_s }
+        elsif Array(call[:values]) == [ nil ]
+          { by_name: true }
         end
         return nil unless found
 
@@ -113,26 +115,29 @@ module RailsAiContext
         [ links, nil ]
       end
 
+      # Rails' `_layout`: a class with no `layout` call of its own inherits the nearest one's value and
+      # conditions. A nil value, or an action the conditions leave out, looks for layouts/<controller_path>
+      # of each class up to the declaring one, and then runs the `_layout` of the class above it.
       def layout_for(ctx, chain, stop, root)
-        declared_at, decl = chain.find { |_, d| d[:layout] }
-        if declared_at
-          layout = decl[:layout].merge(from: declared_at)
-          layout[:otherwise] = by_name(ctx, chain, stop, root) if layout[:only] || layout[:except]
-          return layout
+        at = chain.index { |_, d| d[:layout] }
+        unless at
+          return by_name(ctx, chain, root) || (stop && !FRAMEWORK.include?(stop) ? { unread: stop } : { name: nil, implied: true })
         end
 
-        by_name(ctx, chain, stop, root)
+        declared_at, decl = chain[at]
+        lookup = -> { by_name(ctx, chain.first(at + 1), root) || layout_for(ctx, chain.drop(at + 1), stop, root) }
+        return lookup.call if decl[:layout][:by_name]
+
+        layout = decl[:layout].merge(from: declared_at)
+        layout[:otherwise] = lookup.call if layout[:only] || layout[:except]
+        layout
       end
 
-      # Rails looks for layouts/<controller_path> and then asks the superclass, until a class
-      # whose layout was declared answers.
-      def by_name(ctx, chain, stop, root)
+      # The first of the classes' layouts/<controller_path> files, nearest first.
+      def by_name(ctx, links, root)
         names = layout_names(root)
-        found = chain.map { |name, _| Payload.controller_route_key(ctx, name) }.find { |path| names.include?(path) }
-        return { name: found, implied: true } if found
-        return { unread: stop } if stop && !FRAMEWORK.include?(stop)
-
-        { name: nil, implied: true }
+        found = links.map { |name, _| Payload.controller_route_key(ctx, name) }.find { |path| names.include?(path) }
+        { name: found, implied: true } if found
       end
 
       def layout_names(root)

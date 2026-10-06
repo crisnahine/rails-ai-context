@@ -33,7 +33,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerSettings do
       expect(described_class.from_source("class A\n  layout :pick\nend\n")).to eq(layout: { method: "pick" })
       expect(described_class.from_source("class A\n  layout ->(c) { 'x' }\nend\n")).to eq(layout: { block: 2 })
       expect(described_class.from_source("class A\n  layout false\nend\n")).to eq(layout: { name: false })
-      expect(described_class.from_source("class A\n  layout nil\nend\n")).to eq({})
+      expect(described_class.from_source("class A\n  layout nil\nend\n")).to eq(layout: { by_name: true })
     end
 
     it "reads what an included concern's block declares where the include stands" do
@@ -131,6 +131,28 @@ RSpec.describe RailsAiContext::Introspectors::ControllerSettings do
 
       expect(described_class.resolve(context, "Admin::PostsController", root: @root)[:layout])
         .to eq(name: "admin", from: "Admin::BaseController")
+    end
+
+    # actionview's _write_layout_method: an action the condition leaves out runs the name clause,
+    # layouts/<controller_path> and then `super`, the parent's own `_layout`.
+    it "gives the other actions of a conditional layout the ancestor's declared layout" do
+      context = ctx("Admin::BaseController" => { parent_class: "ApplicationController", layout: { method: "choose" } },
+                    "Admin::CondController" => { parent_class: "Admin::BaseController", layout: { name: "special", only: [ "index" ] } })
+
+      expect(described_class.resolve(context, "Admin::CondController", root: @root)[:layout])
+        .to eq(name: "special", only: [ "index" ], from: "Admin::CondController",
+               otherwise: { method: "choose", from: "Admin::BaseController" })
+    end
+
+    it "reads `layout nil` as the name lookup from this class, then the parent's layout" do
+      FileUtils.mkdir_p(File.join(@root, "app/views/layouts/admin"))
+      context = ctx("Admin::BaseController" => { parent_class: "ApplicationController", layout: { method: "choose" } },
+                    "Admin::ThingsController" => { parent_class: "Admin::BaseController", layout: { by_name: true } },
+                    "Admin::OtherController" => { parent_class: "Admin::BaseController", layout: { by_name: true } })
+      File.write(File.join(@root, "app/views/layouts/admin/things.html.erb"), "")
+
+      expect(described_class.resolve(context, "Admin::ThingsController", root: @root)[:layout]).to eq(name: "admin/things", implied: true)
+      expect(described_class.resolve(context, "Admin::OtherController", root: @root)[:layout]).to eq(method: "choose", from: "Admin::BaseController")
     end
 
     it "says which ancestor it could not read instead of guessing" do
