@@ -34,8 +34,8 @@ RSpec.describe RailsAiContext::Introspectors::Base do
     end
 
     # Resolving a name must not run an app file the boot never loaded.
-    it "leaves a constant that is not loaded yet unloaded" do
-      Dir.mktmpdir do |dir|
+    it "leaves an app constant that is not loaded yet unloaded" do
+      Dir.mktmpdir("zz_lazy", Rails.root.join("tmp").tap { |tmp| FileUtils.mkdir_p(tmp) }) do |dir|
         file = File.join(dir, "zz_lazy.rb")
         File.write(file, "$zz_lazy_ran = true\nmodule ZzLazyNs; module ZzLazy; end; end\n")
         stub_const("ZzLazyNs", Module.new)
@@ -46,7 +46,24 @@ RSpec.describe RailsAiContext::Introspectors::Base do
         expect(check.call(%w[ZzLazyNs::ZzLazy::ZzGemBase::Record ZzLazyNs::ZzGemBase::Record ZzGemBase::Record])).to be(true)
         expect(check.call(%w[ZzLazyNs::ZzLazy::Unknown Unknown])).to be(false)
         expect(check.call(%w[ZzLazyNs::ZzLazy::lowercase lowercase])).to be(false)
+        $LOAD_PATH.unshift(dir)
+        ZzLazyNs.send(:remove_const, :ZzLazy)
+        ZzLazyNs.autoload(:ZzLazy, "zz_lazy")
+        expect(check.call(%w[ZzLazyNs::ZzLazy::ZzGemBase::Record ZzLazyNs::ZzGemBase::Record ZzGemBase::Record])).to be(true)
         expect($zz_lazy_ran).to be(false)
+      ensure
+        $LOAD_PATH.delete(dir)
+      end
+    end
+
+    it "loads a base an engine or gem still holds behind an autoload, as ActiveStorage::Attachment" do
+      Dir.mktmpdir do |dir|
+        file = File.join(dir, "zz_engine_record.rb")
+        File.write(file, "module ZzEngine; class ZzRecord < ActiveRecord::Base; self.abstract_class = true; end; end\n")
+        stub_const("ZzEngine", Module.new)
+        ZzEngine.autoload(:ZzRecord, file)
+
+        expect(check.call(%w[ZzEngine::ZzRecord])).to be(true)
       end
     end
   end

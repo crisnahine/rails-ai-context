@@ -41,10 +41,15 @@ module RailsAiContext
         false
       end
 
-      # A constant the process already holds; a name still behind an autoload would run an app file to answer.
+      # A constant the process can reach without running the app's own code: an engine's
+      # autoloaded model (ActiveStorage::Attachment) loads, an app file behind an autoload does not.
       def loaded_constant(segments)
         segments.reduce(Object) do |scope, segment|
-          return unless scope.is_a?(Module) && scope.const_defined?(segment, false) && !scope.autoload?(segment, false)
+          return unless scope.is_a?(Module) && scope.const_defined?(segment, false)
+
+          pending = scope.autoload?(segment, false)
+          pending = $LOAD_PATH.resolve_feature_path(pending)&.last || pending if pending && !File.absolute_path?(pending)
+          return if pending && PathResolver.project_file?(pending, root)
 
           scope.const_get(segment, false)
         end
