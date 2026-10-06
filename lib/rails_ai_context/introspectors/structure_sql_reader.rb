@@ -184,8 +184,9 @@ module RailsAiContext
       # The optional INHERITS list after a CREATE TABLE body.
       INHERITS = /(?:#{INHERITS_KEYWORD}\s*\(([^)]*)\))?/
       CREATE_TABLE = /CREATE TABLE\s+(?:IF NOT EXISTS\s+)?#{QUALIFIED_NAME}\s*(?=\()/i
-      # mysqldump wraps the statement in version comments and names an algorithm, definer and security first.
-      VIEW = /\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:ALGORITHM|DEFINER|SQL\s+SECURITY)\b[^;]*?\s)?(?:TEMP(?:ORARY)?\s+)?(MATERIALIZED\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?#{QUALIFIED_NAME}(?:\s*\([^)]*\))?\s+AS\s+(.*?)(?:\s+WITH\s+(?:NO\s+)?DATA)?\s*(?:\*\/)?\s*;/im
+      # mysqldump wraps the statement in version comments and names an algorithm, definer and security first;
+      # sqlite3 closes it with a /* name(columns) */ comment.
+      VIEW = /\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:ALGORITHM|DEFINER|SQL\s+SECURITY)\b[^;]*?\s)?(?:TEMP(?:ORARY)?\s+)?(MATERIALIZED\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?#{QUALIFIED_NAME}(?:\s*\([^)]*\))?\s+AS\s+(.*?)(?:\s+WITH\s+(?:NO\s+)?DATA)?(?:\s*\/\*\s*[\w"`]+\([^)]*\)\s*\*\/)?\s*(?:\*\/)?\s*;/im
       VIRTUAL_TABLE = /CREATE\s+VIRTUAL\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?#{QUALIFIED_NAME}\s+USING\s+(\w+)\s*(?:\(([^)]*)\))?/i
 
       # "schema.name" with quotes removed; an unqualified name is in public.

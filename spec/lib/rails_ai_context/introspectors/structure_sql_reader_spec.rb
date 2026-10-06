@@ -129,6 +129,20 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
     end
   end
 
+  # sqlite3's .schema closes a view with a /* name(columns) */ comment of its own.
+  it "ends a SQLite view's SQL before the column-list comment sqlite3 appends" do
+    sql = <<~SQL
+      CREATE TABLE IF NOT EXISTS "users" ("id" integer PRIMARY KEY AUTOINCREMENT NOT NULL, "email" varchar);
+      CREATE VIEW active_users AS SELECT id, email FROM users /*application='App'*/
+      /* active_users(id,email) */;
+      CREATE VIEW plain AS SELECT id FROM users;
+    SQL
+
+    views = described_class.views(sql)
+    expect(views["active_users"][:sql]).to eq("SELECT id, email FROM users /*application='App'*/")
+    expect(views["plain"][:sql]).to eq("SELECT id FROM users")
+  end
+
   describe "unique constraints" do
     it "reads pg_dump's ADD CONSTRAINT ... UNIQUE with its deferrable mode" do
       sql = <<~SQL
