@@ -29,7 +29,8 @@ module RailsAiContext
         files(root.to_s, real_root).each_with_object({}) do |(path, names_only), found|
           source = RailsAiContext::SafeFile.read(path)
           next unless source
-          next unless source.include?("ENV") || ((source.include?(".creds") || source.include?(".envs")) && source.match?(/\.(?:creds|envs)\b/))
+          # Prefilter: ENV and the Rails.app.creds / .envs readers; the AST decides.
+          next unless source.include?("ENV") || source.include?(".creds") || source.include?(".envs")
           next if script?(path) && !source.match?(/\A#!.*\bruby\b/)
           # A YAML or ERB file reads ENV only inside a tag.
           next if !ruby?(path) && !source.include?("<%")
