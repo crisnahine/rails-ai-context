@@ -319,6 +319,23 @@ RSpec.describe RailsAiContext::Tools::SearchDocs, "against the bundled index" do
     expect(top_title("core extensions")).to eq("Active Support Core Extensions")
   end
 
+  it "links a guide newer than the app's Rails to main and says so" do
+    allow(described_class).to receive(:detect_rails_branch).and_return("7-0-stable")
+    text = described_class.call(query: "wishlists", limit: 1).content.first[:text]
+
+    expect(text).to include("rails/rails/main/guides/source/wishlists.md")
+    expect(text).to include("added in Rails 8.1, newer than this app's 7.0")
+    expect(text).not_to include("7-0-stable")
+  end
+
+  it "keeps the app's stable branch for a guide its Rails already has" do
+    allow(described_class).to receive(:detect_rails_branch).and_return("8-1-stable")
+    text = described_class.call(query: "wishlists", limit: 1).content.first[:text]
+
+    expect(text).to include("rails/rails/8-1-stable/guides/source/wishlists.md")
+    expect(text).not_to include("newer than")
+  end
+
   it "does not offer an api source the index has no entries for" do
     text = described_class.call(query: "has_many", source: "api").content.first[:text]
 

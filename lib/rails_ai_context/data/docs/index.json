@@ -119,6 +119,7 @@
     "id": "active_record_encryption",
     "title": "Active Record Encryption",
     "source": "rails",
+    "since": "7.0",
     "summary": "Encrypt model attributes at rest with deterministic and non-deterministic encryption",
     "keywords": [
       "encryption",
@@ -506,6 +507,7 @@
     "id": "action_controller_advanced_topics",
     "title": "Action Controller Advanced Topics",
     "source": "rails",
+    "since": "8.0",
     "summary": "CSRF protection, HTTP authentication, streaming, log parameter filtering, rescue_from, health check endpoint",
     "keywords": [
       "csrf",
@@ -537,6 +539,7 @@
     "id": "active_record_composite_primary_keys",
     "title": "Composite Primary Keys",
     "source": "rails",
+    "since": "7.1",
     "summary": "Tables, queries, associations, forms and fixtures with composite primary keys",
     "keywords": [
       "composite primary key",
@@ -646,6 +649,7 @@
     "id": "error_reporting",
     "title": "Error Reporting in Rails Applications",
     "source": "rails",
+    "since": "7.1",
     "summary": "Rails.error reporter: handle, record, report, and custom error subscribers",
     "keywords": [
       "error reporting",
@@ -676,6 +680,7 @@
     "id": "getting_started_with_devcontainer",
     "title": "Getting Started with Dev Containers",
     "source": "rails",
+    "since": "7.2",
     "summary": "rails-new and running a Rails app inside a development container",
     "keywords": [
       "devcontainer",
@@ -719,6 +724,7 @@
     "id": "product_reviews",
     "title": "Product Reviews",
     "source": "rails",
+    "since": "8.1",
     "summary": "Getting Started tutorial series: collecting reviews, average ratings, filtering reviews",
     "keywords": [
       "reviews",
@@ -746,6 +752,7 @@
     "id": "sign_up_and_settings",
     "title": "Sign Up and Settings",
     "source": "rails",
+    "since": "8.1",
     "summary": "Getting Started tutorial series: user sign up, rate limiting, nested layouts, admin and user controllers",
     "keywords": [
       "sign up",
@@ -776,6 +783,7 @@
     "id": "tuning_performance_for_deployment",
     "title": "Tuning Performance for Deployment",
     "source": "rails",
+    "since": "7.2",
     "summary": "Puma workers and threads, YJIT, memory allocators, performance testing for production",
     "keywords": [
       "performance",
@@ -807,6 +815,7 @@
     "id": "wishlists",
     "title": "Wishlists",
     "source": "rails",
+    "since": "8.1",
     "summary": "Getting Started tutorial series: wishlists, counter caches, friendly URLs, filtering records",
     "keywords": [
       "wishlists",

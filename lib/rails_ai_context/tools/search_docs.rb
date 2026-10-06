@@ -152,6 +152,14 @@ module RailsAiContext
           score
         end
 
+        # The app's stable branch has no file for a guide written after its Rails version.
+        def guide_branch(topic, branch)
+          match = branch.match(/\A(\d+)-(\d+)-stable\z/)
+          return branch unless topic["since"] && match
+
+          Gem::Version.new("#{match[1]}.#{match[2]}") < Gem::Version.new(topic["since"]) ? "main" : branch
+        end
+
         # Derive URL at runtime - no hardcoded URLs stored in index.json
         def url_for(topic, branch)
           case topic["source"]
@@ -176,10 +184,14 @@ module RailsAiContext
 
           results.each_with_index do |r, i|
             topic = r[:topic]
-            url = url_for(topic, branch)
+            topic_branch = guide_branch(topic, branch)
+            url = url_for(topic, topic_branch)
             lines << "## #{i + 1}. #{topic['title']} [#{topic['source']}]"
+            if topic_branch != branch
+              lines << "_(guide added in Rails #{topic['since']}, newer than this app's #{branch.delete_suffix('-stable').tr('-', '.')}; linked from main)_"
+            end
             if fetch
-              lines << fetch_content(topic, branch, url)
+              lines << fetch_content(topic, topic_branch, url)
             else
               lines << topic["summary"] if topic["summary"]
               lines << "→ #{url}"
