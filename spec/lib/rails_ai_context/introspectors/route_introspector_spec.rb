@@ -447,8 +447,9 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       end
     end
 
-    # A prepend registered after the draw reaches the table only on the next reload.
-    it "counts a prepend nested in an initializer block as not expanded" do
+    # Rails runs after_initialize (finisher_hook) before it draws the routes
+    # (set_routes_reloader_hook), 7.0 to 8.1; another on_load hook may run after the draw.
+    it "reads a prepend or append in after_initialize and counts one in another hook as not expanded" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
         File.write(File.join(dir, "config", "routes.rb"), "Rails.application.routes.draw do\n  get \"main\", to: \"posts#index\"\nend\n")
@@ -458,11 +459,21 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
               get "late", to: "posts#index"
             end
           end
+          ActiveSupport.on_load(:after_initialize) do
+            Rails.application.routes.append { get "later", to: "posts#index" }
+          end
+          ActiveSupport.on_load(:action_controller) do
+            Rails.application.routes.append { get "hooked", to: "posts#index" }
+          end
+        RUBY
+        File.write(File.join(dir, "config", "initializers", "more.rb"), <<~RUBY)
+          Rails.application.routes.prepend { get "first", to: "posts#index" }
+          Rails.application.routes.append { get "appended", to: "posts#index" }
         RUBY
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
-        expect(result[:by_controller]["posts"].map { |r| r[:path] }).to eq([ "/main" ])
+        expect(result[:by_controller]["posts"].map { |r| r[:path] }).to eq(%w[/first /late /main /appended /later])
         expect(result[:dynamic_routes]).to eq(1)
       end
     end

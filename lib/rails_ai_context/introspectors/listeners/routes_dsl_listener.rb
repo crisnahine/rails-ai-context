@@ -74,6 +74,10 @@ module RailsAiContext
           return enter_route_set(node) if route_set_draw?(node)
           # `ActiveAdmin.routes(self)` hands the mapper to code this walk cannot see.
           return emit_dynamic(node) if node.receiver && statement && node.arguments&.arguments&.any?(Prism::SelfNode)
+          if after_initialize?(node)
+            register_table_changes(node.block.body)
+            return push_frame(node, late: true)
+          end
           return enter_late_table_change(node) if late_table_change?(node, statement)
           return push_frame(node, prepend: true) if node.receiver && node.name == :prepend && statement && route_body?(node)
           return unless node.receiver.nil?
@@ -148,10 +152,24 @@ module RailsAiContext
           end
         end
 
-        # A `routes.prepend` inside `after_initialize` or `on_load` registers after
-        # the draw, and Rails evaluates it only on the next reload.
+        # Rails runs after_initialize hooks before it draws the routes (7.0 to 8.1).
+        def after_initialize?(node)
+          return false unless node.block.is_a?(Prism::BlockNode)
+
+          hook = node.arguments&.arguments&.first
+          node.name == :after_initialize || (node.name == :on_load && hook.is_a?(Prism::SymbolNode) && hook.unescaped == "after_initialize")
+        end
+
+        def register_table_changes(body)
+          return unless body.is_a?(Prism::StatementsNode)
+
+          body.body.each { |statement| @statements[statement] = true if late_table_change?(statement, false) }
+        end
+
+        # A `routes.prepend` inside any other hook may register after the draw, which
+        # Rails evaluates only on the next reload.
         def late_table_change?(node, statement)
-          !statement && %i[append prepend].include?(node.name) && node.block &&
+          !statement && node.is_a?(Prism::CallNode) && %i[append prepend].include?(node.name) && node.block &&
             node.receiver.is_a?(Prism::CallNode) && node.receiver.name == :routes
         end
 
@@ -837,6 +855,7 @@ module RailsAiContext
           condition = current_condition
           record[:condition] = condition if condition
           record[:prepend] = true if @stack.any? { |f| f[:prepend] }
+          record[:late] = true if @stack.any? { |f| f[:late] }
           constraints = route_constraints(node, path)
           record[:constraints] = constraints if constraints
           params = path.scan(/:(\w+)/).flatten

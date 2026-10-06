@@ -282,8 +282,9 @@ module RailsAiContext
           all_files.concat(sub_files)
         end
         added, added_mounts = walk_route_initializers(already_read)
-        prepended, appended = added.partition { |r| r[:prepend] }
-        records = (prepended + records + appended).map { |r| r.except(:prepend) }
+        # An after_initialize hook adds its blocks after every initializer has added its own.
+        prepended, appended = added.sort_by.with_index { |r, i| [ r[:late] ? 1 : 0, i ] }.partition { |r| r[:prepend] }
+        records = (prepended + records + appended).map { |r| r.except(:prepend, :late) }
         [ records, distinct_mounts(mounts + added_mounts), files.uniq ]
       end
 
