@@ -156,6 +156,14 @@ RSpec.describe RailsAiContext::Introspectors::ControllerSettings do
       expect(described_class.resolve(context, "Admin::OtherController", root: @root)[:layout]).to eq(method: "choose", from: "Admin::BaseController")
     end
 
+    it "drops an ancestor's conditions below `layout nil`, which resets them" do
+      context = ctx("Admin::BaseController" => { parent_class: "ApplicationController", layout: { name: "admin", only: [ "index" ] } },
+                    "Admin::ReportsController" => { parent_class: "Admin::BaseController", layout: { by_name: true } })
+
+      expect(described_class.resolve(context, "Admin::ReportsController", root: @root)[:layout])
+        .to eq(name: "admin", from: "Admin::BaseController")
+    end
+
     it "names the `layout nil` line when the name lookup finds the layout" do
       phrase = described_class.layout_phrase(name: "application", implied: true, from: "CommentsController")
 

@@ -117,16 +117,17 @@ module RailsAiContext
       end
 
       # Rails' `_layout`: a class with no `layout` call of its own inherits the nearest one's value and
-      # conditions. `layout nil` looks for layouts/<controller_path> of each class up to the declaring one,
-      # then runs the `_layout` above it. An action the conditions leave out fails the same inherited
-      # conditions in every ancestor's `_layout`, so it only ever gets the name lookup over the whole chain.
+      # conditions. `layout nil` clears the inherited conditions and looks for layouts/<controller_path> of
+      # each class up to the declaring one, then runs the `_layout` above it for every action. An action
+      # the conditions leave out fails the same inherited conditions in every ancestor's `_layout`, so it
+      # only ever gets the name lookup over the whole chain.
       def layout_for(ctx, chain, stop, root)
         at = chain.index { |_, d| d[:layout] }
         return name_lookup(ctx, chain, stop, root) unless at
 
         declared_at, decl = chain[at]
         if decl[:layout][:by_name]
-          found = by_name(ctx, chain.first(at + 1), root) || layout_for(ctx, chain.drop(at + 1), stop, root)
+          found = by_name(ctx, chain.first(at + 1), root) || layout_for(ctx, chain.drop(at + 1), stop, root).except(:only, :except, :otherwise)
           return found[:implied] ? found.merge(from: declared_at) : found
         end
 
