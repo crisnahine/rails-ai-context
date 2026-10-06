@@ -2090,7 +2090,8 @@ module RailsAiContext
       def own_body(data, class_name)
         data.merge(mixins: ConcernMembership.owned_by(data[:mixins], class_name, root: app.root),
                    callbacks: ConcernMembership.owned_by(data[:callbacks], class_name),
-                   macros: ConcernMembership.owned_by(data[:macros], class_name))
+                   macros: ConcernMembership.owned_by(data[:macros], class_name),
+                   scopes: ConcernMembership.owned_by(data[:scopes], class_name).map { |scope| scope.except(:owner) })
       end
 
       def source_walk(path)
@@ -2178,7 +2179,7 @@ module RailsAiContext
           # An embedded child is a relation like any other, so every count and the graph see it.
           associations: reject_excluded_associations(Array(data[:associations]) + embedded_associations(macros)),
           validations: data[:validations],
-          scopes: data[:scopes],
+          scopes: own[:scopes],
           # Same shape as the booted tier: a Hash keyed by callback type. The
           # listener hands back a flat Array, and every consumer filters on
           # `callbacks.is_a?(Hash)` - so passing it through rendered "No models

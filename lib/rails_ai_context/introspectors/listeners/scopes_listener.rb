@@ -6,6 +6,7 @@ module RailsAiContext
       # Detects `scope :name, -> { ... }` declarations via Prism AST.
       class ScopesListener < BaseListener
         include WithOptionsScope
+        include OwnerScope
 
         # `scope :x, lambda { ... }` and `scope :x do ... end` hold their body
         # in a block, not in a LambdaNode.
@@ -29,7 +30,8 @@ module RailsAiContext
             # A lambda body sliced verbatim from source IS the scope's ground
             # truth; only scopes whose body can't be extracted (block form,
             # metaprogrammed) are heuristic.
-            confidence:      body ? Confidence::VERIFIED : Confidence::INFERRED
+            confidence:      body ? Confidence::VERIFIED : Confidence::INFERRED,
+            owner:           @owner_stack.dup
           }
         end
 
@@ -38,7 +40,7 @@ module RailsAiContext
           own = node.receiver.is_a?(Prism::SelfNode) || (node.receiver.nil? && @singleton_depth.to_i.positive?)
           if own && node.name == :default_scope && node.body
             @results << { name: "default_scope", default: true, body: one_line_source(node.body),
-                          location: node.location.start_line, confidence: Confidence::VERIFIED }
+                          location: node.location.start_line, confidence: Confidence::VERIFIED, owner: @owner_stack.dup }
           end
           super if defined?(super)
         end
@@ -66,7 +68,8 @@ module RailsAiContext
             body:        body,
             all_queries: all_queries,
             location:    node.location.start_line,
-            confidence:  body ? Confidence::VERIFIED : Confidence::INFERRED
+            confidence:  body ? Confidence::VERIFIED : Confidence::INFERRED,
+            owner:       @owner_stack.dup
           }.compact
         end
 

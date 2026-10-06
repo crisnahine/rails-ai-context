@@ -75,6 +75,26 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     expect(described_class.call(model: "Badge").content.first[:text]).to include("- `default_scope` → where(active: true) _(applies to every query on Badge)_")
   end
 
+  it "does not list a default scope a nested class or module declares" do
+    text = details_for("Tag", "tag.rb" => <<~RUBY)
+      class Tag < ApplicationRecord
+        class Archived < Tag
+          default_scope { where(archived: true) }
+        end
+        class Finder
+          def self.default_scope = :nope
+        end
+        module Helpers
+          class << self
+            def default_scope = 1
+          end
+        end
+      end
+    RUBY
+
+    expect(text).not_to include("default_scope")
+  end
+
   it "lists a base's default scope ahead of the model's own, the order Rails stacks them, and the model's named scope over the base's" do
     text = details_for("Category", "application_record.rb" => <<~BASE, "category.rb" => <<~RUBY)
       class ApplicationRecord < ActiveRecord::Base
