@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "pathname"
 require "set"
 
 module RailsAiContext
@@ -56,10 +57,13 @@ module RailsAiContext
         rescue => e
           hash[path_name] = { error: portable_message(e) }
         end
+        engine = PathResolver.bundle_engine_root(root)
+        unread = Pathname.new(engine).relative_path_from(Pathname.new(File.expand_path(root))).to_s if engine
         {
           controllers: inherit_class_declarations(fill_inherited_actions(result)),
-          note: "Parsed statically from app/controllers (app not booted)"
-        }
+          note: "Parsed statically from app/controllers (app not booted)#{"; the engine at #{unread} is not read unbooted" if unread}",
+          unread_engine: unread
+        }.compact
       end
 
       # Rails renders a routed action's template when the controller has no method for it,

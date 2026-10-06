@@ -1074,6 +1074,26 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
   end
 
   describe "#static_call" do
+    # Unbooted, the engine a test/dummy runs in is not walked, so the listing says so.
+    it "says the engine above a test/dummy is not read" do
+      Dir.mktmpdir do |dir|
+        dummy = File.join(dir, "test", "dummy")
+        FileUtils.mkdir_p([ File.join(dummy, "config"), File.join(dummy, "app", "controllers"), File.join(dir, ".git"),
+                            File.join(dir, "app", "controllers", "shop") ])
+        File.write(File.join(dummy, "config", "boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n))
+        File.write(File.join(dir, "Gemfile"), "gemspec\n")
+        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  specs:\n")
+        File.write(File.join(dir, "shop.gemspec"), "")
+        File.write(File.join(dir, "app", "controllers", "shop", "widgets_controller.rb"), "module Shop\n  class WidgetsController < ActionController::Base\n  end\nend\n")
+
+        result = RailsAiContext::RunCache.around { described_class.new(RailsAiContext::StaticApp.new(dummy)).static_call }
+
+        expect(result[:controllers]).to eq({})
+        expect(result[:unread_engine]).to eq("../..")
+        expect(result[:note]).to include("the engine at ../.. is not read unbooted")
+      end
+    end
+
     # responders' respond_to copies the class attribute the parent set before adding to it, and
     # a rate_limit is a before_action every subclass runs.
     it "hands an ancestor's class-level respond_to and rate_limit down to its subclasses" do

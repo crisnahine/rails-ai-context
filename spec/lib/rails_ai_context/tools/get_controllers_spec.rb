@@ -390,6 +390,15 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(full).to include('- Rate limit: to: 10, within: 3.minutes, only: :create; to: 100, within: 1.hour, name: "long"')
     end
 
+    it "says the engine a static run from its test/dummy does not read, in the listing and when a name is not found" do
+      allow(described_class).to receive(:cached_context).and_return({ controllers: { controllers: {}, unread_engine: "../.." } })
+
+      %w[summary standard full].each do |detail|
+        expect(described_class.call(detail: detail).content.first[:text]).to include("The engine at `../..` is not read unbooted")
+      end
+      expect(described_class.call(controller: "Shop::WidgetsController").content.first[:text]).to include("The engine at `../..` is not read unbooted")
+    end
+
     it "leaves an inherited rate limit out of the full listing and names its base in the controller's detail" do
       inherited = { text: "to: 5, within: 1.minute", from: "Admin::BaseController" }
       stub_controllers({ "Admin::ReportsController" => { actions: %w[index], filters: [], parent_class: "Admin::BaseController", rate_limits: [ inherited ] },

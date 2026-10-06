@@ -287,7 +287,6 @@ module RailsAiContext
       depth = real_root.delete_prefix("#{dir}#{File::SEPARATOR}").split(File::SEPARATOR).size
       depth.times.reduce(File.expand_path(root)) { |path, _| File.dirname(path) }
     end
-    private_class_method :bundle_engine_root
 
     # A path under the suite root as the app root reads it: `../models/x_test.rb` from a test/dummy.
     def suite_relative(root, relative)
