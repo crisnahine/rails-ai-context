@@ -293,6 +293,9 @@ RSpec.describe RailsAiContext::GemLock do
         expect(spec.present?("rails")).to be false
         expect(spec.reason).to eq("No Gemfile.lock in the app; config/boot.rb points Bundler at ../../Gemfile, outside the app's git repository, which is not read")
         expect(spec.outside_gemfile).to eq("../../Gemfile")
+        bundle = described_class.bundle(dummy)
+        expect(bundle).to be_a(described_class::Bundle)
+        expect([ bundle.lockfile, bundle.outside, bundle.dir ]).to eq([ nil, "../../Gemfile", dummy ])
       end
     end
 

@@ -16,9 +16,9 @@ module RailsAiContext
       # @return [Array<Hash>] empty when there is no Gemfile or it cannot be read
       def entries(root)
         bundle = GemLock.bundle(root)
-        gemfile = bundle[:gemfile] or return []
+        gemfile = bundle.gemfile or return []
 
-        read(bundle[:dir], File.basename(gemfile), [], [])
+        read(bundle.dir, File.basename(gemfile), [], [])
       rescue StandardError => e
         RailsAiContext.debug_fail(e, [], label: "GemfileGems.entries")
       end
