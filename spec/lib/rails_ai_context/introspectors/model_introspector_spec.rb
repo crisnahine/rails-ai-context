@@ -6108,6 +6108,30 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    it "reports no STI where a base turns it off, and reads a quoted or escaped column name off the node" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[7.1].define(version: 1) do
+            create_table "vehicles" do |t|
+              t.string "type"
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "vehicle.rb"), "class Vehicle < ApplicationRecord\n  self.inheritance_column = nil\nend\n")
+        File.write(File.join(dir, "app", "models", "car.rb"), "class Car < Vehicle\nend\n")
+        File.write(File.join(dir, "app", "models", "boat.rb"), "class Boat < ApplicationRecord\n  self.inheritance_column = %w[kind].first\n  self.inheritance_column = %s(sort)\nend\n")
+        File.write(File.join(dir, "app", "models", "dinghy.rb"), "class Dinghy < Boat\nend\n")
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["Car"]).not_to have_key(:sti)
+        expect(models["Vehicle"]).not_to have_key(:sti)
+        expect(models["Dinghy"][:sti]).to include(type_column: "sort")
+      end
+    end
+
     it "leaves a model with no STI chain without the key" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models"))

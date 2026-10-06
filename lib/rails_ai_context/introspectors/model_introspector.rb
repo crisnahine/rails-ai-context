@@ -175,10 +175,11 @@ module RailsAiContext
         reader.tables.key?(table) && column != RailsAiContext::Confidence::INFERRED && !reader.column?(table, column)
       end
 
-      # The value as written, read the way Rails reads it: a symbol or a string names the column.
-      def static_type_column(settings)
-        written = settings&.dig("inheritance_column") or return "type"
-        written[/\A:"?(\w+)"?\z/, 1] || written[/\A["'](\w+)["']\z/, 1] || RailsAiContext::Confidence::INFERRED
+      # Rails' default column, the literal a class sets, or nil where `inheritance_column = nil` turns STI off.
+      def static_type_column(literals)
+        return "type" unless literals&.key?("inheritance_column")
+
+        literals["inheritance_column"].presence
       end
 
       # A model file the app cannot load leaves its class out of reflection,
@@ -634,7 +635,7 @@ module RailsAiContext
 
         # AST-based macro extractions (replaces regex)
         macros = extract_macros_from_ast(source_data, model_source_path(model))
-        details.merge!(macros)
+        details.merge!(macros.except(:setting_literals))
 
         # AST-based detailed macros (replaces regex)
         detailed = extract_detailed_macros_from_ast(source_data)
@@ -1262,6 +1263,7 @@ module RailsAiContext
           elsif macro == :model_setting
             # Bases arrive first, so the class's own assignment wins.
             (macros[:model_settings] ||= {})[m[:setting]] = m[:value]
+            (macros[:setting_literals] ||= {})[m[:setting]] = m[:literal]
           elsif macro == :connects_to
             macros[:database] = { connects_to: m[:text], condition: m[:condition], declared_in: m[:declared_in], writing: m[:writing] }.compact
           elsif macro == :gem_macro
@@ -1673,8 +1675,8 @@ module RailsAiContext
         }
         details.merge!(extract_macros_from_ast(data, path))
         details.merge!(extract_detailed_macros_from_ast(data))
-        type_column = static_type_column(details[:model_settings]) if sti
-        details[:sti] = sti && !lacks_column?(details[:table_name], type_column) ? sti.merge(type_column: type_column) : nil
+        type_column = static_type_column(details.delete(:setting_literals))
+        details[:sti] = sti && type_column && !lacks_column?(details[:table_name], type_column) ? sti.merge(type_column: type_column) : nil
         downgrade_records(details.compact)
       end
 
