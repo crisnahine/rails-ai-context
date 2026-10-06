@@ -18,6 +18,12 @@ module RailsAiContext
         end
       end
 
+      # The `def` starting at `offset`, reached down the nodes that hold it, or nil.
+      def def_at(node, offset)
+        node = node.compact_child_nodes.find { |child| child.location.start_offset <= offset && offset < child.location.end_offset } until node.nil? || (node.is_a?(Prism::DefNode) && node.location.start_offset == offset)
+        node
+      end
+
       # The nodes a body runs with its own self: the node opening a method,
       # class or `class << x` is there, its body is not.
       def scope(node, found = [])

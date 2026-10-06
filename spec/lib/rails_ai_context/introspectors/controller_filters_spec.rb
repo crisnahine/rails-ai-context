@@ -330,6 +330,20 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
         expect(described_class.from_source(source).map { |f| f[:name] }).to eq([ "authenticate!" ])
       end
     end
+
+    it "reaches a declaring class method by its offset, without walking the source again" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        source = "class PostsController < ApplicationController\n  def self.guard = before_action(:auth)\n  guard\nend\n"
+        allow(RailsAiContext::Introspectors::AstWalk).to receive(:each).and_call_original
+
+        filters, = described_class.with_concerns(source, root: dir, within: "PostsController")
+
+        expect(filters.map { |f| f[:name] }).to eq([ "auth" ])
+        tree = RailsAiContext::AstCache.parse_string(source).value
+        expect(RailsAiContext::Introspectors::AstWalk).not_to have_received(:each).with(tree)
+      end
+    end
   end
   describe ".from_source" do
     it "marks a filter declared only under a condition with it" do

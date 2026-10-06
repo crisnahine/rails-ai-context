@@ -169,9 +169,7 @@ module RailsAiContext
 
         tree = AstCache.parse_string(source).value
         declaring.flat_map do |method|
-          definition = AstWalk.each(tree).find do |node|
-            node.is_a?(Prism::DefNode) && node.name.to_s == method[:name].to_s && node.location.start_line == method[:location]
-          end
+          definition = AstWalk.def_at(tree, method[:offset])
           next [] unless definition
 
           found, = ConcernMacros.expand_calls(definition, sites.fetch(method[:name].to_s), [ :filters ], LISTENERS) do |entry, call|
