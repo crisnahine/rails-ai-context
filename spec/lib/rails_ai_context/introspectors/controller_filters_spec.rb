@@ -93,6 +93,20 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
 
     # Ruby adds a module to the ancestors once, where it is first included,
     # so a concern reached through two includes runs its filters once.
+    # Ruby: `include Alpha, Beta` appends Beta first, so Beta's block runs before Alpha's; a hook's `base.include` too.
+    it "runs the blocks of one multi-argument include last argument first" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        %w[Alpha Beta Gamma Delta].each { |name| concern(dir, name, "included do\n    before_action :#{name.downcase}_check\n  end") }
+        File.write(File.join(dir, "app", "controllers", "concerns", "hooked.rb"), "module Hooked\n  def self.included(base)\n    base.include Gamma, Delta\n  end\nend\n")
+        source = "class MultiController < ApplicationController\n  include Alpha, Beta\n  include Hooked\nend\n"
+
+        filters, = described_class.with_concerns(source, root: dir, within: "MultiController")
+
+        expect(filters.map { |f| f[:name] }).to eq(%w[beta_check alpha_check delta_check gamma_check])
+      end
+    end
+
     it "adds a concern reached through two includes once, at its first include" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))

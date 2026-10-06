@@ -81,10 +81,11 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MixinsListener do
     expect(results.first[:name]).to eq("Admin::Publishable")
   end
 
-  it "records every module of a multi-argument include" do
-    results = parse_and_dispatch("class Post\n  include Publishable, Auditable\nend\n")
+  # Ruby: `include Publishable, Auditable` appends Auditable first, so its included hook runs first.
+  it "records every module of a multi-argument include, in the order Ruby adds them" do
+    results = parse_and_dispatch("class Post\n  include Publishable, Auditable\n  send :extend, Searchable, Taggable\nend\n")
 
-    expect(results.map { |r| r[:name] }).to eq(%w[Publishable Auditable])
+    expect(results.map { |r| r[:name] }).to eq(%w[Auditable Publishable Taggable Searchable])
   end
 
   it "ignores an include whose argument is not a constant" do

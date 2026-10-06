@@ -198,7 +198,8 @@ module RailsAiContext
             end
           next [] unless macro
 
-          arguments.filter_map do |arg|
+          # Ruby adds the last argument first, as MixinsListener records them.
+          arguments.reverse.filter_map do |arg|
             [ macro, arg, call ] if arg.is_a?(Prism::SelfNode) || arg.is_a?(Prism::ConstantReadNode) || arg.is_a?(Prism::ConstantPathNode)
           end
         end

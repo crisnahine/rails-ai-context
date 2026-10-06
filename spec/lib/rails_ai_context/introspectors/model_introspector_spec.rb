@@ -4088,6 +4088,18 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         end
       end
 
+      # Runtime (include AlphaM, BetaM): :beta_save, :alpha_save, :own.
+      it "runs the included blocks of one multi-argument include last argument first" do
+        Dir.mktmpdir do |dir|
+          %w[AlphaM BetaM].each do |name|
+            write_model(dir, "Concerns::#{name}", "module #{name}\n  extend ActiveSupport::Concern\n  included do\n    before_save :#{name.delete_suffix("M").downcase}_save\n  end\nend\n")
+          end
+          write_model(dir, "MultiM", "class MultiM < ApplicationRecord\n  include AlphaM, BetaM\n  before_save :own\nend\n")
+
+          expect(static_save(dir)["MultiM"]).to eq(%w[beta_save alpha_save own])
+        end
+      end
+
       # Runtime: TieRedefM :first, :b; TwoArgM :first, :a; TwoArgRevM :first, :b.
       it "runs the later of two defs of one name in a module a hook extends with, and the earlier argument's" do
         Dir.mktmpdir do |dir|
