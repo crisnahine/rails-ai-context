@@ -1,0 +1,13 @@
+# frozen_string_literal: true
+
+# The gemspec's zeitwerk floor, pinned. railties 7.0 is the line that still
+# allows 2.5, so this leg runs with RAILS_VERSION=7.0. Trimmed to what the
+# suite needs so a dev dependency cannot quietly resolve zeitwerk upward.
+
+source "https://rubygems.org"
+
+gemspec path: ".."
+
+gem "zeitwerk", "~> 2.5.0"
+
+eval_gemfile "rails.gemfile"

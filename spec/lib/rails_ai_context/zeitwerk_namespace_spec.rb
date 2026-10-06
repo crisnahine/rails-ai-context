@@ -38,21 +38,32 @@ end
 RSpec.describe "Zeitwerk loader for the gem" do
   let(:entry) { File.expand_path("../../../lib/rails_ai_context.rb", __dir__) }
 
+  # Past 2.5 the stub reproduces only the arity; the zeitwerk_floor CI leg runs real 2.5.
   it "loads under a for_gem that takes no arguments, as 2.5's does" do
     lib = File.dirname(entry)
     script = <<~'RUBY'
       require "zeitwerk"
-      Zeitwerk::Loader.singleton_class.prepend(Module.new do
-        def for_gem(*args, **kwargs)
-          raise ArgumentError, "for_gem takes no arguments on zeitwerk 2.5" unless args.empty? && kwargs.empty?
+      if Gem::Version.new(Zeitwerk::VERSION) >= Gem::Version.new("2.6")
+        Zeitwerk::Loader.singleton_class.prepend(Module.new do
+          def for_gem(*args, **kwargs)
+            raise ArgumentError, "for_gem takes no arguments on zeitwerk 2.5" unless args.empty? && kwargs.empty?
 
-          Zeitwerk::Registry.loader_for_gem(caller_locations(1, 1).first.path, namespace: Object, warn_on_extra_files: true)
-        end
-      end)
+            Zeitwerk::Registry.loader_for_gem(caller_locations(1, 1).first.path, namespace: Object, warn_on_extra_files: true)
+          end
+        end)
+      end
       require "rails_ai_context"
       RailsAiContext::Tools::BaseTool
-      print RailsAiContext.const_defined?(:Data, false)
     RUBY
+
+    _out, err, status = Open3.capture3(RbConfig.ruby, "-I", lib, "-e", script)
+
+    expect(status).to be_success, err
+  end
+
+  it "names no RailsAiContext::Data on the zeitwerk the suite runs, so ::Data stays the value class" do
+    lib = File.dirname(entry)
+    script = %(require "rails_ai_context"; print RailsAiContext.const_defined?(:Data, false))
 
     out, err, status = Open3.capture3(RbConfig.ruby, "-I", lib, "-e", script)
 

@@ -28,11 +28,17 @@ jobs:
             version: "1.4.0"
           - gem: mcp
             version: "0.13.0"
+          # railties 7.0 is the last line that allows zeitwerk 2.5, and it runs on Ruby 3.1 only.
+          - gem: zeitwerk
+            version: "2.5.4"
+            rails: "7.0"
+            ruby: "3.1"
 
     name: ${{ matrix.gem }} floor (${{ matrix.version }})
 
     env:
       BUNDLE_GEMFILE: gemfiles/${{ matrix.gem }}_floor.gemfile
+      RAILS_VERSION: ${{ matrix.rails || '8.0' }}
 
     steps:
       - uses: actions/checkout@v7
@@ -40,7 +46,7 @@ jobs:
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: "3.2"
+          ruby-version: ${{ matrix.ruby || '3.2' }}
           bundler-cache: true
 
       - name: Confirm the pin took
