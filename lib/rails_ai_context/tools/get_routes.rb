@@ -36,7 +36,8 @@ module RailsAiContext
 
       HINTED_FILTERS = 3
 
-      GEM_DRAWN_NOTE = "_Read from source: #{RailsAiContext::RouteCoverage::GEM_DRAWN} (Active Storage, Action Mailbox, conductor); no count here includes them._"
+      GEM_DRAWN_NOTE = "_Read from source: #{RailsAiContext::RouteCoverage::GEM_DRAWN} (Active Storage, Action Mailbox, conductor) " \
+                       "are read only with the app booted, so no count here includes them._"
 
       # The filters this controller actually runs, read the way every other
       # surface reads them, so a skipped one is never named here. The cut is
