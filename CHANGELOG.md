@@ -230,6 +230,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   print no file count in that case. (#373)
 - **`search_docs` no longer accepts `source: "api"`**, which never had entries.
   The valid sources are all, guides, stimulus, turbo and hotwire. (#322)
+- **The auth payload's `has_secure_password` lists only models with the
+  default password.** A named one (`has_secure_password :six_digit_code`) goes
+  under a new `secure_password_digests` key, model => attributes. A class
+  written across several files keeps its password, and a nested class's
+  digest is not credited to the outer model. (#369)
+- **`model_details` Structure sections no longer share a line.** Each section
+  ends on the line before the next one starts, so a 3-line model reads
+  `class definition(1-1) → associations(2-3)` where 5.31.0 printed `(1-2)`.
+- **The schema payload's `declared_tables` includes db/schema.rb's
+  `create_virtual_table` names.** The booted `schema` line that compares
+  declared and connected tables counts a virtual table as a table and a view
+  as neither, as the header above it does, so the two numbers match.
 
 ### Fixed
 
