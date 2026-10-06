@@ -6038,6 +6038,35 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    it "reports no STI where the schema shows the base's table has no type column" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[7.1].define(version: 1) do
+            create_table "users" do |t|
+              t.string "name"
+              t.bigint "type_id"
+            end
+            create_table "principals" do |t|
+              t.string "type"
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "user.rb"), "class User < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app", "models", "null_user.rb"), "class NullUser < User\nend\n")
+        File.write(File.join(dir, "app", "models", "principal.rb"), "class Principal < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app", "models", "group.rb"), "class Group < Principal\nend\n")
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["User"]).not_to have_key(:sti)
+        expect(models["NullUser"]).not_to have_key(:sti)
+        expect(models["NullUser"][:table_name]).to eq("users")
+        expect(models["Group"][:sti]).to include(sti_parent: "Principal", type_column: "type")
+      end
+    end
+
     it "takes the type column from an inheritance_column a base sets" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models"))

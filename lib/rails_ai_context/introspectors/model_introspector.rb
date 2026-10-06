@@ -154,9 +154,8 @@ module RailsAiContext
       end
 
       # The same shape the booted tier reports under :sti, off the chain the
-      # static tier already resolves to share the base's table. A model that
-      # inherits from another model IS the STI relation, so no type column has
-      # to be read to name it.
+      # static tier already resolves to share the base's table. The caller
+      # drops it when the schema shows that table has no type column.
       def static_sti_info(class_name, sti_parents)
         parent = sti_parents[class_name]
         children = sti_parents.select { |_name, other_parent| other_parent == class_name }.keys.sort
@@ -168,6 +167,12 @@ module RailsAiContext
           sti_parent: parent,
           sti_children: (children unless children.empty?)
         }.compact
+      end
+
+      # Rails runs no STI on a table without the type column; a table the dump does not hold is not known to lack it.
+      def lacks_column?(table, column)
+        reader = SchemaReader.for(app.root)
+        reader.tables.key?(table) && column != RailsAiContext::Confidence::INFERRED && !reader.column?(table, column)
       end
 
       # The value as written, read the way Rails reads it: a symbol or a string names the column.
@@ -1655,7 +1660,8 @@ module RailsAiContext
         }
         details.merge!(extract_macros_from_ast(data, path))
         details.merge!(extract_detailed_macros_from_ast(data))
-        details[:sti] = sti.merge(type_column: static_type_column(details[:model_settings])) if sti
+        type_column = static_type_column(details[:model_settings]) if sti
+        details[:sti] = sti && !lacks_column?(details[:table_name], type_column) ? sti.merge(type_column: type_column) : nil
         downgrade_records(details.compact)
       end
 

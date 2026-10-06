@@ -23,7 +23,11 @@ module RailsAiContext
       # a dump that parses to zero tables falls through to the next source.
       def self.for(root)
         root = root.to_s
+        # One parse per run however many introspectors ask.
+        RailsAiContext::RunCache.fetch([ :schema_reader, root ]) { choose(root) }
+      end
 
+      def self.choose(root)
         candidates = SchemaDumpPath.candidates(root)
         candidates.each do |format, path|
           next unless File.exist?(path)
