@@ -50,6 +50,23 @@ RSpec.describe RailsAiContext::Fingerprinter do
       end
     end
 
+    it "detects a change to every app, test and spec source an introspector reads into the context" do
+      root = app.root.to_s
+      files = %w[test/mailers/previews/user_mailer_preview.rb spec/mailers/previews/user_mailer_preview.rb
+                 app/subscribers/sql_subscriber.rb app/blueprints/user_blueprint.rb app/resources/user_resource.rb
+                 app/misc/rodauth_main.rb app/mailboxes/application_mailbox.rb test/fixtures/widgets.yml
+                 spec/factories/widgets.rb spec/models/widget_spec.rb]
+      files.each do |file|
+        FileUtils.mkdir_p(File.join(root, File.dirname(file)))
+        File.write(File.join(root, file), "\n")
+      end
+      files.each do |file|
+        before = described_class.compute(app)
+        File.utime(Time.now + 5, Time.now + 5, File.join(root, file))
+        expect(described_class.compute(app)).not_to eq(before), file
+      end
+    end
+
     it "detects changes to .erb view files" do
       before = described_class.compute(app)
       File.utime(Time.now + 5, Time.now + 5, File.join(app.root, "app/views/posts/index.html.erb"))
@@ -145,8 +162,7 @@ RSpec.describe RailsAiContext::Fingerprinter do
       require "tmpdir"
       Dir.mktmpdir do |root|
         FileUtils.mkdir_p(File.join(root, "app", "serializers", "concerns"))
-        dirs = described_class.send(:watched_dirs, root)
-        expect(dirs).to include(File.join(root, "app", "serializers", "concerns"))
+        expect(described_class.scope_dirs(root)).to include(File.join(root, "app", "serializers", "concerns"))
       end
     end
 
@@ -158,7 +174,7 @@ RSpec.describe RailsAiContext::Fingerprinter do
         dirs = described_class.send(:watched_dirs, root)
         expect(dirs).to include(File.join(root, "lib"))
         expect(dirs).not_to include(File.join(root, "lib", "api"))
-        expect(described_class.changed_since(root, Time.now - 60)).to eq([ "lib" ])
+        expect(described_class.changed_since(root, Time.now - 60)).to eq([ "lib/api" ])
       end
     end
 

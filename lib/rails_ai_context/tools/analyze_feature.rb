@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "pathname"
+
 module RailsAiContext
   module Tools
     class AnalyzeFeature < BaseTool

@@ -237,7 +237,7 @@ Four cache layers:
 
 SHA256-based change detection:
 
-- Watches: `app/`, `config/`, `db/`, `lib/`, `rakelib/`, Gemfile.lock, `config.ru`, the Rakefile
+- Watches: `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `spec/`, Gemfile.lock, `config.ru`, the Rakefile
 - Computes a composite fingerprint from all watched files
 - Used by introspection cache and live reload to detect actual changes
 

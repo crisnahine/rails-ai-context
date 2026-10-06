@@ -39,7 +39,14 @@ RSpec.describe RailsAiContext::FixtureKeys do
           password_digest: <%= password_digest %>
       YAML
 
-      expect(parsed).to eq("one" => { "email_address" => "one@example.com", "password_digest" => "#{RailsAiContext::ConfigYaml::ERB_OUTPUT}_1" })
+      expect(parsed).to eq("one" => { "email_address" => "one@example.com", "password_digest" => "#{RailsAiContext::ConfigYaml::ERB_OUTPUT}_1_" })
+    end
+
+    it "keeps the digits the file writes right after an output tag" do
+      parsed = described_class.parse("one:\n  amount_cents: <%= dollars %>00\n  ip: 10.0.0.<%= n %>5\n")
+
+      shown = parsed["one"].transform_values { |value| RailsAiContext::ConfigYaml.shown(value) }
+      expect(shown).to eq("amount_cents" => "<%= ... %>00", "ip" => "10.0.0.<%= ... %>5")
     end
 
     it "drops an output tag alone on its line, which writes lines it cannot see" do

@@ -83,7 +83,7 @@ module RailsAiContext
                   job.name.start_with?("ActionMailer", "ActiveStorage::", "ActionMailbox::", "Turbo::", "Sentry::")
           next unless app_defined?(job)
           if SuperclassChain.abstract_base?(job.name, inherited: job.descendants.any?)
-            reflected_bases << { name: job.name, file: source_file_for(job) }
+            reflected_bases << { name: job.name, file: source_file_for(job), active_job: true }
             next
           end
 
@@ -102,6 +102,7 @@ module RailsAiContext
           {
             name: job.name,
             file: source_file_for(job),
+            active_job: true,
             queue: queue.to_s,
             # A block priority is a Proc here; the source names it instead.
             priority: (job.priority unless job.priority.is_a?(Proc))
@@ -126,7 +127,7 @@ module RailsAiContext
         declares = candidate_body(name).select { |m| JOB_BASE_DECLARATIONS.include?(m[:macro]) }
                          .sort_by { |m| m[:offset] }.map { |m| written(candidate.source, m) }
         heirs = job_candidates.keys.select { |other| other != name && chain_of(other).include?(name) }
-        { name: name, file: candidate.file, queue: inherited_queue(name),
+        { name: name, file: candidate.file, active_job: (true if active_job?(name)), queue: inherited_queue(name),
           options: inherited_options(name).presence, retries: RetryPolicy.entries(macros).presence,
           declares: declares.presence, inherited_by: heirs.sort.presence }.compact
       end
@@ -433,6 +434,7 @@ module RailsAiContext
           retries = RetryPolicy.entries(ast[:macros])
 
           job = { name: name, file: candidate.file }
+          job[:active_job] = true if active
           job[:unknown_base] = true if unknown_base
           job[:que] = true if que
           job[:queue] = queue if queue
@@ -1045,14 +1047,14 @@ module RailsAiContext
       def registered(name, relative, computed: [], constants: {})
         text = name.to_s
         return { name: constants[text], file: relative } if constants[text]
-        return { name: text.camelize, file: relative } if name.is_a?(Symbol) || (literal_name?(text) && !computed.include?(text))
+        return { name: text.camelize.delete_prefix("::"), file: relative } if name.is_a?(Symbol) || (literal_name?(text) && !computed.include?(text))
 
         { name: text, file: relative, unresolved: true }
       end
 
       # A string value's characters, not Ruby source.
       def literal_name?(text)
-        text.match?(%r{\A\w+(?:/\w+)*\z})
+        text.match?(%r{\A(?:::)?\w+(?:(?:/|::)\w+)*\z})
       end
 
       # A version that is not a literal is the running Rails's, past every cutoff.

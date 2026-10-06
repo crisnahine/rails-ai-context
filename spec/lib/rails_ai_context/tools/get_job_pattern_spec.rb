@@ -123,6 +123,20 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
         expect(answer(queue_yml, job: "ResqueThing")).not_to include("no worker in")
       end
 
+      it "never flags a Que or Sidekiq base on its own page, and still flags an Active Job base" do
+        jobs = File.join(tmpdir.tap { |dir| FileUtils.mkdir_p(File.join(dir, "app/jobs")) }, "app/jobs")
+        File.write(File.join(jobs, "application_que_job.rb"), "class ApplicationQueJob < Que::Job\n  self.queue = \"que_main\"\nend\n")
+        2.times { |i| File.write(File.join(jobs, "que#{i}.rb"), "class Que#{i} < ApplicationQueJob\n  def run; end\nend\n") }
+        File.write(File.join(jobs, "base_worker.rb"), "class BaseWorker\n  include Sidekiq::Job\n  sidekiq_options queue: \"low\"\nend\n")
+        2.times { |i| File.write(File.join(jobs, "low#{i}_worker.rb"), "class Low#{i}Worker < BaseWorker\n  def perform; end\nend\n") }
+        File.write(File.join(jobs, "maintenance_job.rb"), "class MaintenanceJob < ApplicationJob\n  queue_as :maintenance\nend\n")
+        2.times { |i| File.write(File.join(jobs, "sweep#{i}_job.rb"), "class Sweep#{i}Job < MaintenanceJob\nend\n") }
+
+        expect(answer(queue_yml, job: "ApplicationQueJob")).to include("**Queue:** `que_main`\n")
+        expect(answer(queue_yml, job: "BaseWorker")).to include("**Queue:** `low`\n")
+        expect(answer(queue_yml, job: "MaintenanceJob")).to include("**Queue:** `maintenance` (no worker in config/queue.yml polls it)")
+      end
+
       it "says so on the page of a job whose queue no worker polls" do
         expect(answer(queue_yml, job: "CleanupJob")).to include("**Queue:** `maintenance` (no worker in config/queue.yml polls it)")
         expect(answer(queue_yml, job: "MailJob")).to include("**Queue:** `mailers`\n")
@@ -860,6 +874,30 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text).to include("- `computed`: `CleanupJob` every hour (computed, from config/recurring.yml)")
       expect(text_for(job: "NightlyJob")).to include("**Schedule:** computed (from config/sidekiq.yml)")
       expect(text).not_to include("RAC_ERB_OUTPUT")
+    end
+
+    it "says an ERB tag sets a recurring task's class or command, never an empty code span" do
+      write("config/recurring.yml", <<~YAML)
+        production:
+          computed_class:
+            class: <%= x %>
+            schedule: every hour
+          computed_command:
+            command: <%= y %>
+            schedule: every day
+      YAML
+      write("config/sidekiq.yml", <<~YAML)
+        :scheduler:
+          :schedule:
+            NightlyJob:
+              class: <%= z %>
+              every: 5m
+      YAML
+      text = text_for(detail: "full")
+      expect(text).to include("- `computed_class`: a class an ERB tag sets, every hour (production, from config/recurring.yml)")
+      expect(text).to include("- `computed_command`: a command an ERB tag sets, every day (production, from config/recurring.yml)")
+      expect(text).to include("- `NightlyJob`: a class an ERB tag sets, 5m (from config/sidekiq.yml)")
+      expect(text).not_to include("``")
     end
 
     it "reads a computed GoodJob cron schedule as computed, not as a marker" do

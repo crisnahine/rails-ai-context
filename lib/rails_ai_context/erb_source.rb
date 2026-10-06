@@ -60,7 +60,7 @@ module RailsAiContext
         tag = match[0]
         next "\n" * tag.count("\n") unless tag.start_with?("<%=") && !lines_written?(source, match.begin(0), match.end(0))
 
-        "#{marker}_#{count += 1}"
+        "#{marker}_#{count += 1}_"
       end
     end
 

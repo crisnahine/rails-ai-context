@@ -209,14 +209,13 @@ module RailsAiContext
         "#{line} No worker polls #{missed.map { |queue, held| "#{queue} (#{held.filter_map { |j| j[:name] }.join(', ')})" }.join(', ')}."
       end
 
-      # An Active Job's plain queue name no worker pattern matches: "*" polls all, "name*" a prefix.
-      # Que and Resque jobs run on their own workers.
+      # An Active Job's plain queue name no worker pattern matches: "*" polls all, "name*" a prefix; Solid Queue runs no other kind.
       private_class_method def self.unpolled_queues(data, jobs)
         config = data[:solid_queue_config]
         return [] if !config.is_a?(Hash) || config[:queues_computed]
 
         patterns = Array(config[:queues])
-        jobs.reject { |job| job[:que] || job[:unknown_base] }.select do |job|
+        jobs.select { |job| job[:active_job] }.select do |job|
           queue = job[:queue].to_s
           queue.match?(/\A[\w.:-]+\z/) && patterns.none? { |pattern| pattern.end_with?("*") ? queue.start_with?(pattern.delete_suffix("*")) : pattern == queue }
         end
@@ -590,7 +589,9 @@ module RailsAiContext
 
         [ "## Recurring Tasks", *schedules.map { |task|
           label = task[:name] ? "`#{task[:name]}`: " : ""
-          "- #{label}`#{task[:class] || task[:command]}` #{schedule_text(task)}"
+          runs = task[:class] || task[:command]
+          runs = runs ? "`#{runs}` " : "#{task[:computed] ? "a #{task[:computed]} an ERB tag sets" : "no class or command"}, "
+          "- #{label}#{runs}#{schedule_text(task)}"
         } ]
       end
 

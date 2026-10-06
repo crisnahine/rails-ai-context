@@ -325,7 +325,7 @@ Introspection results are cached at three levels:
 2. **AST cache** - Per-file parse results, invalidated by file content change (SHA256), with a stat shortcut for a file older than the read
 3. **Run cache** - File lists, stats and directory answers for one introspection run, dropped when it ends
 
-The **Fingerprinter** computes a composite SHA256 from all watched directories (`app/`, `config/`, `db/`, `lib/`, `rakelib/`, `Gemfile.lock`, `config.ru`, the Rakefile). When the fingerprint changes, the introspection cache is invalidated even if TTL hasn't expired.
+The **Fingerprinter** computes a composite SHA256 from all watched directories (`app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `spec/`, `Gemfile.lock`, `config.ru`, the Rakefile). When the fingerprint changes, the introspection cache is invalidated even if TTL hasn't expired.
 
 **Live Reload** watches these directories and calls `reset_all_caches!` when changes are detected, then notifies connected MCP clients via `notify_resources_list_changed`.
 
