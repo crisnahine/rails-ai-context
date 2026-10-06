@@ -117,7 +117,8 @@ module RailsAiContext
       CURRENT_ATTRIBUTE_BASES = %w[ActiveSupport::CurrentAttributes Rails::CurrentAttributes].freeze
       RESET_HOOKS = %i[resets after_reset before_reset].freeze
 
-      # class name => the attributes it declares and its reset hooks.
+      # class name => the attributes it declares and its reset hooks. declarations is the
+      # shared reader cached per tree, so the macro walk is the one walk, on matching classes only.
       def current_attributes
         @current_attributes ||= model_classes.filter_map do |name, record|
           declared = DeclaredConstant.declarations(record.source).first

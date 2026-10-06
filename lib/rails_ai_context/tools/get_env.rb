@@ -413,6 +413,7 @@ module RailsAiContext
       ANYWAY_BASES = %w[Anyway::Config ApplicationConfig].freeze
 
       # anyway_config reads "#{env_prefix}_#{ATTR}"; the prefix defaults to the class name before `Config` (PAYMENT_*).
+      # declarations is the shared reader cached per tree; the macro walk runs on a matching class only.
       private_class_method def self.scan_anyway_configs(root)
         ANYWAY_CONFIG_DIRS.flat_map { |dir| Dir.glob(File.join(root, dir, "**", "*.rb")).sort }.filter_map do |path|
           file = path.delete_prefix("#{root}/")
