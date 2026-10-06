@@ -378,6 +378,8 @@ module RailsAiContext
       private_class_method def self.note_lines(schema)
         lines = schema[:note].to_s.empty? ? [] : [ "_#{schema[:note]}_" ]
         lines << "**Extensions:** #{schema[:extensions].join(', ')}" if schema[:extensions]&.any?
+        # The context keeps a search path only when it holds more than public.
+        lines << "**Search path:** #{schema[:search_path].join(', ')}" if schema[:search_path].is_a?(Array)
         lines
       end
 

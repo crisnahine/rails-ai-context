@@ -23,8 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   formats now read the search path from config/database.yml, or its older
   name `schema_order`, take `"$user"` as the configured username when the dump
   creates that schema, and when two schemas hold the same table name, show the
-  one in the earlier schema, as PostgreSQL resolves it. The schema answer
-  names the search path when it holds more than `public`.
+  one in the earlier schema, as PostgreSQL resolves it. When the search path
+  holds more than `public`, the schema answer names it on a `**Search path:**`
+  line, and the JSON answer under `search_path`.
 - **A table Rails 8.0 dumps twice lists its columns, foreign keys and check
   constraints once.** Before Rails 8.1, schema.rb writes a table and its
   foreign keys once per search path schema holding its name, and the static
@@ -47,8 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not dumped again since a Rails upgrade still reads right; how the connection
   names them follows Gemfile.lock, or the stamp when the lock names none. Both tiers list enum types in name order, and a table's Enum
   types section pairs each column with the type the search path finds for it,
-  so a column `mood` whose type is `public.mood` shows that entry. A booted app
-  on Rails 7.0 to 8.0 reads its search path too, where before only 8.1 did.
+  so a column `mood` whose type is `public.mood` shows that entry. The booted
+  app reads its search path with SQL on every Rails version.
 - **A table outside the search path stays out of the table list but can still
   be looked up.** Without a boot, a schema.rb table in another schema was
   listed and counted, while the booted app leaves it out. Both tiers now leave

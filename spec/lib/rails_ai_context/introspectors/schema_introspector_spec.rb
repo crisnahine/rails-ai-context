@@ -2943,6 +2943,18 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       FileUtils.rm_rf(dir)
     end
 
+    it "names the search path in the markdown answer when it holds more than public" do
+      dir = pg_app({ "db/structure.sql" => shadowing_sql }, rails: "8.1.4")
+      plain = pg_app({ "db/structure.sql" => shadowing_sql }, rails: "8.1.4", yml: "")
+
+      expect(ask(dir, detail: "summary")).to include("**Search path:** app, public")
+      expect(ask(dir, detail: "full")).to include("**Search path:** app, public")
+      expect(ask(plain, detail: "summary")).not_to include("**Search path:**")
+    ensure
+      FileUtils.rm_rf(dir)
+      FileUtils.rm_rf(plain)
+    end
+
     it "keeps tables outside the search path out of the JSON listing" do
       dir = pg_app({ "db/structure.sql" => shadowing_sql }, rails: "8.1.4")
       json = JSON.parse(ask(dir, detail: "summary", format: "json", limit: 1))
