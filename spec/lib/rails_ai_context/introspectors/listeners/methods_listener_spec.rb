@@ -617,6 +617,14 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener, "metho
     )
   end
 
+  it "gives an alias its original's params as well as its signature" do
+    source = "class Gadget\n  def build(name, size: 1)\n  end\n  alias_method :setup, :build\n  alias again setup\nend\n"
+    methods = parse_and_dispatch(source).to_h { |m| [ m[:name], m ] }
+
+    expect(methods["setup"]).to include(signature: "setup(name, size: 1)", params: methods["build"][:params])
+    expect(methods["again"]).to include(signature: "again(name, size: 1)", params: methods["build"][:params])
+  end
+
   it "honors the options that leave instance methods out" do
     source = <<~RUBY
       class Gadget
