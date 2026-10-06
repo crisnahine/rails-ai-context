@@ -333,6 +333,7 @@ module RailsAiContext
           configs << "travis" if File.exist?(File.join(dir, ".travis.yml"))
           configs << "buildkite" if Dir.exist?(File.join(dir, ".buildkite")) || Dir.glob(File.join(dir, "buildkite.{yml,yaml,json}")).any?
           configs << "jenkins" if File.file?(File.join(dir, "Jenkinsfile"))
+          configs << "bitbucket_pipelines" if File.file?(File.join(dir, "bitbucket-pipelines.yml"))
           configs
         end.uniq
       end

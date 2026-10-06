@@ -573,13 +573,14 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
       ])
     end
 
-    it "names Buildkite and Jenkins beside the others" do
+    it "names Buildkite, Jenkins and Bitbucket Pipelines beside the others" do
       write(".gitlab-ci.yml")
       write(".circleci/config.yml")
       write(".buildkite/pipeline.yml")
       write("Jenkinsfile")
+      write("bitbucket-pipelines.yml")
 
-      expect(payload[:ci_config]).to eq(%w[circleci gitlab_ci buildkite jenkins])
+      expect(payload[:ci_config]).to eq(%w[circleci gitlab_ci buildkite jenkins bitbucket_pipelines])
       expect(payload[:ci_steps]).to be_nil
     end
 
