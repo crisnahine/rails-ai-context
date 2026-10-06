@@ -1441,7 +1441,8 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
 
         it "lists the siblings of a traced def in every form, leaving out the private ones" do
           ledger = "class Billing::Ledger\n  private def secret_total = 1\n  def Ledger.build = new\n" \
-                   "  ruby2_keywords def forward(*args); end\n  def endless = secret_total\nend\n"
+                   "  ruby2_keywords def forward(*args); end\n  def endless = secret_total\n" \
+                   "  def initialize_copy(other); end\n  def respond_to_missing?(name, all = false) = false\nend\n"
           with_search_app(files.merge("app/models/billing/ledger.rb" => ledger)) do
             method_walks = Hash.new(0)
             allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_dispatch).and_wrap_original do |original, result, map|

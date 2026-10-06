@@ -15,6 +15,27 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener do
     expect(results.first).to include(name: "full_name", scope: :instance, visibility: :public)
   end
 
+  it "records the hooks Ruby always makes private as private, unless marked public" do
+    source = <<~RUBY
+      class User
+        def initialize; end
+        def initialize_copy(other); end
+        def initialize_dup(other); end
+        def initialize_clone(other, freeze: nil); end
+        def respond_to_missing?(name, all = false) = false
+        public def initialize_copy(other); end
+        def self.respond_to_missing?(name, all = false) = false
+      end
+    RUBY
+    results = RailsAiContext::Introspectors::SourceIntrospector.walk_source(source, { methods: -> { described_class.new(include_initialize: true) } })[:methods]
+
+    expect(results.map { |r| [ r[:name], r[:scope], r[:visibility] ] }).to eq([
+      [ "initialize", :instance, :private ], [ "initialize_copy", :instance, :private ], [ "initialize_dup", :instance, :private ],
+      [ "initialize_clone", :instance, :private ], [ "respond_to_missing?", :instance, :private ],
+      [ "initialize_copy", :instance, :public ], [ "respond_to_missing?", :class, :public ]
+    ])
+  end
+
   it "detects class methods with self." do
     source = <<~RUBY
       class User
