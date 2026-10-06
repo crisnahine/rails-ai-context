@@ -208,6 +208,14 @@ RSpec.describe RailsAiContext::Introspectors::ActiveSupportIntrospector do
       end
     end
 
+    it "lets a failing walk raise instead of dropping the file from both lists" do
+      allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source).and_raise(NoMethodError, "broken listener")
+
+      expect {
+        subscriptions("config/initializers/notifications.rb" => "ActiveSupport::Notifications.subscribe(\"sql.active_record\") { |e| }\n")
+      }.to raise_error(NoMethodError, "broken listener")
+    end
+
     it "lists each event the app subscribes to, with the file and line" do
       result = subscriptions(
         "config/initializers/notifications.rb" => <<~RUBY,
