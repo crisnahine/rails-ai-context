@@ -77,6 +77,8 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
     source = <<~RUBY
       ::ActiveSupport.on_load(:active_record) { self.table_name_prefix = "x_" }
       ActiveSupport.on_load(:active_record) { |base| base.pluralize_table_names = false }
+      ActiveSupport.on_load(:active_record) { _1.primary_key_prefix_type = :table_name }
+      ActiveSupport.on_load(:active_record) { it.table_name_suffix = "_y" }
       ActiveSupport.on_load(:active_record) { |(a, b)| a.skipped = 1 }
       ActiveSupport.on_load(:active_record) do |base|
         other = base
@@ -89,7 +91,8 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
 
     results = assignments(source, "on_load(:active_record)")
 
-    expect(results.map { |r| [ r[:path], r[:value] ] }).to eq([ [ [ :table_name_prefix ], "x_" ], [ [ :pluralize_table_names ], false ] ])
+    expect(results.map { |r| [ r[:path], r[:value] ] }).to eq([ [ [ :table_name_prefix ], "x_" ], [ [ :pluralize_table_names ], false ],
+                                                                    [ [ :primary_key_prefix_type ], :table_name ], [ [ :table_name_suffix ], "_y" ] ])
   end
 
   it "reads a nested config assignment" do

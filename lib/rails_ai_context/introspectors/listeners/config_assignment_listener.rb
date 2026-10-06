@@ -132,8 +132,18 @@ module RailsAiContext
           hook = node.arguments&.arguments&.first
           return unless hook.is_a?(Prism::SymbolNode)
 
-          base = Array(node.block.parameters&.parameters&.requireds).first
-          [ "on_load(:#{hook.unescaped})", (base.name if base.is_a?(Prism::RequiredParameterNode)) ]
+          [ "on_load(:#{hook.unescaped})", block_base(node.block.parameters) ]
+        end
+
+        # The name the block's first argument reads as: `|base|`, `_1`, or `it`.
+        def block_base(params)
+          case params
+          when Prism::NumberedParametersNode then :_1
+          when Prism::ItParametersNode then :it
+          when Prism::BlockParametersNode
+            base = Array(params.parameters&.requireds).first
+            base.name if base.is_a?(Prism::RequiredParameterNode)
+          end
         end
 
         def record_assignment(node)
@@ -267,6 +277,12 @@ module RailsAiContext
 
               root, base = @self_roots.last
               parts.unshift(base && current.name == base ? root.to_sym : current.name)
+              current = nil
+            when Prism::ItLocalVariableReadNode
+              root, base = @self_roots.last
+              return nil unless base == :it
+
+              parts.unshift(root.to_sym)
               current = nil
             when Prism::ConstantReadNode, Prism::ConstantPathNode
               parts.unshift(constant_path_string(current).to_sym)
