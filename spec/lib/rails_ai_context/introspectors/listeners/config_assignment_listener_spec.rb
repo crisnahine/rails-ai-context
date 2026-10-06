@@ -276,6 +276,22 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
     expect(writes).to eq([ [ :hosts, :<< ], [ :middleware, :push ] ])
   end
 
+  it "records a chained << once, with the whole chain as its source and no single value" do
+    writes = parse_and_dispatch(%(config.hosts << "a.com" << "b.com"\n)).select { |r| r[:write] }
+
+    expect(writes.map { |r| [ r[:path], r[:value], r[:source] ] }).to eq([ [ %i[hosts <<], nil, %(config.hosts << "a.com" << "b.com") ] ])
+  end
+
+  it "redacts an element write under a secret-named key" do
+    writes = parse_and_dispatch(<<~RUBY).select { |r| r[:write] }
+      config.action_mailer.smtp_settings[:password] = "hunter2pass"
+      config.x.stripe.store(:secret_key, "plainvalue")
+      config.x.stripe.store(:region, "eu")
+    RUBY
+
+    expect(writes.map { |r| r[:source] }).to eq([ "[FILTERED]", "[FILTERED]", %(config.x.stripe.store(:region, "eu")) ])
+  end
+
   it "records a write through an index read as a write of the indexed setting" do
     writes = parse_and_dispatch(<<~RUBY).select { |r| r[:write] }.map { |r| r[:path] }
       config.paths["config/routes.rb"] << "config/extra_routes.rb"
