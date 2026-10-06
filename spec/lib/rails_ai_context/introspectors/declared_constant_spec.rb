@@ -3,6 +3,10 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
+  it "keeps the raw declaration cache behind .declarations" do
+    expect(described_class).not_to respond_to(:declarations_in)
+  end
+
   # A file that declares only a module names a constant too, and the path
   # camelization is wrong for it in exactly the way it is wrong for a class:
   # an app inflection only changes case.
@@ -270,7 +274,7 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
         Other = Struct.new(:a)
       RUBY
 
-      found = described_class.declarations(source).to_h { |d| [ d.name, [ d.superclass, d.nesting ] ] }
+      found = described_class.declarations(source, assignments: true).to_h { |d| [ d.name, [ d.superclass, d.nesting ] ] }
 
       expect(found).to eq(
         "AdminNote" => [ "ApplicationRecord", [] ],
@@ -279,6 +283,20 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
         "Admin::Mark" => [ "Admin::Flag", [] ],
         "Plain" => [ nil, [] ]
       )
+    end
+
+    it "leaves them out by default, so a Class.new error constant is never taken for the file's class" do
+      source = <<~RUBY
+        module Tenancy
+          Missing = Class.new(StandardError)
+          class Current < ActiveSupport::CurrentAttributes
+          end
+        end
+      RUBY
+
+      expect(described_class.declarations(source).map(&:name)).to eq([ "Tenancy::Current" ])
+      expect(described_class.declared_names(source)).to eq([ "Tenancy::Current" ])
+      expect(described_class.declarations(source, assignments: true).map(&:name)).to eq([ "Tenancy::Missing", "Tenancy::Current" ])
     end
   end
 

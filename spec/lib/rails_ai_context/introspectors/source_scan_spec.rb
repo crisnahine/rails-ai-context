@@ -215,6 +215,22 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
     end
   end
 
+  it "keeps a subclass of a class whose own name is written from the root" do
+    Dir.mktmpdir do |dir|
+      {
+        "app/services/ledger_top.rb" => "class ::LedgerTop < ApplicationRecord\nend\n",
+        "app/services/ledger_sub.rb" => "class LedgerSub < LedgerTop\nend\n"
+      }.each do |name, source|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+        File.write(File.join(dir, name), source)
+      end
+
+      expect(described_class.model_paths(dir).map(&:file)).to contain_exactly(
+        "app/services/ledger_top.rb", "app/services/ledger_sub.rb"
+      )
+    end
+  end
+
   it "follows a symlinked directory or file in app/models to a target inside the app, as Zeitwerk does" do
     Dir.mktmpdir do |dir|
       Dir.mktmpdir do |elsewhere|

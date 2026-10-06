@@ -135,7 +135,7 @@ module RailsAiContext
 
           added.each do |record, pairs|
             kept << record
-            known.merge(pairs.map { |name, _| name.include?("::") ? name : lookup(record.path_name, name).last })
+            known.merge(pairs.map { |name, _| qualified(record.path_name, name) })
           end
         end
         pending.filter_map { |record, _| record if kept.include?(record) }
@@ -149,6 +149,13 @@ module RailsAiContext
 
         scopes = path_name.split("::")[0...-name.split("::").size]
         (0..scopes.size).map { |depth| [ *scopes.first(depth), base ].join("::") }
+      end
+
+      # The constant a `class name` line in the file `path_name` names declares.
+      def qualified(path_name, name)
+        return name.delete_prefix("::") if name.start_with?("::")
+
+        name.include?("::") ? name : lookup(path_name, name).last
       end
 
       # The candidates, and every name the scanned files declare by path or by a superclassed class.
@@ -166,7 +173,7 @@ module RailsAiContext
             next if pairs.empty?
 
             records << [ record, pairs ]
-            pairs.each { |name, _| declared << (name.include?("::") ? name : lookup(record.path_name, name).last) }
+            pairs.each { |name, _| declared << qualified(record.path_name, name) }
           end
         end
         [ found, declared ]
@@ -184,7 +191,7 @@ module RailsAiContext
         pairs
       end
 
-      private_class_method :scan, :scan_dir, :ruby_files, :walk_dir, :within?, :extra_model_candidates, :extra_model_declarations, :class_declarations, :lookup
+      private_class_method :scan, :scan_dir, :ruby_files, :walk_dir, :within?, :extra_model_candidates, :extra_model_declarations, :class_declarations, :lookup, :qualified
 
       # `kind: :models` reads model_paths: what model_details lists, not only app/models.
       def each(root, kind:, skip_concerns: true, base_model: nil, &block)
