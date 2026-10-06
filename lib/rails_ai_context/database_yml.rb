@@ -76,9 +76,11 @@ module RailsAiContext
       search_path_entries(root, name).map(&:first)
     end
 
-    # The schema the search path's "$user" names, or nil.
+    # The schema only the search path's "$user" names, or nil: one the path also names outright is configured.
     def user_schema(root, name = "primary")
-      search_path_entries(root, name).find(&:last)&.first
+      entries = search_path_entries(root, name)
+      user = entries.find(&:last)&.first
+      user unless entries.any? { |schema, from_user| !from_user && schema == user }
     end
 
     # [schema, from_user] per search path entry.
