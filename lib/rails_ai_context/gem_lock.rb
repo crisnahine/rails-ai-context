@@ -378,8 +378,8 @@ module RailsAiContext
       declared = {
         bundle.lock_label => locked,
         bundle.gemfile_label => facts[:ruby],
-        ".ruby-version" => version_string(SafeFile.read(File.join(root, ".ruby-version"), max_size: MAX_SIZE)&.strip),
-        ".tool-versions" => version_string(SafeFile.read(File.join(root, ".tool-versions"), max_size: MAX_SIZE)&.[](TOOL_VERSIONS_RUBY, 1)),
+        ".ruby-version" => version_string(read_inside(root, ".ruby-version")&.strip),
+        ".tool-versions" => version_string(read_inside(root, ".tool-versions")&.[](TOOL_VERSIONS_RUBY, 1)),
         **mise_ruby(root)
       }.compact
       engine = declared.values.first&.last

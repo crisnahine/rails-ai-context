@@ -464,6 +464,18 @@ RSpec.describe RailsAiContext::GemLock do
       end
     end
 
+    it "does not follow a .ruby-version or .tool-versions symlinked out of the app" do
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "version"), "3.3.6\n")
+        File.write(File.join(outside, "tools"), "ruby 3.3.6\n")
+        Dir.mktmpdir do |dir|
+          File.symlink(File.join(outside, "version"), File.join(dir, ".ruby-version"))
+          File.symlink(File.join(outside, "tools"), File.join(dir, ".tool-versions"))
+          expect(described_class.for(dir).ruby_versions).to eq({})
+        end
+      end
+    end
+
     it "reads nothing from a mise.toml with no ruby tool or an unreadable one" do
       Dir.mktmpdir do |dir|
         File.write(File.join(dir, "mise.toml"), "[tools]\nruby = \"latest\"\n")
