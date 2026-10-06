@@ -810,6 +810,10 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
         allow(described_class).to receive(:cached_context).and_return({ tests: tests.call })
         text = described_class.call.content.first[:text]
         expect(text).to include("**Suite:** not read: config/boot.rb points Bundler at ../../Gemfile, outside the app's git repository")
+        expect(text).to include("**Framework:** not read, the engine's suite is not read")
+        expect(text).not_to include("no tests yet")
+        expect(described_class.call(model: "Widget").content.first[:text])
+          .to include("Not searched: the engine's suite at `../..` is not read, config/boot.rb points Bundler at ../../Gemfile")
       end
     end
   end
