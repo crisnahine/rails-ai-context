@@ -78,6 +78,7 @@ module RailsAiContext
           end
         end
 
+
         # The segments of `Rails.root.join("a", "b")`, nil unless every one is a literal.
         def app_root_join(node)
           return nil unless node.is_a?(Prism::CallNode) && node.name == :join && app_root?(node.receiver)
@@ -104,8 +105,12 @@ module RailsAiContext
 
         def push_path(value)
           cleaned = value.to_s.strip.delete_prefix("/")
-          @results << cleaned unless cleaned.empty?
+          record_path(cleaned) unless cleaned.empty?
           true
+        end
+
+        def record_path(path)
+          @results << path
         end
       end
     end

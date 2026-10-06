@@ -53,4 +53,15 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::LiteralPaths do
     expect(listener.results).to eq([ "lib" ])
     expect(listener.complete).to eq([ false ])
   end
+
+  it "reports a read as whole when the includer records its own shape" do
+    shaped = Class.new(listener_class) do
+      def record_path(path) = @results << [ :tagged, path ]
+    end
+    listener = shaped.new
+    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(Prism.parse(%(probe ["/", "/lib"])).value)
+
+    expect(listener.results).to eq([ [ :tagged, "lib" ] ])
+    expect(listener.complete).to eq([ true ])
+  end
 end
