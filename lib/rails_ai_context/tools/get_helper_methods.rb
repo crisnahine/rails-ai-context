@@ -347,11 +347,11 @@ module RailsAiContext
           @found = []
         end
 
-        # A prefilter before the parse: whether an include line (`include X, Y`, `include(X)`) names a constant a lib file could hold.
+        # A prefilter before the parse: the source mixes something in and names a constant a lib file could hold, wherever it is written.
         def may_include?(source)
-          return false if @basenames.empty?
+          return false if @basenames.empty? || !source.match?(/\b(?:include|prepend)\b/)
 
-          source.scan(/\b(?:include|prepend)[\s(]+:*([A-Z][^\n]*)/).flatten.flat_map { |line| line.scan(/[A-Z][\w:]*/) }.any? do |written|
+          source.scan(/\b[A-Z][\w:]*/).any? do |written|
             written.split("::").any? { |segment| @basenames.include?(segment.underscore) }
           end
         end

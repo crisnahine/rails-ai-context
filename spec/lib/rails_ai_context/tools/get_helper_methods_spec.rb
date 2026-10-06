@@ -550,18 +550,24 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
         expect(text).not_to include("never")
       end
 
-      it "lists the ones a lib module declares when the controller includes it with parentheses or after another module" do
+      it "lists the ones a lib module declares however the controller writes the include" do
         FileUtils.mkdir_p(File.join(@root, "lib"))
-        %w[paren_mod second_mod].each do |name|
+        %w[paren_mod second_mod multi_line_mod send_mod lead_mod].each do |name|
           File.write(File.join(@root, "lib/#{name}.rb"), "module #{name.camelize}\n  def self.included(base)\n    base.helper_method :#{name}_helper\n  end\nend\n")
         end
         File.write(File.join(@root, "app/controllers/paren_controller.rb"), "class ParenController < ApplicationController\n  include(ParenMod)\nend\n")
         File.write(File.join(@root, "app/controllers/second_controller.rb"), "class SecondController < ApplicationController\n  include Comparable, SecondMod\nend\n")
+        File.write(File.join(@root, "app/controllers/multi_line_controller.rb"), "class MultiLineController < ApplicationController\n  include Comparable,\n          MultiLineMod\nend\n")
+        File.write(File.join(@root, "app/controllers/send_controller.rb"), "class SendController < ApplicationController\n  send(:include, SendMod)\nend\n")
+        File.write(File.join(@root, "app/controllers/lead_controller.rb"), "class LeadController < ApplicationController\n  include ::LeadMod\nend\n")
 
         text = described_class.call(detail: "standard").content.first[:text]
 
         expect(text).to include("- `paren_mod_helper` (ParenMod, `lib/paren_mod.rb`)")
         expect(text).to include("- `second_mod_helper` (SecondMod, `lib/second_mod.rb`)")
+        expect(text).to include("- `multi_line_mod_helper` (MultiLineMod, `lib/multi_line_mod.rb`)")
+        expect(text).to include("- `send_mod_helper` (SendMod, `lib/send_mod.rb`)")
+        expect(text).to include("- `lead_mod_helper` (LeadMod, `lib/lead_mod.rb`)")
       end
 
       it "parses a lib module kept in its outer constant's file once" do
