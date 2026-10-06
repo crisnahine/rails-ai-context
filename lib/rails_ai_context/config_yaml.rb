@@ -26,7 +26,7 @@ module RailsAiContext
 
     # Each output tag reads as a numbered marker; shown, every one is `<%= ... %>` again.
     def shown(text)
-      text.to_s.gsub(/#{ERB_OUTPUT}(?:_\d+)?/o, "<%= ... %>")
+      text.to_s.gsub(/#{ERB_OUTPUT}(?:_\d+_)?/o, "<%= ... %>")
     end
 
     def stringify_keys(value)
