@@ -9,10 +9,7 @@ module RailsAiContext
 
       module_function
 
-      # [format, absolute path] pairs to try in order: the configured dump first, then
-      # the default file of each format, for an app whose configured file is missing.
-      # Only the first is the file Rails would load.
-      # Every schema reader asks, so a run reads the config files once.
+      # [format, path] pairs: the configured dump first (the one Rails loads), then each format's default file.
       def candidates(root)
         root = root.to_s
         RailsAiContext::RunCache.fetch([ :schema_dump_candidates, root ]) do
@@ -54,7 +51,7 @@ module RailsAiContext
         declared = config["schema_format"].to_s
         return declared.to_sym if FILE_NAMES.key?(declared.to_sym) && reads_database_schema_format?(root)
 
-        TableName.active_record_settings(root)[:schema_format] || :ruby
+        ActiveRecordSettings.for(root)[:schema_format] || :ruby
       end
 
       # An app whose lockfile does not say its Active Record is taken to read it.

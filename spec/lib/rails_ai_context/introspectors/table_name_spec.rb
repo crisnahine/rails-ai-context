@@ -50,7 +50,6 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
         Dir.mktmpdir do |dir|
           FileUtils.mkdir_p(File.join(dir, "config"))
           File.write(File.join(dir, "config/application.rb"), body) if body
-          described_class.clear_namespace_prefixes
           return yield(dir)
         end
       end
@@ -81,7 +80,7 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
                      "Rails.application.configure do\n  config.active_record.table_name_suffix = \"_v1\"\nend\n")
           File.write(File.join(dir, "config/initializers/ar.rb"), "ActiveRecord::Base.pluralize_table_names = false\n")
           File.write(File.join(dir, "config/initializers/z.rb"), "Rails.application.config.active_record.table_name_suffix = \"_v2\"\n")
-          described_class.active_record_settings(dir)
+          RailsAiContext::Introspectors::ActiveRecordSettings.for(dir)
         end
 
         expect(result).to eq(table_name_prefix: "op_", table_name_suffix: "_v2", pluralize_table_names: false)
@@ -92,7 +91,7 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
           FileUtils.mkdir_p(File.join(dir, "config/initializers"))
           File.write(File.join(dir, "config/initializers/ar.rb"),
                      "ActiveSupport.on_load(:active_record) do\n  self.table_name_prefix = \"app_\"\n  self.pluralize_table_names = false\nend\n")
-          described_class.active_record_settings(dir)
+          RailsAiContext::Introspectors::ActiveRecordSettings.for(dir)
         end
 
         expect(result).to eq(table_name_prefix: "app_", pluralize_table_names: false)
@@ -300,6 +299,18 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
       end
 
       expect(result).to eq({})
+    end
+
+    it "sees an engine added after an earlier run" do
+      result = app_with("plugins/rss/plugin.rb" => "", "plugins/rss/app/models/thing.rb" => "class Thing; end\n") do |dir|
+        expect(RailsAiContext::RunCache.around { described_class.namespace_prefixes(dir) }).to eq({})
+        engine = File.join(dir, "plugins", "rss", "lib", "rss", "engine.rb")
+        FileUtils.mkdir_p(File.dirname(engine))
+        File.write(engine, "module Rss\n  class Engine < ::Rails::Engine\n    isolate_namespace Rss\n  end\nend\n")
+        RailsAiContext::RunCache.around { described_class.namespace_prefixes(dir) }
+      end
+
+      expect(result).to eq({ "Rss" => "rss_" })
     end
   end
 

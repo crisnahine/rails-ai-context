@@ -102,7 +102,7 @@ module RailsAiContext
               return json_response(table: table_key, databases: groups.flat_map { |dbs, data| dbs.map { |db| [ db, data.except(:unread_calls) ] } }.to_h) if format == "json"
 
               output = groups.map do |dbs, data|
-                in_db = models_data.select { |_, model| model.is_a?(Hash) && dbs.include?((model.dig(:database, :writing) || "primary").to_s) }
+                in_db = models_data.select { |_, model| model.is_a?(Hash) && model[:table_name] == table_key && Payload.model_databases(schema, model).intersect?(dbs) }
                 format_table_markdown(table_key, data, in_db, schema[:enum_types]).sub("\n\n", "\n\n**Database:** #{dbs.join(", ")}\n")
               end.join("\n\n")
             else

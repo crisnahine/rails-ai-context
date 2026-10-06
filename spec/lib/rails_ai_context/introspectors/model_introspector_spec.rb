@@ -1942,7 +1942,6 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
             field :labels, type: Array, default: []
             embeds_many :line_items
             embeds_one :address
-            embedded_in :customer
           end
         RUBY
 
@@ -1953,9 +1952,69 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
                                        { name: :age, type: "Integer", default: "0" }, { name: :labels, type: "Array", default: "[]" } ])
         expect(order[:embeds]).to eq([
           { type: :embeds_many, name: :line_items },
-          { type: :embeds_one, name: :address },
-          { type: :embedded_in, name: :customer }
+          { type: :embeds_one, name: :address }
         ])
+      end
+    end
+
+    # Mongoid keeps an embedded document inside its parent's, and a subclass in its root's collection.
+    it "names the parent of an embedded document and the root's collection for a subclass" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "address.rb"), "class Address\n  include Mongoid::Document\n  embedded_in :author\n  field :city\nend\n")
+        File.write(File.join(dir, "app", "models", "book.rb"), "class Book\n  include Mongoid::Document\n  field :title\nend\n")
+        File.write(File.join(dir, "app", "models", "ebook.rb"), "class Ebook < Book\n  field :url\nend\n")
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["Address"]).to include(embedded_in: "Author")
+        expect(models["Address"]).not_to have_key(:collection)
+        expect(models["Ebook"]).to include(mongoid: true, collection: "books", parent_model: "Book")
+        expect(models["Ebook"][:fields].map { |f| f[:name] }).to eq(%i[title url])
+        expect(models["Ebook"]).not_to have_key(:table_name)
+      end
+    end
+
+    it "gives a document subclass its parent's relations, validations, scopes and callbacks" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "book.rb"), <<~RUBY)
+          class Book
+            include Mongoid::Document
+            field :title
+            belongs_to :author
+            embeds_many :reviews
+            validates :title, presence: true
+            scope :recent, -> { where(:created_at.gt => 1.week.ago) }
+            before_save :stamp
+            after_save :notify
+            before_create :tidy
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "ebook.rb"), <<~RUBY)
+          class Ebook < Book
+            field :url
+            belongs_to :author, optional: true
+            validates :url, presence: true
+            before_save :link
+            after_save :ping
+            skip_callback :create, :before, :tidy
+          end
+        RUBY
+
+        ebook = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Ebook"]
+
+        expect(ebook[:associations].map { |a| [ a[:name].to_s, a[:type].to_s ] }).to eq([ %w[reviews embeds_many], %w[author belongs_to] ])
+        expect(ebook[:associations].last[:options]).to include(optional: true)
+        expect(ebook[:embeds]).to eq([ { type: :embeds_many, name: :reviews } ])
+        expect(ebook[:validations].map { |v| v[:attributes] }).to eq([ [ "title" ], [ "url" ] ])
+        expect(ebook[:scopes].map { |sc| sc[:name] }).to eq(%w[recent])
+        expect(ebook[:callbacks]).to eq("before_save" => %w[stamp link], "after_save" => %w[notify ping])
+        expect(ebook).not_to have_key(:settled_callbacks)
       end
     end
   end
@@ -2167,7 +2226,6 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         write_models(dir,
           "principal.rb" => "class Principal < ApplicationRecord\n  self.table_name = \"\#{table_name_prefix}users\#{table_name_suffix}\"\nend\n",
           "group.rb" => "class Group < Principal\nend\n")
-        RailsAiContext::Introspectors::TableName.clear_namespace_prefixes
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
@@ -2200,7 +2258,6 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
             has_and_belongs_to_many :projects, join_table: "\#{table_name_prefix}custom_fields_projects\#{table_name_suffix}"
           end
         RUBY
-        RailsAiContext::Introspectors::TableName.clear_namespace_prefixes
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
@@ -2220,7 +2277,6 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         File.write(File.join(dir, "config/application.rb"),
                    "module Op\n  class Application < Rails::Application\n    config.active_record.table_name_prefix = \"op_\"\n" \
                    "    config.active_record.table_name_suffix = \"_v2\"\n  end\nend\n")
-        RailsAiContext::Introspectors::TableName.clear_namespace_prefixes
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 

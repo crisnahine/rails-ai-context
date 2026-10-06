@@ -35,33 +35,35 @@ module RailsAiContext
       RailsAiContext.debug_fail(e, nil, label: "database_yml")
     end
 
-    # Each database by name, the primary first. Rails' rule: an env whose values are
-    # all Hashes names one database per key, "primary" or else the first; any other
-    # env is the primary's settings.
+    # Each database by name, in the file's order. An env whose values are all Hashes names one database per key.
     def databases(root)
       config = env(root)
       return {} unless config.is_a?(Hash) && config.any?
-      return { "primary" => config } unless config.values.all?(Hash)
 
-      primary = config.key?("primary") ? "primary" : config.keys.first
-      { primary => config[primary] }.merge(config.except(primary))
+      config.values.all?(Hash) ? config : { "primary" => config }
+    end
+
+    # Rails' rule: "primary", else the first database.
+    def primary_name(root)
+      names = databases(root).keys
+      names.include?("primary") ? "primary" : names.first
     end
 
     # The databases other than the primary that Rails dumps and migrates:
     # HashConfig#database_tasks? skips a replica and database_tasks: false.
     def task_secondaries(root)
-      databases(root).drop(1).to_h.select { |_, entry| !entry["replica"] && entry.fetch("database_tasks", true) }
+      databases(root).except(primary_name(root)).select { |_, entry| !entry["replica"] && entry.fetch("database_tasks", true) }
     end
 
     # The primary database's settings.
     def primary(root)
-      databases(root).values.first
+      databases(root)[primary_name(root)]
     end
 
     # The named database's settings in the running environment, or nil.
     def entry(root, name)
       found = databases(root)
-      found[name] || (found.values.first if name == "primary")
+      found[name] || (found[primary_name(root)] if name == "primary")
     end
 
     # Rails' DatabaseConfigurations: an entry's own url wins over its keys, and an entry

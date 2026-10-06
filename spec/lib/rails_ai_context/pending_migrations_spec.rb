@@ -112,6 +112,17 @@ RSpec.describe RailsAiContext::PendingMigrations do
     end
   end
 
+  # ConnectionPool#migration_context: db_config.migrations_paths || Migrator.migrations_paths.
+  it "reads db/migrate for a secondary whose database.yml entry names no migrations_paths" do
+    Dir.mktmpdir do |dir|
+      root = File.realpath(dir)
+      FileUtils.mkdir_p(File.join(root, "config"))
+      File.write(File.join(root, "config/database.yml"), "#{Rails.env}:\n  primary:\n    adapter: sqlite3\n  analytics:\n    adapter: sqlite3\n")
+
+      expect(described_class.migrate_dirs_for(root, File.join(root, "db/analytics_schema.rb"))).to eq([ File.join(root, "db/migrate") ])
+    end
+  end
+
   describe ".live" do
     it "asks the database once per run however many sections want the answer" do
       allow(RailsAiContext::MigrationStatus).to receive(:pending).and_return([])

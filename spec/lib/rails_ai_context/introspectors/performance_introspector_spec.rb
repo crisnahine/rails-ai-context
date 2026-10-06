@@ -508,7 +508,6 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
           if application
             FileUtils.mkdir_p(File.join(dir, "config"))
             File.write(File.join(dir, "config", "application.rb"), application)
-            RailsAiContext::Introspectors::TableName.clear_namespace_prefixes
           end
           FileUtils.mkdir_p(File.dirname(File.join(dir, "app", "models", model_path)))
           File.write(File.join(dir, "app", "models", model_path), model_source)

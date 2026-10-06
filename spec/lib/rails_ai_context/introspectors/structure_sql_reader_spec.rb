@@ -850,6 +850,12 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
                                                "w" => { materialized: false, sql: "SELECT label\nFROM codes" })
     end
 
+    it "reads a semicolon-ended view whose lines start with words a statement also starts with" do
+      sql = "CREATE VIEW recent_posts AS SELECT id,\n  comment,\n  set,\n  drop,\n  title\nFROM posts WHERE id > 10;\nCREATE TABLE z (a integer);\n"
+
+      expect(described_class.views(sql)).to eq("recent_posts" => { materialized: false, sql: "SELECT id,\n  comment,\n  set,\n  drop,\n  title\nFROM posts WHERE id > 10" })
+    end
+
     it "still reads pg_dump's view whose SELECT starts the next line" do
       sql = "CREATE VIEW public.v AS\n SELECT posts.id\n   FROM public.posts;\n\nCREATE TABLE public.z (a integer);\n"
 

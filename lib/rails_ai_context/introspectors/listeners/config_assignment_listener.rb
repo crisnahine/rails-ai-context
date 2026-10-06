@@ -15,7 +15,9 @@ module RailsAiContext
       #
       # The chain is matched from a root receiver name, so
       # `Rails.application.config.assets.paths = x` reports [:assets, :paths].
-      # The root `on_load(:active_record)` reads `self`, or the block's one parameter, inside that hook's block.
+      # A block root binds the block's first param: `on_load(:active_record)` (self
+      # too, unless the hook yields) or `Apartment.configure` for `Apartment.configure do |c|`.
+      # The param can be named, `_1`, or `it`.
       class ConfigAssignmentListener < BaseListener
         include LiteralPaths
 
@@ -23,6 +25,7 @@ module RailsAiContext
         SETTER = /\A[A-Za-z_]\w*=\z/
         # A predicate or comparison with arguments reads a setting rather than changing it.
         MUTATOR = /\A(?:<<|\[\]=|[A-Za-z_]\w*!?)\z/
+        EVALS = %i[class_eval module_eval class_exec module_exec instance_eval instance_exec].freeze
 
         def initialize(*roots)
           super()
@@ -31,7 +34,8 @@ module RailsAiContext
           @conditions = []
           @statements = Set.new.compare_by_identity
           @def_params = []
-          @self_roots = []
+          # The root `self` and each block-bound local stand for here.
+          @scopes = [ { self: nil, locals: {} } ]
         end
 
         # A call with arguments changes a setting only when it runs as a statement;
@@ -49,13 +53,20 @@ module RailsAiContext
           params = node.parameters
           names = params ? params.child_nodes.flatten.compact.flat_map { |p| p.respond_to?(:name) ? [ p.name ] : [] } : []
           @def_params.push(names)
-          @self_roots.push(nil)
+          @scopes.push(self: nil, locals: {})
         end
 
         def on_def_node_leave(_node)
           @def_params.pop
-          @self_roots.pop
+          @scopes.pop
         end
+
+        def on_class_node_enter(_node) = @scopes.push(self: nil, locals: {})
+        def on_class_node_leave(_node) = @scopes.pop
+        def on_module_node_enter(_node) = @scopes.push(self: nil, locals: {})
+        def on_module_node_leave(_node) = @scopes.pop
+        def on_singleton_class_node_enter(_node) = @scopes.push(self: nil, locals: {})
+        def on_singleton_class_node_leave(_node) = @scopes.pop
 
         # The branch an assignment sits in. Rails' own generated
         # `config/environments/development.rb` assigns `perform_caching` in
@@ -86,7 +97,7 @@ module RailsAiContext
         end
 
         def on_call_node_enter(node)
-          if (hook = load_hook(node)) then @self_roots.push(hook) end
+          @scopes.push(block_scope(node)) if node.block.is_a?(Prism::BlockNode)
           return if node.receiver.nil?
 
           if node.name.to_s.match?(SETTER)
@@ -104,7 +115,7 @@ module RailsAiContext
         end
 
         def on_call_node_leave(node)
-          @self_roots.pop if load_hook(node)
+          @scopes.pop if node.block.is_a?(Prism::BlockNode)
         end
 
         def on_call_operator_write_node_enter(node)
@@ -121,29 +132,55 @@ module RailsAiContext
 
         private
 
-        # `ActiveSupport.on_load(:active_record) { |base| }` names the root `on_load(:active_record)`,
-        # as [root, the parameter that is the base].
-        def load_hook(node)
-          receiver = node.receiver
-          return unless node.name == :on_load && node.block.is_a?(Prism::BlockNode) &&
-                        (receiver.is_a?(Prism::ConstantReadNode) || receiver.is_a?(Prism::ConstantPathNode)) &&
-                        constant_path_string(receiver) == "ActiveSupport"
+        # A block sees the outer locals bar its own params; class_eval and the like run it on another self.
+        def block_scope(node)
+          outer = @scopes.last
+          params = block_params(node.block)
+          own_self = EVALS.include?(node.name) && node.receiver ? receiver_root(node.receiver, outer) : outer[:self]
+          scope = { self: own_self, locals: outer[:locals].except(*params.compact) }
+          root = block_root(node)
+          return scope unless root
 
-          hook = node.arguments&.arguments&.first
-          return unless hook.is_a?(Prism::SymbolNode)
-
-          [ "on_load(:#{hook.unescaped})", block_base(node.block.parameters) ]
+          scope[:locals][params.first] = root if params.first
+          scope[:self] = root if root.start_with?("on_load(") && !extract_keyword_nodes(node).key?(:yield)
+          scope
         end
 
-        # The name the block's first argument reads as: `|base|`, `_1`, or `it`.
-        def block_base(params)
-          case params
-          when Prism::NumberedParametersNode then :_1
-          when Prism::ItParametersNode then :it
-          when Prism::BlockParametersNode
-            base = Array(params.parameters&.requireds).first
-            base.name if base.is_a?(Prism::RequiredParameterNode)
+        # The root an eval's receiver stands for: the hook's self, a bound block param, or a root constant.
+        def receiver_root(receiver, outer)
+          case receiver
+          when Prism::SelfNode then outer[:self]
+          when Prism::LocalVariableReadNode then outer[:locals][receiver.name]
+          when Prism::ConstantReadNode, Prism::ConstantPathNode
+            name = constant_path_string(receiver)
+            name if @roots.include?(name)
           end
+        end
+
+        # `ActiveSupport.on_load(:x)` names `on_load(:x)`; `Apartment.configure` names itself when it is a root.
+        def block_root(node)
+          receiver = node.receiver
+          return unless receiver.is_a?(Prism::ConstantReadNode) || receiver.is_a?(Prism::ConstantPathNode)
+
+          owner = constant_path_string(receiver)
+          if node.name == :on_load && owner == "ActiveSupport"
+            hook = node.arguments&.arguments&.first
+            return "on_load(:#{hook.unescaped})" if hook.is_a?(Prism::SymbolNode)
+          end
+          name = "#{owner}.#{node.name}"
+          name if @roots.include?(name)
+        end
+
+        def block_params(block)
+          params = block.parameters
+          return [ :_1 ] if params.is_a?(Prism::NumberedParametersNode)
+          return [ :it ] if params.is_a?(Prism::ItParametersNode)
+
+          params = params.parameters if params.is_a?(Prism::BlockParametersNode)
+          return [] unless params.is_a?(Prism::ParametersNode)
+
+          # A destructured `|(a, b)|` names nothing, so it binds no root.
+          params.requireds.map { |param| param.name if param.respond_to?(:name) }
         end
 
         def record_assignment(node)
@@ -273,24 +310,24 @@ module RailsAiContext
               parts.unshift(current.name)
               current = current.receiver
             when Prism::LocalVariableReadNode
-              return nil if @def_params.last&.include?(current.name)
+              bound = @scopes.last[:locals][current.name]
+              return nil if !bound && @def_params.last&.include?(current.name)
 
-              root, base = @self_roots.last
-              parts.unshift(base && current.name == base ? root.to_sym : current.name)
+              parts.unshift(bound ? bound.to_sym : current.name)
               current = nil
             when Prism::ItLocalVariableReadNode
-              root, base = @self_roots.last
-              return nil unless base == :it
+              bound = @scopes.last[:locals][:it]
+              return nil unless bound
 
-              parts.unshift(root.to_sym)
+              parts.unshift(bound.to_sym)
               current = nil
             when Prism::ConstantReadNode, Prism::ConstantPathNode
               parts.unshift(constant_path_string(current).to_sym)
               current = nil
             when Prism::SelfNode
-              return nil unless @self_roots.last
+              return nil unless @scopes.last[:self]
 
-              parts.unshift(@self_roots.last.first.to_sym)
+              parts.unshift(@scopes.last[:self].to_sym)
               current = nil
             else
               return nil

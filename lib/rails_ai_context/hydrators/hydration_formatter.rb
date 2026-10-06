@@ -26,7 +26,9 @@ module RailsAiContext
       def self.format_hint(hint)
         lines = []
         lines << "### #{hint.model_name} #{hint.confidence}"
-        lines << if hint.collection
+        lines << if hint.embedded_in
+          "**Embedded in:** `#{hint.embedded_in}` (no collection of its own)"
+        elsif hint.collection
           "**Collection:** `#{hint.table_name}` (key: `#{hint.primary_key}`)"
         else
           "**Table:** `#{hint.table_name}` (pk: `#{hint.primary_key}`)"

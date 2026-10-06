@@ -28,22 +28,20 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
       expect(described_class.cached_context).not_to equal(described_class.cached_context)
     end
 
-    it "rereads the app's Active Record settings when a stale fingerprint rebuilds the context" do
+    it "rereads the app's Active Record settings when a stale fingerprint rebuilds the context in a tool call" do
       Dir.mktmpdir do |root|
         FileUtils.mkdir_p(File.join(root, "config"))
         application = File.join(root, "config", "application.rb")
         File.write(application, "module App\n  class Application < Rails::Application\n  end\nend\n")
-        settings = -> { RailsAiContext::Introspectors::TableName.active_record_settings(root)[:schema_format] }
-        expect(settings.call).to be_nil
+        settings = -> { RailsAiContext::Introspectors::ActiveRecordSettings.for(root)[:schema_format] }
+        expect(RailsAiContext::RunCache.around { settings.call }).to be_nil
 
         File.write(application, "module App\n  class Application < Rails::Application\n    config.active_record.schema_format = :sql\n  end\nend\n")
         cache[:timestamp] -= RailsAiContext.configuration.cache_ttl + 1
         allow(RailsAiContext::Fingerprinter).to receive_messages(stale?: true, mark: "mark")
         allow(RailsAiContext).to receive(:introspect) { { schema_format: settings.call } }
 
-        expect(described_class.cached_context[:schema_format]).to eq(:sql)
-      ensure
-        RailsAiContext::Introspectors::TableName.clear_namespace_prefixes
+        expect(RailsAiContext::RunCache.around { described_class.cached_context[:schema_format] }).to eq(:sql)
       end
     end
   end

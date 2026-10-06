@@ -176,10 +176,9 @@ module RailsAiContext
       end
 
       # Rails' default column, the literal a class sets, or nil where `inheritance_column = nil` turns STI off.
-      def static_type_column(literals)
-        return "type" unless literals&.key?("inheritance_column")
-
-        literals["inheritance_column"].presence
+      def static_type_column(source_data)
+        setting = Array(source_data[:macros]).select { |m| m[:macro] == :model_setting && m[:setting] == "inheritance_column" }.last
+        setting ? setting[:literal].presence : "type"
       end
 
       # A model file the app cannot load leaves its class out of reflection,
@@ -371,7 +370,7 @@ module RailsAiContext
         resolved = parent && !seen.include?(class_name) && resolve_superclass(parent, class_name, candidates)
         return pluralize_tables?(resolved, candidates, seen + [ class_name ]) if resolved && candidates.key?(resolved)
 
-        TableName.active_record_settings(app.root)[:pluralize_table_names] != false
+        ActiveRecordSettings.for(app.root)[:pluralize_table_names] != false
       end
 
       # compute_table_name (7.0 and 8.1): a class nested in a concrete model
@@ -465,7 +464,7 @@ module RailsAiContext
 
           scope.pop
         end
-        candidates.dig(class_name, key) || TableName.active_record_settings(app.root)[key] || ""
+        candidates.dig(class_name, key) || ActiveRecordSettings.for(app.root)[key] || ""
       end
 
       def isolated_prefixes
@@ -636,7 +635,7 @@ module RailsAiContext
 
         # AST-based macro extractions (replaces regex)
         macros = extract_macros_from_ast(source_data, model_source_path(model))
-        details.merge!(macros.except(:setting_literals))
+        details.merge!(macros)
 
         # AST-based detailed macros (replaces regex)
         detailed = extract_detailed_macros_from_ast(source_data)
@@ -879,9 +878,7 @@ module RailsAiContext
         ConcernMembership.payload(own)
       end
 
-      # A gem can mix a module into the app's abstract base (Kaminari's
-      # inherited hook): every model then has it and no file of the app names
-      # it. A module the source includes, or one the app defines, stays.
+      # A module a gem's inherited hook mixes into every model (Kaminari) is left out; one the app includes or defines stays.
       def base_gem_modules(model, mixins)
         written = ConcernMembership.from_mixins(mixins)
         gem_bases(model).flat_map { |base| base.ancestors - every_model_modules }.uniq.select do |mod|
@@ -893,9 +890,7 @@ module RailsAiContext
         model.ancestors.select { |klass| klass.is_a?(Class) && klass < ActiveRecord::Base && klass != model && klass.abstract_class? }
       end
 
-      # The bases a gem's inherited hook reaches as it reaches the model. Kaminari's
-      # reaches every direct ActiveRecord::Base child, so a model that is one is
-      # measured against the app's abstract bases that are one too.
+      # The app's bases a gem's inherited hook reaches as it reaches the model (Kaminari: each direct ActiveRecord::Base child).
       def gem_bases(model)
         bases = abstract_bases(model)
         return bases unless model.superclass == ActiveRecord::Base
@@ -1260,7 +1255,6 @@ module RailsAiContext
           elsif macro == :model_setting
             # Bases arrive first, so the class's own assignment wins.
             (macros[:model_settings] ||= {})[m[:setting]] = m[:value]
-            (macros[:setting_literals] ||= {})[m[:setting]] = m[:literal]
           elsif macro == :connects_to
             macros[:database] = { connects_to: m[:text], condition: m[:condition], declared_in: m[:declared_in], writing: m[:writing] }.compact
           elsif macro == :gem_macro
@@ -1511,9 +1505,8 @@ module RailsAiContext
       ].freeze
       BOOLEAN_ASSOCIATION_OPTIONS = %i[polymorphic optional].freeze
 
-      # What the record already says another way, or what Rails keeps for itself.
-      # A has_many's foreign key (or query_constraints, its 7.1 spelling) stays listed: its
-      # record carries reflection's default key too, so only the declaration says it is not the default.
+      # What the record already says another way, or what Rails keeps for itself. A has_many's declared
+      # foreign key stays: its record carries reflection's default key too.
       UNLISTED_ASSOCIATION_OPTIONS = [ *(LIFTED_ASSOCIATION_OPTIONS - [ :foreign_key ]), :anonymous_class ].freeze
 
       # Every other option the association declares, each as display text:
@@ -1575,9 +1568,7 @@ module RailsAiContext
         with_default_foreign_key(declared ? lifted.merge(declared_options: declared) : lifted)
       end
 
-      # What Rails does with two options: `required:` on a belongs_to sets
-      # `optional:` to its negation, and Rails 7.1 takes `query_constraints:`
-      # as the foreign key (7.2 deprecates it, 8.0 refuses it).
+      # `required:` on a belongs_to sets `optional:` to its negation; Rails 7.1 takes `query_constraints:` as the foreign key.
       def with_rails_option_rules(assoc, options)
         required = literal_boolean(options[:required]) if options.key?(:required)
         assoc = assoc.merge(optional: !required) if assoc[:type] == "belongs_to" && !required.nil?
@@ -1672,7 +1663,7 @@ module RailsAiContext
         }
         details.merge!(extract_macros_from_ast(data, path))
         details.merge!(extract_detailed_macros_from_ast(data))
-        type_column = static_type_column(details.delete(:setting_literals))
+        type_column = static_type_column(data)
         details[:sti] = sti && type_column && !lacks_column?(details[:table_name], type_column) ? sti.merge(type_column: type_column) : nil
         downgrade_records(details.compact)
       end
@@ -1735,34 +1726,27 @@ module RailsAiContext
           [ key, entries.flat_map { |entry| place(entry, rank, calls) }.then { |found| key == :callbacks ? found : found.map { |entry| entry.except(*CHAIN_KEYS) }.uniq } ]
         end
         own = without_expanded_calls(own, Array(collected.delete(:expanded)) + Array(expanded))
-        callbacks = Array(own[:callbacks]).flat_map do |cb|
-          method = own_method(own, cb[:location])
-          next [ cb.merge(rank: rank) ] unless method
-          next [] unless method[:scope] == :class
-
-          calls.placed(cb, [ rank, method[:location] ], [ cb[:location] ])
-        end
+        bodies = method_bodies(own)
+        callbacks = Array(own[:callbacks]).flat_map { |cb| placed_in_method(cb, bodies, rank, calls) || [ cb.merge(rank: rank) ] }
         own = own.merge(callbacks: callbacks + Array(collected.delete(:callbacks)))
-        own = own.merge(METHOD_PLACED_KEYS.to_h { |key| [ key, Array(own[key]).select { |entry| runs?(own, entry, rank, calls) } ] }.compact)
+        own = own.merge(METHOD_PLACED_KEYS.to_h { |key| [ key, Array(own[key]).select { |entry| (placed_in_method(entry, bodies, rank, calls) || [ entry ]).any? } ] })
         [ collected.empty? ? own : merge_inherited(own, collected), walk.unread, walk.hidden ]
       end
 
-      # A declaration in a method body holds only where a call runs that method.
-      def runs?(own, entry, rank, calls)
+      # Nil outside a method body; else where the calls running that method place the
+      # declaration, none for an instance method.
+      def placed_in_method(entry, bodies, rank, calls)
         line = entry[:location] if entry.is_a?(Hash)
-        method = line && own_method(own, line)
+        method = line && ConcernMacros.enclosing(bodies, line)&.last
         # A `def self.default_scope` is the declaration itself, not a body holding one.
-        return true unless method && !(method[:name] == entry[:name] && method[:location] == line)
+        return nil if method.nil? || (method[:name] == entry[:name] && method[:location] == line)
+        return [] unless method[:scope] == :class
 
-        method[:scope] == :class && calls.placed(entry, [ rank, method[:location] ], [ line ]).any?
+        calls.placed(entry, [ rank, method[:location] ], [ line ])
       end
 
       def place(entry, rank, calls)
         entry.is_a?(Hash) ? calls.mixed_in(entry, rank) : [ entry ]
-      end
-
-      def own_method(own, line)
-        ConcernMacros.enclosing(method_bodies(own), line)&.last
       end
 
       def method_bodies(own)
@@ -2066,24 +2050,31 @@ module RailsAiContext
       def mongoid_static_models
         entries = mongoid_candidates
         models = mongoid_model_names(entries)
-        entries.each_with_object({}) do |(class_name, entry), result|
-          if entry[:error]
-            result[class_name] = { error: entry[:error] }
-            next
-          end
-          next unless models.include?(class_name)
+        done = {}
+        entries.each_key { |class_name| mongoid_entry(class_name, entries, models, done) }
+        entries.keys.select { |class_name| done[class_name] }.to_h { |class_name| [ class_name, done[class_name].except(:settled_callbacks) ] }
+      end
 
-          result[class_name] = if entry[:source].include?("Mongoid::Document")
-            mongoid_model_details(entry[:source], class_name, entry[:path]).merge(file: relative_to_root(entry[:path]))
-          else
-            # This walk keeps no candidate hash, so an AR model in a
-            # hybrid app gets the table it assigns itself and the derived
-            # stem otherwise - no namespace prefix, no STI parent.
-            static_model_details(entry[:path], class_name, table_name: TableName.explicit(entry[:source], class_name, app.root))
-          end
-        rescue => e
-          result[class_name] = { error: e.message }
+      # A subclass of a document is a document; its parent is read first.
+      def mongoid_entry(class_name, entries, models, done)
+        return done[class_name] if done.key?(class_name)
+
+        entry = entries[class_name]
+        return done[class_name] = { error: entry[:error] } if entry[:error]
+        return done[class_name] = nil unless models.include?(class_name)
+
+        done[class_name] = false
+        parent_name = entry[:superclass] && SuperclassChain.resolve_in_scope(class_name, entry[:superclass], nesting: entry[:nesting]) { |q| q if models.include?(q) }
+        parent = parent_name && mongoid_entry(parent_name, entries, models, done)
+        done[class_name] = if entry[:source].include?("Mongoid::Document") || (parent.is_a?(Hash) && parent[:mongoid])
+          mongoid_model_details(entry[:source], class_name, entry[:path], parent: parent && parent[:mongoid] ? [ parent_name, parent ] : nil)
+            .merge(file: relative_to_root(entry[:path]))
+        else
+          # A hybrid app's AR model gets only its own or the derived table here: no namespace prefix, no STI parent.
+          static_model_details(entry[:path], class_name, table_name: TableName.explicit(entry[:source], class_name, app.root))
         end
+      rescue => e
+        done[class_name] = { error: e.message }
       end
 
       def mongoid_candidates
@@ -2210,7 +2201,7 @@ module RailsAiContext
 
       MONGOID_MACROS = -> { Listeners::GenericMacroListener.new(%i[field embeds_many embeds_one embedded_in store_in index], call_source: %i[index]) }
 
-      def mongoid_model_details(source, class_name, path)
+      def mongoid_model_details(source, class_name, path, parent: nil)
         data = SourceIntrospector.walk_source(source, {
           mongoid: MONGOID_MACROS,
           associations: Listeners::AssociationsListener,
@@ -2227,8 +2218,12 @@ module RailsAiContext
         calls = singleton_lookup([ [ class_name, path ] ])
         calls.add(0, {}, {}, [])
         own = own_body(data.merge(mixins: []), class_name)
+        parent_name, inherited = parent
+        settled = settle(Walk.empty(own), calls).first[:callbacks]
+        # A parent's callbacks join the chain as a base's do, one rank above the subclass's.
+        settled = Array(inherited&.dig(:settled_callbacks)).map { |cb| cb.merge(rank: cb[:rank].to_i + 1) } + settled
         # Mongoid sets after_commit without prepend, as Rails 7.0 does, so it runs last declared first.
-        callbacks = chain_order(settle(Walk.empty(own), calls).first[:callbacks], false)
+        callbacks = chain_order(settled, false)
         details = {
           confidence: Confidence::STATIC,
           mongoid: true,
@@ -2247,10 +2242,26 @@ module RailsAiContext
           # against an Array.
           callbacks: group_callbacks_by_type(callbacks),
           callback_conditions: callback_conditions(callbacks),
-          methods: data[:methods]
+          methods: data[:methods],
+          settled_callbacks: settled
         }
-        # Mongoid's collection_name: store_in's, else the class name tableized with "/" as "_".
-        details[:collection] = macros.find { |m| m[:macro] == :store_in }&.dig(:options, :collection) || class_name.tableize.tr("/", "_")
+        if inherited
+          { fields: :name, embeds: :name, associations: :name, scopes: :name }.each do |key, name|
+            mine = Array(details[key]).map { |entry| entry[name].to_s }
+            details[key] = Array(inherited[key]).reject { |entry| mine.include?(entry[name].to_s) } + Array(details[key])
+          end
+          details[:validations] = (Array(inherited[:validations]) + Array(details[:validations])).uniq
+          details[:parent_model] = parent_name
+        end
+        embedded = macros.find { |m| m[:macro] == :embedded_in }
+        embedded_in = embedded ? embedded_parent(embedded) : inherited&.dig(:embedded_in)
+        if embedded_in
+          details[:embedded_in] = embedded_in
+        else
+          # Mongoid's collection_name: store_in's, else the root class's name tableized with "/" as "_".
+          details[:collection] = macros.find { |m| m[:macro] == :store_in }&.dig(:options, :collection) ||
+                                 inherited&.dig(:collection) || class_name.tableize.tr("/", "_")
+        end
         downgrade_records(details)
       end
 
@@ -2259,6 +2270,13 @@ module RailsAiContext
         options = macro[:options]
         default = SchemaConventions.format_default(options[:default]) unless options[:default] == Confidence::INFERRED
         { name: macro[:args].first, type: options[:type], default: default }.compact
+      end
+
+      def embedded_parent(macro)
+        options = macro[:options] || {}
+        return "#{macro[:args].first} (polymorphic)" if options[:polymorphic]
+
+        options[:class_name]&.to_s || macro[:args].first.to_s.camelize
       end
 
       def embedded_associations(macros)

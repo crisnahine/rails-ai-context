@@ -1084,6 +1084,19 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(json["databases"].transform_values { |t| t["columns"].map { |c| c["name"] } }).to eq("primary" => %w[email], "analytics" => %w[visitor_token])
     end
 
+    it "lists a sharded model under every shard whose table differs" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { tables: {},
+                  secondary_databases: { "shard_one" => { tables: { "orders" => { columns: [ { name: "total", type: "integer" } ] } } },
+                                         "shard_two" => { tables: { "orders" => { columns: [ { name: "region", type: "string" } ] } } } } },
+        models: { "Order" => { table_name: "orders", database: { connects_to: "connects_to shards: { ... }" } } }
+      })
+      one, two = described_class.call(table: "orders").content.first[:text].split("## Table: orders").drop(1)
+
+      expect(one).to include("**Database:** shard_one", "**Models:** Order\n")
+      expect(two).to include("**Database:** shard_two", "**Models:** Order\n")
+    end
+
     it "lists it among the tables a miss names" do
       expect(described_class.call(table: "nope").content.first[:text]).to include("page_views")
     end

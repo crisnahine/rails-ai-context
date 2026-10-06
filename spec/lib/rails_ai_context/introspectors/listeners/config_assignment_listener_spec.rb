@@ -95,6 +95,65 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
                                                                     [ [ :primary_key_prefix_type ], :table_name ], [ [ :table_name_suffix ], "_y" ] ])
   end
 
+  it "reads neither a class body nor a class_eval block inside the hook as the hook's self" do
+    source = <<~RUBY
+      ActiveSupport.on_load(:active_record) do
+        self.table_name_prefix = "op_"
+        Legacy::Record.class_eval do
+          self.table_name_suffix = "_bad"
+        end
+        class Foo
+          self.table_name_suffix = "_worse"
+        end
+        instance_eval { self.pluralize_table_names = false }
+      end
+    RUBY
+
+    results = assignments(source, "on_load(:active_record)")
+
+    expect(results.map { |r| [ r[:path], r[:value] ] }).to eq([ [ [ :table_name_prefix ], "op_" ], [ [ :pluralize_table_names ], false ] ])
+  end
+
+  it "reads a class_eval on the hook's own self, its block param or a root constant as that root" do
+    source = <<~RUBY
+      ActiveSupport.on_load(:active_record) { self.class_eval { self.table_name_prefix = "ce_" } }
+      ActiveSupport.on_load(:active_record) { |base| base.class_eval { self.table_name_suffix = "_ce" } }
+      ActiveRecord::Base.class_eval { self.pluralize_table_names = false }
+    RUBY
+
+    results = assignments(source, "on_load(:active_record)", "ActiveRecord::Base")
+
+    expect(results.map { |r| [ r[:path], r[:value] ] }).to eq([ [ [ :table_name_prefix ], "ce_" ], [ [ :table_name_suffix ], "_ce" ], [ [ :pluralize_table_names ], false ] ])
+  end
+
+  it "reads the hook's block param and a ::ActiveSupport receiver as the hook's root" do
+    source = <<~RUBY
+      ::ActiveSupport.on_load(:active_record) do |base|
+        base.table_name_prefix = "op_"
+        [1].each { |base| base.ignored = 1 }
+      end
+      ActiveSupport.on_load(:active_record, yield: true) { |base| self.not_base = 1; base.schema_format = :sql }
+    RUBY
+
+    results = assignments(source, "on_load(:active_record)")
+
+    expect(results.map { |r| [ r[:path], r[:value] ] }).to eq([ [ [ :table_name_prefix ], "op_" ], [ [ :schema_format ], :sql ] ])
+  end
+
+  it "reads the param of a block call it is given as a root, whatever each block names it" do
+    source = <<~RUBY
+      Apartment.configure do |config|
+        config.excluded_models = ["User"]
+      end
+      ::Apartment.configure { |c| c.tenant_names = ["a"] }
+      config.outside = 1
+    RUBY
+
+    results = assignments(source, "Apartment.configure")
+
+    expect(results.map { |r| r[:path] }).to eq([ [ :excluded_models ], [ :tenant_names ] ])
+  end
+
   it "reads a nested config assignment" do
     results = assignments("config.action_mailer.delivery_method = :smtp")
 

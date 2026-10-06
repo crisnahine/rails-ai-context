@@ -101,7 +101,15 @@ module RailsAiContext
 
     # The table a model reads, from the database its `connects_to` writes to.
     def model_table(schema, model)
-      model.is_a?(Hash) && model[:table_name] ? schema_table(schema, model[:table_name], database: model.dig(:database, :writing)) : nil
+      model.is_a?(Hash) && model[:table_name] ? schema_table(schema, model[:table_name], database: model_databases(schema, model).first) : nil
+    end
+
+    # The databases a model may read its table from: the one it writes to, or the
+    # primary without connects_to, when that holds the table; every holder otherwise (shards).
+    def model_databases(schema, model)
+      holders = schema_databases(schema, model[:table_name])
+      writing = model.dig(:database, :writing)&.to_s || ("primary" unless model[:database])
+      holders.include?(writing) ? [ writing ] : holders
     end
 
     # Every database whose schema holds the table, "primary" for the primary's.

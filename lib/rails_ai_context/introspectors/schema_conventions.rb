@@ -31,11 +31,8 @@ module RailsAiContext
             options: { null: false }.merge(id_options), primary_key: true } ]
       end
 
-      # Rails omits column:/primary_key: only where the convention holds, so
-      # the fallback is what was declared rather than a guess. PostgreSQL's
-      # convention drops the schema of a qualified target. validate: true and
-      # deferrable: false are the defaults the dump leaves out; Rails 7.0 reads
-      # DEFERRABLE INITIALLY IMMEDIATE back as true, which 7.1 names :immediate.
+      # The dump leaves out column:, primary_key:, validate: true and deferrable: false where they are Rails'
+      # defaults; Rails 7.0 reads DEFERRABLE INITIALLY IMMEDIATE back as true, which 7.1 names :immediate.
       def foreign_key_entry(from, to, column, primary_key, on_delete: nil, on_update: nil, deferrable: nil, validate: nil)
         known = ->(value) { value unless value == RailsAiContext::Confidence::INFERRED }
         {
@@ -255,9 +252,8 @@ module RailsAiContext
         end
       end
 
-      # Views, virtual tables and tables the dumper skipped, listed beside the tables
-      # under the names Rails gives them. A view replaces a table of its name: mysqldump
-      # writes a placeholder table before the view it stands in for.
+      # Views, virtual tables and skipped tables beside the tables. A view replaces a table
+      # of its name: mysqldump writes a placeholder table before the view.
       def add_relations(tables, views: {}, virtual_tables: {}, not_dumped: {})
         views.each { |name, view| tables[name] = view_entry(view[:sql], materialized: view[:materialized], indexes: view[:indexes]) }
         virtual_tables.each { |name, table| tables[name] = virtual_table_entry(table[:module], table[:arguments]) }

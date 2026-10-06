@@ -18,11 +18,9 @@ module RailsAiContext
           next if tree.errors.any?
 
           file = path.delete_prefix("#{root}/")
-          name = block_param(tree.value)
-          listener = -> { Listeners::ConfigAssignmentListener.new(name) }
+          listener = -> { Listeners::ConfigAssignmentListener.new("Apartment.configure") }
           # `+=`, `<<` or `concat` builds on a list the source does not show whole.
-          hit = SourceIntrospector.walk_source(source, { config: listener })[:config]
-                                  .reverse.find { |h| list_write?(h) }
+          hit = SourceIntrospector.walk_dispatch(tree, { config: listener })[:config].reverse.find { |h| list_write?(h) }
           return { excluded_models: [], file: file } unless hit
           return { excluded_models_source: hit[:source], file: file } unless hit[:assignment] && literal_names?(hit[:value])
 
@@ -31,21 +29,6 @@ module RailsAiContext
         nil
       rescue StandardError => e
         RailsAiContext.debug_fail(e, nil, label: "ApartmentConfig")
-      end
-
-      # The name the `Apartment.configure` block gives its config.
-      def block_param(root)
-        block = configure_call(root)&.block
-        params = block.parameters if block.is_a?(Prism::BlockNode)
-        param = params.parameters&.requireds&.first if params.is_a?(Prism::BlockParametersNode)
-        param.is_a?(Prism::RequiredParameterNode) ? param.name.to_s : "config"
-      end
-
-      def configure_call(node)
-        return node if node.is_a?(Prism::CallNode) && node.name == :configure && node.receiver&.slice&.delete_prefix("::") == "Apartment"
-
-        node.compact_child_nodes.each { |child| (found = configure_call(child)) and return found }
-        nil
       end
 
       # A block on a read (`.each { }`) leaves the list as it was.

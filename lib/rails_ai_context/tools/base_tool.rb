@@ -167,8 +167,6 @@ module RailsAiContext
             # covers edits made while the 40 introspectors ran, and the next
             # caller reads a stale context as fresh.
             mark = Fingerprinter.mark(rails_app)
-            # Its process maps would otherwise keep the config the last build read.
-            Introspectors::TableName.clear_namespace_prefixes
             SHARED_CACHE[:context] = RailsAiContext.introspect
             SHARED_CACHE[:timestamp] = now
             SHARED_CACHE[:fingerprint] = mark
@@ -190,7 +188,6 @@ module RailsAiContext
           session_reset!
           AstCache.clear
           PathResolver.clear_code_roots
-          Introspectors::TableName.clear_namespace_prefixes
         end
 
         # ── Session context helpers ──────────────────────────────────────

@@ -23,6 +23,21 @@ RSpec.describe RailsAiContext::Introspector do
       expect(introspector.send(:ruby_engine)).to eq("JRuby 9.4.8.0")
     end
 
+    it "rereads the app's Active Record settings on every run, inside an outer run too" do
+      Dir.mktmpdir do |dir|
+        application = File.join(dir, "config", "application.rb")
+        FileUtils.mkdir_p(File.dirname(application))
+        File.write(application, "class Application < Rails::Application\nend\n")
+        static = described_class.new(RailsAiContext::StaticApp.new(dir))
+        allow(static).to receive(:introspect_all) { RailsAiContext::Introspectors::ActiveRecordSettings.for(dir)[:schema_format] }
+        expect(RailsAiContext::RunCache.around { static.call }).to be_nil
+
+        File.write(application, "class Application < Rails::Application\n  config.active_record.schema_format = :sql\nend\n")
+
+        expect(RailsAiContext::RunCache.around { static.call }).to eq(:sql)
+      end
+    end
+
     # Every count in a generated file is a different number depending on this,
     # and the files carried nothing that said which one they held.
     it "records the tier the run was answered in" do

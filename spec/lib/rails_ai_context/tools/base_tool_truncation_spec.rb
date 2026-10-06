@@ -168,15 +168,13 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
     end
 
     # LiveReload calls this and nothing else, so a plugin directory added
-    # under a long-lived MCP server is only seen if these two go with it.
-    it "clears the code-root and namespace-prefix indexes too" do
+    # under a long-lived MCP server is only seen if this goes with it.
+    it "clears the code-root index too" do
       RailsAiContext::PathResolver::CODE_ROOTS["/tmp/gone"] = [ "/tmp/gone/plugins/x" ]
-      RailsAiContext::Introspectors::TableName::PREFIX_INDEX["/tmp/gone"] = { "X" => "x_" }
 
       described_class.reset_all_caches!
 
       expect(RailsAiContext::PathResolver::CODE_ROOTS["/tmp/gone"]).to be_nil
-      expect(RailsAiContext::Introspectors::TableName::PREFIX_INDEX["/tmp/gone"]).to be_nil
     end
   end
 
