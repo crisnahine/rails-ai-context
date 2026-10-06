@@ -19,16 +19,21 @@ module RailsAiContext
         qualified_tables = {}
         dialect = detect_sql_dialect(content)
         enums = enum_types(content)
-        path = PgNaming.existing_path(search_path, content.scan(CREATE_SCHEMA).map { |(name)| name.delete('"') })
+        # A short PostgreSQL dump can carry no marker detect_sql_dialect knows, so only MySQL and SQLite skip it.
+        created = %i[mysql sqlite].include?(dialect) ? [] : content.scan(CREATE_SCHEMA).map { |(name)| name.delete('"') }
+        path = PgNaming.existing_path(search_path, created)
+        creates = []
+        each_create_table(content) { |*create| creates << create }
         view_matches = content.scan(VIEW)
-        relations = content.scan(CREATE_TABLE) + view_matches.map { |match| [ match[1] ] } + content.scan(VIRTUAL_TABLE).map { |match| [ match[0] ] }
-        names = PgNaming.names(path, relations: relations.map { |(name)| qualified_name(name) }, types: enums.keys)
+        virtual_matches = content.scan(VIRTUAL_TABLE)
+        relations = creates.map(&:first) + view_matches.map { |match| match[1] } + virtual_matches.map(&:first)
+        names = PgNaming.names(path, relations: relations.map { |name| qualified_name(name) }, types: enums.keys)
         local = names.method(:relation)
 
         # Every table the file creates, by schema-qualified name, so a parent
         # outside the listed tables still resolves.
         all = {}
-        each_create_table(content) do |qualified, body, inherits, trailer|
+        creates.each do |qualified, body, inherits, trailer|
           name = qualified_name(qualified)
           shown = local.(name)
           next if shown.start_with?("ar_internal_metadata", "schema_migrations")
@@ -46,7 +51,7 @@ module RailsAiContext
           end
         end
 
-        found_views = views(content, local, view_matches)
+        found_views = views(view_matches, local)
         content.scan(/CREATE (UNIQUE )?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF NOT EXISTS\s+)?[`"]?(\w+)[`"]?\s+ON\s+(?:ONLY\s+)?#{QUALIFIED_NAME}((?:(?!#{NEXT_STATEMENT})[^;])*)/m) do |unique, idx_name, table, rest|
           group = first_paren_group(rest)
           keys = index_keys(group)
@@ -109,7 +114,7 @@ module RailsAiContext
         end
 
         { dialect: dialect, tables: tables, qualified_tables: qualified_tables, names: names, enums: PgNaming.enum_list(enums, path, rails_version),
-          views: found_views, virtual_tables: virtual_tables(content, local), extensions: extensions(content, path, dialect, rails_version) }
+          views: found_views, virtual_tables: virtual_tables(virtual_matches, local), extensions: extensions(content, path, dialect, rails_version) }
       end
 
       # As PostgreSQL's connection names them (PgNaming.extension_name).
@@ -125,15 +130,15 @@ module RailsAiContext
       end
 
       # Each view by the name the app reads it under, a later definition of a name replacing a placeholder.
-      def views(content, local = PgNaming.names(PgNaming::DEFAULT_SEARCH_PATH).method(:relation), view_matches = content.scan(VIEW))
+      def views(view_matches, local)
         view_matches.each_with_object({}) do |(materialized, name, sql), found|
           name = local.(qualified_name(name))
           found[name] = { materialized: !materialized.nil?, sql: sql.strip } if name.match?(/\A\w+\z/)
         end
       end
 
-      def virtual_tables(content, local)
-        content.scan(VIRTUAL_TABLE).to_h do |name, mod, arguments|
+      def virtual_tables(virtual_matches, local)
+        virtual_matches.to_h do |name, mod, arguments|
           [ local.(qualified_name(name)), { module: mod, arguments: split_top_level(arguments.to_s) } ]
         end
       end

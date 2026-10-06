@@ -137,7 +137,7 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
       CREATE VIEW plain AS SELECT id FROM users;
     SQL
 
-    views = described_class.views(sql)
+    views = described_class.parse(sql)[:views]
     expect(views["active_users"][:sql]).to eq("SELECT id, email FROM users /*application='App'*/")
     expect(views["plain"][:sql]).to eq("SELECT id FROM users")
   end
@@ -845,20 +845,20 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
       parsed = described_class.parse(sql)
 
       expect(parsed[:tables].keys).to eq(%w[codes z])
-      expect(described_class.views(sql)).to eq("v" => { materialized: false, sql: "SELECT code FROM codes" },
+      expect(described_class.parse(sql)[:views]).to eq("v" => { materialized: false, sql: "SELECT code FROM codes" },
                                                "w" => { materialized: false, sql: "SELECT label\nFROM codes" })
     end
 
     it "reads a semicolon-ended view whose lines start with words a statement also starts with" do
       sql = "CREATE VIEW recent_posts AS SELECT id,\n  comment,\n  set,\n  drop,\n  title\nFROM posts WHERE id > 10;\nCREATE TABLE z (a integer);\n"
 
-      expect(described_class.views(sql)).to eq("recent_posts" => { materialized: false, sql: "SELECT id,\n  comment,\n  set,\n  drop,\n  title\nFROM posts WHERE id > 10" })
+      expect(described_class.parse(sql)[:views]).to eq("recent_posts" => { materialized: false, sql: "SELECT id,\n  comment,\n  set,\n  drop,\n  title\nFROM posts WHERE id > 10" })
     end
 
     it "still reads pg_dump's view whose SELECT starts the next line" do
       sql = "CREATE VIEW public.v AS\n SELECT posts.id\n   FROM public.posts;\n\nCREATE TABLE public.z (a integer);\n"
 
-      expect(described_class.views(sql)).to eq("v" => { materialized: false, sql: "SELECT posts.id\n   FROM public.posts" })
+      expect(described_class.parse(sql)[:views]).to eq("v" => { materialized: false, sql: "SELECT posts.id\n   FROM public.posts" })
     end
   end
 
@@ -951,5 +951,19 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
       { name: "index_posts_on_spot", columns: [ "spot" ], unique: false, type: "spatial" },
       { name: "index_posts_on_body", columns: [ "body" ], unique: false, type: "fulltext" }
     )
+  end
+
+  it "scans a dump once for its tables and once for its virtual tables, and for schemas only on PostgreSQL" do
+    sqlite = +"CREATE TABLE \"users\" (\"id\" integer);\nCREATE VIRTUAL TABLE docs USING fts5 (body);\n"
+    pg = +"CREATE SCHEMA app;\nCREATE TABLE public.users (\n    id bigint NOT NULL\n);\n"
+    [ sqlite, pg ].each { |content| allow(content).to receive(:scan).and_call_original }
+
+    described_class.parse(sqlite)
+    described_class.parse(pg, search_path: %w[app public])
+
+    expect(sqlite).not_to have_received(:scan).with(described_class::CREATE_TABLE)
+    expect(sqlite).to have_received(:scan).with(described_class::VIRTUAL_TABLE).once
+    expect(sqlite).not_to have_received(:scan).with(described_class::CREATE_SCHEMA)
+    expect(pg).to have_received(:scan).with(described_class::CREATE_SCHEMA).once
   end
 end
