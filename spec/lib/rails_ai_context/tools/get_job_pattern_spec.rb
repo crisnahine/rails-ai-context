@@ -1874,6 +1874,7 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       text = job_text(RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call)
 
       expect(text).to include("sync").and include("perform(id)")
+      expect(text).not_to include("Class.new")
     end
 
     it "is listed, not the error class written before it, when the file pairs the two" do

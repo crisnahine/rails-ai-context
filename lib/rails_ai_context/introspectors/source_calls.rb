@@ -19,7 +19,7 @@ module RailsAiContext
       # framework, the standard library, and the app's record base.
       IGNORED = %w[
         Rails ActiveRecord ApplicationRecord File Dir ENV String Integer Float
-        Array Hash Set Time Date DateTime URI Regexp
+        Array Hash Set Time Date DateTime URI Regexp Class
       ].freeze
 
       # `::Foo::Bar` and `Foo::Bar` are one constant; the root operator is not part of the name.
