@@ -33,6 +33,9 @@ module RailsAiContext
         stack data_model auth key_flows jobs frontend payments realtime storage api devops i18n engines env
         testing getting_started all_rake_tasks generators
       ].freeze
+      AUTH_GEMS = %w[devise omniauth rodauth-rails sorcery clearance authlogic].freeze
+      AUTHZ_GEMS = %w[pundit cancancan action_policy rolify].freeze
+      RAKE_TASKS_SHOWN = 15
 
       def self.call(detail: "standard", server_context: nil)
         ctx = cached_context
@@ -238,9 +241,6 @@ module RailsAiContext
           lines
         end
 
-        AUTH_GEMS = %w[devise omniauth rodauth-rails sorcery clearance authlogic].freeze
-        AUTHZ_GEMS = %w[pundit cancancan action_policy rolify].freeze
-
         # [authentication lines, authorization lines] named from the notable gems alone.
         def auth_gem_lines(ctx)
           notable = Payload.notable_gems(ctx).select { |g| g.is_a?(Hash) }
@@ -427,8 +427,6 @@ module RailsAiContext
             "```", ""
           ].compact
         end
-
-        RAKE_TASKS_SHOWN = 15
 
         def section_rake_tasks(ctx, limit: RAKE_TASKS_SHOWN)
           tasks = Payload.list(ctx, :rake_tasks, :tasks)

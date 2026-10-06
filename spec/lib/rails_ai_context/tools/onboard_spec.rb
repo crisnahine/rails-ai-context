@@ -6,6 +6,12 @@ RSpec.describe RailsAiContext::Tools::Onboard do
   before { described_class.reset_cache! }
 
   # Errbit: no ActiveRecord schema, so the stack line said "on unknown".
+  it "keeps its gem lists on the tool class, where a caller can name them" do
+    expect(described_class::AUTHZ_GEMS).to include("pundit", "action_policy")
+    expect(described_class::AUTH_GEMS).to include("devise")
+    expect(described_class::RAKE_TASKS_SHOWN).to eq(15)
+  end
+
   describe "a Mongoid app" do
     it "names Mongoid and the database mongoid.yml names" do
       Dir.mktmpdir do |dir|
