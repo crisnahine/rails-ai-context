@@ -834,17 +834,6 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
       expect(drawn).to eq([ [ "GET", "/one", "pages#two", "one" ], [ "GET", "/two", "pages#two", "two" ] ])
     end
 
-    it "counts a multi-path route as not expanded where Rails 8.1 refuses to draw it" do
-      results = routes_for(<<~RUBY)
-        Rails.application.routes.draw do
-          get "/one", "/two", to: "pages#two"
-        end
-      RUBY
-
-      expect(results.select { |r| r[:type] == :route }).to be_empty
-      expect(results.count { |r| r[:type] == :dynamic }).to eq(1)
-    end
-
     # actionpack 8.1 mapper.rb `match`: "Wrong number of arguments (expect 1, got 2)".
     it "counts a multi-path route as not expanded under Rails 8.1's single-path rule" do
       listener = described_class.new
