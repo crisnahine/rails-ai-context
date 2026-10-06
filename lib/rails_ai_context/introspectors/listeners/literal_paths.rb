@@ -25,12 +25,12 @@ module RailsAiContext
           end
         end
 
-        # `"#{config.root}/lib_static"`, and only that: an interpolation of
-        # some gem's root names a path outside the app.
+        # `"#{config.root}/lib_static"`, and only that: a gem's root names a path outside
+        # the app, and a later interpolation leaves the path unknown.
         def collect_interpolated_path(node)
-          return unless app_root?(node.parts.first)
+          return unless app_root?(node.parts.first) && node.parts.drop(1).all?(Prism::StringNode)
 
-          push_path(node.parts.filter_map { |part| part.content if part.is_a?(Prism::StringNode) }.join)
+          push_path(node.parts.drop(1).map(&:content).join)
         end
 
         # `Rails.root.join("lib_static")` and its `.to_s`, whose arguments are

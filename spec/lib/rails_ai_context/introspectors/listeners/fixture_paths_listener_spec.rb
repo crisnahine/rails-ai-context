@@ -33,6 +33,10 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::FixturePathsListener do
     RUBY
   end
 
+  it "records a path interpolated past the app root as unread" do
+    expect(paths(%(self.fixture_paths << "\#{Rails.root}/spec/\#{ENV["SUITE"]}/fixtures"\n))).to eq([ :unread ])
+  end
+
   it "reads a path relative to the helper's own directory, on the test case constant too" do
     found = RailsAiContext::Introspectors::SourceIntrospector.walk_source(<<~RUBY, { fixtures: -> { described_class.new(file: "test/test_helper.rb") } })[:fixtures]
       ActiveSupport::TestCase.fixture_paths << File.expand_path("../extra_fx", __dir__)
