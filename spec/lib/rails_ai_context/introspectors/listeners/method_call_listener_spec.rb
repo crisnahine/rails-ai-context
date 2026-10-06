@@ -24,6 +24,12 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodCallListener do
     expect(calls.last[:arguments]).to eq([ "self" ])
   end
 
+  it "records the class or module each call is written in" do
+    calls = walk("module Ops\n  class A\n    go\n  end\nend\nclass B\n  go\nend\ngo\n", names: %w[go])
+
+    expect(calls.map { |c| c[:owner] }).to eq([ %w[Ops A], %w[B], [] ])
+  end
+
   it "ignores a name inside a comment, a string or a heredoc" do
     source = <<~RUBY
       # broadcast_append_to is documented here

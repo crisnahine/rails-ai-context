@@ -6,6 +6,8 @@ module RailsAiContext
       # Call sites by name, wherever they appear: inside a def, a lambda, a
       # callback block. The macro listener only sees class-body calls.
       class MethodCallListener < BaseListener
+        include OwnerScope
+
         def initialize(names: nil, pattern: nil)
           super()
           @names = names&.map(&:to_sym)&.to_set
@@ -24,7 +26,8 @@ module RailsAiContext
             arguments: extract_arg_values(node),
             computed: computed_arguments(node),
             options: extract_keyword_sources(node),
-            snippet: node.slice.lines.first.to_s.strip
+            snippet: node.slice.lines.first.to_s.strip,
+            owner: @owner_stack.dup
           }
         end
 

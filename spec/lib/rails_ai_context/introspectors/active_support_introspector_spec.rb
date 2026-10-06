@@ -265,6 +265,26 @@ RSpec.describe RailsAiContext::Introspectors::ActiveSupportIntrospector do
       ])
     end
 
+    it "gives each bare attach_to to the class it is written in, with that class's methods" do
+      result = subscriptions(
+        "app/subscribers/subs.rb" => <<~RUBY
+          class FirstSubscriber < ActiveSupport::Subscriber
+            def sql(event); end
+            attach_to :active_record
+          end
+          class SecondSubscriber < ActiveSupport::Subscriber
+            def deliver(event); end
+            attach_to :action_mailer
+          end
+        RUBY
+      )
+
+      expect(result).to eq([
+        { event: "sql.active_record", via: "FirstSubscriber.attach_to", file: "app/subscribers/subs.rb", line: 3 },
+        { event: "deliver.action_mailer", via: "SecondSubscriber.attach_to", file: "app/subscribers/subs.rb", line: 7 }
+      ])
+    end
+
     it "reads every file of app/, however many models sort ahead of app/subscribers" do
       models = (1..2001).to_h { |i| [ "app/models/m#{i}.rb", "class M#{i}; end\n" ] }
       result = subscriptions(models.merge(

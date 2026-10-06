@@ -229,7 +229,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 | QueueAssignmentListener | A queue a class body assigns outside any method: Resque's `@queue = :name`, Que's `self.queue = "name"`, or a `def self.queue` returning one, a literal as its value, anything else as source |
 | HttpClientCallListener | Calls on an HTTP client constant (`Faraday`, `Net::HTTP`, `HTTParty`, `RestClient`, `HTTP`, `Excon`, `Typhoeus`, `URI.open`) with a literal URL, bare, wrapped in `URI(...)`/`URI.parse(...)` or as `url:`, and the host `Net::HTTP.start`/`.new` takes. `rails_get_env` names external services from it |
 | ConstantReferenceListener | References to constants by last name, qualified or not (`ActiveSupport::MessageVerifier`), skipping one that only qualifies a nested constant (`MessageVerifier::InvalidSignature`) and mentions in comments or strings. Used by the ActiveSupport introspector for message verifier and encryptor usage |
-| MethodCallListener | Call sites by name or pattern anywhere in a file, inside a `def`, a lambda or a block included, with arguments, options, receiver, line and offset. Used by the Turbo introspector for broadcast calls, the ActiveSupport introspector for notification subscriptions, and others |
+| MethodCallListener | Call sites by name or pattern anywhere in a file, inside a `def`, a lambda or a block included, with arguments, options, receiver, line, offset and the owning class or module. Used by the Turbo introspector for broadcast calls, the ActiveSupport introspector for notification subscriptions, and others |
 
 `GenericMacroListener.new(*names, block_source: [:name])` adds `block`, the
 one-line source of the block those macros are given. `call_source: [:name]`
