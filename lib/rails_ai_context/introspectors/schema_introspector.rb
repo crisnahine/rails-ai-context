@@ -443,38 +443,23 @@ module RailsAiContext
       end
 
       def read_secondary_database_dumps
-        dumps = {}
         primary = dump_candidates.map(&:last)
-        secondaries = SchemaDumpPath.secondaries(app.root)
-        taken = primary + secondaries.values.map(&:last)
-        secondaries.each do |name, (format, path)|
-          next if primary.include?(path) || !File.exist?(path)
+        configured = SchemaDumpPath.secondaries(app.root).map { |name, (format, path)| [ name, format, path ] }
+        taken = primary + configured.map(&:last)
+        globbed = { "rb" => :ruby, "sql" => :sql }.flat_map do |ext, format|
+          kind = format == :ruby ? "schema" : "structure"
+          Dir.glob(File.join(app.root.to_s, "db", "*_#{kind}.#{ext}")).sort
+            .reject { |path| taken.include?(path) }
+            .map { |path| [ File.basename(path, ".#{ext}").delete_suffix("_#{kind}"), format, path ] }
+        end
+        dumps = (configured + globbed).each_with_object({}) do |(name, format, path), found|
+          next if found.key?(name) || primary.include?(path) || !File.exist?(path)
 
           parsed = format == :ruby ? parse_schema_rb(path) : parse_structure_sql(path)
           next if parsed[:tables].blank?
 
           parsed[:note] = "Parsed from #{relative_dump_path(path)} (from committed dump, not a live connection)"
-          dumps[name] = parsed
-        end
-        Dir.glob(File.join(app.root.to_s, "db", "*_schema.rb")).sort.each do |path|
-          name = File.basename(path, ".rb").sub(/_schema\z/, "")
-          next if dumps.key?(name) || taken.include?(path)
-
-          parsed = parse_schema_rb(path)
-          next if parsed[:tables].blank?
-
-          parsed[:note] = "Parsed from db/#{File.basename(path)} (from committed dump, not a live connection)"
-          dumps[name] = parsed
-        end
-        Dir.glob(File.join(app.root.to_s, "db", "*_structure.sql")).sort.each do |path|
-          name = File.basename(path, ".sql").sub(/_structure\z/, "")
-          next if dumps.key?(name) || taken.include?(path)
-
-          parsed = parse_structure_sql(path)
-          next if parsed[:tables].blank?
-
-          parsed[:note] = "Parsed from db/#{File.basename(path)} (from committed dump, not a live connection)"
-          dumps[name] = parsed
+          found[name] = parsed
         end
         replay_secondary_migrations(dumps)
       end

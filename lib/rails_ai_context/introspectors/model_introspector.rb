@@ -1232,10 +1232,6 @@ module RailsAiContext
         query_constraints: :query_constraints
       }.freeze
 
-      STORE_MACROS = %i[store store_accessor].to_set.freeze
-
-      BROADCAST_MACROS = %i[broadcasts broadcasts_to broadcasts_refreshes_to].to_set.freeze
-
       def extract_macros_from_ast(source_data, source_path = nil)
         macros = {}
         source_data[:macros].each do |m|
@@ -1247,7 +1243,7 @@ module RailsAiContext
           elsif (key = ATTRIBUTE_MACRO_MAP[macro])
             (macros[key] ||= []) << m[:attribute]
             (macros[:serialize_options] ||= {})[m[:attribute]] = m[:written] if macro == :serialize && m[:written]&.any?
-          elsif STORE_MACROS.include?(macro)
+          elsif Listeners::MacrosListener::STORE_MACROS.include?(macro)
             add_store_accessors(macros, m)
           elsif macro == :accepts_nested_attributes_for
             (macros[:nested_attributes] ||= []) << { names: m[:names], options: m[:options] }.compact
@@ -1273,7 +1269,7 @@ module RailsAiContext
             (macros[:state_machines] ||= []) << m.slice(:column, :initial, :states, :events)
           end
 
-          if BROADCAST_MACROS.include?(macro)
+          if Listeners::MacrosListener::BROADCAST_MACROS.include?(macro)
             (macros[:broadcasts] ||= []) << macro.to_s
             macros[:broadcasts].uniq!
           end
