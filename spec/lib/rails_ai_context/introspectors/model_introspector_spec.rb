@@ -3142,6 +3142,26 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  describe "the primary key of a booted model with no connection" do
+    it "never asks the database, and still reads a key the source assigns" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "legacy_widget.rb"), "class LegacyWidget < ApplicationRecord\n  self.primary_key = :label\nend\n")
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        introspector.static_call
+        models = %w[LegacyWidget Plain].map do |name|
+          Class.new(ApplicationRecord) { self.table_name = "posts" }.tap do |model|
+            model.define_singleton_method(:name) { name }
+            allow(model).to receive(:connected?).and_return(false)
+            expect(model).not_to receive(:primary_key)
+          end
+        end
+
+        expect(models.map { |model| introspector.send(:model_primary_key, model) }).to eq([ "label", nil ])
+      end
+    end
+  end
+
   describe "a custom validate method with a condition" do
     it "keeps the condition in both tiers" do
       Dir.mktmpdir do |dir|

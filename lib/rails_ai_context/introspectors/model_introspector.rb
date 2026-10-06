@@ -340,9 +340,14 @@ module RailsAiContext
           namespace_affix(class_name, candidates, :table_name_suffix) ].join
       end
 
-      # Reading the key asks the connection; a database that is not there costs the key, not the model.
+      # A key the class does not assign is read through a new connection, which an
+      # unreachable host can hold for a full connect timeout per model; unconnected, read the source.
       def model_primary_key(model)
-        model.primary_key
+        return model.primary_key if model.connected?
+
+        base = model.respond_to?(:base_class) ? model.base_class : model
+        path = model_source_path(base)
+        path && TableName.declarations(model_source(path), base.name, app.root)[:primary_key]
       rescue StandardError => e
         RailsAiContext.debug_fail(e, nil, label: "model_primary_key")
       end
