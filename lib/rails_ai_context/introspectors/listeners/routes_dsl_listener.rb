@@ -762,6 +762,14 @@ module RailsAiContext
         end
 
         def emit_verb_path(node, verb, segment, action_given, opts, rocket_key)
+          # Rails' match reads `path => :action` as the action and `path => "controller"` as the controller.
+          rocket = rocket_key && opts[rocket_key]
+          if rocket.is_a?(Symbol) || (rocket.is_a?(String) && !rocket.include?("#"))
+            opts = opts.except(rocket_key)
+            opts[rocket.is_a?(Symbol) ? :action : :controller] ||= rocket
+            rocket_key = nil
+          end
+
           target_given = opts.key?(:to) || !rocket_key.nil?
           target = opts[:to] || (rocket_key && opts[rocket_key])
           return emit_dynamic(node) if target_given && unreadable_target?(target)

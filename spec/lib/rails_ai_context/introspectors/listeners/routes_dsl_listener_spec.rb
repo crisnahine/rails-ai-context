@@ -940,6 +940,23 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
       expect(results.select { |r| r[:type] == :dynamic }.map { |r| r[:macro] }).to eq([ :mount ])
     end
 
+    it "reads a path => action symbol or path => controller string as Rails' match does" do
+      results = routes_for(<<~RUBY)
+        Rails.application.routes.draw do
+          controller :sessions do
+            get "login" => :new
+            post "login" => :create
+          end
+          get "profile" => "users"
+        end
+      RUBY
+
+      expect(results.select { |r| r[:type] == :route }.map { |r| [ r[:name], r[:verb], r[:path], "#{r[:controller]}##{r[:action]}" ] })
+        .to eq([ [ "login", "GET", "/login", "sessions#new" ], [ nil, "POST", "/login", "sessions#create" ],
+                 [ "profile", "GET", "/profile", "users#profile" ] ])
+      expect(results.select { |r| r[:type] == :dynamic }).to be_empty
+    end
+
     it "does not count Ruby that draws no route" do
       expect(dynamic_macros(<<~RUBY)).to be_empty
         require "sidekiq/web"
