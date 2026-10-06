@@ -38,18 +38,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   app listed them in the order the database created them and the static tier
   in the order the dump wrote them, so the same app gave two orders.
 - **Enum types are named the way the booted app names them.** The enum list
-  holds the types in a schema on the search path, bare in the current schema
-  and schema-qualified otherwise, or every type by its bare name before Rails
-  7.1. A column's enum type is bare when the search path finds that type first,
-  and qualified otherwise. A schema.rb from before Rails 8.1 already holds
-  these names and is read as written; a Rails 8.1 schema.rb qualifies every
-  name, and the static tier renames them. How the dump names things follows
-  its `ActiveRecord::Schema[8.1]` stamp, the Rails that wrote it, so a schema.rb
-  not dumped again since a Rails upgrade still reads right; how the connection
-  names them follows Gemfile.lock, or the stamp when the lock names none. Both tiers list enum types in name order, and a table's Enum
-  types section pairs each column with the type the search path finds for it,
-  so a column `mood` whose type is `public.mood` shows that entry. The booted
-  app reads its search path with SQL on every Rails version.
+  holds the types in a schema on the search path, bare in the current schema and
+  schema-qualified otherwise, or every type by its bare name before Rails 7.1. A
+  column's enum type is bare when the search path finds that type first, and
+  qualified otherwise. A schema.rb from before Rails 8.1 already holds these
+  names and is read as written; a Rails 8.1 schema.rb qualifies every name, and
+  the static tier renames them. How the dump names things follows its
+  `ActiveRecord::Schema[8.1]` stamp, the Rails that wrote it, so a schema.rb not
+  dumped again since a Rails upgrade still reads right; how the connection names
+  them follows Gemfile.lock, or the stamp when the lock names none. Both tiers
+  list enum types in name order, and a table's Enum types section pairs each
+  column with the type the search path finds for it, so a column `mood` whose
+  type is `public.mood` shows that entry. The booted app reads its search path
+  with SQL on every Rails version.
 - **A table outside the search path stays out of the table list but can still
   be looked up.** Without a boot, a schema.rb table in another schema was
   listed and counted, while the booted app leaves it out. Both tiers now leave
