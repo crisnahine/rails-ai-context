@@ -382,6 +382,7 @@ module RailsAiContext
           when :name then name
           when :block then blocks.shift
           when :object then "#{name} (object)"
+          when :unread then "#{name} (not read)"
           end
         end + blocks
       end

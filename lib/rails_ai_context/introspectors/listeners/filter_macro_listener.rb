@@ -15,13 +15,14 @@ module RailsAiContext
         private
 
         # [:name, "x"] for a symbol, string or class; [:object, "Klass"] for an instance;
-        # [:block] for a lambda or proc; nil for anything else.
+        # [:block] for a lambda or proc; [:unread, source] for anything else.
         def callbacks(node)
           Array(node.arguments&.arguments).reject { |arg| arg.is_a?(Prism::KeywordHashNode) }.map do |arg|
             if (text = literal_string(arg)) then [ :name, text ]
             elsif proc_argument?(arg) then [ :block ]
             elsif (const = constant_name(arg)) then [ :name, const ]
             elsif (klass = object_name(arg)) then [ :object, klass ]
+            else [ :unread, one_line_source(arg) ]
             end
           end
         end
