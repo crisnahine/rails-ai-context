@@ -473,15 +473,6 @@ RSpec.describe RailsAiContext::Introspectors::FrontendFrameworkIntrospector do
         end
       end
     end
-
-    it "names bun as the package manager from the text bun.lock" do
-      Dir.mktmpdir do |tmp|
-        root = File.realpath(tmp)
-        File.write(File.join(root, "bun.lock"), "{}")
-
-        expect(described_class.package_manager(root)).to eq("bun")
-      end
-    end
   end
 
   describe "a lockfile at the JS workspace root above the app" do
@@ -504,7 +495,6 @@ RSpec.describe RailsAiContext::Introspectors::FrontendFrameworkIntrospector do
 
         expect(result[:package_manager]).to eq("yarn")
         expect(result[:package_manager_dir]).to eq("..")
-        expect(described_class.package_manager(root)).to eq("yarn")
       end
     end
 
@@ -515,40 +505,6 @@ RSpec.describe RailsAiContext::Introspectors::FrontendFrameworkIntrospector do
 
         expect(result[:package_manager]).to eq("npm")
         expect(result[:package_manager_dir]).to be_nil
-      end
-    end
-
-    it "never looks above the git root" do
-      workspace do |repo, root|
-        FileUtils.rm_rf(File.join(repo, ".git"))
-        FileUtils.mkdir_p(File.join(root, ".git"))
-
-        expect(described_class.package_manager(root)).to be_nil
-      end
-    end
-
-    it "does not walk up at all outside a git repository" do
-      workspace(git: false) do |_repo, root|
-        expect(described_class.package_manager(root)).to be_nil
-      end
-    end
-
-    it "refuses a lockfile symlinked out of the workspace root" do
-      workspace(lockfile: nil) do |repo, root|
-        Dir.mktmpdir do |elsewhere|
-          File.write(File.join(elsewhere, "yarn.lock"), "")
-          File.symlink(File.join(elsewhere, "yarn.lock"), File.join(repo, "yarn.lock"))
-
-          expect(described_class.package_manager(root)).to be_nil
-        end
-      end
-    end
-
-    it "survives a workspace package.json that is not JSON" do
-      workspace(lockfile: nil) do |repo, root|
-        File.write(File.join(repo, "package.json"), "{ not json")
-
-        expect(described_class.package_manager(root)).to be_nil
       end
     end
   end

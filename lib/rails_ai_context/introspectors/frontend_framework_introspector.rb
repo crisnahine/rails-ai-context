@@ -193,12 +193,6 @@ module RailsAiContext
         markers.filter_map { |pkg, label| label if all_deps.key?(pkg) }.uniq
       end
 
-      # ---- Package manager ----
-
-      def self.package_manager(root)
-        RailsAiContext::PackageJson.package_manager(root)&.first
-      end
-
       # ---- TypeScript ----
 
       # An app whose TypeScript lives under frontend/ has no tsconfig.json at
