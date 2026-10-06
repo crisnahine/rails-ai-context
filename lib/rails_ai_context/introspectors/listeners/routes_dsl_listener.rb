@@ -37,8 +37,10 @@ module RailsAiContext
           engine.split("::").first.underscore
         end
 
-        def initialize(scope: [], route_set: nil, names: Set.new)
+        # `single_path` is Rails 8.1's rule: a verb call given more than one path raises.
+        def initialize(scope: [], route_set: nil, names: Set.new, single_path: false)
           super()
+          @single_path = single_path
           @stack = scope.map { |frame| frame.merge(node: nil) }
           @route_set = route_set
           @concern_blocks = {}
@@ -745,6 +747,8 @@ module RailsAiContext
           return emit_dynamic(node) if verb.nil? || opaque_options?(node)
 
           rocket_key = opts.keys.find { |k| k.is_a?(String) }
+          return emit_dynamic(node) if @single_path && (node.arguments&.arguments || []).count { |a| !a.is_a?(Prism::KeywordHashNode) } > 1
+
           paths = literal_paths(node)
           paths = [ [ rocket_key, false ] ] if paths.empty? && rocket_key
           return emit_dynamic(node) if paths.empty?

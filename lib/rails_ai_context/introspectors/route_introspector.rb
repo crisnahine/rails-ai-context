@@ -329,6 +329,16 @@ module RailsAiContext
 
       private
 
+      # Rails 8.1's `match` refuses a second path, so the locked actionpack decides how many a verb call draws.
+      def single_path?
+        return @single_path if defined?(@single_path)
+
+        locked = GemLock.for(app.root.to_s).version("actionpack")
+        @single_path = locked ? Gem::Version.new(locked) >= Gem::Version.new("8.1.0.a") : false
+      rescue ArgumentError
+        @single_path = false
+      end
+
       # An app that splits its routing table with `draw` keeps most of it in
       # config/routes/*.rb, and reading config/routes.rb alone answered 94 on a
       # 723-route app with nothing saying the count was partial. Rails resolves
@@ -344,7 +354,7 @@ module RailsAiContext
         scope = draw[:scope] || []
         already_read << [ path, scope ]
         ast = SourceIntrospector.walk(path, {
-          routes: -> { Listeners::RoutesDslListener.new(scope: scope, route_set: method(:route_set_prefixes), names: @route_names) },
+          routes: -> { Listeners::RoutesDslListener.new(scope: scope, route_set: method(:route_set_prefixes), names: @route_names, single_path: single_path?) },
           mounts: -> { Listeners::MountListener.new(prefix: draw[:prefix], name_prefix: draw[:name_prefix]) }
         })
         records = ast[:routes] || []

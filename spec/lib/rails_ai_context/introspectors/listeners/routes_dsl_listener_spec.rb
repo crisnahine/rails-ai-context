@@ -834,6 +834,16 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
 
       expect(drawn).to eq([ [ "GET", "/one", "pages#two", "one" ], [ "GET", "/two", "pages#two", "two" ] ])
     end
+
+    # actionpack 8.1 mapper.rb `match`: "Wrong number of arguments (expect 1, got 2)".
+    it "counts a multi-path route as not expanded under Rails 8.1's single-path rule" do
+      listener = described_class.new(single_path: true)
+      source = "Rails.application.routes.draw do\n  get \"/one\", \"/two\", to: \"pages#two\"\n  get \"/three\", to: \"pages#three\"\nend\n"
+      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(Prism.parse(source).value)
+
+      expect(listener.results.select { |r| r[:type] == :route }.map { |r| r[:path] }).to eq([ "/three" ])
+      expect(listener.results.count { |r| r[:type] == :dynamic }).to eq(1)
+    end
   end
 
   describe "calls the walk does not know" do
