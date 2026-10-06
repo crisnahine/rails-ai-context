@@ -240,6 +240,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
           result = described_class.new(RailsAiContext::StaticApp.new(dir)).send(:static_schema_parse)
 
           expect(result[:declared_tables]).to eq([ "users" ])
+          expect(result[:declared_in]).to eq("db/schema.rb")
         end
       end
 

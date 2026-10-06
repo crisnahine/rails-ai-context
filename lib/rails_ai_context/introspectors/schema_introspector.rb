@@ -413,13 +413,14 @@ module RailsAiContext
       # Fallback when no database answers: the dump file, then the migrations.
       # Every key the booted answer carries, answered from the files, and
       # meaning the same thing: `declared_tables` is what the schema.rb dump
-      # declares, nil for an app whose tables come from structure.sql or the
-      # migrations.
+      # declares and `declared_in` names that dump, both nil for an app whose
+      # tables come from structure.sql or the migrations.
       def static_schema_parse
         result = static_schema_sources
         return result unless result.is_a?(Hash) && result[:tables].is_a?(Hash)
 
-        result.merge(declared_tables: declared_table_names)
+        result.merge(declared_tables: declared_table_names,
+                     declared_in: (relative_dump_path(schema_file_path) if schema_file_path))
       end
 
       # The configured dump first (database.yml's schema_dump, schema_format), then the default files.
