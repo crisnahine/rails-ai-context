@@ -331,7 +331,8 @@ module RailsAiContext
 
     # Each source answers [version, engine], in Bundler's order: what the lockfile
     # resolved, what the Gemfile asked for, then the version-manager files, mise's last.
-    # The engine comes from the first source that declares anything.
+    # The engine comes from the first source that declares anything, and its Ruby
+    # version only from that same source: JRuby 9.4 runs Ruby 3.1 whatever .tool-versions says.
     def declared_ruby(locked, root, bundle, facts)
       declared = {
         bundle[:lock_label] => locked,
@@ -340,7 +341,9 @@ module RailsAiContext
         ".tool-versions" => version_string(SafeFile.read(File.join(root, ".tool-versions"), max_size: MAX_SIZE)&.[](TOOL_VERSIONS_RUBY, 1)),
         **mise_ruby(root)
       }.compact
-      { ruby_versions: declared.transform_values(&:first).compact, ruby_engine: declared.values.first&.last }
+      engine = declared.values.first&.last
+      declared = declared.first(1).to_h if engine
+      { ruby_versions: declared.transform_values(&:first).compact, ruby_engine: engine }
     end
     private_class_method :declared_ruby
 

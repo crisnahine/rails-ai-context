@@ -484,6 +484,18 @@ RSpec.describe RailsAiContext::GemLock do
       end
     end
 
+    it "pairs no Ruby version from another file with an engine a version-manager file names" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".ruby-version"), "jruby-9.4.8.0\n")
+        File.write(File.join(dir, ".tool-versions"), "ruby 3.3.6\n")
+
+        spec = described_class.for(dir)
+
+        expect(spec.ruby_engine).to eq("JRuby 9.4.8.0")
+        expect(spec.ruby_version).to be_nil
+      end
+    end
+
     it "reads an engine in .tool-versions" do
       Dir.mktmpdir do |dir|
         File.write(File.join(dir, ".tool-versions"), "ruby truffleruby-24.1.1\n")
