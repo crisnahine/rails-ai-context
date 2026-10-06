@@ -7,6 +7,7 @@ module RailsAiContext
     module Listeners
       # The literal path forms an app writes a setting with: a string, `%W(#{config.root}/x)`,
       # `Rails.root.join("x")`. Each one read lands in `push_path`; a path built at run time stays unread.
+      # `collect_paths` returns whether it read the whole node, so a caller can tell a partly read write.
       module LiteralPaths
         APPENDING = %i[<< push append concat].to_set.freeze
 
@@ -18,7 +19,7 @@ module RailsAiContext
 
         def collect_paths(node)
           case node
-          when Prism::ArrayNode then node.elements.each { |element| collect_paths(element) }
+          when Prism::ArrayNode then node.elements.map { |element| collect_paths(element) }.all?
           when Prism::StringNode then push_path(node.unescaped)
           when Prism::InterpolatedStringNode then collect_interpolated_path(node)
           when Prism::CallNode then collect_call_path(node)
@@ -104,6 +105,7 @@ module RailsAiContext
         def push_path(value)
           cleaned = value.to_s.strip.delete_prefix("/")
           @results << cleaned unless cleaned.empty?
+          true
         end
       end
     end

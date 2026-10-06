@@ -12,7 +12,7 @@ module RailsAiContext
       #
       # A path built from __dir__ or __FILE__ is read only when the walk is given the helper's
       # `file`, relative to the app root.
-      # The path forms are LiteralPaths'. A write whose path it cannot read records :unread,
+      # The path forms are LiteralPaths'. A write with any path it cannot read records :unread,
       # so a caller still knows the setting is set.
       class FixturePathsListener < BaseListener
         include LiteralPaths
@@ -32,7 +32,7 @@ module RailsAiContext
             return unless APPENDING.include?(node.name) && fixture_setting?(node.receiver)
           end
 
-          record_write { Array(node.arguments&.arguments).each { |argument| collect_paths(argument) } }
+          record_write { Array(node.arguments&.arguments).map { |argument| collect_paths(argument) }.all? }
         end
 
         def on_call_operator_write_node_enter(node)
@@ -44,9 +44,7 @@ module RailsAiContext
         private
 
         def record_write
-          before = @results.size
-          yield
-          @results << :unread if @results.size == before
+          @results << :unread unless yield
         end
 
         def fixture_setting?(node)

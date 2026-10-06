@@ -9,7 +9,7 @@ module RailsAiContext
       #   FactoryBot.definition_file_paths << "lib/factories"      → { replace: false, paths: ["lib/factories"] }
       #   FactoryBot.find_definitions / FactoryBot.reload           → { load: :find_definitions } / { load: :reload }
       #
-      # The path forms are LiteralPaths'; a write whose paths it cannot read records `unread: true`.
+      # The path forms are LiteralPaths'; a write with any path it cannot read records `unread: true`.
       class DefinitionFilePathsListener < BaseListener
         include LiteralPaths
 
@@ -39,14 +39,14 @@ module RailsAiContext
         private
 
         def collect_arguments(node)
-          Array(node.arguments&.arguments).each { |argument| collect_paths(argument) }
+          Array(node.arguments&.arguments).map { |argument| collect_paths(argument) }.all?
         end
 
         def record(replace)
           before = @results.size
-          yield
-          paths = @results.slice!(before..)
-          @results << (paths.any? ? { replace: replace, paths: paths } : { replace: replace, paths: [], unread: true })
+          read = yield
+          entry = { replace: replace, paths: @results.slice!(before..) }
+          @results << (read ? entry : entry.merge(unread: true))
         end
 
         def setting?(node)

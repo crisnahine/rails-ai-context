@@ -45,4 +45,11 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::FixturePathsListener do
     RUBY
     expect(found).to eq(%w[extra_fx shared_fx test/more_fx])
   end
+
+  it "records a write that it read only part of as unread too" do
+    found = RailsAiContext::Introspectors::SourceIntrospector.walk_source(<<~RUBY, { fixtures: -> { described_class.new(file: "spec/rails_helper.rb") } })[:fixtures]
+      config.fixture_paths = [File.expand_path("f", __dir__), ENV["X"]]
+    RUBY
+    expect(found).to eq([ "spec/f", :unread ])
+  end
 end

@@ -39,4 +39,12 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::DefinitionFilePathsList
 
     expect(writes).to eq([ { replace: true, paths: [ "spec/support/factories" ] }, { replace: false, paths: [ "spec/more" ] } ])
   end
+
+  it "marks a write that it read only part of" do
+    writes = RailsAiContext::Introspectors::SourceIntrospector.walk_source(<<~RUBY, { writes: -> { described_class.new(file: "spec/rails_helper.rb") } })[:writes]
+      FactoryBot.definition_file_paths = [File.expand_path("f", __dir__), ENV["X"]]
+    RUBY
+
+    expect(writes).to eq([ { replace: true, paths: [ "spec/f" ], unread: true } ])
+  end
 end
