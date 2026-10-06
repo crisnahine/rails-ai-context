@@ -100,14 +100,14 @@ module RailsAiContext
 
         databases = RailsAiContext::Payload.schema_databases(schema, table)
         table_exists = databases.any?
-        database_lines, database_flag = database_option(table, databases)
+        database_lines, target = database_option(table, databases)
         lines.concat(database_lines)
 
         case action
         when "add_column"
-          lines.concat(generate_add_column(table, column, type, options, table_exists, database_flag))
+          lines.concat(generate_add_column(table, column, type, options, table_exists, target))
         when "remove_column"
-          lines.concat(generate_remove_column(table, column, type, schema, models, database_flag))
+          lines.concat(generate_remove_column(table, column, type, schema, models, target))
         when "rename_column"
           rename_to = new_name&.to_s&.strip
           rename_to = type if rename_to.nil? || rename_to.empty?
@@ -144,29 +144,41 @@ module RailsAiContext
         end
 
         # A table only a secondary database holds needs its migration in that database's migrations_paths.
+        # [lines, target]: target is nil for the primary, false when no environment configures the
+        # database, else the generator's --database flag and the RAILS_ENV that configures it.
         def database_option(table, databases)
           return [ [], nil ] if databases.empty? || databases.include?("primary")
 
-          # A dump found only by its file name has no database.yml entry, so the generator would write to the primary.
-          unconfigured, databases = databases.partition { |db| RailsAiContext::DatabaseYml.entry(rails_app.root, db).nil? }
-          if databases.empty?
-            note = "**Database:** `#{table}` is in the #{unconfigured.join(", ")} dump, which this environment's config/database.yml does not configure: " \
-                   "there is no `--database` to generate into, and a migration generated here runs on the primary."
-            return [ [ note, "" ], nil ]
+          yml = RailsAiContext::DatabaseYml
+          root = rails_app.root
+          found = databases.to_h { |db| [ db, (entry = yml.entry(root, db)) ? [ nil, entry ] : yml.elsewhere(root, db) ] }.compact
+          if found.empty?
+            note = "**Database:** `#{table}` is in the #{databases.join(", ")} dump, which no environment in config/database.yml configures: " \
+                   "no `--database` reaches it, and a migration generated here runs on the primary."
+            return [ [ note, "" ], false ]
           end
 
-          flag = " --database #{databases.first}"
-          note = "**Database:** `#{table}` is in #{[ databases[0..-2].join(", "), databases.last ].reject(&:empty?).join(" and ")}, not the primary database: generate with `#{flag.strip}` " \
-                 "so the migration lands in that database's migrations_paths and `bin/rails db:migrate` runs it there."
-          groups = databases.group_by { |db| Array(RailsAiContext::DatabaseYml.entry(rails_app.root, db)&.fetch("migrations_paths", nil)) }
+          names = found.keys
+          env_name = found.values.first.first
+          target = { flag: " --database #{names.first}", env: env_name }
+          paths = Array(found.values.first.last["migrations_paths"]).join(", ")
+          note = "**Database:** `#{table}` is in #{[ names[0..-2].join(", "), names.last ].reject(&:empty?).join(" and ")}," \
+                 "#{" which #{env_name} configures and this environment does not," if env_name} not the primary database: generate with #{"`RAILS_ENV=#{env_name}` and " if env_name}`#{target[:flag].strip}` " \
+                 "so the migration lands in #{env_name && !paths.empty? ? paths : "that database's migrations_paths"} and " \
+                 "#{"#{env_name}'s " if env_name}`bin/rails db:migrate` runs it there."
+          groups = found.group_by { |_, (_, entry)| Array(entry["migrations_paths"]) }
           if groups.size > 1
             note += " Those databases read different migrations_paths, so generate it once per database: " \
-                    "#{groups.values.map { |dbs| "`--database #{dbs.first}`" }.join(', ')}."
+                    "#{groups.values.map { |dbs| "`--database #{dbs.first.first}`" }.join(', ')}."
           end
-          [ [ note, "" ], flag ]
+          [ [ note, "" ], target ]
         end
 
-        def generate_add_column(table, column, type, options, table_exists, database_flag = nil)
+        def generate_command(args, target)
+          "#{"RAILS_ENV=#{target[:env]} " if target && target[:env]}bin/rails generate migration #{args}#{target && target[:flag]}"
+        end
+
+        def generate_add_column(table, column, type, options, table_exists, target = nil)
           return [ "**Error:** column name is required for add_column" ] unless column
           type ||= "string"
 
@@ -184,10 +196,10 @@ module RailsAiContext
           opts = options ? ", #{options}" : ""
           class_name = migration_class_name("add", table, column)
 
-          lines << "**Run:** `bin/rails generate migration #{class_name} #{column}:#{type}#{database_flag}`"
-          lines << ""
+          command = generate_command("#{class_name} #{column}:#{type}", target) unless target == false
+          lines.push("**Run:** `#{command}`", "") if command
           lines << "```ruby"
-          lines << "# rails generate migration #{class_name} #{column}:#{type}#{database_flag}"
+          lines << "# #{command.sub("bin/rails", "rails")}" if command
           lines << "class #{class_name} < ActiveRecord::Migration[#{rails_version}]"
           lines << "  def change"
           lines << "    add_column :#{table}, :#{column}, :#{type}#{opts}"
@@ -200,7 +212,7 @@ module RailsAiContext
           lines
         end
 
-        def generate_remove_column(table, column, type, schema, models, database_flag = nil)
+        def generate_remove_column(table, column, type, schema, models, target = nil)
           return [ "**Error:** column name is required for remove_column" ] unless column
 
           lines = []
@@ -221,8 +233,7 @@ module RailsAiContext
           # Check if column is referenced
           col_type = find_column_type(table, column, schema) || type || "string"
 
-          lines << "**Run:** `bin/rails generate migration #{class_name} #{column}:#{col_type}#{database_flag}`"
-          lines << ""
+          lines.push("**Run:** `#{generate_command("#{class_name} #{column}:#{col_type}", target)}`", "") unless target == false
           lines << "**Warning:** `remove_column` is irreversible without specifying the column type."
           lines << ""
           lines << "```ruby"

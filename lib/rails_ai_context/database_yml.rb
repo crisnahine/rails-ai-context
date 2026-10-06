@@ -15,12 +15,17 @@ module RailsAiContext
     module_function
 
     # The running environment's entry, or nil when the file is missing or unreadable.
-    # Every database question routes here, so a run reads the file once.
     def env(root)
-      RailsAiContext::RunCache.fetch([ :database_yml, root.to_s, RailsAiContext.environment_name ]) { read_env(root) }
+      data = file(root)
+      data[RailsAiContext.environment_name] if data
     end
 
-    def read_env(root)
+    # Every environment by name. Every database question routes here, so a run reads the file once.
+    def file(root)
+      RailsAiContext::RunCache.fetch([ :database_yml, root.to_s ]) { read_file(root) }
+    end
+
+    def read_file(root)
       path = File.join(root.to_s, "config/database.yml")
       return nil unless File.exist?(path)
 
@@ -28,16 +33,17 @@ module RailsAiContext
       return nil unless content
 
       data = YAML.safe_load(neutralize_erb(content), aliases: true, permitted_classes: [ Symbol ])
-      return nil unless data.is_a?(Hash)
-
-      data[RailsAiContext.environment_name]
+      data if data.is_a?(Hash)
     rescue => e
       RailsAiContext.debug_fail(e, nil, label: "database_yml")
     end
 
     # Each database by name, in the file's order. An env whose values are all Hashes names one database per key.
     def databases(root)
-      config = env(root)
+      databases_in(env(root))
+    end
+
+    def databases_in(config)
       return {} unless config.is_a?(Hash) && config.any?
 
       config.values.all?(Hash) ? config : { "primary" => config }
@@ -45,8 +51,11 @@ module RailsAiContext
 
     # Rails' rule: "primary", else the first database.
     def primary_name(root)
-      names = databases(root).keys
-      names.include?("primary") ? "primary" : names.first
+      primary_name_in(databases(root))
+    end
+
+    def primary_name_in(found)
+      found.key?("primary") ? "primary" : found.keys.first
     end
 
     # The databases other than the primary that Rails dumps and migrates:
@@ -62,8 +71,26 @@ module RailsAiContext
 
     # The named database's settings in the running environment, or nil.
     def entry(root, name)
-      found = databases(root)
-      found[name] || (found[primary_name(root)] if name == "primary")
+      entry_in(databases(root), name)
+    end
+
+    # [environment, settings] from the first other environment that configures the database,
+    # the one whose tasks wrote its dump; nil when none does.
+    def elsewhere(root, name)
+      data = file(root)
+      return nil unless data
+
+      data.each do |env_name, config|
+        next if env_name == RailsAiContext.environment_name
+
+        found = entry_in(databases_in(config), name)
+        return [ env_name, found ] if found.is_a?(Hash)
+      end
+      nil
+    end
+
+    def entry_in(found, name)
+      found[name] || (found[primary_name_in(found)] if name == "primary")
     end
 
     # Rails' DatabaseConfigurations: an entry's own url wins over its keys, and an entry

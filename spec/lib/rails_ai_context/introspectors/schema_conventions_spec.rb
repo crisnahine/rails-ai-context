@@ -199,6 +199,32 @@ RSpec.describe RailsAiContext::Introspectors::SchemaConventions do
       expect(described_class.implicit_pk_type(@root, "db/schema.rb")).to eq("bigint")
     end
 
+    it "types a dump whose database only another environment configures by that environment's adapter" do
+      database_yml(<<~YAML)
+        default: &default
+          adapter: sqlite3
+        #{Rails.env}:
+          <<: *default
+        production:
+          primary:
+            <<: *default
+          queue:
+            <<: *default
+            migrations_paths: db/queue_migrate
+      YAML
+      expect(described_class.implicit_pk_type(@root, "db/queue_schema.rb")).to eq("integer")
+    end
+
+    it "falls back to the running primary's adapter for a dump no environment configures" do
+      database_yml("#{Rails.env}:\n  adapter: sqlite3\n")
+      expect(described_class.implicit_pk_type(@root, "db/orphan_schema.rb")).to eq("integer")
+    end
+
+    it "types the primary by another environment when the running one has no entry" do
+      database_yml("production:\n  adapter: sqlite3\n")
+      expect(described_class.implicit_pk_type(@root, "db/schema.rb")).to eq("integer")
+    end
+
     it "is nil with no database.yml" do
       expect(described_class.database_adapter_for(@root, "primary")).to be_nil
     end

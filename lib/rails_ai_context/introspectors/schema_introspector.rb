@@ -29,8 +29,7 @@ module RailsAiContext
           # connection, so the two can be one migration apart. The tables the
           # dump declares are what lets a consumer say so rather than call a
           # declared table a typo.
-          declared_tables: declared_table_names,
-          declared_in: (relative_dump_path(schema_file_path) if schema_file_path),
+          **declaration_keys,
           check_constraints: SchemaConventions.check_constraints_of(tables),
           enum_types: enum_types,
           generated_columns: SchemaConventions.generated_columns_of(tables),
@@ -419,8 +418,12 @@ module RailsAiContext
         result = static_schema_sources
         return result unless result.is_a?(Hash) && result[:tables].is_a?(Hash)
 
-        result.merge(declared_tables: declared_table_names,
-                     declared_in: (relative_dump_path(schema_file_path) if schema_file_path))
+        result.merge(declaration_keys)
+      end
+
+      def declaration_keys
+        declared = declared_table_names
+        { declared_tables: declared, declared_in: (relative_dump_path(schema_file_path) if declared) }
       end
 
       # The configured dump first (database.yml's schema_dump, schema_format), then the default files.
