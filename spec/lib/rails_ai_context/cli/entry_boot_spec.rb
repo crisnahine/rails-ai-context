@@ -3,6 +3,8 @@
 require "spec_helper"
 require "tmpdir"
 require "fileutils"
+require "open3"
+require "rbconfig"
 
 RSpec.describe RailsAiContext::CLI::EntryBoot do
   describe ".app_present?" do
@@ -106,12 +108,12 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
         unlocked_tree(dir, %(gem "sinatra"\n))
         lib = File.expand_path("../../../../lib", __dir__)
         script = %(require "rails_ai_context/cli/entry_boot"; p RailsAiContext::CLI::EntryBoot.app_present?(#{dir.inspect}))
-        out = `ruby -I #{lib.shellescape} -e #{script.shellescape} 2>&1`
-        expect(out.strip).to eq("false")
+        out, err, = Open3.capture3(RbConfig.ruby, "-I", lib, "-e", script)
+        expect(out.strip).to eq("false"), err
 
         File.write(File.join(dir, "Gemfile"), %(%w[rails pg].each { |name| gem name }\n))
-        out = `ruby -I #{lib.shellescape} -e #{script.shellescape} 2>&1`
-        expect(out.strip).to eq("true")
+        out, err, = Open3.capture3(RbConfig.ruby, "-I", lib, "-e", script)
+        expect(out.strip).to eq("true"), err
       end
     end
   end
