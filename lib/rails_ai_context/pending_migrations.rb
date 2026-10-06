@@ -31,16 +31,13 @@ module RailsAiContext
       RunCache.fetch([ :pending_migrations, migrate_dir.to_s ]) { MigrationStatus.pending(migrate_dir) }
     end
 
-    # Each database keeps its own migrations: the migrations_paths its
-    # database.yml entry names, else db/migrate or db/<name>_migrate, as Rails
-    # runs them. The schema replay also reads in-repo engines' migrations, whose
-    # renumbered copies in db/migrate would read as pending here, and
-    # db/post_migrate, which Rails' migrator runs only when the app adds it.
+    # The entry's migrations_paths, else db/migrate as Rails runs it; a dump with no entry here takes the generator's db/<name>_migrate.
+    # Only the dirs Rails migrates: an engine's renumbered copy in db/migrate would read as pending.
     def migrate_dirs_for(root, dump_path = nil)
       name = Introspectors::SchemaDumpPath.database_name(root, dump_path)
       entry = RailsAiContext::DatabaseYml.entry(root, name)
       Introspectors::MigrationReplay.configured_dirs(root, entry) ||
-        [ File.join(root.to_s, "db", name == "primary" ? "migrate" : "#{name}_migrate") ]
+        [ File.join(root.to_s, "db", name == "primary" || entry ? "migrate" : "#{name}_migrate") ]
     end
 
     # Every versioned migration file under the directory or directories. One file scan behind
