@@ -16,6 +16,24 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
     expect(results.first[:source]).to eq("30.minutes")
   end
 
+  it "reads a config_for call off its node: the file, the env: literal, and a path or env it cannot read" do
+    results = assignments(<<~RUBY)
+      config.secret_store = config_for(:vault)
+      config.api_token_settings = Rails.application.config_for("tokens", env: "production")
+      config.x.stripe = config_for(Rails.root.join("config", "stripe.yml"), env: Rails.env)
+      config.other = config_for(Rails.root.join(dir, "x.yml"), env: ENV["DEPLOY_ENV"])
+      config.plain = 3
+    RUBY
+
+    expect(results.map { |r| r[:config_for] }).to eq([
+      { argument: ":vault", file: "config/vault.yml" },
+      { argument: '"tokens"', file: "config/tokens.yml", env: "production" },
+      { argument: 'Rails.root.join("config", "stripe.yml")', file: "config/stripe.yml" },
+      { argument: 'Rails.root.join(dir, "x.yml")', env: :expression },
+      nil
+    ])
+  end
+
   it "keeps a heredoc value's body in its source" do
     results = assignments(<<~RUBY)
       config.banner = <<~TXT.squish

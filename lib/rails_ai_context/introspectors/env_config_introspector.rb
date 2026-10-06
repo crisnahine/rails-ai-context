@@ -58,27 +58,22 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, nil, label: "summarize #{APPLICATION}")
       end
 
-      CONFIG_FOR = /\A(?:(?:::)?Rails\.application\.)?config_for\(\s*:?["']?([\w\/]+)/
-      CONFIG_FOR_ENV = /(?:\benv:|:env\s*=>)\s*([^,)]+)/
-      LITERAL_ENV = /\A(?:(["'])(\w+)\1|:(\w+))\z/
-
       # The keys config_for gives the environment it reads (`env:`, else this one):
       # `shared` deep-merged under that environment's section. Names only: a value is often a secret.
       def config_for_files(assignments)
         assignments.filter_map do |key, entries|
-          source = entries.last[:source].to_s
-          name = source[CONFIG_FOR, 1] or next
-          file = "config/#{name}.yml"
-          entry = { key: key, file: file }
-          environment = current_environment
-          if (env = source[CONFIG_FOR_ENV, 1]&.strip) && env != "Rails.env"
-            literal = env.match(LITERAL_ENV) or next entry.merge(environment_unread: true)
-            environment = literal[2] || literal[3]
-            entry[:environment] = environment
-          end
-          next entry.merge(missing: true) unless File.file?(File.join(root, file))
+          call = entries.last[:config_for] or next
+          entry = { key: key, call: call[:argument], file: call[:file] }.compact
+          next entry.merge(path_unread: true) unless call[:file]
 
-          data = RecurringSchedules.yaml(root, file)
+          environment = current_environment
+          case call[:env]
+          when :expression then next entry.merge(environment_unread: true)
+          when String then environment = entry[:environment] = call[:env]
+          end
+          next entry.merge(missing: true) unless File.file?(File.join(root, call[:file]))
+
+          data = RecurringSchedules.yaml(root, call[:file])
           next entry.merge(unreadable: true) unless data.is_a?(Hash)
 
           sections = [ data["shared"], data[environment] ].select { |section| section.is_a?(Hash) }

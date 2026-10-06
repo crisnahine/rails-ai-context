@@ -414,8 +414,8 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
       )
 
       expect(result[:config_for]).to eq([
-        { key: "payment", file: "config/payment.yml", keys: %w[currency key] },
-        { key: "mail", file: "config/mail.yml", missing: true }
+        { key: "payment", call: ":payment", file: "config/payment.yml", keys: %w[currency key] },
+        { key: "mail", call: '"mail"', file: "config/mail.yml", missing: true }
       ])
     end
 
@@ -434,9 +434,9 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
       )
 
       expect(result[:config_for]).to eq([
-        { key: "feature", file: "config/feature.yml", environment: "production", keys: %w[flag_a prod_only] },
-        { key: "other", file: "config/feature.yml", environment_unread: true },
-        { key: "same", file: "config/feature.yml", keys: %w[dev_only flag_a] }
+        { key: "feature", call: ":feature", file: "config/feature.yml", environment: "production", keys: %w[flag_a prod_only] },
+        { key: "other", call: ":feature", file: "config/feature.yml", environment_unread: true },
+        { key: "same", call: ":feature", file: "config/feature.yml", keys: %w[dev_only flag_a] }
       ])
     end
 
@@ -447,7 +447,29 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
     it "reads a config_for file that is not YAML as unreadable rather than failing" do
       result = application("config/application.rb" => application_rb, "config/payment.yml" => "shared: [unclosed\n")
 
-      expect(result[:config_for].first).to eq({ key: "payment", file: "config/payment.yml", unreadable: true })
+      expect(result[:config_for].first).to eq({ key: "payment", call: ":payment", file: "config/payment.yml", unreadable: true })
+    end
+
+    it "reads a config_for under a secret-shaped key, and a Pathname path, off the node" do
+      result = application(
+        "config/application.rb" => <<~RUBY,
+          module App
+            class Application < Rails::Application
+              config.secret_store = config_for(:vault)
+              config.x.stripe = config_for(Rails.root.join("config", "stripe.yml"))
+              config.other = config_for(Rails.root.join(dir, "x.yml"))
+            end
+          end
+        RUBY
+        "config/vault.yml" => "shared:\n  address: x\n",
+        "config/stripe.yml" => "test:\n  publishable_key: x\n"
+      )
+
+      expect(result[:config_for]).to eq([
+        { key: "secret_store", call: ":vault", file: "config/vault.yml", keys: %w[address] },
+        { key: "x.stripe", call: 'Rails.root.join("config", "stripe.yml")', file: "config/stripe.yml", keys: %w[publishable_key] },
+        { key: "other", call: 'Rails.root.join(dir, "x.yml")', path_unread: true }
+      ])
     end
   end
 end

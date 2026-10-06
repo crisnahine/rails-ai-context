@@ -133,7 +133,7 @@ module RailsAiContext
             path, value: value, source: value_node && NodeSource.text(value_node)
           )
 
-          @results << {
+          entry = {
             path:       path,
             assignment: true,
             value:      redacted[:value],
@@ -141,6 +141,40 @@ module RailsAiContext
             condition:  @conditions.compact.last,
             location:   node.location.start_line
           }
+          # Read off the node rather than the source, which is redacted under a secret-shaped key.
+          if (call = config_for(value_node))
+            entry[:config_for] = call
+          end
+          @results << entry
+        end
+
+        # `config_for(:name, env: "production")`: the YAML file it reads, nil for a path
+        # that is not a literal, and its env:, :expression when that is not a literal.
+        def config_for(node)
+          return nil unless node.is_a?(Prism::CallNode) && node.name == :config_for
+          return nil unless node.receiver.nil? || rails_call?(node.receiver, "Rails.application")
+
+          argument = node.arguments&.arguments&.first
+          env = extract_keyword_nodes(node)[:env]
+          env = nil if env && rails_call?(env, "Rails.env")
+          { argument: argument && RailsAiContext::Redaction.call(NodeSource.text(argument)), file: config_for_file(argument),
+            env: env && (literal_string(env) || :expression) }.compact
+        end
+
+        # Rails reads `config/<name>.yml` for a name, and the Pathname itself for `Rails.root.join(...)`.
+        def config_for_file(node)
+          return nil if node.nil? || node.is_a?(Prism::KeywordHashNode)
+
+          name = literal_string(node)
+          return "config/#{name}.yml" if name
+          return nil unless node.is_a?(Prism::CallNode) && node.name == :join && rails_call?(node.receiver, "Rails.root")
+
+          parts = (node.arguments&.arguments || []).map { |part| literal_string(part) }
+          File.join(*parts) if parts.any? && parts.all?
+        end
+
+        def rails_call?(node, text)
+          node.is_a?(Prism::CallNode) && NodeSource.text(node).delete_prefix("::") == text
         end
 
         def condition_text(node)
