@@ -73,4 +73,13 @@ RSpec.describe RailsAiContext::TestHelper do
       expect(text).not_to be_empty
     end
   end
+
+  # The helper is often the only file a test suite requires from this gem,
+  # and a custom tool's class body names MCP::Tool before anything runs.
+  it "loads the MCP SDK on its own" do
+    lib = File.expand_path("../../../lib", __dir__)
+    out = `ruby -I #{lib} -e 'require "rails_ai_context/test_helper"; print defined?(MCP::Tool).inspect' 2>&1`
+
+    expect(out).to eq('"constant"')
+  end
 end

@@ -371,7 +371,9 @@ module RailsAiContext
         # the composers do not index into `content` themselves.
         def response_text(response)
           first = response.content.first
-          first.is_a?(Hash) ? first[:text].to_s : ""
+          text = first.is_a?(Hash) ? first[:text].to_s : ""
+          # The composing tool's own response carries the tier banner, once.
+          (banner = static_tier_banner) ? text.gsub(banner, "") : text
         end
 
         # One-line banner listing introspectors that failed during context

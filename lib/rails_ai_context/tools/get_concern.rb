@@ -18,7 +18,7 @@ module RailsAiContext
             type: "string",
             description: "Filter by concern type, the name each section heading of the listing prints: model for app/models/concerns/, mailer for app/mailers/concerns/, and for a concern outside every concerns directory the root it lives in (service for app/services, lib for lib). other: app/concerns itself, or a configured directory. all: everything (default)."
           },
-          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: concern names only. standard: names + method signatures (default). full: method signatures with source code.")
+          detail: RailsAiContext::DetailLevel.schema("Detail level, read when `name` is given. summary and standard (default): method signatures. full: method signatures with source code.")
         }
       )
 

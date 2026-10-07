@@ -235,7 +235,7 @@ module RailsAiContext
     attr_accessor :max_tool_response_chars
 
     # Live reload: auto-invalidate MCP tool caches on file changes
-    # :auto (default) - enable if `listen` gem is available, skip silently otherwise
+    # :auto (default) - enable if `listen` gem is available, say so on stderr otherwise
     # true  - enable, raise if `listen` gem is missing
     # false - disable entirely
     attr_accessor :live_reload
@@ -372,7 +372,7 @@ module RailsAiContext
     # Database query tool settings (rails_query)
     attr_accessor :query_timeout              # Statement timeout in seconds (default: 5)
     attr_accessor :query_row_limit            # Max rows returned (default: 100, hard cap: 1000)
-    attr_accessor :query_redacted_columns     # Column names whose values are redacted in output
+    attr_accessor :query_redacted_columns     # Column names a query may not reference, redacted in output
     attr_accessor :query_allowed_columns      # Column names to exempt from the built-in sensitive list
     attr_accessor :allow_query_in_production  # Allow rails_query in production (default: false)
 

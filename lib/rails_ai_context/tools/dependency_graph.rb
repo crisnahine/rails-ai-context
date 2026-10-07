@@ -4,8 +4,8 @@ module RailsAiContext
   module Tools
     class DependencyGraph < BaseTool
       tool_name "rails_dependency_graph"
-      description "Generates a dependency graph showing how models, services, and controllers " \
-        "connect. Output as Mermaid diagram syntax or plain text. " \
+      description "Generates a dependency graph showing how models connect through their " \
+        "associations. Output as Mermaid diagram syntax or plain text. " \
         "Use when: understanding feature architecture, tracing data flow, planning refactors. " \
         "Key params: model (center graph on model), depth (1-3), format (mermaid/text)."
 

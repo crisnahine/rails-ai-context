@@ -274,7 +274,7 @@ module RailsAiContext
     end
 
     # Conditionally start live reload based on configuration.
-    # :auto  - try to load `listen`, skip silently with a tip if missing
+    # :auto  - try to load `listen`, print a tip to stderr if missing
     # true   - try to load `listen`, raise if missing
     # false  - skip entirely
     def maybe_start_live_reload(mcp_server)
@@ -291,7 +291,7 @@ module RailsAiContext
           raise LoadError, "Live reload requires the `listen` gem. Add to your Gemfile: gem 'listen', group: :development"
         end
 
-        # :auto mode - skip silently with a tip
+        # :auto mode - skip with a tip
         $stderr.puts "[rails-ai-context] Live reload unavailable (add `listen` gem for auto-refresh)"
       end
     end

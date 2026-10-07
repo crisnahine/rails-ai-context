@@ -280,4 +280,17 @@ RSpec.describe RailsAiContext::Tools::GetContext do
       expect(text).to include("## Table: comments")
     end
   end
+
+  # A composed answer is one response, so it carries the tier banner once
+  # however many tools it was built from.
+  describe "the static tier banner on a composed answer" do
+    it "appears once" do
+      described_class.reset_cache!
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+
+      text = described_class.call(model: "User").content.first[:text]
+
+      expect(text.scan("Serving static analysis").size).to eq(1)
+    end
+  end
 end

@@ -4,6 +4,8 @@
 # Bundler.require never loads it in the test environment, so this file is
 # often the first (and only) entry point required from a test suite.
 require_relative "../rails_ai_context"
+# A custom tool subclasses MCP::Tool, and nothing else has loaded the SDK yet.
+require "mcp"
 
 module RailsAiContext
   # Reusable test helper for verifying MCP tools - both built-in and custom.

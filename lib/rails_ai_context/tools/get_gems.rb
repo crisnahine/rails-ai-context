@@ -4,7 +4,7 @@ module RailsAiContext
   module Tools
     class GetGems < BaseTool
       tool_name "rails_get_gems"
-      description "Get notable gems from Gemfile.lock grouped by category: auth, jobs, frontend, API, database, testing, deploy. " \
+      description "Get notable gems from Gemfile.lock grouped by category (auth, jobs, frontend, API, database, testing, deploy and more). " \
         "Use when: checking what libraries are available before adding a dependency, or understanding the tech stack. " \
         "Filter with category:\"auth\" or category:\"database\". Omit for all categories."
 
@@ -12,7 +12,7 @@ module RailsAiContext
         properties: {
           category: {
             type: "string",
-            enum: %w[auth jobs frontend api database files testing deploy all],
+            enum: Introspectors::GemIntrospector::NOTABLE_GEMS.values.map { |gem| gem[:category].to_s }.uniq + %w[all],
             description: "Filter by category. Default: all."
           },
           offset: {

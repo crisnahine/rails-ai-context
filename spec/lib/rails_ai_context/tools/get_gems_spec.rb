@@ -315,4 +315,11 @@ RSpec.describe RailsAiContext::Tools::GetGems do
       expect(text).to match(/No items at offset 9999/)
     end
   end
+
+  it "lets every category the gem list uses be asked for" do
+    categories = RailsAiContext::Introspectors::GemIntrospector::NOTABLE_GEMS.values.map { |gem| gem[:category].to_s }.uniq
+    enum = described_class.input_schema.to_h[:properties][:category][:enum]
+
+    expect(enum).to match_array(categories + [ "all" ])
+  end
 end

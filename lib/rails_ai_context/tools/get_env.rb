@@ -426,7 +426,7 @@ module RailsAiContext
       end
 
       private_class_method def self.scan_env_example(root)
-        # Only read .env.example or .env.sample - NEVER .env or .env.local
+        # Only the example files - NEVER .env or .env.local
         candidates = %w[.env.example .env.sample .env.template]
         vars = []
 
