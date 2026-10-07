@@ -269,7 +269,7 @@ class RailsAiContextCLI < Thor
       end
     end
 
-    desc "init", "Set up rails-ai-context for standalone use (creates .rails-ai-context.yml and .mcp.json)"
+    desc "init", "Set up rails-ai-context for standalone use (creates .rails-ai-context.yml, each AI tool's MCP config and its context files)"
     option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
     option :mcp_only, type: :boolean, default: false,
       desc: "Write the MCP config and nothing else: no CLAUDE.md, AGENTS.md, rules files or .ai-context.json"
@@ -295,7 +295,7 @@ class RailsAiContextCLI < Thor
       cleanup_removed_tools(previous_tools, ai_tools) if previous_tools&.any?
 
       # --- One-time v5.0.0 legacy UI-pattern files cleanup prompt ---
-      ::RailsAiContext::LegacyCleanup.prompt_legacy_files(ai_tools, root: Dir.pwd)
+      ::RailsAiContext::LegacyCleanup.prompt_legacy_files(ai_tools, root: Dir.pwd) if context_files
 
       # --- Record the selection (YAML, plus the initializer line) ---
       record_selection(ai_tools, tool_mode, context_files)
@@ -397,9 +397,13 @@ class RailsAiContextCLI < Thor
         ai_tools, root: Dir.pwd,
         extra_yaml: { "tool_mode" => tool_mode.to_s, "context_files" => context_files }
       )
-      ::RailsAiContext::Install::SelectionRecord.write_context_files(context_files, root: Dir.pwd)
+      record = ::RailsAiContext::Install::SelectionRecord
+      conflicts = [
+        record.conflict_message(:context_files, record.write_context_files(context_files, root: Dir.pwd)),
+        record.conflict_message(:tool_mode, record.write_tool_mode(tool_mode, root: Dir.pwd))
+      ].compact
 
-      ::RailsAiContext::Install::SelectionRecord.messages(result).each do |level, text|
+      (record.messages(result) + conflicts).each do |level, text|
         $stderr.puts(level == :warn ? "Warning: #{text}" : text)
       end
     end

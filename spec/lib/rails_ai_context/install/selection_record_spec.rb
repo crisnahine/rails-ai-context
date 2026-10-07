@@ -507,6 +507,25 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
   end
 
   describe ".write_tool_mode" do
+    # A second line beside it would lose at boot and win on read.
+    it "does not add a line beside an assignment it cannot rewrite" do
+      FileUtils.mkdir_p(File.join(root, "config", "initializers"))
+      path = File.join(root, "config", "initializers", "rails_ai_context.rb")
+      body = "RailsAiContext.configure do |config|\n  config.tool_mode = ENV.fetch(\"MODE\", \"mcp\").to_sym\nend\n"
+      File.write(path, body)
+
+      expect(described_class.write_tool_mode(:cli, root: root)).to eq(:conflict)
+      expect(File.read(path)).to eq(body)
+      expect(described_class.conflict_message(:tool_mode, :conflict).last).to include("config.tool_mode")
+      expect(described_class.conflict_message(:tool_mode, :updated)).to be_nil
+      # Settled, whatever its shape, so `rails ai:context` does not ask on every run.
+      expect(described_class.tool_mode_set?(root: root)).to be(true)
+    end
+
+    it "reads the tool mode as unset when nothing assigns it" do
+      expect(described_class.tool_mode_set?(root: root)).to be(false)
+    end
+
     it "rewrites an existing uncommented line" do
       write_initializer("RailsAiContext.configure do |config|\n  config.tool_mode = :mcp\nend\n")
 

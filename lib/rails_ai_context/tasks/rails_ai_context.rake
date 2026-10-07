@@ -77,14 +77,19 @@ def prompt_setup
   RailsAiContext::Install::Program.select_setup(install_surface)
 end unless defined?(prompt_setup)
 
+def say_conflict(key, status)
+  _level, text = RailsAiContext::Install::SelectionRecord.conflict_message(key, status)
+  puts "⚠️  #{text}" if text
+end unless defined?(say_conflict)
+
 def save_tool_mode_to_initializer(mode)
-  RailsAiContext::Install::SelectionRecord.write_tool_mode(mode, root: Rails.root)
+  say_conflict(:tool_mode, RailsAiContext::Install::SelectionRecord.write_tool_mode(mode, root: Rails.root))
 rescue => e
   RailsAiContext.debug_fail(e, nil, label: "save_tool_mode_to_initializer")
 end unless defined?(save_tool_mode_to_initializer)
 
 def save_context_files_to_initializer(value)
-  RailsAiContext::Install::SelectionRecord.write_context_files(value, root: Rails.root)
+  say_conflict(:context_files, RailsAiContext::Install::SelectionRecord.write_context_files(value, root: Rails.root))
 rescue => e
   RailsAiContext.debug_fail(e, nil, label: "save_context_files_to_initializer")
 end unless defined?(save_context_files_to_initializer)
@@ -100,7 +105,7 @@ rescue => e
 end unless defined?(ensure_mcp_configs)
 
 def tool_mode_configured?
-  !RailsAiContext::Install::SelectionRecord.tool_mode(root: Rails.root).nil?
+  RailsAiContext::Install::SelectionRecord.tool_mode_set?(root: Rails.root)
 rescue => e
   RailsAiContext.debug_fail(e, false, label: "tool_mode_configured?")
 end unless defined?(tool_mode_configured?)
@@ -295,7 +300,10 @@ namespace :ai do
   end
 
   namespace :context do
-    per_tool = RailsAiContext::Install::AiTool.all.to_h { |tool| [ tool.key, tool.files ] }
+    # The MCP config a tool's file list names is the installer's to write, not this task's.
+    per_tool = RailsAiContext::Install::AiTool.all.to_h { |tool|
+      [ tool.key, tool.files.split(" + ").reject { |file| file == tool.mcp_config[:path] }.join(" + ") ]
+    }
     per_tool.merge(json: ".ai-context.json").each do |fmt, file|
       desc "Generate #{file} context file"
       task fmt => :environment do

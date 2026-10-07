@@ -18,6 +18,18 @@ RSpec.describe "not-applicable context files on every surface" do
     $stderr = previous
   end
 
+  it "never asks about legacy files under --defaults" do
+    generator = RailsAiContext::Generators::InstallGenerator.new([], { defaults: true })
+    generator.instance_variable_set(:@selected_formats, [ :claude ])
+    allow(RailsAiContext).to receive(:generate_context).and_return(written: [], skipped: [], not_applicable: {})
+    allow(generator).to receive(:say)
+
+    expect(RailsAiContext::LegacyCleanup).to receive(:prompt_legacy_files)
+      .with([ :claude ], root: anything, warn_only: true)
+
+    generator.send(:generate_context_files)
+  end
+
   it "names them in the install generator output" do
     generator = RailsAiContext::Generators::InstallGenerator.new
     generator.instance_variable_set(:@selected_formats, [ :claude ])

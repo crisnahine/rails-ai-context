@@ -550,7 +550,7 @@ module RailsAiContext
 
         # One-time v5.0.0 legacy UI-pattern files cleanup prompt
         RailsAiContext::LegacyCleanup.prompt_legacy_files(
-          @selected_formats, root: Rails.root
+          @selected_formats, root: Rails.root, warn_only: options[:defaults]
         )
 
         begin

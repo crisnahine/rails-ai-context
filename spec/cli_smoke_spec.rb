@@ -457,6 +457,50 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       end
     end
 
+    # The initializer wins on read, so a mode init left only in the YAML
+    # changed nothing in an app that still had a generator-written one.
+    it "records the mode init was given in an initializer that already sets one" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        initializer = File.join(dir, "config", "initializers", "rails_ai_context.rb")
+        File.write(initializer, "RailsAiContext.configure do |config|\n  config.tool_mode = :mcp\nend\n")
+
+        `cd #{dir} && printf '1\\n2\\n' | ruby -I #{lib} #{exe} init --no-boot 2>&1`
+
+        expect(File.read(initializer)).to include("config.tool_mode = :cli")
+      end
+    end
+
+    it "warns when the initializer sets the mode in a form init cannot rewrite" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "initializers", "rails_ai_context.rb"),
+                   "RailsAiContext.configure do |config|\n  config.tool_mode = ENV.fetch(\"MODE\", \"mcp\").to_sym\nend\n")
+
+        out = `cd #{dir} && printf '1\\n2\\n' | ruby -I #{lib} #{exe} init --no-boot 2>&1`
+
+        expect(out).to include("sets config.tool_mode in a form this installer does not rewrite")
+      end
+    end
+
+    it "says nothing about legacy rule files on an MCP-only init" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+        FileUtils.mkdir_p(File.join(dir, ".claude", "rules"))
+        File.write(File.join(dir, ".claude", "rules", "rails-ui-patterns.md"), "old\n")
+
+        out = `cd #{dir} && printf '1\\n' | ruby -I #{lib} #{exe} init --mcp-only --no-boot 2>&1`
+
+        expect(out).to include("MCP-only setup")
+        expect(out).not_to include("Legacy files detected")
+      end
+    end
+
     # init wrote its config files and then died in a Ruby backtrace when
     # generating context hit a path it could not write.
     it "answers an unexpected init failure in one line on stderr" do

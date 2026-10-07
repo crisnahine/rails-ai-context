@@ -74,7 +74,7 @@ module RailsAiContext
         recorded.nil? ? nil : !!recorded
       end
 
-      # @return [Symbol] :updated, :inserted, :unchanged or :absent
+      # @return [Symbol] :updated, :inserted, :unchanged, :conflict or :absent
       def write_context_files(value, root:)
         write_config_line(root, "  config.context_files = #{value ? 'true' : 'false'}",
                           CONTEXT_FILES_LINE, /^[ \t]*config\.context_files\s*=.*$/)
@@ -83,7 +83,7 @@ module RailsAiContext
       # Only an uncommented line is rewritten - the generated initializer ships
       # a commented-out default that must stay a comment.
       #
-      # @return [Symbol] :updated, :inserted, :unchanged or :absent
+      # @return [Symbol] :updated, :inserted, :unchanged, :conflict or :absent
       def write_tool_mode(mode, root:)
         write_config_line(root, "  config.tool_mode = :#{mode}",
                           MODE_LINE, /^[ \t]*config\.tool_mode\s*=.*$/)
@@ -132,6 +132,20 @@ module RailsAiContext
         return { tools: [], yaml: :skipped, initializer: :skipped } if addition.empty?
 
         write((read(root: root) || []) | addition, root: root)
+      end
+
+      # What to say when a single-value key came back :conflict, nil otherwise.
+      def conflict_message(key, status)
+        return unless status == :conflict
+
+        [ :warn, "#{INITIALIZER} sets config.#{key} in a form this installer does not " \
+                 "rewrite, and it takes precedence - edit it by hand to change it" ]
+      end
+
+      # Whether the app has settled its tool mode, in the record or in an
+      # initializer line of any shape, so no entry asks again.
+      def tool_mode_set?(root:)
+        !tool_mode(root: root).nil? || initializer_content(root).to_s.match?(/^[ \t]*config\.tool_mode\s*=/)
       end
 
       def initializer_line(tools)
@@ -196,6 +210,10 @@ module RailsAiContext
 
           File.write(path, updated)
           :updated
+        elsif content.match?(assignment)
+          # Assigned in a shape this module will not rewrite. A second line
+          # beside it would lose at boot and win on read.
+          :conflict
         elsif content.match?(SELECTION_LINE)
           File.write(path, content.sub(/^([ \t]*config\.ai_tools\s*=[^\n]*)$/) { "#{Regexp.last_match(1)}\n#{line}" })
           :inserted
