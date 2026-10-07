@@ -49,15 +49,18 @@
 ```
 ## Table: users
 
+**Models:** User
+**Primary key:** id
+
 | Column | Type | Null | Default |
 |--------|------|------|---------|
-| id | integer | NO | |
-| email | string | NO | [unique] |
-| subscription_status | string | yes | "free" |
-| created_at | datetime | NO | |
+| id | integer | **NO** |  |
+| email | string | **NO** |  |
+| subscription_status | string | yes | free |
+| created_at | datetime | **NO** |  |
 
 ### Indexes
-- index_users_on_email (unique)
+- `index_users_on_email` on (email) (unique)
 ```
 
 </details>
@@ -66,7 +69,7 @@ AI sees `subscription_status` already exists - asks before proceeding instead of
 
 ```
 → rails_get_model_details(model: "User")
-→ rails_migration_advisor(action: "add_column", table: "users", columns: "subscription_tier:string")
+→ rails_migration_advisor(action: "add_column", table: "users", column: "subscription_tier", type: "string")
 ```
 
 **Without ground truth:** AI writes a migration blindly, possibly duplicating a column or missing an index.
@@ -88,7 +91,7 @@ rails_get_schema(table: "posts")
 # → Actual column names, types, constraints
 
 rails_diagnose(error: "ActiveRecord::RecordInvalid", file: "app/controllers/posts_controller.rb")
-# → Classification + context + git blame + log correlation
+# → Classification + context + recent git log + log correlation
 ```
 
 AI sees the full picture: the parent controller's `authenticate_user!` filter, the actual strong params whitelist, and the real column names. No guessing.
@@ -110,23 +113,24 @@ AI sees the full picture: the parent controller's `authenticate_user!` filter, t
 # Feature Analysis: notifications
 
 ## Models (1)
+
 ### Notification
-Table: notifications
-Columns: user_id:bigint, title:string, read_at:datetime
-Associations: belongs_to :user
+**Table:** `notifications`
+**Columns:** user_id:bigint, title:string, read_at:datetime
+**Associations:** belongs_to :user
 
 ## Controllers (1)
-### NotificationsController
-Actions: index, mark_read
-Filters: before_action authenticate_user!
 
-## Jobs (1)
-### NotificationBroadcastJob
-Queue: default | Retries: 3
+### NotificationsController
+- **Actions:** index, mark_read
+- **Filters:** before authenticate_user!
 
 ## Routes (2)
-GET  /notifications     → notifications#index
-POST /notifications/:id → notifications#mark_read
+- `GET` `/notifications` → notifications#index `notifications_path`
+- `POST` `/notifications/:id/mark_read` → notifications#mark_read `mark_read_notification_path(@record)`
+
+## Jobs (1)
+- `app/jobs/notification_broadcast_job.rb` (queue: default, retry_on StandardError, attempts: 3, perform(notification_id))
 ```
 
 </details>
@@ -157,31 +161,37 @@ AI scaffolds the feature matching your app's actual patterns - not generic Rails
 <details open>
 <summary>Example output</summary>
 
-```
-# Trace: publishable?
+````
+# Trace: `publishable?`
 
 ## Definition
-app/models/post.rb:45 in Post
+**app/models/post.rb:45** in `class Post`
+```ruby
   def publishable?
     title.present? && body.present? && approved?
   end
-
-## Called from (4 sites)
-
-**Controllers** (2)
-  app/controllers/posts_controller.rb:12  before_action :ensure_publishable
-  app/controllers/admin/posts_controller.rb:8  if @post.publishable?
-
-**Views** (1)
-  app/views/posts/show.html.erb:8  <% if @post.publishable? %>
-
-**Tests** (1)
-  spec/models/post_spec.rb:92  expect(post.publishable?).to be true
 ```
+
+## Calls internally
+- `title`
+- `body`
+- `approved?`
+
+## Called from (3 sites)
+### app/controllers/admin/posts_controller.rb (Controller)
+  8: render :draft unless @post.publishable?
+### app/controllers/posts_controller.rb (Controller)
+  12: redirect_to @post unless @post.publishable?
+### app/views/posts/show.html.erb (View)
+  8: <% if @post.publishable? %>
+
+## Tested by (1 reference)
+- `spec/models/post_spec.rb` (1 reference)
+````
 
 </details>
 
-One call. Definition + source + every caller grouped by type + tests. **Replaces 4-5 sequential file reads.**
+One call. Definition + source + every caller grouped by file and labelled by type + tests. **Replaces 4-5 sequential file reads.**
 
 ---
 
@@ -196,7 +206,7 @@ rails_onboard(detail: "full")
 rails_dependency_graph(format: "mermaid")
 # → Visual model relationship graph
 
-rails_get_gems(detail: "full")
+rails_get_gems()
 # → Every notable gem with version, category, and config location
 ```
 
@@ -226,7 +236,7 @@ AI generates tests that actually run, using your test helper setup, your factory
 **Ask your AI:** "The dashboard view is broken"
 
 ```bash
-rails_get_view(controller: "dashboard", action: "index")
+rails_get_view(path: "dashboard/index.html.erb")
 # → Template source with ivars, Turbo frames, Stimulus controllers, partial locals
 
 rails_get_partial_interface(partial: "dashboard/stats_card")
@@ -243,10 +253,10 @@ rails_get_stimulus(controller: "chart")
 **Ask your AI:** "Review the changes in this branch"
 
 ```bash
-rails_review_changes(ref: "HEAD~3..HEAD")
+rails_review_changes(ref: "HEAD~3")
 # → Per-file context + structural warnings
 
-rails_validate(files: "app/controllers/users_controller.rb,app/models/user.rb", level: "security")
+rails_validate(files: ["app/controllers/users_controller.rb", "app/models/user.rb"], level: "rails")
 # → Syntax + semantic + Brakeman scan
 
 rails_performance_check()
@@ -279,7 +289,7 @@ rails_query(sql: "SELECT * FROM orders JOIN users ON ...", explain: true)
 **Ask your AI:** "What does the Searchable concern do?"
 
 ```bash
-rails_get_concern(concern: "Searchable")
+rails_get_concern(name: "Searchable")
 # → Methods (including class_methods block), source code, which models include it
 
 rails_search_code(pattern: "include Searchable", match_type: "any")
@@ -310,7 +320,7 @@ rails_get_frontend_stack()
 rails_runtime_info(detail: "full")
 # → DB pool stats, table sizes, pending migrations, cache stats, queue depth
 
-rails_read_logs(level: "error", lines: 100)
+rails_read_logs(level: "ERROR", lines: 100)
 # → Recent errors with sensitive data redacted
 
 rails_security_scan()
@@ -329,8 +339,8 @@ rails_get_schema(table: "users")
 rails_get_model_details(model: "User")
 
 # Follow-up: "What context do I have so far?"
-rails_session_context()
-# → Lists all prior tool calls with params and summaries
+rails_session_context(action: "status")
+# → Lists all prior tool calls with params and when each ran
 ```
 
 This prevents redundant queries and helps AI maintain conversation context.

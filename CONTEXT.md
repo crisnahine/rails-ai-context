@@ -6,7 +6,7 @@ Terms this project uses in a narrower sense than everyday English. One entry per
 
 Overloaded. Always qualify it; never use "environment" bare in a tool name, an introspector name, or a config key.
 
-**Process environment** - the environment variables a running app sees, plus the places they are declared (`ENV[]` call sites, `.env.example`, Dockerfile, credentials keys). Served by `rails_get_env`, read by `EnvIntrospector`.
+**Process environment** - the environment variables a running app sees, plus the places they are declared (`ENV[]` call sites, `.env.example`, Dockerfile, credentials keys). Served by `rails_get_env`: `EnvIntrospector` reads the variables and the `ENV[]` call sites, and the tool reads the other places itself.
 
 **Environment config** - what `config/environments/*.rb` declares per environment: the assigned `config.*` keys and the values of the notable toggles. Served by `rails_get_env_config`, read by `EnvConfigIntrospector`.
 
@@ -18,7 +18,7 @@ The assistant a user points at their app: claude, cursor, copilot, opencode, cod
 
 Avoid "format" for either sense - claude is not a file format, and the word collides with real formatting elsewhere in the code. The public config key `ai_tools` already uses the canonical term.
 
-`Install::AiTool` is the one table of what each means: name, context files, MCP config shape, legacy leftovers. `Install::SelectionRecord` owns which ones the user picked - written to YAML always and to the initializer line inside a Rails app, read initializer-first because that is the file a user hand-edits.
+`Install::AiTool` is the one table of what each means: name, context files, MCP config shape, legacy leftovers. `Install::SelectionRecord` owns which ones the user picked - written to YAML always, and to the initializer line when the caller asks for it and the line is in a shape it can rewrite (an ordinary `ai:context` run refreshes the YAML only), read initializer-first because that is the file a user hand-edits.
 
 ## Path
 
@@ -30,13 +30,13 @@ Two senses, one per module, and neither is bare "path" in a name.
 
 ## Safe path
 
-A caller-supplied path resolved once, through `SafePath`, before anything reads it. Its refusal order is the contract, not an implementation detail: traversal, sensitive name, realpath, containment, sensitive realpath, file, size. A caller that reorders those checks, or repeats one of them itself, gets a different answer on a symlink or a dotfile than every other tool does, which is the divergence the module exists to end. `safe_glob` is the globbed-path form: the same guard applied to each path a pattern yields.
+A caller-supplied path resolved once, through `SafePath`, before anything reads it. Its refusal order is the contract, not an implementation detail: traversal, sensitive name, realpath, containment, sensitive realpath, file, size. A caller that reorders those checks, or repeats one of them itself, gets a different answer on a symlink or a dotfile than every other tool does, which is the divergence the module exists to end. `BaseTool.safe_glob` is the globbed-path form: realpath, containment and the sensitive-realpath check on each path a pattern yields, with the size cap left to the read that follows.
 
 Not the same as a path that merely looks harmless, and not a caller's own containment check - "the tool guards this parameter" means it hands the parameter to `SafePath` and renders whatever refusal comes back.
 
 ## Carried path
 
-A path the payload already holds because the gem's own walk found it - a controller's or a model's `file:`. It is re-read with `SafeFile.read(File.join(root, relative))`, which applies the size cap and nothing else. The reason is the walk: `SourceScan` deliberately keeps the spelling the app uses rather than the realpath, so a pack or an in-repo engine symlinked out of the root is spelled inside it, and `SafePath`'s realpath containment would refuse the very file the payload just named - the source comes back nil and a section silently empties.
+A path the payload already holds because the gem's own walk found it - a controller's or a model's `file:`. A controller's is re-read with `SafeFile.read(File.join(root, relative))`, which checks that it is a regular file under the size cap and nothing else; a model's goes through `PortablePath.resolve` first, since it can be a `gem:` path. The reason is the walk: `SourceScan` deliberately keeps the spelling the app uses when the realpath falls outside the root, so a pack or an in-repo engine symlinked out of the root is spelled inside it, and `SafePath`'s realpath containment would refuse the very file the payload just named - the source comes back nil and a section silently empties.
 
 Not an exception to the **safe path** rule, the other side of it: a caller-supplied path is untrusted and goes through `SafePath`; a carried path was produced by this gem and only needs the cap.
 
@@ -58,7 +58,7 @@ The other half of the same problem is the reverse trip. Once a name is the decla
 
 The table a model reads. Rails builds it as `table_name_prefix` + the demodulized class name, pluralized unless `pluralize_table_names` is off, + `table_name_suffix`, unless the class assigns one itself or is an STI child, which reads its parent's. The static tier answers the same order from source: an explicit `self.table_name =`, else the table of the model it inherits from, else the prefix and suffix the enclosing modules declare around the file's own basename. That basename is pluralized unless the class, then its superclass chain, then the app sets `pluralize_table_names = false`. The app-wide affixes and pluralize setting come from `ActiveRecordSettings`, which reads config/application.rb, the environment file, the initializers and `on_load(:active_record)` blocks. Never the underscored constant - that turns `Admin::ActionLog` into `admin/action_logs` and `OAuthClientConfig` into `o_auth_client_configs`, neither of which is a table.
 
-`TableName` reads the five declarations of one class body (`table_name`, `table_name_prefix`, `table_name_suffix`, `pluralize_table_names` and `primary_key`) and holds the two derivations; walking the namespace and the superclass chain belongs to the caller, because only it has the other files. A reader that starts from a model name instead of a file asks `TableName.for_model_name`, which takes the table the model tier already recorded before falling back to the convention. A prefix declared outside the model directories is still invisible, so the answer stays [STATIC].
+`TableName` reads the five declarations of one class body (`table_name`, `table_name_prefix`, `table_name_suffix`, `pluralize_table_names` and `primary_key`) and holds the two derivations; walking the namespace and the superclass chain belongs to the caller, because only it has the other files. A reader that starts from a model name instead of a file asks `TableName.for_model_name`, which takes the table the model tier already recorded before falling back to the convention. A module prefix declared outside the model directories is still invisible, an engine's in `lib/**/engine.rb` aside, so the answer stays [STATIC].
 
 ## Static tier
 
@@ -94,8 +94,10 @@ A Rack app the routing table attaches at a path, engine or not. `mount App =>
 "/path"` is `match("/path", to: App, via: :all, anchor: false)` with a name
 derived, so both spellings build the same endpoint and both are this. The
 payload key is `mounted_engines` for the sections that predate the widening;
-what it holds is every controller-less, non-dynamic endpoint the route set
-carries, which is what the count beside it has always counted.
+in the booted routes section it holds every controller-less, non-dynamic
+endpoint the route set carries, which is what the count beside it has always
+counted. The engines section, and the static routes section, hold the mounts
+parsed from the route files.
 
 Distinct from a **Rails engine**, which is a `Rails::Engine` subclass whether
 or not anything mounts it, and which `rails_get_engines` lists separately under
@@ -139,7 +141,7 @@ Which filters a controller runs, and which of them a given action runs. `ActionF
 
 **A block filter is named by its line.** `before_action { ... }` and `after_action -> { ... }` are callbacks of their own, listed as `block (line N)` and `lambda (line N)` (a lambda says so, as `Proc#lambda?` does, so it reads apart from a block on its line), N being the line the block opens on in the controller's own file; a block in any other file (a concern's class method, an ancestor's body) is `block (line N of app/controllers/concerns/cache_concern.rb)`, as two blocks on one line number in two files are two callbacks. The booted tier lists only a block the app wrote; a framework's or a gem's (`allow_browser`) is left out, as the static tier cannot see it. `skip_forgery_protection` is the `skip_before_action :verify_authenticity_token` Rails defines it as.
 
-**What it cannot see is stated rather than guessed.** The walk reads `ApplicationController`'s file by the one name Rails fixes, so its filters are in the chain; a parent the listing does not hold and the app has no file for - a gem-owned base, or one an inflection renames - still ends the walk. `docs/COMPATIBILITY.md` says both halves.
+**What it cannot see is stated rather than guessed.** The walk reads `ApplicationController`'s file by the one name Rails fixes, so its filters are in the chain; a parent the listing does not hold and the app has no file for - a gem-owned base other than Devise's or Doorkeeper's (there the walk resumes at the parent the initializer names), or one an inflection renames - still ends the walk. `docs/COMPATIBILITY.md` says both halves.
 
 ## Payload
 

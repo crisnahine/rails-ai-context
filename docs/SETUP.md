@@ -31,18 +31,12 @@ flowchart TD
     A[Start] --> B{Can you modify\nthe Gemfile?}
     B -->|Yes| C[In-Gemfile]
     B -->|No| D[Standalone]
-    C --> E{Need MCP\nserver?}
-    D --> E
-    E -->|"Yes - best experience"| F[MCP Mode]
-    E -->|"No - terminal only"| G[CLI Mode]
-    F --> H{Which AI tools?}
-    G --> H
-    H --> I["Claude Code"]
-    H --> J["Cursor"]
-    H --> K["GitHub Copilot"]
-    H --> L["OpenCode"]
-    H --> M["Codex CLI"]
-    H --> N["All of them"]
+    C --> H{Which AI tools?}
+    D --> H
+    H -->|"Claude Code, Cursor, GitHub Copilot,\nOpenCode, Codex CLI, or all"| E{What should\nit write?}
+    E -->|"1 - default"| F[MCP config +\ncontext files]
+    E -->|"2 - no MCP server"| G[Context files only\nCLI mode]
+    E -->|"3 - keep your own files"| O[MCP config only]
 
     style C fill:#27ae60,stroke:#1e8449,color:#fff
     style D fill:#3498db,stroke:#2980b9,color:#fff
@@ -61,10 +55,11 @@ rails generate rails_ai_context:install  # Select "Claude Code"
 This creates:
 - `.mcp.json` - MCP auto-discovery config (auto-detected on project open)
 - `CLAUDE.md` - Root context file
-- `.claude/rules/rails-schema.md` - Schema rules (loaded when editing `db/` files)
+- `.claude/rules/rails-schema.md` - Schema rules (loaded when editing the schema dump or `db/migrate/` files)
 - `.claude/rules/rails-models.md` - Model rules (loaded when editing `app/models/`)
 - `.claude/rules/rails-context.md` - General context rules (always loaded)
 - `.claude/rules/rails-mcp-tools.md` - Tool reference (always loaded)
+- `.claude/rules/rails-components.md` - Component rules (loaded when editing `app/components/` or `app/views/components/`, written only when the app has view components)
 
 Keeping your own `CLAUDE.md`? Add `--mcp-only` and only `.mcp.json` is
 written; every context file is left alone. See
@@ -79,11 +74,13 @@ If you need to configure manually, create `.mcp.json`:
   "mcpServers": {
     "rails-ai-context": {
       "command": "bundle",
-      "args": ["exec", "rails", "ai:serve"]
+      "args": ["exec", "rails-ai-context", "serve"]
     }
   }
 }
 ```
+
+This is what the generator writes for an in-Gemfile install. A standalone install has no `bundle exec`: the command is `rails-ai-context` and the args are `["serve"]`. The same goes for the other tools below.
 
 ### Split rules with `paths:` frontmatter
 
@@ -92,12 +89,11 @@ Claude Code loads `.claude/rules/` files conditionally based on YAML frontmatter
 ```yaml
 ---
 paths:
-  - db/**
-  - app/models/**
+  - "app/models/**/*.rb"
 ---
 ```
 
-Schema and model rules use this to only load when relevant files are being edited.
+Schema, model and component rules use this to only load when relevant files are being edited.
 
 ---
 
@@ -115,7 +111,7 @@ This creates:
 - `.cursor/rules/rails-models.mdc` - Model rules (Type 2: glob `app/models/**/*.rb`)
 - `.cursor/rules/rails-controllers.mdc` - Controller rules (Type 2: glob `app/controllers/**/*.rb`)
 - `.cursor/rules/rails-mcp-tools.mdc` - Tool reference (Type 3: agent-requested)
-- `.cursorrules` - **legacy single-file fallback** at the project root. Cursor's chat agent doesn't always detect `.cursor/rules/*.mdc` (reported in v5.9.0 release QA); this file is parsed verbatim by every Cursor build and contains the same compact project context as `CLAUDE.md`.
+- `.cursorrules` - **legacy single-file fallback** at the project root. Cursor's chat agent doesn't always detect `.cursor/rules/*.mdc` (reported in v5.9.0 release QA); this file is parsed verbatim by every Cursor build and contains the same compact project context `CLAUDE.md` gets in the default compact mode. It stays compact when `context_mode` is `:full`.
 
 ### Manual MCP config
 
@@ -126,7 +122,7 @@ Create `.cursor/mcp.json`:
   "mcpServers": {
     "rails-ai-context": {
       "command": "bundle",
-      "args": ["exec", "rails", "ai:serve"]
+      "args": ["exec", "rails-ai-context", "serve"]
     }
   }
 }
@@ -138,7 +134,7 @@ The MCP tools rule uses `alwaysApply: false` with a descriptive `description:` f
 
 ```markdown
 ---
-description: 45 MCP tools for Rails introspection - schema, models, routes, controllers, views
+description: "Rails MCP tools reference - 45 tools for schema, models, routes, controllers, search, testing, and more"
 alwaysApply: false
 ---
 ```
@@ -170,7 +166,7 @@ Create `.vscode/mcp.json` (note: `servers` key, not `mcpServers`):
   "servers": {
     "rails-ai-context": {
       "command": "bundle",
-      "args": ["exec", "rails", "ai:serve"]
+      "args": ["exec", "rails-ai-context", "serve"]
     }
   }
 }
@@ -178,12 +174,13 @@ Create `.vscode/mcp.json` (note: `servers` key, not `mcpServers`):
 
 ### Frontmatter for agent discovery
 
-Copilot instruction files include `name:` and `description:` YAML frontmatter:
+Copilot instruction files include `applyTo:`, `name:` and `description:` YAML frontmatter:
 
 ```markdown
 ---
-name: Rails Models
-description: Model associations, validations, and schema for this Rails app
+applyTo: "app/models/**/*.rb"
+name: "Rails Models Reference"
+description: "ActiveRecord models - associations, validations, scopes, enums"
 ---
 ```
 
@@ -212,7 +209,7 @@ Create `opencode.json`:
   "mcp": {
     "rails-ai-context": {
       "type": "local",
-      "command": ["bundle", "exec", "rails", "ai:serve"]
+      "command": ["bundle", "exec", "rails-ai-context", "serve"]
     }
   }
 }
@@ -241,7 +238,7 @@ Create `.codex/config.toml`:
 ```toml
 [mcp_servers.rails-ai-context]
 command = "bundle"
-args = ["exec", "rails", "ai:serve"]
+args = ["exec", "rails-ai-context", "serve"]
 
 [mcp_servers.rails-ai-context.env]
 PATH = "/Users/you/.rbenv/shims:/usr/local/bin:/usr/bin"

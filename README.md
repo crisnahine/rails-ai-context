@@ -8,7 +8,7 @@
 [![Downloads](https://img.shields.io/gem/dt/rails-ai-context?style=flat-square&color=blue)](https://rubygems.org/gems/rails-ai-context)
 [![CI](https://img.shields.io/github/actions/workflow/status/crisnahine/rails-ai-context/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/crisnahine/rails-ai-context/actions)
 [![MCP Registry](https://img.shields.io/badge/MCP_Registry-listed-green?style=flat-square)](https://registry.modelcontextprotocol.io)
-[![Ruby](https://img.shields.io/badge/Ruby-3.1_to_3.4-CC342D?style=flat-square&logo=ruby&logoColor=white)](https://github.com/crisnahine/rails-ai-context)
+[![Ruby](https://img.shields.io/badge/Ruby-3.1_to_4.0-CC342D?style=flat-square&logo=ruby&logoColor=white)](https://github.com/crisnahine/rails-ai-context)
 [![Rails](https://img.shields.io/badge/Rails-7.0_to_8.1-CC0000?style=flat-square&logo=rubyonrails&logoColor=white)](https://github.com/crisnahine/rails-ai-context)
 [![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 
@@ -30,7 +30,7 @@
 **rails-ai-context** is a Ruby gem that turns your Rails app into the source of truth for AI coding assistants. Instead of guessing your schema, associations, routes and conventions from training data, the assistant asks your app: 45 read-only tools served over [MCP](https://modelcontextprotocol.io) or run from the CLI, plus generated context files for Claude Code, Cursor, GitHub Copilot, OpenCode and Codex CLI.
 
 > [!TIP]
-> Nothing to add to your Gemfile if you don't want to. `gem install rails-ai-context`, then `rails-ai-context init` inside any Rails app. It also works on an app that won't boot: pass `--no-boot` and every tool answers from the source files.
+> Nothing to add to your Gemfile if you don't want to. `gem install rails-ai-context`, then `rails-ai-context init` inside any Rails app. It also works on an app that won't boot: pass `--no-boot` and the tools answer from the source files. The two that need a live app, `query` and `runtime_info`, say so.
 
 ## Why
 
@@ -63,7 +63,7 @@ You catch it, fix it, re-prompt, and something next to it breaks. The tokens are
 ## Features
 
 - **45 read-only tools** for schema, models, controllers, routes, views, Stimulus, Turbo, jobs, services, mailers, i18n, gems, config, tests, security, performance and more. Every answer comes from your app.
-- **Prism AST parsing** for model introspection. Each result carries `[VERIFIED]` or `[INFERRED]` so the assistant knows what is ground truth and what needs a runtime check.
+- **Prism AST parsing** for model introspection. A model heading and each scope carry `[VERIFIED]` or `[INFERRED]` (`[STATIC]` without a boot) so the assistant knows what is ground truth and what needs a runtime check.
 - **Three ways in**: MCP over stdio, MCP mounted inside your Rails app over HTTP, or plain CLI in any terminal.
 - **Generated context files** for Claude Code, Cursor, GitHub Copilot, OpenCode and Codex CLI, with the MCP config each tool auto-detects on project open.
 - **Live resources**: `rails://` and `rails-ai-context://` URIs that introspect fresh on every read.
@@ -87,7 +87,7 @@ bundle add rails-ai-context --group development
 rails generate rails_ai_context:install
 ```
 
-The generator asks which AI tools you use and what to write, then creates the context files, the MCP config for each tool, and `config/initializers/rails_ai_context.rb`. Re-running it is safe; it keeps what you have and adds what is missing.
+The generator asks which AI tools you use and what to write, then creates the context files, the MCP config for each tool, `config/initializers/rails_ai_context.rb` and `.rails-ai-context.yml`. In a git repo with no pre-commit hook it also offers to install one. An empty answer to the tools question selects all five, and `--defaults` takes the default for each question. Re-running it is safe; it keeps what you have and adds what is missing. Every step is in [What the install generator does](docs/GUIDE.md#what-the-install-generator-does).
 
 Keeping your own `CLAUDE.md` and `AGENTS.md`? `rails generate rails_ai_context:install --mcp-only` writes the MCP config and leaves every context file alone.
 
@@ -125,9 +125,11 @@ Then open the project in your AI tool. The MCP config it wrote is picked up on o
 The default. Each AI tool gets its own config file (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `opencode.json`, `.codex/config.toml`) pointing at:
 
 ```bash
-rails ai:serve             # in-Gemfile
-rails-ai-context serve     # standalone
+bundle exec rails-ai-context serve   # in-Gemfile
+rails-ai-context serve               # standalone
 ```
+
+`rails ai:serve` starts the same server from rake.
 
 ### MCP over HTTP
 
@@ -152,7 +154,7 @@ rails 'ai:tool[search_code]' pattern="publishable?" match_type=trace
 rails-ai-context tool schema --table users --detail full
 ```
 
-Tool names resolve loosely: `schema`, `get_schema` and `rails_get_schema` all work. Most tools take `detail=summary|standard|full`.
+Tool names resolve loosely: `schema`, `get_schema` and `rails_get_schema` all work. About half the tools take `detail=summary|standard|full`.
 
 ### Commands
 
@@ -186,9 +188,9 @@ Every tool is read-only and answers from your app.
 
 A few worth knowing on day one:
 
-- `search_code` with `match_type=trace` returns definition, source, every caller grouped by type, and the tests, in one call. That replaces 4 to 5 file reads.
+- `search_code` with `match_type=trace` returns definition, source, every caller grouped by file and labelled by type, and the tests, in one call. That replaces 4 to 5 file reads.
 - `get_controllers` returns the action source with inherited filters, strong params and the render map.
-- `get_model_details` returns associations, validations, scopes, enums and macros from the AST, each tagged `[VERIFIED]` or `[INFERRED]`.
+- `get_model_details` returns associations, validations, scopes, enums and macros from the AST, with the model and each scope tagged `[VERIFIED]` or `[INFERRED]`.
 - `query` runs read-only SQL with a timeout, a row limit and column redaction. `read_logs` redacts sensitive data before it leaves the process.
 
 Parameters for all 45 are in the [tools reference](docs/TOOLS.md); worked examples in [recipes](docs/RECIPES.md).
@@ -234,7 +236,7 @@ Code is found in the conventional layout, in packwerk packs (`packs/*/app/*`), i
 
 ```ruby
 # config/initializers/rails_ai_context.rb
-if defined?(RailsAiContext)
+if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
   RailsAiContext.configure do |config|
     config.ai_tools  = %i[claude cursor]   # which AI tools to generate for
     config.tool_mode = :mcp                # :mcp (default) or :cli
@@ -254,8 +256,9 @@ Register your own tools next to the built-in ones:
 class RailsGetBusinessMetrics < MCP::Tool
   tool_name "rails_get_business_metrics"
   description "Key business metrics for this app"
+  input_schema(properties: { period: { type: "string" } })
 
-  def call(period: "week")
+  def self.call(period: "week", server_context: nil)
     MCP::Tool::Response.new([{ type: "text", text: "Users this #{period}: #{User.recent.count}" }])
   end
 end

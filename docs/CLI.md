@@ -29,6 +29,7 @@ Start the MCP server.
 
 ```bash
 rails ai:serve                                        # stdio (default)
+rails ai:serve_http                                   # HTTP transport
 rails-ai-context serve                                # stdio (default)
 rails-ai-context serve --transport http --port 6029   # HTTP transport
 ```
@@ -58,7 +59,8 @@ rails-ai-context tool model_details --model User
 | Option | Description |
 |:-------|:------------|
 | `--list` | List all available tools |
-| `--json` | Output as JSON |
+| `--json` | Output as JSON (`-j` after the tool name) |
+| `--help` | After the tool name, print that tool's parameters. Rake: `help=true` |
 | `--no-boot` | Skip booting the app; answer from source alone |
 
 Global options may be typed before or after the command name:
@@ -94,11 +96,15 @@ unanswered.
 
 A thing that is simply not there is an ordinary answer and exits 0: a file the
 tool looked for and did not find, a search with no matches, a directory the
-`--path` names that does not exist.
+`--path` names that does not exist. A tool that needs a
+booted app and is run with `--no-boot` (`query`, `runtime_info`) prints
+`[UNAVAILABLE]` with the reason and also exits 0.
 
 A value the schema cannot hold - `--detail bogus` where the parameter takes
 `summary`, `standard` or `full`, or `--limit abc` where it takes an integer -
-is warned about on stderr and the tool's own default is used.
+is warned about on stderr and the tool's own default is used. A required
+parameter has no default, so a value outside its list (`--action bogus` on
+`migration_advisor`) exits 1.
 
 ### The static tier and `--no-boot`
 
@@ -131,7 +137,7 @@ rails 'ai:tool[get_schema]'
 rails 'ai:tool[rails_get_schema]'
 ```
 
-Resolution order: exact match → `rails_` prefix → `rails_get_` prefix → `get_` prefix.
+Resolution order: exact match → `rails_` prefix → `rails_get_` prefix → short name (the name with `rails_get_` or `rails_` removed).
 
 ### `context`
 
@@ -143,7 +149,9 @@ rails ai:context:claude       # Claude only
 rails ai:context:cursor       # Cursor only
 rails ai:context:copilot      # Copilot only
 rails ai:context:opencode     # OpenCode only
+rails ai:context:codex        # Codex only
 rails ai:context:json         # JSON export
+rails ai:context:full         # All formats, full mode
 
 rails-ai-context context                # All
 rails-ai-context context --format claude # Specific format
@@ -152,6 +160,10 @@ rails-ai-context context --format claude # Specific format
 | Option | Default | Description |
 |:-------|:--------|:------------|
 | `--format` | all configured | `claude`, `cursor`, `copilot`, `opencode`, `codex`, `json`, `all` |
+
+The rake tasks `ai:context`, `ai:context:<format>` and `ai:context_for` also read
+`CONTEXT_MODE`: `CONTEXT_MODE=full rails ai:context` overrides `config.context_mode`
+for that run. The standalone binary does not read it.
 
 ### `doctor`
 
@@ -183,14 +195,16 @@ Interactive setup for standalone mode.
 
 ```bash
 rails-ai-context init
+rails-ai-context init --mcp-only   # MCP config only, no context files
 ```
 
-Asks which AI tools to configure and whether to use MCP or CLI mode. Creates `.rails-ai-context.yml` and MCP config files.
+Asks which AI tools to configure and what to write: MCP config and context files, context files only (CLI mode), or MCP config only. Creates `.rails-ai-context.yml`, the MCP config files (except in CLI mode) and the context files (except with MCP config only). `--mcp-only` skips the second question.
 
 ### `version`
 
 ```bash
 rails-ai-context version
+rails-ai-context --version   # or -v
 ```
 
 ### `inspect`
@@ -199,6 +213,7 @@ Print introspection summary as JSON.
 
 ```bash
 rails-ai-context inspect
+rails ai:inspect             # short text summary instead of JSON
 ```
 
 ### `facts`
@@ -206,17 +221,19 @@ rails-ai-context inspect
 Print a schema facts summary: tables, associations and dependencies.
 
 ```bash
+rails ai:facts
 rails-ai-context facts
 rails-ai-context facts --no-boot
 ```
 
 ### `preset`
 
-Run a named group of tools in one pass. With no name it lists the presets.
+Run a named group of tools in one pass: `architecture`, `debugging` or `migration`. With no name it lists the presets.
 
 ```bash
 rails-ai-context preset
 rails-ai-context preset architecture
+rails 'ai:preset[architecture]'
 ```
 
 ### `tree`
@@ -239,12 +256,18 @@ rails-ai-context tree
 | `rails ai:context:cursor` | Generate Cursor context |
 | `rails ai:context:copilot` | Generate Copilot context |
 | `rails ai:context:opencode` | Generate OpenCode context |
+| `rails ai:context:codex` | Generate Codex context |
 | `rails ai:context:json` | Generate JSON export |
+| `rails ai:context:full` | Generate all formats in full mode |
+| `rails 'ai:context_for[claude]'` | Generate one format by name |
 | `rails ai:serve` | Start MCP server (stdio) |
+| `rails ai:serve_http` | Start MCP server (HTTP) |
 | `rails ai:tool` | List tools or run a tool |
 | `rails ai:doctor` | Run diagnostics |
 | `rails ai:watch` | Watch mode |
-| `rails ai:setup` | Interactive setup (alternative to generator) |
+| `rails ai:inspect` | Print introspection summary |
+| `rails ai:facts` | Print schema facts summary |
+| `rails 'ai:preset[name]'` | Run a preset; no name lists them |
 
 ---
 
@@ -259,6 +282,7 @@ rails 'ai:tool[tool_name]' key=value key2=value2
 - Strings: `table=users`
 - Booleans: `explain=true` or `explain=false`
 - Enums: `detail=full`
+- Arrays: `files=a.rb,b.rb`
 - Spaces: `pattern="has_many :posts"`
 
 ### Thor format
@@ -270,6 +294,7 @@ rails-ai-context tool tool_name --key value --key2 value2
 - Strings: `--table users` or `--table=users`
 - Booleans: `--explain` (true) or `--no-explain` (false)
 - Enums: `--detail full`
+- Arrays: `--files a.rb b.rb` or `--files a.rb,b.rb`
 - Spaces: `--pattern "has_many :posts"`
 
 ### JSON output
@@ -278,6 +303,7 @@ Add `--json` for machine-readable output:
 
 ```bash
 rails-ai-context tool schema --table users --json
+JSON=1 rails 'ai:tool[schema]' table=users
 ```
 
 ---

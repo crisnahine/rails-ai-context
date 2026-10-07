@@ -16,7 +16,7 @@
 
 ```ruby
 # config/initializers/rails_ai_context.rb
-if defined?(RailsAiContext)
+if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
   RailsAiContext.configure do |config|
     config.ai_tools  = %i[claude cursor copilot opencode codex]
     config.tool_mode = :mcp
@@ -49,7 +49,7 @@ preset: full
 
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
-| `ai_tools` | Array of symbols | `[:claude]` | Which AI tools to generate context for. Options: `:claude`, `:cursor`, `:copilot`, `:opencode`, `:codex` |
+| `ai_tools` | Array of symbols | `nil` (all five) | Which AI tools to generate context for. Options: `:claude`, `:cursor`, `:copilot`, `:opencode`, `:codex`. Unset, it reads the selection the installer recorded, and all five when there is none |
 | `tool_mode` | Symbol | `:mcp` | `:mcp` (MCP server primary, CLI fallback) or `:cli` (CLI only, no MCP server) |
 | `context_files` | Boolean | `true` | Set `false` for MCP-only: the server and the CLI still answer, and no context file is written or touched |
 
@@ -76,8 +76,10 @@ nothing, and `rails ai:doctor` raises no context-file warning. A command that
 names a file still writes it: `rails ai:context:claude` and
 `rails-ai-context context --format claude`.
 
-`config.ai_tools = []` means no context files too, and still picks which MCP
-config file is written. Before v5.27.0 an empty list wrote every tool's files.
+`config.ai_tools = []` means no AI tool at all: no context files and no MCP
+config file are written, and `rails ai:context` does not ask which tools you
+use. The installer has no such choice, so set it by hand. Before v5.27.0 an
+empty list wrote every tool's files.
 
 ### Introspection
 
@@ -88,7 +90,7 @@ config file is written. Before v5.27.0 an empty list wrote every tool's files.
 | `introspectors` | Array of symbols | (from preset) | Override the introspector list directly |
 | `generate_root_files` | Boolean | `true` | Set `false` to generate split rules only: no CLAUDE.md, AGENTS.md, .cursorrules or copilot-instructions.md (`.ai-context.json` is still written) |
 | `anti_hallucination_rules` | Boolean | `true` | Embed 6-rule verification protocol in generated context files |
-| `claude_max_lines` | Integer | `150` | Max non-blank lines in a compact context file's gem-managed block, the `<!-- BEGIN/END rails-ai-context -->` markers included. Over budget, data lines are cut and the Commands, Warnings, Rules and MCP-tools sections kept whole |
+| `claude_max_lines` | Integer | `150` | Max non-blank lines in a compact context file's gem-managed block, the `<!-- BEGIN/END rails-ai-context -->` markers included. Over budget, data lines are cut and the Commands, Warnings, Rules and MCP-tools sections kept whole. Must be positive |
 
 ### MCP Server
 
@@ -197,8 +199,8 @@ fits neither that shape nor the conventional one.
 |:-------|:-----|:--------|:-----------|:------------|
 | `query_timeout` | Integer | `5` | - | SQL query timeout in seconds |
 | `query_row_limit` | Integer | `100` | 1 to 1000 | Maximum rows returned |
-| `query_redacted_columns` | Array | 14 patterns | - | Column names that cause a query to be rejected |
-| `query_allowed_columns` | Array | `[]` | - | Column names exempted from the built-in sensitive list |
+| `query_redacted_columns` | Array | 14 patterns | - | Column names that cause a query to be rejected, on top of a fixed built-in list (see [SECURITY.md](SECURITY.md)) |
+| `query_allowed_columns` | Array | `[]` | - | Column names exempted from the built-in sensitive list and from `query_redacted_columns` |
 | `allow_query_in_production` | Boolean | `false` | - | Allow `rails_query` tool in production |
 
 ### Logs
@@ -252,7 +254,7 @@ Lightweight subset for faster generation:
 | Claude Code | `CLAUDE.md` | `.claude/rules/*.md` | `.mcp.json` |
 | Cursor | `.cursorrules` (legacy fallback) | `.cursor/rules/*.mdc` | `.cursor/mcp.json` |
 | GitHub Copilot | `.github/copilot-instructions.md` | `.github/instructions/*.instructions.md` | `.vscode/mcp.json` |
-| OpenCode | `AGENTS.md` | `app/*/AGENTS.md` | `opencode.json` |
+| OpenCode | `AGENTS.md` | `app/models/AGENTS.md`, `app/controllers/AGENTS.md` | `opencode.json` |
 | Codex CLI | (shares `AGENTS.md`) | (shares OpenCode rules) | `.codex/config.toml` |
 
 ---

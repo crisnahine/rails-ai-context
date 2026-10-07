@@ -22,12 +22,20 @@ rails generate rails_ai_context:install
 
 The generator asks two questions:
 
-1. **Which AI tools do you use?** - Claude Code, Cursor, GitHub Copilot, OpenCode, Codex CLI, or all
+1. **Which AI tools do you use?** - Claude Code, Cursor, GitHub Copilot, OpenCode, Codex CLI, or all. There is no "none" choice: an empty answer, or one with no valid number, selects all five.
 2. **What should rails-ai-context write?** - MCP config + context files (default), context files only (CLI mode), or MCP config only
 
 The third answer is MCP-only: the server and the CLI answer in full, and your
 own `CLAUDE.md`, `AGENTS.md` and rules files are left alone. Non-interactively
 that is `--mcp-only`.
+
+Three more prompts appear only when they apply:
+
+- **Remove their generated files?** - on a re-run that drops a tool you picked before. Default: keep them. A yes removes only what the gem generated, never a rule file or a line you wrote.
+- **Install a pre-commit hook that validates Rails references?** - in a git repo that has no pre-commit hook yet. Default: no.
+- **Delete them?** - in a terminal, when rule files left over from before v5.0.0 are found. Default: no.
+
+`--defaults` skips every prompt and takes each default: all five tools, keep the files, MCP config + context files, no hook, keep legacy files. Every step is listed in [What the install generator does](GUIDE.md#what-the-install-generator-does).
 
 That's it. Your AI tool now has live access to your schema, models, routes, controllers, views, and conventions.
 
@@ -50,6 +58,8 @@ rails-ai-context init
 rails-ai-context serve
 ```
 
+`init` asks the same two questions, and the cleanup and legacy-file prompts when they apply. It has no pre-commit hook prompt and no `--defaults` flag, and it does not create `config/initializers/rails_ai_context.rb`.
+
 Works with every Ruby version manager (rbenv, rvm, asdf, mise, chruby, system). [Learn more about standalone mode →](STANDALONE.md)
 
 ## What just happened?
@@ -59,9 +69,10 @@ The install generator created:
 | File | Purpose |
 |:-----|:--------|
 | `.mcp.json` / `.cursor/mcp.json` / `.vscode/mcp.json` / `opencode.json` / `.codex/config.toml` | MCP auto-discovery - your AI tool detects these on project open |
-| `CLAUDE.md` / `.cursor/rules/` / `.cursorrules` / `.github/instructions/` / `AGENTS.md` | Static context rules your AI reads |
+| `CLAUDE.md` + `.claude/rules/` / `.cursor/rules/` + `.cursorrules` / `.github/copilot-instructions.md` + `.github/instructions/` / `AGENTS.md` | Static context rules your AI reads |
+| `.ai-context.json` | The same context as JSON (added to `.gitignore`) |
 | `config/initializers/rails_ai_context.rb` | All configuration options |
-| `.rails-ai-context.yml` | Config for standalone mode |
+| `.rails-ai-context.yml` | Your tool selection, and the config file for standalone mode |
 
 ## Verify it works
 

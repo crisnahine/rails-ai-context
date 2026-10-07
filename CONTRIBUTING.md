@@ -35,7 +35,7 @@ lib/rails_ai_context/
 3. Register it in `lib/rails_ai_context/introspector.rb` (the `INTROSPECTOR_MAP`)
 4. `extend StaticTier` and declare one: `static_tier :files_only` if `#call` runs unchanged with nothing booted, `:runtime_only` if it needs live reflection, or `:alternate_source` plus a `static_call` reading elsewhere. A mapped introspector that declares nothing fails the suite
 5. Add the key to the appropriate preset(s) in `Configuration::PRESETS` (`:full` is the default, `:standard` for core-only)
-6. Write specs in `spec/lib/rails_ai_context/your_introspector_spec.rb`
+6. Write specs in `spec/lib/rails_ai_context/introspectors/your_introspector_spec.rb`
 
 ## Adding a New MCP Tool
 
@@ -86,7 +86,7 @@ bundle exec rubocop --parallel # Lint check
 
 `spec/fixtures/static_app` is the app the static tier is exercised against, and
 `spec/lib/rails_ai_context/serializers/real_shape_smoke_spec.rb` pins its model
-count in two places (`Models 7` and `Models (7)`).
+count in three assertions (a `Models 7` match and `Models (7)` twice).
 
 Adding or removing a fixture model means changing that spec in the same commit.
 

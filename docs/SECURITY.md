@@ -49,11 +49,12 @@ flowchart LR
 
 Before any query reaches the database:
 
-- Strips comments: block (`/* */`), line (`--`), MySQL (`#` at line start)
+- Strips comments: block (`/* */`), line (`--`), and on MySQL `#`. A comment marker inside a quoted string or identifier is data and stays. The query that runs is this stripped text, never the raw input, so nothing the checks did not read reaches the database
 - **Blocks write keywords**: INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, GRANT, REVOKE, SET, COPY, MERGE, REPLACE
 - **Blocks lock clauses**: FOR UPDATE, FOR SHARE, FOR NO KEY UPDATE
 - **Blocks dangerous SHOW**: GRANTS, PROCESSLIST, BINLOG, SLAVE, MASTER, REPLICAS
-- **Blocks SELECT INTO**: prevents table creation via SELECT
+- **Blocks SELECT INTO**: prevents table creation via SELECT, and `INTO OUTFILE` / `INTO DUMPFILE` writes to disk
+- **Blocks file and network functions**: `pg_read_file`, `pg_read_binary_file`, `pg_ls_dir`, `pg_stat_file`, `lo_import`, `lo_export`, `dblink*`, `LOAD DATA`, `LOAD_FILE`, `load_extension` and their relatives, checked before and after comment stripping
 - **Blocks multi-statements**: multiple semicolons
 - **Blocks injection patterns**: OR 1=1, OR true, OR ''='', UNION SELECT
 - **Allows only**: SELECT, WITH, SHOW, EXPLAIN, DESCRIBE, DESC
@@ -68,7 +69,7 @@ After validation, the query runs inside a transaction:
 | MySQL | `SET TRANSACTION READ ONLY` + `MAX_EXECUTION_TIME` hint |
 | SQLite | A read-only connection in a child process, killed at timeout |
 
-All queries execute inside a transaction, then rollback (even if they could write, they can't).
+On PostgreSQL and MySQL the query executes inside a transaction, then rolls back (even if it could write, it can't). Any other adapter has no database-level guard: the query runs with Layer 1 validation and the row limit only.
 
 A SQLite query runs in-process under `PRAGMA query_only = ON`, with no time
 limit, for an in-memory database, on a platform without `fork`, or when it
@@ -87,7 +88,8 @@ lock in WAL mode does not block it.
 
 - Default: 100 rows
 - Configurable: `config.query_row_limit` (hard cap: 1000)
-- Applied as `LIMIT` clause appended to query
+- Applied as a `LIMIT` clause appended to the query. A `LIMIT` or `FETCH FIRST` that ends the query is lowered to the cap, and one inside a subquery is left as written
+- The rows that come back are cut to the cap too, so the answer holds it whatever the database made of the text
 
 ### Layer 4 - Sensitive column rejection
 
@@ -95,13 +97,18 @@ A query that names a sensitive column is **rejected before execution**, not reda
 
 **Default redacted patterns:** `password_digest`, `encrypted_password`, `password_hash`, `reset_password_token`, `confirmation_token`, `unlock_token`, `otp_secret`, `session_data`, `secret_key`, `api_key`, `api_secret`, `access_token`, `refresh_token`, `jti`
 
-Matching is by name, case-insensitive and word-bounded, against both the defaults above and `config.query_redacted_columns`. `SELECT password_digest AS pd FROM users` is blocked outright: post-execution redaction reads the column names the database returns, which the caller controls through aliases and expressions, so it cannot be relied on.
+Those are the defaults of `config.query_redacted_columns`. A fixed built-in list is checked as well, which adds `password_reset_token`, `remember_token`, `secret` and `private_key`. Matching is by name, case-insensitive and word-bounded, against both lists. `SELECT password_digest AS pd FROM users` is blocked outright: post-execution redaction reads the column names the database returns, which the caller controls through aliases and expressions, so it cannot be relied on.
 
 If one of your own columns merely looks sensitive (an `oauth_applications.secret`, say), exempt it by name:
 
 ```ruby
 config.query_allowed_columns = %w[secret]
 ```
+
+Results are redacted as well: a returned column comes back as `[FILTERED]` when
+its name is in `config.query_redacted_columns`, contains `password`, `secret` or
+`token`, or ends in `key`, `digest` or `hash`. `SHOW`, `DESCRIBE` and `EXPLAIN`
+output is not redacted.
 
 The exemption covers the results too: an allowed name comes back unredacted. A
 column declared with `encrypts` stays `[FILTERED]` either way.
@@ -120,13 +127,15 @@ The `rails_search_code` and file-reading tools block access to sensitive files:
 ### Default patterns
 
 ```text
-.env .env.*
+.env .env.* *.env .envrc
 config/master.key
 config/credentials.yml.enc config/credentials/*.yml.enc
-config/database.yml config/secrets.yml
+config/database.yml config/secrets*.yml config/secrets*.yml.enc
+config/application.yml
+config/settings.local.yml config/settings/*.local.yml
 config/cable.yml config/storage.yml
 config/mongoid.yml config/redis.yml
-*.pem *.key *.p12 *.pfx *.jks *.keystore
+*.pem *.key *.p8 *.p12 *.pfx *.jks *.keystore
 **/id_rsa **/id_ed25519 **/id_ecdsa **/id_dsa
 .ssh/* .aws/credentials .aws/config .netrc .pgpass .my.cnf
 ```
@@ -164,7 +173,8 @@ All file-reading operations validate paths against `Rails.root`:
 
 ```ruby
 real_path = File.realpath(requested_path)
-raise unless real_path.start_with?(Rails.root.to_s)
+root = File.realpath(Rails.root.to_s)
+raise unless real_path == root || real_path.start_with?(root + File::SEPARATOR)
 ```
 
 The VFS (`rails-ai-context://views/{path}`) applies the same protection for view template reads.
@@ -216,7 +226,7 @@ Search tools use array-based command execution (never shell strings):
 
 ```ruby
 # Safe: array form
-Open3.capture2("rg", "--no-heading", pattern, "--", directory)
+Open3.capture3("rg", "--no-heading", "--", pattern, directory)
 
 # Pattern injection prevented by -- separator
 ```
@@ -227,7 +237,7 @@ File type parameters accept only alphanumeric characters.
 
 ## Regex injection prevention
 
-On Ruby 3.2 and newer, user-supplied regex patterns have a 1-second timeout:
+On Ruby 3.2 and newer, user-supplied regex patterns have a 1-second timeout (2 seconds in the Ruby search fallback):
 
 ```ruby
 Regexp.new(pattern, timeout: 1)
@@ -319,7 +329,7 @@ The McpController uses thread-safe transport initialization with mutex synchroni
 ## Credential handling
 
 - `rails_get_env` returns credential **keys**, never values
-- Environment variable values are not exposed
+- The process's environment variable values are never read. A default written in code, and a placeholder from `.env.example`, `.env.sample` or `.env.template`, is shown after redaction
 - `config/credentials/*.yml.enc` is in the sensitive patterns list
 
 ---
@@ -328,7 +338,7 @@ The McpController uses thread-safe transport initialization with mutex synchroni
 
 Email crisjosephnahine@gmail.com. Response within 48 hours.
 
-Supported versions: 4.0.x and later (4.2.1+ includes security hardening). See the repo root `SECURITY.md` for the full policy.
+Supported versions: only the latest 5.x release gets security fixes. See the repo root `SECURITY.md` for the full policy.
 
 ---
 

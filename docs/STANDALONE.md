@@ -24,13 +24,17 @@ rails-ai-context init
 ```
 
 Interactive setup asks:
-1. Which AI tools? (Claude, Cursor, Copilot, OpenCode, Codex, or all)
-2. MCP or CLI mode?
+1. Which AI tools? (Claude, Cursor, Copilot, OpenCode, Codex, or all; an empty answer selects all five)
+2. What should it write? (MCP config + context files, context files only for CLI mode, or MCP config only)
+
+On a re-run that drops a tool, it also asks whether to remove that tool's files. Unlike the install generator, `init` has no pre-commit hook prompt and no `--defaults` flag. The steps are listed in [What the install generator does](GUIDE.md#what-the-install-generator-does).
 
 Creates:
 - `.rails-ai-context.yml` - YAML configuration
 - MCP config files for selected AI tools
 - Context files for selected AI tools
+
+It does not create `config/initializers/rails_ai_context.rb`.
 
 ## Usage
 
@@ -141,7 +145,7 @@ bundle remove rails-ai-context
 rails-ai-context init
 ```
 
-The MCP config files are updated automatically. Both modes generate identical context files and provide the same 45 tools.
+The MCP config files are updated automatically. Both modes generate the same set of context files and provide the same 45 tools. The commands named inside the files follow the install mode.
 
 Both also take `--mcp-only`, which writes the MCP config and no context files
 at all. See [CONFIGURATION.md](CONFIGURATION.md#mcp-only).

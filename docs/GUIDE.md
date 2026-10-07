@@ -40,11 +40,11 @@
 - [Generated Files](#generated-files)
 - [All Commands](#all-commands)
 - [CLI Tools](#cli-tools)
-- [MCP Tools - Common Reference](#mcp-tools--common-reference)
+- [MCP Tools - Common Reference](#mcp-tools---common-reference)
 - [MCP Resources](#mcp-resources)
 - [MCP Server Setup](#mcp-server-setup)
-- [Configuration - All Options](#configuration--all-options)
-- [Introspectors - Full List](#introspectors--full-list)
+- [Configuration - All Options](#configuration---all-options)
+- [Introspectors - Full List](#introspectors---full-list)
 - [AI Assistant Setup](#ai-assistant-setup)
 - [Stack Compatibility](#stack-compatibility)
 - [Diagnostics](#diagnostics)
@@ -89,12 +89,49 @@ No Gemfile entry, no initializer, no files in your project besides config and co
 
 ### What the install generator does
 
-1. Creates per-tool MCP config files (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `opencode.json`, `.codex/config.toml`)
-2. Creates `config/initializers/rails_ai_context.rb` with commented defaults
-3. Asks which AI tools you use (Claude, Cursor, Copilot, OpenCode, Codex)
-4. Asks whether to enable MCP server (`tool_mode: :mcp`) or use CLI-only mode (`tool_mode: :cli`)
-5. Adds `.ai-context.json` to `.gitignore` (JSON cache - markdown files should be committed)
-6. Generates all context files
+`rails generate rails_ai_context:install` runs these steps in this order. Steps 1, 2, 3, 8 and 9 can ask a question.
+
+1. **Asks which AI tools you use.** It prints this menu, then `Enter numbers separated by commas (e.g. 1,2) or 'a' for all:`
+
+   ```
+   1. Claude Code      -> CLAUDE.md + .claude/rules/
+   2. Cursor           -> .cursor/rules/ + .cursorrules (legacy fallback)
+   3. GitHub Copilot   -> .github/copilot-instructions.md + .github/instructions/
+   4. OpenCode         -> AGENTS.md
+   5. Codex CLI        -> AGENTS.md + .codex/config.toml
+   a. All of the above
+   ```
+
+   There is no "none" choice. An empty answer, or one with no valid number in it, prints `No tools selected - defaulting to all.` and selects all five.
+2. **Offers to clean up tools you dropped.** Only on a re-run, and only when the last recorded selection (the `config.ai_tools` line in the initializer, else `.rails-ai-context.yml`) has a tool you did not pick this time. It lists them and asks `Remove their generated files?` with `y` (all), `n` (keep, the default) or numbers like `1,2`. A yes removes only what the gem generated: the rule files it names inside the tool's rules directory (the directory goes too when nothing else is left in it), and the block between the `rails-ai-context` markers in a root file such as `CLAUDE.md`. A rule file you wrote by hand, your own lines around the markers, a root file with no markers and a symlink are left alone. It also keeps any file a remaining tool shares (`AGENTS.md`), and takes only the `rails-ai-context` entry out of the tool's MCP config.
+3. **Asks what to write**, then `Enter number (default: 1):`
+
+   ```
+   1. MCP config + context files   (default)
+   2. Context files only           (CLI mode, no MCP server)
+   3. MCP config only              (leaves CLAUDE.md, AGENTS.md and rules untouched)
+   ```
+
+   Choices 1 and 3 set `tool_mode` to `:mcp`, choice 2 sets it to `:cli`. Choice 3 also sets `context_files` to `false`. Any other answer counts as 1.
+4. **Writes the MCP config for each selected tool** (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `opencode.json`, `.codex/config.toml`). Skipped for choice 2. An existing file is merged: only the `rails-ai-context` entry is added or replaced.
+5. **Creates or updates `config/initializers/rails_ai_context.rb`.** A new file gets your three answers as live lines (`config.ai_tools`, `config.tool_mode`, `config.context_files`) and every other option commented out at its default, wrapped in `if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)`. In an existing file it rewrites those three lines, appends any config section the file lacks, adds the guard if it is missing, and leaves the rest alone.
+6. **Writes `.rails-ai-context.yml`** with `ai_tools`, `tool_mode` and `context_files`. Other keys already in the file are kept.
+7. **Adds lines to `.gitignore`**, if the file exists: `.ai-context.json` (not for choice 3) and `.codex/config.toml` (always, because it holds this machine's Ruby paths). A line that is already there is not added again.
+8. **Asks about a pre-commit hook:** `Install a pre-commit hook that validates Rails references? (y/N)`. Only `y` installs it. The hook runs `rails 'ai:tool[validate]'` on the staged `.rb` and `.erb` files. No question is asked when the app has no `.git` directory or when the hook is already installed. When another `.git/hooks/pre-commit` exists it prints `Skipped pre-commit hook (existing hook found - add manually)` and moves on.
+9. **Generates the context files** for the selected tools. Skipped for choice 3. If files that v5.0.0 stopped generating are still there (`.claude/rules/rails-ui-patterns.md`, `.claude/rules/rails-accessibility.md`, `.cursor/rules/rails-ui-patterns.mdc`, `.github/instructions/rails-ui-patterns.instructions.md`), it lists them first and asks `Delete them? [y/N]:`. Without a terminal, or under `--defaults`, it prints the `rm` command and does not ask.
+10. **Prints a summary:** the files each selected tool got and the commands to run next.
+
+Two flags change the prompts:
+
+- `--defaults` answers every prompt with its default: all five tools, keep dropped tools' files, choice 1, no hook, keep legacy files. Piping an empty stdin does the same.
+- `--mcp-only` skips the step 3 question and acts as choice 3. Steps 1, 2 and 8 still ask.
+
+A team that wants no AI tool files in the repo can skip the generator. The gem needs none of its output: `rails 'ai:tool[NAME]'`, `rails ai:serve`, `rails ai:doctor` and the `rails-ai-context` binary all work on the defaults with no initializer, no `.rails-ai-context.yml` and no MCP config. `rails ai:context` is the one to leave alone in that setup, since it writes context files. To make that safe too, set `config.ai_tools = []` in an initializer: an empty list means no tool, so nothing is written and nothing is asked.
+
+Two other entry points ask the same step 1 and step 3 questions:
+
+- `rails-ai-context init` (standalone) asks both, then offers the step 2 and step 9 cleanups, writes `.rails-ai-context.yml`, the MCP configs and the `.gitignore` lines, and generates the context files. On an MCP-only run it skips the step 9 question, as the generator does. It never creates the initializer (in one that exists it updates `config.ai_tools`, `config.tool_mode` and `config.context_files`), never offers the pre-commit hook, and has `--mcp-only` but no `--defaults`.
+- `rails ai:context` asks step 1 only when no tool selection is recorded, and step 3 only when no `tool_mode` is recorded. It then writes `.rails-ai-context.yml`, the MCP configs and the `.gitignore` lines before generating. It does not create the initializer or offer the hook.
 
 ---
 
@@ -123,7 +160,7 @@ rails ai:context:full
 CONTEXT_MODE=full rails ai:context
 ```
 
-- Dumps everything into context files (schema, all models, all routes, etc.)
+- Dumps everything into the root files CLAUDE.md, AGENTS.md and copilot-instructions.md (schema, all models, all routes, etc.). The split rule files and Cursor's files are the same in both modes
 - Can produce thousands of lines for large apps
 - **Best for:** small apps (<30 models) where the full dump fits in context
 
@@ -133,9 +170,6 @@ CONTEXT_MODE=full rails ai:context
 # Full dump for Claude only, compact for everything else
 CONTEXT_MODE=full rails ai:context:claude
 
-# Full dump for Cursor only
-CONTEXT_MODE=full rails ai:context:cursor
-
 # Full dump for Copilot only
 CONTEXT_MODE=full rails ai:context:copilot
 ```
@@ -144,7 +178,7 @@ CONTEXT_MODE=full rails ai:context:copilot
 
 ```ruby
 # config/initializers/rails_ai_context.rb
-if defined?(RailsAiContext)
+if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
   RailsAiContext.configure do |config|
     config.context_mode = :full # or :compact (default)
   end
@@ -229,7 +263,7 @@ unmarked file was generated with the app running.
 | `rails ai:context:full` | full | all | Generate all files in full mode |
 | `rails ai:context:claude` | compact | Claude | CLAUDE.md + .claude/rules/ |
 | `rails ai:context:opencode` | compact | OpenCode | AGENTS.md + per-directory AGENTS.md |
-| `rails ai:context:codex` | compact | Codex | AGENTS.md + .codex/config.toml |
+| `rails ai:context:codex` | compact | Codex | AGENTS.md + per-directory AGENTS.md (same files as OpenCode; `.codex/config.toml` comes from the installer or `rails ai:context`) |
 | `rails ai:context:cursor` | compact | Cursor | .cursor/rules/ |
 | `rails ai:context:copilot` | compact | Copilot | copilot-instructions.md + .github/instructions/ |
 | `rails ai:context:json` | - | JSON | .ai-context.json |
@@ -249,16 +283,18 @@ unmarked file was generated with the app running.
 
 | Command | Transport | Description |
 |---------|-----------|-------------|
-| `rails ai:serve` | stdio | Start MCP server. Auto-discovered by each AI tool via its own config file. |
+| `rails ai:serve` | stdio | Start MCP server. The generated MCP config files start the same server with `bundle exec rails-ai-context serve`. |
 | `rails ai:serve_http` | HTTP | Start MCP server at `http://127.0.0.1:6029/mcp`. For remote clients. |
 
 ### Utilities
 
 | Command | Description |
 |---------|-------------|
-| `rails ai:doctor` | Run 13 diagnostic checks. Reports pass/warn/fail with fix suggestions. AI readiness score (0-100). |
+| `rails ai:doctor` | Run up to 25 diagnostic checks. Reports pass/warn/fail with fix suggestions. AI readiness score (0-100). `STRICT=1` exits 1 when a check fails. |
 | `rails ai:watch` | Watch for file changes and auto-regenerate context files. Requires `listen` gem. |
 | `rails ai:inspect` | Print introspection summary to stdout. Useful for debugging. |
+| `rails ai:facts` | Print a short schema facts summary (tables, columns, indexes, associations, dependencies). |
+| `rails 'ai:preset[NAME]'` | Run a multi-tool preset: `architecture`, `debugging` or `migration`. |
 
 ### Standalone CLI
 
@@ -275,14 +311,16 @@ rails-ai-context tool                      # List all available tools
 rails-ai-context tool schema --table users --detail full  # Run a tool
 rails-ai-context tool schema --help        # Per-tool help
 rails-ai-context tool schema --json        # JSON envelope output
-rails-ai-context doctor                    # Run diagnostics
+rails-ai-context doctor                    # Run diagnostics (--strict exits 1 on a failed check)
 rails-ai-context watch                     # Watch for changes
 rails-ai-context inspect                   # Print introspection JSON
+rails-ai-context facts                     # Print schema facts summary
+rails-ai-context preset architecture       # Run a multi-tool preset
 rails-ai-context version                   # Print version
 rails-ai-context help                      # Show all commands
 ```
 
-Must be run from your Rails app root directory (requires `config/environment.rb`).
+Run it from your Rails app root, or pass `--app-path PATH`. Booting needs `config/environment.rb`. When the app cannot boot, or with `--no-boot`, every command except `doctor` reads the source files instead.
 
 **Config:** Standalone mode reads from `.rails-ai-context.yml` (created by `init`), and that is its only config source - the gem is not loaded while `config/initializers` runs. If no config file exists, defaults are used. With the gem in the Gemfile the two merge key by key ([Precedence](CONFIGURATION.md#precedence)).
 
@@ -345,7 +383,7 @@ Short names are resolved automatically:
 The `tool_mode` config controls how tool references appear in generated context files:
 
 ```ruby
-if defined?(RailsAiContext)
+if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
   RailsAiContext.configure do |config|
     # :mcp (default) - MCP primary, CLI as fallback
     # :cli - CLI only, no MCP server needed
@@ -377,7 +415,7 @@ Returns database schema: tables, columns, indexes, foreign keys.
 |-------|------|-------------|
 | `table` | string | Specific table name for full detail. Omit for listing. |
 | `detail` | string | `summary` / `standard` (default) / `full` |
-| `limit` | integer | Max tables to return. Default: 50 (summary), 15 (standard), 5 (full). |
+| `limit` | integer | Max tables to return. Default: 50 (summary), 25 (standard), 10 (full). |
 | `offset` | integer | Skip tables for pagination. Default: 0. |
 | `format` | string | `markdown` (default) / `json`. JSON returns the same page of tables keyed by table name, or the single table's own data when `table` is given. |
 
@@ -385,7 +423,7 @@ Returns database schema: tables, columns, indexes, foreign keys.
 
 ```
 rails_get_schema()
-  → Standard detail, first 15 tables with column names and types
+  → Standard detail, first 25 tables with column names and types
 
 rails_get_schema(detail: "summary")
   → All tables with column and index counts (up to 50)
@@ -402,7 +440,7 @@ rails_get_schema(detail: "full", format: "json")
 
 ### rails_get_model_details
 
-Returns model details: associations, validations, scopes, enums, callbacks, concerns. Source parsing uses Prism AST - every result carries a `[VERIFIED]` (static literal arguments) or `[INFERRED]` (dynamic expressions) confidence tag.
+Returns model details: associations, validations, scopes, enums, callbacks, concerns. Source parsing uses Prism AST. The model heading and each scope carry a confidence tag: `[VERIFIED]` (confirmed by the booted app, or static literal arguments), `[INFERRED]` (dynamic expressions) or `[STATIC]` (read from source without a boot).
 
 **Parameters:**
 
@@ -442,7 +480,7 @@ Returns all routes: HTTP verbs, paths, controller actions, route names.
 |-------|------|-------------|
 | `controller` | string | Filter by controller name (e.g. `users`, `api/v1/posts`). Case-insensitive. |
 | `detail` | string | `summary` / `standard` (default) / `full` |
-| `limit` | integer | Max routes to return. Default: 100 (standard), 200 (full). |
+| `limit` | integer | Max routes to return. Default: 150 (standard), 200 (full). |
 | `offset` | integer | Skip routes for pagination. Default: 0. |
 | `app_only` | boolean | Filter out internal Rails routes (Active Storage, Action Mailbox, Conductor, etc.). Default: true. |
 
@@ -458,8 +496,8 @@ rails_get_routes(detail: "summary")
 rails_get_routes(controller: "users")
   → All routes for UsersController
 
-rails_get_routes(controller: "api")
-  → All routes matching "api" (partial match, case-insensitive)
+rails_get_routes(controller: "posts")
+  → Also reaches a namespaced `api/v1/posts`: an exact name first, then the trailing path segments, never a substring
 
 rails_get_routes(detail: "full", limit: 50)
   → Full table with route names, first 50 routes
@@ -537,13 +575,15 @@ Returns notable gems categorized by function.
 
 | Param | Type | Description |
 |-------|------|-------------|
-| `category` | string | Filter by category: `auth`, `jobs`, `frontend`, `api`, `database`, `files`, `testing`, `deploy`, `all` (default). |
+| `category` | string | Filter by category: `auth`, `jobs`, `frontend`, `api`, `database`, `files`, `testing`, `deploy`, `monitoring`, `admin`, `pagination`, `search`, `forms`, `server`, `notifications`, `validation`, `utilities`, `services`, `payments`, `all` (default). |
+| `limit` | integer | Max gems to return. Default: 50. |
+| `offset` | integer | Skip this many gems for pagination. Default: 0. |
 
 **Returns:** Notable gems grouped by category with descriptions.
 
 ```
 rails_get_gems()
-  → auth: devise (4.9.3), background_jobs: sidekiq (7.2.1), ...
+  → Auth: devise `4.9.3`, Jobs: sidekiq `7.2.1`, ...
 ```
 
 ### rails_get_conventions
@@ -716,7 +756,7 @@ rails_search_code(pattern: "User", match_type: "class")
   → Only `class User` / `module User` definitions
 ```
 
-**Security:** Uses `Open3.capture2` with array arguments (no shell injection). Validates file_type. Blocks path traversal. Respects `excluded_paths` and `sensitive_patterns` config on both backends, and the Ruby fallback reads the ignore files ripgrep reads and ranks them the way ripgrep does: `.rgignore` over `.ignore` over `.gitignore` (each scoped to its own directory) over `.git/info/exclude` over the global excludes file, the file type deciding before depth, which breaks ties only within one type; `.ignore` and `.rgignore` apply outside a git repository too, and a directory the rules ignore is never entered. As ripgrep does, the fallback also reads the ignore files of every directory above the app, the git ones only as far up as the nearest `.git` (a file for a worktree or submodule), so an app nested in a larger repository gets that repository's rules and a repository nested in the app stops the app's `.gitignore`. Patterns match case-sensitively, symlinks are not followed, and a file with a NUL byte in its first 64 KiB is skipped unread, all as in ripgrep, so the two return the same set.
+**Security:** Uses `Open3.capture3` with array arguments (no shell injection). Validates file_type. Blocks path traversal. Respects `excluded_paths` and `sensitive_patterns` config on both backends, and the Ruby fallback reads the ignore files ripgrep reads and ranks them the way ripgrep does: `.rgignore` over `.ignore` over `.gitignore` (each scoped to its own directory) over `.git/info/exclude` over the global excludes file, the file type deciding before depth, which breaks ties only within one type; `.ignore` and `.rgignore` apply outside a git repository too, and a directory the rules ignore is never entered. As ripgrep does, the fallback also reads the ignore files of every directory above the app, the git ones only as far up as the nearest `.git` (a file for a worktree or submodule), so an app nested in a larger repository gets that repository's rules and a repository nested in the app stops the app's `.gitignore`. Patterns match case-sensitively, symlinks are not followed, and a file with a NUL byte in its first 64 KiB is skipped unread, all as in ripgrep, so the two return the same set.
 
 ### rails_analyze_feature
 
@@ -750,7 +790,7 @@ rails_analyze_feature(feature: "orders")
 
 ### rails_security_scan
 
-Runs Brakeman static security analysis on the Rails app. Detects SQL injection, XSS, mass assignment, command injection, and other vulnerabilities. Requires the `brakeman` gem - returns installation instructions if not present.
+Runs Brakeman static security analysis on the Rails app. Detects SQL injection, XSS, mass assignment, command injection, and other vulnerabilities. Uses the app's `brakeman` gem, or a `brakeman` gem installed for the same Ruby when the bundle has none. Returns installation instructions when neither is there.
 
 **Parameters:**
 
@@ -785,7 +825,8 @@ Get ActiveSupport::Concern details: public methods, included modules, and which 
 | Param | Type | Description |
 |-------|------|-------------|
 | `name` | string | Concern module name (e.g. `Searchable`, `Authenticatable`). Omit to list all concerns. |
-| `type` | string | Filter by concern type: `model`, `controller`, `all` (default). |
+| `type` | string | Filter by concern type, the name the listing's section headings print: `model`, `controller`, `mailer`, the root a concern outside every concerns directory lives in (`service`, `lib`), `other`, or `all` (default). |
+| `detail` | string | `summary` / `standard` (default) / `full`. Only read when `name` is given: `full` adds each method's source code, `summary` and `standard` both return method signatures. The listing is the same at every level. |
 
 **Examples:**
 
@@ -844,6 +885,8 @@ Get Rails helper modules: method signatures, framework helpers in use, and which
 |-------|------|-------------|
 | `helper` | string | Helper module name (e.g. `ApplicationHelper`, `UsersHelper`). Omit to list all helpers. |
 | `detail` | string | `summary` / `standard` (default) / `full`. summary: names + method counts. standard: names + method signatures. full: method signatures + view cross-references + framework helpers. |
+| `limit` | integer | Max helpers to return. Default: 50. |
+| `offset` | integer | Skip this many helpers for pagination. Default: 0. |
 
 **Examples:**
 
@@ -862,7 +905,7 @@ rails_get_helper_methods(detail: "full")
 
 ### rails_get_service_pattern
 
-Analyze service objects in app/services/: patterns, interfaces, dependencies, and side effects. Specify a service for full detail, or omit to detect the common pattern and list all services.
+Analyze service objects in app/services/, app/interactions/ and app/interactors/: patterns, interfaces, dependencies, and side effects. Specify a service for full detail, or omit to detect the common pattern and list all services.
 
 **Parameters:**
 
@@ -914,7 +957,7 @@ rails_get_job_pattern(detail: "full")
 
 ### rails_get_env
 
-Discover environment variables, external service dependencies, and credentials keys used by the app. Scans Ruby files for ENV[], .env.example, Dockerfile, the env Kamal's config/deploy.yml sets (secret names; clear values, except one holding a URL or a key-like token, or under a secret-named variable, which shows as hidden, and one an ERB tag sets, which says so), config gem setting keys, Anyway::Config attributes with their env names, external HTTP calls, and credentials keys (never values).
+Discover environment variables, external service dependencies, and credentials keys used by the app. Scans .rb, .rake, ERB views and config YAML for ENV[], .env.example, Dockerfile, the env Kamal's config/deploy.yml sets (secret names; clear values, except one holding a URL or a key-like token, or under a secret-named variable, which shows as hidden, and one an ERB tag sets, which says so), config gem setting keys, Anyway::Config attributes with their env names, external HTTP calls, and credentials keys (never values).
 
 **Parameters:**
 
@@ -1002,6 +1045,7 @@ Get cross-layer context in a single call - combines schema, model, controller, r
 | `action` | string | Specific action name (e.g. `create`). Requires controller. Returns full action context. |
 | `model` | string | Model name (e.g. `Post`). Returns schema, associations, validations, scopes, callbacks, tests. |
 | `feature` | string | Feature keyword (e.g. `post`). Like analyze_feature but includes schema columns and scope bodies. |
+| `include` | array | Extra context to append in any mode: `stimulus`, `turbo`, `services`, `jobs`, `conventions`, `helpers`, `env`, `callbacks`. |
 
 **Examples:**
 
@@ -1010,13 +1054,13 @@ rails_get_context(controller: "PostsController", action: "create")
   → Controller action source + model details + routes + views - everything for that action
 
 rails_get_context(model: "User")
-  → Model details + schema columns + test file content
+  → Model details + schema columns + the names of its tests
 
 rails_get_context(feature: "orders")
   → Full-stack feature analysis including schema columns and scope bodies
 ```
 
-**Returns:** Combined context from multiple tools in a single response. For controller+action: controller source with filters, inferred model details, matching routes, and view templates. For model: model details with associations/validations/scopes, schema columns with types, and test file content. For feature: delegates to full-stack feature analysis.
+**Returns:** Combined context from multiple tools in a single response. For controller+action: controller source with filters, inferred model details, matching routes, and view templates. For model: model details with associations/validations/scopes, schema columns with types, and the names of the tests in its test file. For feature: delegates to full-stack feature analysis.
 
 ### Detail Level Summary
 
@@ -1025,10 +1069,10 @@ All tools that support `detail` use these three levels. Default limits vary by t
 | Level | What it returns | Schema default limit | Best for |
 |-------|----------------|---------------------|----------|
 | `summary` | Names + counts | 50 | Getting the landscape, understanding what exists |
-| `standard` | Names + key details | 29 | Working context, column types, action names |
+| `standard` | Names + key details | 25 | Working context, column types, action names |
 | `full` | Everything | 10 | Deep inspection, indexes, FKs, constraints |
 
-Other tools default to higher limits (e.g. models/controllers/stimulus: 50 for all levels, routes: 100/200).
+Other tools default to higher limits (e.g. models/controllers/stimulus: 50 for all levels, routes: 150/200).
 
 ### Recommended Workflow
 
@@ -1067,7 +1111,7 @@ Live resources introspected fresh on every request - zero stale data:
 | `rails-ai-context://controllers/{name}` | Controller details with actions, filters, strong params |
 | `rails-ai-context://controllers/{name}/{action}` | Specific action source code and applicable filters |
 | `rails-ai-context://views/{path}` | View template content (path traversal protected) |
-| `rails-ai-context://routes` | Live route map (optionally filter by controller) |
+| `rails-ai-context://routes/{controller}` | Live route map, filtered by controller |
 
 ---
 
@@ -1094,7 +1138,7 @@ The install generator (or `rails-ai-context init`) creates per-tool MCP config f
 | OpenCode | `opencode.json` | `mcp` | JSON |
 | Codex CLI | `.codex/config.toml` | `[mcp_servers]` | TOML |
 
-Each file is merge-safe - only the `rails-ai-context` entry is managed, other servers are preserved.
+Each file is merge-safe - only the `rails-ai-context` entry is managed, other servers are preserved. When the gem is not in the app's `Gemfile.lock` (standalone install) the entry runs `rails-ai-context serve` with no `bundle exec`.
 
 **Example: `.mcp.json` (Claude Code)**
 ```json
@@ -1102,7 +1146,7 @@ Each file is merge-safe - only the `rails-ai-context` entry is managed, other se
   "mcpServers": {
     "rails-ai-context": {
       "command": "bundle",
-      "args": ["exec", "rails", "ai:serve"]
+      "args": ["exec", "rails-ai-context", "serve"]
     }
   }
 }
@@ -1112,7 +1156,7 @@ Each file is merge-safe - only the `rails-ai-context` entry is managed, other se
 ```toml
 [mcp_servers.rails-ai-context]
 command = "bundle"
-args = ["exec", "rails", "ai:serve"]
+args = ["exec", "rails-ai-context", "serve"]
 
 [mcp_servers.rails-ai-context.env]
 PATH = "/home/user/.rbenv/shims:/usr/local/bin:/usr/bin"
@@ -1144,14 +1188,14 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
   "mcpServers": {
     "rails-ai-context": {
       "command": "bundle",
-      "args": ["exec", "rails", "ai:serve"],
+      "args": ["exec", "rails-ai-context", "serve"],
       "cwd": "/path/to/your/rails/app"
     }
   }
 }
 ```
 
-Or for standalone: replace `"command": "bundle"` / `"args": ["exec", "rails", "ai:serve"]` with `"command": "rails-ai-context"` / `"args": ["serve"]`.
+Or for standalone: replace `"command": "bundle"` / `"args": ["exec", "rails-ai-context", "serve"]` with `"command": "rails-ai-context"` / `"args": ["serve"]`.
 
 ### Cursor
 
@@ -1162,7 +1206,7 @@ Auto-discovered via `.cursor/mcp.json`. Or add manually in **Cursor Settings > M
   "mcpServers": {
     "rails-ai-context": {
       "command": "bundle",
-      "args": ["exec", "rails", "ai:serve"],
+      "args": ["exec", "rails-ai-context", "serve"],
       "cwd": "/path/to/your/rails/app"
     }
   }
@@ -1184,7 +1228,7 @@ rails ai:serve_http
 Or auto-mount inside your Rails app (no separate process):
 
 ```ruby
-if defined?(RailsAiContext)
+if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
   RailsAiContext.configure do |config|
     config.auto_mount = true
     config.http_path  = "/mcp"       # default
@@ -1213,7 +1257,7 @@ This provides a native Rails controller (`RailsAiContext::McpController`) that d
 
 ```ruby
 # config/initializers/rails_ai_context.rb
-if defined?(RailsAiContext)
+if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
   RailsAiContext.configure do |config|
     # --- Introspectors ---
 
@@ -1348,7 +1392,7 @@ end
 | `tool_mode` | Symbol | `:mcp` | `:mcp` (MCP primary + CLI fallback) or `:cli` (CLI only, no MCP server needed) |
 | `ai_tools` | Array | `nil` (all) | AI tools to generate context for: `%i[claude cursor copilot opencode codex]`. Selected during install. |
 | `excluded_models` | Array | internal Rails models | Models to skip |
-| `excluded_paths` | Array | `node_modules tmp log vendor .git` | Paths excluded from code search |
+| `excluded_paths` | Array | `node_modules tmp log vendor .git doc docs` | Paths excluded from code search |
 | `sensitive_patterns` | Array | `.env`, `.key`, `.pem`, credentials | File patterns blocked from search and read tools |
 | `output_dir` | String | `nil` (Rails.root) | Where to write context files |
 | `auto_mount` | Boolean | `false` | Auto-mount HTTP MCP endpoint |
@@ -1358,7 +1402,7 @@ end
 | `live_reload` | Symbol/Boolean | `:auto` | `:auto`, `true`, or `false` - enable MCP live reload |
 | `live_reload_debounce` | Float | `1.5` | Debounce interval in seconds for live reload |
 | `server_name` | String | `"rails-ai-context"` | MCP server name |
-| `server_version` | String | gem version | MCP server version |
+| `server_version` | String | gem version | MCP server version. Read-only, there is no setter |
 | `generate_root_files` | Boolean | `true` | Set `false` to generate split rules only: no CLAUDE.md, AGENTS.md, .cursorrules or copilot-instructions.md (`.ai-context.json` is still written) |
 | `anti_hallucination_rules` | Boolean | `true` | Embed 6-rule Anti-Hallucination Protocol in generated context files - set `false` to skip |
 | `hydration_enabled` | Boolean | `true` | Inject schema hints into controller/view tool responses |
@@ -1378,6 +1422,16 @@ end
 | `excluded_middleware` | Array | standard Rails middleware | Default middleware hidden from config output |
 | `search_extensions` | Array | `nil` | Narrows the Ruby fallback to these extensions. Unset, it searches every non-hidden, non-binary file, as ripgrep does |
 | `concern_paths` | Array | `nil` (discovers `app/concerns` and `app/*/concerns`) | Where to look for concern source files. Setting it replaces discovery |
+| `context_files` | Boolean | `true` | Set `false` for an MCP-only install: no CLAUDE.md, AGENTS.md, rules files or `.ai-context.json` are written |
+| `frontend_paths` | Array | `nil` (auto-detected) | Frontend directories, e.g. `["app/frontend", "../web-client"]`. One outside the app root is read for manifests only |
+| `extra_app_paths` | Array | `[]` | More app-root-relative directories that hold Rails app code. Each one's `app/models`, `app/controllers` and `app/views` are scanned |
+| `query_timeout` | Integer | `5` | `rails_query` statement timeout in seconds |
+| `query_row_limit` | Integer | `100` | Max rows `rails_query` returns (1 to 1000) |
+| `query_redacted_columns` | Array | `password_digest`, `encrypted_password`, tokens, etc. | Column names whose values `rails_query` redacts |
+| `query_allowed_columns` | Array | `[]` | Column names to exempt from the built-in sensitive list |
+| `allow_query_in_production` | Boolean | `false` | Allow `rails_query` in production |
+| `log_lines` | Integer | `50` | Default number of lines `rails_read_logs` tails |
+| `instrumentation_include_arguments` | Boolean | `false` | Forward raw tool arguments in `ActiveSupport::Notifications` events |
 
 ### Root file generation
 
@@ -1388,14 +1442,14 @@ By default, `rails ai:context` generates root files (CLAUDE.md, AGENTS.md, etc.)
 **Skip root files:** If you prefer to maintain root files yourself and only want split rules (`.claude/rules/`, `.cursor/rules/`, `.github/instructions/`):
 
 ```ruby
-if defined?(RailsAiContext)
+if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
   RailsAiContext.configure do |config|
     config.generate_root_files = false
   end
 end
 ```
 
-All split rules include an app overview file, so no context is lost when root files are disabled.
+The Claude Code, Cursor and Copilot rule sets each keep an app overview file (`rails-context.md`, `rails-project.mdc`, `rails-context.instructions.md`). The Claude Code one leaves out gems, architecture, services and jobs, which it expects in CLAUDE.md. OpenCode and Codex have no overview outside AGENTS.md: their split files hold only the model and controller listings.
 
 ---
 
@@ -1411,7 +1465,7 @@ Core Rails structure only. Use `config.preset = :standard` for a lighter footpri
 | `models` | Associations, validations, scopes, enums, callbacks, concerns, instance methods, class methods. Source-level macros via Prism AST (single-pass, 8 listeners): `has_secure_password`, `encrypts`, `normalizes`, `delegate`, `serialize`, `store`, `generates_token_for`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `broadcasts_to`. Every result tagged `[VERIFIED]` or `[INFERRED]`. |
 | `routes` | All routes with HTTP verbs, paths, controller actions, route names, API namespaces, mounted engines. |
 | `jobs` | ActiveJob classes with queue names. Mailers with action methods. Action Cable channels. |
-| `gems` | 70+ notable gems categorized: auth, background_jobs, admin, monitoring, search, pagination, forms, file_upload, testing, linting, security, api, frontend, utilities. |
+| `gems` | 127 notable gems categorized: auth, jobs, frontend, api, database, files, testing, deploy, monitoring, admin, pagination, search, forms, server, notifications, validation, utilities, services, payments. |
 | `conventions` | Architecture patterns (MVC, service objects, STI, polymorphism, etc.), directory structure with file counts, config files, detected patterns. |
 | `controllers` | Actions, filters (before/after/around with only/except), strong params methods, parent class, API controller detection, concerns. |
 | `tests` | Test framework (rspec/minitest), factories/fixtures with locations and counts, system tests, CI config files, coverage tool, test helpers, VCR cassettes. |
@@ -1441,11 +1495,19 @@ Includes all standard introspectors plus:
 | `action_mailbox` | Action Mailbox mailboxes with routing patterns. |
 | `seeds` | db/seeds.rb analysis (Faker usage, environment conditionals), seed files in db/seeds/, models seeded. |
 | `middleware` | Custom Rack middleware in app/middleware/ and lib/middleware/ with detected patterns (auth, rate limiting, tenant isolation, logging), what the app's config inserts, moves or removes, and the full middleware stack. |
-| `engines` | Mounted Rails engines from routes.rb with paths and descriptions for 23+ known engines (Sidekiq::Web, Flipper::UI, PgHero, ActiveAdmin, etc.). |
+| `engines` | Mounted Rails engines from routes.rb with paths and descriptions for 23 known engines (Sidekiq::Web, Flipper::UI, PgHero, ActiveAdmin, etc.). |
 | `env_config` | Per-environment config files (`config/environments/*.rb`): notable toggles (`force_ssl`, `eager_load`, caching, log level, queue adapter, mailer delivery) with URI credentials redacted, assigned config keys, plus the keys `config/application.rb` sets for every environment and the keys each `config_for` YAML file gives. |
 | `multi_database` | Multiple databases, replicas, sharding config, model-specific `connects_to` declarations. database.yml parsing fallback. |
 | `frontend_frameworks` | Frontend JS framework detection (React/Vue/Svelte/Angular), mounting strategy (Inertia/react-rails), TypeScript config, state management, package manager. |
 | `database_stats` | PostgreSQL approximate row counts via `pg_stat_user_tables`. Gracefully skips on non-PostgreSQL adapters. |
+| `initializers` | The `Rails.application.initializers` graph (name, owner, `before:`/`after:` edges) and a per-file summary of `config/initializers/*.rb`. |
+| `autoload` | Zeitwerk autoloaders with collapsed and ignored dirs, `autoload_paths`, `eager_load_paths`, custom inflections. |
+| `connection_pool` | Per-database adapter config: pool size, `checkout_timeout`, `reaping_frequency`, `prepared_statements`, replica flag, connection-handler roles. |
+| `active_support` | Concerns in `app/**/concerns/`, deprecators, MessageEncryptor/Verifier usage, notification subscriptions, on-load hooks, cache store options. |
+| `credentials` | Encrypted credentials files (default and per-environment), where the master key comes from, top-level key names only (never values). |
+| `security` | `force_ssl` and SSL options, host authorization, Content Security Policy and Permissions Policy directives, CSRF config, cookie session options. |
+| `observability` | Log subscribers, `ActiveSupport::Notifications` subscribers, `ServerTiming` middleware, log level and tags. |
+| `env` | Rails-related ENV vars split into set and unset (sensitive ones are redacted), plus the app's own `ENV["X"]` references. |
 
 ### Using the standard preset
 
@@ -1501,7 +1563,7 @@ config.introspectors = %i[schema models routes gems auth api]
   "mcp": {
     "rails-ai-context": {
       "type": "local",
-      "command": ["bundle", "exec", "rails", "ai:serve"]
+      "command": ["bundle", "exec", "rails-ai-context", "serve"]
     }
   }
 }
@@ -1563,21 +1625,21 @@ OpenCode uses **per-directory lazy-loading**: when the agent reads a file, it wa
 | Setup | Coverage | Notes |
 |-------|----------|-------|
 | Rails full-stack (ERB + Hotwire) | 40/40 | All introspectors relevant |
-| Rails + Inertia.js (React/Vue) | ~34/40 | Views/Turbo partially useful, backend fully covered |
-| Rails API + React/Next.js SPA | ~32/40 | Schema, models, routes, API, auth, jobs - all covered |
-| Rails API + mobile app | ~32/40 | Same as SPA - backend introspection is identical |
-| Rails engine (mountable gem) | ~27/40 | Core introspectors (schema, models, routes, gems) work |
+| Rails + Inertia.js (React/Vue) | Backend ones | Views/Turbo partially useful, backend fully covered |
+| Rails API + React/Next.js SPA | Backend ones | Schema, models, routes, API, auth, jobs - all covered |
+| Rails API + mobile app | Backend ones | Same as SPA - backend introspection is identical |
+| Rails engine (mountable gem) | Core ones | Core introspectors (schema, models, routes, gems) work |
 
-Frontend introspectors (views, Turbo, Stimulus, assets) degrade gracefully - they report nothing when those features aren't present.
+All 40 introspectors run on every setup with the default `:full` preset. The gem keeps no per-setup count: frontend introspectors (views, Turbo, Stimulus, assets) degrade gracefully - they report nothing when those features aren't present.
 
 **Tip for API-only apps:**
 
 ```ruby
-# Use standard preset (already perfect for API apps)
+# Use standard preset (it already has auth)
 config.preset = :standard
 
-# Or add API-specific introspectors
-config.introspectors += %i[auth api]
+# And add the API introspector, which standard leaves out
+config.introspectors += %i[api]
 ```
 
 ---
@@ -1588,23 +1650,35 @@ config.introspectors += %i[auth api]
 rails ai:doctor
 ```
 
-Runs 13 checks and reports an AI readiness score (0-100):
+Runs up to 25 checks and reports an AI readiness score (0-100). A check that does not apply to the app prints no row:
 
 | Check | What it verifies |
 |-------|------------------|
-| Schema | db/schema.rb exists and is parseable |
-| Models | Model files detected in app/models/ |
-| Routes | Routes are mapped |
-| Gems | Gemfile.lock exists and is parseable |
+| Schema | A schema dump file exists |
+| Pending migrations | No migration is pending (fails when one is) |
+| Models | Model files detected |
+| Routes | `config/routes.rb` exists |
+| Gems | The lockfile exists |
 | Controllers | Controller files detected |
-| Views | View templates detected |
-| I18n | Locale files exist |
-| Tests | Test framework detected |
+| Views | Files exist under `app/views` |
+| Tests | A test suite is found |
 | Migrations | Migration files exist |
-| Context files | Generated context files exist |
-| MCP Server | MCP server can be built |
-| Ripgrep | `rg` binary installed (optional, falls back to Ruby) |
+| Context files | Generated context files exist and are newer than the code they describe. No row on an MCP-only install |
+| Initializer guard | Shown only when `config/initializers/rails_ai_context.rb` has no guard, or guards on `defined?(RailsAiContext)` alone |
+| MCP configs | Each selected tool's MCP config file exists and parses. Skipped in CLI-only mode |
+| Codex env snapshot | The `GEM_HOME` saved in `.codex/config.toml` still exists. Only when Codex is selected |
+| MCP server | MCP server can be built |
+| Introspector health | Every configured introspector returns data |
+| Preset coverage | The preset covers the features the app has |
+| ripgrep | `rg` binary installed (optional, falls back to Ruby) |
+| Prism parser | Prism is available for AST-based validation |
+| Brakeman | Brakeman is available for `rails_security_scan` (optional) |
 | Live reload | `listen` gem installed (optional, enables MCP live reload) |
+| MCP stdio hygiene | On a standalone install, gem activation prints nothing on stdout |
+| Secrets in .gitignore | Sensitive files that exist are gitignored |
+| MCP auto_mount | `auto_mount` is not on in production |
+| Schema file size | The schema file is under 80% of `max_schema_file_size` |
+| View aggregation size | `app/views` templates total under 80% of `max_view_total_size` |
 
 Each check reports **pass**, **warn**, or **fail** with fix suggestions.
 
@@ -1625,7 +1699,7 @@ Requires the `listen` gem:
 gem "listen", group: :development
 ```
 
-Watches for changes in: `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `spec/`, and regenerates only the files that changed (diff-aware, skips unchanged files).
+Watches for changes in: `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `spec/`, plus the app directories of packs, in-repo engines and `extra_app_paths`, and regenerates only the files that changed (diff-aware, skips unchanged files).
 
 ---
 
@@ -1635,12 +1709,12 @@ When running the MCP server via `rails ai:serve`, **live reload** automatically 
 
 ### How it works
 
-1. A background thread watches `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/` and `spec/` for changes
+1. A background thread watches `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/` and `spec/` (plus the app directories of packs, in-repo engines and `extra_app_paths`) for changes
 2. On change (debounced 1.5s), it checks the file fingerprint to avoid false positives
 3. If files truly changed, it:
    - Clears all MCP tool caches
    - Sends `notifications/resources/list_changed` to the AI client
-   - Logs a summary of what changed (e.g., "Files changed: 2 model(s), 1 controller(s)")
+   - Logs a summary of what changed (e.g., "Files changed: 2 models, 1 controller.")
 
 ### Setup
 
@@ -1656,9 +1730,9 @@ Live reload is **enabled by default** when the `listen` gem is available. No con
 ### Configuration
 
 ```ruby
-if defined?(RailsAiContext)
+if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
   RailsAiContext.configure do |config|
-    # :auto (default) - enable if `listen` gem is available, skip silently otherwise
+    # :auto (default) - enable if `listen` gem is available, otherwise skip with one line on stderr
     # true  - enable, raise if `listen` gem is missing
     # false - disable entirely
     config.live_reload = :auto
@@ -1696,12 +1770,12 @@ Works in:
 ## Security
 
 - All MCP tools are **read-only** - they never modify your application or database
-- Code search uses `Open3.capture2` with array arguments - **no shell injection**
+- Code search uses `Open3.capture3` with array arguments - **no shell injection**
 - File paths are validated against **path traversal** attacks
 - Credentials and secret values are **never exposed** - only key names are introspected
 - The gem makes **no outbound network requests**
 - File type validation prevents arbitrary file access in code search
-- `max_results` is capped at 100 to prevent resource exhaustion
+- Search output is capped at `max_search_results` lines (default 200) to prevent resource exhaustion
 
 ---
 
@@ -1735,7 +1809,7 @@ config.max_tool_response_chars = 60_000
 
 ### Models not detected
 
-- Models must be in `app/models/` and inherit from `ApplicationRecord`
+- Models must descend from `ActiveRecord::Base`, through `ApplicationRecord` or any other base class. Without a boot they must also sit in a model directory (`app/models/`, or a pack's or engine's)
 - Excluded models: `ApplicationRecord`, `ActiveStorage::*`, `ActionText::*`, `ActionMailbox::*`
 - Add custom exclusions: `config.excluded_models += %w[InternalModel]`
 

@@ -52,12 +52,13 @@ Yes, freely. Both generate identical context files and provide the same 45 tools
 ### Do I need to commit the generated files?
 
 **Yes, commit these:**
-- `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `opencode.json`, `.codex/config.toml` - so teammates get MCP auto-discovery
-- `CLAUDE.md`, `.cursor/rules/`, `.cursorrules`, `.github/instructions/`, `AGENTS.md` - so AI has context
+- `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `opencode.json` - so teammates get MCP auto-discovery
+- `CLAUDE.md`, `.claude/rules/`, `.cursor/rules/`, `.cursorrules`, `.github/copilot-instructions.md`, `.github/instructions/`, `AGENTS.md` - so AI has context
 - `config/initializers/rails_ai_context.rb`, `.rails-ai-context.yml` - so config is shared
 
 **Don't commit:**
 - `.ai-context.json` - auto-added to .gitignore by the install generator
+- `.codex/config.toml` - it embeds this machine's Ruby PATH and GEM_HOME, so install adds it to .gitignore too and `rails ai:doctor` fails when it is not ignored
 
 ### Can I use only the MCP server?
 
@@ -141,7 +142,7 @@ Depends on your `ai_tools` config. For all tools:
 | Claude | CLAUDE.md, .claude/rules/*.md |
 | Cursor | .cursor/rules/*.mdc AND .cursorrules (legacy fallback for chat agent) |
 | Copilot | .github/copilot-instructions.md, .github/instructions/*.instructions.md |
-| OpenCode | AGENTS.md, app/*/AGENTS.md |
+| OpenCode | AGENTS.md, app/models/AGENTS.md, app/controllers/AGENTS.md |
 | Codex | Shares AGENTS.md and OpenCode rules |
 
 ### How do I regenerate context files?
@@ -175,7 +176,7 @@ Introspection results are cached with TTL (default: 60s) and fingerprint invalid
 
 ### Does this affect my app's performance?
 
-No. The gem only runs in development. Tools execute on demand (not continuously). The MCP server is a separate process (stdio) or a development-only endpoint (HTTP).
+No, as long as the gem sits in the Gemfile's `:development` group, where `bundle add rails-ai-context --group development` puts it: Bundler then never loads it in production. The gem itself does not check the environment, apart from `rails_query` refusing to run in production by default. Tools execute on demand (not continuously). The MCP server is a separate process (stdio), or an HTTP endpoint that exists only when you mount it or set `auto_mount`.
 
 ### How does live reload work?
 
@@ -187,7 +188,7 @@ The `listen` gem watches `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, 
 
 ### Can tools modify my database?
 
-No. The query tool uses `SET TRANSACTION READ ONLY` + rollback. Even if SQL validation were bypassed, the database layer prevents writes.
+No. The query tool uses `SET TRANSACTION READ ONLY` + rollback on PostgreSQL and MySQL, and a read-only connection on SQLite. Even if SQL validation were bypassed, the database layer prevents writes.
 
 ### Can tools read my .env or credentials?
 

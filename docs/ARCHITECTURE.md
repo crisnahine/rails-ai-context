@@ -93,7 +93,7 @@ flowchart LR
     F --> G[Cache Result]
     G --> D
     D --> H[Hydrate\nSchema Hints]
-    H --> I[Truncate\nmax_chars]
+    H --> I[Truncate\nmax_tool_response_chars]
     I --> J[MCP::Tool::Response]
 ```
 
@@ -132,10 +132,10 @@ Two more answer a question a tool asks:
 
 **Prism AST parsing** replaced all regex-based Ruby source parsing in v5.2.0.
 
-- **AstCache** - Thread-safe parse cache (`Concurrent::Map`), keyed by path + SHA256 + mtime; a stat match answers without a read for a file already two seconds older than the read that recorded it
+- **AstCache** - Thread-safe parse cache (`Concurrent::Map`), keyed by the SHA256 of the file's content; a stat match answers without a read for a file already two seconds older than the read that recorded it
 - **SourceIntrospector** - Single-pass Prism Dispatcher walks the AST once, feeding every registered listener simultaneously
-- **Listeners** - Associations, Validations, Scopes, Enums, Callbacks, Macros and Methods are the default map for model analysis; the rest are used through targeted walks over schema dumps, migrations, Gemfiles, rake tasks and initializers, and `MethodCallListener` reports a named call with its arguments and options wherever one is asked for
-- **Confidence** - Every result carries `[VERIFIED]` (static literals) or `[INFERRED]` (dynamic expressions), and a record in a static-tier entry is capped at `[STATIC]`, since no record can claim more than the tier that carries it
+- **Listeners** - Associations, Validations, Scopes, Enums, Callbacks, Macros, Methods and Mixins are the default map for model analysis; the rest are used through targeted walks over schema dumps, migrations, Gemfiles, rake tasks and initializers, and `MethodCallListener` reports a named call with its arguments and options wherever one is asked for
+- **Confidence** - A listener that records one tags each record `[VERIFIED]` (static literals) or `[INFERRED]` (dynamic expressions), and a record in a static-tier entry is capped at `[STATIC]`, since no record can claim more than the tier that carries it
 
 ### Tool Registry (`lib/rails_ai_context/tools/base_tool.rb`)
 
@@ -196,7 +196,7 @@ Result: controller and view tools automatically include relevant schema informat
 | `CopilotSerializer` | `.github/copilot-instructions.md` |
 | `CopilotInstructionsSerializer` | `.github/instructions/*.instructions.md` |
 | `OpencodeSerializer` | `AGENTS.md` (root) |
-| `OpencodeRulesSerializer` | `app/*/AGENTS.md` |
+| `OpencodeRulesSerializer` | `app/models/AGENTS.md`, `app/controllers/AGENTS.md` |
 | `JsonSerializer` | `.ai-context.json` |
 | `MarkdownSerializer` | Base formatting |
 | `ContextFileSerializer` | Atomic file writes with section markers |
@@ -207,6 +207,7 @@ Result: controller and view tools automatically include relevant schema informat
 | `SectionFacts` | The facts every surface states about an app - auth, assets, associations, the filter chain, an unread entry's row, the static-tier notice - each rendered in one place |
 | `SectionMarkerWriter` | Writes a managed section into a file the user also owns |
 | `ContextModeDispatch` | Picks full or compact rendering for a run |
+| `Base` | Holds the context hash a serializer renders |
 
 ### CLI (`exe/rails-ai-context`, `lib/rails_ai_context/cli/`)
 
@@ -219,7 +220,7 @@ Thor-based CLI that works standalone (no Gemfile entry):
 
 ### Path safety (`lib/rails_ai_context/safe_path.rb`, `lib/rails_ai_context/view_file.rb`)
 
-- **SafePath** - Resolves a caller-supplied path once, in a fixed refusal order: traversal, sensitive name, realpath, containment, sensitive realpath, file, size. `safe_glob` is the globbed-path form
+- **SafePath** - Resolves a caller-supplied path once, in a fixed refusal order: traversal, sensitive name, realpath, containment, sensitive realpath, file, size. `BaseTool.safe_glob` is the globbed-path form, checking realpath, containment and the sensitive realpath on each path a pattern yields
 - **ViewFile** - Which file a view name means, and whether the app owns it, so no tool builds a template path itself
 
 ### Caching
@@ -237,7 +238,7 @@ Four cache layers:
 
 SHA256-based change detection:
 
-- Watches: `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `spec/`, Gemfile.lock, `config.ru`, the Rakefile
+- Watches: `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `spec/`, the Gemfile and Gemfile.lock (or `gems.rb` and `gems.locked`), `package.json`, `tsconfig.json`, `config.ru`, the Rakefile
 - Computes a composite fingerprint from all watched files
 - Used by introspection cache and live reload to detect actual changes
 
@@ -245,9 +246,9 @@ SHA256-based change detection:
 
 1. **Official MCP SDK** - Not a custom protocol. Uses `mcp` gem's `MCP::Tool`, `MCP::Server`, transports.
 2. **Read-only tools** - All 45 tools annotated as non-destructive. Defense-in-depth for query tool.
-3. **Graceful degradation** - Works without database (parses schema.rb as text), without Brakeman, without ripgrep, without listen gem.
-4. **Zeitwerk autoloading** - Files loaded on-demand. No `require_relative` in the gem.
-5. **Diff-aware generation** - Context file regeneration skips unchanged files using fingerprinting.
+3. **Graceful degradation** - Works without database (parses `schema.rb` or `structure.sql`, or replays the migrations), without Brakeman, without ripgrep, without listen gem.
+4. **Zeitwerk autoloading** - Files loaded on-demand. `require_relative` is kept for the few files that load before or outside the loader.
+5. **Diff-aware generation** - Context file regeneration skips a file whose content is unchanged, the timestamp line aside.
 6. **Section markers** - Root file content wrapped in `<!-- BEGIN/END rails-ai-context -->` to preserve user-added content.
 
 ## Dependencies

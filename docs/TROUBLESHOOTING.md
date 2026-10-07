@@ -40,14 +40,14 @@ The gem is likely in a `:development` group but you're running in another enviro
 
 ```ruby
 # config/initializers/rails_ai_context.rb
-if defined?(RailsAiContext)
+if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
   RailsAiContext.configure do |config|
     # ...
   end
 end
 ```
 
-The `if defined?` guard prevents crashes when the gem isn't loaded.
+The guard prevents crashes when the gem isn't loaded. `rails ai:doctor` warns about a guard that checks `defined?(RailsAiContext)` alone, since the constant can exist where `configure` does not.
 
 ### "Permission denied" during install
 
@@ -172,7 +172,7 @@ config.generate_root_files = false
 
 ## Query tool issues
 
-### "Query tool disabled in production"
+### "rails_query is disabled in production"
 
 By design. Override if needed:
 
@@ -180,20 +180,21 @@ By design. Override if needed:
 config.allow_query_in_production = true
 ```
 
-### "Query blocked: potentially unsafe SQL"
+### "Blocked: contains INSERT" and other "Blocked:" messages
 
-The 4-layer SQL validator blocks write operations and injection patterns. Ensure you're only running SELECT queries.
+The 4-layer SQL validator blocks write operations and injection patterns, and the message names what it hit. Ensure you're only running SELECT queries.
 
 Common false positives:
-- Hash characters in strings → write the hash outside a comment position
+- A blocked keyword inside a string (`WHERE note = 'please insert coin'`) → the validator matches words, not SQL structure, so the query is refused
+- Hash characters → a `#` starts a comment on MySQL only, and never inside a quoted string
 - JSONB operators (`#>>`) → preserved correctly since v5.6.0
 
 ### "Column values show [FILTERED]"
 
-Columns matching sensitive patterns are redacted. Configure:
+Columns whose names look sensitive are redacted, and a query that names one is rejected with "Blocked: query references sensitive column". Shortening `config.query_redacted_columns` does not lift either, because a built-in list applies as well. Exempt a column of your own by name:
 
 ```ruby
-config.query_redacted_columns = %w[password_digest encrypted_password]
+config.query_allowed_columns = %w[secret]
 ```
 
 ---
@@ -203,11 +204,11 @@ config.query_redacted_columns = %w[password_digest encrypted_password]
 ### "Search returns no results"
 
 1. Check the case: the search is case-sensitive on both backends, as ripgrep is by default
-2. Check excluded paths: `config.excluded_paths` excludes `node_modules`, `tmp`, `log`, `doc` and `docs` directories at any depth
+2. Check excluded paths: `config.excluded_paths` excludes `node_modules`, `tmp`, `log`, `vendor`, `.git`, `doc` and `docs` directories at any depth
 3. Check `config.search_extensions`: when set, it narrows the Ruby fallback to those extensions
 4. Check sensitive patterns: some files are blocked by design
 
-### "ripgrep not found" warning
+### "ripgrep not installed" warning
 
 Install ripgrep for faster search:
 
@@ -245,7 +246,7 @@ The file is read from the app root, once, at boot, and an initializer does not r
 
 ## Security scan issues
 
-### "Brakeman not installed"
+### "Brakeman is not installed"
 
 The `rails_security_scan` tool requires Brakeman:
 

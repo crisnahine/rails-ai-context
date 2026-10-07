@@ -84,20 +84,20 @@ end
 
 | Introspector | Key | What it extracts |
 |:-------------|:----|:-----------------|
-| SchemaIntrospector | `:schema` | Database tables, columns, types, indexes, defaults, encrypted hints |
+| SchemaIntrospector | `:schema` | Database tables, columns, types, indexes, defaults, check constraints, enum types, extensions |
 | ModelIntrospector | `:models` | Associations, validations, scopes, enums, concerns (AST-based). Both tiers merge what the included concerns declare, tagged `from_concern:`; a concern whose file could not be read is listed in `concerns_unread`, a base class whose file could not be read in `bases_unread`, and the number of concerns `excluded_concerns` hid in `concerns_hidden` |
 | RouteIntrospector | `:routes` | Routes with helpers, HTTP methods, constraints |
-| ControllerIntrospector | `:controllers` | Actions, filters, strong params, render paths |
+| ControllerIntrospector | `:controllers` | Actions, filters, strong params, concerns, `rescue_from` handlers, rate limits |
 | ViewIntrospector | `:views` | View files, layouts, partials |
-| ViewTemplateIntrospector | `:view_templates` | Template content with ivars, Turbo frames, Stimulus refs |
+| ViewTemplateIntrospector | `:view_templates` | Each template with its line count, ivars, rendered partials and Stimulus refs; each partial with its line count, model fields and helper calls |
 
 ### Models & Data
 
 | Introspector | Key | What it extracts |
 |:-------------|:----|:-----------------|
-| MigrationIntrospector | `:migrations` | Migration files, versions, reversibility. `recent` and `pending` entries are `{ version:, name: }`, and the name is the migration class (`CreatePosts`) in both tiers |
+| MigrationIntrospector | `:migrations` | Migration files, versions, the schema actions each one takes. `recent` and `pending` entries are `{ version:, name: }`, and the name is the migration class (`CreatePosts`) in both tiers |
 | SeedsIntrospector | `:seeds` | Seed file analysis |
-| DatabaseStatsIntrospector | `:database_stats` | Table sizes, row counts, index stats |
+| DatabaseStatsIntrospector | `:database_stats` | Approximate row counts per table, plus dead rows on PostgreSQL |
 | MultiDatabaseIntrospector | `:multi_database` | Multi-database configuration |
 
 ### Frontend
@@ -114,14 +114,14 @@ end
 
 | Introspector | Key | What it extracts |
 |:-------------|:----|:-----------------|
-| ConfigIntrospector | `:config` | Database, cache, queue, Action Cable config |
+| ConfigIntrospector | `:config` | Cache store, session store, time zone, queue adapter, mailer settings, middleware stack, initializers, `Current` attributes, error monitoring |
 | GemIntrospector | `:gems` | Notable gems with versions and categories |
-| ConventionIntrospector | `:conventions` | Auth patterns, flash messages, test patterns |
+| ConventionIntrospector | `:conventions` | Architecture markers (service objects, Hotwire, GraphQL and others), model patterns (STI, soft delete, state machines and others), directory structure, config files |
 | I18nIntrospector | `:i18n` | Locale files, translation keys |
 | MiddlewareIntrospector | `:middleware` | Rack middleware stack. The static tier declares an alternate source rather than an empty stack: without a booted app it answers only the file facts it can read. `config.ru`'s top-level `use` and `map` calls (`rackup`) are read on both tiers with `ConditionalMacroListener`, each with the `if` it sits under; a `map` whose block runs the app itself is a path prefix, so the `use` calls inside it are listed instead of the map |
 | EngineIntrospector | `:engines` | Mounted engines |
 | EnvConfigIntrospector | `:env_config` | Per-environment config files: notable toggles (`force_ssl`, `eager_load`, caching, queue adapter), assigned config keys, plus the keys `config/application.rb` sets and each `config_for` file's keys |
-| DevopsIntrospector | `:devops` | Dockerfile, CI config, deployment |
+| DevOpsIntrospector | `:devops` | Puma config, Procfile, health check, Dockerfile, deployment tool |
 
 ### Jobs & Services
 
@@ -159,7 +159,7 @@ These introspectors map directly onto the internal RAILS_NERVOUS_SYSTEM checklis
 | Introspector | Key | Nervous-system § | What it extracts |
 |:-------------|:----|:---|:-----------------|
 | InitializerIntrospector | `:initializers` | §2 | `Rails.application.initializers` graph: name, owner, `before:`/`after:` edges, block `source_location`, per-file `config/initializers/*.rb` summary |
-| AutoloadIntrospector | `:autoload` | §3 | Zeitwerk presence, autoloaders (`:main` / `:once`) with collapsed + ignored dirs, `autoload_paths`, `eager_load_paths`, the root directories each loader holds (other engines' and `push_dir` roots, with the namespace they load under), custom inflections (`acronym`, `plural`, `singular`, `irregular`) |
+| AutoloadIntrospector | `:autoload` | §3 | Zeitwerk presence, autoloaders (`:main` / `:once`) with collapsed + ignored dirs, `autoload_paths`, `eager_load_paths`, the root directories each loader holds (other engines' and `push_dir` roots, with the namespace they load under), custom inflections (`acronym`, `plural`, `singular`, `irregular`, `uncountable`, `human`) |
 | ConnectionPoolIntrospector | `:connection_pool` | §10 | Per-database adapter config: pool size, `checkout_timeout`, `reaping_frequency`, `prepared_statements`, `advisory_locks`, replica flag, connection-handler roles, automatic shard selector detection |
 | ActiveSupportIntrospector | `:active_support` | §17 | Concerns in `app/**/concerns/` (ActiveSupport::Concern flags, `included do`/`class_methods do` blocks), deprecators registry, MessageEncryptor/Verifier usage, notification subscriptions read from source (`subscribe`, `monotonic_subscribe`, `attach_to`), TaggedLogging config, common on-load hooks, cache store options |
 | CredentialsIntrospector | `:credentials` | §30 | Default + per-env encrypted files, master-key source (`env:RAILS_MASTER_KEY` vs `file:config/master.key` vs missing), `require_master_key` flag, arbitrary encrypted configs (`config/*.yml.enc`), top-level key **names only** (never values) |
@@ -183,9 +183,9 @@ It runs a single-pass Dispatcher that walks the AST once and feeds events to all
 | ValidationsListener | `validates`, `validates_*_of`, custom `validate :method`, under the options of an enclosing `with_options` block |
 | ScopesListener | `scope :name, -> { ... }`, `lambda { ... }` and the block form |
 | EnumsListener | Rails 7+ and legacy enum syntax, prefix/suffix options |
-| CallbacksListener | All AR callback types including `around_*`, `after_touch`, `after_initialize` and `after_find`; `after_commit` with `on:` resolution; a callback object by its constant, a block as `[inline_block]`; `if:`/`unless:` kept as the source wrote them, and the options of an enclosing `with_options` block |
+| CallbacksListener | All AR callback types including `around_*`, `after_touch`, `after_initialize` and `after_find`; `after_commit` with `on:` resolution; a callback object as the source wrote it (`Normalizer`, `Normalizer.new`), a block as `[inline_block]`; `if:`/`unless:` kept as the source wrote them, and the options of an enclosing `with_options` block |
 | MacrosListener | (each attribute macro and `has_secure_password` with its keyword options as written, under `written`) `encrypts`, `normalizes`, `delegate`, `has_secure_password`, `serialize`, `store`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `generates_token_for`, `attribute`, `alias_attribute`, `store_accessor`, `self.ignored_columns`, `has_secure_token`, `accepts_nested_attributes_for`, `attr_readonly`, `query_constraints`, `connects_to` as written (a child carries its base's, with the base's name under `declared_in`), the class settings `self.inheritance_column`/`store_full_sti_class`/`strict_loading_by_default`/`implicit_order_column`/`locking_column =` as written, an `aasm` block's states, initial state, events and transitions, and model gems' class macros (`GEM_MACROS`: `has_paper_trail`, `friendly_id`, `mount_uploader`, `monetize`, `pg_search_scope`, `acts_as_list` and others) as written, without their block |
-| MethodsListener | `def`/`def self.`, visibility tracking, parameter extraction, `class << self`, the methods `delegate` and Forwardable's `def_delegators`/`def_delegator` define (public unless `private: true`, and with no `end_location`, since a delegation has no body), and the methods `alias`, `alias_method`, `attr_*`, `define_method` with a literal name, `class_attribute` and `cattr_*`/`mattr_*` define (an alias keeps its original's visibility and parameters; Active Support's accessors are public on the class and, unless an option turns them off, on instances); each `def` carries `offset`/`end_offset`, which `SourceIntrospector.outside_defs` pairs against a call's `offset` to tell a call on the same line as a def from one inside it; a `Struct.new`/`Class.new`/`Module.new`/`Data.define` block assigned to a constant is that constant's body, and a `def self.x` in `included do` is marked `class_methods_block` like one in `class_methods do`; `include_initialize: true` adds the constructor a caller reports on its own |
+| MethodsListener | `def`/`def self.`, visibility tracking, parameter extraction, `class << self`, the methods `delegate` and Forwardable's `def_delegators`/`def_delegator` define (public unless `private: true`, and with no `end_location`, since a delegation has no body), and the methods `alias`, `alias_method`, `attr_*`, `define_method` with a literal name, `class_attribute` and `cattr_*`/`mattr_*` define (an alias keeps its original's visibility and parameters; Active Support's accessors are public on the class and, unless an option turns them off, on instances); each `def` carries `offset`/`end_offset`, which `SourceIntrospector.outside_defs` pairs against a call's `offset` to tell a call on the same line as a def from one inside it; a `Struct.new`/`Class.new`/`Module.new`/`Data.define` block assigned to a constant is that constant's body, and a `def self.x` in `included do` is marked `class_methods_block` like a `def x` in `class_methods do`; `include_initialize: true` adds the constructor a caller reports on its own |
 | MixinsListener | `include`, `prepend`, `extend`, `singleton_class.include` and `singleton_class.prepend` (`singleton_class.extend` is not read), flagging the ones that reach the ancestor chain, as reflection reports them. GitLab's `prepend_mod_with("Note")`, `include_mod_with`, `extend_mod_with` and their `_mod` forms record `EE::Note` and `JH::Note` flagged `edition`; `ConcernMembership.owned_by` keeps one only where the app has its file, and credits `Note.prepend X` to Note |
 
 ### The targeted-walk listeners
@@ -200,7 +200,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 | ConstructorMacroListener | Class-body macros that define a constructor: T::Struct `const`/`prop`, Dry::Struct `attribute`/`attribute?`, dry-initializer `param`/`option` (with `extend` recorded so a consumer can check for `Dry::Initializer`), and the attr_extras initializers, `method_object` and `static_facade`. Each record adds `owner`, the one-line `source`, and `params` as `[kind, name, default]` with lambda defaults read as the value they return. Used by `rails_get_service_pattern`, which keeps a record only when the class is that library's |
 | GrapeApiListener | A Grape API class body: each class with its superclass, `version` (with `using:`) and `prefix`, each verb endpoint with the namespaces around it (`namespace`, `resource(s)`, `group`, `segment`, `route_param` as `:id`) and the `requires`/`optional` names of the `params` block before it, and each `mount`. Calls inside an endpoint body are skipped. Used by `GrapeEndpoints`, which decides which classes reach `Grape::API` and builds each path the way Grape does, for `rails_get_routes` |
 | ChainedCallListener | Calls on a receiver: `ChainedCallListener.new(:includes)`, or `receiver: :inflect` to pin the receiver. Reports the receiver name |
-| ConfigAssignmentListener | `config.key = value` and `config.a.b = value` in initializers and `config/environments/*.rb`, plus bare `config.jwt do ... end` section references and settings written without `=` (`<<`, a call with arguments, `+=`/`||=`/`&&=`, a block), tagged `write:`. An assignment whose value is a `config_for` call carries `config_for:` (the YAML file it reads and its `env:`). An assignment whose value is a string or symbol written as one carries `literal: true`. An assignment whose value is not redacted carries the same `arguments:`, `computed:` and `constants:` MethodCallListener reports for the value as one argument. Takes a root name (`:config` by default, e.g. `:DatabaseCleaner`); the root `on_load(:active_record)` reads `self.x =` and `base.x =` for the block's first param inside that `ActiveSupport.on_load` block (not inside a nested class, def or `Foo.class_eval`; a `class_eval` on that self, that param or a root constant keeps the root), and a root named `Receiver.method` (`Apartment.configure`) binds that block's first param |
+| ConfigAssignmentListener | `config.key = value` and `config.a.b = value` in initializers and `config/environments/*.rb`, plus bare `config.jwt do ... end` section references and settings written without `=` (`<<`, a call with arguments, `+=`/`||=`/`&&=`, a block), tagged `write:`. An assignment whose value is a `config_for` call carries `config_for:` (the YAML file it reads and its `env:`). An assignment whose value is a string or symbol written as one carries `literal: true`. An assignment whose value is not redacted carries the same `arguments:`, `computed:` and `constants:` MethodCallListener reports for the value as one argument. Takes a root name (`:config` by default, e.g. `:DatabaseCleaner`); the root `on_load(:active_record)` reads `self.x =` and `base.x =` for the block's first param inside that `ActiveSupport.on_load` block (not inside a nested class or def; inside `Foo.class_eval` `self.x =` is not read while `base.x =` still is; a `class_eval` on that self, that param or a root constant keeps the root), and a root named `Receiver.method` (`Apartment.configure`) binds that block's first param |
 | ClassDefinitionListener | Class definitions with their superclass and the nesting a bare superclass is read in |
 | NestedConstantsListener | The offset ranges of the modules and classes a class body nests, so a filter declared inside one is not read as the outer class's own. Used by `ControllerFilters` |
 | ComponentStructureListener | ViewComponent and Phlex structure: `renders_one`/`renders_many`, slot methods, hash/array constant tables, `case @ivar` variant branching, `CONST[@ivar]` indexing |
@@ -210,8 +210,8 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 | AutoloadIgnoreListener | The lib subdirectories `autoload_lib(ignore:)` and `autoload_lib_once(ignore:)` keep out of autoloading, as `lib/<name>`. Literal strings and symbols only |
 | PreviewPathsListener | ViewComponent preview directories the config sets: `view_component.previews.paths`, `preview_paths`, `preview_path`, in the same literal forms as AutoloadPathsListener; with `framework: :action_mailer`, the mailer preview directories `action_mailer.preview_paths` and `preview_path` set |
 | I18nLoadPathListener | Locale files `config.i18n.load_path` or `I18n.load_path` adds: `+=`, `<<`, `push`, `append`, `concat`, with `Dir[]`/`Dir.glob` around the same literal forms as AutoloadPathsListener |
-| FixturePathsListener | Fixture directories a test helper sets: `fixture_paths =`/`<<`/`+=`/`push` and the older `fixture_path =`, on `self`, `config`, a constant or no receiver, in the same literal forms as AutoloadPathsListener plus `File.expand_path("x", __dir__)`, `File.expand_path("x", __FILE__)` and `File.join(__dir__, "x")` when given the helper's file; a write whose path it cannot read records `:unread` |
-| DefinitionFilePathsListener | Where a test helper points factory_bot: `FactoryBot.definition_file_paths =` (replaces the defaults) and `<<`/`+=`/`push`/`concat` (adds), each write as `{ replace:, paths: }` in the same forms as FixturePathsListener (`unread: true` and no paths when it cannot read them), and each `FactoryBot.find_definitions`/`FactoryBot.reload` as `{ load: }`, in source order; `::FactoryBot` counts |
+| FixturePathsListener | Fixture directories a test helper sets: `fixture_paths =`/`<<`/`+=`/`push` and the older `fixture_path =`, on `self`, `config` or a constant (`<<`/`push` with no receiver too), in the same literal forms as AutoloadPathsListener plus `File.expand_path("x", __dir__)`, `File.expand_path("x", __FILE__)` and `File.join(__dir__, "x")` when given the helper's file; a write whose path it cannot read records `:unread` |
+| DefinitionFilePathsListener | Where a test helper points factory_bot: `FactoryBot.definition_file_paths =` (replaces the defaults) and `<<`/`+=`/`push`/`concat` (adds), each write as `{ replace:, paths: }` in the same forms as FixturePathsListener (`unread: true` when it cannot read every path, with `paths` holding those it could), and each `FactoryBot.find_definitions`/`FactoryBot.reload` as `{ load: }`, in source order; `::FactoryBot` counts |
 | ViewPathsListener | View roots `config/application.rb` adds to `config.paths["app/views"]`: `unshift` puts one before app/views, `<<`/`push`/`concat` after it, in the same literal forms as AutoloadPathsListener; a write whose path it cannot read is left out |
 | NamespacedRootsListener | Roots `config/application.rb` or an initializer hands Zeitwerk under a namespace: `push_dir(path, namespace: Const)`, as phlex:install writes, in the same literal forms as AutoloadPathsListener; a write whose path it cannot read is left out |
 | SchemaDslListener | `schema.rb`: `create_table`, `t.string`, `t.column`, `t.index`, `add_foreign_key`, `create_enum`, `create_schema`, `create_view`, `create_virtual_table`, the `ActiveRecord::Schema[x.y]` version stamp (a nil one for the unstamped `Schema.define` of Rails before 7.0), and the comment the dumper writes for a table it could not describe. Names drop `public.` unless `raw_names:` is set, which SchemaReader uses to name them against the search path |
@@ -288,6 +288,14 @@ same wherever it is asked. Those live as their own modules under
 | `AdminResources` | The models an admin gem exposes (ActiveAdmin, Trestle, Administrate, Avo, Madmin), from the folder each gem's generator writes to, with ActiveAdmin's `permit_params`. `rails_get_conventions` and `rails_analyze_feature` both ask it |
 | `SchemaDumpPath` | The primary database's dump file as `DatabaseTasks.schema_dump_path` names it: `database.yml`'s `schema_dump` in the configured `schema_format`, then each format's default file, and the secondary databases' dumps. Every schema reader, the doctor and the pending-migration check ask it |
 | `ApartmentConfig` | The models an Apartment initializer keeps in the shared schema (`excluded_models`), or the source of a list the file computes. The model introspector asks it to say which models get one table per tenant |
+| `SchemaReader` | What a `schema.rb` dump declares: tables, columns, defaults, indexes, foreign keys, enum types and check constraints. `SchemaReader.for(root)` answers from whichever source the app committed: `schema.rb`, `structure.sql`, or a migration replay |
+| `StructureSqlReader` | A `structure.sql` dump (PostgreSQL, MySQL or SQLite) as the same table shape the other static schema sources produce |
+| `MigrationReplay` | The tables of an app with no schema dump, replayed from its migrations in the dump readers' shape |
+| `SchemaConventions` | The Rails schema conventions every static source must agree on: the implicit `id` key and its type per adapter, what a reference declares, what `t.timestamps` expands to |
+| `PgNaming` | How Rails' PostgreSQL connection and `schema.rb` dumper name extensions, enum types and relations, by Rails version, so the static tier names them as the booted app does |
+| `SqliteVirtualTables` | SQLite's virtual tables and their shadow tables, read from `sqlite_master`. The schema and database stats introspectors ask it |
+| `RenderedRecord` | The records a bare `render @post.comments` hands to Rails, and the partial Rails renders for them. `rails_get_partial_interface` and the view template introspector ask it |
+| `NodeSource` | A node's source with the bodies of the heredocs it opens, which Prism's `slice` leaves out |
 
 ### Confidence tagging
 
@@ -305,7 +313,7 @@ has_many :posts, class_name: name  → [INFERRED]  (name is a variable)
 
 Thread-safe parse cache using `Concurrent::Map`:
 
-- Keyed by: file path + SHA256 content hash + mtime, so a changed file is parsed again
+- Keyed by: the SHA256 hash of the file's content, so a changed file is parsed again
 - A file whose stat (mtime, size, inode) matches the last read answers without reading or hashing it, but only once that file was already two seconds older than the read, so a same-size rewrite within one mtime tick is still read
 - Bounded at 500 parses; a recorded stat is dropped with its parse
 - Shared by all AST-based introspectors
@@ -325,7 +333,7 @@ Introspection results are cached at three levels:
 2. **AST cache** - Per-file parse results, invalidated by file content change (SHA256), with a stat shortcut for a file older than the read
 3. **Run cache** - File lists, stats and directory answers for one introspection run, dropped when it ends
 
-The **Fingerprinter** computes a composite SHA256 from all watched directories (`app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `spec/`, `Gemfile.lock`, `config.ru`, the Rakefile). When the fingerprint changes, the introspection cache is invalidated even if TTL hasn't expired.
+The **Fingerprinter** computes a composite SHA256 from all watched directories (`app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `spec/`, the Gemfile and `Gemfile.lock` (or `gems.rb` and `gems.locked`), `package.json`, `tsconfig.json`, `config.ru`, the Rakefile). When the fingerprint changes, the introspection cache is invalidated even if TTL hasn't expired.
 
 **Live Reload** watches these directories and calls `reset_all_caches!` when changes are detected, then notifies connected MCP clients via `notify_resources_list_changed`.
 

@@ -19,6 +19,8 @@ Custom tools are subclasses of `MCP::Tool` that you register in your configurati
 
 ```ruby
 # app/mcp_tools/rails_get_business_metrics.rb
+require "mcp" # the gem loads the MCP SDK lazily, so a file read first needs it
+
 class RailsGetBusinessMetrics < MCP::Tool
   tool_name "rails_get_business_metrics"
   description "Returns key business metrics for the current environment"
@@ -33,7 +35,7 @@ class RailsGetBusinessMetrics < MCP::Tool
     }
   )
 
-  def call(period: "week")
+  def self.call(period: "week", server_context: nil)
     # Your logic here - full access to Rails models, services, etc.
     stats = {
       users: User.where("created_at > ?", period_start(period)).count,
@@ -46,9 +48,7 @@ class RailsGetBusinessMetrics < MCP::Tool
     ])
   end
 
-  private
-
-  def period_start(period)
+  def self.period_start(period)
     case period
     when "day" then 1.day.ago
     when "week" then 1.week.ago
@@ -56,7 +56,7 @@ class RailsGetBusinessMetrics < MCP::Tool
     end
   end
 
-  def format_stats(stats)
+  def self.format_stats(stats)
     <<~TEXT
       ## Business Metrics
       - New users: #{stats[:users]}
@@ -73,7 +73,7 @@ Add your tool classes to the configuration:
 
 ```ruby
 # config/initializers/rails_ai_context.rb
-if defined?(RailsAiContext)
+if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
   RailsAiContext.configure do |config|
     config.custom_tools = ["RailsGetBusinessMetrics"]
   end
@@ -98,7 +98,7 @@ class RailsGetDeployStatus < MCP::Tool
   tool_name "rails_get_deploy_status"
   description "Returns current deployment status"
 
-  def call
+  def self.call(server_context: nil)
     # Use SafeFile for safe reading
     version = RailsAiContext::SafeFile.read(Rails.root.join("REVISION"))
     deployed_at = File.mtime(Rails.root.join("tmp/restart.txt")) rescue nil
@@ -215,7 +215,7 @@ end
 - Custom tools have access to the full Rails environment - ActiveRecord, services, mailers, etc.
 - Keep tools read-only when possible. MCP tools annotated as non-destructive build more trust with AI clients.
 - Return `MCP::Tool::Response` objects with `type: "text"` content blocks.
-- Tool responses are automatically truncated at `config.max_tool_response_chars` (default: 200,000).
+- A response you build with `MCP::Tool::Response.new` is sent as written. The `config.max_tool_response_chars` cap (default: 200,000) is applied by the built-in tools' `text_response`, so keep a custom tool's output short yourself.
 
 ---
 

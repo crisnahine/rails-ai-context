@@ -43,7 +43,7 @@ Tool name resolution is flexible - all of these work:
 | `get_schema` | `rails_get_schema` |
 | `rails_get_schema` | `rails_get_schema` |
 
-Individual lookup tools accept a **`detail`** parameter: `summary` (compact), `standard` (default), or `full` (everything). Start with summary, drill down as needed. Composite tools (`rails_get_context`, `rails_analyze_feature`) do not accept `detail`.
+Most lookup tools accept a **`detail`** parameter: `summary` (compact), `standard` (default), or `full` (everything). Start with summary, drill down as needed. Composite tools (`rails_get_context`, `rails_analyze_feature`) do not accept `detail`.
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
 
@@ -87,7 +87,7 @@ Search your codebase with regex, ripgrep acceleration, and sensitive file blocki
 
 The header counts matches, not emitted lines, so below the cap it does not move with `context_lines`. When the search hits `max_search_results` (a cap on emitted lines) the header says `first N lines scanned` and marks the count `N+`: it is then the matches among the lines that were scanned, a floor rather than the total, so it falls as `context_lines` grows. `offset` and `limit` count lines, so a search with context returns more lines than matches. A limit smaller than one match's context block would hold only context, so the page starts at the next match instead and says so.
 
-> **Trace mode** returns definition + source code + every caller grouped by type + tests - replaces 4-5 sequential file reads.
+> **Trace mode** returns definition + source code + every caller grouped by file and labelled by type + tests - replaces 4-5 sequential file reads.
 
 Without ripgrep on the PATH, the Ruby fallback returns the rows ripgrep would, context lines and the line cap included, from the files ripgrep would search: no hidden files, no symlinks followed, no binary files (a NUL byte in the first 64 KiB), and ignore files read with ripgrep's precedence, where the file type decides before depth: any `.rgignore`, then any `.ignore`, then any `.gitignore`, then `.git/info/exclude`, then the global excludes file, the deepest file first within a type. `.ignore` and `.rgignore` apply everywhere, including the directories above the app; the git files apply only inside a repository and only as far up as the nearest `.git` (a file for a worktree or submodule), whose `info/exclude` is the only one read. Patterns match case-sensitively.
 
@@ -100,8 +100,8 @@ Method-aware code extraction with surrounding class context. Every line returned
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `file` | string | *required* | File path relative to Rails root |
-| `method_name` | string | - | Extract a specific method |
-| `line` | integer | - | Center extraction around a line number |
+| `near` | string | *required* | What to find in the file: a method name, keyword or string (e.g. `def index`, `validates`, `STATUSES`) |
+| `context_lines` | integer | `5` | Lines of context above and below the match |
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
 
@@ -116,7 +116,6 @@ Full-stack feature analysis: models + controllers + routes + services + admin re
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `feature` | string | *required* | Feature name (e.g., `billing`, `auth`, `subscription`) |
-| `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
 ### `rails_get_context`
 
@@ -124,9 +123,11 @@ Composite context: schema + model + controller + routes + views for a resource. 
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `resource` | string | *required* | Resource name (e.g., `users`, `Post`) |
-| `action` | string | - | Specific controller action |
-| `detail` | enum | `standard` | `summary`, `standard`, `full` |
+| `controller` | string | - | Controller name (e.g., `PostsController`) |
+| `action` | string | - | Specific controller action; requires `controller` |
+| `model` | string | - | Model name (e.g., `Post`) |
+| `feature` | string | - | Feature keyword (e.g., `post`) |
+| `include` | array | - | Extra context to add: `stimulus`, `turbo`, `services`, `jobs`, `conventions`, `helpers`, `env`, `callbacks` |
 
 ### `rails_onboard`
 
@@ -164,15 +165,20 @@ composite unique index; `[in index after x]` marks a column that only trails
 |:----------|:-----|:--------|:------------|
 | `table` | string | - | Specific table (omit for overview) |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
+| `limit` | integer | auto | Max tables when listing: 50 for `summary`, 25 for `standard`, 10 for `full` |
+| `offset` | integer | `0` | Skip this many tables |
+| `format` | enum | `markdown` | `markdown`, `json` |
 
 ### `rails_get_model_details`
 
-AST-parsed model internals. Every result carries `[VERIFIED]` or `[INFERRED]` confidence tag. The method list says how many of the model's methods it is showing.
+AST-parsed model internals. The model heading and each scope carry a confidence tag: `[VERIFIED]` or `[INFERRED]` on a booted app, `[STATIC]` without a boot. The method list says how many of the model's methods it is showing.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `model` | string | - | Model name (e.g., `User`, `Post`) |
+| `model` | string | - | Model name (e.g., `User`, `Post`). Omit to list all models |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
+| `limit` | integer | `50` | Max models when listing |
+| `offset` | integer | `0` | Skip this many models |
 
 Returns: associations, validations, scopes, enums, callbacks, macros, methods, concerns.
 What the included concerns declare is merged in, so the answer does not stop
@@ -181,7 +187,8 @@ Concerns as `[UNAVAILABLE]` rather than dropped.
 
 ### `rails_get_callbacks`
 
-Callbacks grouped by type, in Rails event order, with source code. The list
+Callbacks grouped by type, in Rails event order, with source code at
+`detail:"full"`. The list
 covers concern-declared callbacks too, with the body read from the concern
 file, and the "From Concerns" section says which concern declared each one.
 Within one type the order is the order Rails runs them: base classes first, a
@@ -198,12 +205,12 @@ not read, so the list can miss it or show the definition it replaces.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `model` | string | *required* | Model name |
+| `model` | string | - | Model name. Omit to list every model with its callbacks |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
 ### `rails_get_concern`
 
-Concern methods, source code, and which models include it. A class under
+Concern methods, their source code at `detail:"full"`, and which models include it. A class under
 `app/models/concerns` that subclasses `ActiveModel::Validator` is listed as a
 validator rather than a concern, and its users are the models that name it in
 `validates_with`. The rule reads the class the file is named for, so a concern
@@ -230,8 +237,10 @@ Controller actions with inherited filters, render map, strong params. Includes s
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `controller` | string | - | Controller name (e.g., `UsersController`) |
-| `action` | string | - | Specific action |
+| `action` | string | - | Specific action; requires `controller` |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
+| `limit` | integer | `50` | Max controllers when listing |
+| `offset` | integer | `0` | Skip this many controllers |
 
 ### `rails_get_routes`
 
@@ -248,6 +257,9 @@ the summary counts them.
 |:----------|:-----|:--------|:------------|
 | `controller` | string | - | Filter by controller |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
+| `limit` | integer | auto | Max routes to return; the default depends on `detail` |
+| `offset` | integer | `0` | Skip this many routes |
+| `app_only` | boolean | `true` | Leave out internal Rails routes (Active Storage, Action Mailbox, Conductor) |
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
 
@@ -262,7 +274,7 @@ View templates with instance variables, Turbo frames, Stimulus controllers, part
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `controller` | string | - | Controller name |
-| `action` | string | - | Specific action view |
+| `path` | string | - | Specific view path relative to `app/views` (e.g., `posts/index.html.erb`); returns its content |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
 ### `rails_get_stimulus`
@@ -287,6 +299,8 @@ two or more confirmed neighbours that all drop the directory's segment.
 |:----------|:-----|:--------|:------------|
 | `controller` | string | - | Stimulus controller name |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
+| `limit` | integer | `50` | Max controllers when listing |
+| `offset` | integer | `0` | Skip this many controllers |
 
 ### `rails_get_partial_interface`
 
@@ -304,6 +318,8 @@ Turbo Stream broadcast-to-subscription wiring with mismatch warnings.
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
+| `stream` | string | - | Filter by stream or channel name (e.g., `notifications`) |
+| `controller` | string | - | Filter by controller name (e.g., `messages`) |
 
 ### `rails_get_frontend_stack`
 
@@ -335,8 +351,10 @@ Test scaffolding that matches your project's patterns (fixtures vs factories, RS
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `file` | string | *required* | File to generate tests for |
-| `detail` | enum | `standard` | `summary`, `standard`, `full` |
+| `model` | string | - | Model to generate a model test for (e.g., `User`) |
+| `controller` | string | - | Controller to generate a request test for (e.g., `PostsController`) |
+| `file` | string | - | File to generate tests for, relative to Rails root; the type is detected |
+| `type` | enum | `unit` | `unit`, `request`, `system` |
 
 ### `rails_validate`
 
@@ -353,11 +371,15 @@ Brakeman static analysis: SQL injection, XSS, mass assignment, command injection
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
+| `files` | array | - | File paths to filter results to (omit to scan the whole app) |
+| `confidence` | enum | `weak` | Minimum confidence: `high`, `medium`, `weak` (`weak` shows every warning) |
+| `checks` | array | - | Run only these Brakeman checks, by class name (e.g., `CheckSQL`) |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
-> Requires the `brakeman` gem. When it cannot be loaded, the answer says which
-> case it is: brakeman is nowhere on the machine, or it is installed and the
-> app's bundle does not carry it, which `--no-boot` scans around.
+> Requires the `brakeman` gem. When the app's bundle does not carry it but the
+> machine has it, the scan runs brakeman as its own process from outside the
+> bundle and says so. When no scan can run, the answer says which case it is:
+> brakeman is nowhere on the machine, or it is installed and produced no report.
 
 ### `rails_performance_check`
 
@@ -365,6 +387,8 @@ N+1 query risks, missing indexes, missing counter_cache, eager load candidates.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
+| `model` | string | - | Filter results to one model |
+| `category` | enum | `all` | `n_plus_one`, `counter_cache`, `indexes`, `model_all`, `eager_load`, `all` |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
@@ -385,17 +409,13 @@ API layer: api_only mode, serialization strategy (Jbuilder, serializers), GraphQ
 
 Auth checks, flash messages, create action template, test patterns, and the admin resources ActiveAdmin, Administrate, Avo, Madmin and Trestle register (with ActiveAdmin's permitted params).
 
-| Parameter | Type | Default | Description |
-|:----------|:-----|:--------|:------------|
-| `detail` | enum | `standard` | `summary`, `standard`, `full` |
+*No parameters.*
 
 ### `rails_get_config`
 
 Database config, auth framework, assets, cache, queue, Action Cable. The `use` and `map` calls in `config.ru` are listed apart from the stack, since they run before Rails.
 
-| Parameter | Type | Default | Description |
-|:----------|:-----|:--------|:------------|
-| `detail` | enum | `standard` | `summary`, `standard`, `full` |
+*No parameters.*
 
 ### `rails_get_gems`
 
@@ -405,11 +425,13 @@ found under a load-order prefix too (`config/initializers/3_omniauth.rb`).
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `detail` | enum | `standard` | `summary`, `standard`, `full` |
+| `category` | enum | `all` | `auth`, `jobs`, `frontend`, `api`, `database`, `files`, `testing`, `deploy`, `monitoring`, `admin`, `pagination`, `search`, `forms`, `server`, `notifications`, `validation`, `utilities`, `services`, `payments`, `all` |
+| `offset` | integer | `0` | Skip this many gems |
+| `limit` | integer | `50` | Max gems to return |
 
 ### `rails_get_env`
 
-Environment variables + credentials keys (values are never exposed). Scans `.rb`, `.rake`, ERB views and config YAML under `app`, `config` and `lib`, plus `config.ru`, `db/seeds.rb`, `db/seeds/` and the Ruby scripts in `bin/`; files matching `sensitive_patterns` (`config/database.yml`, credentials, keys) are never read, and the answer says so. The env Kamal's `config/deploy.yml` gives the app container is listed too: secret names only, and clear values, except one holding a URL or a key-like token, or under a secret-named variable, which shows as hidden, and one an ERB tag sets, which says so. So are the setting keys in the config gem's `config/settings.yml` and `config/settings/<env>.yml` when the bundle has the config gem, and the attributes of each `Anyway::Config` class in `config/configs` or `app/configs` with the env name it reads (`PAYMENT_API_KEY`), never their values. A variable whose call sites pass different defaults is labelled as such rather than with one site's default; `detail:"full"` names each site's. A default is redacted by the rule a source literal gets: a credential format under any name, a URL's password, and under a secret-named variable a value that is not clearly something else, so an address, URL or hostname default prints as written.
+Environment variables + credentials keys (values are never exposed). Scans `.rb`, `.rake`, ERB views and config YAML under `app`, `config` and `lib`, plus `config.ru`, `db/seeds.rb`, `db/seeds/` and the Ruby scripts in `bin/`; config YAML matching `sensitive_patterns` (`config/database.yml`) is read only for the ENV names in its ERB tags, credentials and keys are never read, and the answer says so. The env Kamal's `config/deploy.yml` gives the app container is listed too: secret names only, and clear values, except one holding a URL or a key-like token, or under a secret-named variable, which shows as hidden, and one an ERB tag sets, which says so. So are the setting keys in the config gem's `config/settings.yml` and `config/settings/<env>.yml` when the bundle has the config gem, and the attributes of each `Anyway::Config` class in `config/configs` or `app/configs` with the env name it reads (`PAYMENT_API_KEY`), never their values. A variable whose call sites pass different defaults is labelled as such rather than with one site's default; `detail:"full"` names each site's. A default is redacted by the rule a source literal gets: a credential format under any name, a URL's password, and under a secret-named variable a value that is not clearly something else, so an address, URL or hostname default prints as written.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -417,11 +439,14 @@ Environment variables + credentials keys (values are never exposed). Scans `.rb`
 
 ### `rails_get_helper_methods`
 
-Application and framework helpers with view cross-references.
+Application and framework helpers, with view cross-references at `detail:"full"`.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
+| `helper` | string | - | Helper module name (e.g., `ApplicationHelper`). Omit to list all helpers |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
+| `offset` | integer | `0` | Skip this many helpers |
+| `limit` | integer | `50` | Max helpers to return |
 
 ### `rails_get_service_pattern`
 
@@ -438,7 +463,7 @@ own file ceiling left the list partial. A module under
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `service` | string | *required* | Service class name |
+| `service` | string | - | Service class name or filename. Omit to list all services |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
 ### `rails_get_job_pattern`
@@ -481,6 +506,8 @@ ViewComponent/Phlex components: props, slots, previews, sidecar assets, usage ex
 |:----------|:-----|:--------|:------------|
 | `component` | string | - | Specific component name |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
+| `offset` | integer | `0` | Skip this many components |
+| `limit` | integer | `50` | Max components to return |
 
 ### `rails_get_i18n`
 
@@ -555,7 +582,7 @@ only.
 
 ### `rails_dependency_graph`
 
-Model/service dependency graph in Mermaid or text format.
+Model association graph in Mermaid or text format.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -565,7 +592,7 @@ Model/service dependency graph in Mermaid or text format.
 | `show_cycles` | boolean | `false` | Detect and list circular dependencies |
 | `show_sti` | boolean | `false` | Show Single Table Inheritance hierarchies |
 
-Without `model` the graph is capped at 50 nodes, and says so when it cuts.
+The graph is capped at 50 nodes, with or without `model`, and says so when it cuts.
 
 ### `rails_migration_advisor`
 
@@ -573,10 +600,12 @@ Migration code generation with duplicate/nonexistent column warnings, reversibil
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `action` | string | *required* | Migration action (e.g., `add_column`, `create_table`) |
+| `action` | enum | *required* | `add_column`, `remove_column`, `rename_column`, `add_index`, `add_association`, `change_type`, `create_table` |
 | `table` | string | *required* | Table name |
-| `columns` | string | - | Column definitions |
-| `detail` | enum | `standard` | `summary`, `standard`, `full` |
+| `column` | string | - | Column name |
+| `type` | string | - | Column type (e.g., `string`, `integer`, `references`) |
+| `new_name` | string | - | New column name, for `rename_column` only |
+| `options` | string | - | Extra options (e.g., `null: false, default: 0`) |
 
 ### `rails_search_docs`
 
@@ -585,7 +614,9 @@ Bundled topic index with weighted keyword search. Optional on-demand GitHub fetc
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `query` | string | *required* | Search query |
-| `fetch` | boolean | `false` | Fetch from GitHub if not found locally |
+| `source` | enum | `all` | `all`, `guides`, `stimulus`, `turbo`, `hotwire` |
+| `limit` | integer | `5` | Max results to return (1-20) |
+| `fetch` | boolean | `false` | Fetch the full content from GitHub (cached 24h in `tmp/`) |
 
 ### `rails_query`
 
@@ -593,7 +624,7 @@ Safe read-only SQL with 4-layer security: regex validation, `SET TRANSACTION REA
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `sql` | string | *required* | SQL query (SELECT only) |
+| `sql` | string | *required* | SQL query. Only `SELECT`, `WITH`, `SHOW`, `EXPLAIN`, `DESCRIBE` are allowed |
 | `limit` | integer | `100` | Maximum rows to return (hard cap: 1000) |
 | `format` | enum | `table` | `table`, `csv` |
 | `explain` | boolean | `false` | Show query plan instead of results |
@@ -606,20 +637,21 @@ Reverse file tail with level filtering and sensitive data redaction.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `file` | string | `development.log` | Log file name |
-| `lines` | integer | `50` | Number of lines |
-| `level` | enum | - | Filter: `debug`, `info`, `warn`, `error`, `fatal` |
+| `file` | string | current environment's log | Log file name in `log/` (e.g., `production`, `sidekiq`); the `.log` suffix is optional |
+| `lines` | integer | `50` | Number of lines, max 500 |
+| `level` | enum | `all` | Minimum level: `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`, `all` |
 | `search` | string | - | Keep lines matching this term. The match runs on the redacted line, so a redacted value cannot be searched for |
 
 ### `rails_diagnose`
 
-One-call error diagnosis with classification, context, git blame, and log correlation. It does not call a method undefined when the model's method list could be missing one - a concern's, a parent's, or anything past the payload's own cap.
+One-call error diagnosis with classification, context, recent git changes, and log correlation. It does not call a method undefined when the model's method list could be missing one - a concern's, a parent's, or anything past the payload's own cap.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `error` | string | *required* | Error message or class |
 | `file` | string | - | File where error occurred |
 | `line` | integer | - | Line number |
+| `action` | string | - | `controller#action` (e.g., `posts#create`); adds that action's context |
 
 ### `rails_review_changes`
 
@@ -627,8 +659,8 @@ PR/commit review with per-file context and warnings.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `ref` | string | `HEAD` | Git ref to review |
-| `detail` | enum | `standard` | `summary`, `standard`, `full` |
+| `ref` | string | `HEAD` | Git ref to diff against. `HEAD` reviews uncommitted changes |
+| `files` | array | - | Review only these changed files (omit for all) |
 
 ### `rails_runtime_info`
 
@@ -637,14 +669,16 @@ Live database pool stats, table sizes, pending migrations, cache stats, queue de
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
+| `section` | enum | - | One section only: `database`, `cache`, `jobs`, `connections` |
 
 ### `rails_session_context`
 
-Session-aware context tracking across tool calls within a conversation.
+Session-aware context tracking across tool calls within a conversation. Pass `action` or `mark`; a call with neither is an error.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `detail` | enum | `standard` | `summary`, `standard`, `full` |
+| `action` | enum | - | `status` (queried tools with timestamps), `summary` (short recap), `reset` (clear the session) |
+| `mark` | string | - | Record a tool and its params as already queried (e.g., `get_schema:users`) |
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
 
