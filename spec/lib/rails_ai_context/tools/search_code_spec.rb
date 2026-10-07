@@ -409,6 +409,23 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
 
   # A composer must be able to ask whether the trace found a `def` without
   # reading the sentence this tool renders.
+  describe "the route hint on a traced controller caller" do
+    def headings(method)
+      described_class.call(pattern: method, match_type: "trace").content.first[:text].lines.grep(/^### /).join
+    end
+
+    it "names the routes of the actions the calls sit in" do
+      hint = headings("post_params")
+
+      expect(hint).to include("`POST /posts`")
+      expect(hint).not_to include("`GET /posts`")
+    end
+
+    it "gives no route for a call no action holds" do
+      expect(headings("set_post")).to include("app/controllers/posts_controller.rb (Controller)\n")
+    end
+  end
+
   describe "a trace that found no definition" do
     it "marks the answer rather than only saying so in prose" do
       traced = described_class.call(pattern: "zzz_no_such_method_anywhere", match_type: "trace")
@@ -1281,12 +1298,59 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
 
       with_search_app(files) do
         allow(described_class).to receive(:cached_context).and_return({
-          routes: { by_controller: { "posts" => [ { verb: "GET", path: "/posts" } ] } }
+          routes: { by_controller: { "posts" => [
+            { verb: "DELETE", path: "/posts/:id", action: "destroy" },
+            { verb: "GET", path: "/posts", action: "index" }
+          ] } }
         })
 
         text = described_class.call(pattern: "publish_all", match_type: "trace").content.first[:text]
 
         expect(text).to include("`GET /posts`")
+        expect(text).not_to include("DELETE")
+      end
+    end
+
+    def traced_heading(controller_body)
+      described_class.reset_cache!
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+      files = {
+        "app/models/post.rb" => "class Post\n  def publish_all\n    1\n  end\nend\n",
+        "app/controllers/posts_controller.rb" => controller_body
+      }
+
+      with_search_app(files) do
+        allow(described_class).to receive(:cached_context).and_return({
+          routes: { by_controller: { "posts" => [
+            { verb: "GET", path: "/posts", action: "index" },
+            { verb: "DELETE", path: "/posts/:id", action: "destroy" }
+          ] } }
+        })
+
+        return described_class.call(pattern: "publish_all", match_type: "trace").content.first[:text].lines.grep(/^### app\/controllers/).join
+      end
+    end
+
+    it "finds the action under a macro line that has no end" do
+      heading = traced_heading("class PostsController\n  attr_reader :thing\n  delegate :x, to: :thing\n  def index\n    publish_all\n  end\nend\n")
+
+      expect(heading).to include("`GET /posts`")
+    end
+
+    it "finds the action in a file whose module has methods of its own" do
+      heading = traced_heading("module Helper\n  def help\n  end\nend\nclass PostsController\n  def index\n    publish_all\n  end\nend\n")
+
+      expect(heading).to include("`GET /posts`")
+    end
+
+    it "gives no route for a call in a class method, a private method or a nested class" do
+      [
+        "class PostsController\n  def self.index\n    publish_all\n  end\nend\n",
+        "class PostsController\n  private\n\n  def destroy\n    publish_all\n  end\nend\n",
+        "class PostsController\n  class Helper\n    def destroy\n      publish_all\n    end\n  end\n  def show\n  end\nend\n",
+        "class PostsController\n  class Helper\n    def destroy\n      publish_all\n    end\n  end\nend\n"
+      ].each do |body|
+        expect(traced_heading(body)).not_to include("→"), body
       end
     end
   end

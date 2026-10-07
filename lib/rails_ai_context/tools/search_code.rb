@@ -684,8 +684,7 @@ module RailsAiContext
               # below reads, and `match?` sets none.
               controller_match = file.match(%r{app/controllers/(.+)_controller\.rb})
               if category == "Controller" && controller_match
-                route_actions = extract_controller_actions_from_matches(matches)
-                routes = find_routes_for_controller(controller_match[1], route_actions, root, ctx)
+                routes = find_routes_for_controller(controller_match[1], enclosing_actions(file, matches, root), ctx)
                 route_hint = " → #{routes}" if routes
               end
 
@@ -759,24 +758,29 @@ module RailsAiContext
       end
 
       # Extract which action a controller caller is in
-      private_class_method def self.extract_controller_actions_from_matches(matches)
-        actions = []
-        matches.each do |m|
-          # Match standard RESTful action names from the content
-          if (match = m[:content].match(/\b(index|show|new|create|edit|update|destroy)\b/))
-            actions << match[1]
-          end
-        end
-        actions.uniq.first(3)
+      # The actions a controller file's matches sit in: the public instance
+      # methods of the first class it declares. A call from a macro line, a
+      # private method, a class method, a module or a nested class sits in none.
+      private_class_method def self.enclosing_actions(file, matches, root)
+        source = RailsAiContext::SafeFile.read(File.join(root, file)) || ""
+        controller = Introspectors::DeclaredConstant.declared_names(source).first or return []
+        actions = Introspectors::ActionResolver.own_methods_in(source, controller).select { |d|
+          d[:end_location] && d[:scope] == :instance && d[:visibility] == :public
+        }
+        matches.filter_map { |m|
+          actions.find { |d| (d[:location]..d[:end_location]).cover?(m[:line_number]) }&.dig(:name)
+        }.uniq
+      rescue => e
+        RailsAiContext.debug_fail(e, [], label: "enclosing_actions")
       end
 
-      # Find routes for a controller
-      private_class_method def self.find_routes_for_controller(ctrl_path, _actions, _root, ctx)
+      # Routes of the actions the callers sit in, so the hint never names a
+      # route that does not reach the call.
+      private_class_method def self.find_routes_for_controller(ctrl_path, actions, ctx)
         routes = ctx[:routes]
         return nil unless routes
-        ctrl_routes = RouteCoverage.all_by_controller(routes)[ctrl_path]
-        return nil unless ctrl_routes&.any?
-        # Show the first 2 routes as hints
+        ctrl_routes = Array(RouteCoverage.all_by_controller(routes)[ctrl_path]).select { |r| actions.include?(r[:action].to_s) }
+        return nil unless ctrl_routes.any?
         ctrl_routes.first(2).map { |r| "`#{r[:verb]} #{r[:path]}`" }.join(", ")
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "find_routes_for_controller")
