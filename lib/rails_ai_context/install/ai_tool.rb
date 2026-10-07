@@ -13,8 +13,11 @@ module RailsAiContext
     #
     # context_paths lists the root file first, then the split-rule targets. The writers,
     # doctor and cleanup all read this table, so a moved path changes every surface at once.
-    AiTool = Struct.new(:number, :key, :name, :files, :context_paths, :rules_dir, :mcp_config, :legacy_paths,
-                        :owned_dir, keyword_init: true)
+    #
+    # rule_files names what the gem writes inside rules_dir. The directory is shared with
+    # rules the user writes by hand, so cleanup removes these names and nothing else.
+    AiTool = Struct.new(:number, :key, :name, :files, :context_paths, :rules_dir, :rule_files, :mcp_config,
+                        :legacy_paths, :owned_dir, keyword_init: true)
 
     class AiTool
       ALL = [
@@ -23,6 +26,7 @@ module RailsAiContext
           files: "CLAUDE.md + .claude/rules/",
           context_paths: %w[CLAUDE.md .claude/rules],
           rules_dir: ".claude/rules",
+          rule_files: %w[rails-context.md rails-schema.md rails-models.md rails-mcp-tools.md rails-components.md],
           mcp_config: { path: ".mcp.json", root_key: "mcpServers", format: :mcp_json },
           legacy_paths: [ ".claude/rules/rails-ui-patterns.md", ".claude/rules/rails-accessibility.md" ],
           owned_dir: ".claude"
@@ -32,6 +36,7 @@ module RailsAiContext
           files: ".cursor/rules/ + .cursorrules (legacy fallback)",
           context_paths: %w[.cursor/rules .cursorrules],
           rules_dir: ".cursor/rules",
+          rule_files: %w[rails-project.mdc rails-models.mdc rails-controllers.mdc rails-mcp-tools.mdc],
           mcp_config: { path: ".cursor/mcp.json", root_key: "mcpServers", format: :mcp_json },
           legacy_paths: [ ".cursor/rules/rails-ui-patterns.mdc" ],
           owned_dir: ".cursor"
@@ -41,6 +46,10 @@ module RailsAiContext
           files: ".github/copilot-instructions.md + .github/instructions/",
           context_paths: %w[.github/copilot-instructions.md .github/instructions],
           rules_dir: ".github/instructions",
+          rule_files: %w[
+            rails-context.instructions.md rails-models.instructions.md
+            rails-controllers.instructions.md rails-mcp-tools.instructions.md
+          ],
           mcp_config: { path: ".vscode/mcp.json", root_key: "servers", format: :vscode_json },
           legacy_paths: [ ".github/instructions/rails-ui-patterns.instructions.md" ]
         ),

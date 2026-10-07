@@ -108,7 +108,7 @@ RSpec.describe RailsAiContext::Install::Program do
     # reporting a successful removal must not carry that level.
     it "reports a removal at a level that is not a warning" do
       Dir.mktmpdir do |root|
-        File.write(File.join(root, ".cursorrules"), "x")
+        File.write(File.join(root, ".cursorrules"), "<!-- BEGIN rails-ai-context -->\nx\n<!-- END rails-ai-context -->\n")
 
         surface = surface_class.new("y")
         described_class.cleanup_removed_tools(surface, previous: %i[claude cursor], selected: %i[claude], root: root)
@@ -119,11 +119,36 @@ RSpec.describe RailsAiContext::Install::Program do
       end
     end
 
+    it "says so when it kept the user's own lines in a file" do
+      Dir.mktmpdir do |root|
+        File.write(File.join(root, ".cursorrules"), "mine\n<!-- BEGIN rails-ai-context -->\nx\n<!-- END rails-ai-context -->\n")
+
+        surface = surface_class.new("y")
+        described_class.cleanup_removed_tools(surface, previous: %i[claude cursor], selected: %i[claude], root: root)
+
+        expect(surface.text).to include("Removed the generated section from .cursorrules")
+        expect(File.read(File.join(root, ".cursorrules"))).to eq("mine\n")
+      end
+    end
+
+    it "says a file was kept, and claims no removal, when nothing in it was generated" do
+      Dir.mktmpdir do |root|
+        File.write(File.join(root, ".cursorrules"), "my own rules\n")
+
+        surface = surface_class.new("y")
+        described_class.cleanup_removed_tools(surface, previous: %i[claude cursor], selected: %i[claude], root: root)
+
+        expect(surface.text).to include("Kept .cursorrules")
+        expect(surface.text).not_to include("Cursor files removed")
+        expect(File.read(File.join(root, ".cursorrules"))).to eq("my own rules\n")
+      end
+    end
+
     it "warns about a path it could not remove instead of claiming it went" do
       skip "root can remove anything" if Process.uid.zero?
 
       Dir.mktmpdir do |root|
-        File.write(File.join(root, ".cursorrules"), "x")
+        File.write(File.join(root, ".cursorrules"), "<!-- BEGIN rails-ai-context -->\nx\n<!-- END rails-ai-context -->\n")
         File.chmod(0o500, root)
 
         surface = surface_class.new("y")
