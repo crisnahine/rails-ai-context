@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "strscan"
+
 module RailsAiContext
   module Tools
     class Query < BaseTool
@@ -173,12 +175,17 @@ module RailsAiContext
         end
 
         # ── Layer 1: SQL validation ─────────────────────────────────
-        valid, error = validate_sql(sql)
+        mysql = mysql_dialect?
+        valid, error = validate_sql(sql, mysql: mysql)
         return error_response(error) unless valid
+
+        # Run the text the validator read, never the raw input: whatever the
+        # scanner and the database disagree on, nothing unread reaches the database.
+        sql = comment_free(sql, mysql: mysql)
 
         # ── EXPLAIN mode ────────────────────────────────────────────
         if explain
-          return execute_explain(sql.strip, config.query_timeout)
+          return execute_explain(sql, config.query_timeout)
         end
 
         # Resolve row limit
@@ -187,11 +194,11 @@ module RailsAiContext
         timeout_seconds = config.query_timeout
 
         # ── Layers 2-3: Execute with DB-level safety + row limit ────
-        result = execute_safely(sql.strip, row_limit, timeout_seconds)
+        result = execute_safely(sql, row_limit, timeout_seconds)
 
         # ── Layer 4: Redact sensitive columns ───────────────────────
         # Skip for SHOW/DESCRIBE/EXPLAIN - see SCHEMA_METADATA_PREFIX.
-        redacted = sql.strip.match?(SCHEMA_METADATA_PREFIX) ? result : redact_results(result)
+        redacted = sql.match?(SCHEMA_METADATA_PREFIX) ? result : redact_results(result)
 
         # ── Format output ───────────────────────────────────────────
         output = case format
@@ -227,36 +234,73 @@ module RailsAiContext
       end
 
       # ── SQL comment stripping ───────────────────────────────────────
-      def self.strip_sql_comments(sql)
-        sql
-          # MySQL version-conditional comments `/*! ... */` / `/*!12345 ... */`
-          # are NOT comments - MySQL executes their content. Unwrap them first
-          # so the validator sees the inner SQL (e.g. `LOAD_FILE`) instead of
-          # stripping it alongside regular block comments, which would let
-          # `SELECT /*!50000 LOAD_FILE('/etc/passwd') */` slip past
-          # BLOCKED_FUNCTIONS. PostgreSQL and SQLite treat `/*! ... */` as
-          # a normal comment, so unwrapping is MySQL-safe: the content is
-          # ignored by those engines anyway.
-          .gsub(/\/\*!\d*\s*(.*?)\*\//m) { " #{Regexp.last_match(1)} " }
-          .gsub(/\/\*.*?\*\//m, " ")   # Block comments: /* ... */
-          .gsub(/--[^\n]*/, " ")        # Line comments: -- ...
-          .gsub(/^\s*#[^\n]*/m, " ")   # MySQL-style comments: # at line start only
-          .squeeze(" ").strip
+      def self.strip_sql_comments(sql, mysql: false)
+        comment_free(sql, mysql: mysql).squeeze(" ")
+      end
+
+      QUOTED = /'[^']*'?|"[^"]*"?|`[^`]*`?/m
+      # A backslash escapes the next character: every MySQL string, and a PostgreSQL E'...' one.
+      ESCAPED_STRING = /'(?:\\.|[^'\\])*'?/m
+      MYSQL_QUOTED = /#{ESCAPED_STRING}|"(?:\\.|[^"\\])*"?|`[^`]*`?/m
+      DOLLAR_QUOTED = /(?<![\p{Word}$])\$(\p{Word}*)\$.*?\$\1\$/m
+      UNQUOTED = /[^'"`$\/\-#*]+/
+
+      # Comments out, everything else as written: this is the text that runs.
+      # A quoted span is copied whole, so a comment marker inside one is data.
+      # Only MySQL has a hash comment, a `--` that needs a space after it, and
+      # `/*! ... */` content it runs. PostgreSQL has dollar quoting.
+      def self.comment_free(sql, mysql: false)
+        # fixed_anchor, so the dollar quote's lookbehind sees the text before the pointer.
+        scanner = StringScanner.new(sql, fixed_anchor: true)
+        line_comment = mysql ? /--(?=\s|\z)[^\n]*|#[^\n]*/ : /--[^\n]*/
+        out = +""
+        executable = false
+
+        until scanner.eos?
+          quoted = if mysql then MYSQL_QUOTED
+          elsif out.match?(/(?<![\p{Word}$])[eE]\z/) && scanner.check(/'/) then ESCAPED_STRING
+          else QUOTED
+          end
+
+          if (span = scanner.scan(quoted) || (!mysql && scanner.scan(DOLLAR_QUOTED)) || scanner.scan(UNQUOTED))
+            out << span
+          elsif mysql && scanner.scan(/\/\*!\d*/)
+            # Its content stays in the text for the checks to read, e.g. the
+            # `LOAD_FILE` in `SELECT /*!50000 LOAD_FILE('/etc/passwd') */`.
+            executable = true
+            out << " "
+          elsif executable && scanner.scan(/\*\//)
+            executable = false
+            out << " "
+          elsif scanner.scan(/\/\*.*?(?:\*\/|\z)/m) || scanner.scan(line_comment)
+            out << " "
+          else
+            out << scanner.getch
+          end
+        end
+
+        out.strip
+      end
+
+      private_class_method def self.mysql_dialect?
+        ActiveRecord::Base.connection_db_config.adapter.to_s.match?(MYSQL_ADAPTER)
+      rescue ActiveRecord::ActiveRecordError
+        false
       end
 
       # ── SQL validation (Layer 1) ────────────────────────────────────
-      def self.validate_sql(sql)
+      def self.validate_sql(sql, mysql: false)
         return [ false, "SQL query is required." ] if sql.nil? || sql.strip.empty?
 
         # Belt-and-suspenders: run BLOCKED_FUNCTIONS against the RAW sql before
-        # stripping comments. If the unwrap logic in strip_sql_comments is ever
+        # stripping comments. If the unwrap logic in comment_free is ever
         # defeated by a novel MySQL comment variant, this still catches the
         # dangerous primitives (pg_read_file, LOAD_FILE, dblink, ...).
         if (m = sql.match(BLOCKED_FUNCTIONS))
           return [ false, "Blocked: dangerous function #{m[0]} (filesystem/network primitive)" ]
         end
 
-        cleaned = strip_sql_comments(sql)
+        cleaned = strip_sql_comments(sql, mysql: mysql)
 
         # Check multi-statement and clause patterns first - they provide more
         # specific error messages than the generic keyword blocker.
@@ -332,7 +376,7 @@ module RailsAiContext
 
         limited_sql = apply_row_limit(sql, row_limit)
 
-        run_guarded(conn, adapter, limited_sql, timeout_seconds)
+        cap_rows(run_guarded(conn, adapter, limited_sql, timeout_seconds), sql, row_limit)
       end
 
       # EXPLAIN goes through the adapter wrappers too (READ ONLY, timeout): EXPLAIN ANALYZE runs
@@ -364,7 +408,7 @@ module RailsAiContext
 
       private_class_method def self.execute_mysql(conn, sql, timeout)
         # Inject MAX_EXECUTION_TIME hint for per-query timeout
-        hinted_sql = if sql.match?(/\ASELECT/i) && !sql.match?(/\/\*\+/)
+        hinted_sql = if sql.match?(/\ASELECT/i)
           sql.sub(/\ASELECT/i, "SELECT /*+ MAX_EXECUTION_TIME(#{(timeout * 1000).to_i}) */")
         else
           sql
@@ -499,8 +543,7 @@ module RailsAiContext
 
       # ── EXPLAIN execution ────────────────────────────────────────────
       private_class_method def self.execute_explain(sql, timeout)
-        cleaned = strip_sql_comments(sql)
-        unless cleaned.match?(/\A\s*(SELECT|WITH)\b/i)
+        unless sql.match?(/\A\s*(SELECT|WITH)\b/i)
           return text_response("EXPLAIN only supports SELECT queries.")
         end
 
@@ -659,24 +702,49 @@ module RailsAiContext
       end
 
       # ── Row limit enforcement (Layer 3) ─────────────────────────────
+      # The query's own limit ends the statement. A LIMIT anywhere else belongs
+      # to a subquery or a string literal and is left as written.
+      TRAILING_LIMIT = /\bLIMIT\s+(?:(\d+)\s*,\s*)?(\d+)(\s+OFFSET\s+\d+)?\s*;?\s*\z/i
+      TRAILING_FETCH = /\bFETCH\s+(FIRST|NEXT)\s+(\d+)(\s+ROWS?\s+ONLY)\s*;?\s*\z/i
+
       private_class_method def self.apply_row_limit(sql, limit)
         return sql if sql.match?(SCHEMA_METADATA_PREFIX)
 
-        effective_limit = [ limit, HARD_ROW_CAP ].min
+        cap = [ limit, HARD_ROW_CAP ].min
 
-        if sql.match?(/\bLIMIT\s+(\d+)/i)
-          sql.sub(/\bLIMIT\s+(\d+)/i) do
-            user_limit = $1.to_i
-            "LIMIT #{[ user_limit, effective_limit ].min}"
-          end
-        elsif sql.match?(/\bFETCH\s+FIRST\s+(\d+)/i)
-          sql.sub(/\bFETCH\s+FIRST\s+(\d+)/i) do
-            user_limit = $1.to_i
-            "FETCH FIRST #{[ user_limit, effective_limit ].min}"
-          end
+        if sql.match?(TRAILING_LIMIT)
+          sql.sub(TRAILING_LIMIT) { "LIMIT #{"#{$1}, " if $1}#{[ $2.to_i, cap ].min}#{$3}" }
+        elsif sql.match?(TRAILING_FETCH)
+          sql.sub(TRAILING_FETCH) { "FETCH #{$1} #{[ $2.to_i, cap ].min}#{$3}" }
+        elsif own_limit?(sql)
+          # A limit in a spelling this does not rewrite (`LIMIT 1+1`, `WITH TIES`).
+          # A second one would be a syntax error, so it runs as written and cap_rows holds the cap.
+          sql
         else
-          "#{sql.chomp.chomp(';')} LIMIT #{effective_limit}"
+          # On its own line, so nothing the database reads as a line comment takes it.
+          "#{sql.sub(/;\s*\z/, "")}\nLIMIT #{cap}"
         end
+      end
+
+      # Whether the last LIMIT or FETCH is the statement's own: nothing after
+      # it closes a parenthesis or a quote that opened before it.
+      private_class_method def self.own_limit?(sql)
+        start = sql.rindex(/\b(?:LIMIT|FETCH\s+(?:FIRST|NEXT))\b/i) or return false
+        tail = sql[start..]
+        depth = 0
+        tail.each_char do |char|
+          depth += { "(" => 1, ")" => -1 }.fetch(char, 0)
+          return false if depth.negative?
+        end
+        [ "'", '"', "`" ].all? { |quote| tail.count(quote).even? }
+      end
+
+      # The text carries the limit. This holds it whatever the database made of that text.
+      private_class_method def self.cap_rows(result, sql, limit)
+        cap = [ limit, HARD_ROW_CAP ].min
+        return result if sql.match?(SCHEMA_METADATA_PREFIX) || result.rows.size <= cap
+
+        ResultProxy.new(result.columns, result.rows.first(cap), result.respond_to?(:unbounded) && result.unbounded)
       end
 
       # ── Column redaction (Layer 4) ──────────────────────────────────
@@ -701,7 +769,7 @@ module RailsAiContext
           col_down = col.downcase
           i if encrypted_cols.include?(col_down) || redacted_cols.include?(col_down) ||
                (!allowed.include?(col_down) &&
-                sensitive_suffixes.any? { |suffix| col_down.end_with?(suffix) || col_down.include?("password") || col_down.include?("secret") || col_down.include?("token") })
+                (col_down.end_with?(*sensitive_suffixes) || col_down.match?(/password|secret|token/)))
         }
 
         return result if redacted_indices.empty?

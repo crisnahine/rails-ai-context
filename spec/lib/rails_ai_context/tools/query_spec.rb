@@ -229,7 +229,7 @@ RSpec.describe RailsAiContext::Tools::Query do
 
     it "enforces hard cap of 1000" do
       result = described_class.send(:apply_row_limit, "SELECT * FROM users LIMIT 9999", 2000)
-      # apply_row_limit uses [limit, HARD_ROW_CAP].min, so effective_limit = 1000
+      # The cap is [limit, HARD_ROW_CAP].min, so 1000 here
       expect(result).to include("LIMIT 1000")
     end
 
@@ -914,7 +914,7 @@ it "still explains a database that does not exist" do
     end
 
     it "strips MySQL-style hash comments at line start" do
-      expect(described_class.strip_sql_comments("# full line comment\nSELECT 1")).to eq("SELECT 1")
+      expect(described_class.strip_sql_comments("# full line comment\nSELECT 1", mysql: true)).to eq("SELECT 1")
     end
 
     it "preserves hash characters inside SQL strings" do
@@ -933,14 +933,214 @@ it "still explains a database that does not exist" do
       # MySQL executes /*!version ... */ content even though it looks like a comment.
       # strip_sql_comments must expose the inside or BLOCKED_FUNCTIONS will miss it.
       sql = "SELECT /*!50000 LOAD_FILE('/etc/passwd') */ AS x"
-      result = described_class.strip_sql_comments(sql)
+      result = described_class.strip_sql_comments(sql, mysql: true)
       expect(result).to include("LOAD_FILE")
     end
 
     it "unwraps bare executable comments without version digits" do
       sql = "SELECT /*! pg_read_file('foo') */ 1"
-      result = described_class.strip_sql_comments(sql)
+      result = described_class.strip_sql_comments(sql, mysql: true)
       expect(result).to include("pg_read_file")
+    end
+  end
+
+  describe "the text that runs is the text that was validated" do
+    def answer(sql, **opts)
+      described_class.call(sql: sql, **opts).content.first[:text]
+    end
+
+    it "refuses a sensitive column that follows a comment marker in a string literal" do
+      text = answer("SELECT '--' AS m, api_key AS x FROM (SELECT 'leak' AS api_key) t")
+
+      expect(text).to include("sensitive column `api_key`")
+      expect(text).not_to include("leak")
+    end
+
+    it "refuses a second statement that follows a comment marker in a string literal" do
+      expect(answer("SELECT '--' AS m; SELECT 2 AS hidden")).to include("multiple statements")
+    end
+
+    it "still answers a query that carries an ordinary comment" do
+      expect(answer("SELECT 7 AS n -- why")).to include("7")
+    end
+
+    def sent_to_the_database(sql)
+      sent = nil
+      allow(described_class).to receive(:run_guarded) { |_conn, _adapter, text, _timeout|
+        sent = text
+        ActiveRecord::Result.new(%w[n], [ [ 1 ] ])
+      }
+      described_class.call(sql: sql)
+      sent
+    end
+
+    it "sends the database the text without its comments, the limit on a line of its own" do
+      expect(sent_to_the_database("SELECT 7 AS n /* a */ -- why")).to eq("SELECT 7 AS n\nLIMIT 100")
+    end
+
+    it "reads a hash comment on a MySQL connection and nowhere else" do
+      sql = "SELECT 7 AS n # why"
+
+      expect(sent_to_the_database(sql)).to eq("SELECT 7 AS n # why\nLIMIT 100")
+
+      allow(ActiveRecord::Base).to receive(:connection_db_config).and_return(double(adapter: "trilogy"))
+      expect(sent_to_the_database(sql)).to eq("SELECT 7 AS n\nLIMIT 100")
+    end
+
+    # A comment marker inside quotes is data. Taking it out changed the answer
+    # without an error, which is worse than refusing the query.
+    it "leaves a block comment marker inside a string literal alone" do
+      expect(answer("SELECT 'see /* draft */ end' AS v")).to include("see /* draft */ end")
+    end
+
+    it "leaves glob patterns that hold both halves of a block comment alone" do
+      text = answer("SELECT 'src/app.rb' GLOB 'src/*' AS a, 'x' GLOB '*/x' AS b")
+
+      expect(text).to match(/\| a +\| b +\|/)
+    end
+
+    it "leaves a line comment marker inside a string literal alone" do
+      expect(answer("SELECT 'x -- y' AS v")).to include("x -- y")
+    end
+
+    it "leaves the spacing inside a string literal alone" do
+      expect(answer("SELECT 'a  b' AS v")).to include("a  b")
+    end
+  end
+
+  describe ".comment_free" do
+    it "keeps an escaped quote inside a string literal" do
+      sql = "SELECT 'it''s -- fine' AS v"
+
+      expect(described_class.comment_free(sql)).to eq(sql)
+    end
+
+    it "keeps a quoted identifier that holds a comment marker" do
+      sql = %(SELECT "a--b", `c/*d*/e` FROM t)
+
+      expect(described_class.comment_free(sql)).to eq(sql)
+    end
+
+    it "ends an unterminated block comment at the end of the text" do
+      expect(described_class.comment_free("SELECT 1 /* open")).to eq("SELECT 1")
+    end
+
+    # PostgreSQL has no hash comment, and a hash starts four of its operators.
+    it "keeps a line that starts with a hash operator" do
+      sql = "SELECT data\n  #>> '{a,b}' AS v FROM t"
+
+      expect(described_class.comment_free(sql)).to eq(sql)
+    end
+
+    it "keeps a dollar-quoted string that holds a comment marker" do
+      [ "SELECT $tag$a -- b$tag$ AS v", "SELECT $$a /* b */ c$$ AS v", "SELECT $é$a -- b$é$ AS v" ].each do |sql|
+        expect(described_class.comment_free(sql)).to eq(sql)
+      end
+    end
+
+    it "does not read a dollar inside an identifier as a quote" do
+      expect(described_class.comment_free("SELECT a$b$ -- x $b$\nFROM t")).to eq("SELECT a$b$  \nFROM t")
+    end
+
+    it "reads a backslash as an escape in a PostgreSQL E string" do
+      sql = "SELECT E'\\'', 'x /* y */ z'"
+
+      expect(described_class.comment_free(sql)).to eq(sql)
+    end
+
+    # Only MySQL runs what it holds; anywhere else it is a comment.
+    it "takes a version comment out whole" do
+      expect(described_class.comment_free("SELECT 1 /*!50000 , 2 */")).to eq("SELECT 1")
+    end
+
+    context "for MySQL" do
+      it "keeps what a version comment holds, for the checks to read" do
+        expect(described_class.comment_free("SELECT 1 /*!50000 , 2 */", mysql: true)).to eq("SELECT 1   , 2")
+      end
+
+      it "takes a hash comment out wherever it starts" do
+        expect(described_class.comment_free("SELECT 1 # note\nFROM t", mysql: true)).to eq("SELECT 1  \nFROM t")
+      end
+
+      it "reads two dashes with nothing after them as an expression" do
+        expect(described_class.comment_free("SELECT 5--3 AS v", mysql: true)).to eq("SELECT 5--3 AS v")
+      end
+
+      it "keeps a backslash-escaped quote inside a string literal" do
+        sql = "SELECT 'it\\'s -- fine' AS v"
+
+        expect(described_class.comment_free(sql, mysql: true)).to eq(sql)
+      end
+    end
+  end
+
+  describe "the row limit" do
+    def rows(sql, limit:)
+      described_class.call(sql: sql, limit: limit).content.first[:text][/(\d+) rows? returned/, 1].to_i
+    end
+
+    let(:three) { "(VALUES (1),(2),(3)) v" }
+
+    it "holds when the query ends in a line comment" do
+      expect(rows("SELECT * FROM #{three} -- trailing note", limit: 2)).to eq(2)
+    end
+
+    it "holds when the only LIMIT is inside a comment" do
+      expect(rows("SELECT * FROM #{three} /* LIMIT 3 */", limit: 2)).to eq(2)
+    end
+
+    it "holds when the query ends in a block comment nobody closed" do
+      expect(rows("SELECT * FROM #{three} /*", limit: 2)).to eq(2)
+    end
+
+    it "holds when a string literal holds the word LIMIT, and leaves the literal as written" do
+      text = described_class.call(sql: "SELECT 'LIMIT 5' AS note, column1 FROM #{three}", limit: 2).content.first[:text]
+
+      expect(text).to include("2 rows returned")
+      expect(text).to include("LIMIT 5")
+    end
+
+    it "holds when only a subquery has a LIMIT" do
+      expect(rows("SELECT column1 FROM #{three} WHERE column1 IN (SELECT 1 LIMIT 1) OR column1 > 0", limit: 2)).to eq(2)
+    end
+
+    it "leaves a subquery's own LIMIT as written" do
+      sql = described_class.send(:apply_row_limit, "SELECT * FROM (SELECT id FROM t LIMIT 500) q", 100)
+
+      expect(sql).to include("LIMIT 500")
+      expect(sql).to end_with("LIMIT 100")
+    end
+
+    it "caps the count of a MySQL offset-and-count LIMIT, not the offset" do
+      expect(described_class.send(:apply_row_limit, "SELECT * FROM t LIMIT 10, 5000", 100)).to end_with("LIMIT 10, 100")
+    end
+
+    it "caps FETCH NEXT as it does FETCH FIRST" do
+      sql = "SELECT * FROM t OFFSET 5 ROWS FETCH NEXT 5000 ROWS ONLY"
+
+      expect(described_class.send(:apply_row_limit, sql, 100)).to end_with("FETCH NEXT 100 ROWS ONLY")
+    end
+
+    # A second LIMIT would be a syntax error on a query that ran before.
+    it "sends a limit it cannot rewrite as written" do
+      [ "SELECT * FROM t LIMIT 1+1", "SELECT * FROM t LIMIT (2)", "SELECT * FROM t FETCH FIRST 5 ROWS WITH TIES" ].each do |sql|
+        expect(described_class.send(:apply_row_limit, sql, 100)).to eq(sql)
+      end
+    end
+
+    it "still answers a query whose limit is an expression" do
+      expect(rows("SELECT * FROM #{three} LIMIT 1+1", limit: 5)).to eq(2)
+    end
+
+    it "caps a LIMIT that an OFFSET follows" do
+      expect(described_class.send(:apply_row_limit, "SELECT * FROM t LIMIT 5000 OFFSET 20", 100)).to end_with("LIMIT 100 OFFSET 20")
+    end
+
+    # Whatever the text says, the answer never carries more rows than asked for.
+    it "drops rows the database returned past the limit" do
+      allow(described_class).to receive(:run_guarded).and_return(ActiveRecord::Result.new(%w[n], [ [ 1 ], [ 2 ], [ 3 ] ]))
+
+      expect(rows("SELECT n FROM t", limit: 2)).to eq(2)
     end
   end
 
