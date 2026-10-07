@@ -105,8 +105,8 @@ from the booted path:
 | `jobs` | `app/jobs`, `app/workers`, `app/sidekiq`, `app/mailers` and `app/channels` parsed for classes and their public methods, plus any class elsewhere under `app/` whose parent chain reaches `ActionMailer::Base` |
 | `i18n` | `config.i18n.available_locales` read from `config/`, or every top-level key across `config/locales` when the app never assigns it; the default locale read from `config/`. The backend and the fallbacks stay in the answer and are declared unanswered, being facts about the running process |
 | `api` | every detection but the mode is a file read and runs unchanged; `config.api_only` comes from the assignment in `config/application.rb` |
-| `engines` | `config/routes.rb` mounts, plus the Gemfile |
-| `active_support` | concern and core-extension use read from source |
+| `engines` | the mounts in `config/routes.rb` and the files it draws, plus the in-repo engines found in the tree; the loaded `Rails::Engine` classes are declared unavailable |
+| `active_support` | concerns, message verifier and encryptor use, notification subscriptions and a `TaggedLogging` initializer read from source; deprecators, load hooks and the cache store are declared unavailable |
 | `middleware` | `app/middleware`, `lib/middleware`, and the stack changes in `config/initializers`, `config/environments` and `config/application.rb`; the booted stack and its count are declared unavailable |
 
 **runtime-only** (8) report `{ unavailable: reason }` here, and only these:
@@ -174,14 +174,14 @@ a consumer must not join it to the app root. The gem's own readers ask
 ## Shape matrix
 
 Rows are app shapes; columns are schema, models, routes, and controllers
-(the four whose static behavior varies by shape), plus views for contrast.
+(the four whose static behavior varies by shape), plus views.
 `n/a` means the shape doesn't change that introspector's behavior - see
 the stock full-stack row for its baseline proof. Reference numbers point at
 the proof list below the table.
 
 | Shape | Schema | Models | Routes | Controllers | Views |
 |:---|:---|:---|:---|:---|:---|
-| Stock full-stack (`schema.rb`) | runtime + static [1] | runtime + static [1] | runtime + static [1] | runtime + static [1] | runtime only [2] |
+| Stock full-stack (`schema.rb`) | runtime + static [1] | runtime + static [1] | runtime + static [1] | runtime + static [1] | runtime [2] + static [8] |
 | API-only | runtime + static [1] | runtime + static [1] | runtime + static [1] | runtime + static [1] | runtime, "not applicable" [3] |
 | `structure.sql` - PostgreSQL dialect | static [4] | n/a | n/a | n/a | n/a |
 | `structure.sql` - MySQL/Trilogy dialect | static [4] | n/a | n/a | n/a | n/a |
@@ -191,7 +191,7 @@ the proof list below the table.
 | In-repo `engines/` | n/a | n/a | n/a | static [5] | n/a |
 | In-repo `plugins/`, `modules/`, `gems/plugins/` | n/a | static [5] | n/a | static [5] | n/a |
 | Mongoid | `[UNAVAILABLE]`, honest signal [6] | static (fields + embeds) [6] | n/a | n/a | n/a |
-| Broken-boot (any full-stack app) | static [7] | static, per-file isolation [7] | static [7] | static [7] | `[UNAVAILABLE]` [8] |
+| Broken-boot (any full-stack app) | static [7] | static, per-file isolation [7] | static [7] | static [7] | static [8] |
 | Packs + engines under `--no-boot` | n/a | static [5] | n/a | static [5] | n/a |
 | Empty/greenfield app (no scaffold) | graceful, no crash [9] | graceful, no crash [9] | graceful, no crash [9] | graceful, no crash [9] | graceful, no crash [9] |
 | Massive app (500 models/tables) | no crash at scale [10] | no crash at scale [10] | no crash at scale [10] | n/a | n/a |
@@ -239,6 +239,12 @@ Proof sources:
    structure.sql side by side; the small apps and the same private app
    answering as v5.32.0 did; and the unit suite on Ruby 3.1 with Rails 7.0
    through Ruby 4.0 with Rails 8.1.
+   In the v5.32.2 release QA: `rails_query` on the same private app's
+   PostgreSQL database, with comment markers inside string literals, E strings
+   and dollar quotes, a `#>>` that starts a line, and every spelling of a row
+   limit; the installer's cleanup on a small Rails 8.1 app holding hand-written
+   rule files; and the unit suite on Ruby 3.1 with Rails 7.0 through Ruby 4.0
+   with Rails 8.1.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified
@@ -258,14 +264,16 @@ Proof sources:
    tier)" and "multi-database schema dumps".
 6. `spec/e2e/shapes_spec.rb`: "Mongoid app (bare directory, --app-path, no
    boot possible)".
-7. `spec/e2e/boot_resilience_spec.rb` (four boot-failure modes: raises,
-   prints to stdout, writes via the `STDOUT` constant, hangs past the
-   timeout) plus `spec/e2e/static_tier_spec.rb` ("broken-boot app over the
+7. `spec/e2e/boot_resilience_spec.rb` (five boot-failure modes: raises,
+   prints to stdout, writes via the `STDOUT` constant, calls `exit`/`abort`,
+   hangs past the timeout) plus `spec/e2e/static_tier_spec.rb` ("broken-boot app over the
    CLI", "broken-boot app over MCP stdio", "syntax error in one model file").
-8. No introspector outside the six in the operating-tiers table defines
-   `static_call` (`lib/rails_ai_context/introspectors/view_introspector.rb`
-   has none); `Introspector#run_introspector` reports `{ unavailable: reason
-   }` for every such section regardless of shape.
+8. `views` is files-only
+   (`lib/rails_ai_context/introspectors/view_introspector.rb`), so its `call`
+   runs unchanged with nothing booted, proven against `spec/fixtures/static_app`
+   in `spec/lib/rails_ai_context/introspectors/static_tier_declarations_spec.rb`.
+   `Introspector#run_introspector` reports `{ unavailable: reason }` only for
+   the eight runtime-only sections, regardless of shape.
 9. `spec/e2e/empty_app_spec.rb` - all 45 built-in tools swept against an app
    with no scaffold, no models, no controllers beyond
    `ApplicationController`, no routes beyond root.
@@ -288,14 +296,16 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   `ApplicationRecord`, pass their concerns, scopes, callbacks and macros down
   the way Rails does. Only the table stops at an abstract base, because a child
   of one has its own. A concern's macro is tagged with the concern that
-  declared it. Both tiers stop at the same place: a superclass whose file is not
+  declared it. Both tiers leave out a superclass whose file is not
   under one of the app's model directories, a gem-owned base for example. The
   booted tier could read that file and deliberately does not, because an answer
-  the static tier can never match is two answers to one question. Reflection
+  the static tier can never match is two answers to one question. The static
+  tier ends the walk at such a base; the booted tier steps over it and still
+  reads an app base above it. Reflection
   still carries such a base's associations, validations and enums onto the
-  child. The validations Rails generates at boot
-  (implicit `belongs_to` presence, attachment validations) are runtime-only and
-  stay marked `[UNAVAILABLE]`. A concern whose file cannot be found, a gem's
+  child. The presence validation Rails adds for a required
+  `belongs_to` is listed in both tiers as implicit; without a boot it is worked
+  out from `optional:`/`required:` and `belongs_to_required_by_default`. A concern whose file cannot be found, a gem's
   module for example, is named under `Concerns` as not read.
 - **Callbacks are what the file declares.** In both tiers the callback list is
   what the model file, the app concerns it includes and the classes it inherits
@@ -317,13 +327,15 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   are invisible to ActiveRecord reflection, so `ModelIntrospector#call` falls
   back to the same source-parsing pass used in the static tier even when the
   app is booted (`lib/rails_ai_context/introspectors/model_introspector.rb`).
-  Fields or associations defined in an included concern module rather than
-  directly in the document class body are not resolved, in either tier.
-- **Static-tier API-only detection.** `Tools::BaseTool#api_only_app?` reads
-  `app.config.api_only`. `RailsAiContext::StaticApp` exposes no `config`
-  method, so this check is always false in the static tier - the "not
-  applicable" messaging for view/frontend tools on API-only apps only fires
-  once the app has actually booted.
+  A concern's fields, embedded relations, `store_in` and indexes are read. A
+  `belongs_to`/`has_many`, validation, scope or callback declared in a concern
+  rather than in the document class body is not resolved, in either tier.
+- **Static-tier API-only detection.** `RailsAiContext::StaticApp` exposes no
+  `config` method, so in the static tier `Tools::BaseTool.api_only_app?` reads
+  the `config.api_only = true` assignment in `config/application.rb`
+  (`AppKind.api_only?`). A value set anywhere else, or one that is not a
+  literal `true`, is missed, and the "not applicable" messaging for
+  view/frontend tools then only fires once the app has booted.
 - **Live multi-DB connections are not iterated, only dumps.**
   `MultiDatabaseIntrospector` reads `config/database.yml` and the model source
   in the static tier, so databases, replicas, sharding and `connects_to`
@@ -346,23 +358,27 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   the extension list is plpgsql alone. `config.active_record.dump_schemas =
   :all` dumps everything.
 - **Inherited controller actions and filters are resolved by parent name, so
-  some walks end early.** A controller that defines no action of its own takes
-  the actions of the nearest app ancestor the listing holds, walked through the
+  some walks end early.** Every controller also takes the actions of each app
+  ancestor the listing holds, up to the app's base controller, walked through the
   `parent_class` each entry carries, and the filter chain is walked the same
   way. A superclass spelled relatively inside a `module` body (`module
   Settings; class ProfileController < BaseController`) is resolved against the
-  enclosing namespace first, the way Ruby resolves it. What still ends the walk
-  is a gem-owned parent such as `OAuth::AuthorizationsController <
-  Doorkeeper::AuthorizationsController`, which the payload cannot hold. A
-  booted run answers that one.
+  enclosing namespace first, the way Ruby resolves it. A gem-owned parent such as
+  `OAuth::AuthorizationsController < Doorkeeper::AuthorizationsController`,
+  which the payload cannot hold, still ends the inherited-actions walk. The
+  filter walk skips that class's own filters: for a Devise or Doorkeeper parent
+  it resumes at the base class the gem's initializer names, or the gem's
+  default, and for any other gem-owned parent it ends. A booted run answers
+  those.
 - **`ApplicationController` is not in the listing, but its filters are in the
   chain.** Every app has one and it would sit in every listing row, so the
   controller listing leaves it out. The chain walk reads its file anyway, by
   the one name Rails fixes, so a filter it declares is attributed to it in both
   tiers with its `only:`/`except:`/`if:` intact. A parent the listing does not
   hold and the app has no file for still ends the walk: reconstructing a path
-  from a class name breaks on an app inflection, and a gem-owned parent such as
-  `Doorkeeper::AuthorizationsController` has no file under the app root at all.
+  from a class name breaks on an app inflection, and a gem-owned parent has no file under the app
+  root at all (a Devise or Doorkeeper one resumes at its configured base, as
+  above).
   A booted run answers that one from reflection.
 - **Some route macros surface as a dynamic tally, not resolved entries.**
   `RouteIntrospector#static_call` counts routes behind `devise_for`, a `match`

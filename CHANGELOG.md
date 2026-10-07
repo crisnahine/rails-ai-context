@@ -5,6 +5,80 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.32.2] - 2026-10-07
+
+### Security
+
+- **`rails_query` runs the text its checks read.** The read-only validator
+  strips comments before it looks for blocked keywords, sensitive columns and
+  a second statement, but the query that ran was the raw input. The stripper
+  did not know string literals, so a `--` or `/*` inside a quoted string hid
+  the rest of the line from every check while the database still ran it: a
+  column such as `api_key` could be read through an alias, unredacted. Comments
+  are now taken out by a scanner that copies quoted strings and identifiers
+  whole, and the query that runs is the text it leaves, so the checks and the
+  database read the same thing.
+
+### Fixed
+
+- **The row limit holds whatever the query text looks like.** `LIMIT` was
+  appended after a trailing `-- note`, where the database read it as part of
+  the comment, and the first `LIMIT` anywhere in the text counted as the
+  query's own: one in a comment or a string literal left the query unlimited,
+  and one in a subquery was rewritten to the cap, which changed the answer.
+  Only a `LIMIT` or `FETCH FIRST` that ends the statement is the query's own
+  now, the appended one goes on its own line, and the answer is cut to the
+  limit after the database returns as well.
+- **A `#` no longer ends a PostgreSQL or SQLite query line.** A line starting
+  with `#>>`, `#>` or `#-` was dropped from the validated text as a MySQL
+  comment. Hash comments are read on MySQL only, where they can start anywhere
+  on a line.
+- **Dropping an AI tool on a re-run removes only what the gem generated.**
+  Answering yes to "Remove their generated files?" deleted the whole rules
+  directory and the whole root file, so a rule file written by hand in
+  `.claude/rules/`, and a `CLAUDE.md` the gem had never written to, went with
+  them. Cleanup now removes the rule files the gem names, the block between
+  its markers in a root file, and a split rules file it generated whole. It
+  leaves every other file and line, a symlink included, and says so when a
+  file kept the user's own content.
+- **`search_code` trace names the routes that reach the call.** A controller
+  caller's heading listed the controller's first two routes whatever action
+  the call was in, so a call inside `create` could read `GET /posts`. The
+  heading now lists the routes of the actions the calls sit in, and none when
+  the call is in a `before_action` line, a private or class method, or a
+  nested class.
+- **`rails-ai-context init` records the tool mode where it is read first.**
+  It wrote `tool_mode` to `.rails-ai-context.yml` only, and an initializer that
+  already set `config.tool_mode` won on read, so choosing CLI mode changed
+  nothing in such an app. It now updates the initializer line too, as it does
+  for the tool selection. An assignment written in another shape, such as one
+  read from `ENV`, is left alone and no second line is added beside it; the
+  same now holds for `config.context_files`.
+- **`--defaults` on the install generator asks nothing.** The legacy-files
+  question still waited for an answer on a terminal.
+- **`rails-ai-context init --mcp-only` no longer asks about legacy rule
+  files**, matching the generator.
+- **`rails_get_gems` filters by every category it prints.** The `category`
+  parameter accepted 8 of the 19 categories, so `monitoring`, `admin`,
+  `payments` and the rest could not be asked for.
+- **A composed answer carries the static tier banner once.** `rails_get_context`
+  repeated it for each tool the answer was built from.
+- **`rails_ai_context/test_helper` loads the MCP SDK.** A spec for a custom
+  tool raised `uninitialized constant MCP` when the helper was the first thing
+  the suite required.
+- **Descriptions say what the code does.** `rails_dependency_graph` no longer
+  claims services and controllers, `rails_get_concern` no longer promises a
+  `summary` level that differs from `standard`, `rails ai:context:codex` no
+  longer says it writes `.codex/config.toml`, and `init --help` no longer names
+  `.mcp.json` as the one MCP config.
+
+- **The docs say what the code does.** They were checked against the code,
+  line by line. The install steps
+  are listed in full in the guide, MCP config samples show the command the
+  installer writes, every tool's parameters match its schema, and counts,
+  defaults and error messages are the ones the code has. `rails ai:setup`,
+  which was documented and never existed, is gone from the CLI reference.
+
 ## [5.32.1] - 2026-10-06
 
 ### Fixed
