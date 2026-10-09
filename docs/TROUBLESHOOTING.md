@@ -94,6 +94,17 @@ ruby -v
 
 For Codex CLI specifically, the env section in `.codex/config.toml` must match your current Ruby environment. Re-run install if you changed Ruby versions.
 
+### A server set up for a folder of apps fails to start
+
+`rails-ai-context init` run in a folder of apps writes entries that name each app relative to that folder (`--app-path shop`, and `BUNDLE_GEMFILE=shop/Gemfile` for an in-Gemfile app). Claude Code, Codex and OpenCode start a server in the folder they were launched in, so:
+
+1. Start the AI tool in the folder of apps, not inside one of them. Launched inside an app, the tool still reads the folder's config above it, and the server says `--app-path shop is read from ...; it names an app from ...`. An in-Gemfile entry fails earlier, in Bundler, with a Gemfile it cannot find. To work in one app on its own, run `rails-ai-context init` inside it too.
+2. Check the Ruby. Every server in the folder runs under the Ruby your version manager picks in the folder, and `init` warns about an app that declares another. `Your Ruby version is ..., but your Gemfile specified ...` from an in-Gemfile entry is that case: install the app's bundle for that Ruby, or give the app its own config with `init` inside it.
+
+### "No Rails app found in ..., and 2 below it"
+
+You ran a command in a folder that holds several apps. The error lists the exact command for each, with `--app-path`. To set them all up at once, run `rails-ai-context init` in that folder.
+
 ### "Tools return empty results"
 
 1. Check that your Rails app boots: `rails runner "puts 'ok'"`
@@ -110,7 +121,8 @@ dependency graph, or launching from inside another Bundler project's
 directory. Fixes:
 
 1. Launch `rails-ai-context serve` with the app root as the working directory
-   (the generated MCP configs do this by default).
+   (the generated MCP configs do this by default; a folder of apps' configs
+   start in that folder and name the app with `--app-path`).
 2. Make sure `GEM_PATH` covers the complete default gem path
    (`gem env path`), not just `gem env gemdir` - Ruby's bundled gems
    (racc, etc.) live in a separate directory.

@@ -34,6 +34,8 @@ Creates:
 - MCP config files for selected AI tools
 - Context files for selected AI tools
 
+Run it from a subdirectory and it sets up the app above. Run it in a folder that holds several apps - the folder you open your editor at - and it sets them all up at once: each app gets its own `.rails-ai-context.yml` and context files, and the folder's MCP configs get one server per app. See [`init`](CLI.md#init-standalone-only) in the CLI reference.
+
 It does not create `config/initializers/rails_ai_context.rb`.
 
 ## Usage

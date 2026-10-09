@@ -403,6 +403,17 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   under `config/initializers` adds with `Rails.application.routes.prepend` or
   `.append` are read, before and after the draw as Rails orders them. Routes Rails' own
   engines and gems draw into the app's table are read only with the app booted.
+- **A folder of apps is served from the folder.** `init` run in a folder of
+  apps writes entries that name each app relative to that folder, because
+  Claude Code, Codex and OpenCode start a server in the folder they were
+  launched in, and Cursor and VS Code expand `${workspaceFolder}`. A tool
+  launched inside one of the apps still reads the folder's config above it,
+  and its servers then start where the relative path misses. Every server in
+  the folder also runs under the Ruby the version manager picks in the folder,
+  so an app that declares another may answer from the static tier, and its
+  `bundle exec` entry may not start; `init` warns when it sees one.
+  `spec/e2e/workspace_install_spec.rb` starts each entry the way its tool does,
+  on a standalone and an in-Gemfile app. ADR-0005 records the per-tool facts.
 
 <br>
 

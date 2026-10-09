@@ -30,7 +30,7 @@
 **rails-ai-context** is a Ruby gem that turns your Rails app into the source of truth for AI coding assistants. Instead of guessing your schema, associations, routes and conventions from training data, the assistant asks your app: 45 read-only tools served over [MCP](https://modelcontextprotocol.io) or run from the CLI, plus generated context files for Claude Code, Cursor, GitHub Copilot, OpenCode and Codex CLI.
 
 > [!TIP]
-> Nothing to add to your Gemfile if you don't want to. `gem install rails-ai-context`, then `rails-ai-context init` inside any Rails app. It also works on an app that won't boot: pass `--no-boot` and the tools answer from the source files. The two that need a live app, `query` and `runtime_info`, say so.
+> Nothing to add to your Gemfile if you don't want to. `gem install rails-ai-context`, then `rails-ai-context init` inside any Rails app, or in a folder of apps to set them all up with one MCP server each. It also works on an app that won't boot: pass `--no-boot` and the tools answer from the source files. The two that need a live app, `query` and `runtime_info`, say so.
 
 ## Why
 
@@ -169,7 +169,7 @@ Tool names resolve loosely: `schema`, `get_schema` and `rails_get_schema` all wo
 | `rails ai:watch` | `rails-ai-context watch` | Regenerate on file change |
 | `rails 'ai:preset[NAME]'` | `rails-ai-context preset NAME` | Run a multi-tool preset (`architecture`, `debugging`, `migration`) |
 
-Flags shared by the app-reading commands: `--app-path PATH` to target another directory, `--environment ENV` to set `RAILS_ENV`, and `--no-boot` to skip the boot attempt and answer from source. Full list in the [CLI reference](docs/CLI.md).
+The binary finds the app the way `bin/rails` does, so it runs from any subdirectory, and from a folder holding one app. Flags shared by the app-reading commands: `--app-path PATH` to target another directory, `--environment ENV` to set `RAILS_ENV`, and `--no-boot` to skip the boot attempt and answer from source. Full list in the [CLI reference](docs/CLI.md).
 
 ## Tools
 

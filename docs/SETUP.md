@@ -18,6 +18,7 @@
 - [GitHub Copilot](#github-copilot)
 - [OpenCode](#opencode)
 - [Codex CLI](#codex-cli)
+- [A folder of apps](#a-folder-of-apps)
 - [Verify MCP is connected](#verify-mcp-is-connected)
 - [HTTP Transport](#http-transport-alternative)
 - [Regenerating context files](#regenerating-context-files)
@@ -257,6 +258,19 @@ rails ai:doctor  # Includes check_codex_env_staleness
 ```
 
 If you change Ruby versions, re-run the install generator to update the env snapshot.
+
+---
+
+## A folder of apps
+
+When your AI tool opens a folder that holds several apps (`work/shop`, `work/admin`), run `rails-ai-context init` in that folder. Each AI tool reads its MCP config from the folder it opened, so the folder's configs get one server per app, and each app keeps its own `.rails-ai-context.yml` and context files:
+
+| AI tool | Entry for `work/shop` |
+|---------|-----------------------|
+| Claude Code, Codex CLI, OpenCode | `rails-ai-context serve --app-path shop --server-name shop-rails-ai-context` |
+| Cursor, GitHub Copilot (VS Code) | the same, with `--app-path ${workspaceFolder}/shop` |
+
+Claude Code, Codex and OpenCode start a server in the folder they were launched in, so start them in `work/`. Cursor and VS Code expand `${workspaceFolder}` to the folder their config sits in. An in-Gemfile app's entry runs `bundle exec` with `BUNDLE_GEMFILE` naming that app's Gemfile, spelled the same way. `--server-name` makes each server announce its app first: VS Code names every tool after that name and keeps 13 characters of it. The full shape is in the [CLI reference](CLI.md#init-standalone-only), and [ADR-0005](adr/0005-workspace-mcp-entries.md) records why.
 
 ---
 

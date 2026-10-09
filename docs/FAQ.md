@@ -49,6 +49,10 @@ Yes. The gem gracefully degrades - it parses `db/schema.rb` as text when no data
 
 Yes, freely. Both generate identical context files and provide the same 45 tools. Just re-run the install/init to update MCP config files.
 
+### My editor opens a folder that holds several apps. Does that work?
+
+Yes. Run `rails-ai-context init` in that folder. It asks once, gives each app its own `.rails-ai-context.yml` and context files, and writes one MCP server per app into the folder's configs, `rails-ai-context-<app folder>`, so your AI tool sees every app and each app's tools are named after it. Start the tool in that folder: the entries name each app relative to it. See [`init`](CLI.md#init-standalone-only).
+
 ### Do I need to commit the generated files?
 
 **Yes, commit these:**
