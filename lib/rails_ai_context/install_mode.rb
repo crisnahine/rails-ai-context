@@ -44,21 +44,13 @@ module RailsAiContext
       lock = RailsAiContext::GemLock.for(root)
       return !lock.present?("rails-ai-context") unless lock.missing?
 
+      # nil when the Gemfile cannot be read in full: missing, unparseable, or
+      # pulling gems in from files a pre-boot read does not follow
+      # (eval_gemfile, gemspec).
       gems = lock.gemfile_gems
-      return false if gems.nil? || gems.include?("rails-ai-context")
-
-      !pulls_in_others?(File.join(root, RailsAiContext::GemLock.gemfile_name(root)))
+      gems.nil? ? false : !gems.include?("rails-ai-context")
     rescue => e
       RailsAiContext.debug_fail(e, false, label: "standalone install detection")
     end
-
-    # eval_gemfile and gemspec name gems in files the Gemfile read before a
-    # boot does not follow. A Gemfile that cannot be read rules nothing out.
-    def pulls_in_others?(gemfile)
-      File.read(gemfile).match?(/^[ \t]*(?:eval_gemfile|gemspec)\b/)
-    rescue SystemCallError
-      true
-    end
-    private_class_method :pulls_in_others?
   end
 end

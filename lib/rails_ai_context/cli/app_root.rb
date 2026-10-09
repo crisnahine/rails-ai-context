@@ -6,11 +6,12 @@ require_relative "entry_boot"
 module RailsAiContext
   module CLI
     # Which app a command reads, decided once and before anything reads
-    # Dir.pwd: --app-path as given, else the current directory, else the
-    # nearest app above it (the way bin/rails and Bundler find theirs), else
-    # the one app a level or two below it. Stdlib only, like EntryBoot: the
-    # answer is needed before the gem entry may load. Never prints and never
-    # exits; the binary relays the lines.
+    # Dir.pwd: --app-path as given, else the current directory (or, when it
+    # holds source alone, the app it sits in), else the nearest app above it
+    # (the way bin/rails and Bundler find theirs), else the one app a level or
+    # two below it. Stdlib only, like EntryBoot: the answer is needed before
+    # the gem entry may load. Never prints and never exits; the binary relays
+    # the lines.
     module AppRoot
       # root is the app the command reads, nil when there is no single one.
       # walked is nil when root is the directory the caller stood in or

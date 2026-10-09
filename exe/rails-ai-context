@@ -516,13 +516,15 @@ class RailsAiContextCLI < Thor
     end
 
     # This copy of the gem, at this version: the installed spec when one was
-    # activated (a wrapper on PATH may load another version), else this file
-    # with its own lib, as a checkout runs it.
+    # activated, the way its RubyGems wrapper activates it (a wrapper found on
+    # PATH may load another version), else this file with its own lib, as a
+    # checkout runs it.
     def own_binary
       spec = PREBOOT_GEM_SPECS["rails-ai-context"]
       return [ RbConfig.ruby, "-I", File.expand_path("../lib", __dir__), EXE_PATH ] unless spec
 
-      [ RbConfig.ruby, "-e", 'load Gem.bin_path("rails-ai-context", "rails-ai-context", ARGV.shift)', "= #{spec.version}" ]
+      [ RbConfig.ruby, "-e", 'load Gem.activate_bin_path("rails-ai-context", "rails-ai-context", ARGV.shift)',
+        "= #{spec.version}" ]
     end
 
     def show_workspace_instructions(apps, ai_tools, tool_mode, context_files)
