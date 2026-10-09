@@ -85,20 +85,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it replaced the user's table too; a comment above the next table now stays
   with it, a section a formatter wrapped over several lines is still read as
   the gem's, values are written as TOML strings rather than Ruby literals, a
-  file with Windows line endings keeps them, and one that is not ASCII is
-  read whatever the locale, by `doctor` too.
+  file with Windows line endings keeps them, a byte order mark no longer
+  hides the first section, and one that is not ASCII is read whatever the
+  locale, by `doctor` too.
 - **A JSON config the install cannot write back faithfully is left alone**,
   with the entry to add by hand, said on the terminal: one that does not
   parse (VS Code's and OpenCode's take trailing commas) was replaced by a
   file holding only the gem's server, one with comments lost them, and one
   that is JSON but not an object, or not UTF-8, raised out of the install. A
   byte order mark at the head of a config is kept, where it cost the file
-  its contents. `doctor` says to make such a file valid JSON before running
+  its contents, and an entry of the user's under the gem's own name - the
+  HTTP one SETUP.md describes - is kept in place of the gem's, where it was
+  overwritten. `doctor` says to make such a file valid JSON before running
   the install again.
 - **In a C or POSIX locale, a container's default, the binary reads paths
   and files as UTF-8**, as Rails does once it boots. A home directory, an
   app folder or an initializer holding characters outside ASCII stopped a
-  command with an encoding error.
+  command with an encoding error. A folder named in another encoding is
+  read byte by byte, as before.
 
 ## [5.32.2] - 2026-10-07
 

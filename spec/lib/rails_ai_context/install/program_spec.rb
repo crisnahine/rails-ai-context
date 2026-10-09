@@ -50,6 +50,20 @@ RSpec.describe RailsAiContext::Install::Program do
     end
   end
 
+  describe ".write_mcp_configs, with an entry of the user's under the gem's name" do
+    it "says it kept the user's entry" do
+      Dir.mktmpdir do |root|
+        File.write(File.join(root, ".mcp.json"), %({"mcpServers": {"rails-ai-context": {"url": "http://localhost:3000/mcp"}}}))
+        surface = surface_class.new
+
+        described_class.write_mcp_configs(surface, tools: %i[claude], tool_mode: :mcp, root: root, standalone: true)
+
+        expect(surface.lines).to include([ :muted, ".mcp.json unchanged - skipped" ],
+                                         [ :muted, a_string_including(".mcp.json: kept rails-ai-context") ])
+      end
+    end
+  end
+
   describe ".select_ai_tools" do
     it "parses numbers into tool keys and shows every tool with its files" do
       surface = surface_class.new("1,3")
@@ -205,6 +219,7 @@ RSpec.describe RailsAiContext::Install::Program do
                                                        app_roots: [ File.join(root, "a") ])
 
         expect(surface.lines).to include([ :warn, a_string_including("Could not update a/.cursor/mcp.json: it holds comments") ])
+        expect(surface.text).not_to include("Cursor files removed")
       end
     end
 

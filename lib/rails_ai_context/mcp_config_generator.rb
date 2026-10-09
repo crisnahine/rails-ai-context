@@ -94,15 +94,17 @@ module RailsAiContext
     end
 
     # @return [Hash] { written: [paths], skipped: [paths], failed: [paths],
-    #   reasons: { path => why it failed } }, the reasons for the caller to
+    #   reasons: { path => why it failed }, notes: { path => an entry kept
+    #   in place of the gem's } }, the reasons and notes for the caller to
     #   say in its own voice
     def call
-      return { written: [], skipped: [], failed: [], reasons: {} } if @tool_mode == :cli
+      return { written: [], skipped: [], failed: [], reasons: {}, notes: {} } if @tool_mode == :cli
 
       written = []
       skipped = []
       failed = []
       reasons = {}
+      @notes = {}
 
       @tools.each do |tool|
         config = TOOL_CONFIGS[tool]
@@ -126,7 +128,7 @@ module RailsAiContext
         end
       end
 
-      { written: written, skipped: skipped, failed: failed, reasons: reasons }
+      { written: written, skipped: skipped, failed: failed, reasons: reasons, notes: @notes }
     end
 
     # A config that parses but holds no object to merge into, at the top or
@@ -283,13 +285,36 @@ module RailsAiContext
       !at.nil? && argv[at + 1] == "serve"
     end
 
-    # A JSON config as data, past an editor's byte order mark. JSON is
-    # UTF-8, so a file that is not raises as one that does not parse.
-    def self.read_json(path)
-      text = RailsAiContext::SafeFile.read_text(path)
-      raise JSON::ParserError, "it is not UTF-8, which JSON is" if text.encoding == Encoding::BINARY
+    # A config's text past an editor's byte order mark, and the mark, which
+    # is the file's and goes back at its head when it is written.
+    def self.split_bom(text)
+      return [ text, "".dup.force_encoding(text.encoding) ] unless text.b.start_with?(BOM.b)
 
-      JSON.parse(text.delete_prefix(BOM))
+      [ text.byteslice(BOM.bytesize..).force_encoding(text.encoding), BOM.dup.force_encoding(text.encoding) ]
+    end
+
+    # A JSON config's text and byte order mark, and why it cannot be read
+    # as JSON at all: JSON is UTF-8.
+    #
+    # @return [Array(String, String, String)] text, mark, problem (nil when none)
+    def self.json_text(path)
+      text, bom = split_bom(RailsAiContext::SafeFile.read_text(path))
+      [ text, bom, text.encoding == Encoding::BINARY ? "it is not UTF-8, which JSON is" : nil ]
+    end
+
+    # A JSON config as data. One that is not UTF-8 raises as one that does
+    # not parse.
+    def self.read_json(path)
+      text, _, problem = json_text(path)
+      raise JSON::ParserError, problem if problem
+
+      JSON.parse(text)
+    end
+
+    # The first line of a JSON parser's complaint, which can run to the
+    # whole file.
+    def self.parse_problem(error)
+      "it does not parse as JSON (#{error.message.lines.first.to_s.strip[0, 100]})"
     end
 
     # Whether JSON text holds a comment, which JSON.parse passes over and a
@@ -352,12 +377,9 @@ module RailsAiContext
     def merge_json(path, config, entries)
       FileUtils.mkdir_p(File.dirname(path))
 
-      text = File.exist?(path) ? RailsAiContext::SafeFile.read_text(path) : nil
-      raise ShapeError, "it is not UTF-8, which JSON is" if text && text.encoding == Encoding::BINARY
+      text, bom, problem = File.exist?(path) ? self.class.json_text(path) : [ nil, "", nil ]
+      raise ShapeError, problem if problem
 
-      # An editor's byte order mark is the file's, and stays.
-      bom = text&.start_with?(BOM) ? BOM : ""
-      text = text&.delete_prefix(BOM)
       # An empty file holds nothing to lose.
       data = text.nil? || text.strip.empty? ? {} : parse_json(text)
       raise ShapeError, "it is JSON but not an object" unless data.is_a?(Hash)
@@ -371,6 +393,11 @@ module RailsAiContext
         argv = self.class.json_argv(entry)
         [ name, self.class.entry_app_root(argv, config[:folder_variable], @output_dir) ] if self.class.own_entry?(name, argv)
       end
+      # An entry under one of this write's names that is not the gem's - the
+      # HTTP one SETUP.md describes - is kept in place of the gem's.
+      kept = entries.keys.select { |name| servers.key?(name) && !self.class.own_entry?(name, self.class.json_argv(servers[name])) }
+      note_kept(path, kept)
+      entries = entries.except(*kept)
       stale = stale_names(ours.to_h)
       return :skipped if text && stale.empty? && entries.all? { |name, entry| servers[name] == entry }
       # JSON.parse passes over comments, and the file written back would
@@ -391,7 +418,14 @@ module RailsAiContext
     def parse_json(text)
       JSON.parse(text)
     rescue JSON::ParserError => e
-      raise ShapeError, "it does not parse as JSON (#{e.message.lines.first.to_s.strip[0, 100]})"
+      raise ShapeError, self.class.parse_problem(e)
+    end
+
+    def note_kept(path, kept)
+      return if kept.empty?
+
+      @notes[path] = "kept #{kept.join(', ')}, which #{kept.one? ? 'runs' : 'run'} something other than the gem's " \
+                     "server (an HTTP entry?), in place of the gem's"
     end
 
     # --- TOML merge logic ---
@@ -400,7 +434,7 @@ module RailsAiContext
     # dropped, and a new one goes at the end after a blank line.
     def merge_toml(path)
       FileUtils.mkdir_p(File.dirname(path))
-      content = File.exist?(path) ? RailsAiContext::SafeFile.read_text(path) : +""
+      content, bom = self.class.split_bom(File.exist?(path) ? RailsAiContext::SafeFile.read_text(path) : +"")
       lines = content.lines
       # A file kept with Windows line endings keeps them, and one that is not
       # UTF-8 gets the new sections as bytes beside its own.
@@ -414,9 +448,13 @@ module RailsAiContext
       ours = Toml.own_sections(lines).map do |range, name|
         [ name, self.class.entry_app_root(Toml.argv(lines, range), nil, @output_dir) ]
       end
+      # A section under one of this write's names that is not the gem's is
+      # kept in place of the gem's, which would be a second table of one
+      # name, and that does not parse.
+      kept = named.map(&:last).select { |name| by_name.key?(name) } - ours.map(&:first)
+      note_kept(path, kept.uniq)
+      by_name = by_name.except(*kept)
       drop = stale_names(ours.to_h)
-      # An entry this write names is replaced whoever wrote it: a second
-      # table of one name would not parse.
       starts = named.select { |_, name| by_name.key?(name) || drop.include?(name) }
         .to_h { |range, name| [ range.begin, [ range, name ] ] }
 
@@ -459,7 +497,7 @@ module RailsAiContext
 
       return :skipped if File.exist?(path) && new_content == content
 
-      RailsAiContext::SafeFile.atomic_write(path, new_content)
+      RailsAiContext::SafeFile.atomic_write(path, bom + new_content)
       :written
     end
 
@@ -555,7 +593,7 @@ module RailsAiContext
     # The app every server of ours in one config file names.
     def self.app_roots_in(path, config, dir)
       argvs = if config[:format] == :codex_toml
-        lines = RailsAiContext::SafeFile.read_text(path).lines
+        lines = split_bom(RailsAiContext::SafeFile.read_text(path)).first.lines
         Toml.own_sections(lines).map { |range, _| Toml.argv(lines, range) }
       else
         data = read_json(path)
@@ -605,15 +643,19 @@ module RailsAiContext
     end
 
     # @return [true, String, nil] true when the entries went, the reason they
-    #   stay when a rewrite would lose what the file holds, nil when it holds
-    #   none of the gem's
+    #   stay when the file cannot be written back faithfully, nil when it
+    #   holds none of the gem's
     def self.remove_json_entry(path, root_key)
-      text = RailsAiContext::SafeFile.read_text(path)
-      return nil if text.encoding == Encoding::BINARY
+      text, bom, problem = json_text(path)
+      # A file that cannot be read says so only when it names the gem.
+      unreadable = ->(why) { "#{why}, so it is left as it is. Remove its rails-ai-context entries by hand" if text.include?(SERVER_NAME) }
+      return unreadable.call(problem) if problem
 
-      bom = text.start_with?(BOM) ? BOM : ""
-      text = text.delete_prefix(BOM)
-      data = JSON.parse(text)
+      data = begin
+        JSON.parse(text)
+      rescue JSON::ParserError => e
+        return unreadable.call(parse_problem(e))
+      end
       servers = data.is_a?(Hash) ? data[root_key] : nil
       return nil unless servers.is_a?(Hash)
 
@@ -633,12 +675,10 @@ module RailsAiContext
         RailsAiContext::SafeFile.atomic_write(path, bom + JSON.pretty_generate(data) + "\n")
       end
       true
-    rescue JSON::ParserError
-      nil
     end
 
     def self.remove_toml_entry(path)
-      content = RailsAiContext::SafeFile.read_text(path)
+      content, bom = split_bom(RailsAiContext::SafeFile.read_text(path))
       lines = content.lines
       sections = Toml.own_sections(lines)
       return false if sections.empty?
@@ -653,7 +693,7 @@ module RailsAiContext
       if new_content.empty?
         File.delete(path)
       else
-        RailsAiContext::SafeFile.atomic_write(path, new_content + newline)
+        RailsAiContext::SafeFile.atomic_write(path, bom + new_content + newline)
       end
       true
     end

@@ -28,6 +28,13 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
     File.join(tmp, path).tap { |d| FileUtils.mkdir_p(d) }
   end
 
+  # macOS filesystems refuse a name that is not UTF-8.
+  def latin1_app(path)
+    app(path)
+  rescue Errno::EILSEQ
+    skip "this filesystem refuses names that are not UTF-8"
+  end
+
   describe ".resolve" do
     it "keeps the current directory when it is an app" do
       root = app("shop")
@@ -198,7 +205,7 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
     # another encoding is escaped byte by byte, not refused.
     it "writes each command the way a shell reads it" do
       app("work/a b")
-      app("work/caf\xE9".b)
+      latin1_app("work/caf\xE9".b)
       cwd = File.join(tmp, "work")
       lines = described_class.several_apps(described_class.resolve(cwd: cwd), cwd, %w[tool search_code pattern=x$y])
 
@@ -208,7 +215,7 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
 
     # Names that are no UTF-8 are directories all the same.
     it "walks up from, and down to, a folder whose name is not UTF-8" do
-      root = app("caf\xE9".b)
+      root = latin1_app("caf\xE9".b)
       nested = File.join(root, "app/models")
 
       expect(described_class.resolve(cwd: nested.dup.force_encoding(Encoding::UTF_8)).root.b).to eq(root.b)
@@ -300,7 +307,9 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
         File.write(File.join(tmp, "Gemfile"), "")
         under_bundle(File.join(tmp, "Gemfile"))
 
-        expect(described_class.bundle_warning(root, root)).to start_with("[rails-ai-context] WARNING: This app boots against")
+        warning = described_class.bundle_warning(root, root)
+        expect(warning).to start_with("[rails-ai-context] WARNING: This app boots against")
+        expect(warning).not_to include("from inside the app")
       end
 
       it "warns for an app with no Gemfile outside the bundle's directory, and not inside it" do

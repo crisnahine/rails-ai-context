@@ -129,16 +129,20 @@ module RailsAiContext
           outcome[:failed].each { |path| surface.say "Could not remove #{path} - check its permissions", :warn }
 
           # Merge-safe MCP config cleanup - removes only the rails-ai-context entries
+          left = []
           cleaned = [ root, *app_roots ].map(&:to_s).uniq.flat_map do |dir|
             RailsAiContext::McpConfigGenerator.remove(
               tools: [ key ], output_dir: dir,
-              warn: ->(path, reason) { surface.say "Could not update #{relative_to(path, root)}: #{reason}", :warn }
+              warn: lambda { |path, reason|
+                left << path
+                surface.say "Could not update #{relative_to(path, root)}: #{reason}", :warn
+              }
             )
           end
           cleaned.each { |f| surface.say "  Removed MCP entry from #{relative_to(f, root)}", :ok }
 
           gone = outcome[:removed].any? || outcome[:trimmed].any? || cleaned.any?
-          surface.say "  #{tool.name} files removed", :ok if tool && gone && outcome[:failed].empty?
+          surface.say "  #{tool.name} files removed", :ok if tool && gone && outcome[:failed].empty? && left.empty?
         end
       end
 
@@ -176,6 +180,7 @@ module RailsAiContext
         result = generator.call
         result[:written].each { |f| surface.say "Created/Updated #{relative_to(f, root)}", :ok }
         result[:skipped].each { |f| surface.say "#{relative_to(f, root)} unchanged - skipped", :muted }
+        result[:notes]&.each { |f, note| surface.say "  #{relative_to(f, root)}: #{note}", :muted }
         result[:failed].each do |f|
           surface.say "Could not write #{relative_to(f, root)} - that tool will not auto-discover the MCP server", :warn
           surface.say "  #{result[:reasons][f]}", :warn if result[:reasons]&.[](f)

@@ -176,6 +176,19 @@ RSpec.describe RailsAiContext::Install::Workspace do
       expect(described_class.apps(@dir, [ root ]).first.server.env).to include("BUNDLE_GEMFILE" => "api/Gemfile")
     end
 
+    # Bundler names the lockfile after the path it is given, so a shared
+    # Gemfile that is itself a link keeps the name config/boot.rb gives it.
+    it "names a shared Gemfile by the path config/boot.rb gives it, not its link's target" do
+      FileUtils.mkdir_p(File.join(@dir, ".git"))
+      File.write(File.join(@dir, "Gemfile.real"), "")
+      File.symlink(File.join(@dir, "Gemfile.real"), File.join(@dir, "Gemfile"))
+      File.write(File.join(@dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails-ai-context (1.0.0)\n\n")
+      root = app("apps/a")
+      File.write(File.join(root, "config/boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n))
+
+      expect(described_class.apps(@dir, [ root ]).first.server.env).to include("BUNDLE_GEMFILE" => "Gemfile")
+    end
+
     # config/boot.rb's Gemfile is the one the app boots against, read or not.
     it "names the Gemfile config/boot.rb points at outside any git repository" do
       File.write(File.join(@dir, "Gemfile"), "")

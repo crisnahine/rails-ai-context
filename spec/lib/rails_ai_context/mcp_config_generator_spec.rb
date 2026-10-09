@@ -319,6 +319,44 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
         end
       end
 
+      # SETUP.md tells a user to point the bare name at the HTTP endpoint.
+      it "keeps an HTTP entry under the bare name in place of the gem's, and says so" do
+        Dir.mktmpdir do |dir|
+          http = %({"mcpServers": {"rails-ai-context": {"url": "http://localhost:3000/mcp"}}}\n)
+          File.write(File.join(dir, ".mcp.json"), http)
+          FileUtils.mkdir_p(File.join(dir, ".codex"))
+          toml = %([mcp_servers.rails-ai-context]\nurl = "http://localhost:3000/mcp"\n)
+          File.write(File.join(dir, ".codex/config.toml"), toml)
+
+          result = described_class.new(tools: %i[claude codex], output_dir: dir, tool_mode: :mcp, standalone: true).call
+
+          expect(result[:skipped].size).to eq(2)
+          expect(File.read(File.join(dir, ".mcp.json"))).to eq(http)
+          expect(File.read(File.join(dir, ".codex/config.toml"))).to eq(toml)
+          expect(result[:notes].values).to all(include("kept rails-ai-context", "in place of the gem's"))
+        end
+      end
+
+      # A byte order mark hid the header on the first line, and a second
+      # table of one name does not parse.
+      it "reads a Codex config past a byte order mark, and keeps the mark" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, ".codex"))
+          path = File.join(dir, ".codex/config.toml")
+          File.write(path, %(\uFEFF[mcp_servers.rails-ai-context]\ncommand = "old"\nargs = ["serve"]\n))
+
+          described_class.new(tools: %i[codex], output_dir: dir, tool_mode: :mcp, standalone: true).call
+
+          toml = File.read(path)
+          expect(toml).to start_with("\uFEFF[mcp_servers.rails-ai-context]\n")
+          expect(toml.scan("[mcp_servers.rails-ai-context]").size).to eq(1)
+          expect(toml).not_to include(%(command = "old"))
+
+          expect(described_class.remove(tools: %i[codex], output_dir: dir)).to eq([ path ])
+          expect(File.exist?(path)).to be(false)
+        end
+      end
+
       it "reads a // inside a string as no comment" do
         Dir.mktmpdir do |dir|
           File.write(File.join(dir, ".mcp.json"), %({"mcpServers": {"api": {"url": "https://x.example/mcp", "note": "a \\" // b"}}}\n))
@@ -1142,6 +1180,24 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
         expect(cleaned).to be_empty
         expect(File.read(File.join(dir, ".mcp.json"))).to eq(commented)
         expect(said).to contain_exactly([ File.join(dir, ".mcp.json"), a_string_including("so it is left as it is", "Remove rails-ai-context from it by hand") ])
+      end
+    end
+
+    # Dropping a tool leaves a file it cannot read as it is, and says so
+    # when the file names the gem.
+    it "says why it leaves a config that does not parse, and only when it names the gem" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, ".vscode"))
+        File.write(File.join(dir, ".vscode/mcp.json"), %({"servers": {"rails-ai-context": {"command": "rails-ai-context"},}}))
+        File.write(File.join(dir, ".mcp.json"), %({"mcpServers": {"other": {},}}))
+        said = []
+
+        cleaned = described_class.remove(tools: %i[copilot claude], output_dir: dir, warn: ->(path, reason) { said << [ path, reason ] })
+
+        expect(cleaned).to be_empty
+        expect(said).to contain_exactly(
+          [ File.join(dir, ".vscode/mcp.json"), a_string_including("does not parse as JSON", "Remove its rails-ai-context entries by hand") ]
+        )
       end
     end
 
