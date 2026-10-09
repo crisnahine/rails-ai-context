@@ -8,21 +8,27 @@ module E2E
   class McpStdioClient
     class Error < StandardError; end
 
-    def initialize(app_builder, timeout: 20)
+    # `launch:` starts the server the way an AI tool would from its config
+    # entry - { env:, command:, chdir: } - instead of the builder's own way.
+    def initialize(app_builder, timeout: 20, launch: nil)
       @app     = app_builder
       @timeout = timeout
+      @launch  = launch
       @id      = 0
     end
 
     def start!
-      prefix = if @app.isolated_gem_home?
-        [ File.join(@app.gem_home, "bin", "rails-ai-context") ]
+      env, command, chdir = if @launch
+        @launch.values_at(:env, :command, :chdir)
       else
-        [ "bundle", "exec", "rails-ai-context" ]
+        prefix = if @app.isolated_gem_home?
+          [ File.join(@app.gem_home, "bin", "rails-ai-context") ]
+        else
+          [ "bundle", "exec", "rails-ai-context" ]
+        end
+        [ @app.env, [ *prefix, "serve" ], @app.app_path ]
       end
-      @stdin, @stdout, @stderr, @wait_thr = Open3.popen3(
-        @app.env, *prefix, "serve", chdir: @app.app_path
-      )
+      @stdin, @stdout, @stderr, @wait_thr = Open3.popen3(env, *command, chdir: chdir)
       # Server may emit a line of banner text before the JSON-RPC stream.
       # we tolerate that because the MCP SDK also does (the first byte of
       # JSON starts the message). But if the process dies early, fail loud.

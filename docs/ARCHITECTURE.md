@@ -213,7 +213,8 @@ Result: controller and view tools automatically include relevant schema informat
 
 Thor-based CLI that works standalone (no Gemfile entry):
 
-- `EntryBoot` - Finds and boots the host Rails app for the standalone binary, or says which tier it fell back to
+- `AppRoot` - Decides which app a command reads before anything reads the working directory: `--app-path` as given, else the working directory, else the nearest app root above it, else the one app below it (several are refused by name, and `init` sets them all up)
+- `EntryBoot` - Boots the app `AppRoot` chose for the standalone binary, or says which tier it fell back to
 - `ToolRunner` - Parses CLI args, resolves tool names, executes tools, formats output
 - Supports `--json` mode for machine-readable output
 - Same 45 tools available as MCP and CLI

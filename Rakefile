@@ -14,6 +14,7 @@ RSpec::Core::RakeTask.new(:spec)
 #   bundle exec rake e2e:in_gemfile   # just Path A
 #   bundle exec rake e2e:standalone   # just Path B
 #   bundle exec rake e2e:zero_config  # just Path C
+#   bundle exec rake e2e:workspace    # just Path D: init in a folder of apps
 #   bundle exec rake e2e:mcp          # stdio + HTTP protocol specs
 namespace :e2e do
   RSpec::Core::RakeTask.new(:in_gemfile) do |t|
@@ -28,6 +29,11 @@ namespace :e2e do
 
   RSpec::Core::RakeTask.new(:zero_config) do |t|
     t.pattern = "spec/e2e/zero_config_install_spec.rb"
+    ENV["E2E"] = "1"
+  end
+
+  RSpec::Core::RakeTask.new(:workspace) do |t|
+    t.pattern = "spec/e2e/workspace_install_spec.rb"
     ENV["E2E"] = "1"
   end
 

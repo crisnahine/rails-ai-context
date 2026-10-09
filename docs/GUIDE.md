@@ -117,7 +117,7 @@ No Gemfile entry, no initializer, no files in your project besides config and co
 5. **Creates or updates `config/initializers/rails_ai_context.rb`.** A new file gets your three answers as live lines (`config.ai_tools`, `config.tool_mode`, `config.context_files`) and every other option commented out at its default, wrapped in `if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)`. In an existing file it rewrites those three lines, appends any config section the file lacks, adds the guard if it is missing, and leaves the rest alone.
 6. **Writes `.rails-ai-context.yml`** with `ai_tools`, `tool_mode` and `context_files`. Other keys already in the file are kept.
 7. **Adds lines to `.gitignore`**, if the file exists: `.ai-context.json` (not for choice 3) and `.codex/config.toml` (always, because it holds this machine's Ruby paths). A line that is already there is not added again.
-8. **Asks about a pre-commit hook:** `Install a pre-commit hook that validates Rails references? (y/N)`. Only `y` installs it. The hook runs `rails 'ai:tool[validate]'` on the staged `.rb` and `.erb` files. No question is asked when the app has no `.git` directory or when the hook is already installed. When another `.git/hooks/pre-commit` exists it prints `Skipped pre-commit hook (existing hook found - add manually)` and moves on.
+8. **Asks about a pre-commit hook:** `Install a pre-commit hook that validates Rails references? (y/N)`. Only `y` installs it. The hook runs `rails 'ai:tool[validate]'` on the staged `.rb` and `.erb` files. It goes where git runs hooks (`git rev-parse --git-path hooks`), so an app checked out as a submodule, an app inside a monorepo and a repo with `core.hooksPath` set all get it where git will run it; in a monorepo the hook changes into the app's directory and validates that app's staged files only. No question is asked outside a git repository or when the hook is already installed. When another `pre-commit` hook exists there it prints `Skipped pre-commit hook (existing hook found - add manually)` and moves on.
 9. **Generates the context files** for the selected tools. Skipped for choice 3. If files that v5.0.0 stopped generating are still there (`.claude/rules/rails-ui-patterns.md`, `.claude/rules/rails-accessibility.md`, `.cursor/rules/rails-ui-patterns.mdc`, `.github/instructions/rails-ui-patterns.instructions.md`), it lists them first and asks `Delete them? [y/N]:`. Without a terminal, or under `--defaults`, it prints the `rm` command and does not ask.
 10. **Prints a summary:** the files each selected tool got and the commands to run next.
 
@@ -130,7 +130,7 @@ A team that wants no AI tool files in the repo can skip the generator. The gem n
 
 Two other entry points ask the same step 1 and step 3 questions:
 
-- `rails-ai-context init` (standalone) asks both, then offers the step 2 and step 9 cleanups, writes `.rails-ai-context.yml`, the MCP configs and the `.gitignore` lines, and generates the context files. On an MCP-only run it skips the step 9 question, as the generator does. It never creates the initializer (in one that exists it updates `config.ai_tools`, `config.tool_mode` and `config.context_files`), never offers the pre-commit hook, and has `--mcp-only` but no `--defaults`.
+- `rails-ai-context init` (standalone) asks both, then offers the step 2 and step 9 cleanups, writes `.rails-ai-context.yml`, the MCP configs and the `.gitignore` lines, and generates the context files. On an MCP-only run it skips the step 9 question, as the generator does. It never creates the initializer (in one that exists it updates `config.ai_tools`, `config.tool_mode` and `config.context_files`), never offers the pre-commit hook, and has `--mcp-only` but no `--defaults`. Run in a folder that holds several apps, it asks once and sets them all up: each app's own `.rails-ai-context.yml` and context files, and one MCP server per app in the folder's configs ([`init`](CLI.md#init-standalone-only)).
 - `rails ai:context` asks step 1 only when no tool selection is recorded, and step 3 only when no `tool_mode` is recorded. It then writes `.rails-ai-context.yml`, the MCP configs and the `.gitignore` lines before generating. It does not create the initializer or offer the hook.
 
 ---
@@ -1138,7 +1138,9 @@ The install generator (or `rails-ai-context init`) creates per-tool MCP config f
 | OpenCode | `opencode.json` | `mcp` | JSON |
 | Codex CLI | `.codex/config.toml` | `[mcp_servers]` | TOML |
 
-Each file is merge-safe - only the `rails-ai-context` entry is managed, other servers are preserved. When the gem is not in the app's `Gemfile.lock` (standalone install) the entry runs `rails-ai-context serve` with no `bundle exec`.
+Each file is merge-safe - only the `rails-ai-context` entries are managed, other servers are preserved. When the gem is not in the app's `Gemfile.lock` (standalone install) the entry runs `rails-ai-context serve` with no `bundle exec`.
+
+A folder of apps gets one entry per app instead, `rails-ai-context-<app folder>`, each pointed at its app with `--app-path` and announcing its app first with `--server-name`; see [`init`](CLI.md#init-standalone-only) for the shape each AI tool gets.
 
 **Example: `.mcp.json` (Claude Code)**
 ```json
@@ -1401,7 +1403,7 @@ end
 | `http_port` | Integer | `6029` | HTTP server port |
 | `live_reload` | Symbol/Boolean | `:auto` | `:auto`, `true`, or `false` - enable MCP live reload |
 | `live_reload_debounce` | Float | `1.5` | Debounce interval in seconds for live reload |
-| `server_name` | String | `"rails-ai-context"` | MCP server name |
+| `server_name` | String | `"rails-ai-context"` | The MCP server name the server announces. `serve --server-name` overrides it for one process, which is how a workspace's entries announce their app |
 | `server_version` | String | gem version | MCP server version. Read-only, there is no setter |
 | `generate_root_files` | Boolean | `true` | Set `false` to generate split rules only: no CLAUDE.md, AGENTS.md, .cursorrules or copilot-instructions.md (`.ai-context.json` is still written) |
 | `anti_hallucination_rules` | Boolean | `true` | Embed 6-rule Anti-Hallucination Protocol in generated context files - set `false` to skip |
@@ -1784,7 +1786,7 @@ Works in:
 ### MCP server not detected by your AI tool
 
 1. Run `rails ai:doctor` - it checks per-tool MCP config files
-2. Verify the correct config file exists for your tool (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `opencode.json`, `.codex/config.toml`)
+2. Verify the correct config file exists for your tool (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `opencode.json`, `.codex/config.toml`) in the folder the tool opened: the app, or the folder of apps `init` set up
 3. Re-run install (`rails generate rails_ai_context:install` or `rails-ai-context init`) to regenerate configs
 4. Restart your AI tool
 
