@@ -99,10 +99,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overwritten. `doctor` says to make such a file valid JSON before running
   the install again.
 - **In a C or POSIX locale, a container's default, the binary reads paths
-  and files as UTF-8**, as Rails does once it boots. A home directory, an
-  app folder or an initializer holding characters outside ASCII stopped a
-  command with an encoding error. A folder named in another encoding is
-  read byte by byte, as before.
+  and files as UTF-8 when they are**, as Rails does once it boots. An app
+  folder or a folder of apps whose path holds characters outside ASCII, a
+  home directory holding them while the binary looked for the app, and an
+  initializer holding them stopped the binary with an encoding error. A
+  folder named in another encoding is read byte by byte, as before.
 
 ## [5.32.2] - 2026-10-07
 

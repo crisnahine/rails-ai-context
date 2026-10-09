@@ -311,10 +311,12 @@ module RailsAiContext
       JSON.parse(text)
     end
 
-    # The first line of a JSON parser's complaint, which can run to the
-    # whole file.
+    # Where a JSON parser stopped, when it says (json 2.10 on), and what
+    # usually stops it in a config an editor keeps; its own words can run to
+    # the whole file.
     def self.parse_problem(error)
-      "it does not parse as JSON (#{error.message.lines.first.to_s.strip[0, 100]})"
+      where = error.message[/line \d+,? column \d+/]
+      "it does not parse as JSON#{" at #{where}" if where} (a trailing comma?)"
     end
 
     # Whether JSON text holds a comment, which JSON.parse passes over and a

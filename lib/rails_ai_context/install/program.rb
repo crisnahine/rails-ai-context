@@ -183,7 +183,7 @@ module RailsAiContext
         result[:notes]&.each { |f, note| surface.say "  #{relative_to(f, root)}: #{note}", :muted }
         result[:failed].each do |f|
           surface.say "Could not write #{relative_to(f, root)} - that tool will not auto-discover the MCP server", :warn
-          surface.say "  #{result[:reasons][f]}", :warn if result[:reasons]&.[](f)
+          surface.say result[:reasons][f], :warn if result[:reasons]&.[](f)
         end
         surface.say "Skipped MCP config files (CLI-only mode)", :muted if tool_mode == :cli
         result
