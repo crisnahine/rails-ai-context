@@ -90,12 +90,23 @@ RSpec.describe RailsAiContext::Install::Workspace do
       expect(apps.map(&:standalone)).to eq([ true, false ])
     end
 
+    # A fresh clone has no lockfile yet; a Gemfile that does not name the gem
+    # cannot be serving it, so bundle exec would find no binary to run.
+    it "reads an app with a Gemfile and no lockfile by what its Gemfile names" do
+      without = app("a")
+      File.write(File.join(without, "Gemfile"), %(source "https://rubygems.org"\ngem "rails"\n))
+      with = app("b")
+      File.write(File.join(with, "Gemfile"), %(source "https://rubygems.org"\ngem "rails"\ngem "rails-ai-context"\n))
+
+      expect(described_class.apps(@dir, [ without, with ]).map(&:standalone)).to eq([ true, false ])
+    end
+
     it "points a standalone app's server at it with no Bundler variables" do
       root = app("a", lock_gems: %w[rails])
       server = described_class.apps(@dir, [ root ]).first.server
 
-      expect(server.argv).to eq(%w[rails-ai-context serve --app-path a --server-name a-rails-ai-context])
-      expect(server.env).to eq({})
+      expect(server.argv).to eq(%w[rails-ai-context serve --app-path a])
+      expect(server.env).to eq("RAILS_AI_CONTEXT_SERVER_NAME" => "a-rails-ai-context")
     end
 
     # bundle exec looks for a Gemfile upward from where the client starts
@@ -104,8 +115,8 @@ RSpec.describe RailsAiContext::Install::Workspace do
       root = app("group/b", lock_gems: %w[rails rails-ai-context])
       server = described_class.apps(@dir, [ root ]).first.server
 
-      expect(server.argv).to eq(%w[bundle exec rails-ai-context serve --app-path group/b --server-name b-rails-ai-context])
-      expect(server.env).to eq("BUNDLE_GEMFILE" => "group/b/Gemfile")
+      expect(server.argv).to eq(%w[bundle exec rails-ai-context serve --app-path group/b])
+      expect(server.env).to eq("BUNDLE_GEMFILE" => "group/b/Gemfile", "RAILS_AI_CONTEXT_SERVER_NAME" => "b-rails-ai-context")
     end
 
     # VS Code names each tool after the announced name and keeps 13
@@ -124,7 +135,7 @@ RSpec.describe RailsAiContext::Install::Workspace do
       File.write(File.join(root, "gems.rb"), "")
       File.write(File.join(root, "gems.locked"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails-ai-context (1.0.0)\n\n")
 
-      expect(described_class.apps(@dir, [ root ]).first.server.env).to eq("BUNDLE_GEMFILE" => "b/gems.rb")
+      expect(described_class.apps(@dir, [ root ]).first.server.env).to include("BUNDLE_GEMFILE" => "b/gems.rb")
     end
   end
 end

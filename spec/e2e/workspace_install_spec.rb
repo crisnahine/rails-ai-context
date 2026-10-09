@@ -18,6 +18,25 @@ RSpec.describe "E2E: workspace of apps", type: :e2e do
     @admin = E2E::TestAppBuilder.new(parent_dir: @workspace, name: "admin", install_path: :in_gemfile)
     @admin.define_singleton_method(:run_install_generator!) { }
     @admin.build!
+    # A custom tool, which only a boot of the app can list (#426).
+    File.write(File.join(@admin.app_path, "config/initializers/rails_ai_context.rb"), <<~RUBY)
+      if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
+        require "mcp"
+
+        class LabProbeTool < MCP::Tool
+          tool_name "lab_probe"
+          description "Lab probe custom tool"
+
+          def self.call(server_context: nil)
+            MCP::Tool::Response.new([ { type: "text", text: "probe" } ])
+          end
+        end
+
+        RailsAiContext.configure do |config|
+          config.custom_tools = [ LabProbeTool ]
+        end
+      end
+    RUBY
 
     @init_out, @init_err, @init_status = Open3.capture3(
       shell_env, File.join(@shop.gem_home, "bin", "rails-ai-context"), "init",
@@ -76,7 +95,8 @@ RSpec.describe "E2E: workspace of apps", type: :e2e do
       servers = json_servers(".mcp.json", "mcpServers")
       expect(servers["rails-ai-context-shop"]["command"]).to eq("rails-ai-context")
       expect(servers["rails-ai-context-admin"]).to include(
-        "command" => "bundle", "env" => { "BUNDLE_GEMFILE" => "admin/Gemfile" }
+        "command" => "bundle",
+        "env" => { "BUNDLE_GEMFILE" => "admin/Gemfile", "RAILS_AI_CONTEXT_SERVER_NAME" => "admin-rails-ai-context" }
       )
     end
 
@@ -142,6 +162,18 @@ RSpec.describe "E2E: workspace of apps", type: :e2e do
 
     expect(status.success?).to be(false)
     expect(err).to include("it names an app from #{@workspace}")
+  end
+
+  # tool --list read the current directory before --app-path, so from
+  # outside the app it never booted it and left its custom tools out.
+  it "lists an app's custom tools with --app-path from outside it" do
+    env = shell_env.merge("BUNDLE_GEMFILE" => File.join(@admin.app_path, "Gemfile"))
+    out, err, status = Open3.capture3(env, "bundle", "exec", "rails-ai-context", "tool", "--list", "--app-path", "admin",
+                                      chdir: @workspace)
+
+    expect(status.success?).to be(true), err
+    expect(out).to match(/^\s+lab_probe\s+Lab probe custom tool$/)
+    expect(out).not_to include("Run inside a Rails app to execute tools")
   end
 
   it "finds the workspace's MCP configs from doctor inside an app" do

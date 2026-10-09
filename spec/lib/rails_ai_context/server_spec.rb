@@ -44,6 +44,27 @@ RSpec.describe RailsAiContext::Server do
     end
   end
 
+  describe ".announced_name" do
+    it "is config.server_name by default" do
+      expect(described_class.announced_name).to eq(RailsAiContext.configuration.server_name)
+    end
+
+    # A workspace's entries name each server after its app this way, and an
+    # app pinned to an older gem ignores the variable instead of failing.
+    it "is RAILS_AI_CONTEXT_SERVER_NAME when the process sets it" do
+      stub_const("ENV", ENV.to_h.merge("RAILS_AI_CONTEXT_SERVER_NAME" => "shop-rails-ai-context"))
+
+      expect(described_class.announced_name).to eq("shop-rails-ai-context")
+      expect(server.build.name).to eq("shop-rails-ai-context")
+    end
+
+    it "ignores a blank RAILS_AI_CONTEXT_SERVER_NAME" do
+      stub_const("ENV", ENV.to_h.merge("RAILS_AI_CONTEXT_SERVER_NAME" => " "))
+
+      expect(described_class.announced_name).to eq(RailsAiContext.configuration.server_name)
+    end
+  end
+
   describe "#build" do
     it "returns an MCP::Server instance" do
       mcp_server = server.build

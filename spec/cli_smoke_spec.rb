@@ -160,8 +160,9 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       # Bare `preset` lists and returns before the boot path, so the loop
       # runs a real one. Only serve and watch are left out: both run until
       # interrupted.
+      # No command may wait on the runner's own stdin: init prompts.
       [ "inspect", "facts", "context", "preset architecture", "init", "tool", "doctor" ].each do |command|
-        out = `cd #{dir} && ruby -I #{lib} #{exe} #{command} 2>&1`
+        out = `cd #{dir} && ruby -I #{lib} #{exe} #{command} < /dev/null 2>&1`
         expect(out).not_to include("ArgumentError"), "#{command}: #{out}"
         # preset rescues StandardError, so only the message reaches stderr.
         expect(out).not_to include("missing keyword"), "#{command}: #{out}"
@@ -397,10 +398,10 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
 
         expect(status.exitstatus).to eq(0), err
         expect(servers(dir)).to eq(
-          "rails-ai-context-a" => { "command" => "rails-ai-context",
-                                    "args" => %w[serve --app-path a --server-name a-rails-ai-context] },
-          "rails-ai-context-b" => { "command" => "rails-ai-context",
-                                    "args" => %w[serve --app-path group/b --server-name b-rails-ai-context] }
+          "rails-ai-context-a" => { "command" => "rails-ai-context", "args" => %w[serve --app-path a],
+                                    "env" => { "RAILS_AI_CONTEXT_SERVER_NAME" => "a-rails-ai-context" } },
+          "rails-ai-context-b" => { "command" => "rails-ai-context", "args" => %w[serve --app-path group/b],
+                                    "env" => { "RAILS_AI_CONTEXT_SERVER_NAME" => "b-rails-ai-context" } }
         )
         %w[a group/b].each do |app|
           expect(File.exist?(File.join(dir, app, ".rails-ai-context.yml"))).to be(true), app
@@ -453,8 +454,8 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         _out, err, status = init(dir, "1\n1\n")
 
         expect(servers(dir)["rails-ai-context-b"]).to eq(
-          "command" => "bundle", "args" => %w[exec rails-ai-context serve --app-path b --server-name b-rails-ai-context],
-          "env" => { "BUNDLE_GEMFILE" => "b/Gemfile" }
+          "command" => "bundle", "args" => %w[exec rails-ai-context serve --app-path b],
+          "env" => { "BUNDLE_GEMFILE" => "b/Gemfile", "RAILS_AI_CONTEXT_SERVER_NAME" => "b-rails-ai-context" }
         )
         expect(File.exist?(File.join(dir, "a", "CLAUDE.md"))).to be(true)
         expect(status.exitstatus).to eq(1)
@@ -478,7 +479,7 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
           { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "rails_get_model_details", arguments: {} } }
         ].map { |message| "#{JSON.generate(message)}\n" }.join
 
-        out, err, = Open3.capture3("ruby", "-I", lib, exe, *entry["args"], "--no-boot", chdir: dir, stdin_data: requests)
+        out, err, = Open3.capture3(entry["env"], "ruby", "-I", lib, exe, *entry["args"], "--no-boot", chdir: dir, stdin_data: requests)
         responses = out.lines.filter_map { |line| JSON.parse(line) rescue nil }.to_h { |msg| [ msg["id"], msg ] }
 
         expect(responses.dig(1, "result", "serverInfo", "name")).to eq("b-rails-ai-context"), err
@@ -497,6 +498,61 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
 
         expect(err).to include("Warning: b/ declares Ruby 2.7.8; this folder runs #{RUBY_VERSION}.")
         expect(err).not_to include("Warning: a/")
+      end
+    end
+
+    it "sets up the folder of apps --app-path names" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "work", "a"))
+        rails_app(File.join(dir, "work", "b"))
+
+        _out, err, status = init(dir, "1\n3\n", "--app-path", "work")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(servers(File.join(dir, "work")).keys).to eq(%w[rails-ai-context-a rails-ai-context-b])
+        expect(Dir.children(dir)).to eq(%w[work])
+      end
+    end
+
+    it "lists the apps below a folder --app-path names to any other command" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "work", "a"))
+        rails_app(File.join(dir, "work", "b"))
+
+        _out, err, status = Open3.capture3("ruby", "-I", lib, exe, "--app-path", "work", "tool", "schema", "--no-boot", chdir: dir)
+
+        expect(status.exitstatus).to eq(1)
+        expect(err).to include("No Rails app found in #{File.join(File.realpath(dir), 'work')}, and 2 below it")
+        expect(err).to include("rails-ai-context --app-path work/a tool schema --no-boot\n")
+      end
+    end
+
+    it "drops the entry of an app that is gone when it runs again" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "a"))
+        rails_app(File.join(dir, "b"))
+        init(dir, "1\n3\n")
+        FileUtils.rm_rf(File.join(dir, "b"))
+
+        _out, err, status = init(dir, "1\n3\n")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(servers(dir).keys).to eq(%w[rails-ai-context-a])
+      end
+    end
+
+    it "serves an app with a Gemfile and no lockfile from this binary" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "a"))
+        rails_app(File.join(dir, "b"))
+        File.delete(File.join(dir, "b", "Gemfile.lock"))
+        File.write(File.join(dir, "b", "Gemfile"), %(source "https://rubygems.org"\ngem "rails"\n))
+
+        _out, err, status = init(dir, "1\n1\n")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(servers(dir)["rails-ai-context-b"]["command"]).to eq("rails-ai-context")
+        expect(File.exist?(File.join(dir, "b", "CLAUDE.md"))).to be(true)
       end
     end
 

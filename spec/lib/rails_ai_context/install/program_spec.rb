@@ -155,7 +155,9 @@ RSpec.describe RailsAiContext::Install::Program do
           File.write(File.join(root, app, ".cursorrules"), "<!-- BEGIN rails-ai-context -->\nx\n<!-- END rails-ai-context -->\n")
         end
         FileUtils.mkdir_p(File.join(root, ".cursor"))
-        File.write(File.join(root, ".cursor/mcp.json"), JSON.generate("mcpServers" => { "rails-ai-context-a" => {}, "mine" => {} }))
+        File.write(File.join(root, ".cursor/mcp.json"), JSON.generate("mcpServers" => {
+          "rails-ai-context-a" => { "command" => "rails-ai-context", "args" => %w[serve --app-path a] }, "mine" => {}
+        }))
         FileUtils.mkdir_p(File.join(root, "a/.cursor"))
         File.write(File.join(root, "a/.cursor/mcp.json"), JSON.generate("mcpServers" => { "rails-ai-context" => {} }))
 

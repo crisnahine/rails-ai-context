@@ -3,6 +3,8 @@
 require "spec_helper"
 require "fileutils"
 require "tmpdir"
+require "open3"
+require "shellwords"
 require "rails/generators"
 require "generators/rails_ai_context/install/install_generator"
 
@@ -203,7 +205,9 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
         generator.install_validation_hook
 
         content = File.read(File.join(mono, ".git/hooks/pre-commit"))
-        expect(content).to include("cd apps/web || exit 0\nchanged_files=$(git diff --cached --name-only --relative")
+        expect(content).to include("# rails-ai-context apps: apps/web\n")
+        expect(content).to include("for app in apps/web; do\n")
+        expect(content).to include('changed_files=$(cd "$app" && git diff --cached --name-only --relative')
         expect(File.exist?(File.join(app, ".git"))).to be(false)
       end
     end
@@ -218,7 +222,7 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
 
         expect(File.file?(File.join(tmpdir, ".git"))).to be(true)
         expect(File.read(File.join(store, "web.git/hooks/pre-commit"))).to include("rails-ai-context")
-        expect(File.read(File.join(store, "web.git/hooks/pre-commit"))).not_to include("cd ")
+        expect(File.read(File.join(store, "web.git/hooks/pre-commit"))).to include("# rails-ai-context apps: .\n")
       end
     end
 
@@ -229,6 +233,101 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
 
       expect(File.exist?(File.join(tmpdir, ".githooks/pre-commit"))).to be(true)
       expect(File.exist?(hook_path)).to be(false)
+    end
+
+    # A core.hooksPath set globally is shared by every repository.
+    it "leaves a hooks directory outside the repository alone and says so" do
+      Dir.mktmpdir do |shared|
+        git("-C", tmpdir, "config", "core.hooksPath", shared)
+        allow(generator).to receive(:say)
+
+        generator.install_validation_hook
+
+        expect(generator).not_to have_received(:ask)
+        expect(generator).to have_received(:say).with(a_string_including("core.hooksPath points outside this repository"), :yellow)
+        expect(Dir.children(shared)).to be_empty
+      end
+    end
+
+    context "in a monorepo with two apps" do
+      let(:mono) { Dir.mktmpdir }
+
+      before do
+        FileUtils.rm_rf(File.join(tmpdir, ".git"))
+        git("init", "-q", mono)
+        %w[apps/web apps/admin].each { |app| FileUtils.mkdir_p(File.join(mono, app, "app", "models")) }
+      end
+
+      after { FileUtils.remove_entry(mono) }
+
+      def install_for(app)
+        allow(Rails).to receive(:root).and_return(Pathname.new(File.join(mono, app)))
+        generator.install_validation_hook
+      end
+
+      let(:mono_hook) { File.join(mono, ".git/hooks/pre-commit") }
+
+      it "covers the second app in the same hook" do
+        install_for("apps/web")
+        install_for("apps/admin")
+
+        expect(File.read(mono_hook)).to include("# rails-ai-context apps: apps/web apps/admin\n")
+        expect(File.read(mono_hook)).to include("for app in apps/web apps/admin; do\n")
+      end
+
+      it "asks nothing for an app the hook already covers" do
+        install_for("apps/web")
+        install_for("apps/web")
+
+        expect(generator).to have_received(:ask).once
+      end
+
+      it "leaves a hook changed by hand alone, and says how to add the app" do
+        install_for("apps/web")
+        File.write(mono_hook, File.read(mono_hook) + "echo mine\n")
+        allow(generator).to receive(:say)
+
+        install_for("apps/admin")
+
+        expect(File.read(mono_hook)).to end_with("echo mine\n")
+        expect(File.read(mono_hook)).not_to include("apps/admin")
+        expect(generator).to have_received(:say).with(a_string_including("was changed by hand - add apps/admin"), :yellow)
+      end
+
+      # What git runs at commit: each app's staged files, by paths relative
+      # to it, validated from inside it, and a failure stops the commit.
+      it "validates each app's staged files from inside it when git commits" do
+        install_for("apps/web")
+        install_for("apps/admin")
+        Dir.mktmpdir do |bin|
+          log = File.join(bin, "calls.log")
+          File.write(File.join(bin, "rails"), %(#!/bin/sh\necho "$(basename "$PWD") $*" >> #{log.shellescape}\n[ "$(basename "$PWD")" != admin ]\n))
+          File.chmod(0o755, File.join(bin, "rails"))
+          File.write(File.join(mono, "apps/web/app/models/post.rb"), "class Post; end\n")
+          File.write(File.join(mono, "apps/admin/app/models/user.rb"), "class User; end\n")
+          File.write(File.join(mono, "README.md"), "x\n")
+          git("-C", mono, "add", "-A")
+
+          env = { "PATH" => "#{bin}:#{ENV.fetch('PATH')}", "GIT_AUTHOR_NAME" => "t", "GIT_AUTHOR_EMAIL" => "t@t",
+                  "GIT_COMMITTER_NAME" => "t", "GIT_COMMITTER_EMAIL" => "t@t" }
+          out, status = Open3.capture2e(env, "git", "-C", mono, "commit", "-q", "-m", "x")
+
+          expect(File.read(log).lines).to eq([ "web ai:tool[validate] files=app/models/post.rb,\n",
+                                               "admin ai:tool[validate] files=app/models/user.rb,\n" ])
+          expect(status.success?).to be(false), out
+          expect(out).to include("rails-ai-context validation found issues.")
+        end
+      end
+    end
+
+    # A hook from before it named its apps is the repository root's.
+    it "asks nothing where a hook from an earlier version already serves the app" do
+      FileUtils.mkdir_p(File.dirname(hook_path))
+      File.write(hook_path, "#!/bin/bash\n# rails-ai-context: validate Rails references before commit\n")
+
+      generator.install_validation_hook
+
+      expect(generator).not_to have_received(:ask)
     end
 
     it "passes staged files to validation without collapsing newlines into spaces" do

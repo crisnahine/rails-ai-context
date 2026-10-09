@@ -177,8 +177,6 @@ class RailsAiContextCLI < Thor
     desc "serve", "Start MCP server (stdio transport)"
     option :transport, type: :string, default: "stdio", desc: "Transport: stdio or http"
     option :port, type: :numeric, desc: "HTTP port (only for http transport; default: config http_port, else 6029)"
-    option :server_name, type: :string,
-      desc: "Name the server announces to the client (default: config server_name, else rails-ai-context)"
     option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
     def serve
       boot_rails!(command: "serve", allow_static: true)
@@ -186,9 +184,6 @@ class RailsAiContextCLI < Thor
       transport = options[:transport].to_sym
       # No Thor default: it would overwrite the config file's http_port.
       ::RailsAiContext.configuration.http_port = options[:port] if options[:port]
-      # A workspace's entries announce their app: VS Code names every tool
-      # after the announced name, and keeps only its first 13 characters.
-      ::RailsAiContext.configuration.server_name = options[:server_name] if options[:server_name]
 
       ::RailsAiContext.start_mcp_server(transport: transport)
     end
@@ -281,7 +276,7 @@ class RailsAiContextCLI < Thor
       desc: "Write the MCP config and nothing else: no CLAUDE.md, AGENTS.md, rules files or .ai-context.json"
     def init
       resolution = resolve_app_root!(workspace: true)
-      return init_workspace(Dir.pwd, resolution.below) if resolution.workspace?
+      return init_workspace(resolution.base, resolution.below) if resolution.workspace?
 
       refuse_no_app! unless entry_boot.app_present?(Dir.pwd, allow_source_only: true)
 
@@ -413,9 +408,12 @@ class RailsAiContextCLI < Thor
       end
     end
 
+    # The install form is the app's own: under bundle exec the process's
+    # bundle can be another app's (`init --app-path ../b` run from a).
     def write_mcp_configs(ai_tools, tool_mode, root: Dir.pwd, servers: nil)
+      standalone = servers ? nil : ::RailsAiContext::InstallMode.standalone?(root: root)
       ::RailsAiContext::Install::Program.write_mcp_configs(
-        program_surface, tools: ai_tools, tool_mode: tool_mode, root: root, servers: servers
+        program_surface, tools: ai_tools, tool_mode: tool_mode, root: root, servers: servers, standalone: standalone
       )
     end
 
@@ -505,9 +503,11 @@ class RailsAiContextCLI < Thor
         command = [ "bundle", "exec", "rails-ai-context", "context", *flags ]
       end
 
-      # A parent run under some other bundle hands its Bundler variables on.
+      # A parent run under bundle exec hands the child the environment it was
+      # started with, the user's own Bundler settings included, not its bundle.
       run = -> { system(env, *command, chdir: app.root) }
-      ok = defined?(::Bundler) && ::Bundler.respond_to?(:with_unbundled_env) ? ::Bundler.with_unbundled_env(&run) : run.call
+      ok = defined?(::Bundler) && ::Bundler.respond_to?(:with_original_env) ? ::Bundler.with_original_env(&run) : run.call
+      $stderr.puts "Error: could not run `#{command.first}` - is it installed and on PATH?" if ok.nil?
       ok == true
     end
 
@@ -710,6 +710,10 @@ class RailsAiContextCLI < Thor
           $stderr.puts "  #{hint}" if hint
           exit 1
         end
+        if result.below.any? && required
+          app_root.several_apps(result, cwd, ARGV).each { |line| $stderr.puts line }
+          exit 1
+        end
         @app_above_hint = app_root.app_above_hint(result.root, cwd) unless entry_boot.app_present?(result.root, allow_source_only: true)
       elsif result.root.nil?
         return result unless required && result.below.any?
@@ -725,10 +729,8 @@ class RailsAiContextCLI < Thor
       gemfile = ENV["BUNDLE_GEMFILE"]
       ENV["BUNDLE_GEMFILE"] = File.expand_path(gemfile, cwd) if gemfile && !gemfile.empty?
       Dir.chdir(result.root) unless result.root == cwd
-      return result unless result.walked
-
       # stderr only: stdout is the protocol channel for serve.
-      $stderr.puts app_root.notice(result, cwd)
+      $stderr.puts app_root.notice(result, cwd) if result.walked
       warning = app_root.bundle_warning(result.root, cwd)
       $stderr.puts warning if warning
       result

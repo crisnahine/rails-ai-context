@@ -35,6 +35,17 @@ RSpec.describe RailsAiContext::InstallMode do
       expect(described_class.standalone?).to be(false)
     end
 
+    # A fresh clone has no lockfile yet.
+    it "reads a Gemfile with no lockfile beside it by whether it names the gem" do
+      File.write(File.join(tmpdir, "Gemfile"), %(source "https://rubygems.org"\ngem "rails"\n))
+      expect(described_class.standalone?).to be(true)
+
+      Dir.mktmpdir do |bundled|
+        File.write(File.join(bundled, "Gemfile"), %(source "https://rubygems.org"\ngem "rails"\ngem "rails-ai-context"\n))
+        expect(described_class.standalone?(root: bundled)).to be(false)
+      end
+    end
+
     # A workspace asks about apps that are not the bundle it runs in.
     it "reads the app named by root: rather than the process's bundle" do
       File.write(File.join(tmpdir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails-ai-context (5.13.0)\n")

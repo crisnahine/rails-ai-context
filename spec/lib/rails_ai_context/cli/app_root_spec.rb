@@ -51,6 +51,25 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
       expect(described_class.resolve(cwd: dir("shop/packs/billing/app/models")).root).to eq(root)
     end
 
+    # A pack has app/ and nothing else; standing in its root still means the
+    # host app, the way it does from any directory inside it.
+    it "takes a pack's root for the host app" do
+      root = app("shop")
+      FileUtils.mkdir_p(File.join(root, "packs/billing/app/models"))
+      File.write(File.join(root, "packs/billing/app/models/invoice.rb"), "class Invoice; end\n")
+
+      result = described_class.resolve(cwd: File.join(root, "packs/billing"))
+      expect([ result.root, result.walked ]).to eq([ root, :up ])
+    end
+
+    it "keeps a tree of source alone when no app holds it" do
+      engine = dir("engine")
+      FileUtils.mkdir_p(File.join(engine, "app/models"))
+      File.write(File.join(engine, "app/models/widget.rb"), "class Widget; end\n")
+
+      expect(described_class.resolve(cwd: engine).root).to eq(engine)
+    end
+
     it "lands an engine's dummy app on the dummy app" do
       app("engine")
       dummy = app("engine/spec/dummy")
@@ -170,6 +189,45 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
       expect(described_class.relative_path_hint("missing", launched)).to be_nil
       expect(described_class.relative_path_hint(File.join(tmp, "work/a"), launched)).to be_nil
       expect(described_class.relative_path_hint(nil, launched)).to be_nil
+    end
+
+    describe ".bundle_warning" do
+      def under_bundle(gemfile)
+        stub_const("ENV", ENV.to_h.merge("BUNDLE_BIN_PATH" => "/usr/bin/bundle"))
+        allow(Bundler).to receive(:default_gemfile).and_return(Pathname.new(gemfile))
+      end
+
+      it "says nothing outside bundle exec, or for the app whose Gemfile bundle exec loaded" do
+        root = app("work/shop")
+        File.write(File.join(root, "Gemfile"), "")
+        stub_const("ENV", ENV.to_h.except("BUNDLE_BIN_PATH"))
+        expect(described_class.bundle_warning(root, tmp)).to be_nil
+
+        under_bundle(File.join(root, "Gemfile"))
+        expect(described_class.bundle_warning(root, tmp)).to be_nil
+      end
+
+      # A folder of apps with a bundle of its own: the app is inside that
+      # bundle's directory and still not its app.
+      it "warns for an app whose own Gemfile is not the one bundle exec loaded" do
+        root = app("work/shop")
+        File.write(File.join(root, "Gemfile"), "")
+        File.write(File.join(tmp, "work/Gemfile"), "")
+        under_bundle(File.join(tmp, "work/Gemfile"))
+
+        expect(described_class.bundle_warning(root, File.join(tmp, "work")))
+          .to start_with("[rails-ai-context] WARNING: shop/ boots against the bundle of #{File.join(tmp, 'work/Gemfile')}")
+      end
+
+      it "warns for an app with no Gemfile outside the bundle's directory, and not inside it" do
+        inside = app("work/engine/spec/dummy")
+        outside = app("other")
+        File.write(File.join(tmp, "work/engine/Gemfile"), "")
+        under_bundle(File.join(tmp, "work/engine/Gemfile"))
+
+        expect(described_class.bundle_warning(inside, tmp)).to be_nil
+        expect(described_class.bundle_warning(outside, tmp)).to include("boots against the bundle of")
+      end
     end
 
     it "names the app above a wrong --app-path" do
