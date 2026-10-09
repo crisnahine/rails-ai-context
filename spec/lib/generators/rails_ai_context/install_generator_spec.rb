@@ -173,8 +173,62 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
     let(:hook_path) { File.join(tmpdir, ".git/hooks/pre-commit") }
 
     before do
-      FileUtils.mkdir_p(File.join(tmpdir, ".git"))
+      git("init", "-q", tmpdir)
       allow(generator).to receive(:ask).and_return("y")
+    end
+
+    def git(*args)
+      system("git", *args, out: File::NULL, err: File::NULL) or raise "git #{args.join(' ')} failed"
+    end
+
+    it "offers nothing outside a git repository" do
+      FileUtils.rm_rf(File.join(tmpdir, ".git"))
+      Dir.mktmpdir do |outside|
+        allow(Rails).to receive(:root).and_return(Pathname.new(outside))
+        generator.install_validation_hook
+        expect(generator).not_to have_received(:ask)
+      end
+    end
+
+    # A monorepo app has no .git of its own; the hook goes in the repo's
+    # hooks dir, runs from the app, and reads paths relative to it.
+    it "installs into the repo above a monorepo app and validates from the app" do
+      FileUtils.rm_rf(File.join(tmpdir, ".git"))
+      Dir.mktmpdir do |mono|
+        git("init", "-q", mono)
+        app = File.join(mono, "apps", "web")
+        FileUtils.mkdir_p(app)
+        allow(Rails).to receive(:root).and_return(Pathname.new(app))
+
+        generator.install_validation_hook
+
+        content = File.read(File.join(mono, ".git/hooks/pre-commit"))
+        expect(content).to include("cd apps/web || exit 0\nchanged_files=$(git diff --cached --name-only --relative")
+        expect(File.exist?(File.join(app, ".git"))).to be(false)
+      end
+    end
+
+    # A submodule's .git is a file naming the real git dir.
+    it "installs into the real hooks dir when .git is a file" do
+      FileUtils.rm_rf(File.join(tmpdir, ".git"))
+      Dir.mktmpdir do |store|
+        git("init", "-q", "--separate-git-dir", File.join(store, "web.git"), tmpdir)
+
+        generator.install_validation_hook
+
+        expect(File.file?(File.join(tmpdir, ".git"))).to be(true)
+        expect(File.read(File.join(store, "web.git/hooks/pre-commit"))).to include("rails-ai-context")
+        expect(File.read(File.join(store, "web.git/hooks/pre-commit"))).not_to include("cd ")
+      end
+    end
+
+    it "installs where core.hooksPath points, where git runs it" do
+      git("-C", tmpdir, "config", "core.hooksPath", ".githooks")
+
+      generator.install_validation_hook
+
+      expect(File.exist?(File.join(tmpdir, ".githooks/pre-commit"))).to be(true)
+      expect(File.exist?(hook_path)).to be(false)
     end
 
     it "passes staged files to validation without collapsing newlines into spaces" do

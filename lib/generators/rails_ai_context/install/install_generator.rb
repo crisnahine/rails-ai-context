@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "json"
+require "open3"
+require "shellwords"
 require "thor/line_editor"
 
 # Thor's interactive `ask` reads the line through Reline once the `readline`
@@ -452,6 +454,23 @@ module RailsAiContext
       def read_previous_ai_tools
         RailsAiContext::Install::SelectionRecord.read(root: Rails.root)
       end
+
+      # Git's own answer, not a `.git` directory in Rails.root: a submodule
+      # has a `.git` file, a monorepo app has its `.git` above it, and
+      # core.hooksPath moves the hooks elsewhere, where a hook written to
+      # .git/hooks would never run. `--git-path` answers relative to the
+      # directory it runs in. The prefix is where the app sits in the work
+      # tree; git runs a hook at the top of it.
+      def git_hooks_location
+        out, status = Open3.capture2("git", "rev-parse", "--git-path", "hooks", "--show-prefix",
+                                     chdir: Rails.root.to_s, err: File::NULL)
+        return nil unless status.success?
+
+        hooks, prefix = out.lines.map(&:chomp)
+        [ Pathname.new(File.expand_path(hooks, Rails.root.to_s)), prefix.to_s.delete_suffix("/") ]
+      rescue SystemCallError
+        nil
+      end
       end # no_tasks
 
       def create_yaml_config
@@ -476,10 +495,9 @@ module RailsAiContext
       end
 
       def install_validation_hook
-        git_dir = Rails.root.join(".git")
-        return unless Dir.exist?(git_dir)
+        hooks_dir, app_prefix = git_hooks_location
+        return unless hooks_dir
 
-        hooks_dir = git_dir.join("hooks")
         hook_path = hooks_dir.join("pre-commit")
 
         if File.exist?(hook_path) && !File.read(hook_path).include?("rails-ai-context")
@@ -502,6 +520,10 @@ module RailsAiContext
           validate_command = %(rails 'ai:tool[validate]' files="$files")
         end
 
+        # In a monorepo the app's own files are the ones to validate, by paths
+        # relative to it, and the validator runs from there.
+        app_dir_step = app_prefix.empty? ? "" : "cd #{app_prefix.shellescape} || exit 0\n"
+
         FileUtils.mkdir_p(hooks_dir)
         File.write(hook_path, <<~HOOK)
           #!/bin/bash
@@ -509,7 +531,7 @@ module RailsAiContext
           # Catches hallucinated columns, missing models, and schema drift.
           # Remove this file or the rails-ai-context section to disable.
 
-          changed_files=$(git diff --cached --name-only | grep -E '\\.(rb|erb)$' || true)
+          #{app_dir_step}changed_files=$(git diff --cached --name-only --relative | grep -E '\\.(rb|erb)$' || true)
 
           if [ -z "$changed_files" ]; then
             exit 0
