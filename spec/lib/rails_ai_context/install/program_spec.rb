@@ -2,6 +2,8 @@
 
 require "spec_helper"
 require "tmpdir"
+require "json"
+require "fileutils"
 
 RSpec.describe RailsAiContext::Install::Program do
   let(:surface_class) do
@@ -141,6 +143,30 @@ RSpec.describe RailsAiContext::Install::Program do
         expect(surface.text).to include("Kept .cursorrules")
         expect(surface.text).not_to include("Cursor files removed")
         expect(File.read(File.join(root, ".cursorrules"))).to eq("my own rules\n")
+      end
+    end
+
+    # A workspace keeps the context files in each app and the MCP entries in
+    # itself; a dropped tool's go from both, named from the workspace.
+    it "cleans each app's files and the workspace's MCP entries" do
+      Dir.mktmpdir do |root|
+        %w[a b].each do |app|
+          FileUtils.mkdir_p(File.join(root, app))
+          File.write(File.join(root, app, ".cursorrules"), "<!-- BEGIN rails-ai-context -->\nx\n<!-- END rails-ai-context -->\n")
+        end
+        FileUtils.mkdir_p(File.join(root, ".cursor"))
+        File.write(File.join(root, ".cursor/mcp.json"), JSON.generate("mcpServers" => { "rails-ai-context-a" => {}, "mine" => {} }))
+        FileUtils.mkdir_p(File.join(root, "a/.cursor"))
+        File.write(File.join(root, "a/.cursor/mcp.json"), JSON.generate("mcpServers" => { "rails-ai-context" => {} }))
+
+        surface = surface_class.new("y")
+        described_class.cleanup_removed_tools(surface, previous: %i[claude cursor], selected: %i[claude], root: root,
+                                                       app_roots: [ File.join(root, "a"), File.join(root, "b") ])
+
+        expect(surface.text).to include("Removed a/.cursorrules", "Removed b/.cursorrules")
+        expect(surface.text).to include("Removed MCP entry from .cursor/mcp.json", "Removed MCP entry from a/.cursor/mcp.json")
+        expect(JSON.parse(File.read(File.join(root, ".cursor/mcp.json")))["mcpServers"].keys).to eq(%w[mine])
+        expect(File.exist?(File.join(root, "a/.cursor/mcp.json"))).to be(false)
       end
     end
 

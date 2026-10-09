@@ -1,0 +1,130 @@
+# frozen_string_literal: true
+
+require "spec_helper"
+require "tmpdir"
+require "fileutils"
+
+RSpec.describe RailsAiContext::Install::Workspace do
+  describe ".server_names" do
+    it "names each server after its app's folder" do
+      expect(described_class.server_names(%w[api web])).to eq(
+        "api" => "rails-ai-context-api", "web" => "rails-ai-context-web"
+      )
+    end
+
+    # Two apps called web in different folders: the folder name alone would
+    # make one entry overwrite the other.
+    it "names apps that share a folder name by their whole path" do
+      expect(described_class.server_names(%w[client/web admin/web api])).to eq(
+        "client/web" => "rails-ai-context-client-web",
+        "admin/web" => "rails-ai-context-admin-web",
+        "api" => "rails-ai-context-api"
+      )
+    end
+
+    it "keeps a name when an app with another folder name is added" do
+      before = described_class.server_names(%w[api web])
+      after = described_class.server_names(%w[api web billing])
+      expect(after.slice("api", "web")).to eq(before)
+    end
+
+    it "numbers a name that is still taken, in path order" do
+      names = described_class.server_names(%w[x/web y/web x-web])
+      expect(names.values.uniq.size).to eq(3)
+      expect(names["x-web"]).to eq("rails-ai-context-x-web")
+      expect(names["x/web"]).to eq("rails-ai-context-x-web-2")
+    end
+
+    it "keeps to the characters every client and a bare TOML key accept" do
+      names = described_class.server_names([ "my app.v2", "café", "---" ])
+      expect(names.values).to all(match(/\Arails-ai-context-[A-Za-z0-9_-]+\z/))
+      expect(names["my app.v2"]).to eq("rails-ai-context-my-app-v2")
+      expect(names["---"]).to eq("rails-ai-context-app")
+    end
+
+    # Clients prefix every tool with its server's name and cap the result.
+    it "shortens a long name to fit, staying unique and stable" do
+      paths = %w[customer-portal-backend customer-portal-frontend]
+      names = described_class.server_names(paths)
+
+      expect(names.values).to all(satisfy { |name| name.size <= described_class::MAX_SERVER_NAME })
+      expect(names.values.uniq.size).to eq(2)
+      expect(described_class.server_names(paths)).to eq(names)
+      expect(names.values).to all(start_with("rails-ai-context-custom"))
+    end
+
+    it "fits a numbered name too" do
+      long = "a-very-long-application-folder-name"
+      names = described_class.server_names([ "x/#{long}", "y/#{long}", "x-#{long}" ])
+      expect(names.values.uniq.size).to eq(3)
+      expect(names.values).to all(satisfy { |name| name.size <= described_class::MAX_SERVER_NAME })
+    end
+  end
+
+  describe ".apps" do
+    around do |example|
+      Dir.mktmpdir do |dir|
+        @dir = File.realpath(dir)
+        example.run
+      end
+    end
+
+    def app(path, lock_gems: nil)
+      root = File.join(@dir, path)
+      FileUtils.mkdir_p(File.join(root, "config"))
+      if lock_gems
+        File.write(File.join(root, "Gemfile"), "")
+        specs = lock_gems.map { |name| "    #{name} (1.0.0)\n" }.join
+        File.write(File.join(root, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n#{specs}\n")
+      end
+      root
+    end
+
+    it "decides the install mode from each app's own lockfile" do
+      standalone = app("a", lock_gems: %w[rails])
+      bundled = app("group/b", lock_gems: %w[rails rails-ai-context])
+
+      apps = described_class.apps(@dir, [ standalone, bundled ])
+
+      expect(apps.map(&:path)).to eq(%w[a group/b])
+      expect(apps.map(&:standalone)).to eq([ true, false ])
+    end
+
+    it "points a standalone app's server at it with no Bundler variables" do
+      root = app("a", lock_gems: %w[rails])
+      server = described_class.apps(@dir, [ root ]).first.server
+
+      expect(server.argv).to eq(%w[rails-ai-context serve --app-path a --server-name a-rails-ai-context])
+      expect(server.env).to eq({})
+    end
+
+    # bundle exec looks for a Gemfile upward from where the client starts
+    # it, which is the workspace, never the app below.
+    it "gives an in-Gemfile app's server its own Gemfile" do
+      root = app("group/b", lock_gems: %w[rails rails-ai-context])
+      server = described_class.apps(@dir, [ root ]).first.server
+
+      expect(server.argv).to eq(%w[bundle exec rails-ai-context serve --app-path group/b --server-name b-rails-ai-context])
+      expect(server.env).to eq("BUNDLE_GEMFILE" => "group/b/Gemfile")
+    end
+
+    # VS Code names each tool after the announced name and keeps 13
+    # characters of it: rails-ai-cont for every app, were the app not first.
+    it "has each server announce its app first, distinct within 13 characters" do
+      roots = %w[web api customer-portal-backend].map { |path| app(path, lock_gems: %w[rails]) }
+      names = described_class.apps(@dir, roots).map { |a| a.server.announce }
+
+      expect(names.first(2)).to eq(%w[web-rails-ai-context api-rails-ai-context])
+      expect(names.last).to match(/\Acustom-[0-9a-f]{6}-rails-ai-context\z/)
+      expect(names.map { |name| name[0, 13] }.uniq.size).to eq(3)
+    end
+
+    it "names a gems.rb bundle by its own file name" do
+      root = app("b")
+      File.write(File.join(root, "gems.rb"), "")
+      File.write(File.join(root, "gems.locked"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails-ai-context (1.0.0)\n\n")
+
+      expect(described_class.apps(@dir, [ root ]).first.server.env).to eq("BUNDLE_GEMFILE" => "b/gems.rb")
+    end
+  end
+end

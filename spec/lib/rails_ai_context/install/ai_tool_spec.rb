@@ -44,14 +44,14 @@ RSpec.describe RailsAiContext::Install::AiTool do
         name: "Cursor",
         files: ".cursor/rules/ + .cursorrules (legacy fallback)",
         context_paths: %w[.cursor/rules .cursorrules],
-        mcp_config: { path: ".cursor/mcp.json", root_key: "mcpServers", format: :mcp_json },
+        mcp_config: { path: ".cursor/mcp.json", root_key: "mcpServers", format: :mcp_json, folder_variable: "${workspaceFolder}" },
         legacy_paths: [ ".cursor/rules/rails-ui-patterns.mdc" ]
       },
       copilot: {
         name: "GitHub Copilot",
         files: ".github/copilot-instructions.md + .github/instructions/",
         context_paths: %w[.github/copilot-instructions.md .github/instructions],
-        mcp_config: { path: ".vscode/mcp.json", root_key: "servers", format: :vscode_json },
+        mcp_config: { path: ".vscode/mcp.json", root_key: "servers", format: :vscode_json, folder_variable: "${workspaceFolder}" },
         legacy_paths: [ ".github/instructions/rails-ui-patterns.instructions.md" ]
       },
       opencode: {

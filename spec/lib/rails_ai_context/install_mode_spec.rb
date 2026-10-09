@@ -34,5 +34,15 @@ RSpec.describe RailsAiContext::InstallMode do
       allow(Bundler).to receive(:root).and_raise(Bundler::GemfileNotFound)
       expect(described_class.standalone?).to be(false)
     end
+
+    # A workspace asks about apps that are not the bundle it runs in.
+    it "reads the app named by root: rather than the process's bundle" do
+      File.write(File.join(tmpdir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails-ai-context (5.13.0)\n")
+      Dir.mktmpdir do |app|
+        File.write(File.join(app, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (7.1.0)\n")
+        expect(described_class.standalone?(root: app)).to be(true)
+        expect(described_class.standalone?).to be(false)
+      end
+    end
   end
 end

@@ -643,6 +643,79 @@ RSpec.describe RailsAiContext::Doctor do
     end
   end
 
+  # An app in a workspace is served from the folder above it, by an entry
+  # named rails-ai-context-<app> that points --app-path at it.
+  describe "an app set up as part of a workspace" do
+    around do |example|
+      Dir.mktmpdir do |dir|
+        @work = File.realpath(dir)
+        FileUtils.mkdir_p(File.join(@work, "a"))
+        example.run
+      end
+    end
+
+    let(:app_root) { File.join(@work, "a") }
+    let(:workspace_doctor) { described_class.new(RailsAiContext::StaticApp.new(app_root)) }
+
+    before do
+      allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
+      allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude codex])
+    end
+
+    def write(path, content)
+      FileUtils.mkdir_p(File.dirname(File.join(@work, path)))
+      File.write(File.join(@work, path), content)
+    end
+
+    it "finds its MCP configs in the workspace and names where they are" do
+      write(".mcp.json", JSON.generate("mcpServers" => {
+        "rails-ai-context-a" => { "command" => "rails-ai-context", "args" => %w[serve --app-path a] }
+      }))
+      write(".codex/config.toml", %([mcp_servers.rails-ai-context-a]\ncommand = "rails-ai-context"\nargs = ["serve", "--app-path", "a"]\n))
+
+      check = workspace_doctor.send(:check_mcp_json)
+
+      expect(check.status).to eq(:pass)
+      expect(check.message).to include("2 of 2")
+    end
+
+    it "still asks for a config when the workspace's serves other apps only" do
+      write(".mcp.json", JSON.generate("mcpServers" => {
+        "rails-ai-context-b" => { "command" => "rails-ai-context", "args" => %w[serve --app-path b] }
+      }))
+
+      check = workspace_doctor.send(:check_mcp_json)
+
+      expect(check.status).to eq(:warn)
+      expect(check.message).to include(".mcp.json")
+    end
+
+    it "checks the Codex env snapshot of every server the gem wrote there" do
+      Dir.mktmpdir("gem_home") do |gem_home|
+        write(".codex/config.toml", <<~TOML)
+          [mcp_servers.rails-ai-context-a]
+          command = "rails-ai-context"
+          args = ["serve", "--app-path", "a"]
+
+          [mcp_servers.rails-ai-context-a.env]
+          GEM_HOME = "#{gem_home}"
+
+          [mcp_servers.rails-ai-context-b]
+          command = "rails-ai-context"
+          args = ["serve", "--app-path", "b"]
+
+          [mcp_servers.rails-ai-context-b.env]
+          GEM_HOME = "/nonexistent/gems/3.3.0"
+        TOML
+
+        check = workspace_doctor.send(:check_codex_env_staleness)
+
+        expect(check.status).to eq(:warn)
+        expect(check.message).to include("/nonexistent/gems/3.3.0")
+      end
+    end
+  end
+
   describe "#check_security_gitignore" do
     def gitignore_check_for(root)
       described_class.new(RailsAiContext::StaticApp.new(root)).send(:check_security_gitignore)

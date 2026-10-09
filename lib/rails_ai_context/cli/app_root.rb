@@ -12,28 +12,33 @@ module RailsAiContext
     # answer is needed before the gem entry may load. Never prints and never
     # exits; the binary relays the lines.
     module AppRoot
-      # root is nil when nothing was found; then candidates names the apps
-      # below the current directory, when there are several. walked is true
-      # when root is not the directory the caller stood in or named.
-      Result = Struct.new(:root, :walked, :candidates, :explicit, keyword_init: true)
+      # root is the app the command reads, nil when there is no single one.
+      # walked is nil when root is the directory the caller stood in or
+      # named, else :up or :down. below lists the apps under a directory that
+      # is no app and has none above it: one is root, several leave root nil.
+      Result = Struct.new(:root, :walked, :below, :explicit, keyword_init: true) do
+        # A folder that is no app and holds apps below it: what `init` sets
+        # up as a whole, where every other command needs exactly one.
+        def workspace?
+          below.any?
+        end
+      end
 
       def self.resolve(cwd:, app_path: nil)
         if app_path
-          return Result.new(root: File.expand_path(app_path, cwd), walked: false, candidates: [], explicit: true)
+          return Result.new(root: File.expand_path(app_path, cwd), walked: nil, below: [], explicit: true)
         end
 
         if EntryBoot.app_present?(cwd, allow_source_only: true)
-          return Result.new(root: cwd, walked: false, candidates: [], explicit: false)
+          return Result.new(root: cwd, walked: nil, below: [], explicit: false)
         end
 
         if (above = walk_up(cwd))
-          return Result.new(root: above, walked: true, candidates: [], explicit: false)
+          return Result.new(root: above, walked: :up, below: [], explicit: false)
         end
 
         below = walk_down(cwd)
-        return Result.new(root: below.first, walked: true, candidates: [], explicit: false) if below.one?
-
-        Result.new(root: nil, walked: false, candidates: below, explicit: false)
+        Result.new(root: below.one? ? below.first : nil, walked: below.one? ? :down : nil, below: below, explicit: false)
       end
 
       # The nearest app root at or above dir. The test is stricter than the
@@ -133,16 +138,14 @@ module RailsAiContext
       end
 
       def self.notice(result, cwd)
-        shown = display(result.root, cwd)
-        shown = "#{shown}/" unless shown.start_with?("/")
-        "[rails-ai-context] using app at #{shown}"
+        "[rails-ai-context] using app at #{display(result.root, cwd).delete_suffix("/")}/"
       end
 
       # `argv` is the command line as typed, which every suggested command
       # repeats behind its own --app-path.
       def self.several_apps(result, cwd, argv)
-        lines = [ "Error: No Rails app found in #{cwd}, and #{result.candidates.size} below it. Name one with --app-path:" ]
-        result.candidates.each do |root|
+        lines = [ "Error: No Rails app found in #{cwd}, and #{result.below.size} below it. Name one with --app-path:" ]
+        result.below.each do |root|
           lines << "  #{[ "rails-ai-context", "--app-path", display(root, cwd), *argv ].shelljoin}"
         end
         lines
@@ -159,6 +162,26 @@ module RailsAiContext
         "#{root} is inside the app at #{shown}: pass --app-path #{shown.shellescape}"
       end
 
+      # A workspace entry's --app-path is relative to the folder the client was
+      # opened at. A client launched inside one of the apps still reads the
+      # workspace's config above it, but starts the server where it was
+      # launched, so the path misses: name the folder it was written for.
+      def self.relative_path_hint(app_path, cwd)
+        return nil if app_path.nil? || app_path.start_with?("~") || File.absolute_path?(app_path)
+
+        dir = cwd
+        loop do
+          parent = File.dirname(dir)
+          return nil if parent == dir
+
+          dir = parent
+          next unless EntryBoot.app_present?(File.expand_path(app_path, dir), allow_source_only: true)
+
+          return "--app-path #{app_path} is read from #{cwd}; it names an app from #{dir}. " \
+                 "A workspace's MCP configs expect the client to be started in the workspace folder."
+        end
+      end
+
       # Under bundle exec the bundle is already chosen: an app outside it
       # boots against someone else's Gemfile.lock.
       def self.bundle_warning(root, cwd)
@@ -168,7 +191,8 @@ module RailsAiContext
         return nil if root == bundle_root || root.start_with?("#{bundle_root}/")
 
         "[rails-ai-context] WARNING: #{display(root, cwd)} is outside the bundle at #{bundle_root}; " \
-          "under bundle exec it boots against that bundle, not its own. Run the command from inside the app."
+          "under bundle exec it boots against that bundle, not its own. Run the command from inside the app, " \
+          "or point BUNDLE_GEMFILE at the app's Gemfile."
       rescue StandardError
         nil
       end

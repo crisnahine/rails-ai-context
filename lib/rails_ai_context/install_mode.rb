@@ -28,8 +28,10 @@ module RailsAiContext
       COMMANDS.fetch(job)[standalone ? 0 : 1]
     end
 
-    def standalone?
-      root = if defined?(Bundler)
+    # `root:` asks about one app, where the process's own bundle is beside the
+    # point: a workspace sets up apps that are not the one it runs in.
+    def standalone?(root: nil)
+      root ||= if defined?(Bundler)
         Bundler.root.to_s
       elsif defined?(Rails) && Rails.respond_to?(:root) && Rails.root
         Rails.root.to_s

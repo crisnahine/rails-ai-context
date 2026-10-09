@@ -16,6 +16,11 @@ module RailsAiContext
     #
     # rule_files names what the gem writes inside rules_dir. The directory is shared with
     # rules the user writes by hand, so cleanup removes these names and nothing else.
+    #
+    # mcp_config[:folder_variable] is how the tool's config names the folder it sits in, where
+    # it has a way to: a workspace entry's app path starts from it, since the tool does not
+    # promise to start the server there. The others start it in the folder they were launched
+    # in, which is the workspace, so a relative path is the portable spelling there.
     AiTool = Struct.new(:number, :key, :name, :files, :context_paths, :rules_dir, :rule_files, :mcp_config,
                         :legacy_paths, :owned_dir, keyword_init: true)
 
@@ -37,7 +42,8 @@ module RailsAiContext
           context_paths: %w[.cursor/rules .cursorrules],
           rules_dir: ".cursor/rules",
           rule_files: %w[rails-project.mdc rails-models.mdc rails-controllers.mdc rails-mcp-tools.mdc],
-          mcp_config: { path: ".cursor/mcp.json", root_key: "mcpServers", format: :mcp_json },
+          mcp_config: { path: ".cursor/mcp.json", root_key: "mcpServers", format: :mcp_json,
+                        folder_variable: "${workspaceFolder}" },
           legacy_paths: [ ".cursor/rules/rails-ui-patterns.mdc" ],
           owned_dir: ".cursor"
         ),
@@ -50,7 +56,8 @@ module RailsAiContext
             rails-context.instructions.md rails-models.instructions.md
             rails-controllers.instructions.md rails-mcp-tools.instructions.md
           ],
-          mcp_config: { path: ".vscode/mcp.json", root_key: "servers", format: :vscode_json },
+          mcp_config: { path: ".vscode/mcp.json", root_key: "servers", format: :vscode_json,
+                        folder_variable: "${workspaceFolder}" },
           legacy_paths: [ ".github/instructions/rails-ui-patterns.instructions.md" ]
         ),
         new(

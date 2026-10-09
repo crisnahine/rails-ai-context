@@ -154,3 +154,17 @@ Two senses on different axes. Qualify it; the bare word does not say which.
 **Standalone install** - how the gem got installed: `gem install rails-ai-context`, driven through its own binary, never in the host app's Gemfile, so the `rails ai:*` rake tasks do not exist. `InstallMode.standalone?` is the decider, and the `standalone:` flag on `McpConfigGenerator` means this - it picks whether the written MCP command is the bare binary or a bundled invocation. `docs/STANDALONE.md` documents this sense only.
 
 **Standalone server** - how MCP is served: the entry point that is its own process, `rails ai:serve_http` starting `Server` with `transport: :http`, serving MCP and nothing else. The middleware and the engine controller answer the same requests from inside the app's web server; the standalone server does not need one running. It says nothing about the install - an in-Gemfile app starts it from a rake task. ADR-0003 and `McpEdge` use this sense.
+
+## App root
+
+The directory a command reads as the app, decided once by `CLI::AppRoot` before anything reads the working directory, and then made the process's working directory. `--app-path` names it outright and is never walked. Otherwise it is the working directory when that passes the loose test the command applies (`config/environment.rb`, `config/application.rb`, or any `app/**/*.rb`), else the nearest directory above it that passes the strict one, as `bin/rails` and Bundler find theirs: `config/application.rb`, `config/environment.rb`, or a `bin/rails` that boots an app or an engine. The walk up never stops at a packwerk pack (it has `app/` and nothing else), `$HOME`, `node_modules`, `vendor/bundle` or a gem install.
+
+Not the same as `Rails.root`, which only a booted app has, and not the **workspace** below, which is no app at all.
+
+## Workspace
+
+A folder an editor or agent is opened at that is no app and has no app above it, but holds apps one or two levels down (`config/application.rb` only, so an engine or a pack is not one). `init` sets one up as a whole: the AI tools are chosen once, each app gets its own `.rails-ai-context.yml` and context files, since its server reads them from its own root, and the workspace's MCP configs get one server per app, since a client reads them from the folder it opened and from nowhere below. Every other command needs a single app, so it uses the only one or refuses with one `--app-path` command per app.
+
+**Server name** - the key an entry has in a config. An app's own config calls its server `rails-ai-context`; a workspace's calls each one `rails-ai-context-<app folder>` (`Install::Workspace.server_names`), with the whole path where two apps share a folder name, and a hash where the name would be too long for the tools. `McpConfigGenerator::OWN_SERVER_NAME` matches every form, so removal never leaves one behind. Not the **announced name**, which the running server gives the tool (`config.server_name`, `serve --server-name`): a workspace server announces its app first, because VS Code names tools after that and keeps 13 characters of it.
+
+**Workspace entry** - the server entry itself: `--app-path` relative to the workspace, because the file may be committed; spelled from the tool's own name for its config's folder (`${workspaceFolder}`) where it has one, bare where the tool starts servers in the folder it was launched in. For an in-Gemfile app it adds `BUNDLE_GEMFILE` naming the app's own Gemfile, because `bundle exec` started in the workspace would never find it. ADR-0005 records the per-tool facts this rests on.

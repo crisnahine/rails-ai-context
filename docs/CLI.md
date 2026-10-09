@@ -38,6 +38,7 @@ rails-ai-context serve --transport http --port 6029   # HTTP transport
 |:-------|:--------|:------------|
 | `--transport` | `stdio` | `stdio` or `http` |
 | `--port` | `http_port` from config, else `6029` | HTTP listen port |
+| `--server-name` | `server_name` from config, else `rails-ai-context` | The name the server announces to the client. A [workspace](#init-standalone-only) entry announces its app first, since VS Code names every tool after this name and keeps 13 characters of it |
 | `--no-boot` | off | Skip booting the app; answer from source alone |
 
 ### `tool`
@@ -209,6 +210,43 @@ rails-ai-context init --mcp-only   # MCP config only, no context files
 ```
 
 Asks which AI tools to configure and what to write: MCP config and context files, context files only (CLI mode), or MCP config only. Creates `.rails-ai-context.yml`, the MCP config files (except in CLI mode) and the context files (except with MCP config only). `--mcp-only` skips the second question.
+
+Run inside an app, `init` sets up that app (found the way every command finds it: the [app root](#tool) above a subdirectory, or the one `--app-path` names).
+
+Run in a folder that is no app but holds apps one or two levels down - a **workspace**, the folder an editor or agent is often opened at - it sets the folder up as a whole:
+
+```text
+work/                      <- run `rails-ai-context init` here
+  .mcp.json                   one server per app: rails-ai-context-api, rails-ai-context-web
+  .cursor/mcp.json ...        (every selected AI tool's MCP config, in the folder it reads)
+  api/  .rails-ai-context.yml, CLAUDE.md, ...   each app keeps its own config and context files
+  web/  .rails-ai-context.yml, CLAUDE.md, ...
+```
+
+The AI tools and the setup are asked once. Each app gets its own `.rails-ai-context.yml` and context files, because its server reads them from its own root; a child process generates them with the install that app's server will run. The folder's MCP configs get one server per app, because a client reads its project config from the folder it opened. Each entry is named `rails-ai-context-<app folder>` (the whole path where two apps share a folder name; a short hash where the name would pass 30 characters, since Cursor drops a tool whose server and tool names together pass 60) and points `--app-path` at its app:
+
+```json
+{
+  "mcpServers": {
+    "rails-ai-context-api": {
+      "command": "rails-ai-context",
+      "args": ["serve", "--app-path", "api", "--server-name", "api-rails-ai-context"]
+    },
+    "rails-ai-context-web": {
+      "command": "bundle",
+      "args": ["exec", "rails-ai-context", "serve", "--app-path", "web", "--server-name", "web-rails-ai-context"],
+      "env": { "BUNDLE_GEMFILE": "web/Gemfile" }
+    }
+  }
+}
+```
+
+- **Paths stay relative**, so a committed file means the same thing on every machine. Claude Code, Codex and OpenCode start a server in the folder they were launched in, so their configs name the app from the workspace (`api`). Cursor does not promise a working directory, so its config and VS Code's name it from the folder the config sits in (`${workspaceFolder}/api`), which both expand.
+- **The command form is each app's own**: the bare binary where the gem is not in the app's Gemfile.lock, `bundle exec` where it is, with `BUNDLE_GEMFILE` naming the app's Gemfile, since `bundle exec` started in the workspace would look for one there.
+- **`--server-name` puts the app first** in the name the server announces. VS Code names every tool after that name and keeps 13 characters of it, so without it every app's tools would start `rails-ai-cont`.
+- A bare `rails-ai-context` entry left in the folder is replaced, since it would serve the folder itself.
+
+Start the client in the workspace folder. A client started inside one of the apps (Claude Code, Codex and OpenCode still read a config above it) runs each workspace server from there, where the relative path misses; the server says which folder the path was written for. To open an app on its own, run `init` inside it as well. `init` warns when an app declares a Ruby other than the one the workspace runs, since every server it starts runs under that one. `doctor` inside one of the apps finds the workspace's config one or two levels up.
 
 ### `version`
 

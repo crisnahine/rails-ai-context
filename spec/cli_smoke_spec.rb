@@ -3,6 +3,7 @@
 require "spec_helper"
 require "timeout"
 require "open3"
+require "json"
 
 # Runtime smoke test: every registered tool must execute via ToolRunner
 # against the combustion fixture without raising. Tools are allowed to
@@ -356,6 +357,159 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         expect(status.exitstatus).to eq(1)
         expect(err).to include("No Rails app found in #{File.join(dir, "app", "models")}")
         expect(err).to include("is inside the app at")
+      end
+    end
+  end
+
+  # An editor opened at a folder of apps reads the MCP config there and
+  # nowhere below, so init sets the folder up: one server per app in its
+  # configs, and each app's own config and context files in the app.
+  describe "init in a folder of apps" do
+    let(:exe) { File.expand_path("../exe/rails-ai-context", __dir__) }
+    let(:lib) { File.expand_path("../lib", __dir__) }
+
+    # A lockfile without the gem makes a standalone install, served by this
+    # binary; one with it, an in-Gemfile install, served by bundle exec.
+    def rails_app(dir, bundled: false)
+      FileUtils.mkdir_p(File.join(dir, "config"))
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      File.write(File.join(dir, "config", "application.rb"), "module X\n  class Application < Rails::Application\n  end\nend\n")
+      File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+      File.write(File.join(dir, "Gemfile"), "")
+      specs = bundled ? "    rails (8.0.0)\n    rails-ai-context (5.32.2)\n" : "    rails (8.0.0)\n"
+      File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n#{specs}\n")
+    end
+
+    def init(dir, answers, *flags)
+      Open3.capture3("ruby", "-I", lib, exe, "init", "--no-boot", *flags, chdir: dir, stdin_data: answers)
+    end
+
+    def servers(dir)
+      JSON.parse(File.read(File.join(dir, ".mcp.json")))["mcpServers"]
+    end
+
+    it "writes one server per app here and each app's own files in the app" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "a"))
+        rails_app(File.join(dir, "group", "b"))
+
+        _out, err, status = init(dir, "1\n1\n")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(servers(dir)).to eq(
+          "rails-ai-context-a" => { "command" => "rails-ai-context",
+                                    "args" => %w[serve --app-path a --server-name a-rails-ai-context] },
+          "rails-ai-context-b" => { "command" => "rails-ai-context",
+                                    "args" => %w[serve --app-path group/b --server-name b-rails-ai-context] }
+        )
+        %w[a group/b].each do |app|
+          expect(File.exist?(File.join(dir, app, ".rails-ai-context.yml"))).to be(true), app
+          expect(File.read(File.join(dir, app, "CLAUDE.md"))).to include("Widget")
+          expect(File.exist?(File.join(dir, app, ".mcp.json"))).to be(false)
+        end
+        expect(Dir.children(dir).sort).to eq(%w[.mcp.json a group])
+        expect(err).to include("rails-ai-context-b -> group/b/")
+      end
+    end
+
+    it "sets up the one app below the same way" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "a"))
+
+        _out, err, status = init(dir, "1\n3\n")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(servers(dir).keys).to eq(%w[rails-ai-context-a])
+        expect(File.exist?(File.join(dir, "a", ".rails-ai-context.yml"))).to be(true)
+        expect(File.exist?(File.join(dir, "a", "CLAUDE.md"))).to be(false)
+        expect(err).to include("MCP-only setup")
+      end
+    end
+
+    # The bare entry serves the folder it starts in, which is no app.
+    it "replaces a bare entry left in the folder, and changes nothing on a second run" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "a"))
+        rails_app(File.join(dir, "b"))
+        File.write(File.join(dir, ".mcp.json"), JSON.generate("mcpServers" => {
+          "rails-ai-context" => { "command" => "rails-ai-context", "args" => [ "serve" ] }, "mine" => { "command" => "x" }
+        }))
+
+        init(dir, "1\n3\n")
+        first = File.read(File.join(dir, ".mcp.json"))
+        _out, err, = init(dir, "1\n3\n")
+
+        expect(servers(dir).keys).to eq(%w[mine rails-ai-context-a rails-ai-context-b])
+        expect(File.read(File.join(dir, ".mcp.json"))).to eq(first)
+        expect(err).to include(".mcp.json unchanged - skipped")
+      end
+    end
+
+    it "names an in-Gemfile app's Gemfile, and fails when its bundle cannot write the context" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "a"))
+        rails_app(File.join(dir, "b"), bundled: true)
+
+        _out, err, status = init(dir, "1\n1\n")
+
+        expect(servers(dir)["rails-ai-context-b"]).to eq(
+          "command" => "bundle", "args" => %w[exec rails-ai-context serve --app-path b --server-name b-rails-ai-context],
+          "env" => { "BUNDLE_GEMFILE" => "b/Gemfile" }
+        )
+        expect(File.exist?(File.join(dir, "a", "CLAUDE.md"))).to be(true)
+        expect(status.exitstatus).to eq(1)
+        expect(err).to include("Error: no context files for b/")
+      end
+    end
+
+    # What a client sees: the entry it was given starts a server, from the
+    # folder the client was opened at, for the app the entry names.
+    it "writes entries that serve their app from the folder" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "a"))
+        rails_app(File.join(dir, "b"))
+        File.write(File.join(dir, "b", "app", "models", "gadget.rb"), "class Gadget < ApplicationRecord\nend\n")
+        init(dir, "1\n3\n")
+        entry = servers(dir)["rails-ai-context-b"]
+        requests = [
+          { jsonrpc: "2.0", id: 1, method: "initialize",
+            params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "spec", version: "1" } } },
+          { jsonrpc: "2.0", method: "notifications/initialized" },
+          { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "rails_get_model_details", arguments: {} } }
+        ].map { |message| "#{JSON.generate(message)}\n" }.join
+
+        out, err, = Open3.capture3("ruby", "-I", lib, exe, *entry["args"], "--no-boot", chdir: dir, stdin_data: requests)
+        responses = out.lines.filter_map { |line| JSON.parse(line) rescue nil }.to_h { |msg| [ msg["id"], msg ] }
+
+        expect(responses.dig(1, "result", "serverInfo", "name")).to eq("b-rails-ai-context"), err
+        expect(responses.dig(2, "result", "content", 0, "text")).to include("Gadget")
+      end
+    end
+
+    it "warns when an app declares a Ruby other than the one the folder runs" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "a"))
+        rails_app(File.join(dir, "b"))
+        File.write(File.join(dir, "b", ".ruby-version"), "2.7.8\n")
+        File.write(File.join(dir, "a", ".ruby-version"), "#{RUBY_VERSION}\n")
+
+        _out, err, = init(dir, "1\n3\n")
+
+        expect(err).to include("Warning: b/ declares Ruby 2.7.8; this folder runs #{RUBY_VERSION}.")
+        expect(err).not_to include("Warning: a/")
+      end
+    end
+
+    it "still sets up only the app --app-path names" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "a"))
+        rails_app(File.join(dir, "b"))
+
+        _out, err, status = init(dir, "1\n3\n", "--app-path", "a")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(Dir.children(dir).sort).to eq(%w[a b])
+        expect(JSON.parse(File.read(File.join(dir, "a", ".mcp.json")))["mcpServers"].keys).to eq(%w[rails-ai-context])
       end
     end
   end

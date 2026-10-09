@@ -32,13 +32,13 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
     it "keeps the current directory when it is an app" do
       root = app("shop")
       result = described_class.resolve(cwd: root)
-      expect([ result.root, result.walked ]).to eq([ root, false ])
+      expect([ result.root, result.walked, result.workspace? ]).to eq([ root, nil, false ])
     end
 
     it "walks up from a subdirectory to the app root" do
       root = app("shop")
       result = described_class.resolve(cwd: dir("shop/app/models"))
-      expect([ result.root, result.walked ]).to eq([ root, true ])
+      expect([ result.root, result.walked, result.workspace? ]).to eq([ root, :up, false ])
     end
 
     # A pack has app/ and passes the looser test a command applies to the
@@ -88,22 +88,22 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
     it "uses the one app below the current directory" do
       root = app("work/a")
       result = described_class.resolve(cwd: dir("work"))
-      expect([ result.root, result.walked ]).to eq([ root, true ])
+      expect([ result.root, result.walked, result.below, result.workspace? ]).to eq([ root, :down, [ root ], true ])
     end
 
     it "names every app below when there are several, and picks none" do
       a = app("work/a")
       b = app("work/group/b")
       result = described_class.resolve(cwd: dir("work"))
-      expect(result.root).to be_nil
-      expect(result.candidates).to eq([ a, b ])
+      expect([ result.root, result.walked, result.workspace? ]).to eq([ nil, nil, true ])
+      expect(result.below).to eq([ a, b ])
     end
 
     it "never walks an explicit --app-path" do
       app("shop")
       models = dir("shop/app/models")
       result = described_class.resolve(cwd: tmp, app_path: "shop/app/models")
-      expect([ result.root, result.walked, result.explicit ]).to eq([ models, false, true ])
+      expect([ result.root, result.walked, result.explicit ]).to eq([ models, nil, true ])
     end
   end
 
@@ -143,7 +143,7 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
       root = app("work/a")
       result = described_class.resolve(cwd: dir("work"))
       expect(described_class.notice(result, File.join(tmp, "work"))).to eq("[rails-ai-context] using app at a/")
-      expect(described_class.notice(result, File.join(root, "app"))).to eq("[rails-ai-context] using app at #{root}")
+      expect(described_class.notice(result, File.join(root, "app"))).to eq("[rails-ai-context] using app at #{root}/")
     end
 
     it "gives each app found below the exact command to run" do
@@ -156,6 +156,20 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
         "  rails-ai-context --app-path a tool schema",
         "  rails-ai-context --app-path b tool schema"
       ])
+    end
+
+    # A client launched inside one app still reads the workspace's config
+    # above it, and starts the server where it was launched.
+    it "names the folder a relative --app-path was written for" do
+      app("work/a")
+      launched = dir("work/b/app")
+
+      expect(described_class.relative_path_hint("a", launched))
+        .to eq("--app-path a is read from #{launched}; it names an app from #{File.join(tmp, 'work')}. " \
+               "A workspace's MCP configs expect the client to be started in the workspace folder.")
+      expect(described_class.relative_path_hint("missing", launched)).to be_nil
+      expect(described_class.relative_path_hint(File.join(tmp, "work/a"), launched)).to be_nil
+      expect(described_class.relative_path_hint(nil, launched)).to be_nil
     end
 
     it "names the app above a wrong --app-path" do

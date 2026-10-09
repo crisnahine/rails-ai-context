@@ -414,6 +414,239 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
     end
   end
 
+  # A folder of apps: one server per app in the folder's own configs, since
+  # a client reads them from the folder it opened and from nowhere below.
+  describe "workspace servers" do
+    let(:servers) do
+      [
+        described_class::Server.new(name: "rails-ai-context-a", standalone: true, app_path: "a"),
+        described_class::Server.new(name: "rails-ai-context-b", standalone: false, app_path: "group/b",
+                                    gemfile: "group/b/Gemfile")
+      ]
+    end
+
+    def generate(dir, tools: self.tools)
+      described_class.new(tools: tools, output_dir: dir, tool_mode: :mcp, servers: servers).call
+    end
+
+    it "writes one entry per app, each naming its app and an in-Gemfile app's Gemfile" do
+      Dir.mktmpdir do |dir|
+        generate(dir)
+
+        # Claude Code starts a server in the folder it was launched in.
+        claude = JSON.parse(File.read(File.join(dir, ".mcp.json")))["mcpServers"]
+        expect(claude.keys).to eq(%w[rails-ai-context-a rails-ai-context-b])
+        expect(claude["rails-ai-context-a"]).to eq("command" => "rails-ai-context", "args" => %w[serve --app-path a])
+        expect(claude["rails-ai-context-b"]).to eq(
+          "command" => "bundle", "args" => %w[exec rails-ai-context serve --app-path group/b],
+          "env" => { "BUNDLE_GEMFILE" => "group/b/Gemfile" }
+        )
+
+        # Cursor does not promise a working directory; it and VS Code name
+        # the folder their config sits in.
+        cursor = JSON.parse(File.read(File.join(dir, ".cursor/mcp.json")))["mcpServers"]
+        vscode = JSON.parse(File.read(File.join(dir, ".vscode/mcp.json")))["servers"]
+        [ cursor, vscode ].each do |entries|
+          expect(entries["rails-ai-context-a"]).to eq(
+            "command" => "rails-ai-context", "args" => [ "serve", "--app-path", "${workspaceFolder}/a" ]
+          )
+          expect(entries["rails-ai-context-b"]).to eq(
+            "command" => "bundle", "args" => [ "exec", "rails-ai-context", "serve", "--app-path", "${workspaceFolder}/group/b" ],
+            "env" => { "BUNDLE_GEMFILE" => "${workspaceFolder}/group/b/Gemfile" }
+          )
+        end
+
+        opencode = JSON.parse(File.read(File.join(dir, "opencode.json")))["mcp"]
+        expect(opencode["rails-ai-context-b"]).to eq(
+          "type" => "local", "command" => %w[bundle exec rails-ai-context serve --app-path group/b],
+          "environment" => { "BUNDLE_GEMFILE" => "group/b/Gemfile" }
+        )
+        expect(opencode["rails-ai-context-a"]).not_to have_key("environment")
+
+        toml = File.read(File.join(dir, ".codex/config.toml"))
+        expect(toml).to include(%([mcp_servers.rails-ai-context-a]\ncommand = "rails-ai-context"\nargs = ["serve", "--app-path", "a"]\n))
+        expect(toml).to include(%(args = ["exec", "rails-ai-context", "serve", "--app-path", "group/b"]))
+        b_env = toml[/^\[mcp_servers\.rails-ai-context-b\.env\]\n(.*?)(?=\n\[|\z)/m, 1]
+        expect(b_env).to include(%(BUNDLE_GEMFILE = "group/b/Gemfile"))
+        a_env = toml[/^\[mcp_servers\.rails-ai-context-a\.env\]\n(.*?)(?=\n\[|\z)/m, 1].to_s
+        expect(a_env).not_to include("BUNDLE_GEMFILE")
+      end
+    end
+
+    it "skips every file on a second identical run" do
+      Dir.mktmpdir do |dir|
+        generate(dir)
+        result = generate(dir)
+        expect(result[:written]).to be_empty
+        expect(result[:skipped].size).to eq(5)
+      end
+    end
+
+    # The bare entry serves the folder it starts in, and a workspace is no
+    # app, so it can only fail.
+    it "drops the bare entry and keeps everyone else's" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".mcp.json"), JSON.pretty_generate(
+          "mcpServers" => { "rails-ai-context" => { "command" => "rails-ai-context", "args" => [ "serve" ] },
+                            "other" => { "command" => "node" } }
+        ))
+        FileUtils.mkdir_p(File.join(dir, ".codex"))
+        File.write(File.join(dir, ".codex/config.toml"), <<~TOML)
+          model = "o3"
+
+          [mcp_servers.rails-ai-context]
+          command = "rails-ai-context"
+          args = ["serve"]
+
+          [mcp_servers.rails-ai-context.env]
+          PATH = "/old"
+
+          [mcp_servers.other]
+          command = "node"
+        TOML
+
+        generate(dir, tools: %i[claude codex])
+
+        expect(JSON.parse(File.read(File.join(dir, ".mcp.json")))["mcpServers"].keys)
+          .to eq(%w[other rails-ai-context-a rails-ai-context-b])
+        toml = File.read(File.join(dir, ".codex/config.toml"))
+        expect(toml).not_to match(/^\[mcp_servers\.rails-ai-context(\.env)?\]$/)
+        expect(toml).not_to include("/old")
+        expect(toml).to start_with(%(model = "o3"\n\n[mcp_servers.other]\ncommand = "node"\n\n[mcp_servers.rails-ai-context-a]))
+        expect(toml).not_to include("\n\n\n")
+      end
+    end
+
+    it "keeps an app's own bare entry when it writes one" do
+      Dir.mktmpdir do |dir|
+        described_class.new(tools: [ :claude ], output_dir: dir, tool_mode: :mcp, standalone: true).call
+        described_class.new(tools: [ :claude ], output_dir: dir, tool_mode: :mcp, standalone: true).call
+        expect(JSON.parse(File.read(File.join(dir, ".mcp.json")))["mcpServers"].keys).to eq(%w[rails-ai-context])
+      end
+    end
+
+    it "reports a servers key that is not an object as failed and leaves the file alone" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".mcp.json"), %({"mcpServers": ["x"]}\n))
+        allow(RailsAiContext).to receive(:log_warn)
+
+        result = generate(dir, tools: [ :claude ])
+
+        expect(result[:failed]).to eq([ File.join(dir, ".mcp.json") ])
+        expect(File.read(File.join(dir, ".mcp.json"))).to eq(%({"mcpServers": ["x"]}\n))
+      end
+    end
+  end
+
+  # The sections are found by lines, so what sits around them must come
+  # through byte for byte.
+  describe "Codex TOML sections" do
+    def write_codex(dir, content)
+      FileUtils.mkdir_p(File.join(dir, ".codex"))
+      File.write(File.join(dir, ".codex/config.toml"), content)
+    end
+
+    def codex(dir)
+      File.read(File.join(dir, ".codex/config.toml"))
+    end
+
+    it "ends a section at the next table even with no blank line before it" do
+      Dir.mktmpdir do |dir|
+        write_codex(dir, %([mcp_servers.rails-ai-context]\ncommand = "old"\n[profiles.fast]\nmodel = "o4"\n))
+
+        described_class.new(tools: [ :codex ], output_dir: dir, tool_mode: :mcp).call
+
+        expect(codex(dir)).to include(%([profiles.fast]\nmodel = "o4"\n))
+        expect(codex(dir)).not_to include(%(command = "old"))
+      end
+    end
+
+    it "leaves a comment over the next table with that table" do
+      Dir.mktmpdir do |dir|
+        write_codex(dir, %([mcp_servers.rails-ai-context]\ncommand = "old"\n\n# my server\n[mcp_servers.other]\ncommand = "node"\n))
+
+        described_class.remove(tools: [ :codex ], output_dir: dir)
+
+        expect(codex(dir)).to eq(%(# my server\n[mcp_servers.other]\ncommand = "node"\n))
+      end
+    end
+
+    it "does not take another server whose name starts with ours for one of our sub-tables" do
+      Dir.mktmpdir do |dir|
+        write_codex(dir, %([mcp_servers.rails-ai-context]\ncommand = "old"\n\n[mcp_servers.rails-ai-context-a]\ncommand = "a"\n))
+
+        described_class.new(tools: [ :codex ], output_dir: dir, tool_mode: :mcp, standalone: true).call
+
+        expect(codex(dir)).to include(%([mcp_servers.rails-ai-context-a]\ncommand = "a"\n))
+        expect(codex(dir).scan("[mcp_servers.rails-ai-context]").size).to eq(1)
+      end
+    end
+
+    # Ruby's inspect writes `\#{` and `\e`, neither of which TOML accepts.
+    it "writes values as TOML basic strings" do
+      Dir.mktmpdir do |dir|
+        stub_const("ENV", ENV.to_h.merge("GEM_HOME" => %(/x/\#{y}/"q"/\e)))
+
+        described_class.new(tools: [ :codex ], output_dir: dir, tool_mode: :mcp).call
+
+        expect(codex(dir)).to include(%(GEM_HOME = "/x/\#{y}/\\"q\\"/\\u001b"))
+      end
+    end
+  end
+
+  describe ".serving_config" do
+    around do |example|
+      Dir.mktmpdir do |dir|
+        @dir = File.realpath(dir)
+        example.run
+      end
+    end
+
+    def write(path, content)
+      FileUtils.mkdir_p(File.dirname(File.join(@dir, path)))
+      File.write(File.join(@dir, path), content)
+    end
+
+    def entry(app_path)
+      { "command" => "rails-ai-context", "args" => [ "serve", "--app-path", app_path ] }
+    end
+
+    it "is the app's own config first" do
+      write("work/a/.mcp.json", "{}")
+      write("work/.mcp.json", JSON.generate("mcpServers" => { "rails-ai-context-a" => entry("a") }))
+      expect(described_class.serving_config(File.join(@dir, "work/a"), :claude)).to eq(File.join(@dir, "work/a/.mcp.json"))
+    end
+
+    it "is a workspace's one or two levels up whose entry names the app" do
+      write("work/.mcp.json", JSON.generate("mcpServers" => { "rails-ai-context-b" => entry("group/b") }))
+      write("work/.codex/config.toml", %([mcp_servers.rails-ai-context-a]\ncommand = "x"\nargs = ["serve", "--app-path", "a"]\n))
+      write("work/opencode.json", JSON.generate("mcp" => { "rails-ai-context-a" => { "type" => "local", "command" => [ "rails-ai-context", "serve", "--app-path=a" ] } }))
+
+      expect(described_class.serving_config(File.join(@dir, "work/group/b"), :claude)).to eq(File.join(@dir, "work/.mcp.json"))
+      expect(described_class.serving_config(File.join(@dir, "work/a"), :codex)).to eq(File.join(@dir, "work/.codex/config.toml"))
+      expect(described_class.serving_config(File.join(@dir, "work/a"), :opencode)).to eq(File.join(@dir, "work/opencode.json"))
+    end
+
+    it "reads the tool's name for its folder as that folder" do
+      write("work/.cursor/mcp.json", JSON.generate("mcpServers" => {
+        "rails-ai-context-b" => { "command" => "rails-ai-context", "args" => [ "serve", "--app-path", "${workspaceFolder}/group/b" ] }
+      }))
+      expect(described_class.serving_config(File.join(@dir, "work/group/b"), :cursor)).to eq(File.join(@dir, "work/.cursor/mcp.json"))
+    end
+
+    it "is nothing when the config above serves other apps, or is no object" do
+      write("work/.mcp.json", JSON.generate("mcpServers" => { "rails-ai-context-a" => entry("a") }))
+      write("work/.vscode/mcp.json", "[1, 2]")
+      expect(described_class.serving_config(File.join(@dir, "work/b"), :claude)).to be_nil
+      expect(described_class.serving_config(File.join(@dir, "work/a"), :copilot)).to be_nil
+    end
+
+    it "ignores a server the gem did not write" do
+      write("work/.mcp.json", JSON.generate("mcpServers" => { "mine" => entry("a") }))
+      expect(described_class.serving_config(File.join(@dir, "work/a"), :claude)).to be_nil
+    end
+  end
+
   describe ".remove" do
     it "removes only rails-ai-context entry from JSON config, preserving others" do
       Dir.mktmpdir do |dir|
@@ -483,6 +716,35 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
 
         expect(Dir.glob(File.join(dir, "*.tmp"), File::FNM_DOTMATCH)).to be_empty
         expect(JSON.parse(File.read(path))["mcpServers"].keys).to eq([ "other-server" ])
+      end
+    end
+
+    # A workspace entry is one of ours too, and a dropped tool leaves none.
+    it "removes every entry the gem wrote, workspace ones included" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".mcp.json"), JSON.generate(
+          "mcpServers" => { "rails-ai-context-a" => {}, "rails-ai-context-b" => {}, "rails-ai-contextual" => {}, "other" => {} }
+        ))
+        FileUtils.mkdir_p(File.join(dir, ".codex"))
+        File.write(File.join(dir, ".codex/config.toml"), <<~TOML)
+          [mcp_servers.rails-ai-context-a]
+          command = "a"
+
+          [mcp_servers.rails-ai-context-a.env]
+          PATH = "/x"
+
+          [mcp_servers.other]
+          command = "node"
+
+          [mcp_servers.rails-ai-context-b]
+          command = "b"
+        TOML
+
+        cleaned = described_class.remove(tools: %i[claude codex], output_dir: dir)
+
+        expect(cleaned.size).to eq(2)
+        expect(JSON.parse(File.read(File.join(dir, ".mcp.json")))["mcpServers"].keys).to eq(%w[rails-ai-contextual other])
+        expect(File.read(File.join(dir, ".codex/config.toml"))).to eq(%([mcp_servers.other]\ncommand = "node"\n))
       end
     end
 

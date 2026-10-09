@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "find"
+require "pathname"
 
 module RailsAiContext
   # Diagnostic checker that validates the environment and reports
@@ -309,22 +310,24 @@ module RailsAiContext
 
       checks = tools_to_check.map do |tool|
         cfg = configs[tool]
-        full_path = File.join(app.root, cfg[:path])
+        # An app in a workspace is served from the folder above it.
+        full_path = McpConfigGenerator.serving_config(app.root, tool) || File.join(app.root, cfg[:path])
         unless File.exist?(full_path)
           next Check.new(name: cfg[:label], status: :warn,
             message: "No #{cfg[:path]} for MCP auto-discovery",
             fix: "Run `#{command(:install)}`")
         end
 
+        shown = app_relative(full_path)
         if cfg[:path].end_with?(".toml")
-          Check.new(name: cfg[:label], status: :pass, message: "#{cfg[:path]} exists", fix: nil)
+          Check.new(name: cfg[:label], status: :pass, message: "#{shown} exists", fix: nil)
         else
           begin
             JSON.parse(File.read(full_path))
-            Check.new(name: cfg[:label], status: :pass, message: "#{cfg[:path]} valid", fix: nil)
+            Check.new(name: cfg[:label], status: :pass, message: "#{shown} valid", fix: nil)
           rescue JSON::ParserError => e
             Check.new(name: cfg[:label], status: :fail,
-              message: "#{cfg[:path]} has invalid JSON: #{e.message}",
+              message: "#{shown} has invalid JSON: #{e.message}",
               fix: "Run `#{command(:install)}` to regenerate")
           end
         end
@@ -352,33 +355,41 @@ module RailsAiContext
       ai_tools = configured_ai_tools
       return nil unless ai_tools.include?(:codex)
 
-      toml_path = File.join(app.root, ".codex/config.toml")
-      return nil unless File.exist?(toml_path)
-
-      content = File.read(toml_path)
-      match = content.match(/^\[mcp_servers\.rails-ai-context\.env\]\s*$(.+?)(?=\n\[|\z)/m)
-      return nil unless match
-
-      env_section = match[1]
+      # The app's own config, or the workspace's above it.
+      toml_path = McpConfigGenerator.serving_config(app.root, :codex)
+      return nil unless toml_path && File.exist?(toml_path)
 
       # Check if snapshotted GEM_HOME directory still exists on disk.
       # This is version-manager agnostic and OS agnostic - no string format
       # assumptions. If the directory was removed (e.g. Ruby upgrade), the
-      # env snapshot is definitely stale.
-      gem_home_match = env_section.match(/^GEM_HOME\s*=\s*"([^"]+)"/)
-      return nil unless gem_home_match
+      # env snapshot is definitely stale. Every server the gem wrote carries
+      # one: the app's own, and each app's in a workspace.
+      gem_homes = File.read(toml_path).scan(CODEX_ENV_SECTION).filter_map do |(env_section)|
+        env_section[/^GEM_HOME\s*=\s*"([^"]+)"/, 1]
+      end.uniq
+      return nil if gem_homes.empty?
 
-      snapshot_gem_home = gem_home_match[1]
+      snapshot_gem_home = gem_homes.find { |dir| !Dir.exist?(dir) }
 
-      if Dir.exist?(snapshot_gem_home)
+      if snapshot_gem_home.nil?
         Check.new(name: "Codex env snapshot", status: :pass,
-          message: "Codex GEM_HOME (#{snapshot_gem_home}) exists - env snapshot is current",
+          message: "Codex GEM_HOME (#{gem_homes.first}) exists - env snapshot is current",
           fix: nil)
       else
         Check.new(name: "Codex env snapshot", status: :warn,
           message: "Codex MCP env snapshot is stale - GEM_HOME #{snapshot_gem_home} no longer exists. Re-run the install generator to update.",
           fix: "Run `#{command(:install)}`")
       end
+    end
+
+    CODEX_ENV_SECTION = /^\[mcp_servers\.#{McpConfigGenerator::OWN_NAME}\.env\]\s*$(.+?)(?=\n\[|\z)/m
+
+    # How a file the check found reads from the app: its own path, or
+    # ../.mcp.json for a workspace's.
+    def app_relative(path)
+      Pathname.new(path).relative_path_from(Pathname.new(app.root.to_s)).to_s
+    rescue ArgumentError
+      path.to_s
     end
 
     def check_mcp_buildable
