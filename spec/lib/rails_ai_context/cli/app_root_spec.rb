@@ -194,6 +194,27 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
       ])
     end
 
+    # `=` reads as itself after the command's name; a folder named in
+    # another encoding is escaped byte by byte, not refused.
+    it "writes each command the way a shell reads it" do
+      app("work/a b")
+      app("work/caf\xE9".b)
+      cwd = File.join(tmp, "work")
+      lines = described_class.several_apps(described_class.resolve(cwd: cwd), cwd, %w[tool search_code pattern=x$y])
+
+      expect(lines[1]).to eq("  rails-ai-context --app-path a\\ b tool search_code pattern=x\\$y")
+      expect(lines[2].b).to eq("  rails-ai-context --app-path caf\\\xE9 tool search_code pattern=x\\$y".b)
+    end
+
+    # Names that are no UTF-8 are directories all the same.
+    it "walks up from, and down to, a folder whose name is not UTF-8" do
+      root = app("caf\xE9".b)
+      nested = File.join(root, "app/models")
+
+      expect(described_class.resolve(cwd: nested.dup.force_encoding(Encoding::UTF_8)).root.b).to eq(root.b)
+      expect(described_class.resolve(cwd: tmp.dup.force_encoding(Encoding::UTF_8)).root.b).to eq(root.b)
+    end
+
     # A client launched inside one app still reads the workspace's config
     # above it, and starts the server where it was launched.
     it "names the folder a relative --app-path was written for" do
@@ -259,6 +280,27 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
         under_bundle(File.join(root, "Gemfile.next"))
 
         expect(described_class.bundle_warning(root, tmp)).to be_nil
+      end
+
+      # A monorepo's apps have no Gemfile; their config/boot.rb names the
+      # shared one, wherever it sits.
+      it "says nothing for the bundle an app's config/boot.rb names" do
+        root = app("mono/apps/web")
+        FileUtils.mkdir_p(File.join(tmp, "mono/gems"))
+        File.write(File.join(tmp, "mono/gems/Gemfile"), "")
+        File.write(File.join(root, "config/boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../gems/Gemfile", __dir__)\n))
+        under_bundle(File.join(tmp, "mono/gems/Gemfile"))
+
+        expect(described_class.bundle_warning(root, tmp)).to be_nil
+      end
+
+      it "names the app it stands in plainly" do
+        root = app("shop")
+        File.write(File.join(root, "Gemfile"), "")
+        File.write(File.join(tmp, "Gemfile"), "")
+        under_bundle(File.join(tmp, "Gemfile"))
+
+        expect(described_class.bundle_warning(root, root)).to start_with("[rails-ai-context] WARNING: This app boots against")
       end
 
       it "warns for an app with no Gemfile outside the bundle's directory, and not inside it" do

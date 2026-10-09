@@ -19,16 +19,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spelled from `${workspaceFolder}` for Cursor and VS Code, which name the
   folder their config sits in. Each app keeps its own install form, decided
   from its own Gemfile.lock, and an in-Gemfile app's entry sets
-  `BUNDLE_GEMFILE` to the Gemfile its bundle reads: its own, or the shared
-  one its `config/boot.rb` names. A bare `rails-ai-context` entry left in
-  the folder is replaced, a re-run drops the entry of an app that is gone or
-  that the gem renamed, removal and cleanup take every `rails-ai-context-*`
-  entry that runs the gem's server (a hand-made one that does not stays),
-  `--app-path` naming a folder of apps sets that folder up, and `doctor`
-  inside an app finds the folder's config one or two levels up and checks
-  each Codex env snapshot in it. `init` warns when an app declares a Ruby
-  other than the one the folder runs. See ADR-0005 for what each AI tool
-  does with a server's working directory, and why.
+  `BUNDLE_GEMFILE` to the Gemfile its bundle reads: its own (a linked one by
+  the link's name), else the shared one its `config/boot.rb` names, else the
+  one `bundle exec` run inside the app would find. A bare
+  `rails-ai-context` entry left in the folder is replaced, a re-run drops
+  the entry of an app whose folder is gone or that the gem renamed, removal
+  and cleanup take every `rails-ai-context-*` entry that runs the gem's
+  server (a hand-made one that does not stays, and so does an entry with no
+  command, an HTTP one, under either name), `--app-path` naming a folder of
+  apps sets that folder up, and `doctor` inside an app finds the folder's
+  config one or two levels up, says when one there does not parse, and
+  checks each Codex env snapshot in it. `init` warns when an app declares a
+  Ruby other than the one the folder runs. See ADR-0005 for what each AI
+  tool does with a server's working directory, and why.
 - **`RAILS_AI_CONTEXT_SERVER_NAME`** names the server, for one process, in
   place of the default `config.server_name`; a name the app configured wins.
   A workspace entry sets it to put its app first: VS Code names every tool
@@ -50,10 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`init --app-path` sets up the app it names** (#424). The config, every MCP
   config and the `.gitignore` entries went to the current directory and the
   context files to the named app; from a directory that is no app, it
-  refused outright. Under `bundle exec`, a command that reads an app other
-  than the bundle's says it boots against that bundle, and the install form
-  every file names - the MCP command, the commands in context files and
-  tool hints - is read from the app's own Gemfile.lock, not the bundle's.
+  refused outright. The commands it prints afterwards name the app the same
+  way. Under `bundle exec`, a command that reads an app other than the
+  bundle's says it boots against that bundle, and the install form every
+  file names - the MCP command, the commands in context files and tool
+  hints - is read from the app's own Gemfile.lock, not the bundle's.
 - **`tool --list --app-path` lists the app's custom tools** (#426). It never
   booted the named app, so tools from its initializer were missing.
 - **A wrong `--app-path` inside an app names the app**, and a relative one
@@ -65,12 +69,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hooks directory is now git's own answer. A monorepo's hook validates each
   app's staged files from inside that app, from a linked worktree too, and
   installing in a second app adds it to the same hook. A deleted file no
-  longer blocks the commit: there is nothing left to validate. Running the
-  generator again brings a hook an earlier version wrote, and nobody changed
-  since, up to date. A `core.hooksPath` outside the repository, which every
-  repository using it shares, a repository that does not track the app (a
-  dotfiles repository at `$HOME`), and a hook changed by hand are left alone
-  with a message.
+  longer blocks the commit: there is nothing left to validate, and an
+  exported `CDPATH` cannot send the hook into another folder of the same
+  name. Running the generator again brings a hook an earlier version wrote,
+  and nobody changed since, up to date. A `core.hooksPath` outside the
+  repository, which every repository using it shares, a repository that does
+  not track the app (a dotfiles repository at `$HOME`), and any other hook
+  that runs `rails-ai-context` are left alone with a message.
 - **An app with a Gemfile and no lockfile yet is read by what its Gemfile
   names.** It counted as an in-Gemfile install, so a fresh clone that never
   named the gem got `bundle exec` commands that could not start. A Gemfile
@@ -83,11 +88,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file with Windows line endings keeps them, and one that is not ASCII is
   read whatever the locale, by `doctor` too.
 - **A JSON config the install cannot write back faithfully is left alone**,
-  with the entry to add by hand: one that does not parse (VS Code's and
-  OpenCode's take trailing commas) was replaced by a file holding only the
-  gem's server, one with comments lost them, and one that is JSON but not an
-  object raised out of the install. `doctor` says to make such a file valid
-  JSON before running the install again.
+  with the entry to add by hand, said on the terminal: one that does not
+  parse (VS Code's and OpenCode's take trailing commas) was replaced by a
+  file holding only the gem's server, one with comments lost them, and one
+  that is JSON but not an object, or not UTF-8, raised out of the install. A
+  byte order mark at the head of a config is kept, where it cost the file
+  its contents. `doctor` says to make such a file valid JSON before running
+  the install again.
+- **In a C or POSIX locale, a container's default, the binary reads paths
+  and files as UTF-8**, as Rails does once it boots. A home directory, an
+  app folder or an initializer holding characters outside ASCII stopped a
+  command with an encoding error.
 
 ## [5.32.2] - 2026-10-07
 

@@ -82,9 +82,9 @@ ls -la .mcp.json .cursor/ .vscode/ .github/
    rails generate rails_ai_context:install
    ```
 
-### "could not write .vscode/mcp.json: ... left the file as it is"
+### "Could not write .vscode/mcp.json - that tool will not auto-discover the MCP server"
 
-The install never replaces a config it cannot write back faithfully: one that does not parse as JSON (VS Code and OpenCode accept trailing commas, which JSON does not), or one holding comments that writing it back would drop. The warning ends with the exact entry to add, as `Add {"servers":{...}} to it by hand`. Add that entry yourself, or remove the trailing commas and comments and run the install again. `doctor` reports one that does not parse as invalid JSON.
+The install never replaces a config it cannot write back faithfully: one that does not parse as JSON (VS Code and OpenCode accept trailing commas, which JSON does not), one holding comments that writing it back would drop, or one that is not UTF-8. The line after the warning says which, and ends with the exact entry to add, as `Add {"servers":{...}} to it by hand`. Add that entry yourself, or remove the trailing commas and comments and run the install again. `doctor` reports one that does not parse as invalid JSON, a workspace's above the app included. Dropping an AI tool leaves such a file alone the same way and names the entries to remove.
 
 ### "MCP server fails to start"
 

@@ -22,10 +22,9 @@ module RailsAiContext
       MAX_SERVER_NAME = 30
 
       # root is absolute; path is root relative to the workspace, as the
-      # entry's --app-path names it. An in-Gemfile app's gemfile is the one
-      # its bundle reads - its own, or the one its config/boot.rb names, a
-      # monorepo's shared Gemfile - absolute, and gemfile_path is that
-      # relative to the workspace.
+      # entry's --app-path names it. gemfile is the Gemfile the app's bundle
+      # reads, absolute, and gemfile_path that relative to the workspace;
+      # both are nil when the app has none bundle exec could find.
       App = Struct.new(:root, :path, :server_name, :standalone, :gemfile, :gemfile_path, keyword_init: true) do
         # The app's MCP entry. An in-Gemfile app's names its bundle's Gemfile,
         # which bundle exec, started in the workspace, would never find.
@@ -52,30 +51,47 @@ module RailsAiContext
         roots.zip(paths).map do |root, path|
           gemfile = bundle_gemfile(root)
           App.new(root: root, path: path, server_name: names.fetch(path), standalone: InstallMode.standalone?(root: root),
-                  gemfile: gemfile, gemfile_path: relative(gemfile, dir))
+                  gemfile: gemfile, gemfile_path: gemfile && relative(gemfile, dir))
         end
       end
 
-      # The Gemfile the app's bundle reads, by GemLock's answer: the app's
-      # own, else the one its config/boot.rb points Bundler at.
+      # The Gemfile the app's bundle reads: GemLock's answer (the app's own,
+      # else the one its config/boot.rb names inside its repository), else
+      # the one config/boot.rb names anywhere, which the app boots against,
+      # else the one bundle exec run inside the app would find. nil when there
+      # is none, and the entry then names none either.
       def bundle_gemfile(root)
-        found = GemLock.bundle(root).gemfile
-        found && File.file?(found) ? found : File.join(root, GemLock.gemfile_name(root))
+        [ GemLock.bundle(root).gemfile, GemLock.boot_gemfile(root) ].find { |path| path && File.file?(path) } ||
+          nearest_gemfile(root)
       end
 
-      # A path as the workspace's config spells it: from the workspace, with
-      # both sides resolved, so a symlinked temp or home directory does not
-      # turn it into a walk through the filesystem root.
+      # Bundler's own search: gems.rb, then Gemfile, in the app and in each
+      # directory above it.
+      def nearest_gemfile(root)
+        dir = root
+        loop do
+          found = %w[gems.rb Gemfile].map { |name| File.join(dir, name) }.find { |path| File.file?(path) }
+          return found if found
+
+          parent = File.dirname(dir)
+          return nil if parent == dir
+
+          dir = parent
+        end
+      end
+
+      # A path as the workspace's config spells it: from the workspace as
+      # written where it lies below it, else from both sides resolved, so a
+      # symlinked temp or home directory does not turn it into a walk
+      # through the filesystem root. A Gemfile's own name is never resolved:
+      # Bundler takes the lockfile's name from the path it is given, so a
+      # Gemfile linked in from elsewhere keeps the lockfile beside the link.
       def relative(path, dir)
-        Pathname.new(resolved(path)).relative_path_from(Pathname.new(resolved(dir))).to_s
-      end
+        below = path.delete_prefix("#{dir.delete_suffix('/')}/")
+        return below unless below == path
 
-      # The real path, or for a file not there yet its directory's.
-      def resolved(path)
-        return File.realpath(path) if File.exist?(path)
-
-        dir = File.dirname(path)
-        File.join(File.exist?(dir) ? File.realpath(dir) : File.expand_path(dir), File.basename(path))
+        resolved = File.join(SafePath.canonical(File.dirname(path)), File.basename(path))
+        Pathname.new(resolved).relative_path_from(Pathname.new(SafePath.canonical(dir))).to_s
       end
 
       # One stable name per app path: the folder's name, or its whole path

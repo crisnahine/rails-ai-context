@@ -304,7 +304,7 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
         expect(File.read(mono_hook)).to include("rails-ai-context tool validate")
       end
 
-      it "says why it leaves a hook from an earlier version alone for an app below the root" do
+      it "says why it leaves a hook it did not write as it stands alone, for an app below the root" do
         FileUtils.mkdir_p(File.dirname(mono_hook))
         File.write(mono_hook, "#!/bin/bash\n# rails-ai-context: validate Rails references before commit\n")
         allow(generator).to receive(:say)
@@ -312,7 +312,7 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
         install_for("apps/web")
 
         expect(generator).not_to have_received(:ask)
-        expect(generator).to have_received(:say).with(a_string_including("comes from an earlier version"), :yellow)
+        expect(generator).to have_received(:say).with(a_string_including("is not a hook this version wrote"), :yellow)
       end
 
       # An earlier version's hook, unchanged, served the app at the top.
@@ -407,6 +407,26 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
         end
       end
 
+      # cd consults CDPATH for a bare relative name, and a committer's
+      # exported CDPATH may hold a folder of the same name.
+      it "validates inside the app whatever CDPATH holds" do
+        install_for("apps/web")
+        Dir.mktmpdir do |bin|
+          FileUtils.mkdir_p(File.join(bin, "elsewhere/apps/web"))
+          File.write(File.join(bin, "rails"), "#!/bin/sh\necho \"$PWD\" >> #{File.join(bin, 'pwd.log').shellescape}\n")
+          File.chmod(0o755, File.join(bin, "rails"))
+          File.write(File.join(mono, "apps/web/app/models/post.rb"), "class Post; end\n")
+          git("-C", mono, "add", "-A")
+          env = { "PATH" => "#{bin}:#{ENV.fetch('PATH')}", "CDPATH" => File.join(bin, "elsewhere"),
+                  "GIT_AUTHOR_NAME" => "t", "GIT_AUTHOR_EMAIL" => "t@t", "GIT_COMMITTER_NAME" => "t", "GIT_COMMITTER_EMAIL" => "t@t" }
+
+          out, status = Open3.capture2e(env, "git", "-C", mono, "commit", "-q", "-m", "x")
+
+          expect(status.success?).to be(true), out
+          expect(File.realpath(File.read(File.join(bin, "pwd.log")).strip)).to eq(File.realpath(File.join(mono, "apps/web")))
+        end
+      end
+
       # A deleted file has nothing left to validate, and an app that is gone
       # has nothing to validate in.
       it "passes over deleted files and an app that is gone" do
@@ -492,17 +512,21 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       end
     end
 
-    it "says why it leaves an earlier version's hook changed by hand alone" do
+    # A team's own hook that calls the gem among its other checks is not the
+    # gem's to replace, whatever it looks like.
+    it "leaves a hook that runs the gem among other checks alone, and says so" do
+      own = "#!/bin/sh\n# team checks\nbundle exec rubocop --force-exclusion\nrails-ai-context tool validate --files \"$FILES\"\n"
       FileUtils.mkdir_p(File.dirname(hook_path))
-      File.write(hook_path, "#!/bin/bash\n# rails-ai-context: validate Rails references before commit\n")
+      File.write(hook_path, own)
       allow(generator).to receive(:say)
 
       generator.install_validation_hook
 
       expect(generator).not_to have_received(:ask)
-      expect(File.read(hook_path)).to eq("#!/bin/bash\n# rails-ai-context: validate Rails references before commit\n")
+      expect(File.read(hook_path)).to eq(own)
       expect(generator).to have_received(:say)
-        .with(a_string_including("comes from an earlier version and was changed by hand - delete it"), :yellow)
+        .with(a_string_including("already runs rails-ai-context and is not a hook this version wrote"), :yellow)
+      expect(generator).not_to have_received(:say).with(a_string_including("delete it"), anything)
     end
 
     # The apps line edited by hand into something a shell would not read.

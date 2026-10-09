@@ -482,7 +482,7 @@ module RailsAiContext
       # directory may not exist yet, and a temp or home directory may sit
       # behind a symlink.
       def inside?(path, dir)
-        RailsAiContext::SafePath.contained?(canonical_path(path.to_s), canonical_path(dir.to_s))
+        RailsAiContext::SafePath.contained?(RailsAiContext::SafePath.canonical(path), RailsAiContext::SafePath.canonical(dir))
       end
 
       # Whether git tracks any file of the app, asked from inside it.
@@ -499,27 +499,19 @@ module RailsAiContext
         FileUtils.chmod(0o755, path)
       end
 
-      # Why a hook of the gem's that was changed since it was written is left
-      # alone, and what to do instead.
+      # Why a hook that runs rails-ai-context but is not one this version
+      # wrote, as it stands, is left alone. It may be the gem's, changed by
+      # hand since, or somebody's own that calls the gem among other checks,
+      # so nothing here suggests replacing it.
       def hand_changed_hook(path, content, listed, app)
         if listed
           "#{path} validates #{listed.join(', ')} and was changed by hand - add #{app} to it the same way"
         elsif content.include?("# rails-ai-context apps:")
           "#{path} names its apps in a form this version cannot read - add #{app} to it by hand"
         else
-          "#{path} comes from an earlier version and was changed by hand - delete it and run this again for the " \
-            "current hook, which validates #{app == '.' ? 'this app' : app} and leaves deleted files out"
+          "#{path} already runs rails-ai-context and is not a hook this version wrote as it stands, so it is left " \
+            "as it is - make sure it passes deleted files over, as the current hook does"
         end
-      end
-
-      def canonical_path(path)
-        existing = path
-        existing = File.dirname(existing) until File.exist?(existing) || File.dirname(existing) == existing
-        rest = path.delete_prefix(existing)
-        real = File.realpath(existing)
-        rest.empty? ? real : File.join(real, rest)
-      rescue SystemCallError
-        path
       end
       end # no_tasks
 

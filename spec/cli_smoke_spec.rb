@@ -513,6 +513,7 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         expect(Dir.children(dir)).to eq(%w[work])
         # From where it was run, not from the folder it set up.
         expect(err).to include("rails-ai-context --app-path work/a tool NAME")
+        expect(err).to include("Claude Code      -> .mcp.json in work/;")
       end
     end
 
@@ -780,6 +781,67 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         expect($?.exitstatus).to eq(0), out
         expect(Dir.children(File.join(dir, "empty"))).to be_empty
         expect(File.exist?(File.join(dir, "b", ".rails-ai-context.yml"))).to be(true)
+      end
+    end
+
+    # The commands it prints are run from where init was: without the
+    # --app-path they would read that folder instead.
+    it "names the app in the commands it prints when --app-path set up another" do
+      Dir.mktmpdir do |dir|
+        %w[a b].each do |name|
+          FileUtils.mkdir_p(File.join(dir, name, "app", "models"))
+          File.write(File.join(dir, name, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+        end
+
+        out = `cd #{dir}/a && printf '1\n3\n' | ruby -I #{lib} #{exe} init --app-path ../b --no-boot 2>&1`
+
+        expect($?.exitstatus).to eq(0), out
+        expect(out).to include("rails-ai-context --app-path ../b doctor")
+        expect(out).not_to match(/^  rails-ai-context doctor/)
+      end
+    end
+
+    # A C or POSIX locale tags every path binary or US-ASCII, and the first
+    # one outside ASCII - a home directory named after its owner - could be
+    # neither compared with nor joined to the gem's own UTF-8 strings.
+    # Run outside any bundle, as the installed binary runs: Bundler's own
+    # setup trips over such a home directory before any of this gem loads.
+    # GEM_PATH unset puts the gem directory under that home on Gem.path.
+    it "finds its way under a home directory named outside ASCII in a C locale" do
+      Dir.mktmpdir do |dir|
+        home = File.join(dir, "jos\u00e9")
+        notes = File.join(home, "notes")
+        FileUtils.mkdir_p(notes)
+        unbundled = %w[RUBYOPT RUBYLIB BUNDLE_GEMFILE BUNDLE_BIN_PATH BUNDLER_SETUP BUNDLER_VERSION GEM_HOME GEM_PATH]
+        env = unbundled.to_h { |key| [ key, nil ] }.merge("LANG" => "C", "LC_ALL" => "C", "HOME" => home)
+        thor = Gem.loaded_specs.fetch("thor").full_require_paths.flat_map { |path| [ "-I", path ] }
+
+        _out, err, status = Open3.capture3(env, RbConfig.ruby, *thor, "-I", lib, exe, "init", chdir: notes, stdin_data: "")
+
+        expect(err).not_to include("incompatible character encodings")
+        expect(status.exitstatus).to eq(1)
+        expect(err).to include("No Rails app found in #{notes}")
+      end
+    end
+
+    # The generator's initializer holds box-drawing characters, which a C
+    # locale cannot read without being told the file is UTF-8.
+    it "sets up a folder of apps in a C locale whose initializers hold text outside ASCII" do
+      Dir.mktmpdir do |dir|
+        %w[a b].each do |name|
+          FileUtils.mkdir_p(File.join(dir, "caf\u00e9", name, "config", "initializers"))
+          File.write(File.join(dir, "caf\u00e9", name, "config", "application.rb"), "")
+          File.write(File.join(dir, "caf\u00e9", name, "config", "initializers", "rails_ai_context.rb"),
+                     "# \u2500\u2500 rails-ai-context \u2500\u2500\nRailsAiContext.configure do |config|\n  config.ai_tools = %i[claude]\nend\n")
+        end
+        env = { "LANG" => "C", "LC_ALL" => "C" }
+
+        _out, err, status = Open3.capture3(env, "ruby", "-I", lib, exe, "init", "--no-boot",
+                                           chdir: File.join(dir, "caf\u00e9"), stdin_data: "1\n3\n")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(JSON.parse(File.read(File.join(dir, "caf\u00e9", ".mcp.json")))["mcpServers"].keys)
+          .to eq(%w[rails-ai-context-a rails-ai-context-b])
       end
     end
 

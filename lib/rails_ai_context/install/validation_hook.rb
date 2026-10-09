@@ -105,7 +105,9 @@ module RailsAiContext
       # from the top of the work tree by paths relative to the app - never
       # from inside it, where a linked worktree's exported GIT_DIR would make
       # git list them from the top instead - deleted files left out, and
-      # validated from inside the app. An app that is gone is passed over.
+      # validated from inside the app, entered as ./app so that a CDPATH
+      # the committer exported cannot send it elsewhere. An app that is gone
+      # is passed over.
       #
       # @param apps [Array<String>] app paths from the top of the work tree,
       #   "." for the top itself
@@ -142,7 +144,7 @@ module RailsAiContext
 
             if command -v #{hook_binary} &> /dev/null; then
               files=$(printf '%s\\n' "$changed_files" | tr '\\n' ',')
-              (cd "$app" && #{validate_command} 2>/dev/null)
+              (cd "./$app" && #{validate_command} 2>/dev/null)
               exit_code=$?
               if [ $exit_code -ne 0 ]; then
                 status=$exit_code

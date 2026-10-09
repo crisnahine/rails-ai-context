@@ -250,16 +250,16 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
         Dir.mktmpdir do |dir|
           FileUtils.mkdir_p(File.join(dir, ".vscode"))
           jsonc = %({\n  "servers": { "github": { "url": "https://api.example/mcp" }, },\n  "inputs": [],\n}\n)
-          File.write(File.join(dir, ".vscode/mcp.json"), jsonc)
-          allow(RailsAiContext).to receive(:log_warn)
+          path = File.join(dir, ".vscode/mcp.json")
+          File.write(path, jsonc)
 
           result = described_class.new(tools: [ :copilot ], output_dir: dir, tool_mode: :mcp, standalone: true).call
 
-          expect(result[:failed]).to eq([ File.join(dir, ".vscode/mcp.json") ])
-          expect(File.read(File.join(dir, ".vscode/mcp.json"))).to eq(jsonc)
-          expect(RailsAiContext).to have_received(:log_warn).with(
-            a_string_including("does not parse as JSON", "left the file as it is",
-                               %(Add {"servers":{"rails-ai-context":{"command":"rails-ai-context","args":["serve"]}}} to it by hand))
+          expect(result[:failed]).to eq([ path ])
+          expect(File.read(path)).to eq(jsonc)
+          expect(result[:reasons][path]).to include(
+            "does not parse as JSON", "so it is left as it is",
+            %(Add {"servers":{"rails-ai-context":{"command":"rails-ai-context","args":["serve"]}}} to it by hand)
           )
         end
       end
@@ -271,13 +271,12 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
           path = File.join(dir, ".vscode/mcp.json")
           commented = %({\n  // GitHub's server\n  "servers": { "github": { "url": "https://api.example/mcp" } }\n}\n)
           File.write(path, commented)
-          allow(RailsAiContext).to receive(:log_warn)
 
           result = described_class.new(tools: [ :copilot ], output_dir: dir, tool_mode: :mcp, standalone: true).call
 
           expect(result[:failed]).to eq([ path ])
           expect(File.read(path)).to eq(commented)
-          expect(RailsAiContext).to have_received(:log_warn).with(a_string_including("holds comments"))
+          expect(result[:reasons][path]).to include("holds comments")
 
           current = %({\n  /* ours */\n  "servers": { "rails-ai-context": { "command": "rails-ai-context", "args": ["serve"] } }\n}\n)
           File.write(path, current)
@@ -285,6 +284,38 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
 
           expect(result[:skipped]).to eq([ path ])
           expect(File.read(path)).to eq(current)
+        end
+      end
+
+      # An empty file holds nothing to lose; an editor's byte order mark is
+      # the file's.
+      it "fills an empty config, and keeps a byte order mark" do
+        Dir.mktmpdir do |dir|
+          File.write(File.join(dir, ".mcp.json"), "\n")
+          FileUtils.mkdir_p(File.join(dir, ".vscode"))
+          File.write(File.join(dir, ".vscode/mcp.json"), %(\uFEFF{"servers": {"github": {"url": "https://api.example/mcp"}}}\n))
+
+          result = described_class.new(tools: %i[claude copilot], output_dir: dir, tool_mode: :mcp, standalone: true).call
+
+          expect(result[:written].size).to eq(2)
+          expect(JSON.parse(File.read(File.join(dir, ".mcp.json")))["mcpServers"].keys).to eq(%w[rails-ai-context])
+          vscode = File.read(File.join(dir, ".vscode/mcp.json"))
+          expect(vscode).to start_with("\uFEFF{")
+          expect(JSON.parse(vscode.delete_prefix("\uFEFF"))["servers"].keys).to eq(%w[github rails-ai-context])
+        end
+      end
+
+      # JSON is UTF-8; bytes that are not would make a rewrite fail midway.
+      it "leaves a config that is not UTF-8 as it is" do
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, ".mcp.json")
+          File.binwrite(path, %({"mcpServers": {"x": {"command": "caf\xE9"}}}\n).b)
+
+          result = described_class.new(tools: %i[claude], output_dir: dir, tool_mode: :mcp, standalone: true).call
+
+          expect(result[:failed]).to eq([ path ])
+          expect(result[:reasons][path]).to include("not UTF-8")
+          expect(File.binread(path)).to eq(%({"mcpServers": {"x": {"command": "caf\xE9"}}}\n).b)
         end
       end
 
@@ -572,6 +603,24 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
       end
     end
 
+    # The gem writes no entry without a command: an HTTP one under the bare
+    # name is somebody's own.
+    it "keeps a bare entry that runs no command" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".mcp.json"), JSON.generate("mcpServers" => {
+          "rails-ai-context" => { "type" => "http", "url" => "http://localhost:6029/mcp" }
+        }))
+
+        generate(dir, tools: %i[claude])
+        described_class.remove(tools: %i[cursor], output_dir: dir)
+
+        expect(JSON.parse(File.read(File.join(dir, ".mcp.json")))["mcpServers"].keys)
+          .to eq(%w[rails-ai-context rails-ai-context-a rails-ai-context-b])
+        expect(described_class.remove(tools: %i[claude], output_dir: dir).size).to eq(1)
+        expect(JSON.parse(File.read(File.join(dir, ".mcp.json")))["mcpServers"].keys).to eq(%w[rails-ai-context])
+      end
+    end
+
     it "keeps an app's own bare entry when it writes one" do
       Dir.mktmpdir do |dir|
         described_class.new(tools: [ :claude ], output_dir: dir, tool_mode: :mcp, standalone: true).call
@@ -701,8 +750,9 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
         expect(toml).to start_with(%([mcp_servers.other]\ncommand = "node"\n\n[mcp_servers.rails-ai-context-a]))
       end
 
-      # A comment over a header is the header's.
-      it "drops the comment over a stale section's header with it, and leaves no blank line at the end" do
+      # A comment over a header may be a key of the table before it, set
+      # aside by hand, so it stays.
+      it "keeps the comment over a stale section's header, and leaves no blank line at the end" do
         FileUtils.mkdir_p(File.join(@dir, ".codex"))
         current = described_class.new(tools: [ :codex ], output_dir: @dir, tool_mode: :mcp, servers: servers)
         current.call
@@ -723,7 +773,7 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
         current.call
 
         expect(File.read(File.join(@dir, ".codex/config.toml")))
-          .to eq(%(# about other\n[mcp_servers.other]\ncommand = "node"\n\n) + written)
+          .to eq(%(# about other\n[mcp_servers.other]\ncommand = "node"\n\n) + written + "\n# my old app\n")
       end
     end
 
@@ -749,13 +799,12 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
         FileUtils.mkdir_p(File.join(dir, ".vscode"))
         jsonc = %({\n  // mine\n  "servers": { "github": { "url": "https://api.example/mcp" }, },\n}\n)
         File.write(File.join(dir, ".vscode/mcp.json"), jsonc)
-        allow(RailsAiContext).to receive(:log_warn)
 
         result = generate(dir, tools: [ :copilot ])
 
         expect(result[:failed]).to eq([ File.join(dir, ".vscode/mcp.json") ])
         expect(File.read(File.join(dir, ".vscode/mcp.json"))).to eq(jsonc)
-        expect(RailsAiContext).to have_received(:log_warn).with(a_string_including("does not parse as JSON"))
+        expect(result[:reasons][File.join(dir, ".vscode/mcp.json")]).to include("does not parse as JSON")
       end
     end
 
@@ -1086,14 +1135,13 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
       Dir.mktmpdir do |dir|
         commented = %({\n  // ours\n  "mcpServers": { "rails-ai-context": { "command": "rails-ai-context", "args": ["serve"] } }\n}\n)
         File.write(File.join(dir, ".mcp.json"), commented)
-        allow(RailsAiContext).to receive(:log_warn)
+        said = []
 
-        cleaned = described_class.remove(tools: [ :claude ], output_dir: dir)
+        cleaned = described_class.remove(tools: [ :claude ], output_dir: dir, warn: ->(path, reason) { said << [ path, reason ] })
 
         expect(cleaned).to be_empty
         expect(File.read(File.join(dir, ".mcp.json"))).to eq(commented)
-        expect(RailsAiContext).to have_received(:log_warn)
-          .with(a_string_including(".mcp.json as it is", "Remove rails-ai-context from it by hand"))
+        expect(said).to contain_exactly([ File.join(dir, ".mcp.json"), a_string_including("so it is left as it is", "Remove rails-ai-context from it by hand") ])
       end
     end
 

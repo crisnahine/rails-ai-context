@@ -310,8 +310,10 @@ module RailsAiContext
       invalid = []
       checks = tools_to_check.map do |tool|
         cfg = configs[tool]
-        # An app in a workspace is served from the folder above it.
-        full_path = McpConfigGenerator.serving_config(app.root, tool) || File.join(app.root, cfg[:path])
+        # An app in a workspace is served from the folder above it, whose
+        # config, if it cannot be read, is the one to fix.
+        full_path = McpConfigGenerator.serving_config(app.root, tool) ||
+                    McpConfigGenerator.unreadable_config_above(app.root, tool) || File.join(app.root, cfg[:path])
         unless File.exist?(full_path)
           next Check.new(name: cfg[:label], status: :warn,
             message: "No #{cfg[:path]} for MCP auto-discovery",
@@ -324,7 +326,12 @@ module RailsAiContext
           Check.new(name: cfg[:label], status: :pass, message: "#{shown} exists", fix: nil)
         else
           begin
-            JSON.parse(SafeFile.read_text(full_path))
+            # An empty file is one install fills.
+            if SafeFile.read_text(full_path).strip.empty?
+              next Check.new(name: cfg[:label], status: :warn, message: "#{shown} is empty", fix: "Run `#{command(:install)}`")
+            end
+
+            McpConfigGenerator.read_json(full_path)
             Check.new(name: cfg[:label], status: :pass, message: "#{shown} valid", fix: nil)
           rescue JSON::ParserError => e
             invalid << shown
@@ -391,12 +398,9 @@ module RailsAiContext
     # app's in a workspace. Read the way the generator reads the file, so a
     # section is the gem's by the same rule and any byte reads in any locale.
     def codex_gem_homes(path)
-      toml = McpConfigGenerator::Toml
       lines = SafeFile.read_text(path).lines
-      toml.sections(lines) { |name| name.match?(McpConfigGenerator::OWN_SERVER_NAME) }.filter_map do |range, name|
-        next unless McpConfigGenerator.own_entry?(name, toml.argv(lines, range))
-
-        toml.sub_table(lines, range, name, "env")["GEM_HOME"]
+      McpConfigGenerator::Toml.own_sections(lines).filter_map do |range, name|
+        McpConfigGenerator::Toml.sub_table(lines, range, name, "env")["GEM_HOME"]
       end.uniq
     end
 

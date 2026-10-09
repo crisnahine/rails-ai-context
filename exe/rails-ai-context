@@ -45,6 +45,19 @@ PREBOOT_GEM_SPECS = preboot_gem_specs.freeze
 # entry puts those back, so re-registering their specs would tell it not to.
 PREBOOT_FRAMEWORK_NAMES = preboot_framework_names.freeze
 
+# A C or POSIX locale names no encoding, so Ruby tags every path it reads -
+# the working directory, $HOME, a glob - binary or US-ASCII, and the first
+# one outside ASCII can be neither compared with nor joined to the gem's own
+# UTF-8 strings. Rails makes UTF-8 the default when it boots; this binary
+# reads paths and files before any boot, so it does the same first, for
+# them and for the arguments it was given.
+if Encoding.default_external == Encoding::US_ASCII
+  verbose, $VERBOSE = $VERBOSE, nil
+  Encoding.default_external = Encoding::UTF_8
+  $VERBOSE = verbose
+  ARGV.map! { |arg| arg.dup.force_encoding(Encoding::UTF_8) }
+end
+
 # This file, wherever the gem is installed: what a child re-entering this very
 # copy runs when no installed spec names it.
 EXE_PATH = File.expand_path(__FILE__).freeze
@@ -465,11 +478,11 @@ class RailsAiContextCLI < Thor
         $stderr.puts "MCP-only setup: no context files written."
       end
 
-      show_workspace_instructions(apps, ai_tools, tool_mode, context_files)
+      show_workspace_instructions(dir, apps, ai_tools, tool_mode, context_files)
       return if failed.empty?
 
       $stderr.puts "Error: no context files for #{failed.map { |app| "#{app.path}/" }.join(', ')} - see the output above. " \
-                   "Retry with `rails-ai-context --app-path #{app_root.display(failed.first.root, Dir.pwd).shellescape} context`."
+                   "Retry with `#{app_root.command_line([ "rails-ai-context", "--app-path", app_root.display(failed.first.root, Dir.pwd), "context" ])}`."
       exit 1
     end
 
@@ -542,20 +555,21 @@ class RailsAiContextCLI < Thor
               "= #{spec.version}" ], false ]
     end
 
-    def show_workspace_instructions(apps, ai_tools, tool_mode, context_files)
+    def show_workspace_instructions(dir, apps, ai_tools, tool_mode, context_files)
       $stderr.puts ""
       $stderr.puts "=" * 50
       $stderr.puts " rails-ai-context initialized for #{apps.size == 1 ? '1 app' : "#{apps.size} apps"}"
       $stderr.puts "=" * 50
       $stderr.puts ""
       $stderr.puts "Your setup:"
+      where = dir == Dir.pwd ? "here" : "in #{app_root.display(dir, Dir.pwd).delete_suffix('/')}/"
       ::RailsAiContext::Install::AiTool.all.each do |tool|
         next unless ai_tools.include?(tool.key)
 
         # The MCP config is this folder's, so it leaves the per-app list.
         per_app = tool.files.split(" + ").reject { |part| part == tool.mcp_config[:path] }.join(" + ")
         files = context_files ? "#{per_app} in each app" : "no context files"
-        files = "#{tool.mcp_config[:path]} here; #{files}" if tool_mode == :mcp
+        files = "#{tool.mcp_config[:path]} #{where}; #{files}" if tool_mode == :mcp
         $stderr.puts "  #{tool.name.ljust(16)} -> #{files}"
       end
       if tool_mode == :mcp
@@ -563,11 +577,14 @@ class RailsAiContextCLI < Thor
         $stderr.puts "MCP servers, one per app:"
         width = apps.map { |app| app.server_name.size }.max
         apps.each do |app|
-          how = app.standalone ? "" : " (bundle exec, BUNDLE_GEMFILE=#{app.server.gemfile})"
+          how = if app.standalone then ""
+          elsif app.server.gemfile then " (bundle exec, BUNDLE_GEMFILE=#{app.server.gemfile})"
+          else " (bundle exec)"
+          end
           $stderr.puts "  #{app.server_name.ljust(width)} -> #{app.path}/#{how}"
         end
       end
-      first = app_root.display(apps.first.root, Dir.pwd).shellescape
+      first = app_root.command_line([ app_root.display(apps.first.root, Dir.pwd) ])
       $stderr.puts ""
       $stderr.puts "Commands, from here:"
       $stderr.puts "  rails-ai-context --app-path #{first} context    # Regenerate that app's context files" if context_files
@@ -594,14 +611,20 @@ class RailsAiContextCLI < Thor
         $stderr.puts ""
         $stderr.puts "  Left alone on purpose: CLAUDE.md, AGENTS.md, the rules directories and .ai-context.json."
       end
+      # Set up through --app-path from elsewhere, the commands name the app
+      # the same way, or they would read the folder they are run in.
+      result = @app_root_result
+      typed = @app_path_override || options[:app_path]
+      binary = "rails-ai-context"
+      binary = app_root.command_line([ "rails-ai-context", "--app-path", typed ]) if result&.explicit && typed && result.root != result.cwd
       $stderr.puts ""
       $stderr.puts "Commands:"
-      $stderr.puts "  rails-ai-context context    # Regenerate context files" if context_files
-      $stderr.puts "  rails-ai-context tool NAME  # Run any of the #{RailsAiContext::CountPhrase.call(builtin_tool_count, "tool")}"
+      $stderr.puts "  #{binary} context    # Regenerate context files" if context_files
+      $stderr.puts "  #{binary} tool NAME  # Run any of the #{RailsAiContext::CountPhrase.call(builtin_tool_count, "tool")}"
       if tool_mode == :mcp
-        $stderr.puts "  rails-ai-context serve      # Start MCP server"
+        $stderr.puts "  #{binary} serve      # Start MCP server"
       end
-      $stderr.puts "  rails-ai-context doctor     # Check AI readiness"
+      $stderr.puts "  #{binary} doctor     # Check AI readiness"
       $stderr.puts ""
       if tool_mode == :mcp
         $stderr.puts "MCP auto-discovery:"
