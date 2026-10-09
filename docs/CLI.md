@@ -67,7 +67,17 @@ Global options may be typed before or after the command name:
 `rails-ai-context --app-path /srv/app doctor` and
 `rails-ai-context doctor --app-path /srv/app` run the same check.
 
-`--app-path` names the Rails root, and defaults to the working directory.
+`--app-path` names the Rails root, taken as given. Left out, every command
+that reads an app finds it the way `bin/rails` and Bundler do: the working
+directory if it is an app, else the nearest app root above it (a directory with
+`config/application.rb`, `config/environment.rb`, or a `bin/rails` that boots an
+app or an engine; never `$HOME`, `node_modules` or a gem install), else the one
+app a level or two below it. A walk names the app it chose on stderr, as
+`[rails-ai-context] using app at a/`, so `serve` keeps stdout clean. A folder
+holding several apps is refused with one `--app-path` command per app, and
+`tool --list` there lists the tools without an app. The chosen root is the
+process's working directory for the rest of the run, so `init`, the config and
+every file written land in it.
 `--environment` names the `RAILS_ENV` to boot under. Left out, it resolves the
 way Rails resolves its own environment: the ambient `RAILS_ENV`, then
 `RACK_ENV`, then `development`, reading an empty value as unset. So an app

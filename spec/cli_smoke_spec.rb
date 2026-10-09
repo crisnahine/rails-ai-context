@@ -280,6 +280,86 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
     end
   end
 
+  # bin/rails and Bundler both walk up to the app; the binary refused from
+  # anywhere but the root, and refused a folder of apps without naming them.
+  describe "a command run outside the app root" do
+    let(:exe) { File.expand_path("../exe/rails-ai-context", __dir__) }
+    let(:lib) { File.expand_path("../lib", __dir__) }
+
+    def rails_app(dir)
+      FileUtils.mkdir_p(File.join(dir, "config"))
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      File.write(File.join(dir, "config", "application.rb"), "module X\n  class Application < Rails::Application\n  end\nend\n")
+      File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+    end
+
+    it "walks up from a subdirectory and says so on stderr only" do
+      Dir.mktmpdir do |dir|
+        dir = File.realpath(dir)
+        rails_app(dir)
+
+        out, err, status = Open3.capture3("ruby", "-I", lib, exe, "tool", "model_details", "--no-boot",
+                                          chdir: File.join(dir, "app", "models"))
+
+        expect(status.exitstatus).to eq(0), err
+        expect(out).to include("Widget")
+        expect(out).not_to include("using app at")
+        expect(err).to include("[rails-ai-context] using app at #{dir}")
+      end
+    end
+
+    it "uses the one app in a folder below" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "a"))
+
+        out, err, status = Open3.capture3("ruby", "-I", lib, exe, "tool", "model_details", "--no-boot", chdir: dir)
+
+        expect(status.exitstatus).to eq(0), err
+        expect(out).to include("Widget")
+        expect(err).to include("[rails-ai-context] using app at a/")
+      end
+    end
+
+    it "names every app in a folder of several, with the command for each" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "a"))
+        rails_app(File.join(dir, "b"))
+
+        out, err, status = Open3.capture3("ruby", "-I", lib, exe, "serve", chdir: dir, stdin_data: "")
+
+        expect(status.exitstatus).to eq(1)
+        expect(out).to eq("")
+        expect(err).to include("rails-ai-context --app-path a serve\n")
+        expect(err).to include("rails-ai-context --app-path b serve\n")
+      end
+    end
+
+    it "still lists tools in a folder of several apps" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "a"))
+        rails_app(File.join(dir, "b"))
+
+        out, err, status = Open3.capture3("ruby", "-I", lib, exe, "tool", "--list", chdir: dir)
+
+        expect(status.exitstatus).to eq(0), err
+        expect(out).to include("schema")
+      end
+    end
+
+    it "names the app above a wrong --app-path" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+
+        _out, err, status = Open3.capture3("ruby", "-I", lib, exe, "tool", "schema", "--no-boot",
+                                           "--app-path", File.join(dir, "app", "models"))
+
+        expect(status.exitstatus).to eq(1)
+        expect(err).to include("No Rails app found in #{File.join(dir, "app", "models")}")
+        expect(err).to include("is inside the app at")
+      end
+    end
+  end
+
   # docs/CLI.md lists watch among the commands that take --no-boot, and it
   # died with an uninitialized-constant backtrace.
   it "watches a source-only tree with --no-boot" do
@@ -453,7 +533,41 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         out = `cd #{dir} && ruby -I #{lib} #{exe} init < /dev/null 2>&1`
         expect($?.exitstatus).to eq(1), out
         expect(out).to include("No Rails app found in")
-        expect(out).to include("Run this command from your Rails app root directory.")
+        expect(out).to include("Run this command from your Rails app root directory (or pass --app-path).")
+      end
+    end
+
+    # init read Dir.pwd before --app-path was applied: the config, every MCP
+    # config and the .gitignore entries went where it was run, the context
+    # files into the named app.
+    it "sets up only the app --app-path names" do
+      Dir.mktmpdir do |dir|
+        %w[a b].each do |name|
+          FileUtils.mkdir_p(File.join(dir, name, "app", "models"))
+          File.write(File.join(dir, name, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+          File.write(File.join(dir, name, ".gitignore"), "*.log\n")
+        end
+
+        out = `cd #{dir}/a && printf '1\n3\n' | ruby -I #{lib} #{exe} init --app-path ../b --no-boot 2>&1`
+
+        expect($?.exitstatus).to eq(0), out
+        expect(Dir.children(File.join(dir, "a")).sort).to eq(%w[.gitignore app])
+        expect(File.read(File.join(dir, "a", ".gitignore"))).to eq("*.log\n")
+        expect(Dir.children(File.join(dir, "b"))).to include(".rails-ai-context.yml", ".mcp.json")
+      end
+    end
+
+    it "sets up the app --app-path names from a directory that is no app" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "empty"))
+        FileUtils.mkdir_p(File.join(dir, "b", "app", "models"))
+        File.write(File.join(dir, "b", "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+
+        out = `cd #{dir}/empty && printf '1\n3\n' | ruby -I #{lib} #{exe} init --app-path ../b --no-boot 2>&1`
+
+        expect($?.exitstatus).to eq(0), out
+        expect(Dir.children(File.join(dir, "empty"))).to be_empty
+        expect(File.exist?(File.join(dir, "b", ".rails-ai-context.yml"))).to be(true)
       end
     end
 

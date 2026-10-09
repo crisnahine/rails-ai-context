@@ -274,11 +274,8 @@ class RailsAiContextCLI < Thor
     option :mcp_only, type: :boolean, default: false,
       desc: "Write the MCP config and nothing else: no CLAUDE.md, AGENTS.md, rules files or .ai-context.json"
     def init
-      unless entry_boot.app_present?(Dir.pwd, allow_source_only: true)
-        $stderr.puts "Error: No Rails app found in #{Dir.pwd}"
-        $stderr.puts "Run this command from your Rails app root directory."
-        exit 1
-      end
+      resolve_app_root!
+      refuse_no_app! unless entry_boot.app_present?(Dir.pwd, allow_source_only: true)
 
       require_install_files!
 
@@ -470,6 +467,8 @@ class RailsAiContextCLI < Thor
     # otherwise load the gem standalone and list from that. Only execution
     # (running a specific tool) genuinely needs a live app.
     def print_tool_list(no_boot: false)
+      # No app is no refusal here: the app-less listing is the answer.
+      resolve_app_root!(required: false)
       if !no_boot && entry_boot.app_present?(Dir.pwd) && try_boot_for_list
         puts ::RailsAiContext::CLI::ToolRunner.tool_list
         return
@@ -480,8 +479,7 @@ class RailsAiContextCLI < Thor
         # Boot is what normally loads .rails-ai-context.yml, so without it the
         # listing took the gem's defaults and advertised tools the app has
         # configured off - which the very next call then refuses by name.
-        # The app under analysis, which --app-path may have moved.
-        ::RailsAiContext::Configuration.auto_load!(File.expand_path(@app_path_override || options[:app_path] || Dir.pwd))
+        ::RailsAiContext::Configuration.auto_load!(Dir.pwd)
         puts ::RailsAiContext::CLI::ToolRunner.tool_list
         puts ""
         puts "Run inside a Rails app to execute tools - static source analysis works even when the app can't boot (see --no-boot)."
@@ -491,9 +489,8 @@ class RailsAiContextCLI < Thor
         if entry_boot.app_present?(Dir.pwd, allow_source_only: true)
           $stderr.puts "Error: the tool list needs this gem loaded, and it failed: #{e.message}"
         else
-          $stderr.puts "Error: No Rails app found in #{Dir.pwd}"
-          $stderr.puts "Run this command from your Rails app root directory."
           $stderr.puts "  (gem also failed to load standalone: #{e.message})" if ENV["DEBUG"]
+          refuse_no_app!
         end
         exit 1
       end
@@ -532,16 +529,8 @@ class RailsAiContextCLI < Thor
     # than being recognised by name.
     def boot_rails!(command:, allow_static: false, no_boot: false, allow_source_only: allow_static,
                     boot_failure_hint: nil)
-      app_path_opt = @app_path_override || options[:app_path]
+      resolve_app_root!
       environment_opt = @environment_override || options[:environment]
-      app_root = File.expand_path(app_path_opt || Dir.pwd)
-      if app_path_opt && !Dir.exist?(app_root)
-        $stderr.puts "Error: No such directory: #{app_root}"
-        exit 1
-      end
-      # Relative paths inside the app (log/, tmp/, sqlite files) assume the
-      # process cwd is the app root, so honor --app-path by moving there.
-      Dir.chdir(app_root) if app_path_opt
       # Apps read RAILS_ENV in config/boot.rb, before anything the gem can
       # rescue, so the default is only reachable if it is set here.
       # The chain is Rails' own (`Rails.env`): RAILS_ENV, then RACK_ENV, then
@@ -557,7 +546,59 @@ class RailsAiContextCLI < Thor
       return unless outcome.tier == :absent
 
       $stderr.puts boot_failure_hint if boot_failure_hint && outcome.reason
+      $stderr.puts "  #{@app_above_hint}" if @app_above_hint && !outcome.reason
       exit 1
+    end
+
+    # Which app this command reads, decided once and before anything reads
+    # Dir.pwd, then made the process cwd: relative paths inside the app (log/,
+    # tmp/, sqlite files, every install helper's root) assume it. Without
+    # this, init wrote half its files where it was run and half into
+    # --app-path, and `tool --list --app-path X` never booted X.
+    #
+    # `required: false` leaves the current directory in place when there is
+    # no single app, for the one command that answers without one.
+    def resolve_app_root!(required: true)
+      return if @app_root_resolved
+
+      @app_root_resolved = true
+      cwd = Dir.pwd
+      result = app_root.resolve(cwd: cwd, app_path: @app_path_override || options[:app_path])
+
+      if result.explicit
+        unless Dir.exist?(result.root)
+          $stderr.puts "Error: No such directory: #{result.root}"
+          exit 1
+        end
+        @app_above_hint = app_root.app_above_hint(result.root, cwd) unless entry_boot.app_present?(result.root, allow_source_only: true)
+      elsif result.root.nil?
+        return unless required && result.candidates.any?
+
+        app_root.several_apps(result, cwd, ARGV).each { |line| $stderr.puts line }
+        exit 1
+      end
+
+      Dir.chdir(result.root) unless result.root == cwd
+      return unless result.walked
+
+      # stderr only: stdout is the protocol channel for serve.
+      $stderr.puts app_root.notice(result, cwd)
+      warning = app_root.bundle_warning(result.root, cwd)
+      $stderr.puts warning if warning
+    end
+
+    def refuse_no_app!
+      $stderr.puts "Error: No Rails app found in #{Dir.pwd}"
+      $stderr.puts entry_boot::NO_APP_HINT
+      $stderr.puts "  #{@app_above_hint}" if @app_above_hint
+      exit 1
+    end
+
+    # Stdlib only, so it is safe to load before the app boots.
+    def app_root
+      entry_boot
+      require_relative "../lib/rails_ai_context/cli/app_root"
+      ::RailsAiContext::CLI::AppRoot
     end
 
     # Stdlib only, so it is safe to load before the app boots.

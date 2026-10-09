@@ -59,7 +59,6 @@ module RailsAiContext
         names = lock.gemfile_gems
         !names.nil? && (names & %w[rails railties]).empty?
       end
-      private_class_method :other_framework?
 
       def self.call(root:, allow_static:, no_boot: false, allow_source_only: false, command: nil)
         messages = []

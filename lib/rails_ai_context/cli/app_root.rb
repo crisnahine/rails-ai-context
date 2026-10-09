@@ -1,0 +1,177 @@
+# frozen_string_literal: true
+
+require "shellwords"
+require_relative "entry_boot"
+
+module RailsAiContext
+  module CLI
+    # Which app a command reads, decided once and before anything reads
+    # Dir.pwd: --app-path as given, else the current directory, else the
+    # nearest app above it (the way bin/rails and Bundler find theirs), else
+    # the one app a level or two below it. Stdlib only, like EntryBoot: the
+    # answer is needed before the gem entry may load. Never prints and never
+    # exits; the binary relays the lines.
+    module AppRoot
+      # root is nil when nothing was found; then candidates names the apps
+      # below the current directory, when there are several. walked is true
+      # when root is not the directory the caller stood in or named.
+      Result = Struct.new(:root, :walked, :candidates, :explicit, keyword_init: true)
+
+      def self.resolve(cwd:, app_path: nil)
+        if app_path
+          return Result.new(root: File.expand_path(app_path, cwd), walked: false, candidates: [], explicit: true)
+        end
+
+        if EntryBoot.app_present?(cwd, allow_source_only: true)
+          return Result.new(root: cwd, walked: false, candidates: [], explicit: false)
+        end
+
+        if (above = walk_up(cwd))
+          return Result.new(root: above, walked: true, candidates: [], explicit: false)
+        end
+
+        below = walk_down(cwd)
+        return Result.new(root: below.first, walked: true, candidates: [], explicit: false) if below.one?
+
+        Result.new(root: nil, walked: false, candidates: below, explicit: false)
+      end
+
+      # The nearest app root at or above dir. The test is stricter than the
+      # one a command applies to the directory it stands in: app/**/*.rb
+      # alone passes a packwerk pack and this gem's own repo, and a walk that
+      # stopped there would never reach the host app.
+      def self.walk_up(dir)
+        homes = home_dirs
+        loop do
+          return dir if !homes.include?(dir) && !excluded?(dir) && app_root?(dir)
+
+          parent = File.dirname(dir)
+          # The filesystem root is its own dirname, a Windows drive root too.
+          return nil if parent == dir
+
+          dir = parent
+        end
+      end
+
+      # Apps one or two levels down, by config/application.rb only - an engine
+      # or a pack has app/ and would read as an app on the looser test. Never
+      # from the filesystem root or $HOME: on macOS listing ~/Documents can
+      # raise a folder-access prompt.
+      def self.walk_down(dir)
+        return [] if File.dirname(dir) == dir || home_dirs.include?(dir)
+
+        # Hidden directories (.git, .claude/worktrees) are left out by the
+        # glob itself, and an unreadable one yields nothing rather than raising.
+        roots = Dir.glob("{*,*/*}/config/application.rb", base: dir).sort
+          .reject { |hit| (hit.split("/") & WALK_DOWN_DROPPED).any? }
+          .map { |hit| File.join(dir, File.dirname(hit, 2)) }
+        # A symlink loop or a Capistrano `current` link names one app twice.
+        roots = roots.uniq { |root| real(root) }
+        roots.reject { |root| roots.any? { |other| other != root && root.start_with?("#{other}/") } }
+      end
+
+      WALK_DOWN_DROPPED = %w[node_modules vendor tmp].freeze
+
+      def self.app_root?(dir)
+        marked = File.exist?(File.join(dir, "config", "application.rb")) ||
+          File.exist?(File.join(dir, "config", "environment.rb")) ||
+          rails_binstub?(dir)
+        marked && !EntryBoot.other_framework?(dir)
+      end
+      private_class_method :app_root?
+
+      # Rails' AppLoader takes the first bin/rails or script/rails that boots
+      # an app or an engine, and an engine's spec/ walks up to the engine.
+      def self.rails_binstub?(dir)
+        %w[bin/rails script/rails].any? do |stub|
+          path = File.join(dir, stub)
+          File.file?(path) && File.read(path, 4096).match?(/(APP|ENGINE)_PATH/)
+        rescue SystemCallError, IOError
+          false
+        end
+      end
+      private_class_method :rails_binstub?
+
+      # A gem's own source and a JS package are never the app a command means.
+      # Walking up from inside one keeps going to the app that holds it.
+      def self.excluded?(dir)
+        segments = dir.split("/")
+        return true if segments.include?("node_modules")
+        return true if segments.each_cons(2).include?(%w[vendor bundle])
+        return false unless defined?(Gem) && Gem.respond_to?(:path)
+
+        Gem.path.any? { |gem_dir| dir == gem_dir || dir.start_with?("#{gem_dir}/") }
+      end
+      private_class_method :excluded?
+
+      # Dir.home falls back to the passwd entry when HOME is unset and raises
+      # only when that fails too; an empty or relative HOME comes back as is.
+      def self.home_dirs
+        home = Dir.home
+        return [] unless home && !home.empty? && File.absolute_path?(home)
+
+        [ File.expand_path(home), real(home) ].uniq
+      rescue ArgumentError
+        []
+      end
+      private_class_method :home_dirs
+
+      def self.real(path)
+        File.realpath(path)
+      rescue SystemCallError
+        path
+      end
+      private_class_method :real
+
+      # Under the caller's directory a path reads relative to it, the way it
+      # is typed; anywhere else it stays absolute.
+      def self.display(path, cwd)
+        return "." if path == cwd
+        return path unless path.start_with?("#{cwd}/")
+
+        path.delete_prefix("#{cwd}/")
+      end
+
+      def self.notice(result, cwd)
+        shown = display(result.root, cwd)
+        shown = "#{shown}/" unless shown.start_with?("/")
+        "[rails-ai-context] using app at #{shown}"
+      end
+
+      # `argv` is the command line as typed, which every suggested command
+      # repeats behind its own --app-path.
+      def self.several_apps(result, cwd, argv)
+        lines = [ "Error: No Rails app found in #{cwd}, and #{result.candidates.size} below it. Name one with --app-path:" ]
+        result.candidates.each do |root|
+          lines << "  #{[ "rails-ai-context", "--app-path", display(root, cwd), *argv ].shelljoin}"
+        end
+        lines
+      end
+
+      # A wrong --app-path still fails, but a path inside an app names it.
+      def self.app_above_hint(root, cwd)
+        return nil unless Dir.exist?(root)
+
+        above = walk_up(root) or return nil
+        return nil if above == root
+
+        shown = display(above, cwd)
+        "#{root} is inside the app at #{shown}: pass --app-path #{shown.shellescape}"
+      end
+
+      # Under bundle exec the bundle is already chosen: an app outside it
+      # boots against someone else's Gemfile.lock.
+      def self.bundle_warning(root, cwd)
+        return nil unless ENV["BUNDLE_BIN_PATH"] && defined?(::Bundler) && ::Bundler.respond_to?(:root)
+
+        bundle_root = ::Bundler.root.to_s
+        return nil if root == bundle_root || root.start_with?("#{bundle_root}/")
+
+        "[rails-ai-context] WARNING: #{display(root, cwd)} is outside the bundle at #{bundle_root}; " \
+          "under bundle exec it boots against that bundle, not its own. Run the command from inside the app."
+      rescue StandardError
+        nil
+      end
+    end
+  end
+end

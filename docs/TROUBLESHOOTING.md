@@ -238,7 +238,7 @@ Standalone mode boots the app with a small shim, then restores the `$LOAD_PATH` 
 
 The file is read from the app root, once, at boot, and an initializer does not replace it: a `configure` block wins only the keys it assigns, key by key ([Precedence](CONFIGURATION.md#precedence)). In standalone mode the initializer contributes nothing at all, since the gem is not loaded while `config/initializers` runs. Check:
 
-1. You are in the app root, or passed `--app-path`.
+1. You are inside the app, or passed `--app-path`. A command run from a subdirectory reads the config of the app root it walks up to, and names it on stderr.
 2. The key is one the gem knows. An unknown key warns on stderr and is ignored.
 3. The file is readable and parses. Corrupted YAML degrades gracefully with a warning.
 

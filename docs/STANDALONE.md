@@ -165,7 +165,7 @@ ruby -v                       # Right Ruby version?
 
 The file is read from the app root, once, at boot. Check:
 
-1. You are in the app root, or passed `--app-path`.
+1. You are inside the app, or passed `--app-path`. A command run from a subdirectory reads the config of the app root it walks up to, and names it on stderr.
 2. The key is one the gem knows. An unknown key warns on stderr and is ignored; `custom_tools` is initializer-only.
 3. The file is readable and parses. A directory at that path, an unreadable file or broken YAML warns on stderr and keeps the defaults.
 

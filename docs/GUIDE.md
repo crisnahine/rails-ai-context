@@ -320,7 +320,7 @@ rails-ai-context version                   # Print version
 rails-ai-context help                      # Show all commands
 ```
 
-Run it from your Rails app root, or pass `--app-path PATH`. Booting needs `config/environment.rb`. When the app cannot boot, or with `--no-boot`, every command except `doctor` reads the source files instead.
+Run it anywhere inside your Rails app, from a folder holding one app, or pass `--app-path PATH` ([how the app is found](CLI.md#tool)). Booting needs `config/environment.rb`. When the app cannot boot, or with `--no-boot`, every command except `doctor` reads the source files instead.
 
 **Config:** Standalone mode reads from `.rails-ai-context.yml` (created by `init`), and that is its only config source - the gem is not loaded while `config/initializers` runs. If no config file exists, defaults are used. With the gem in the Gemfile the two merge key by key ([Precedence](CONFIGURATION.md#precedence)).
 
