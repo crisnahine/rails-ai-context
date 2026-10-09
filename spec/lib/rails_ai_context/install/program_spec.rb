@@ -29,6 +29,27 @@ RSpec.describe RailsAiContext::Install::Program do
     end
   end
 
+  # The reason a config was left as it is goes where the install speaks,
+  # not to a Rails log the person running it never reads.
+  describe ".write_mcp_configs" do
+    it "says why a config was left as it is, and what to add by hand" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, ".vscode"))
+        File.write(File.join(root, ".vscode/mcp.json"), %({\n  // mine\n  "servers": {}\n}\n))
+        surface = surface_class.new
+        allow(RailsAiContext).to receive(:log_warn)
+
+        described_class.write_mcp_configs(surface, tools: %i[copilot], tool_mode: :mcp, root: root, standalone: true)
+
+        expect(surface.lines).to include(
+          [ :warn, "Could not write .vscode/mcp.json - that tool will not auto-discover the MCP server" ],
+          [ :warn, a_string_including("holds comments", "Add {\"servers\":{\"rails-ai-context\"") ]
+        )
+        expect(RailsAiContext).not_to have_received(:log_warn)
+      end
+    end
+  end
+
   describe ".select_ai_tools" do
     it "parses numbers into tool keys and shows every tool with its files" do
       surface = surface_class.new("1,3")
@@ -159,7 +180,8 @@ RSpec.describe RailsAiContext::Install::Program do
           "rails-ai-context-a" => { "command" => "rails-ai-context", "args" => %w[serve --app-path a] }, "mine" => {}
         }))
         FileUtils.mkdir_p(File.join(root, "a/.cursor"))
-        File.write(File.join(root, "a/.cursor/mcp.json"), JSON.generate("mcpServers" => { "rails-ai-context" => {} }))
+        File.write(File.join(root, "a/.cursor/mcp.json"),
+                   JSON.generate("mcpServers" => { "rails-ai-context" => { "command" => "rails-ai-context", "args" => [ "serve" ] } }))
 
         surface = surface_class.new("y")
         described_class.cleanup_removed_tools(surface, previous: %i[claude cursor], selected: %i[claude], root: root,
@@ -169,6 +191,20 @@ RSpec.describe RailsAiContext::Install::Program do
         expect(surface.text).to include("Removed MCP entry from .cursor/mcp.json", "Removed MCP entry from a/.cursor/mcp.json")
         expect(JSON.parse(File.read(File.join(root, ".cursor/mcp.json")))["mcpServers"].keys).to eq(%w[mine])
         expect(File.exist?(File.join(root, "a/.cursor/mcp.json"))).to be(false)
+      end
+    end
+
+    it "says which config it left as it is, named from where it was run" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "a/.cursor"))
+        File.write(File.join(root, "a/.cursor/mcp.json"),
+                   %({\n  // ours\n  "mcpServers": { "rails-ai-context": { "command": "rails-ai-context", "args": ["serve"] } }\n}\n))
+        surface = surface_class.new("y")
+
+        described_class.cleanup_removed_tools(surface, previous: %i[claude cursor], selected: %i[claude], root: root,
+                                                       app_roots: [ File.join(root, "a") ])
+
+        expect(surface.lines).to include([ :warn, a_string_including("Could not update a/.cursor/mcp.json: it holds comments") ])
       end
     end
 

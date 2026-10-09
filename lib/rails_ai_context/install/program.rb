@@ -130,7 +130,10 @@ module RailsAiContext
 
           # Merge-safe MCP config cleanup - removes only the rails-ai-context entries
           cleaned = [ root, *app_roots ].map(&:to_s).uniq.flat_map do |dir|
-            RailsAiContext::McpConfigGenerator.remove(tools: [ key ], output_dir: dir)
+            RailsAiContext::McpConfigGenerator.remove(
+              tools: [ key ], output_dir: dir,
+              warn: ->(path, reason) { surface.say "Could not update #{relative_to(path, root)}: #{reason}", :warn }
+            )
           end
           cleaned.each { |f| surface.say "  Removed MCP entry from #{relative_to(f, root)}", :ok }
 
@@ -175,6 +178,7 @@ module RailsAiContext
         result[:skipped].each { |f| surface.say "#{relative_to(f, root)} unchanged - skipped", :muted }
         result[:failed].each do |f|
           surface.say "Could not write #{relative_to(f, root)} - that tool will not auto-discover the MCP server", :warn
+          surface.say "  #{result[:reasons][f]}", :warn if result[:reasons]&.[](f)
         end
         surface.say "Skipped MCP config files (CLI-only mode)", :muted if tool_mode == :cli
         result

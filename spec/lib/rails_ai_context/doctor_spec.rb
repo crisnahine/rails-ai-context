@@ -668,6 +668,22 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
 
+    context "when a JSON config is empty, or starts with a byte order mark" do
+      before do
+        allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude copilot])
+        write(".mcp.json", "\n")
+        write(".vscode/mcp.json", %(\uFEFF{"servers": {}}))
+      end
+
+      # init fills an empty file, so init is the fix.
+      it "asks init to fill the empty one and reads the other" do
+        expect(check.status).to eq(:warn)
+        expect(check.message).to include("1 of 2", ".mcp.json")
+        expect(check.fix).to eq("Run `#{RailsAiContext::InstallMode.command(:install)}` to fix")
+      end
+    end
+
     # A config shared by every app in a workspace may hold any bytes.
     context "when a JSON config holds bytes outside ASCII" do
       before do
@@ -727,6 +743,29 @@ RSpec.describe RailsAiContext::Doctor do
 
       expect(check.status).to eq(:warn)
       expect(check.message).to include(".mcp.json")
+    end
+
+    # The folder's config cannot say whether it serves this app, and is the
+    # one a client opened at the folder reads.
+    it "names a config of the gem's above it that does not parse" do
+      allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[copilot])
+      write(".vscode/mcp.json", %({"servers": {"rails-ai-context-a": {"command": "rails-ai-context"},}}))
+
+      check = workspace_doctor.send(:check_mcp_json)
+
+      expect(check.status).to eq(:fail)
+      expect(check.message).to include(".vscode/mcp.json")
+      expect(check.fix).to start_with("Make ../.vscode/mcp.json valid JSON")
+    end
+
+    it "passes over a config above it that names no server of the gem's" do
+      allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[copilot])
+      write(".vscode/mcp.json", %({"servers": {"github": {"url": "x"},}}))
+
+      check = workspace_doctor.send(:check_mcp_json)
+
+      expect(check.status).to eq(:warn)
+      expect(check.fix).to eq("Run `#{RailsAiContext::InstallMode.command(:install)}` to fix")
     end
 
     it "checks the Codex env snapshot of every server the gem wrote there" do

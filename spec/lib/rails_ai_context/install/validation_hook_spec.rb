@@ -11,7 +11,7 @@ RSpec.describe RailsAiContext::Install::ValidationHook do
 
       expect(script).to include("# rails-ai-context apps: apps/web my\\ app\n")
       expect(script).to include("for app in apps/web my\\ app; do\n")
-      expect(script).to include(%((cd "$app" && rails 'ai:tool[validate]' files="$files" 2>/dev/null)))
+      expect(script).to include(%((cd "./$app" && rails 'ai:tool[validate]' files="$files" 2>/dev/null)))
       expect(script).to include("--diff-filter=d")
     end
 

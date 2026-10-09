@@ -2,6 +2,7 @@
 
 require "shellwords"
 require_relative "entry_boot"
+require_relative "../safe_path"
 
 module RailsAiContext
   module CLI
@@ -18,8 +19,9 @@ module RailsAiContext
       # named, else :up or :down. below lists the apps under `base`, a
       # directory that is no app: the one the caller stood in when it has no
       # app above it either, or the one --app-path named. Without
-      # --app-path, one app below is root; several leave root nil.
-      Result = Struct.new(:root, :walked, :below, :base, :explicit, keyword_init: true) do
+      # --app-path, one app below is root; several leave root nil. cwd is
+      # where the caller stood.
+      Result = Struct.new(:root, :walked, :below, :base, :explicit, :cwd, keyword_init: true) do
         # A folder that is no app and holds apps below it: what `init` sets
         # up as a whole, where every other command needs exactly one.
         def workspace?
@@ -28,31 +30,34 @@ module RailsAiContext
       end
 
       def self.resolve(cwd:, app_path: nil)
+        # Every path handed back is spelled in the caller's encoding, which a
+        # shell's argument may not share.
+        app_path = app_path.dup.force_encoding(cwd.encoding) if app_path && app_path.encoding != cwd.encoding
         if app_path
           # Named outright, it is never walked: a folder of apps is set up by
           # init and listed to every other command, never quietly swapped
           # for the one app inside it.
           root = File.expand_path(app_path, cwd)
           below = Dir.exist?(root) && !EntryBoot.app_present?(root, allow_source_only: true) ? walk_down(root) : []
-          return Result.new(root: root, walked: nil, below: below, base: root, explicit: true)
+          return Result.new(root: root, walked: nil, below: below, base: root, explicit: true, cwd: cwd)
         end
 
         if EntryBoot.app_present?(cwd, allow_source_only: true)
           # A tree that is only source - a packwerk pack, an engine kept as
           # code - belongs to the app it sits in, when it sits in one.
           above = app_root?(cwd) ? nil : walk_up(File.dirname(cwd))
-          return Result.new(root: above, walked: :up, below: [], base: cwd, explicit: false) if above
+          return Result.new(root: above, walked: :up, below: [], base: cwd, explicit: false, cwd: cwd) if above
 
-          return Result.new(root: cwd, walked: nil, below: [], base: cwd, explicit: false)
+          return Result.new(root: cwd, walked: nil, below: [], base: cwd, explicit: false, cwd: cwd)
         end
 
         if (above = walk_up(cwd))
-          return Result.new(root: above, walked: :up, below: [], base: cwd, explicit: false)
+          return Result.new(root: above, walked: :up, below: [], base: cwd, explicit: false, cwd: cwd)
         end
 
         below = walk_down(cwd)
         Result.new(root: below.one? ? below.first : nil, walked: below.one? ? :down : nil, below: below, base: cwd,
-                   explicit: false)
+                   explicit: false, cwd: cwd)
       end
 
       # The nearest app root at or above dir. The test is stricter than the
@@ -62,7 +67,7 @@ module RailsAiContext
       def self.walk_up(dir)
         homes = home_dirs
         loop do
-          return dir if !homes.include?(dir) && !excluded?(dir) && app_root?(dir)
+          return dir if !homes.include?(dir.b) && !excluded?(dir) && app_root?(dir)
 
           parent = File.dirname(dir)
           # The filesystem root is its own dirname, a Windows drive root too.
@@ -79,16 +84,16 @@ module RailsAiContext
       # folder-access prompt.
       def self.walk_down(dir)
         return [] if File.dirname(dir) == dir
-        return [] if home_dirs.any? { |home| home == dir || home.start_with?("#{dir.delete_suffix('/')}/") }
+        return [] if home_dirs.any? { |home| SafePath.contained?(home, dir.b) }
 
         # Hidden directories (.git, .claude/worktrees) are left out by the
         # glob itself, and an unreadable one yields nothing rather than raising.
         roots = Dir.glob("{*,*/*}/config/application.rb", base: dir).sort
-          .reject { |hit| (hit.split("/") & WALK_DOWN_DROPPED).any? }
-          .map { |hit| File.join(dir, File.dirname(hit, 2)) }
+          .reject { |hit| (segments(hit) & WALK_DOWN_DROPPED).any? }
+          .map { |hit| File.join(dir, File.dirname(hit, 2).dup.force_encoding(dir.encoding)) }
         # A symlink loop or a Capistrano `current` link names one app twice.
-        roots = roots.uniq { |root| real(root) }
-        roots.reject { |root| roots.any? { |other| other != root && root.start_with?("#{other}/") } }
+        roots = roots.uniq { |root| real(root).b }
+        roots.reject { |root| roots.any? { |other| other != root && SafePath.contained?(root.b, other.b) } }
       end
 
       WALK_DOWN_DROPPED = %w[node_modules vendor tmp].freeze
@@ -98,7 +103,7 @@ module RailsAiContext
       def self.rails_binstub?(dir)
         %w[bin/rails script/rails].any? do |stub|
           path = File.join(dir, stub)
-          File.file?(path) && File.read(path, 4096).match?(/(APP|ENGINE)_PATH/)
+          File.file?(path) && File.binread(path, 4096).match?(/(APP|ENGINE)_PATH/)
         rescue SystemCallError, IOError
           false
         end
@@ -108,9 +113,9 @@ module RailsAiContext
       # A gem's own source and a JS package are never the app a command means.
       # Walking up from inside one keeps going to the app that holds it.
       def self.excluded?(dir)
-        segments = dir.split("/")
-        return true if segments.include?("node_modules")
-        return true if segments.each_cons(2).include?(%w[vendor bundle])
+        names = segments(dir)
+        return true if names.include?("node_modules")
+        return true if names.each_cons(2).include?(%w[vendor bundle])
         return false unless defined?(Gem) && Gem.respond_to?(:path)
 
         # An empty entry - GEM_PATH=":$HOME/.gem" - would read as the
@@ -118,27 +123,34 @@ module RailsAiContext
         Gem.path.any? do |gem_dir|
           next false unless gem_dir.is_a?(String) && File.absolute_path?(gem_dir) && File.dirname(gem_dir) != gem_dir
 
-          dir == gem_dir || dir.start_with?("#{gem_dir}/")
+          SafePath.contained?(dir.b, gem_dir.b)
         end
       end
       private_class_method :excluded?
 
+      # A path's names as bytes: a directory named in another encoding than
+      # UTF-8 is still a directory, and only ASCII names are looked for.
+      def self.segments(path)
+        path.b.split("/")
+      end
+      private_class_method :segments
+
       # Dir.home falls back to the passwd entry when HOME is unset and raises
       # only when that fails too; an empty or relative HOME comes back as is.
+      # As bytes, like every path compared here: a locale that names no
+      # encoding tags paths binary or US-ASCII, and the gem's own are UTF-8.
       def self.home_dirs
         home = Dir.home
         return [] unless home && !home.empty? && File.absolute_path?(home)
 
-        [ File.expand_path(home), real(home) ].uniq
+        [ File.expand_path(home).b, real(home).b ].uniq
       rescue ArgumentError
         []
       end
       private_class_method :home_dirs
 
       def self.real(path)
-        File.realpath(path)
-      rescue SystemCallError
-        path
+        SafePath.canonical(path)
       end
       private_class_method :real
 
@@ -169,9 +181,24 @@ module RailsAiContext
         rest = without_app_path(argv)
         lines = [ "Error: No Rails app found in #{result.base}, and #{result.below.size} below it. Name one with --app-path:" ]
         result.below.each do |root|
-          lines << "  #{[ "rails-ai-context", "--app-path", display(root, cwd), *rest ].shelljoin}"
+          lines << "  #{command_line([ "rails-ai-context", "--app-path", display(root, cwd), *rest ])}"
         end
         lines
+      end
+
+      # Words as a shell reads them: Shellwords' escaping, but for an `=`
+      # inside a word, which every shell reads as itself there, and a name
+      # that is not UTF-8 is escaped byte by byte rather than refused.
+      def self.command_line(words)
+        words = words.map { |word| word.dup.force_encoding(Encoding::UTF_8) }
+        words = words.map(&:b) unless words.all?(&:valid_encoding?)
+        words.map do |word|
+          next "''" if word.empty?
+
+          escaped = word.gsub(%r{[^A-Za-z0-9_\-.,:+/@=\n]}) { |char| "\\#{char}" }.gsub("\n", "'\n'")
+          # zsh expands a word that starts with `=`.
+          escaped.start_with?("=") ? "\\#{escaped}" : escaped
+        end.join(" ")
       end
 
       def self.without_app_path(argv)
@@ -198,7 +225,7 @@ module RailsAiContext
         return nil if above == root
 
         shown = display(above, cwd)
-        "#{root} is inside the app at #{shown}: pass --app-path #{shown.shellescape}"
+        "#{root} is inside the app at #{shown}: pass --app-path #{command_line([ shown ])}"
       end
 
       # A workspace entry's --app-path is relative to the folder the client was
@@ -224,9 +251,10 @@ module RailsAiContext
       # Under bundle exec the bundle is already chosen. One whose Gemfile is in
       # the app or below it is the app's own - a dual-boot Gemfile.next, an
       # Appraisal gemfiles/ entry, a Gemfile linked in from a shared one - and
-      # so is any bundle above an app that has no Gemfile (an engine's dummy
-      # app). Otherwise an app with a Gemfile of its own boots against someone
-      # else's Gemfile.lock.
+      # so is the one an app with no Gemfile names in its config/boot.rb (a
+      # monorepo's shared bundle), or any bundle above such an app (an
+      # engine's dummy app). Otherwise an app with a Gemfile of its own boots
+      # against someone else's Gemfile.lock.
       def self.bundle_warning(root, cwd)
         return nil unless ENV["BUNDLE_BIN_PATH"] && defined?(::Bundler) && ::Bundler.respond_to?(:default_gemfile)
 
@@ -235,22 +263,24 @@ module RailsAiContext
         real_root = real(root)
         # Bundler looks for gems.rb before Gemfile.
         own = %w[gems.rb Gemfile].map { |name| File.join(root, name) }.find { |path| File.file?(path) }
-        return nil if inside?(given, root) || inside?(bundle_gemfile, real_root) || (own && real(own) == bundle_gemfile)
+        return nil if SafePath.contained?(given.b, root.b) || SafePath.contained?(bundle_gemfile.b, real_root.b)
+        return nil if own && real(own).b == bundle_gemfile.b
+        return nil if own.nil? && (SafePath.contained?(real_root.b, File.dirname(bundle_gemfile).b) || boot_bundle?(root, bundle_gemfile))
 
-        bundle_dir = File.dirname(bundle_gemfile)
-        return nil if own.nil? && (real_root == bundle_dir || inside?(real_root, bundle_dir))
-
-        "[rails-ai-context] WARNING: #{display(root, cwd).delete_suffix('/')}/ boots against the bundle of #{bundle_gemfile} " \
-          "under bundle exec, not its own. Run it without bundle exec or from inside the app, or point BUNDLE_GEMFILE at " \
-          "the app's Gemfile."
+        where = root == cwd ? "This app" : "#{display(root, cwd).delete_suffix('/')}/"
+        "[rails-ai-context] WARNING: #{where} boots against the bundle of #{bundle_gemfile} under bundle exec, " \
+          "not its own. Run it without bundle exec or from inside the app, or point BUNDLE_GEMFILE at the app's Gemfile."
       rescue StandardError
         nil
       end
 
-      def self.inside?(path, dir)
-        path.start_with?("#{dir.delete_suffix('/')}/")
+      # Whether config/boot.rb points Bundler at this Gemfile.
+      def self.boot_bundle?(root, gemfile)
+        require_relative "../gem_lock"
+        named = GemLock.boot_gemfile(root)
+        !named.nil? && real(named).b == gemfile.b
       end
-      private_class_method :inside?
+      private_class_method :boot_bundle?
     end
   end
 end

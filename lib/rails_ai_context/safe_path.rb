@@ -102,6 +102,21 @@ module RailsAiContext
       real == real_dir || real.start_with?(dir_prefix(real_dir))
     end
 
+    # One spelling of a place whatever links lead to it, for comparing two
+    # paths: the real path, or for a path not there yet its nearest existing
+    # ancestor's real path with the rest appended. Stdlib only, so it serves
+    # before the gem entry loads too.
+    def canonical(path)
+      path = File.expand_path(path.to_s)
+      existing = path
+      existing = File.dirname(existing) until File.exist?(existing) || File.dirname(existing) == existing
+      rest = path.delete_prefix(existing)
+      real = File.realpath(existing)
+      rest.empty? ? real : File.join(real, rest)
+    rescue SystemCallError
+      path
+    end
+
     # The nearest directory at or above `dir` that holds `.git` (a directory, or a
     # file in a worktree or submodule), or nil outside any repository.
     def git_root(dir)

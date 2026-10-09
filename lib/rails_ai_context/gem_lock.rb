@@ -187,7 +187,9 @@ module RailsAiContext
     end
     private_class_method :boot_bundle
 
-    # The BUNDLE_GEMFILE config/boot.rb sets, when it is outside the app root.
+    # The BUNDLE_GEMFILE config/boot.rb sets, when it is outside the app root:
+    # the Gemfile the app boots against when nothing else names one, which a
+    # caller may name whether or not it is in a repository this reads.
     def boot_gemfile(root)
       real_root = File.realpath(root)
       real = File.realpath(File.join(real_root, "config/boot.rb"))
@@ -203,7 +205,6 @@ module RailsAiContext
     rescue SystemCallError
       nil
     end
-    private_class_method :boot_gemfile
 
     # `ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../Gemfile", __dir__)`, the line `rails new`
     # and `rails plugin new` write, with `=` or `__FILE__` as older templates do.

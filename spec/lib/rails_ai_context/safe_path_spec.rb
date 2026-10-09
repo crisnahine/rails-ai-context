@@ -287,4 +287,18 @@ RSpec.describe RailsAiContext::SafePath do
       end
     end
   end
+
+  describe ".canonical" do
+    it "spells a place one way whatever links lead to it, there yet or not" do
+      Dir.mktmpdir do |dir|
+        real = File.realpath(dir)
+        FileUtils.mkdir_p(File.join(real, "target/app"))
+        File.symlink(File.join(real, "target"), File.join(real, "link"))
+
+        expect(described_class.canonical(File.join(dir, "link/app"))).to eq(File.join(real, "target/app"))
+        expect(described_class.canonical(File.join(dir, "link/app/not/yet"))).to eq(File.join(real, "target/app/not/yet"))
+        expect(described_class.canonical(File.join(dir, "link/../link/app"))).to eq(File.join(real, "target/app"))
+      end
+    end
+  end
 end

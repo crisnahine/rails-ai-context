@@ -165,6 +165,53 @@ RSpec.describe RailsAiContext::Install::Workspace do
       expect(found.server.env).to include("BUNDLE_GEMFILE" => "Gemfile")
     end
 
+    # Bundler names the lockfile after the path it is given: the link's,
+    # beside which the app's own Gemfile.lock lies.
+    it "names a Gemfile linked in from elsewhere by the link" do
+      File.write(File.join(@dir, "Gemfile.shared"), "")
+      root = app("api", lock_gems: %w[rails rails-ai-context])
+      File.delete(File.join(root, "Gemfile"))
+      File.symlink(File.join(@dir, "Gemfile.shared"), File.join(root, "Gemfile"))
+
+      expect(described_class.apps(@dir, [ root ]).first.server.env).to include("BUNDLE_GEMFILE" => "api/Gemfile")
+    end
+
+    # config/boot.rb's Gemfile is the one the app boots against, read or not.
+    it "names the Gemfile config/boot.rb points at outside any git repository" do
+      File.write(File.join(@dir, "Gemfile"), "")
+      root = app("apps/a")
+      File.write(File.join(root, "config/boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n))
+
+      found = described_class.apps(@dir, [ root ]).first
+
+      expect(found.gemfile).to eq(File.join(@dir, "Gemfile"))
+      expect(found.server.env).to include("BUNDLE_GEMFILE" => "Gemfile")
+    end
+
+    # With nothing naming one, the Gemfile bundle exec run inside the app
+    # would find, which may sit above the workspace.
+    it "names the Gemfile Bundler's own search finds from inside the app" do
+      Dir.mktmpdir do |outer|
+        outer = File.realpath(outer)
+        File.write(File.join(outer, "Gemfile"), "")
+        work = File.join(outer, "apps")
+        root = File.join(work, "a")
+        FileUtils.mkdir_p(File.join(root, "config"))
+
+        expect(described_class.apps(work, [ root ]).first.server.env).to include("BUNDLE_GEMFILE" => "../Gemfile")
+      end
+    end
+
+    it "names no Gemfile when there is none to find" do
+      root = app("a")
+      allow(described_class).to receive(:nearest_gemfile).and_return(nil)
+
+      found = described_class.apps(@dir, [ root ]).first
+
+      expect(found.gemfile).to be_nil
+      expect(found.server.env).not_to have_key("BUNDLE_GEMFILE")
+    end
+
     it "names a gems.rb bundle by its own file name" do
       root = app("b")
       File.write(File.join(root, "gems.rb"), "")
