@@ -3,6 +3,7 @@
 require "json"
 require "fileutils"
 require "securerandom"
+require "strscan"
 require_relative "install_mode"
 
 module RailsAiContext
@@ -37,8 +38,9 @@ module RailsAiContext
     # One server entry. app_path and gemfile are relative to the folder the
     # config sits in, because the file may be committed and an absolute path
     # holds only on the machine that wrote it. `folder` is how a tool's config
-    # names that folder (AiTool's folder_variable), for the tools that do not
-    # promise to start the server in it; elsewhere the path stays relative.
+    # names that folder (AiTool's folder_variable), where the tool has a name
+    # for it; elsewhere the path stays relative, read from the folder the tool
+    # starts the server in.
     #
     # `announce` is the name the server gives the client, where it differs
     # from the entry's: VS Code names every tool after the announced name and
@@ -132,7 +134,7 @@ module RailsAiContext
       # A table header, and the one shape of it that names a server.
       TABLE = /\A[ \t]*\[/
       SERVER_HEADER = /\A[ \t]*\[[ \t]*mcp_servers\.([A-Za-z0-9_-]+)[ \t]*\][ \t]*(?:#.*)?\r?\n?\z/
-      COMMAND_LINE = /\A[ \t]*(command|args)[ \t]*=[ \t]*(.*?)[ \t]*\r?\n?\z/
+      KEY_LINE = /\A[ \t]*([A-Za-z0-9_-]+)[ \t]*=[ \t]*/
 
       module_function
 
@@ -152,19 +154,71 @@ module RailsAiContext
         end
       end
 
-      # One section's command line: its `command` and `args`, which the gem
-      # writes as JSON-compatible strings, read from the table itself and not
-      # its sub-tables.
+      # One section's command line, its `command` and `args`, read from the
+      # table itself and not its sub-tables.
       def argv(lines, range)
-        own = lines[range].drop(1).take_while { |line| !line.match?(TABLE) }
-        values = own.filter_map { |line| line.match(COMMAND_LINE)&.captures }.to_h
-        [ *parse(values["command"]), *parse(values["args"]) ]
+        values = table(lines[range].drop(1).take_while { |line| !line.match?(TABLE) })
+        [ *values["command"], *values["args"] ]
       end
 
-      def parse(value)
-        value && JSON.parse(value)
+      # One sub-table of a section, `[mcp_servers.<name>.<key>]`, as each
+      # key's string value.
+      def sub_table(lines, range, name, key)
+        header = /\A[ \t]*\[[ \t]*mcp_servers\.#{Regexp.escape(name)}\.#{Regexp.escape(key)}[ \t]*\][ \t]*(?:#.*)?\r?\n?\z/
+        start = range.find { |index| lines[index].match?(header) } or return {}
+        body = lines[(start + 1)...range.end].take_while { |line| !line.match?(TABLE) }
+        table(body).filter_map { |item, values| [ item, values.first ] if values.first }.to_h
+      end
+
+      # The string values of one table's keys, from its lines: key => the
+      # strings it holds, one for a string and each element's for an array.
+      def table(lines)
+        text = lines.join
+        values = {}
+        offset = 0
+        lines.each do |line|
+          key = line[KEY_LINE, 1]
+          values[key] = strings(text[(offset + line[KEY_LINE].size)..]) if key && !values.key?(key)
+          offset += line.size
+        end
+        values
+      end
+
+      # The strings at the start of a value: a basic ("...") or literal
+      # ('...') string, or an array of them however a formatter wrapped it,
+      # with comments and a trailing comma.
+      def strings(text)
+        scanner = StringScanner.new(text)
+        found = []
+        depth = 0
+        until scanner.eos?
+          if scanner.scan(/[ \t\r,]+|#[^\n]*/)
+            next
+          elsif scanner.scan(/\n/)
+            break if depth.zero?
+          elsif scanner.scan(/\[/)
+            depth += 1
+          elsif scanner.scan(/\]/)
+            depth -= 1
+            break if depth <= 0
+          elsif (basic = scanner.scan(/"(?:[^"\\\n]|\\.)*"/))
+            found << unescape(basic)
+            break if depth.zero?
+          elsif (literal = scanner.scan(/'[^'\n]*'/))
+            found << literal[1..-2]
+            break if depth.zero?
+          else
+            break
+          end
+        end
+        found
+      end
+
+      # TOML's basic-string escapes are JSON's, but for \U and \e.
+      def unescape(basic)
+        JSON.parse(basic)
       rescue JSON::ParserError
-        nil
+        basic[1..-2]
       end
 
       def sub_table?(line, name)
@@ -179,7 +233,9 @@ module RailsAiContext
 
     # The directory an entry's --app-path names, read the way its tool reads
     # it: the tool's name for its config's folder is that folder, and a bare
-    # relative path starts there too.
+    # relative path starts there too. Any other variable (${HOME},
+    # ${userHome}) is the tool's to expand, so such a path names no app this
+    # can judge.
     #
     # @return [String, nil] absolute, nil when the entry names no app
     def self.entry_app_root(argv, folder, dir)
@@ -189,6 +245,8 @@ module RailsAiContext
       return nil if path.nil? || path.empty?
 
       path = dir + path.delete_prefix(folder) if folder && path.start_with?(folder)
+      return nil if path.include?("$")
+
       File.expand_path(path, dir)
     end
 
@@ -216,13 +274,10 @@ module RailsAiContext
       File.expand_path(path)
     end
 
-    # A config's text as UTF-8 whatever the locale says. One that is not
-    # valid UTF-8 stays as bytes: the line reading here only looks for ASCII,
-    # and every line it does not replace is written back as it came.
-    def self.read_text(path)
-      content = File.binread(path)
-      utf8 = content.dup.force_encoding(Encoding::UTF_8)
-      utf8.valid_encoding? ? utf8 : content
+    # Whether JSON text holds a comment, which JSON.parse passes over and a
+    # rewrite would drop. Strings are matched whole, so a URL's // is none.
+    def self.json_comments?(text)
+      text.scan(%r{"(?:[^"\\]|\\.)*"|//|/\*}).any? { |token| !token.start_with?('"') }
     end
 
     private
@@ -230,22 +285,22 @@ module RailsAiContext
     # What a write drops besides replacing its own entries, from the entries
     # of ours already there (name => the app root each names). An app's own
     # write drops nothing. A workspace's drops the bare entry, which would
-    # serve the folder itself; an entry whose app is gone; and one for an app
-    # it now names otherwise, when the old name is one this gem gave it - a
-    # second entry made by hand for the same app stays, and so does one
-    # naming an app outside this write.
+    # serve the folder itself, and an entry under a name it gives an app in
+    # this folder, when that app is gone or now goes by another name. Every
+    # other entry stays as somebody's own: a second one named by hand, one
+    # naming an app outside the folder, or one only another machine has.
     def stale_names(existing)
       return [] unless workspace_write?
 
       names = @servers.map(&:name)
       roots = @servers.map { |server| self.class.real(File.expand_path(server.app_path, @output_dir)) }
+      inside = "#{@output_dir.delete_suffix('/')}/"
       existing.filter_map do |name, app_root|
         next name if name == SERVER_NAME
-        next if names.include?(name) || app_root.nil?
-        next name unless File.directory?(app_root)
-        next unless roots.include?(self.class.real(app_root))
+        next if names.include?(name) || app_root.nil? || !app_root.start_with?(inside)
+        next unless Install::Workspace.generated_name?(name, app_root.delete_prefix(inside))
 
-        name if Install::Workspace.generated_name?(name, app_root.delete_prefix("#{@output_dir.delete_suffix('/')}/"))
+        name if !File.directory?(app_root) || roots.include?(self.class.real(app_root))
       end
     end
 
@@ -279,38 +334,40 @@ module RailsAiContext
     def merge_json(path, config, entries)
       FileUtils.mkdir_p(File.dirname(path))
 
-      exists = File.exist?(path)
-      data = exists ? parse_json(path) : {}
-      raise ShapeError, "it is JSON but not an object; left the file as it is" unless data.is_a?(Hash)
+      text = File.exist?(path) ? RailsAiContext::SafeFile.read_text(path) : nil
+      data = text ? parse_json(text) : {}
+      raise ShapeError, "it is JSON but not an object" unless data.is_a?(Hash)
 
       root_key = config[:root_key]
       data[root_key] ||= {}
       servers = data[root_key]
-      raise ShapeError, %("#{root_key}" is not an object; left the file as it is) unless servers.is_a?(Hash)
+      raise ShapeError, %("#{root_key}" is not an object) unless servers.is_a?(Hash)
 
       ours = servers.filter_map do |name, entry|
         argv = self.class.json_argv(entry)
         [ name, self.class.entry_app_root(argv, config[:folder_variable], @output_dir) ] if self.class.own_entry?(name, argv)
       end
       stale = stale_names(ours.to_h)
-      return :skipped if exists && stale.empty? && entries.all? { |name, entry| servers[name] == entry }
+      return :skipped if text && stale.empty? && entries.all? { |name, entry| servers[name] == entry }
+      # JSON.parse passes over comments, and the file written back would
+      # have none.
+      raise ShapeError, "it holds comments, which writing it back as JSON would drop" if text && self.class.json_comments?(text)
 
       stale.each { |name| servers.delete(name) }
       servers.merge!(entries)
       RailsAiContext::SafeFile.atomic_write(path, JSON.pretty_generate(data) + "\n")
       :written
+    rescue ShapeError => e
+      raise ShapeError, "#{e.message}; left the file as it is. Add #{JSON.generate(config[:root_key] => entries)} to it by hand"
     end
 
-    # A file that does not parse is replaced: it serves no tool as it stands.
-    # A workspace's is left alone instead - a folder's config is the likelier
-    # to be kept by hand, and VS Code's reads comments and trailing commas,
-    # which JSON does not.
-    def parse_json(path)
-      JSON.parse(self.class.read_text(path))
+    # A file JSON cannot parse is never replaced: VS Code's and OpenCode's
+    # configs take trailing commas, and a fresh file would drop everything
+    # somebody wrote there.
+    def parse_json(text)
+      JSON.parse(text)
     rescue JSON::ParserError
-      raise ShapeError, "it does not parse as JSON (a comment or a trailing comma?); left the file as it is" if workspace_write?
-
-      {}
+      raise ShapeError, "it does not parse as JSON (a trailing comma?)"
     end
 
     # --- TOML merge logic ---
@@ -319,7 +376,7 @@ module RailsAiContext
     # dropped, and a new one goes at the end after a blank line.
     def merge_toml(path)
       FileUtils.mkdir_p(File.dirname(path))
-      content = File.exist?(path) ? self.class.read_text(path) : +""
+      content = File.exist?(path) ? RailsAiContext::SafeFile.read_text(path) : +""
       lines = content.lines
       # A file kept with Windows line endings keeps them, and one that is not
       # UTF-8 gets the new sections as bytes beside its own.
@@ -342,6 +399,7 @@ module RailsAiContext
 
       out = []
       written = {}
+      dropped = false
       index = 0
       while index < lines.size
         range, name = starts[index]
@@ -353,14 +411,19 @@ module RailsAiContext
           written[name] = true
           index = range.end
         else
-          # A dropped section takes the blank line under it when the one
-          # above is blank too, so the gap it leaves does not double.
+          # A dropped section takes the comments just above its header, which
+          # are the header's, and the blank line under it when the one above
+          # is blank too, so the gap it leaves does not double.
+          out.pop while out.any? && out.last.strip.start_with?("#")
           index = range.end
           index += 1 if (out.empty? || out.last.strip.empty?) && lines[index]&.strip&.empty?
+          dropped = true
         end
       end
 
       new_content = out.join.force_encoding(content.encoding)
+      # A section dropped from the end leaves no blank line behind it.
+      new_content = new_content.sub(/(?:\r?\n)+\z/, newline) if dropped && !new_content.empty?
       by_name.each do |name, section|
         next if written.key?(name)
 
@@ -398,9 +461,11 @@ module RailsAiContext
     end
 
     # A TOML basic string. JSON's string escapes are a subset of TOML's, where
-    # Ruby's #inspect writes `\#{` and `\e`, which TOML rejects.
+    # Ruby's #inspect writes `\#{` and `\e`, which TOML rejects. ENV hands
+    # back bytes tagged BINARY where the locale names no encoding, so they are
+    # read as the UTF-8 they almost always are.
     def toml_string(value)
-      JSON.generate(value.to_s)
+      JSON.generate(value.to_s.dup.force_encoding(Encoding::UTF_8).scrub)
     end
 
     # Snapshot environment variables needed for Ruby/Bundler to work.
@@ -440,13 +505,13 @@ module RailsAiContext
     # The app every server of ours in one config file names.
     def self.app_roots_in(path, config, dir)
       argvs = if config[:format] == :codex_toml
-        lines = read_text(path).lines
+        lines = RailsAiContext::SafeFile.read_text(path).lines
         Toml.sections(lines) { |name| name.match?(OWN_SERVER_NAME) }.filter_map do |range, name|
           argv = Toml.argv(lines, range)
           argv if own_entry?(name, argv)
         end
       else
-        data = JSON.parse(read_text(path))
+        data = JSON.parse(RailsAiContext::SafeFile.read_text(path))
         servers = data.is_a?(Hash) ? data[config[:root_key]] : nil
         return [] unless servers.is_a?(Hash)
 
@@ -480,7 +545,7 @@ module RailsAiContext
           if config[:format] == :codex_toml
             cleaned << path if remove_toml_entry(path)
           else
-            cleaned << path if remove_json_entry(path, config[:root_key])
+            cleaned << path if remove_json_entry(path, config[:root_key], config[:path])
           end
         rescue SystemCallError, IOError => e
           RailsAiContext.log_warn "[rails-ai-context] could not update #{config[:path]}: #{e.message}"
@@ -489,13 +554,20 @@ module RailsAiContext
       cleaned
     end
 
-    def self.remove_json_entry(path, root_key)
-      data = JSON.parse(read_text(path))
+    def self.remove_json_entry(path, root_key, label)
+      text = RailsAiContext::SafeFile.read_text(path)
+      data = JSON.parse(text)
       servers = data.is_a?(Hash) ? data[root_key] : nil
       return false unless servers.is_a?(Hash)
 
       own = servers.select { |name, entry| own_entry?(name, json_argv(entry)) }.keys
       return false if own.empty?
+
+      if json_comments?(text)
+        RailsAiContext.log_warn "[rails-ai-context] left #{label} as it is: it holds comments, which writing it back as " \
+                                "JSON would drop. Remove #{own.join(', ')} from it by hand."
+        return false
+      end
 
       own.each { |name| servers.delete(name) }
       data.delete(root_key) if servers.empty?
@@ -511,13 +583,19 @@ module RailsAiContext
     end
 
     def self.remove_toml_entry(path)
-      content = read_text(path)
+      content = RailsAiContext::SafeFile.read_text(path)
       lines = content.lines
       sections = Toml.sections(lines) { |name| name.match?(OWN_SERVER_NAME) }
         .select { |range, name| own_entry?(name, Toml.argv(lines, range)) }
       return false if sections.empty?
 
-      sections.reverse_each { |range, _| lines.slice!(range) }
+      # Each section goes with the comments just above its header, which are
+      # the header's.
+      sections.reverse_each do |range, _|
+        start = range.begin
+        start -= 1 while start.positive? && lines[start - 1].strip.start_with?("#")
+        lines.slice!(start...range.end)
+      end
       # Clean up extra blank lines left behind, in the file's own line ending
       newline = content.include?("\r\n") ? "\r\n" : "\n"
       new_content = lines.join.force_encoding(content.encoding).gsub(/(?:\r?\n){3,}/, newline * 2).strip

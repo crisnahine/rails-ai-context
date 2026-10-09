@@ -23,6 +23,15 @@ module RailsAiContext
       raise
     end
 
+    # A file the gem rewrites in part, as UTF-8 whatever the locale says. One
+    # that is not valid UTF-8 stays as bytes: what is looked for in it is
+    # ASCII, and what is not replaced is written back as it came.
+    def self.read_text(path)
+      content = File.binread(path)
+      utf8 = content.dup.force_encoding(Encoding::UTF_8)
+      utf8.valid_encoding? ? utf8 : content
+    end
+
     def self.read(path, max_size: nil)
       return nil unless path
 

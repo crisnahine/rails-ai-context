@@ -315,6 +315,18 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
         expect(generator).to have_received(:say).with(a_string_including("comes from an earlier version"), :yellow)
       end
 
+      # An earlier version's hook, unchanged, served the app at the top.
+      it "adds an app below the root to an earlier version's hook, bringing it up to date" do
+        FileUtils.mkdir_p(File.dirname(mono_hook))
+        File.write(mono_hook, RailsAiContext::Install::ValidationHook::LEGACY.keys.first)
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
+
+        install_for("apps/web")
+
+        expect(generator).to have_received(:ask).once
+        expect(File.read(mono_hook)).to eq(RailsAiContext::Install::ValidationHook.script(%w[. apps/web], standalone: false))
+      end
+
       it "asks nothing for an app the hook already covers" do
         install_for("apps/web")
         install_for("apps/web")
@@ -436,13 +448,74 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       end
     end
 
-    # A hook from before it named its apps is the repository root's.
-    it "asks nothing where a hook from an earlier version already serves the app" do
+    # Each release from v5.9.0 wrote one of these for the app at the top of
+    # its repository, and each hands validate the files a commit deletes.
+    RailsAiContext::Install::ValidationHook::LEGACY.each_with_index do |(legacy, _), index|
+      it "brings an earlier version's hook up to date without asking again (#{index + 1} of 3)" do
+        FileUtils.mkdir_p(File.dirname(hook_path))
+        File.write(hook_path, legacy)
+        allow(generator).to receive(:say)
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+
+        generator.install_validation_hook
+
+        expect(generator).not_to have_received(:ask)
+        expect(File.read(hook_path)).to eq(RailsAiContext::Install::ValidationHook.script([ "." ], standalone: true))
+        expect(File.executable?(hook_path)).to be(true)
+        expect(generator).to have_received(:say).with(a_string_including("Updated the pre-commit validation hook"), :green)
+      end
+    end
+
+    # What the update is for: a commit that deletes a file.
+    it "lets a commit that deletes a file through once an earlier version's hook is updated" do
+      FileUtils.mkdir_p(File.join(tmpdir, "app/models"))
+      File.write(File.join(tmpdir, "app/models/old.rb"), "class Old; end\n")
+      commit_all(tmpdir)
+      FileUtils.mkdir_p(File.dirname(hook_path))
+      File.write(hook_path, RailsAiContext::Install::ValidationHook::LEGACY.keys.last)
+      FileUtils.chmod(0o755, hook_path)
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+      Dir.mktmpdir do |bin|
+        # A validator that fails on a file that is not there, as the real one does.
+        File.write(File.join(bin, "rails-ai-context"), %(#!/bin/sh\nfor f in $(echo "$4" | tr ',' ' '); do [ -f "$f" ] || exit 1; done\n))
+        File.chmod(0o755, File.join(bin, "rails-ai-context"))
+        env = { "PATH" => "#{bin}:#{ENV.fetch('PATH')}", "GIT_AUTHOR_NAME" => "t", "GIT_AUTHOR_EMAIL" => "t@t",
+                "GIT_COMMITTER_NAME" => "t", "GIT_COMMITTER_EMAIL" => "t@t" }
+        git("-C", tmpdir, "rm", "-q", "app/models/old.rb")
+        blocked, = Open3.capture2e(env, hook_path, chdir: tmpdir)
+
+        generator.install_validation_hook
+        out, status = Open3.capture2e(env, "git", "-C", tmpdir, "commit", "-q", "-m", "x")
+
+        expect(blocked).to include("rails-ai-context validation found issues.")
+        expect(status.success?).to be(true), out
+      end
+    end
+
+    it "says why it leaves an earlier version's hook changed by hand alone" do
       FileUtils.mkdir_p(File.dirname(hook_path))
       File.write(hook_path, "#!/bin/bash\n# rails-ai-context: validate Rails references before commit\n")
+      allow(generator).to receive(:say)
 
       generator.install_validation_hook
 
+      expect(generator).not_to have_received(:ask)
+      expect(File.read(hook_path)).to eq("#!/bin/bash\n# rails-ai-context: validate Rails references before commit\n")
+      expect(generator).to have_received(:say)
+        .with(a_string_including("comes from an earlier version and was changed by hand - delete it"), :yellow)
+    end
+
+    # The apps line edited by hand into something a shell would not read.
+    it "says why it leaves a hook whose apps line it cannot read alone, instead of raising" do
+      FileUtils.mkdir_p(File.dirname(hook_path))
+      allow(generator).to receive(:say)
+      [ "# rails-ai-context apps: apps/web \"apps/x\n", "# rails-ai-context apps: caf\xC3(\xFF\n".b ].each do |line|
+        File.binwrite(hook_path, "#!/bin/bash\n".b + line)
+
+        expect { generator.install_validation_hook }.not_to raise_error
+      end
+
+      expect(generator).to have_received(:say).with(a_string_including("names its apps in a form this version cannot read"), :yellow).twice
       expect(generator).not_to have_received(:ask)
     end
 

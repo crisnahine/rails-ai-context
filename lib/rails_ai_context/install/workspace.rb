@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "digest"
+require "pathname"
 
 module RailsAiContext
   module Install
@@ -21,14 +22,16 @@ module RailsAiContext
       MAX_SERVER_NAME = 30
 
       # root is absolute; path is root relative to the workspace, as the
-      # entry's --app-path names it.
-      App = Struct.new(:root, :path, :server_name, :standalone, keyword_init: true) do
-        # The app's MCP entry. An in-Gemfile app's names its own Gemfile, which
-        # bundle exec, started in the workspace, would never find.
+      # entry's --app-path names it. An in-Gemfile app's gemfile is the one
+      # its bundle reads - its own, or the one its config/boot.rb names, a
+      # monorepo's shared Gemfile - absolute, and gemfile_path is that
+      # relative to the workspace.
+      App = Struct.new(:root, :path, :server_name, :standalone, :gemfile, :gemfile_path, keyword_init: true) do
+        # The app's MCP entry. An in-Gemfile app's names its bundle's Gemfile,
+        # which bundle exec, started in the workspace, would never find.
         def server
-          gemfile = standalone ? nil : "#{path}/#{GemLock.gemfile_name(root)}"
-          McpConfigGenerator::Server.new(name: server_name, standalone: standalone, app_path: path, gemfile: gemfile,
-                                         announce: announced_name)
+          McpConfigGenerator::Server.new(name: server_name, standalone: standalone, app_path: path,
+                                         gemfile: standalone ? nil : gemfile_path, announce: announced_name)
         end
 
         # The entry's name with the app first, so that the 13 characters VS
@@ -47,9 +50,32 @@ module RailsAiContext
         paths = roots.map { |root| root.delete_prefix("#{dir.delete_suffix('/')}/") }
         names = server_names(paths)
         roots.zip(paths).map do |root, path|
-          App.new(root: root, path: path, server_name: names.fetch(path),
-                  standalone: InstallMode.standalone?(root: root))
+          gemfile = bundle_gemfile(root)
+          App.new(root: root, path: path, server_name: names.fetch(path), standalone: InstallMode.standalone?(root: root),
+                  gemfile: gemfile, gemfile_path: relative(gemfile, dir))
         end
+      end
+
+      # The Gemfile the app's bundle reads, by GemLock's answer: the app's
+      # own, else the one its config/boot.rb points Bundler at.
+      def bundle_gemfile(root)
+        found = GemLock.bundle(root).gemfile
+        found && File.file?(found) ? found : File.join(root, GemLock.gemfile_name(root))
+      end
+
+      # A path as the workspace's config spells it: from the workspace, with
+      # both sides resolved, so a symlinked temp or home directory does not
+      # turn it into a walk through the filesystem root.
+      def relative(path, dir)
+        Pathname.new(resolved(path)).relative_path_from(Pathname.new(resolved(dir))).to_s
+      end
+
+      # The real path, or for a file not there yet its directory's.
+      def resolved(path)
+        return File.realpath(path) if File.exist?(path)
+
+        dir = File.dirname(path)
+        File.join(File.exist?(dir) ? File.realpath(dir) : File.expand_path(dir), File.basename(path))
       end
 
       # One stable name per app path: the folder's name, or its whole path
@@ -79,14 +105,14 @@ module RailsAiContext
 
       # Whether `name` is one server_names gives the app at `path` (relative
       # to the workspace) alongside some other set of apps: its folder's name
-      # or its whole path, numbered or shortened where that was needed.
+      # or its whole path, shortened where that was needed. A numbered name is
+      # not claimed: `rails-ai-context-api-2` is as likely a second entry
+      # somebody made by hand.
       def generated_name?(name, path)
         rest = name.delete_prefix(PREFIX)
         return false if rest == name
 
-        [ slug(File.basename(path)), slug(path) ].uniq.any? do |base|
-          rest == fit(base, path) || (2..99).any? { |number| rest == fit(base, path, "-#{number}") }
-        end
+        [ slug(File.basename(path)), slug(path) ].uniq.any? { |base| rest == fit(base, path) }
       end
 
       # Letters, digits, `_` and `-`: what every client accepts in a server

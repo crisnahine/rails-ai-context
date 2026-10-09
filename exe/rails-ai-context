@@ -490,7 +490,7 @@ class RailsAiContextCLI < Thor
 
     # One process boots one app, so each app's context files come from a
     # child running the install that app's server runs: its bundle's copy of
-    # the gem for an in-Gemfile app, this binary for a standalone one. The
+    # the gem for an in-Gemfile app, this copy for a standalone one. The
     # child prompts for its own legacy files, so this process does not.
     def generate_app_context(app)
       $stderr.puts ""
@@ -500,31 +500,46 @@ class RailsAiContextCLI < Thor
       flags << "--no-boot" if options[:no_boot]
       flags.push("--environment", options[:environment]) if options[:environment]
       if app.standalone
-        env = {}
-        command = [ *own_binary, "context", *flags ]
+        env, command, bundled = own_binary
+        command = [ *command, "context", *flags ]
       else
-        env = { "BUNDLE_GEMFILE" => File.join(app.root, ::RailsAiContext::GemLock.gemfile_name(app.root)) }
+        env = { "BUNDLE_GEMFILE" => app.gemfile }
         command = [ "bundle", "exec", "rails-ai-context", "context", *flags ]
       end
 
-      # A parent run under bundle exec hands the child the environment it was
-      # started with, the user's own Bundler settings included, not its bundle.
+      # Otherwise a parent run under bundle exec hands the child the
+      # environment it was started with, the user's own Bundler settings
+      # included, not its bundle.
       run = -> { system(env, *command, chdir: app.root) }
-      ok = defined?(::Bundler) && ::Bundler.respond_to?(:with_original_env) ? ::Bundler.with_original_env(&run) : run.call
+      original = !bundled && defined?(::Bundler) && ::Bundler.respond_to?(:with_original_env)
+      ok = original ? ::Bundler.with_original_env(&run) : run.call
       $stderr.puts "Error: could not run `#{command.first}` - is it installed and on PATH?" if ok.nil?
       ok == true
     end
 
-    # This copy of the gem, at this version: the installed spec when one was
-    # activated, the way its RubyGems wrapper activates it (a wrapper found on
-    # PATH may load another version), else this file with its own lib, as a
-    # checkout runs it.
+    # This copy of the gem, at this version, as a child runs it.
+    #
+    # Inside a bundle (a checkout's, or a folder's own Gemfile that lists the
+    # gem) the child keeps this process's environment: its dependencies may
+    # be installed nowhere else, as under a vendored BUNDLE_PATH. The bundle's
+    # Gemfile is pinned, since the child starts in another directory.
+    # Otherwise it is the installed spec, activated the way its RubyGems
+    # wrapper does it (a wrapper found on PATH may load another version), or
+    # this file with its own lib, as a checkout runs it.
+    #
+    # @return [Array(Hash, Array<String>, Boolean)] the child's environment,
+    #   its command, and whether it keeps this process's bundle
     def own_binary
-      spec = PREBOOT_GEM_SPECS["rails-ai-context"]
-      return [ RbConfig.ruby, "-I", File.expand_path("../lib", __dir__), EXE_PATH ] unless spec
+      from_lib = [ RbConfig.ruby, "-I", File.expand_path("../lib", __dir__), EXE_PATH ]
+      if ENV["BUNDLE_BIN_PATH"] && defined?(::Bundler) && ::Bundler.respond_to?(:default_gemfile)
+        return [ { "BUNDLE_GEMFILE" => ::Bundler.default_gemfile.to_s }, from_lib, true ]
+      end
 
-      [ RbConfig.ruby, "-e", 'load Gem.activate_bin_path("rails-ai-context", "rails-ai-context", ARGV.shift)',
-        "= #{spec.version}" ]
+      spec = PREBOOT_GEM_SPECS["rails-ai-context"]
+      return [ {}, from_lib, false ] unless spec
+
+      [ {}, [ RbConfig.ruby, "-e", 'load Gem.activate_bin_path("rails-ai-context", "rails-ai-context", ARGV.shift)',
+              "= #{spec.version}" ], false ]
     end
 
     def show_workspace_instructions(apps, ai_tools, tool_mode, context_files)

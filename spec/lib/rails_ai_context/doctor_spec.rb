@@ -241,13 +241,26 @@ RSpec.describe RailsAiContext::Doctor do
   end
 
   describe "#check_codex_env_staleness" do
-    subject(:check) { doctor.send(:check_codex_env_staleness) }
+    # A real file in a real app folder: the check reads it the way the
+    # generator does, bytes and all.
+    around do |example|
+      Dir.mktmpdir do |dir|
+        @root = File.realpath(dir)
+        example.run
+      end
+    end
 
-    let(:toml_path) { File.join(Rails.application.root, ".codex/config.toml") }
+    subject(:check) { described_class.new(RailsAiContext::StaticApp.new(@root)).send(:check_codex_env_staleness) }
+
+    def write_toml(content)
+      FileUtils.mkdir_p(File.join(@root, ".codex"))
+      File.binwrite(File.join(@root, ".codex/config.toml"), content)
+    end
 
     context "when codex is not in ai_tools" do
       before do
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude cursor])
+        write_toml(%([mcp_servers.rails-ai-context.env]\nGEM_HOME = "/nonexistent/gems"\n))
       end
 
       it "returns nil (skipped)" do
@@ -261,11 +274,6 @@ RSpec.describe RailsAiContext::Doctor do
       end
 
       context "when .codex/config.toml does not exist" do
-        before do
-          allow(File).to receive(:exist?).and_call_original
-          allow(File).to receive(:exist?).with(toml_path).and_return(false)
-        end
-
         it "returns nil (skipped)" do
           expect(check).to be_nil
         end
@@ -273,15 +281,11 @@ RSpec.describe RailsAiContext::Doctor do
 
       context "when .codex/config.toml exists but has no env section" do
         before do
-          toml_content = <<~TOML
+          write_toml(<<~TOML)
             [mcp_servers.rails-ai-context]
             command = "bundle"
             args = ["exec", "rails", "ai:serve"]
           TOML
-          allow(File).to receive(:exist?).and_call_original
-          allow(File).to receive(:exist?).with(toml_path).and_return(true)
-          allow(File).to receive(:read).and_call_original
-          allow(File).to receive(:read).with(toml_path).and_return(toml_content)
         end
 
         it "returns nil (skipped)" do
@@ -291,7 +295,7 @@ RSpec.describe RailsAiContext::Doctor do
 
       context "when env section exists but has no GEM_HOME" do
         before do
-          toml_content = <<~TOML
+          write_toml(<<~TOML)
             [mcp_servers.rails-ai-context]
             command = "bundle"
             args = ["exec", "rails", "ai:serve"]
@@ -299,10 +303,6 @@ RSpec.describe RailsAiContext::Doctor do
             [mcp_servers.rails-ai-context.env]
             PATH = "/usr/local/bin:/usr/bin"
           TOML
-          allow(File).to receive(:exist?).and_call_original
-          allow(File).to receive(:exist?).with(toml_path).and_return(true)
-          allow(File).to receive(:read).and_call_original
-          allow(File).to receive(:read).with(toml_path).and_return(toml_content)
         end
 
         it "returns nil (skipped)" do
@@ -316,7 +316,7 @@ RSpec.describe RailsAiContext::Doctor do
         after { FileUtils.rm_rf(gem_home) }
 
         before do
-          toml_content = <<~TOML
+          write_toml(<<~TOML)
             [mcp_servers.rails-ai-context]
             command = "bundle"
             args = ["exec", "rails", "ai:serve"]
@@ -325,10 +325,6 @@ RSpec.describe RailsAiContext::Doctor do
             GEM_HOME = "#{gem_home}"
             PATH = "/usr/local/bin:/usr/bin"
           TOML
-          allow(File).to receive(:exist?).and_call_original
-          allow(File).to receive(:exist?).with(toml_path).and_return(true)
-          allow(File).to receive(:read).and_call_original
-          allow(File).to receive(:read).with(toml_path).and_return(toml_content)
         end
 
         it "returns a pass check" do
@@ -342,7 +338,7 @@ RSpec.describe RailsAiContext::Doctor do
         let(:stale_gem_home) { "/nonexistent/path/to/gems/3.3.0" }
 
         before do
-          toml_content = <<~TOML
+          write_toml(<<~TOML)
             [mcp_servers.rails-ai-context]
             command = "bundle"
             args = ["exec", "rails", "ai:serve"]
@@ -351,10 +347,6 @@ RSpec.describe RailsAiContext::Doctor do
             GEM_HOME = "#{stale_gem_home}"
             PATH = "/usr/local/bin:/usr/bin"
           TOML
-          allow(File).to receive(:exist?).and_call_original
-          allow(File).to receive(:exist?).with(toml_path).and_return(true)
-          allow(File).to receive(:read).and_call_original
-          allow(File).to receive(:read).with(toml_path).and_return(toml_content)
         end
 
         it "returns a warn check with stale GEM_HOME path" do
@@ -370,7 +362,7 @@ RSpec.describe RailsAiContext::Doctor do
           expect(check.fix).to eq("Run `rails-ai-context init`")
 
           allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
-          expect(described_class.new(Rails.application).send(:check_codex_env_staleness).fix)
+          expect(described_class.new(RailsAiContext::StaticApp.new(@root)).send(:check_codex_env_staleness).fix)
             .to eq("Run `rails generate rails_ai_context:install`")
         end
       end
@@ -381,7 +373,7 @@ RSpec.describe RailsAiContext::Doctor do
         after { FileUtils.rm_rf(gem_home) }
 
         before do
-          toml_content = <<~TOML
+          write_toml(<<~TOML)
             [mcp_servers.rails-ai-context]
             command = "bundle"
             args = ["exec", "rails", "ai:serve"]
@@ -392,15 +384,55 @@ RSpec.describe RailsAiContext::Doctor do
             [mcp_servers.other-tool]
             command = "other"
           TOML
-          allow(File).to receive(:exist?).and_call_original
-          allow(File).to receive(:exist?).with(toml_path).and_return(true)
-          allow(File).to receive(:read).and_call_original
-          allow(File).to receive(:read).with(toml_path).and_return(toml_content)
         end
 
         it "correctly parses the env section and returns pass" do
           expect(check.status).to eq(:pass)
           expect(check.message).to include(gem_home)
+        end
+      end
+
+      # A Windows GEM_HOME is written with its backslashes escaped.
+      context "when GEM_HOME holds TOML escapes" do
+        before do
+          write_toml(%([mcp_servers.rails-ai-context]\ncommand = "rails-ai-context"\nargs = ["serve"]\n\n) +
+                     %([mcp_servers.rails-ai-context.env]\nGEM_HOME = "C:\\\\Ruby33\\\\lib"\n))
+        end
+
+        it "names the path the snapshot holds" do
+          expect(check.message).to include("GEM_HOME C:\\Ruby33\\lib no longer exists")
+        end
+      end
+
+      # The file is shared by every app in a workspace; a byte outside ASCII
+      # in a comment or a PATH must not stop the check in a C locale.
+      context "when the file holds bytes outside ASCII" do
+        before do
+          write_toml("# caf\xC3\xA9 \xFF\n[mcp_servers.rails-ai-context]\ncommand = \"rails-ai-context\"\nargs = [\"serve\"]\n\n" \
+                     "[mcp_servers.rails-ai-context.env]\nGEM_HOME = \"/nonexistent/gems\"\n".b)
+        end
+
+        it "still reads the snapshot" do
+          expect(check.message).to include("/nonexistent/gems")
+        end
+      end
+
+      # A hand-made entry under the gem's prefix that runs something else
+      # is somebody's own, and its environment is theirs.
+      context "when a section only shares the gem's name" do
+        before do
+          write_toml(<<~TOML)
+            [mcp_servers.rails-ai-context-prod]
+            command = "npx"
+            args = ["mcp-remote", "https://prod.example/mcp"]
+
+            [mcp_servers.rails-ai-context-prod.env]
+            GEM_HOME = "/nonexistent/prod/gems"
+          TOML
+        end
+
+        it "is not read" do
+          expect(check).to be_nil
         end
       end
     end
@@ -543,9 +575,21 @@ RSpec.describe RailsAiContext::Doctor do
   end
 
   describe "#check_mcp_json" do
-    subject(:check) { doctor.send(:check_mcp_json) }
+    # Real files in a real app folder: the check reads them the way the
+    # generator does.
+    around do |example|
+      Dir.mktmpdir do |dir|
+        @root = File.realpath(dir)
+        example.run
+      end
+    end
 
-    let(:root) { Rails.application.root }
+    subject(:check) { described_class.new(RailsAiContext::StaticApp.new(@root)).send(:check_mcp_json) }
+
+    def write(path, content)
+      FileUtils.mkdir_p(File.dirname(File.join(@root, path)))
+      File.binwrite(File.join(@root, path), content)
+    end
 
     context "when tool_mode is :cli" do
       before do
@@ -562,15 +606,7 @@ RSpec.describe RailsAiContext::Doctor do
       before do
         allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude cursor copilot])
-        # .mcp.json exists and is valid
-        allow(File).to receive(:exist?).and_call_original
-        allow(File).to receive(:exist?).with(File.join(root, ".mcp.json")).and_return(true)
-        allow(File).to receive(:read).and_call_original
-        allow(File).to receive(:read).with(File.join(root, ".mcp.json")).and_return('{"mcpServers":{}}')
-        # .cursor/mcp.json missing
-        allow(File).to receive(:exist?).with(File.join(root, ".cursor/mcp.json")).and_return(false)
-        # .vscode/mcp.json missing
-        allow(File).to receive(:exist?).with(File.join(root, ".vscode/mcp.json")).and_return(false)
+        write(".mcp.json", '{"mcpServers":{}}')
       end
 
       it "aggregates all failures into a single check" do
@@ -578,6 +614,7 @@ RSpec.describe RailsAiContext::Doctor do
         expect(check.message).to include("2 of 3")
         expect(check.message).to include(".cursor/mcp.json")
         expect(check.message).to include(".vscode/mcp.json")
+        expect(check.fix).to eq("Run `#{RailsAiContext::InstallMode.command(:install)}` to fix")
       end
     end
 
@@ -585,12 +622,8 @@ RSpec.describe RailsAiContext::Doctor do
       before do
         allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude opencode])
-        allow(File).to receive(:exist?).and_call_original
-        allow(File).to receive(:exist?).with(File.join(root, ".mcp.json")).and_return(true)
-        allow(File).to receive(:read).and_call_original
-        allow(File).to receive(:read).with(File.join(root, ".mcp.json")).and_return('{"mcpServers":{}}')
-        allow(File).to receive(:exist?).with(File.join(root, "opencode.json")).and_return(true)
-        allow(File).to receive(:read).with(File.join(root, "opencode.json")).and_return('{"mcp":{}}')
+        write(".mcp.json", '{"mcpServers":{}}')
+        write("opencode.json", '{"mcp":{}}')
       end
 
       it "returns pass with count" do
@@ -603,14 +636,8 @@ RSpec.describe RailsAiContext::Doctor do
       before do
         allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(nil)
-        # Stub all 5 config files as present
-        allow(File).to receive(:exist?).and_call_original
-        allow(File).to receive(:read).and_call_original
-        %w[.mcp.json .cursor/mcp.json .vscode/mcp.json opencode.json].each do |path|
-          allow(File).to receive(:exist?).with(File.join(root, path)).and_return(true)
-          allow(File).to receive(:read).with(File.join(root, path)).and_return("{}")
-        end
-        allow(File).to receive(:exist?).with(File.join(root, ".codex/config.toml")).and_return(true)
+        %w[.mcp.json .cursor/mcp.json .vscode/mcp.json opencode.json].each { |path| write(path, "{}") }
+        write(".codex/config.toml", "")
       end
 
       it "checks all 5 tools and returns pass" do
@@ -623,10 +650,7 @@ RSpec.describe RailsAiContext::Doctor do
       before do
         allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude])
-        allow(File).to receive(:exist?).and_call_original
-        allow(File).to receive(:exist?).with(File.join(root, ".mcp.json")).and_return(true)
-        allow(File).to receive(:read).and_call_original
-        allow(File).to receive(:read).with(File.join(root, ".mcp.json")).and_return("not json{{{")
+        write(".mcp.json", "not json{{{")
       end
 
       it "returns fail status with tool label" do
@@ -635,10 +659,25 @@ RSpec.describe RailsAiContext::Doctor do
         expect(check.message).to include(".mcp.json")
       end
 
-      it "names the binary's init to regenerate it in a standalone install" do
+      # Install leaves a file it cannot parse as it is, so running it alone
+      # would change nothing.
+      it "asks for the file to be made valid before init runs, in a standalone install" do
         allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
 
-        expect(check.fix).to eq("Run `rails-ai-context init` to fix")
+        expect(check.fix).to eq("Make .mcp.json valid JSON (`rails-ai-context init` leaves a file it cannot parse as it is), then run it")
+      end
+    end
+
+    # A config shared by every app in a workspace may hold any bytes.
+    context "when a JSON config holds bytes outside ASCII" do
+      before do
+        allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude])
+        write(".mcp.json", %({"mcpServers":{"caf\xC3\xA9":{"command":"x"}}}).b)
+      end
+
+      it "reads it as UTF-8 whatever the locale" do
+        expect(check.status).to eq(:pass)
       end
     end
   end

@@ -223,26 +223,34 @@ module RailsAiContext
 
       # Under bundle exec the bundle is already chosen. One whose Gemfile is in
       # the app or below it is the app's own - a dual-boot Gemfile.next, an
-      # Appraisal gemfiles/ entry - and so is any bundle above an app that has
-      # no Gemfile (an engine's dummy app). Otherwise an app with a Gemfile of
-      # its own boots against someone else's Gemfile.lock.
+      # Appraisal gemfiles/ entry, a Gemfile linked in from a shared one - and
+      # so is any bundle above an app that has no Gemfile (an engine's dummy
+      # app). Otherwise an app with a Gemfile of its own boots against someone
+      # else's Gemfile.lock.
       def self.bundle_warning(root, cwd)
         return nil unless ENV["BUNDLE_BIN_PATH"] && defined?(::Bundler) && ::Bundler.respond_to?(:default_gemfile)
 
-        bundle_gemfile = real(::Bundler.default_gemfile.to_s)
+        given = ::Bundler.default_gemfile.to_s
+        bundle_gemfile = real(given)
         real_root = real(root)
-        return nil if bundle_gemfile.start_with?("#{real_root.delete_suffix('/')}/")
-
         # Bundler looks for gems.rb before Gemfile.
         own = %w[gems.rb Gemfile].map { |name| File.join(root, name) }.find { |path| File.file?(path) }
+        return nil if inside?(given, root) || inside?(bundle_gemfile, real_root) || (own && real(own) == bundle_gemfile)
+
         bundle_dir = File.dirname(bundle_gemfile)
-        return nil if own.nil? && (real_root == bundle_dir || real_root.start_with?("#{bundle_dir}/"))
+        return nil if own.nil? && (real_root == bundle_dir || inside?(real_root, bundle_dir))
 
         "[rails-ai-context] WARNING: #{display(root, cwd).delete_suffix('/')}/ boots against the bundle of #{bundle_gemfile} " \
-          "under bundle exec, not its own. Run the command from inside the app, or point BUNDLE_GEMFILE at the app's Gemfile."
+          "under bundle exec, not its own. Run it without bundle exec or from inside the app, or point BUNDLE_GEMFILE at " \
+          "the app's Gemfile."
       rescue StandardError
         nil
       end
+
+      def self.inside?(path, dir)
+        path.start_with?("#{dir.delete_suffix('/')}/")
+      end
+      private_class_method :inside?
     end
   end
 end

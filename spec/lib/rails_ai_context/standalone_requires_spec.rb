@@ -23,7 +23,7 @@ RSpec.describe "the files the install path loads on their own" do
   # shims it installs are the ones under test.
   def install_files_preamble
     <<~RUBY
-      src = File.read(#{exe.inspect})
+      src = File.read(#{exe.inspect}, encoding: "UTF-8")
       body = src[/^    def require_install_files!\\n(.*?)^    end$/m, 1] or abort("require_install_files! not found")
       Object.new.instance_eval(body, #{exe.inspect}, src[0...src.index(body)].count("\\n") + 1)
     RUBY

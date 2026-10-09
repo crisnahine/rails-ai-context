@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "find"
 require "rbconfig"
 require_relative "../boot_manager"
 
@@ -43,10 +44,28 @@ module RailsAiContext
         return false if other_framework?(root)
         return true if File.exist?(File.join(root, "config", "environment.rb"))
         return false unless allow_source_only
+        return true if File.exist?(File.join(root, "config", "application.rb"))
 
-        File.exist?(File.join(root, "config", "application.rb")) ||
-          Dir.glob(File.join(root, "app", "**", "*.rb")).any?
+        source_file?(File.join(root, "app"))
       end
+
+      # Whether app/ holds a Ruby file, as app/**/*.rb would match one: the
+      # first answers, where a glob lists the whole tree before it yields, and
+      # hidden entries are passed over as the glob passes them.
+      def self.source_file?(dir)
+        return false unless File.directory?(dir)
+
+        # The trailing separator walks into app/ when it is a link.
+        start = File.join(dir, "")
+        Find.find(start) do |path|
+          next if path == start
+
+          Find.prune if File.basename(path).start_with?(".")
+          return true if path.end_with?(".rb") && File.file?(path)
+        end
+        false
+      end
+      private_class_method :source_file?
 
       # Sinatra MVC trees have config/environment.rb too; without application.rb the lockfile, else the Gemfile, decides.
       def self.other_framework?(root)

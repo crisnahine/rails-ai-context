@@ -65,7 +65,6 @@ RSpec.describe RailsAiContext::Install::Workspace do
     it "knows the names it gives an app, under any set of apps" do
       expect(described_class.generated_name?("rails-ai-context-web", "apps/web")).to be(true)
       expect(described_class.generated_name?("rails-ai-context-apps-web", "apps/web")).to be(true)
-      expect(described_class.generated_name?("rails-ai-context-web-2", "apps/web")).to be(true)
       long = "a-very-long-application-folder-name"
       expect(described_class.generated_name?(described_class.server_names([ long ]).fetch(long), long)).to be(true)
     end
@@ -74,6 +73,10 @@ RSpec.describe RailsAiContext::Install::Workspace do
       expect(described_class.generated_name?("rails-ai-context-readonly", "apps/web")).to be(false)
       expect(described_class.generated_name?("rails-ai-context", "apps/web")).to be(false)
       expect(described_class.generated_name?("web", "apps/web")).to be(false)
+    end
+
+    it "does not claim a numbered name, which is as likely a second entry made by hand" do
+      expect(described_class.generated_name?("rails-ai-context-web-2", "apps/web")).to be(false)
     end
   end
 
@@ -144,6 +147,22 @@ RSpec.describe RailsAiContext::Install::Workspace do
       expect(names.first(2)).to eq(%w[web-rails-ai-context api-rails-ai-context])
       expect(names.last).to match(/\Acustom-[0-9a-f]{6}-rails-ai-context\z/)
       expect(names.map { |name| name[0, 13] }.uniq.size).to eq(3)
+    end
+
+    # A monorepo's apps share one bundle, which each app's config/boot.rb
+    # names; the app has no Gemfile for bundle exec to find.
+    it "gives an app the shared Gemfile its config/boot.rb names" do
+      FileUtils.mkdir_p(File.join(@dir, ".git"))
+      File.write(File.join(@dir, "Gemfile"), "")
+      File.write(File.join(@dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails-ai-context (1.0.0)\n\n")
+      root = app("apps/a")
+      File.write(File.join(root, "config/boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n))
+
+      found = described_class.apps(@dir, [ root ]).first
+
+      expect(found.standalone).to be(false)
+      expect(found.gemfile).to eq(File.join(@dir, "Gemfile"))
+      expect(found.server.env).to include("BUNDLE_GEMFILE" => "Gemfile")
     end
 
     it "names a gems.rb bundle by its own file name" do
