@@ -45,6 +45,10 @@ PREBOOT_GEM_SPECS = preboot_gem_specs.freeze
 # entry puts those back, so re-registering their specs would tell it not to.
 PREBOOT_FRAMEWORK_NAMES = preboot_framework_names.freeze
 
+# This file, wherever the gem is installed: what a child re-entering this very
+# copy runs when no installed spec names it.
+EXE_PATH = File.expand_path(__FILE__).freeze
+
 # After one of these tools' names `--environment` is its filter, never RAILS_ENV: this is
 # decided before boot, when no tool schema can load. cli_smoke_spec holds it to the schemas.
 ENVIRONMENT_PARAM_TOOLS = %w[env_config].freeze
@@ -465,7 +469,7 @@ class RailsAiContextCLI < Thor
       return if failed.empty?
 
       $stderr.puts "Error: no context files for #{failed.map { |app| "#{app.path}/" }.join(', ')} - see the output above. " \
-                   "Retry with `rails-ai-context --app-path #{failed.first.path.shellescape} context`."
+                   "Retry with `rails-ai-context --app-path #{app_root.display(failed.first.root, Dir.pwd).shellescape} context`."
       exit 1
     end
 
@@ -497,7 +501,7 @@ class RailsAiContextCLI < Thor
       flags.push("--environment", options[:environment]) if options[:environment]
       if app.standalone
         env = {}
-        command = [ RbConfig.ruby, "-I", File.expand_path("../lib", __dir__), File.expand_path($PROGRAM_NAME), "context", *flags ]
+        command = [ *own_binary, "context", *flags ]
       else
         env = { "BUNDLE_GEMFILE" => File.join(app.root, ::RailsAiContext::GemLock.gemfile_name(app.root)) }
         command = [ "bundle", "exec", "rails-ai-context", "context", *flags ]
@@ -509,6 +513,16 @@ class RailsAiContextCLI < Thor
       ok = defined?(::Bundler) && ::Bundler.respond_to?(:with_original_env) ? ::Bundler.with_original_env(&run) : run.call
       $stderr.puts "Error: could not run `#{command.first}` - is it installed and on PATH?" if ok.nil?
       ok == true
+    end
+
+    # This copy of the gem, at this version: the installed spec when one was
+    # activated (a wrapper on PATH may load another version), else this file
+    # with its own lib, as a checkout runs it.
+    def own_binary
+      spec = PREBOOT_GEM_SPECS["rails-ai-context"]
+      return [ RbConfig.ruby, "-I", File.expand_path("../lib", __dir__), EXE_PATH ] unless spec
+
+      [ RbConfig.ruby, "-e", 'load Gem.bin_path("rails-ai-context", "rails-ai-context", ARGV.shift)', "= #{spec.version}" ]
     end
 
     def show_workspace_instructions(apps, ai_tools, tool_mode, context_files)
@@ -536,9 +550,9 @@ class RailsAiContextCLI < Thor
           $stderr.puts "  #{app.server_name.ljust(width)} -> #{app.path}/#{how}"
         end
       end
-      first = apps.first.path.shellescape
+      first = app_root.display(apps.first.root, Dir.pwd).shellescape
       $stderr.puts ""
-      $stderr.puts "Commands, from this folder:"
+      $stderr.puts "Commands, from here:"
       $stderr.puts "  rails-ai-context --app-path #{first} context    # Regenerate that app's context files" if context_files
       $stderr.puts "  rails-ai-context --app-path #{first} tool NAME  # Run a tool against it"
       $stderr.puts "  rails-ai-context --app-path #{first} doctor     # Check its AI readiness"

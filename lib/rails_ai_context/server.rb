@@ -84,13 +84,16 @@ module RailsAiContext
       end
     end
 
-    # The name the server gives the client: RAILS_AI_CONTEXT_SERVER_NAME for
-    # this process, else config.server_name. A workspace's entries set the
-    # variable so each server announces its app first: VS Code names every
-    # tool after this name and keeps 13 characters of it.
+    # The name the server gives the client: config.server_name, and when
+    # that is the default, RAILS_AI_CONTEXT_SERVER_NAME in its place. A
+    # workspace's entries set the variable so each server announces its app
+    # first, since VS Code names every tool after this name and keeps 13
+    # characters of it; a name the app configured itself still wins.
     def self.announced_name(config = RailsAiContext.configuration)
       name = ENV[McpConfigGenerator::SERVER_NAME_ENV].to_s.strip
-      name.empty? ? config.server_name : name
+      return config.server_name if name.empty? || config.server_name != McpConfigGenerator::SERVER_NAME
+
+      name
     end
 
     # Build and return the configured MCP::Server instance

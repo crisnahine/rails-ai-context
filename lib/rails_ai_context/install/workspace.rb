@@ -77,6 +77,18 @@ module RailsAiContext
         paths.to_h { |path| [ path, names[path] ] }
       end
 
+      # Whether `name` is one server_names gives the app at `path` (relative
+      # to the workspace) alongside some other set of apps: its folder's name
+      # or its whole path, numbered or shortened where that was needed.
+      def generated_name?(name, path)
+        rest = name.delete_prefix(PREFIX)
+        return false if rest == name
+
+        [ slug(File.basename(path)), slug(path) ].uniq.any? do |base|
+          rest == fit(base, path) || (2..99).any? { |number| rest == fit(base, path, "-#{number}") }
+        end
+      end
+
       # Letters, digits, `_` and `-`: what every client accepts in a server
       # name, Codex's bare TOML key included.
       def slug(text)

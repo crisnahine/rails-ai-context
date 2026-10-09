@@ -511,6 +511,8 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         expect(status.exitstatus).to eq(0), err
         expect(servers(File.join(dir, "work")).keys).to eq(%w[rails-ai-context-a rails-ai-context-b])
         expect(Dir.children(dir)).to eq(%w[work])
+        # From where it was run, not from the folder it set up.
+        expect(err).to include("rails-ai-context --app-path work/a tool NAME")
       end
     end
 

@@ -12,8 +12,9 @@ module RailsAiContext
   # ai:*`) are available - only the `rails-ai-context` binary works. Detected
   # by scanning the resolved Gemfile.lock for a rails-ai-context spec line.
   # With no lockfile yet (a fresh clone), the Gemfile decides: a Gemfile that
-  # does not name the gem cannot be serving it. Falls back to treating the
-  # install as in-Gemfile (the common case) when neither can be read.
+  # does not name the gem, and pulls in no other file that might, cannot be
+  # serving it. Falls back to treating the install as in-Gemfile (the common
+  # case) when neither can be read in full.
   module InstallMode
     # What a reader runs for each job, as [standalone, in the app's bundle].
     COMMANDS = {
@@ -44,9 +45,20 @@ module RailsAiContext
       return !lock.present?("rails-ai-context") unless lock.missing?
 
       gems = lock.gemfile_gems
-      gems.nil? ? false : !gems.include?("rails-ai-context")
+      return false if gems.nil? || gems.include?("rails-ai-context")
+
+      !pulls_in_others?(File.join(root, RailsAiContext::GemLock.gemfile_name(root)))
     rescue => e
       RailsAiContext.debug_fail(e, false, label: "standalone install detection")
     end
+
+    # eval_gemfile and gemspec name gems in files the Gemfile read before a
+    # boot does not follow. A Gemfile that cannot be read rules nothing out.
+    def pulls_in_others?(gemfile)
+      File.read(gemfile).match?(/^[ \t]*(?:eval_gemfile|gemspec)\b/)
+    rescue SystemCallError
+      true
+    end
+    private_class_method :pulls_in_others?
   end
 end

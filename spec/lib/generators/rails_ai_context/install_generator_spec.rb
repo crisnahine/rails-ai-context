@@ -183,6 +183,11 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       system("git", *args, out: File::NULL, err: File::NULL) or raise "git #{args.join(' ')} failed"
     end
 
+    def commit_all(repo)
+      git("-C", repo, "add", "-A")
+      git("-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "apps")
+    end
+
     it "offers nothing outside a git repository" do
       FileUtils.rm_rf(File.join(tmpdir, ".git"))
       Dir.mktmpdir do |outside|
@@ -199,7 +204,9 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       Dir.mktmpdir do |mono|
         git("init", "-q", mono)
         app = File.join(mono, "apps", "web")
-        FileUtils.mkdir_p(app)
+        FileUtils.mkdir_p(File.join(app, "config"))
+        File.write(File.join(app, "config/application.rb"), "")
+        commit_all(mono)
         allow(Rails).to receive(:root).and_return(Pathname.new(app))
 
         generator.install_validation_hook
@@ -255,7 +262,12 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       before do
         FileUtils.rm_rf(File.join(tmpdir, ".git"))
         git("init", "-q", mono)
-        %w[apps/web apps/admin].each { |app| FileUtils.mkdir_p(File.join(mono, app, "app", "models")) }
+        %w[apps/web apps/admin].each do |app|
+          FileUtils.mkdir_p(File.join(mono, app, "config"))
+          File.write(File.join(mono, app, "config/application.rb"), "")
+          FileUtils.mkdir_p(File.join(mono, app, "app", "models"))
+        end
+        commit_all(mono)
       end
 
       after { FileUtils.remove_entry(mono) }
@@ -273,6 +285,34 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
 
         expect(File.read(mono_hook)).to include("# rails-ai-context apps: apps/web apps/admin\n")
         expect(File.read(mono_hook)).to include("for app in apps/web apps/admin; do\n")
+      end
+
+      it "names the repository the hook goes into" do
+        install_for("apps/web")
+
+        expect(generator).to have_received(:ask).with(a_string_including("in #{mono}"))
+      end
+
+      # An untouched hook in the other install form is still the gem's.
+      it "adds the app to a hook written in the other install form, keeping that form" do
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+        install_for("apps/web")
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
+        install_for("apps/admin")
+
+        expect(File.read(mono_hook)).to include("# rails-ai-context apps: apps/web apps/admin\n")
+        expect(File.read(mono_hook)).to include("rails-ai-context tool validate")
+      end
+
+      it "says why it leaves a hook from an earlier version alone for an app below the root" do
+        FileUtils.mkdir_p(File.dirname(mono_hook))
+        File.write(mono_hook, "#!/bin/bash\n# rails-ai-context: validate Rails references before commit\n")
+        allow(generator).to receive(:say)
+
+        install_for("apps/web")
+
+        expect(generator).not_to have_received(:ask)
+        expect(generator).to have_received(:say).with(a_string_including("comes from an earlier version"), :yellow)
       end
 
       it "asks nothing for an app the hook already covers" do
@@ -317,6 +357,25 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
           expect(status.success?).to be(false), out
           expect(out).to include("rails-ai-context validation found issues.")
         end
+      end
+    end
+
+    # A dotfiles repository at $HOME holds every app below it in name only.
+    it "offers no hook for an app the repository above it does not track" do
+      FileUtils.rm_rf(File.join(tmpdir, ".git"))
+      Dir.mktmpdir do |home|
+        git("init", "-q", home)
+        app = File.join(home, "code", "shop")
+        FileUtils.mkdir_p(File.join(app, "config"))
+        File.write(File.join(app, "config/application.rb"), "")
+        allow(Rails).to receive(:root).and_return(Pathname.new(app))
+        allow(generator).to receive(:say)
+
+        generator.install_validation_hook
+
+        expect(generator).not_to have_received(:ask)
+        expect(generator).to have_received(:say).with(a_string_including("is not tracked in the git repository at"), :yellow)
+        expect(File.exist?(File.join(home, ".git/hooks/pre-commit"))).to be(false)
       end
     end
 

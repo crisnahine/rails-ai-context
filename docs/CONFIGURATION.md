@@ -96,7 +96,7 @@ empty list wrote every tool's files.
 
 | Option | Type | Default | Validation | Description |
 |:-------|:-----|:--------|:-----------|:------------|
-| `server_name` | String | `"rails-ai-context"` | - | The MCP server name the server announces. The `RAILS_AI_CONTEXT_SERVER_NAME` environment variable overrides it for one process, which is how a workspace's entries announce their app |
+| `server_name` | String | `"rails-ai-context"` | - | The MCP server name the server announces. When it is left at the default, the `RAILS_AI_CONTEXT_SERVER_NAME` environment variable takes its place for one process, which is how a workspace's entries announce their app |
 | `cache_ttl` | Integer | `60` | Must be positive | Cache time-to-live in seconds |
 | `max_tool_response_chars` | Integer | `200_000` | Must be positive | Safety cap for tool responses and MCP resource payloads. An over-cap resource keeps its JSON shape: whole elements are dropped and reported under a `_truncated` key |
 | `live_reload` | Symbol/Boolean | `:auto` | - | `:auto` (uses `listen` gem if available), `true`, or `false` |

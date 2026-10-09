@@ -73,10 +73,12 @@ module RailsAiContext
 
       # Apps one or two levels down, by config/application.rb only - an engine
       # or a pack has app/ and would read as an app on the looser test. Never
-      # from the filesystem root or $HOME: on macOS listing ~/Documents can
-      # raise a folder-access prompt.
+      # from $HOME or a directory above it (the filesystem root, /Users): two
+      # levels from there reach ~/Documents, and on macOS listing it raises a
+      # folder-access prompt.
       def self.walk_down(dir)
-        return [] if File.dirname(dir) == dir || home_dirs.include?(dir)
+        return [] if File.dirname(dir) == dir
+        return [] if home_dirs.any? { |home| home == dir || home.start_with?("#{dir.delete_suffix('/')}/") }
 
         # Hidden directories (.git, .claude/worktrees) are left out by the
         # glob itself, and an unreadable one yields nothing rather than raising.
