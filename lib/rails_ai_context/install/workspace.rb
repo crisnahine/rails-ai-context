@@ -55,14 +55,20 @@ module RailsAiContext
         end
       end
 
-      # The Gemfile the app's bundle reads: GemLock's answer (the app's own,
-      # else the one its config/boot.rb names inside its repository), else
-      # the one config/boot.rb names anywhere, which the app boots against,
-      # else the one bundle exec run inside the app would find. nil when there
-      # is none, and the entry then names none either.
+      # The Gemfile the app's bundle reads, in GemLock's order: the app's own
+      # when it is locked or nothing else is named, else the one its
+      # config/boot.rb names, inside a repository or not, else the one
+      # bundle exec run inside the app would find. Each is named as it is
+      # written, never through a link it may be, since Bundler names the
+      # lockfile after the path it is given. nil when there is none, and the
+      # entry then names none either.
       def bundle_gemfile(root)
-        [ GemLock.bundle(root).gemfile, GemLock.boot_gemfile(root) ].find { |path| path && File.file?(path) } ||
-          nearest_gemfile(root)
+        own = File.join(root, GemLock.gemfile_name(root))
+        boot = GemLock.boot_gemfile(root)
+        boot = nil unless boot && File.file?(boot)
+        return own if File.file?(own) && (boot.nil? || File.file?(File.join(root, GemLock.lockfile_name(root))))
+
+        boot || nearest_gemfile(root)
       end
 
       # Bundler's own search: gems.rb, then Gemfile, in the app and in each

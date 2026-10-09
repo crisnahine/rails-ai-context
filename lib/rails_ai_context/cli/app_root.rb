@@ -267,9 +267,11 @@ module RailsAiContext
         return nil if own && real(own).b == bundle_gemfile.b
         return nil if own.nil? && (SafePath.contained?(real_root.b, File.dirname(bundle_gemfile).b) || boot_bundle?(root, bundle_gemfile))
 
-        where = root == cwd ? "This app" : "#{display(root, cwd).delete_suffix('/')}/"
+        # Standing in the app, only a BUNDLE_GEMFILE someone set picks another
+        # bundle, so the way out is the variable.
+        where, inside = root == cwd ? [ "This app", "" ] : [ "#{display(root, cwd).delete_suffix('/')}/", " or from inside the app" ]
         "[rails-ai-context] WARNING: #{where} boots against the bundle of #{bundle_gemfile} under bundle exec, " \
-          "not its own. Run it without bundle exec or from inside the app, or point BUNDLE_GEMFILE at the app's Gemfile."
+          "not its own. Run it without bundle exec#{inside}, or point BUNDLE_GEMFILE at the app's Gemfile."
       rescue StandardError
         nil
       end

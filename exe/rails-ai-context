@@ -50,12 +50,17 @@ PREBOOT_FRAMEWORK_NAMES = preboot_framework_names.freeze
 # one outside ASCII can be neither compared with nor joined to the gem's own
 # UTF-8 strings. Rails makes UTF-8 the default when it boots; this binary
 # reads paths and files before any boot, so it does the same first, for
-# them and for the arguments it was given.
+# them and for the arguments it was given - when they are UTF-8. A folder
+# or an argument in another encoding (Latin-1 bytes on disk) keeps the
+# locale's tags, under which it is read byte by byte as before.
 if Encoding.default_external == Encoding::US_ASCII
-  verbose, $VERBOSE = $VERBOSE, nil
-  Encoding.default_external = Encoding::UTF_8
-  $VERBOSE = verbose
-  ARGV.map! { |arg| arg.dup.force_encoding(Encoding::UTF_8) }
+  utf8 = ->(text) { text.dup.force_encoding(Encoding::UTF_8).valid_encoding? }
+  if (utf8.call(Dir.pwd) rescue false) && ARGV.all?(&utf8)
+    verbose, $VERBOSE = $VERBOSE, nil
+    Encoding.default_external = Encoding::UTF_8
+    $VERBOSE = verbose
+    ARGV.map! { |arg| arg.dup.force_encoding(Encoding::UTF_8) }
+  end
 end
 
 # This file, wherever the gem is installed: what a child re-entering this very

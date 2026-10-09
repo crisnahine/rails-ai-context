@@ -824,6 +824,29 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       end
     end
 
+    # Bytes on disk that are not UTF-8 keep the locale's tags, under which
+    # they are read byte by byte, as they always were in a C locale.
+    it "reads an app in a folder named in Latin-1 in a C locale, from inside it and through --app-path" do
+      Dir.mktmpdir do |dir|
+        latin1 = File.join(dir, "caf\xE9".b)
+        begin
+          FileUtils.mkdir_p(File.join(latin1, "app", "models"))
+        rescue Errno::EILSEQ
+          skip "this filesystem refuses names that are not UTF-8"
+        end
+        File.write(File.join(latin1, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+        env = { "LANG" => "C", "LC_ALL" => "C" }
+
+        _out, inside, inside_status = Open3.capture3(env, "ruby", "-I", lib, exe, "tool", "model_details", "--no-boot",
+                                                     chdir: latin1, stdin_data: "")
+        _out, named, named_status = Open3.capture3(env, "ruby", "-I", lib, exe, "--app-path", "caf\xE9".b, "tool", "model_details",
+                                                   "--no-boot", chdir: dir, stdin_data: "")
+
+        expect(inside_status.exitstatus).to eq(0), inside
+        expect(named_status.exitstatus).to eq(0), named
+      end
+    end
+
     # The generator's initializer holds box-drawing characters, which a C
     # locale cannot read without being told the file is UTF-8.
     it "sets up a folder of apps in a C locale whose initializers hold text outside ASCII" do

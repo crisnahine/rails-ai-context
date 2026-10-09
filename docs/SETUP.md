@@ -299,6 +299,8 @@ Then point your AI tool's MCP config to the HTTP endpoint instead of a command:
 
 Benefits: inherits Rails routing, authentication, and middleware stack. No separate process needed.
 
+Running the install again keeps an entry like this one, under the gem's own name, in place of the command entry it would write, and says so.
+
 ---
 
 ## Verify MCP is connected

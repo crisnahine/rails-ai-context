@@ -327,7 +327,8 @@ module RailsAiContext
         else
           begin
             # An empty file is one install fills.
-            if SafeFile.read_text(full_path).strip.empty?
+            text, = McpConfigGenerator.json_text(full_path)
+            if text.strip.empty?
               next Check.new(name: cfg[:label], status: :warn, message: "#{shown} is empty", fix: "Run `#{command(:install)}`")
             end
 
@@ -359,9 +360,15 @@ module RailsAiContext
     end
 
     # Install leaves a config it cannot parse as it is, so running it alone
-    # would change nothing there.
+    # would change nothing there. A workspace's config above the app is
+    # written by `init` run in the workspace, never by this app's install.
     def unparseable_fix(paths)
-      "Make #{paths.join(', ')} valid JSON (`#{command(:install)}` leaves a file it cannot parse as it is), then run it"
+      run = if paths.any? { |path| path.start_with?("../") }
+        "`rails-ai-context init` in the folder that holds #{paths.one? ? 'it' : 'them'}"
+      else
+        "`#{command(:install)}`"
+      end
+      "Make #{paths.join(', ')} valid JSON (the install leaves a file it cannot parse as it is), then run #{run}"
     end
 
     def check_codex_env_staleness
@@ -398,7 +405,7 @@ module RailsAiContext
     # app's in a workspace. Read the way the generator reads the file, so a
     # section is the gem's by the same rule and any byte reads in any locale.
     def codex_gem_homes(path)
-      lines = SafeFile.read_text(path).lines
+      lines = McpConfigGenerator.split_bom(SafeFile.read_text(path)).first.lines
       McpConfigGenerator::Toml.own_sections(lines).filter_map do |range, name|
         McpConfigGenerator::Toml.sub_table(lines, range, name, "env")["GEM_HOME"]
       end.uniq
