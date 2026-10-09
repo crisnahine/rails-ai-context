@@ -307,6 +307,7 @@ module RailsAiContext
       tools_to_check = ai_tools & configs.keys
       tools_to_check = %i[claude] if tools_to_check.empty?
 
+      invalid = []
       checks = tools_to_check.map do |tool|
         cfg = configs[tool]
         # An app in a workspace is served from the folder above it.
@@ -323,12 +324,13 @@ module RailsAiContext
           Check.new(name: cfg[:label], status: :pass, message: "#{shown} exists", fix: nil)
         else
           begin
-            JSON.parse(File.read(full_path))
+            JSON.parse(SafeFile.read_text(full_path))
             Check.new(name: cfg[:label], status: :pass, message: "#{shown} valid", fix: nil)
           rescue JSON::ParserError => e
+            invalid << shown
             Check.new(name: cfg[:label], status: :fail,
               message: "#{shown} has invalid JSON: #{e.message}",
-              fix: "Run `#{command(:install)}` to regenerate")
+              fix: unparseable_fix([ shown ]))
           end
         end
       end
@@ -345,8 +347,14 @@ module RailsAiContext
         worst_status = failures.any? { |c| c.status == :fail } ? :fail : :warn
         Check.new(name: "MCP configs", status: worst_status,
           message: "#{failures.size} of #{count_phrase(checks.size, "MCP config")} #{failures.size == 1 ? "needs" : "need"} attention: #{labels.join(', ')}",
-          fix: "Run `#{command(:install)}` to fix")
+          fix: invalid.any? ? unparseable_fix(invalid) : "Run `#{command(:install)}` to fix")
       end
+    end
+
+    # Install leaves a config it cannot parse as it is, so running it alone
+    # would change nothing there.
+    def unparseable_fix(paths)
+      "Make #{paths.join(', ')} valid JSON (`#{command(:install)}` leaves a file it cannot parse as it is), then run it"
     end
 
     def check_codex_env_staleness
@@ -362,11 +370,8 @@ module RailsAiContext
       # Check if snapshotted GEM_HOME directory still exists on disk.
       # This is version-manager agnostic and OS agnostic - no string format
       # assumptions. If the directory was removed (e.g. Ruby upgrade), the
-      # env snapshot is definitely stale. Every server the gem wrote carries
-      # one: the app's own, and each app's in a workspace.
-      gem_homes = File.read(toml_path).scan(CODEX_ENV_SECTION).filter_map do |(env_section)|
-        env_section[/^GEM_HOME\s*=\s*"([^"]+)"/, 1]
-      end.uniq
+      # env snapshot is definitely stale.
+      gem_homes = codex_gem_homes(toml_path)
       return nil if gem_homes.empty?
 
       snapshot_gem_home = gem_homes.find { |dir| !Dir.exist?(dir) }
@@ -382,8 +387,18 @@ module RailsAiContext
       end
     end
 
-    CODEX_ENV_SECTION = /^\[mcp_servers\.#{McpConfigGenerator::OWN_NAME}\.env\]\s*$(.+?)(?=\n\[|\z)/m
+    # Every server the gem wrote carries a snapshot: the app's own, and each
+    # app's in a workspace. Read the way the generator reads the file, so a
+    # section is the gem's by the same rule and any byte reads in any locale.
+    def codex_gem_homes(path)
+      toml = McpConfigGenerator::Toml
+      lines = SafeFile.read_text(path).lines
+      toml.sections(lines) { |name| name.match?(McpConfigGenerator::OWN_SERVER_NAME) }.filter_map do |range, name|
+        next unless McpConfigGenerator.own_entry?(name, toml.argv(lines, range))
 
+        toml.sub_table(lines, range, name, "env")["GEM_HOME"]
+      end.uniq
+    end
 
     def check_mcp_buildable
       Server.new(app).build

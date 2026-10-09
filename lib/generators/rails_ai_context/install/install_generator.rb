@@ -247,10 +247,6 @@ module RailsAiContext
         end
       end
 
-      # The line a validation hook names the apps it covers on, relative to the
-      # top of the work tree, the way a shell reads them.
-      HOOK_APPS = /^# rails-ai-context apps: (.*)$/
-
       no_tasks do
       # Thor's `ask` returns nil when stdin hits EOF (e.g. piping fewer answers
       # than prompts, or `< /dev/null`), which crashes the very next `.strip`
@@ -468,7 +464,9 @@ module RailsAiContext
       def git_repository
         out, status = Open3.capture2("git", "rev-parse", "--git-path", "hooks", "--show-prefix", "--show-toplevel",
                                      "--git-common-dir", chdir: Rails.root.to_s, err: File::NULL)
-        return nil unless status.success?
+        # Paths that are no UTF-8 cannot be named in the hook as text.
+        out = out.dup.force_encoding(Encoding::UTF_8)
+        return nil unless status.success? && out.valid_encoding?
 
         hooks, prefix, toplevel, common_dir = out.lines.map(&:chomp)
         return nil if toplevel.to_s.empty?
@@ -478,61 +476,6 @@ module RailsAiContext
           toplevel: File.expand_path(toplevel, root), common_dir: File.expand_path(common_dir.to_s, root) }
       rescue SystemCallError
         nil
-      end
-
-      # One hook for every app it names. Each app's staged files are listed
-      # from the top of the work tree by paths relative to the app - never
-      # from inside it, where a linked worktree's exported GIT_DIR would make
-      # git list them from the top instead - deleted files left out, and
-      # validated from inside the app. An app that is gone is passed over.
-      def validation_hook(apps, standalone:)
-        # Standalone installs have no `ai:*` rake tasks, so the hook must call
-        # the gem's own binary; in-Gemfile installs go through rake as usual.
-        if standalone
-          hook_binary = "rails-ai-context"
-          validate_command = %(rails-ai-context tool validate --files "$files")
-        else
-          hook_binary = "rails"
-          validate_command = %(rails 'ai:tool[validate]' files="$files")
-        end
-        listed = apps.shelljoin
-
-        <<~HOOK
-          #!/bin/bash
-          # rails-ai-context: validate Rails references before commit
-          # Catches hallucinated columns, missing models, and schema drift.
-          # Remove this file or the rails-ai-context section to disable.
-          # rails-ai-context apps: #{listed}
-
-          status=0
-          for app in #{listed}; do
-            [ -d "$app" ] || continue
-            if [ "$app" = "." ]; then
-              changed_files=$(git diff --cached --name-only --diff-filter=d | grep -E '\\.(rb|erb)$' || true)
-            else
-              changed_files=$(git diff --cached --name-only --diff-filter=d --relative="$app/" | grep -E '\\.(rb|erb)$' || true)
-            fi
-            if [ -z "$changed_files" ]; then
-              continue
-            fi
-
-            if command -v #{hook_binary} &> /dev/null; then
-              files=$(printf '%s\\n' "$changed_files" | tr '\\n' ',')
-              (cd "$app" && #{validate_command} 2>/dev/null)
-              exit_code=$?
-              if [ $exit_code -ne 0 ]; then
-                status=$exit_code
-              fi
-            fi
-          done
-
-          if [ $status -ne 0 ]; then
-            echo ""
-            echo "rails-ai-context validation found issues."
-            echo "Fix them or skip with: git commit --no-verify"
-            exit $status
-          fi
-        HOOK
       end
 
       # Whether `path` is `dir` or below it, compared by real paths: a hooks
@@ -548,6 +491,25 @@ module RailsAiContext
         status.success? && !out.empty?
       rescue SystemCallError
         false
+      end
+
+      def write_validation_hook(path, dir, script)
+        FileUtils.mkdir_p(dir)
+        File.write(path, script)
+        FileUtils.chmod(0o755, path)
+      end
+
+      # Why a hook of the gem's that was changed since it was written is left
+      # alone, and what to do instead.
+      def hand_changed_hook(path, content, listed, app)
+        if listed
+          "#{path} validates #{listed.join(', ')} and was changed by hand - add #{app} to it the same way"
+        elsif content.include?("# rails-ai-context apps:")
+          "#{path} names its apps in a form this version cannot read - add #{app} to it by hand"
+        else
+          "#{path} comes from an earlier version and was changed by hand - delete it and run this again for the " \
+            "current hook, which validates #{app == '.' ? 'this app' : app} and leaves deleted files out"
+        end
       end
 
       def canonical_path(path)
@@ -604,45 +566,46 @@ module RailsAiContext
         end
 
         hook_path = repo[:hooks].join("pre-commit")
+        hook = RailsAiContext::Install::ValidationHook
         apps = [ app ]
         standalone = RailsAiContext::InstallMode.standalone?
         if File.exist?(hook_path)
-          content = File.read(hook_path)
+          content = File.binread(hook_path)
           unless content.include?("rails-ai-context")
             say "  Skipped pre-commit hook (existing hook found - add manually)", :yellow
             return
           end
 
-          # A hook from before it named its apps served the repository's root.
-          covered = content[HOOK_APPS, 1]&.shellsplit
-          if covered.nil?
-            return if app == "."
+          coverage = hook.coverage(content)
+          unless coverage
+            listed = hook.listed(content)
+            return if listed&.include?(app)
 
-            say "  Skipped pre-commit hook (#{hook_path} comes from an earlier version and validates the repository root " \
-                "only - delete it and run this again to cover #{app} too)", :yellow
+            say "  Skipped pre-commit hook (#{hand_changed_hook(hook_path, content, listed, app)})", :yellow
             return
           end
-          return if covered.include?(app)
 
-          # Another app in the same repository: its hook is rewritten to cover
-          # this one too, in the form it was written in, unless it was changed
-          # by hand since.
-          standalone = [ standalone, !standalone ].find { |mode| content == validation_hook(covered, standalone: mode) }
-          if standalone.nil?
-            say "  Skipped pre-commit hook (#{hook_path} validates #{covered.join(', ')} and was changed by hand - " \
-                "add #{app} to it the same way)", :yellow
+          # An earlier version's hook, unchanged: rewritten in the current form,
+          # which leaves deleted files out, without asking again for the app
+          # that took it.
+          if coverage.legacy && app == "."
+            write_validation_hook(hook_path, repo[:hooks], hook.script(apps, standalone: standalone))
+            say "  Updated the pre-commit validation hook from an earlier version", :green
             return
           end
-          apps = covered + [ app ]
+          return if coverage.apps.include?(app)
+
+          # Another app in the same repository: the hook is rewritten to cover
+          # this one too, in the form it was written in.
+          standalone = coverage.standalone unless coverage.legacy
+          apps = coverage.apps + [ app ]
         end
 
         where = app == "." ? "" : " in #{repo[:toplevel]}"
         answer = ask_safe("Install a pre-commit hook#{where} that validates Rails references? (y/N)").strip.downcase
         return unless answer == "y"
 
-        FileUtils.mkdir_p(repo[:hooks])
-        File.write(hook_path, validation_hook(apps, standalone: standalone))
-        FileUtils.chmod(0o755, hook_path)
+        write_validation_hook(hook_path, repo[:hooks], hook.script(apps, standalone: standalone))
         say(apps.one? ? "  Installed pre-commit validation hook" : "  Added #{app} to the pre-commit validation hook", :green)
       end
 

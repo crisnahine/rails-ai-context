@@ -34,7 +34,11 @@ module RailsAiContext
         marked_content = "#{BEGIN_MARKER}\n#{content}\n#{END_MARKER}\n"
 
         if File.exist?(filepath)
-          existing = File.read(filepath)
+          # Read as UTF-8 whatever the locale: a C locale tagged it US-ASCII,
+          # and the first non-ASCII character stopped the rewrite. A file that
+          # is no UTF-8 keeps its bytes, and the block joins them as bytes.
+          existing = RailsAiContext::SafeFile.read_text(filepath)
+          marked_content = marked_content.b if existing.encoding == Encoding::BINARY
 
           new_content = if existing.include?(BEGIN_MARKER) && existing.include?(END_MARKER)
             existing.sub(

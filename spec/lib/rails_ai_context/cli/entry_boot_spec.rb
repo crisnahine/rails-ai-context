@@ -30,6 +30,28 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
         expect(described_class.app_present?(dir, allow_source_only: true)).to be true
       end
     end
+
+    # What app/**/*.rb matches: hidden entries are passed over, a linked
+    # app/ is read through, and the root's name is never a pattern.
+    it "reads source the way app/**/*.rb matches it" do
+      Dir.mktmpdir do |tmp|
+        hidden = File.join(tmp, "hidden")
+        FileUtils.mkdir_p(File.join(hidden, "app/.cache"))
+        File.write(File.join(hidden, "app/.cache/widget.rb"), "")
+        File.write(File.join(hidden, "app/.widget.rb"), "")
+        linked = File.join(tmp, "linked")
+        FileUtils.mkdir_p([ File.join(tmp, "source/models"), linked ])
+        File.write(File.join(tmp, "source/models/widget.rb"), "")
+        File.symlink(File.join(tmp, "source"), File.join(linked, "app"))
+        pattern = File.join(tmp, "pack[1]")
+        FileUtils.mkdir_p(File.join(pattern, "app"))
+        File.write(File.join(pattern, "app/widget.rb"), "")
+
+        expect(described_class.app_present?(hidden, allow_source_only: true)).to be false
+        expect(described_class.app_present?(linked, allow_source_only: true)).to be true
+        expect(described_class.app_present?(pattern, allow_source_only: true)).to be true
+      end
+    end
   end
 
   # Sinatra MVC trees keep config/environment.rb and app/ too.

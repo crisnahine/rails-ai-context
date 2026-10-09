@@ -236,6 +236,20 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
           .to start_with("[rails-ai-context] WARNING: shop/ boots against the bundle of #{File.join(tmp, 'work/Gemfile')}")
       end
 
+      # Bundler names the Gemfile it found in the app; the link is followed
+      # only to compare it.
+      it "says nothing for an app whose Gemfile links to a shared one" do
+        root = app("work/shop")
+        File.write(File.join(tmp, "work/Gemfile.shared"), "")
+        File.symlink(File.join(tmp, "work/Gemfile.shared"), File.join(root, "Gemfile"))
+
+        under_bundle(File.join(root, "Gemfile"))
+        expect(described_class.bundle_warning(root, tmp)).to be_nil
+
+        under_bundle(File.join(tmp, "work/Gemfile.shared"))
+        expect(described_class.bundle_warning(root, tmp)).to be_nil
+      end
+
       # Dual boot (Gemfile.next) and Appraisal (gemfiles/rails_7_1.gemfile)
       # keep a second bundle inside the app.
       it "says nothing for a bundle whose Gemfile is inside the app" do

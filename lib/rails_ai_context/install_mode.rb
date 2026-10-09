@@ -30,18 +30,12 @@ module RailsAiContext
       COMMANDS.fetch(job)[standalone ? 0 : 1]
     end
 
-    # `root:` asks about one app, where the process's own bundle is beside the
-    # point: a workspace sets up apps that are not the one it runs in.
+    # `root:` asks about one app; without it, the app under analysis. Either
+    # way the app's own bundle decides, never the process's: under bundle
+    # exec that can be another app's (`init --app-path ../b` run from a), and
+    # a workspace sets up apps that are not the one it runs in.
     def standalone?(root: nil)
-      root ||= if defined?(Bundler)
-        Bundler.root.to_s
-      elsif defined?(Rails) && Rails.respond_to?(:root) && Rails.root
-        Rails.root.to_s
-      else
-        Dir.pwd
-      end
-
-      lock = RailsAiContext::GemLock.for(root)
+      lock = RailsAiContext::GemLock.for(root || app_root)
       return !lock.present?("rails-ai-context") unless lock.missing?
 
       # nil when the Gemfile cannot be read in full: missing, unparseable, or
@@ -51,6 +45,16 @@ module RailsAiContext
       gems.nil? ? false : !gems.include?("rails-ai-context")
     rescue => e
       RailsAiContext.debug_fail(e, false, label: "standalone install detection")
+    end
+
+    # Found the way the app's selection is: the root the CLI set, else
+    # Rails', else the directory the binary moved into, which is the app's.
+    def app_root
+      configured = RailsAiContext.configuration.app_root if RailsAiContext.respond_to?(:configuration)
+      return configured.to_s if configured
+      return Rails.root.to_s if defined?(Rails) && Rails.respond_to?(:root) && Rails.root
+
+      Dir.pwd
     end
   end
 end

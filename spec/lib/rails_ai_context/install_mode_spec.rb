@@ -8,7 +8,7 @@ RSpec.describe RailsAiContext::InstallMode do
   describe ".standalone?" do
     let(:tmpdir) { Dir.mktmpdir }
 
-    before { allow(Bundler).to receive(:root).and_return(Pathname.new(tmpdir)) }
+    before { allow(Rails).to receive(:root).and_return(Pathname.new(tmpdir)) }
     after  { FileUtils.remove_entry(tmpdir) }
 
     it "is false when the Gemfile.lock lists rails-ai-context" do
@@ -31,7 +31,7 @@ RSpec.describe RailsAiContext::InstallMode do
     end
 
     it "defaults to false when detection raises" do
-      allow(Bundler).to receive(:root).and_raise(Bundler::GemfileNotFound)
+      allow(RailsAiContext::GemLock).to receive(:for).and_raise(Errno::EACCES)
       expect(described_class.standalone?).to be(false)
     end
 
@@ -59,6 +59,31 @@ RSpec.describe RailsAiContext::InstallMode do
         File.write(File.join(app, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (7.1.0)\n")
         expect(described_class.standalone?(root: app)).to be(true)
         expect(described_class.standalone?).to be(false)
+      end
+    end
+
+    # Under bundle exec the process's bundle can be another app's:
+    # `init --app-path ../b` run from a boots b against a's Gemfile.
+    it "reads the app under analysis, not the bundle the process runs in" do
+      File.write(File.join(tmpdir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (7.1.0)\n")
+      Dir.mktmpdir do |other|
+        File.write(File.join(other, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails-ai-context (5.13.0)\n")
+        allow(Bundler).to receive(:root).and_return(Pathname.new(other))
+
+        expect(described_class.standalone?).to be(true)
+      end
+    end
+
+    # The CLI names the app it reads before anything boots it.
+    it "reads the root the CLI set over Rails'" do
+      Dir.mktmpdir do |app|
+        File.write(File.join(app, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (7.1.0)\n")
+        previous = RailsAiContext.configuration.app_root
+        RailsAiContext.configuration.app_root = app
+
+        expect(described_class.standalone?).to be(true)
+      ensure
+        RailsAiContext.configuration.app_root = previous
       end
     end
   end
