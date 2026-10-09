@@ -16,7 +16,7 @@ module RailsAiContext
       # branch on a fact instead of parsing the reason text.
       Outcome = Struct.new(:tier, :reason, :kind, :messages, keyword_init: true)
 
-      NO_APP_HINT = "Run this command from your Rails app root directory (or pass --app-path)."
+      NO_APP_HINT = "Run this command inside a Rails app or a folder holding one (or pass --app-path)."
 
       # A restored gem path must land ahead of these, or a gem with a
       # default-gem twin (prism, json) loads half from Ruby and half from itself.

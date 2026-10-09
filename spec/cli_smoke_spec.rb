@@ -745,7 +745,7 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         out = `cd #{dir} && ruby -I #{lib} #{exe} init < /dev/null 2>&1`
         expect($?.exitstatus).to eq(1), out
         expect(out).to include("No Rails app found in")
-        expect(out).to include("Run this command from your Rails app root directory (or pass --app-path).")
+        expect(out).to include("Run this command inside a Rails app or a folder holding one (or pass --app-path).")
       end
     end
 
