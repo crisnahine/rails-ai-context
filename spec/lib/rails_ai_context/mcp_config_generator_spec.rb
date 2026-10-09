@@ -620,6 +620,23 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
       end
     end
 
+    # VS Code's mcp.json reads comments and trailing commas; a folder's is
+    # the likelier to be kept by hand, so a workspace write leaves it be.
+    it "leaves a config that does not parse as JSON alone" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, ".vscode"))
+        jsonc = %({\n  // mine\n  "servers": { "github": { "url": "https://api.example/mcp" }, },\n}\n)
+        File.write(File.join(dir, ".vscode/mcp.json"), jsonc)
+        allow(RailsAiContext).to receive(:log_warn)
+
+        result = generate(dir, tools: [ :copilot ])
+
+        expect(result[:failed]).to eq([ File.join(dir, ".vscode/mcp.json") ])
+        expect(File.read(File.join(dir, ".vscode/mcp.json"))).to eq(jsonc)
+        expect(RailsAiContext).to have_received(:log_warn).with(a_string_including("does not parse as JSON"))
+      end
+    end
+
     it "reports a config that is JSON but no object as failed and leaves it alone" do
       Dir.mktmpdir do |dir|
         File.write(File.join(dir, ".mcp.json"), %([{"command": "x"}]\n))
@@ -711,6 +728,40 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
         described_class.new(tools: [ :codex ], output_dir: dir, tool_mode: :mcp).call
 
         expect(codex(dir)).to include(%(GEM_HOME = "/x/\#{y}/\\"q\\"/\\u001b"))
+      end
+    end
+  end
+
+  describe "a config that is not ASCII" do
+    def codex(dir) = File.join(dir, ".codex/config.toml")
+
+    it "reads a UTF-8 file whatever the locale says" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, ".codex"))
+        File.write(codex(dir), %(# café\n[mcp_servers.rails-ai-context]\ncommand = "old"\n), encoding: "UTF-8")
+        previous = Encoding.default_external
+        begin
+          silence_warnings { Encoding.default_external = Encoding::US_ASCII }
+          described_class.new(tools: [ :codex ], output_dir: dir, tool_mode: :mcp, standalone: true).call
+        ensure
+          silence_warnings { Encoding.default_external = previous }
+        end
+
+        content = File.binread(codex(dir)).force_encoding("UTF-8")
+        expect(content).to start_with("# café\n[mcp_servers.rails-ai-context]\ncommand = \"rails-ai-context\"")
+      end
+    end
+
+    it "writes every byte of a file that is not UTF-8 back as it came" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, ".codex"))
+        latin1 = "# caf\xE9\n[profiles.fast]\nmodel = \"o4\"\n".b
+        File.binwrite(codex(dir), latin1)
+
+        described_class.new(tools: [ :codex ], output_dir: dir, tool_mode: :mcp, standalone: true).call
+        described_class.remove(tools: [ :codex ], output_dir: dir)
+
+        expect(File.binread(codex(dir))).to eq(latin1)
       end
     end
   end

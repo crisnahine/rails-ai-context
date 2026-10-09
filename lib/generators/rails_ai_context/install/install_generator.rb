@@ -480,8 +480,11 @@ module RailsAiContext
         nil
       end
 
-      # One hook for every app it names. Each app's staged files are found by
-      # paths relative to it and validated from inside it.
+      # One hook for every app it names. Each app's staged files are listed
+      # from the top of the work tree by paths relative to the app - never
+      # from inside it, where a linked worktree's exported GIT_DIR would make
+      # git list them from the top instead - deleted files left out, and
+      # validated from inside the app. An app that is gone is passed over.
       def validation_hook(apps, standalone:)
         # Standalone installs have no `ai:*` rake tasks, so the hook must call
         # the gem's own binary; in-Gemfile installs go through rake as usual.
@@ -503,7 +506,12 @@ module RailsAiContext
 
           status=0
           for app in #{listed}; do
-            changed_files=$(cd "$app" && git diff --cached --name-only --relative | grep -E '\\.(rb|erb)$' || true)
+            [ -d "$app" ] || continue
+            if [ "$app" = "." ]; then
+              changed_files=$(git diff --cached --name-only --diff-filter=d | grep -E '\\.(rb|erb)$' || true)
+            else
+              changed_files=$(git diff --cached --name-only --diff-filter=d --relative="$app/" | grep -E '\\.(rb|erb)$' || true)
+            fi
             if [ -z "$changed_files" ]; then
               continue
             fi

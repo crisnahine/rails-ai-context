@@ -214,7 +214,7 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
         content = File.read(File.join(mono, ".git/hooks/pre-commit"))
         expect(content).to include("# rails-ai-context apps: apps/web\n")
         expect(content).to include("for app in apps/web; do\n")
-        expect(content).to include('changed_files=$(cd "$app" && git diff --cached --name-only --relative')
+        expect(content).to include('git diff --cached --name-only --diff-filter=d --relative="$app/"')
         expect(File.exist?(File.join(app, ".git"))).to be(false)
       end
     end
@@ -334,6 +334,24 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
         expect(generator).to have_received(:say).with(a_string_including("was changed by hand - add apps/admin"), :yellow)
       end
 
+      # A stand-in validator on PATH logs what it was given and where, and
+      # fails in the app named by `fail_in`, as a real one does on a bad
+      # reference.
+      def fake_rails(bin, log, fail_in: nil)
+        File.write(File.join(bin, "rails"), <<~SH)
+          #!/bin/sh
+          echo "$(basename "$PWD") $*" >> #{log.shellescape}
+          [ "$(basename "$PWD")" != "#{fail_in}" ]
+        SH
+        File.chmod(0o755, File.join(bin, "rails"))
+      end
+
+      def commit(repo, bin)
+        env = { "PATH" => "#{bin}:#{ENV.fetch('PATH')}", "GIT_AUTHOR_NAME" => "t", "GIT_AUTHOR_EMAIL" => "t@t",
+                "GIT_COMMITTER_NAME" => "t", "GIT_COMMITTER_EMAIL" => "t@t" }
+        Open3.capture2e(env, "git", "-C", repo, "commit", "-q", "-m", "x")
+      end
+
       # What git runs at commit: each app's staged files, by paths relative
       # to it, validated from inside it, and a failure stops the commit.
       it "validates each app's staged files from inside it when git commits" do
@@ -341,21 +359,60 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
         install_for("apps/admin")
         Dir.mktmpdir do |bin|
           log = File.join(bin, "calls.log")
-          File.write(File.join(bin, "rails"), %(#!/bin/sh\necho "$(basename "$PWD") $*" >> #{log.shellescape}\n[ "$(basename "$PWD")" != admin ]\n))
-          File.chmod(0o755, File.join(bin, "rails"))
+          fake_rails(bin, log, fail_in: "admin")
           File.write(File.join(mono, "apps/web/app/models/post.rb"), "class Post; end\n")
           File.write(File.join(mono, "apps/admin/app/models/user.rb"), "class User; end\n")
           File.write(File.join(mono, "README.md"), "x\n")
           git("-C", mono, "add", "-A")
 
-          env = { "PATH" => "#{bin}:#{ENV.fetch('PATH')}", "GIT_AUTHOR_NAME" => "t", "GIT_AUTHOR_EMAIL" => "t@t",
-                  "GIT_COMMITTER_NAME" => "t", "GIT_COMMITTER_EMAIL" => "t@t" }
-          out, status = Open3.capture2e(env, "git", "-C", mono, "commit", "-q", "-m", "x")
+          out, status = commit(mono, bin)
 
           expect(File.read(log).lines).to eq([ "web ai:tool[validate] files=app/models/post.rb,\n",
                                                "admin ai:tool[validate] files=app/models/user.rb,\n" ])
           expect(status.success?).to be(false), out
           expect(out).to include("rails-ai-context validation found issues.")
+        end
+      end
+
+      # git exports GIT_DIR to a hook in a linked worktree, where a diff run
+      # from inside an app would list paths from the top of the work tree.
+      it "lists an app's files by paths relative to it from a linked worktree too" do
+        install_for("apps/web")
+        Dir.mktmpdir do |bin|
+          worktree = File.join(bin, "wt")
+          git("-C", mono, "worktree", "add", "-q", worktree)
+          log = File.join(bin, "calls.log")
+          fake_rails(bin, log)
+          FileUtils.mkdir_p(File.join(worktree, "apps/web/app/models"))
+          File.write(File.join(worktree, "apps/web/app/models/post.rb"), "class Post; end\n")
+          File.write(File.join(worktree, "top.rb"), "x\n")
+          git("-C", worktree, "add", "-A")
+
+          out, status = commit(worktree, bin)
+
+          expect(status.success?).to be(true), out
+          expect(File.read(log).lines).to eq([ "web ai:tool[validate] files=app/models/post.rb,\n" ])
+        end
+      end
+
+      # A deleted file has nothing left to validate, and an app that is gone
+      # has nothing to validate in.
+      it "passes over deleted files and an app that is gone" do
+        File.write(File.join(mono, "apps/web/app/models/post.rb"), "class Post; end\n")
+        commit_all(mono)
+        install_for("apps/web")
+        install_for("apps/admin")
+        Dir.mktmpdir do |bin|
+          log = File.join(bin, "calls.log")
+          fake_rails(bin, log)
+          git("-C", mono, "rm", "-q", "apps/web/app/models/post.rb")
+          git("-C", mono, "rm", "-q", "-r", "apps/admin")
+
+          out, status = commit(mono, bin)
+
+          expect(status.success?).to be(true), out
+          expect(out).not_to include("No such file or directory")
+          expect(File.exist?(log)).to be(false)
         end
       end
     end
