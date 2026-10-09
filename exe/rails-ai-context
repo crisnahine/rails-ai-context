@@ -124,7 +124,7 @@ class RailsAiContextCLI < Thor
     map %w[--version -v] => :version
 
     class_option :app_path, type: :string,
-      desc: "Path to the Rails app root (default: current directory)"
+      desc: "Path to the Rails app root (default: the app the current directory is in, or the one app below it)"
     class_option :environment, type: :string,
       desc: "RAILS_ENV to run under (default: the ambient RAILS_ENV or development)"
 

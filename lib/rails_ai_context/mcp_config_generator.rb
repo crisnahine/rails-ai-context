@@ -216,6 +216,15 @@ module RailsAiContext
       File.expand_path(path)
     end
 
+    # A config's text as UTF-8 whatever the locale says. One that is not
+    # valid UTF-8 stays as bytes: the line reading here only looks for ASCII,
+    # and every line it does not replace is written back as it came.
+    def self.read_text(path)
+      content = File.binread(path)
+      utf8 = content.dup.force_encoding(Encoding::UTF_8)
+      utf8.valid_encoding? ? utf8 : content
+    end
+
     private
 
     # What a write drops besides replacing its own entries, from the entries
@@ -226,7 +235,7 @@ module RailsAiContext
     # second entry made by hand for the same app stays, and so does one
     # naming an app outside this write.
     def stale_names(existing)
-      return [] if @servers.any? { |server| server.name == SERVER_NAME }
+      return [] unless workspace_write?
 
       names = @servers.map(&:name)
       roots = @servers.map { |server| self.class.real(File.expand_path(server.app_path, @output_dir)) }
@@ -238,6 +247,11 @@ module RailsAiContext
 
         name if Install::Workspace.generated_name?(name, app_root.delete_prefix("#{@output_dir.delete_suffix('/')}/"))
       end
+    end
+
+    # A workspace's write: per-app servers, with the app's own bare one gone.
+    def workspace_write?
+      @servers.none? { |server| server.name == SERVER_NAME }
     end
 
     # The root key comes from the AiTool table, the same table self.remove
@@ -288,9 +302,14 @@ module RailsAiContext
     end
 
     # A file that does not parse is replaced: it serves no tool as it stands.
+    # A workspace's is left alone instead - a folder's config is the likelier
+    # to be kept by hand, and VS Code's reads comments and trailing commas,
+    # which JSON does not.
     def parse_json(path)
-      JSON.parse(File.read(path))
+      JSON.parse(self.class.read_text(path))
     rescue JSON::ParserError
+      raise ShapeError, "it does not parse as JSON (a comment or a trailing comma?); left the file as it is" if workspace_write?
+
       {}
     end
 
@@ -300,11 +319,15 @@ module RailsAiContext
     # dropped, and a new one goes at the end after a blank line.
     def merge_toml(path)
       FileUtils.mkdir_p(File.dirname(path))
-      content = File.exist?(path) ? File.read(path) : ""
+      content = File.exist?(path) ? self.class.read_text(path) : +""
       lines = content.lines
-      # A file kept with Windows line endings keeps them.
+      # A file kept with Windows line endings keeps them, and one that is not
+      # UTF-8 gets the new sections as bytes beside its own.
       newline = content.include?("\r\n") ? "\r\n" : "\n"
-      by_name = @servers.to_h { |server| [ server.name, toml_section(server).gsub("\n", newline) ] }
+      by_name = @servers.to_h do |server|
+        section = toml_section(server).gsub("\n", newline)
+        [ server.name, content.encoding == Encoding::BINARY ? section.b : section ]
+      end
 
       named = Toml.sections(lines) { |name| name.match?(OWN_SERVER_NAME) }
       ours = named.filter_map do |range, name|
@@ -337,7 +360,7 @@ module RailsAiContext
         end
       end
 
-      new_content = out.join
+      new_content = out.join.force_encoding(content.encoding)
       by_name.each do |name, section|
         next if written.key?(name)
 
@@ -417,13 +440,13 @@ module RailsAiContext
     # The app every server of ours in one config file names.
     def self.app_roots_in(path, config, dir)
       argvs = if config[:format] == :codex_toml
-        lines = File.read(path).lines
+        lines = read_text(path).lines
         Toml.sections(lines) { |name| name.match?(OWN_SERVER_NAME) }.filter_map do |range, name|
           argv = Toml.argv(lines, range)
           argv if own_entry?(name, argv)
         end
       else
-        data = JSON.parse(File.read(path))
+        data = JSON.parse(read_text(path))
         servers = data.is_a?(Hash) ? data[config[:root_key]] : nil
         return [] unless servers.is_a?(Hash)
 
@@ -467,7 +490,7 @@ module RailsAiContext
     end
 
     def self.remove_json_entry(path, root_key)
-      data = JSON.parse(File.read(path))
+      data = JSON.parse(read_text(path))
       servers = data.is_a?(Hash) ? data[root_key] : nil
       return false unless servers.is_a?(Hash)
 
@@ -488,7 +511,7 @@ module RailsAiContext
     end
 
     def self.remove_toml_entry(path)
-      content = File.read(path)
+      content = read_text(path)
       lines = content.lines
       sections = Toml.sections(lines) { |name| name.match?(OWN_SERVER_NAME) }
         .select { |range, name| own_entry?(name, Toml.argv(lines, range)) }
@@ -497,7 +520,7 @@ module RailsAiContext
       sections.reverse_each { |range, _| lines.slice!(range) }
       # Clean up extra blank lines left behind, in the file's own line ending
       newline = content.include?("\r\n") ? "\r\n" : "\n"
-      new_content = lines.join.gsub(/(?:\r?\n){3,}/, newline * 2).strip
+      new_content = lines.join.force_encoding(content.encoding).gsub(/(?:\r?\n){3,}/, newline * 2).strip
 
       if new_content.empty?
         File.delete(path)

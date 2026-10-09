@@ -60,8 +60,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   monorepo app and under `core.hooksPath`** (#425). It looked for a `.git`
   directory in the app root and skipped the step silently otherwise; the
   hooks directory is now git's own answer. A monorepo's hook validates each
-  app's staged files from inside that app, and installing in a second app
-  adds it to the same hook. A `core.hooksPath` outside the repository, which
+  app's staged files from inside that app, from a linked worktree too, and
+  installing in a second app adds it to the same hook. A deleted file no
+  longer blocks the commit: there is nothing left to validate. A `core.hooksPath` outside the repository, which
   every repository using it shares, and a repository that does not track the
   app (a dotfiles repository at `$HOME`), are left alone with a message.
 - **An app with a Gemfile and no lockfile yet is read by what its Gemfile
@@ -71,9 +72,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Codex's config keeps the tables around the gem's own.** A server section
   ran on into the next table when no blank line separated them, so updating
   it replaced the user's table too; a comment above the next table now stays
-  with it, and values are written as TOML strings rather than Ruby literals.
+  with it, values are written as TOML strings rather than Ruby literals, a
+  file with Windows line endings keeps them, and one that is not ASCII is
+  read whatever the locale.
 - **A config that is JSON but not an object, or whose servers key is not
   one, is reported and left alone** rather than raising out of the install.
+  In a folder of apps, so is a config that does not parse (VS Code's reads
+  comments and trailing commas).
 
 ## [5.32.2] - 2026-10-07
 

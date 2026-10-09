@@ -98,6 +98,13 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
       expect(described_class.resolve(cwd: dir("shop/vendor/bundle/ruby/3.4.0/gems/thing/lib")).root).to eq(root)
     end
 
+    # GEM_PATH=":$HOME/.gem" puts an empty entry in Gem.path.
+    it "is not thrown off by an empty Gem.path entry" do
+      root = app("shop")
+      allow(Gem).to receive(:path).and_return([ "", "relative/gems", File.join(tmp, "gems") ])
+      expect(described_class.resolve(cwd: dir("shop/app/models")).root).to eq(root)
+    end
+
     it "never takes $HOME as the app" do
       home = app("home")
       allow(Dir).to receive(:home).and_return(home)
@@ -227,6 +234,17 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
 
         expect(described_class.bundle_warning(root, File.join(tmp, "work")))
           .to start_with("[rails-ai-context] WARNING: shop/ boots against the bundle of #{File.join(tmp, 'work/Gemfile')}")
+      end
+
+      # Dual boot (Gemfile.next) and Appraisal (gemfiles/rails_7_1.gemfile)
+      # keep a second bundle inside the app.
+      it "says nothing for a bundle whose Gemfile is inside the app" do
+        root = app("shop")
+        File.write(File.join(root, "Gemfile"), "")
+        File.write(File.join(root, "Gemfile.next"), "")
+        under_bundle(File.join(root, "Gemfile.next"))
+
+        expect(described_class.bundle_warning(root, tmp)).to be_nil
       end
 
       it "warns for an app with no Gemfile outside the bundle's directory, and not inside it" do
