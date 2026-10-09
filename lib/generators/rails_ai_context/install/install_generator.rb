@@ -247,6 +247,10 @@ module RailsAiContext
         end
       end
 
+      # The line a validation hook names the apps it covers on, relative to the
+      # top of the work tree, the way a shell reads them.
+      HOOK_APPS = /^# rails-ai-context apps: (.*)$/
+
       no_tasks do
       # Thor's `ask` returns nil when stdin hits EOF (e.g. piping fewer answers
       # than prompts, or `< /dev/null`), which crashes the very next `.strip`
@@ -458,18 +462,88 @@ module RailsAiContext
       # Git's own answer, not a `.git` directory in Rails.root: a submodule
       # has a `.git` file, a monorepo app has its `.git` above it, and
       # core.hooksPath moves the hooks elsewhere, where a hook written to
-      # .git/hooks would never run. `--git-path` answers relative to the
-      # directory it runs in. The prefix is where the app sits in the work
-      # tree; git runs a hook at the top of it.
-      def git_hooks_location
-        out, status = Open3.capture2("git", "rev-parse", "--git-path", "hooks", "--show-prefix",
-                                     chdir: Rails.root.to_s, err: File::NULL)
+      # .git/hooks would never run. `--git-path` and `--git-common-dir` answer
+      # relative to the directory they run in. The prefix is where the app
+      # sits in the work tree; git runs a hook at the top of it.
+      def git_repository
+        out, status = Open3.capture2("git", "rev-parse", "--git-path", "hooks", "--show-prefix", "--show-toplevel",
+                                     "--git-common-dir", chdir: Rails.root.to_s, err: File::NULL)
         return nil unless status.success?
 
-        hooks, prefix = out.lines.map(&:chomp)
-        [ Pathname.new(File.expand_path(hooks, Rails.root.to_s)), prefix.to_s.delete_suffix("/") ]
+        hooks, prefix, toplevel, common_dir = out.lines.map(&:chomp)
+        return nil if toplevel.to_s.empty?
+
+        root = Rails.root.to_s
+        { hooks: Pathname.new(File.expand_path(hooks, root)), prefix: prefix.to_s.delete_suffix("/"),
+          toplevel: File.expand_path(toplevel, root), common_dir: File.expand_path(common_dir.to_s, root) }
       rescue SystemCallError
         nil
+      end
+
+      # One hook for every app it names. Each app's staged files are found by
+      # paths relative to it and validated from inside it.
+      def validation_hook(apps)
+        # Standalone installs have no `ai:*` rake tasks, so the hook must call
+        # the gem's own binary; in-Gemfile installs go through rake as usual.
+        if RailsAiContext::InstallMode.standalone?
+          hook_binary = "rails-ai-context"
+          validate_command = %(rails-ai-context tool validate --files "$files")
+        else
+          hook_binary = "rails"
+          validate_command = %(rails 'ai:tool[validate]' files="$files")
+        end
+        listed = apps.shelljoin
+
+        <<~HOOK
+          #!/bin/bash
+          # rails-ai-context: validate Rails references before commit
+          # Catches hallucinated columns, missing models, and schema drift.
+          # Remove this file or the rails-ai-context section to disable.
+          # rails-ai-context apps: #{listed}
+
+          status=0
+          for app in #{listed}; do
+            changed_files=$(cd "$app" && git diff --cached --name-only --relative | grep -E '\\.(rb|erb)$' || true)
+            if [ -z "$changed_files" ]; then
+              continue
+            fi
+
+            if command -v #{hook_binary} &> /dev/null; then
+              files=$(printf '%s\\n' "$changed_files" | tr '\\n' ',')
+              (cd "$app" && #{validate_command} 2>/dev/null)
+              exit_code=$?
+              if [ $exit_code -ne 0 ]; then
+                status=$exit_code
+              fi
+            fi
+          done
+
+          if [ $status -ne 0 ]; then
+            echo ""
+            echo "rails-ai-context validation found issues."
+            echo "Fix them or skip with: git commit --no-verify"
+            exit $status
+          fi
+        HOOK
+      end
+
+      # Whether `path` is `dir` or below it, compared by real paths: a hooks
+      # directory may not exist yet, and a temp or home directory may sit
+      # behind a symlink.
+      def inside?(path, dir)
+        path = canonical_path(path.to_s)
+        dir = canonical_path(dir.to_s)
+        path == dir || path.start_with?(dir.end_with?("/") ? dir : "#{dir}/")
+      end
+
+      def canonical_path(path)
+        existing = path
+        existing = File.dirname(existing) until File.exist?(existing) || File.dirname(existing) == existing
+        rest = path.delete_prefix(existing)
+        real = File.realpath(existing)
+        rest.empty? ? real : File.join(real, rest)
+      rescue SystemCallError
+        path
       end
       end # no_tasks
 
@@ -495,62 +569,47 @@ module RailsAiContext
       end
 
       def install_validation_hook
-        hooks_dir, app_prefix = git_hooks_location
-        return unless hooks_dir
+        repo = git_repository or return
 
-        hook_path = hooks_dir.join("pre-commit")
-
-        if File.exist?(hook_path) && !File.read(hook_path).include?("rails-ai-context")
-          say "  Skipped pre-commit hook (existing hook found - add manually)", :yellow
+        # A core.hooksPath outside the repository is shared by every
+        # repository that uses it, so this app's hook does not belong there.
+        unless inside?(repo[:hooks], repo[:toplevel]) || inside?(repo[:hooks], repo[:common_dir])
+          say "  Skipped pre-commit hook (core.hooksPath points outside this repository, at #{repo[:hooks]}, " \
+              "where every repository using it would run it - add it there by hand)", :yellow
           return
         end
 
-        return if File.exist?(hook_path) && File.read(hook_path).include?("rails-ai-context")
+        app = repo[:prefix].empty? ? "." : repo[:prefix]
+        hook_path = repo[:hooks].join("pre-commit")
+        apps = [ app ]
+        if File.exist?(hook_path)
+          content = File.read(hook_path)
+          unless content.include?("rails-ai-context")
+            say "  Skipped pre-commit hook (existing hook found - add manually)", :yellow
+            return
+          end
+
+          # A hook from before it named its apps served the repository's root.
+          covered = content[HOOK_APPS, 1]&.shellsplit || [ "." ]
+          return if covered.include?(app)
+
+          # Another app in the same repository: its hook is rewritten to cover
+          # this one too, unless it was changed by hand since it was written.
+          unless content == validation_hook(covered)
+            say "  Skipped pre-commit hook (#{hook_path} validates #{covered.join(', ')} and was changed by hand - " \
+                "add #{app} to it the same way)", :yellow
+            return
+          end
+          apps = covered + [ app ]
+        end
 
         answer = ask_safe("Install a pre-commit hook that validates Rails references? (y/N)").strip.downcase
         return unless answer == "y"
 
-        # Standalone installs have no `ai:*` rake tasks, so the hook must call
-        # the gem's own binary; in-Gemfile installs go through rake as usual.
-        if RailsAiContext::InstallMode.standalone?
-          hook_binary = "rails-ai-context"
-          validate_command = %(rails-ai-context tool validate --files "$files")
-        else
-          hook_binary = "rails"
-          validate_command = %(rails 'ai:tool[validate]' files="$files")
-        end
-
-        # In a monorepo the app's own files are the ones to validate, by paths
-        # relative to it, and the validator runs from there.
-        app_dir_step = app_prefix.empty? ? "" : "cd #{app_prefix.shellescape} || exit 0\n"
-
-        FileUtils.mkdir_p(hooks_dir)
-        File.write(hook_path, <<~HOOK)
-          #!/bin/bash
-          # rails-ai-context: validate Rails references before commit
-          # Catches hallucinated columns, missing models, and schema drift.
-          # Remove this file or the rails-ai-context section to disable.
-
-          #{app_dir_step}changed_files=$(git diff --cached --name-only --relative | grep -E '\\.(rb|erb)$' || true)
-
-          if [ -z "$changed_files" ]; then
-            exit 0
-          fi
-
-          if command -v #{hook_binary} &> /dev/null; then
-            files=$(printf '%s\\n' "$changed_files" | tr '\\n' ',')
-            #{validate_command} 2>/dev/null
-            exit_code=$?
-            if [ $exit_code -ne 0 ]; then
-              echo ""
-              echo "rails-ai-context validation found issues."
-              echo "Fix them or skip with: git commit --no-verify"
-              exit $exit_code
-            fi
-          fi
-        HOOK
+        FileUtils.mkdir_p(repo[:hooks])
+        File.write(hook_path, validation_hook(apps))
         FileUtils.chmod(0o755, hook_path)
-        say "  Installed pre-commit validation hook", :green
+        say(apps.one? ? "  Installed pre-commit validation hook" : "  Added #{app} to the pre-commit validation hook", :green)
       end
 
       def generate_context_files

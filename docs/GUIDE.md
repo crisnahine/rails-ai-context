@@ -117,7 +117,7 @@ No Gemfile entry, no initializer, no files in your project besides config and co
 5. **Creates or updates `config/initializers/rails_ai_context.rb`.** A new file gets your three answers as live lines (`config.ai_tools`, `config.tool_mode`, `config.context_files`) and every other option commented out at its default, wrapped in `if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)`. In an existing file it rewrites those three lines, appends any config section the file lacks, adds the guard if it is missing, and leaves the rest alone.
 6. **Writes `.rails-ai-context.yml`** with `ai_tools`, `tool_mode` and `context_files`. Other keys already in the file are kept.
 7. **Adds lines to `.gitignore`**, if the file exists: `.ai-context.json` (not for choice 3) and `.codex/config.toml` (always, because it holds this machine's Ruby paths). A line that is already there is not added again.
-8. **Asks about a pre-commit hook:** `Install a pre-commit hook that validates Rails references? (y/N)`. Only `y` installs it. The hook runs `rails 'ai:tool[validate]'` on the staged `.rb` and `.erb` files. It goes where git runs hooks (`git rev-parse --git-path hooks`), so an app checked out as a submodule, an app inside a monorepo and a repo with `core.hooksPath` set all get it where git will run it; in a monorepo the hook changes into the app's directory and validates that app's staged files only. No question is asked outside a git repository or when the hook is already installed. When another `pre-commit` hook exists there it prints `Skipped pre-commit hook (existing hook found - add manually)` and moves on.
+8. **Asks about a pre-commit hook:** `Install a pre-commit hook that validates Rails references? (y/N)`. Only `y` installs it. The hook runs `rails 'ai:tool[validate]'` on the staged `.rb` and `.erb` files. It goes where git runs hooks (`git rev-parse --git-path hooks`), so an app checked out as a submodule, an app inside a monorepo and a repo with `core.hooksPath` set all get it where git will run it. The hook names the apps it covers and validates each one's staged files from inside that app; installing in a second app of the same monorepo adds it to the hook, unless the hook was changed by hand, which it says. A `core.hooksPath` outside the repository is shared by every repository that uses it, so the hook is not written there, and it says that too. No question is asked outside a git repository or when the hook already covers the app. When another `pre-commit` hook exists there it prints `Skipped pre-commit hook (existing hook found - add manually)` and moves on.
 9. **Generates the context files** for the selected tools. Skipped for choice 3. If files that v5.0.0 stopped generating are still there (`.claude/rules/rails-ui-patterns.md`, `.claude/rules/rails-accessibility.md`, `.cursor/rules/rails-ui-patterns.mdc`, `.github/instructions/rails-ui-patterns.instructions.md`), it lists them first and asks `Delete them? [y/N]:`. Without a terminal, or under `--defaults`, it prints the `rm` command and does not ask.
 10. **Prints a summary:** the files each selected tool got and the commands to run next.
 
@@ -1140,7 +1140,7 @@ The install generator (or `rails-ai-context init`) creates per-tool MCP config f
 
 Each file is merge-safe - only the `rails-ai-context` entries are managed, other servers are preserved. When the gem is not in the app's `Gemfile.lock` (standalone install) the entry runs `rails-ai-context serve` with no `bundle exec`.
 
-A folder of apps gets one entry per app instead, `rails-ai-context-<app folder>`, each pointed at its app with `--app-path` and announcing its app first with `--server-name`; see [`init`](CLI.md#init-standalone-only) for the shape each AI tool gets.
+A folder of apps gets one entry per app instead, `rails-ai-context-<app folder>`, each pointed at its app with `--app-path` and announcing its app first through `RAILS_AI_CONTEXT_SERVER_NAME`; see [`init`](CLI.md#init-standalone-only) for the shape each AI tool gets.
 
 **Example: `.mcp.json` (Claude Code)**
 ```json
@@ -1403,7 +1403,7 @@ end
 | `http_port` | Integer | `6029` | HTTP server port |
 | `live_reload` | Symbol/Boolean | `:auto` | `:auto`, `true`, or `false` - enable MCP live reload |
 | `live_reload_debounce` | Float | `1.5` | Debounce interval in seconds for live reload |
-| `server_name` | String | `"rails-ai-context"` | The MCP server name the server announces. `serve --server-name` overrides it for one process, which is how a workspace's entries announce their app |
+| `server_name` | String | `"rails-ai-context"` | The MCP server name the server announces. The `RAILS_AI_CONTEXT_SERVER_NAME` environment variable overrides it for one process, which is how a workspace's entries announce their app |
 | `server_version` | String | gem version | MCP server version. Read-only, there is no setter |
 | `generate_root_files` | Boolean | `true` | Set `false` to generate split rules only: no CLAUDE.md, AGENTS.md, .cursorrules or copilot-instructions.md (`.ai-context.json` is still written) |
 | `anti_hallucination_rules` | Boolean | `true` | Embed 6-rule Anti-Hallucination Protocol in generated context files - set `false` to skip |

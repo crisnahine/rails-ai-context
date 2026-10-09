@@ -11,8 +11,9 @@ module RailsAiContext
   # app's Bundler group, so none of the rake tasks this gem ships (`rails
   # ai:*`) are available - only the `rails-ai-context` binary works. Detected
   # by scanning the resolved Gemfile.lock for a rails-ai-context spec line.
-  # Falls back to treating the install as in-Gemfile (the common case) when
-  # the lock file can't be read.
+  # With no lockfile yet (a fresh clone), the Gemfile decides: a Gemfile that
+  # does not name the gem cannot be serving it. Falls back to treating the
+  # install as in-Gemfile (the common case) when neither can be read.
   module InstallMode
     # What a reader runs for each job, as [standalone, in the app's bundle].
     COMMANDS = {
@@ -40,7 +41,10 @@ module RailsAiContext
       end
 
       lock = RailsAiContext::GemLock.for(root)
-      lock.missing? ? false : !lock.present?("rails-ai-context")
+      return !lock.present?("rails-ai-context") unless lock.missing?
+
+      gems = lock.gemfile_gems
+      gems.nil? ? false : !gems.include?("rails-ai-context")
     rescue => e
       RailsAiContext.debug_fail(e, false, label: "standalone install detection")
     end

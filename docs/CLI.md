@@ -38,8 +38,9 @@ rails-ai-context serve --transport http --port 6029   # HTTP transport
 |:-------|:--------|:------------|
 | `--transport` | `stdio` | `stdio` or `http` |
 | `--port` | `http_port` from config, else `6029` | HTTP listen port |
-| `--server-name` | `server_name` from config, else `rails-ai-context` | The name the server announces to the client. A [workspace](#init-standalone-only) entry announces its app first, since VS Code names every tool after this name and keeps 13 characters of it |
 | `--no-boot` | off | Skip booting the app; answer from source alone |
+
+The server announces itself to the client as `server_name` from config, else `rails-ai-context`; the `RAILS_AI_CONTEXT_SERVER_NAME` environment variable overrides both for one process. A [workspace](#init-standalone-only) entry sets it to put its app first, since VS Code names every tool after the announced name and keeps 13 characters of it.
 
 ### `tool`
 
@@ -230,12 +231,13 @@ The AI tools and the setup are asked once. Each app gets its own `.rails-ai-cont
   "mcpServers": {
     "rails-ai-context-api": {
       "command": "rails-ai-context",
-      "args": ["serve", "--app-path", "api", "--server-name", "api-rails-ai-context"]
+      "args": ["serve", "--app-path", "api"],
+      "env": { "RAILS_AI_CONTEXT_SERVER_NAME": "api-rails-ai-context" }
     },
     "rails-ai-context-web": {
       "command": "bundle",
-      "args": ["exec", "rails-ai-context", "serve", "--app-path", "web", "--server-name", "web-rails-ai-context"],
-      "env": { "BUNDLE_GEMFILE": "web/Gemfile" }
+      "args": ["exec", "rails-ai-context", "serve", "--app-path", "web"],
+      "env": { "BUNDLE_GEMFILE": "web/Gemfile", "RAILS_AI_CONTEXT_SERVER_NAME": "web-rails-ai-context" }
     }
   }
 }
@@ -243,8 +245,10 @@ The AI tools and the setup are asked once. Each app gets its own `.rails-ai-cont
 
 - **Paths stay relative**, so a committed file means the same thing on every machine. Claude Code, Codex and OpenCode start a server in the folder they were launched in, so their configs name the app from the workspace (`api`). Cursor does not promise a working directory, so its config and VS Code's name it from the folder the config sits in (`${workspaceFolder}/api`), which both expand.
 - **The command form is each app's own**: the bare binary where the gem is not in the app's Gemfile.lock, `bundle exec` where it is, with `BUNDLE_GEMFILE` naming the app's Gemfile, since `bundle exec` started in the workspace would look for one there.
-- **`--server-name` puts the app first** in the name the server announces. VS Code names every tool after that name and keeps 13 characters of it, so without it every app's tools would start `rails-ai-cont`.
-- A bare `rails-ai-context` entry left in the folder is replaced, since it would serve the folder itself.
+- **`RAILS_AI_CONTEXT_SERVER_NAME` puts the app first** in the name the server announces. VS Code names every tool after that name and keeps 13 characters of it, so without it every app's tools would start `rails-ai-cont`. It is a variable rather than a flag so that an app whose bundle pins an older gem ignores it and starts.
+- A bare `rails-ai-context` entry left in the folder is replaced, since it would serve the folder itself, and so is an entry for an app that is gone or now goes by another name. Names starting `rails-ai-context` are the gem's: dropping an AI tool removes every one of them from its config.
+- `--app-path` naming a folder of apps sets that folder up the same way; every other command lists the apps below it.
+- An app whose bundle is not installed yet (a Gemfile and no lockfile) is served by this binary unless its Gemfile names the gem.
 
 Start the client in the workspace folder. A client started inside one of the apps (Claude Code, Codex and OpenCode still read a config above it) runs each workspace server from there, where the relative path misses; the server says which folder the path was written for. To open an app on its own, run `init` inside it as well. `init` warns when an app declares a Ruby other than the one the workspace runs, since every server it starts runs under that one. `doctor` inside one of the apps finds the workspace's config one or two levels up.
 

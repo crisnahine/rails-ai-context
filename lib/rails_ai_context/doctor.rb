@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require "find"
-require "pathname"
 
 module RailsAiContext
   # Diagnostic checker that validates the environment and reports
@@ -318,7 +317,8 @@ module RailsAiContext
             fix: "Run `#{command(:install)}`")
         end
 
-        shown = app_relative(full_path)
+        # ../.mcp.json for a workspace's.
+        shown = Install::Program.relative_to(full_path, app.root)
         if cfg[:path].end_with?(".toml")
           Check.new(name: cfg[:label], status: :pass, message: "#{shown} exists", fix: nil)
         else
@@ -384,13 +384,6 @@ module RailsAiContext
 
     CODEX_ENV_SECTION = /^\[mcp_servers\.#{McpConfigGenerator::OWN_NAME}\.env\]\s*$(.+?)(?=\n\[|\z)/m
 
-    # How a file the check found reads from the app: its own path, or
-    # ../.mcp.json for a workspace's.
-    def app_relative(path)
-      Pathname.new(path).relative_path_from(Pathname.new(app.root.to_s)).to_s
-    rescue ArgumentError
-      path.to_s
-    end
 
     def check_mcp_buildable
       Server.new(app).build

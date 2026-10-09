@@ -14,9 +14,11 @@ module RailsAiContext
     module AppRoot
       # root is the app the command reads, nil when there is no single one.
       # walked is nil when root is the directory the caller stood in or
-      # named, else :up or :down. below lists the apps under a directory that
-      # is no app and has none above it: one is root, several leave root nil.
-      Result = Struct.new(:root, :walked, :below, :explicit, keyword_init: true) do
+      # named, else :up or :down. below lists the apps under `base`, a
+      # directory that is no app: the one the caller stood in when it has no
+      # app above it either, or the one --app-path named. Without
+      # --app-path, one app below is root; several leave root nil.
+      Result = Struct.new(:root, :walked, :below, :base, :explicit, keyword_init: true) do
         # A folder that is no app and holds apps below it: what `init` sets
         # up as a whole, where every other command needs exactly one.
         def workspace?
@@ -26,19 +28,30 @@ module RailsAiContext
 
       def self.resolve(cwd:, app_path: nil)
         if app_path
-          return Result.new(root: File.expand_path(app_path, cwd), walked: nil, below: [], explicit: true)
+          # Named outright, it is never walked: a folder of apps is set up by
+          # init and listed to every other command, never quietly swapped
+          # for the one app inside it.
+          root = File.expand_path(app_path, cwd)
+          below = Dir.exist?(root) && !EntryBoot.app_present?(root, allow_source_only: true) ? walk_down(root) : []
+          return Result.new(root: root, walked: nil, below: below, base: root, explicit: true)
         end
 
         if EntryBoot.app_present?(cwd, allow_source_only: true)
-          return Result.new(root: cwd, walked: nil, below: [], explicit: false)
+          # A tree that is only source - a packwerk pack, an engine kept as
+          # code - belongs to the app it sits in, when it sits in one.
+          above = app_root?(cwd) ? nil : walk_up(File.dirname(cwd))
+          return Result.new(root: above, walked: :up, below: [], base: cwd, explicit: false) if above
+
+          return Result.new(root: cwd, walked: nil, below: [], base: cwd, explicit: false)
         end
 
         if (above = walk_up(cwd))
-          return Result.new(root: above, walked: :up, below: [], explicit: false)
+          return Result.new(root: above, walked: :up, below: [], base: cwd, explicit: false)
         end
 
         below = walk_down(cwd)
-        Result.new(root: below.one? ? below.first : nil, walked: below.one? ? :down : nil, below: below, explicit: false)
+        Result.new(root: below.one? ? below.first : nil, walked: below.one? ? :down : nil, below: below, base: cwd,
+                   explicit: false)
       end
 
       # The nearest app root at or above dir. The test is stricter than the
@@ -76,14 +89,6 @@ module RailsAiContext
       end
 
       WALK_DOWN_DROPPED = %w[node_modules vendor tmp].freeze
-
-      def self.app_root?(dir)
-        marked = File.exist?(File.join(dir, "config", "application.rb")) ||
-          File.exist?(File.join(dir, "config", "environment.rb")) ||
-          rails_binstub?(dir)
-        marked && !EntryBoot.other_framework?(dir)
-      end
-      private_class_method :app_root?
 
       # Rails' AppLoader takes the first bin/rails or script/rails that boots
       # an app or an engine, and an engine's spec/ walks up to the engine.
@@ -128,6 +133,14 @@ module RailsAiContext
       end
       private_class_method :real
 
+      def self.app_root?(dir)
+        marked = File.exist?(File.join(dir, "config", "application.rb")) ||
+          File.exist?(File.join(dir, "config", "environment.rb")) ||
+          rails_binstub?(dir)
+        marked && !EntryBoot.other_framework?(dir)
+      end
+      private_class_method :app_root?
+
       # Under the caller's directory a path reads relative to it, the way it
       # is typed; anywhere else it stays absolute.
       def self.display(path, cwd)
@@ -142,14 +155,31 @@ module RailsAiContext
       end
 
       # `argv` is the command line as typed, which every suggested command
-      # repeats behind its own --app-path.
+      # repeats behind its own --app-path, in place of any it carried.
       def self.several_apps(result, cwd, argv)
-        lines = [ "Error: No Rails app found in #{cwd}, and #{result.below.size} below it. Name one with --app-path:" ]
+        rest = without_app_path(argv)
+        lines = [ "Error: No Rails app found in #{result.base}, and #{result.below.size} below it. Name one with --app-path:" ]
         result.below.each do |root|
-          lines << "  #{[ "rails-ai-context", "--app-path", display(root, cwd), *argv ].shelljoin}"
+          lines << "  #{[ "rails-ai-context", "--app-path", display(root, cwd), *rest ].shelljoin}"
         end
         lines
       end
+
+      def self.without_app_path(argv)
+        kept = []
+        value_next = false
+        argv.each do |arg|
+          if value_next
+            value_next = false
+          elsif arg == "--app-path"
+            value_next = true
+          elsif !arg.start_with?("--app-path=")
+            kept << arg
+          end
+        end
+        kept
+      end
+      private_class_method :without_app_path
 
       # A wrong --app-path still fails, but a path inside an app names it.
       def self.app_above_hint(root, cwd)
@@ -182,17 +212,20 @@ module RailsAiContext
         end
       end
 
-      # Under bundle exec the bundle is already chosen: an app outside it
-      # boots against someone else's Gemfile.lock.
+      # Under bundle exec the bundle is already chosen: an app with a Gemfile
+      # of its own other than that one, or with none and outside it, boots
+      # against someone else's Gemfile.lock.
       def self.bundle_warning(root, cwd)
-        return nil unless ENV["BUNDLE_BIN_PATH"] && defined?(::Bundler) && ::Bundler.respond_to?(:root)
+        return nil unless ENV["BUNDLE_BIN_PATH"] && defined?(::Bundler) && ::Bundler.respond_to?(:default_gemfile)
 
-        bundle_root = ::Bundler.root.to_s
-        return nil if root == bundle_root || root.start_with?("#{bundle_root}/")
+        bundle_gemfile = real(::Bundler.default_gemfile.to_s)
+        # Bundler looks for gems.rb before Gemfile.
+        own = %w[gems.rb Gemfile].map { |name| File.join(root, name) }.find { |path| File.file?(path) }
+        bundle_dir = File.dirname(bundle_gemfile)
+        return nil if own ? real(own) == bundle_gemfile : real(root).start_with?("#{bundle_dir}/") || real(root) == bundle_dir
 
-        "[rails-ai-context] WARNING: #{display(root, cwd)} is outside the bundle at #{bundle_root}; " \
-          "under bundle exec it boots against that bundle, not its own. Run the command from inside the app, " \
-          "or point BUNDLE_GEMFILE at the app's Gemfile."
+        "[rails-ai-context] WARNING: #{display(root, cwd).delete_suffix('/')}/ boots against the bundle of #{bundle_gemfile} " \
+          "under bundle exec, not its own. Run the command from inside the app, or point BUNDLE_GEMFILE at the app's Gemfile."
       rescue StandardError
         nil
       end

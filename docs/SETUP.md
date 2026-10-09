@@ -267,10 +267,10 @@ When your AI tool opens a folder that holds several apps (`work/shop`, `work/adm
 
 | AI tool | Entry for `work/shop` |
 |---------|-----------------------|
-| Claude Code, Codex CLI, OpenCode | `rails-ai-context serve --app-path shop --server-name shop-rails-ai-context` |
+| Claude Code, Codex CLI, OpenCode | `rails-ai-context serve --app-path shop`, with `RAILS_AI_CONTEXT_SERVER_NAME=shop-rails-ai-context` |
 | Cursor, GitHub Copilot (VS Code) | the same, with `--app-path ${workspaceFolder}/shop` |
 
-Claude Code, Codex and OpenCode start a server in the folder they were launched in, so start them in `work/`. Cursor and VS Code expand `${workspaceFolder}` to the folder their config sits in. An in-Gemfile app's entry runs `bundle exec` with `BUNDLE_GEMFILE` naming that app's Gemfile, spelled the same way. `--server-name` makes each server announce its app first: VS Code names every tool after that name and keeps 13 characters of it. The full shape is in the [CLI reference](CLI.md#init-standalone-only), and [ADR-0005](adr/0005-workspace-mcp-entries.md) records why.
+Claude Code, Codex and OpenCode start a server in the folder they were launched in, so start them in `work/`. Cursor and VS Code expand `${workspaceFolder}` to the folder their config sits in. An in-Gemfile app's entry runs `bundle exec` with `BUNDLE_GEMFILE` naming that app's Gemfile, spelled the same way. `RAILS_AI_CONTEXT_SERVER_NAME` makes each server announce its app first: VS Code names every tool after that name and keeps 13 characters of it. The full shape is in the [CLI reference](CLI.md#init-standalone-only), and [ADR-0005](adr/0005-workspace-mcp-entries.md) records why.
 
 ---
 

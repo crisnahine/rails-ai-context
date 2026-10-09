@@ -20,16 +20,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   folder their config sits in. Each app keeps its own install form, decided
   from its own Gemfile.lock, and an in-Gemfile app's entry sets
   `BUNDLE_GEMFILE` to its Gemfile. A bare `rails-ai-context` entry left in
-  the folder is replaced, removal and cleanup take every
-  `rails-ai-context-*` entry, and `doctor` inside an app finds the folder's
+  the folder is replaced, a re-run drops the entry of an app that is gone or
+  was renamed, removal and cleanup take every `rails-ai-context-*` entry,
+  `--app-path` naming a folder of apps sets that folder up, and `doctor`
+  inside an app finds the folder's
   config one or two levels up and checks each Codex env snapshot in it.
   `init` warns when an app declares a Ruby other than the one the folder
   runs. See ADR-0005 for what each AI tool does with a server's working
   directory, and why.
-- **`serve --server-name NAME`** sets the name the server announces, over
-  `config.server_name`. A workspace entry announces its app first: VS Code
-  names every tool after the announced name and keeps 13 characters of it,
-  so every app's tools would otherwise start `rails-ai-cont`.
+- **`RAILS_AI_CONTEXT_SERVER_NAME`** sets the name the server announces, over
+  `config.server_name`, for one process. A workspace entry sets it to put its
+  app first: VS Code names every tool after the announced name and keeps 13
+  characters of it, so every app's tools would otherwise start
+  `rails-ai-cont`. An app whose bundle pins an older gem ignores the variable
+  and starts.
 
 ### Fixed
 
@@ -54,14 +58,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The install generator offers the pre-commit hook in a submodule, a
   monorepo app and under `core.hooksPath`** (#425). It looked for a `.git`
   directory in the app root and skipped the step silently otherwise; the
-  hooks directory is now git's own answer, and a monorepo app's hook
-  validates that app's staged files from inside it.
+  hooks directory is now git's own answer. A monorepo's hook validates each
+  app's staged files from inside that app, and installing in a second app
+  adds it to the same hook. A `core.hooksPath` outside the repository, which
+  every repository using it shares, is left alone with a message.
+- **An app with a Gemfile and no lockfile yet is read by what its Gemfile
+  names.** It counted as an in-Gemfile install, so a fresh clone that never
+  named the gem got `bundle exec` commands that could not start.
 - **Codex's config keeps the tables around the gem's own.** A server section
   ran on into the next table when no blank line separated them, so updating
   it replaced the user's table too; a comment above the next table now stays
   with it, and values are written as TOML strings rather than Ruby literals.
-- **A config whose servers key is not an object is reported and left alone**
-  rather than raising out of the install.
+- **A config that is JSON but not an object, or whose servers key is not
+  one, is reported and left alone** rather than raising out of the install.
 
 ## [5.32.2] - 2026-10-07
 

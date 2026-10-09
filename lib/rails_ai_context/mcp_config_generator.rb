@@ -24,10 +24,15 @@ module RailsAiContext
     SERVER_NAME = "rails-ai-context"
 
     # Every name this gem writes a server under: the app's own, and the
-    # workspace form. Removal matches all of them, so dropping an AI tool
-    # leaves no workspace entry behind.
+    # workspace form. The names are the gem's: removal takes all of them, so
+    # dropping an AI tool leaves no workspace entry behind.
     OWN_NAME = /#{Regexp.escape(SERVER_NAME)}(?:-[A-Za-z0-9_-]+)?/
     OWN_SERVER_NAME = /\A#{OWN_NAME}\z/
+
+    # The name the server announces, where an entry sets one. A variable
+    # rather than a flag: an app whose bundle pins an older gem ignores it
+    # and starts, where an unknown flag would stop it (ADR-0005).
+    SERVER_NAME_ENV = "RAILS_AI_CONTEXT_SERVER_NAME"
 
     # One server entry. app_path and gemfile are relative to the folder the
     # config sits in, because the file may be committed and an absolute path
@@ -44,15 +49,16 @@ module RailsAiContext
       # rake task can only quarantine from the environment task onward.
       def argv(folder = nil)
         argv = standalone ? %w[rails-ai-context serve] : %w[bundle exec rails-ai-context serve]
-        argv += [ "--app-path", anchored(app_path, folder) ] if app_path
-        argv += [ "--server-name", announce ] if announce
-        argv
+        app_path ? [ *argv, "--app-path", anchored(app_path, folder) ] : argv
       end
 
       # bundle exec looks for a Gemfile from where it starts, upward, and a
       # workspace entry starts in the folder above its app.
       def env(folder = nil)
-        !standalone && gemfile ? { "BUNDLE_GEMFILE" => anchored(gemfile, folder) } : {}
+        env = {}
+        env["BUNDLE_GEMFILE"] = anchored(gemfile, folder) if !standalone && gemfile
+        env[SERVER_NAME_ENV] = announce if announce
+        env
       end
 
       private
@@ -75,7 +81,7 @@ module RailsAiContext
     #   app's own single server, in the install mode `standalone` names.
     def initialize(tools:, output_dir:, standalone: nil, tool_mode: :mcp, servers: nil)
       @tools = Array(tools).map(&:to_sym)
-      @output_dir = output_dir
+      @output_dir = output_dir.to_s
       @tool_mode = tool_mode
       @servers = servers || [
         Server.new(name: SERVER_NAME, standalone: standalone.nil? ? InstallMode.standalone? : standalone)
@@ -115,8 +121,8 @@ module RailsAiContext
       { written: written, skipped: skipped, failed: failed }
     end
 
-    # A config whose servers key holds something other than an object: there
-    # is no entry to merge into, and replacing it would drop what it holds.
+    # A config that parses but holds no object to merge into, at the top or
+    # under its servers key: replacing it would drop what it holds.
     class ShapeError < StandardError; end
 
     # Codex's config read by lines rather than by a TOML parser, which the
@@ -126,6 +132,7 @@ module RailsAiContext
       # A table header, and the one shape of it that names a server.
       TABLE = /\A[ \t]*\[/
       SERVER_HEADER = /\A[ \t]*\[[ \t]*mcp_servers\.([A-Za-z0-9_-]+)[ \t]*\][ \t]*(?:#.*)?\r?\n?\z/
+      COMMAND_LINE = /\A[ \t]*(command|args)[ \t]*=[ \t]*(.*?)[ \t]*\r?\n?\z/
 
       module_function
 
@@ -145,6 +152,21 @@ module RailsAiContext
         end
       end
 
+      # One section's command line: its `command` and `args`, which the gem
+      # writes as JSON-compatible strings, read from the table itself and not
+      # its sub-tables.
+      def argv(lines, range)
+        own = lines[range].drop(1).take_while { |line| !line.match?(TABLE) }
+        values = own.filter_map { |line| line.match(COMMAND_LINE)&.captures }.to_h
+        [ *parse(values["command"]), *parse(values["args"]) ]
+      end
+
+      def parse(value)
+        value && JSON.parse(value)
+      rescue JSON::ParserError
+        nil
+      end
+
       def sub_table?(line, name)
         line.sub(/\A[ \t]*\[\[?[ \t]*/, "").start_with?("mcp_servers.#{name}.")
       end
@@ -155,12 +177,64 @@ module RailsAiContext
       end
     end
 
+    # The directory an entry's --app-path names, read the way its tool reads
+    # it: the tool's name for its config's folder is that folder, and a bare
+    # relative path starts there too.
+    #
+    # @return [String, nil] absolute, nil when the entry names no app
+    def self.entry_app_root(argv, folder, dir)
+      argv = argv.map(&:to_s)
+      at = argv.index("--app-path")
+      path = at ? argv[at + 1] : argv.find { |arg| arg.start_with?("--app-path=") }&.delete_prefix("--app-path=")
+      return nil if path.nil? || path.empty?
+
+      path = dir + path.delete_prefix(folder) if folder && path.start_with?(folder)
+      File.expand_path(path, dir)
+    end
+
+    # A JSON entry's command line: OpenCode's command array, or command plus args.
+    def self.json_argv(entry)
+      entry.is_a?(Hash) ? [ *entry["command"], *entry["args"] ] : []
+    end
+
+    # Whether an entry is the gem's: the app's own by its name, which every
+    # version has written, and a workspace one by its name and by running the
+    # gem's server, so a hand-made `rails-ai-context-prod` HTTP entry is left
+    # to whoever made it.
+    def self.own_entry?(name, argv)
+      return true if name == SERVER_NAME
+      return false unless name.match?(OWN_SERVER_NAME)
+
+      argv = argv.map(&:to_s)
+      at = argv.index("rails-ai-context")
+      !at.nil? && argv[at + 1] == "serve"
+    end
+
+    def self.real(path)
+      File.realpath(path)
+    rescue SystemCallError
+      File.expand_path(path)
+    end
+
     private
 
-    # In a workspace the bare entry serves the folder itself, which is no
-    # app, so it can only fail; the per-app entries replace it.
-    def superseded
-      @servers.any? { |server| server.name == SERVER_NAME } ? [] : [ SERVER_NAME ]
+    # What a write drops besides replacing its own entries, from the entries
+    # of ours already there (name => the app root each names). An app's own
+    # write drops nothing. A workspace's drops the bare entry, which would
+    # serve the folder itself, and an entry whose app is gone or now goes by
+    # another name; one naming an app outside this write stays, as somebody's
+    # own arrangement.
+    def stale_names(existing)
+      return [] if @servers.any? { |server| server.name == SERVER_NAME }
+
+      names = @servers.map(&:name)
+      roots = @servers.map { |server| self.class.real(File.expand_path(server.app_path, @output_dir)) }
+      existing.filter_map do |name, app_root|
+        next name if name == SERVER_NAME
+        next if names.include?(name) || app_root.nil?
+
+        name if !File.directory?(app_root) || roots.include?(self.class.real(app_root))
+      end
     end
 
     # The root key comes from the AiTool table, the same table self.remove
@@ -171,7 +245,7 @@ module RailsAiContext
       return merge_toml(path) if config[:format] == :codex_toml
 
       entries = @servers.to_h { |server| [ server.name, json_entry(server, config) ] }
-      merge_json(path, config[:root_key], entries)
+      merge_json(path, config, entries)
     end
 
     def json_entry(server, config)
@@ -185,17 +259,23 @@ module RailsAiContext
 
     # --- JSON merge logic ---
 
-    def merge_json(path, root_key, entries)
+    def merge_json(path, config, entries)
       FileUtils.mkdir_p(File.dirname(path))
 
-      existing = File.exist?(path) ? parse_json(path) : nil
-      data = existing.is_a?(Hash) ? existing : {}
+      exists = File.exist?(path)
+      data = exists ? parse_json(path) : {}
+      raise ShapeError, "it is JSON but not an object; left the file as it is" unless data.is_a?(Hash)
+
+      root_key = config[:root_key]
       data[root_key] ||= {}
       servers = data[root_key]
       raise ShapeError, %("#{root_key}" is not an object; left the file as it is) unless servers.is_a?(Hash)
 
-      stale = superseded.select { |name| servers.key?(name) }
-      return :skipped if existing && stale.empty? && entries.all? { |name, entry| servers[name] == entry }
+      ours = servers.select { |name, entry| self.class.own_entry?(name, self.class.json_argv(entry)) }
+      stale = stale_names(ours.to_h do |name, entry|
+        [ name, self.class.entry_app_root(self.class.json_argv(entry), config[:folder_variable], @output_dir) ]
+      end)
+      return :skipped if exists && stale.empty? && entries.all? { |name, entry| servers[name] == entry }
 
       stale.each { |name| servers.delete(name) }
       servers.merge!(entries)
@@ -212,28 +292,33 @@ module RailsAiContext
 
     # --- TOML merge logic ---
 
-    # Each server's section is replaced where it stands, a superseded one is
+    # Each server's section is replaced where it stands, a stale one is
     # dropped, and a new one goes at the end after a blank line.
     def merge_toml(path)
       FileUtils.mkdir_p(File.dirname(path))
       content = File.exist?(path) ? File.read(path) : ""
-      by_name = @servers.to_h { |server| [ server.name, toml_section(server) ] }
-      drop = superseded
-
       lines = content.lines
-      sections = Toml.sections(lines) { |name| by_name.key?(name) || drop.include?(name) }
+      # A file kept with Windows line endings keeps them.
+      newline = content.include?("\r\n") ? "\r\n" : "\n"
+      by_name = @servers.to_h { |server| [ server.name, toml_section(server).gsub("\n", newline) ] }
+
+      named = Toml.sections(lines) { |name| name.match?(OWN_SERVER_NAME) }
+      ours = named.select { |range, name| self.class.own_entry?(name, Toml.argv(lines, range)) }
+      drop = stale_names(ours.to_h { |range, name| [ name, self.class.entry_app_root(Toml.argv(lines, range), nil, @output_dir) ] })
+      # An entry this write names is replaced whoever wrote it: a second
+      # table of one name would not parse.
+      starts = named.select { |_, name| by_name.key?(name) || drop.include?(name) }
+        .to_h { |range, name| [ range.begin, [ range, name ] ] }
+
       out = []
       written = {}
       index = 0
       while index < lines.size
-        range, name = sections.find { |r, _| r.begin == index }
-        unless range
+        range, name = starts[index]
+        if range.nil?
           out << lines[index]
           index += 1
-          next
-        end
-
-        if by_name.key?(name) && !written.key?(name)
+        elsif by_name.key?(name) && !written.key?(name)
           out << by_name.fetch(name)
           written[name] = true
           index = range.end
@@ -250,9 +335,9 @@ module RailsAiContext
         next if written.key?(name)
 
         separator = if new_content.empty? then ""
-        elsif new_content.end_with?("\n\n") then ""
-        elsif new_content.end_with?("\n") then "\n"
-        else "\n\n"
+        elsif new_content.end_with?(newline * 2) then ""
+        elsif new_content.end_with?(newline) then newline
+        else newline * 2
         end
         new_content = new_content + separator + section
       end
@@ -317,52 +402,31 @@ module RailsAiContext
         dir = parent
         path = File.join(dir, config[:path])
         next unless File.file?(path)
-        return path if app_paths(path, config, dir).any? { |app_path| real(File.expand_path(app_path, dir)) == target }
+        return path if app_roots_in(path, config, dir).any? { |root| real(root) == target }
       end
       nil
     end
 
-    # The --app-path of every server this gem wrote into one config file,
-    # with the tool's name for the folder (`dir`) read as that folder.
-    def self.app_paths(path, config, dir)
+    # The app every server of ours in one config file names.
+    def self.app_roots_in(path, config, dir)
       argvs = if config[:format] == :codex_toml
         lines = File.read(path).lines
-        Toml.sections(lines) { |name| name.match?(OWN_SERVER_NAME) }.filter_map do |range, _|
-          args = lines[range].find { |line| line.match?(/\A[ \t]*args[ \t]*=/) } or next
-          Array(JSON.parse(args.split("=", 2).last.strip))
-        rescue JSON::ParserError
-          nil
+        Toml.sections(lines) { |name| name.match?(OWN_SERVER_NAME) }.filter_map do |range, name|
+          argv = Toml.argv(lines, range)
+          argv if own_entry?(name, argv)
         end
       else
         data = JSON.parse(File.read(path))
         servers = data.is_a?(Hash) ? data[config[:root_key]] : nil
         return [] unless servers.is_a?(Hash)
 
-        servers.filter_map do |name, entry|
-          next unless name.match?(OWN_SERVER_NAME) && entry.is_a?(Hash)
-
-          [ *entry["command"], *entry["args"] ]
-        end
+        servers.filter_map { |name, entry| json_argv(entry) if own_entry?(name, json_argv(entry)) }
       end
-
-      folder = config[:folder_variable]
-      argvs.filter_map do |argv|
-        argv = argv.map(&:to_s)
-        at = argv.index("--app-path")
-        app_path = at ? argv[at + 1] : argv.find { |arg| arg.start_with?("--app-path=") }&.delete_prefix("--app-path=")
-        folder && app_path&.start_with?(folder) ? dir + app_path.delete_prefix(folder) : app_path
-      end
+      argvs.filter_map { |argv| entry_app_root(argv, config[:folder_variable], dir) }
     rescue SystemCallError, IOError, JSON::ParserError
       []
     end
-    private_class_method :app_paths
-
-    def self.real(path)
-      File.realpath(path)
-    rescue SystemCallError
-      File.expand_path(path)
-    end
-    private_class_method :real
+    private_class_method :app_roots_in
 
     # --- Merge-safe removal ---
 
@@ -400,7 +464,7 @@ module RailsAiContext
       servers = data.is_a?(Hash) ? data[root_key] : nil
       return false unless servers.is_a?(Hash)
 
-      own = servers.keys.grep(OWN_SERVER_NAME)
+      own = servers.select { |name, entry| own_entry?(name, json_argv(entry)) }.keys
       return false if own.empty?
 
       own.each { |name| servers.delete(name) }
@@ -417,18 +481,21 @@ module RailsAiContext
     end
 
     def self.remove_toml_entry(path)
-      lines = File.read(path).lines
+      content = File.read(path)
+      lines = content.lines
       sections = Toml.sections(lines) { |name| name.match?(OWN_SERVER_NAME) }
+        .select { |range, name| own_entry?(name, Toml.argv(lines, range)) }
       return false if sections.empty?
 
       sections.reverse_each { |range, _| lines.slice!(range) }
-      # Clean up extra blank lines left behind
-      new_content = lines.join.gsub(/\n{3,}/, "\n\n").strip
+      # Clean up extra blank lines left behind, in the file's own line ending
+      newline = content.include?("\r\n") ? "\r\n" : "\n"
+      new_content = lines.join.gsub(/(?:\r?\n){3,}/, newline * 2).strip
 
       if new_content.empty?
         File.delete(path)
       else
-        RailsAiContext::SafeFile.atomic_write(path, new_content + "\n")
+        RailsAiContext::SafeFile.atomic_write(path, new_content + newline)
       end
       true
     end
