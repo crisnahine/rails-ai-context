@@ -301,6 +301,20 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
         expect(described_class.bundle_warning(root, tmp)).to be_nil
       end
 
+      # ENV hands Bundler's path back tagged binary in a C locale, whatever
+      # the binary made the default; the warning must not fail to join it.
+      it "warns when the bundle's path and the app's both hold text outside ASCII" do
+        root = app("caf\u00e9/tiend\u00e1")
+        File.write(File.join(root, "Gemfile"), "")
+        other = File.join(tmp, "caf\u00e9/other/Gemfile")
+        FileUtils.mkdir_p(File.dirname(other))
+        File.write(other, "")
+        stub_const("ENV", ENV.to_h.merge("BUNDLE_BIN_PATH" => "/usr/bin/bundle"))
+        allow(Bundler).to receive(:default_gemfile).and_return(Pathname.new(other.b))
+
+        expect(described_class.bundle_warning(root, File.join(tmp, "caf\u00e9"))).to include("tiend\u00e1/ boots against the bundle of")
+      end
+
       it "names the app it stands in plainly" do
         root = app("shop")
         File.write(File.join(root, "Gemfile"), "")

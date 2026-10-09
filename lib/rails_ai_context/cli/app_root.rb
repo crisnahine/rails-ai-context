@@ -258,7 +258,9 @@ module RailsAiContext
       def self.bundle_warning(root, cwd)
         return nil unless ENV["BUNDLE_BIN_PATH"] && defined?(::Bundler) && ::Bundler.respond_to?(:default_gemfile)
 
-        given = ::Bundler.default_gemfile.to_s
+        # Bundler's path comes from ENV, which a C locale tags binary whatever
+        # the default; spelled in the app's encoding, it joins its name.
+        given = ::Bundler.default_gemfile.to_s.dup.force_encoding(root.encoding)
         bundle_gemfile = real(given)
         real_root = real(root)
         # Bundler looks for gems.rb before Gemfile.

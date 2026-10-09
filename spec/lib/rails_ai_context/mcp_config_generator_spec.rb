@@ -357,6 +357,16 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
         end
       end
 
+      it "says where a config stopped parsing, when the parser says" do
+        Dir.mktmpdir do |dir|
+          File.write(File.join(dir, ".mcp.json"), %({"mcpServers": {"a": {},}}\n))
+
+          result = described_class.new(tools: %i[claude], output_dir: dir, tool_mode: :mcp, standalone: true).call
+
+          expect(result[:reasons].values.first).to match(/\Ait does not parse as JSON( at line \d+,? column \d+)? \(a trailing comma\?\)/)
+        end
+      end
+
       it "reads a // inside a string as no comment" do
         Dir.mktmpdir do |dir|
           File.write(File.join(dir, ".mcp.json"), %({"mcpServers": {"api": {"url": "https://x.example/mcp", "note": "a \\" // b"}}}\n))
