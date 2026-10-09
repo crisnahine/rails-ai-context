@@ -221,9 +221,10 @@ module RailsAiContext
     # What a write drops besides replacing its own entries, from the entries
     # of ours already there (name => the app root each names). An app's own
     # write drops nothing. A workspace's drops the bare entry, which would
-    # serve the folder itself, and an entry whose app is gone or now goes by
-    # another name; one naming an app outside this write stays, as somebody's
-    # own arrangement.
+    # serve the folder itself; an entry whose app is gone; and one for an app
+    # it now names otherwise, when the old name is one this gem gave it - a
+    # second entry made by hand for the same app stays, and so does one
+    # naming an app outside this write.
     def stale_names(existing)
       return [] if @servers.any? { |server| server.name == SERVER_NAME }
 
@@ -232,8 +233,10 @@ module RailsAiContext
       existing.filter_map do |name, app_root|
         next name if name == SERVER_NAME
         next if names.include?(name) || app_root.nil?
+        next name unless File.directory?(app_root)
+        next unless roots.include?(self.class.real(app_root))
 
-        name if !File.directory?(app_root) || roots.include?(self.class.real(app_root))
+        name if Install::Workspace.generated_name?(name, app_root.delete_prefix("#{@output_dir.delete_suffix('/')}/"))
       end
     end
 
@@ -271,10 +274,11 @@ module RailsAiContext
       servers = data[root_key]
       raise ShapeError, %("#{root_key}" is not an object; left the file as it is) unless servers.is_a?(Hash)
 
-      ours = servers.select { |name, entry| self.class.own_entry?(name, self.class.json_argv(entry)) }
-      stale = stale_names(ours.to_h do |name, entry|
-        [ name, self.class.entry_app_root(self.class.json_argv(entry), config[:folder_variable], @output_dir) ]
-      end)
+      ours = servers.filter_map do |name, entry|
+        argv = self.class.json_argv(entry)
+        [ name, self.class.entry_app_root(argv, config[:folder_variable], @output_dir) ] if self.class.own_entry?(name, argv)
+      end
+      stale = stale_names(ours.to_h)
       return :skipped if exists && stale.empty? && entries.all? { |name, entry| servers[name] == entry }
 
       stale.each { |name| servers.delete(name) }
@@ -303,8 +307,11 @@ module RailsAiContext
       by_name = @servers.to_h { |server| [ server.name, toml_section(server).gsub("\n", newline) ] }
 
       named = Toml.sections(lines) { |name| name.match?(OWN_SERVER_NAME) }
-      ours = named.select { |range, name| self.class.own_entry?(name, Toml.argv(lines, range)) }
-      drop = stale_names(ours.to_h { |range, name| [ name, self.class.entry_app_root(Toml.argv(lines, range), nil, @output_dir) ] })
+      ours = named.filter_map do |range, name|
+        argv = Toml.argv(lines, range)
+        [ name, self.class.entry_app_root(argv, nil, @output_dir) ] if self.class.own_entry?(name, argv)
+      end
+      drop = stale_names(ours.to_h)
       # An entry this write names is replaced whoever wrote it: a second
       # table of one name would not parse.
       starts = named.select { |_, name| by_name.key?(name) || drop.include?(name) }

@@ -46,6 +46,12 @@ RSpec.describe RailsAiContext::InstallMode do
       end
     end
 
+    # eval_gemfile and gemspec are followed only after a boot.
+    it "rules nothing out from a Gemfile that pulls in other files" do
+      File.write(File.join(tmpdir, "Gemfile"), %(source "https://rubygems.org"\ngem "rails"\neval_gemfile "Gemfile.tools"\n))
+      expect(described_class.standalone?).to be(false)
+    end
+
     # A workspace asks about apps that are not the bundle it runs in.
     it "reads the app named by root: rather than the process's bundle" do
       File.write(File.join(tmpdir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails-ai-context (5.13.0)\n")

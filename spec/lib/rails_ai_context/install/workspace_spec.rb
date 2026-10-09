@@ -61,6 +61,22 @@ RSpec.describe RailsAiContext::Install::Workspace do
     end
   end
 
+  describe ".generated_name?" do
+    it "knows the names it gives an app, under any set of apps" do
+      expect(described_class.generated_name?("rails-ai-context-web", "apps/web")).to be(true)
+      expect(described_class.generated_name?("rails-ai-context-apps-web", "apps/web")).to be(true)
+      expect(described_class.generated_name?("rails-ai-context-web-2", "apps/web")).to be(true)
+      long = "a-very-long-application-folder-name"
+      expect(described_class.generated_name?(described_class.server_names([ long ]).fetch(long), long)).to be(true)
+    end
+
+    it "does not claim a name made by hand" do
+      expect(described_class.generated_name?("rails-ai-context-readonly", "apps/web")).to be(false)
+      expect(described_class.generated_name?("rails-ai-context", "apps/web")).to be(false)
+      expect(described_class.generated_name?("web", "apps/web")).to be(false)
+    end
+  end
+
   describe ".apps" do
     around do |example|
       Dir.mktmpdir do |dir|

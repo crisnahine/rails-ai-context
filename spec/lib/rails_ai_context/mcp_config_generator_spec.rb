@@ -560,6 +560,16 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
           .to eq(%w[rails-ai-context-elsewhere rails-ai-context-http mine rails-ai-context-a rails-ai-context-group-b])
       end
 
+      # A second entry for the same app, made by hand, is somebody's choice.
+      it "keeps a hand-named entry for a current app" do
+        File.write(File.join(@dir, ".mcp.json"), JSON.generate("mcpServers" => { "rails-ai-context-readonly" => entry("a") }))
+
+        described_class.new(tools: [ :claude ], output_dir: @dir, tool_mode: :mcp, servers: servers).call
+
+        expect(JSON.parse(File.read(File.join(@dir, ".mcp.json")))["mcpServers"].keys)
+          .to eq(%w[rails-ai-context-readonly rails-ai-context-a rails-ai-context-b])
+      end
+
       it "reads a stale entry's app through the tool's name for its folder" do
         FileUtils.mkdir_p(File.join(@dir, ".cursor"))
         File.write(File.join(@dir, ".cursor/mcp.json"), JSON.generate("mcpServers" => {

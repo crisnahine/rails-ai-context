@@ -40,7 +40,7 @@ rails-ai-context serve --transport http --port 6029   # HTTP transport
 | `--port` | `http_port` from config, else `6029` | HTTP listen port |
 | `--no-boot` | off | Skip booting the app; answer from source alone |
 
-The server announces itself to the client as `server_name` from config, else `rails-ai-context`; the `RAILS_AI_CONTEXT_SERVER_NAME` environment variable overrides both for one process. A [workspace](#init-standalone-only) entry sets it to put its app first, since VS Code names every tool after the announced name and keeps 13 characters of it.
+The server announces itself to the client as `server_name` from config, else `rails-ai-context`. The `RAILS_AI_CONTEXT_SERVER_NAME` environment variable takes the place of that default for one process; a `server_name` the app sets itself still wins. A [workspace](#init-standalone-only) entry sets the variable to put its app first, since VS Code names every tool after the announced name and keeps 13 characters of it.
 
 ### `tool`
 
@@ -246,7 +246,7 @@ The AI tools and the setup are asked once. Each app gets its own `.rails-ai-cont
 - **Paths stay relative**, so a committed file means the same thing on every machine. Claude Code, Codex and OpenCode start a server in the folder they were launched in, so their configs name the app from the workspace (`api`). Cursor does not promise a working directory, so its config and VS Code's name it from the folder the config sits in (`${workspaceFolder}/api`), which both expand.
 - **The command form is each app's own**: the bare binary where the gem is not in the app's Gemfile.lock, `bundle exec` where it is, with `BUNDLE_GEMFILE` naming the app's Gemfile, since `bundle exec` started in the workspace would look for one there.
 - **`RAILS_AI_CONTEXT_SERVER_NAME` puts the app first** in the name the server announces. VS Code names every tool after that name and keeps 13 characters of it, so without it every app's tools would start `rails-ai-cont`. It is a variable rather than a flag so that an app whose bundle pins an older gem ignores it and starts.
-- A bare `rails-ai-context` entry left in the folder is replaced, since it would serve the folder itself, and so is an entry for an app that is gone or now goes by another name. Names starting `rails-ai-context` are the gem's: dropping an AI tool removes every one of them from its config.
+- A bare `rails-ai-context` entry left in the folder is replaced, since it would serve the folder itself, and so is an entry for an app that is gone, or one the gem named that app under before another app arrived with the same folder name. An entry named `rails-ai-context-...` that runs `rails-ai-context serve` is the gem's: dropping an AI tool removes it from that tool's config. One that does not, such as an HTTP entry of your own, is left alone, and so is a second entry you named yourself for an app.
 - `--app-path` naming a folder of apps sets that folder up the same way; every other command lists the apps below it.
 - An app whose bundle is not installed yet (a Gemfile and no lockfile) is served by this binary unless its Gemfile names the gem.
 

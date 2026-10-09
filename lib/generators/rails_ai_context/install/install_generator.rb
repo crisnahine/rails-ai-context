@@ -482,10 +482,10 @@ module RailsAiContext
 
       # One hook for every app it names. Each app's staged files are found by
       # paths relative to it and validated from inside it.
-      def validation_hook(apps)
+      def validation_hook(apps, standalone:)
         # Standalone installs have no `ai:*` rake tasks, so the hook must call
         # the gem's own binary; in-Gemfile installs go through rake as usual.
-        if RailsAiContext::InstallMode.standalone?
+        if standalone
           hook_binary = "rails-ai-context"
           validate_command = %(rails-ai-context tool validate --files "$files")
         else
@@ -531,9 +531,15 @@ module RailsAiContext
       # directory may not exist yet, and a temp or home directory may sit
       # behind a symlink.
       def inside?(path, dir)
-        path = canonical_path(path.to_s)
-        dir = canonical_path(dir.to_s)
-        path == dir || path.start_with?(dir.end_with?("/") ? dir : "#{dir}/")
+        RailsAiContext::SafePath.contained?(canonical_path(path.to_s), canonical_path(dir.to_s))
+      end
+
+      # Whether git tracks any file of the app, asked from inside it.
+      def app_tracked?
+        out, status = Open3.capture2("git", "ls-files", "-z", "--", ".", chdir: Rails.root.to_s, err: File::NULL)
+        status.success? && !out.empty?
+      rescue SystemCallError
+        false
       end
 
       def canonical_path(path)
@@ -580,8 +586,18 @@ module RailsAiContext
         end
 
         app = repo[:prefix].empty? ? "." : repo[:prefix]
+        # An app below the top of a repository it is not tracked in - one
+        # under a dotfiles repository at $HOME - is not that repository's to
+        # validate.
+        unless app == "." || app_tracked?
+          say "  Skipped pre-commit hook (#{Rails.root} is not tracked in the git repository at #{repo[:toplevel]} - " \
+              "commit it there, then run this again)", :yellow
+          return
+        end
+
         hook_path = repo[:hooks].join("pre-commit")
         apps = [ app ]
+        standalone = RailsAiContext::InstallMode.standalone?
         if File.exist?(hook_path)
           content = File.read(hook_path)
           unless content.include?("rails-ai-context")
@@ -590,12 +606,21 @@ module RailsAiContext
           end
 
           # A hook from before it named its apps served the repository's root.
-          covered = content[HOOK_APPS, 1]&.shellsplit || [ "." ]
+          covered = content[HOOK_APPS, 1]&.shellsplit
+          if covered.nil?
+            return if app == "."
+
+            say "  Skipped pre-commit hook (#{hook_path} comes from an earlier version and validates the repository root " \
+                "only - delete it and run this again to cover #{app} too)", :yellow
+            return
+          end
           return if covered.include?(app)
 
           # Another app in the same repository: its hook is rewritten to cover
-          # this one too, unless it was changed by hand since it was written.
-          unless content == validation_hook(covered)
+          # this one too, in the form it was written in, unless it was changed
+          # by hand since.
+          standalone = [ standalone, !standalone ].find { |mode| content == validation_hook(covered, standalone: mode) }
+          if standalone.nil?
             say "  Skipped pre-commit hook (#{hook_path} validates #{covered.join(', ')} and was changed by hand - " \
                 "add #{app} to it the same way)", :yellow
             return
@@ -603,11 +628,12 @@ module RailsAiContext
           apps = covered + [ app ]
         end
 
-        answer = ask_safe("Install a pre-commit hook that validates Rails references? (y/N)").strip.downcase
+        where = app == "." ? "" : " in #{repo[:toplevel]}"
+        answer = ask_safe("Install a pre-commit hook#{where} that validates Rails references? (y/N)").strip.downcase
         return unless answer == "y"
 
         FileUtils.mkdir_p(repo[:hooks])
-        File.write(hook_path, validation_hook(apps))
+        File.write(hook_path, validation_hook(apps, standalone: standalone))
         FileUtils.chmod(0o755, hook_path)
         say(apps.one? ? "  Installed pre-commit validation hook" : "  Added #{app} to the pre-commit validation hook", :green)
       end

@@ -148,6 +148,16 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
       expect(described_class.walk_down(dir("work"))).to eq([ a ])
     end
 
+    # Two levels down from /Users reach ~/Documents, and on macOS listing it
+    # raises a folder-access prompt.
+    it "never lists a directory above $HOME" do
+      home = dir("users/me")
+      app("users/me/shop")
+      app("users/other")
+      allow(Dir).to receive(:home).and_return(home)
+      expect(described_class.walk_down(File.join(tmp, "users"))).to eq([])
+    end
+
     it "never lists $HOME or the filesystem root" do
       home = dir("home")
       app("home/a")

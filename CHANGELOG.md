@@ -21,19 +21,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from its own Gemfile.lock, and an in-Gemfile app's entry sets
   `BUNDLE_GEMFILE` to its Gemfile. A bare `rails-ai-context` entry left in
   the folder is replaced, a re-run drops the entry of an app that is gone or
-  was renamed, removal and cleanup take every `rails-ai-context-*` entry,
+  that the gem renamed, removal and cleanup take every `rails-ai-context-*`
+  entry that runs the gem's server (a hand-made one that does not stays),
   `--app-path` naming a folder of apps sets that folder up, and `doctor`
   inside an app finds the folder's
   config one or two levels up and checks each Codex env snapshot in it.
   `init` warns when an app declares a Ruby other than the one the folder
   runs. See ADR-0005 for what each AI tool does with a server's working
   directory, and why.
-- **`RAILS_AI_CONTEXT_SERVER_NAME`** sets the name the server announces, over
-  `config.server_name`, for one process. A workspace entry sets it to put its
-  app first: VS Code names every tool after the announced name and keeps 13
-  characters of it, so every app's tools would otherwise start
-  `rails-ai-cont`. An app whose bundle pins an older gem ignores the variable
-  and starts.
+- **`RAILS_AI_CONTEXT_SERVER_NAME`** names the server, for one process, in
+  place of the default `config.server_name`; a name the app configured wins.
+  A workspace entry sets it to put its app first: VS Code names every tool
+  after the announced name and keeps 13 characters of it, so every app's
+  tools would otherwise start `rails-ai-cont`. An app whose bundle pins an
+  older gem ignores the variable and starts.
 
 ### Fixed
 
@@ -61,10 +62,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hooks directory is now git's own answer. A monorepo's hook validates each
   app's staged files from inside that app, and installing in a second app
   adds it to the same hook. A `core.hooksPath` outside the repository, which
-  every repository using it shares, is left alone with a message.
+  every repository using it shares, and a repository that does not track the
+  app (a dotfiles repository at `$HOME`), are left alone with a message.
 - **An app with a Gemfile and no lockfile yet is read by what its Gemfile
   names.** It counted as an in-Gemfile install, so a fresh clone that never
-  named the gem got `bundle exec` commands that could not start.
+  named the gem got `bundle exec` commands that could not start. A Gemfile
+  that pulls in others (`eval_gemfile`, `gemspec`) still counts as one.
 - **Codex's config keeps the tables around the gem's own.** A server section
   ran on into the next table when no blank line separated them, so updating
   it replaced the user's table too; a comment above the next table now stays

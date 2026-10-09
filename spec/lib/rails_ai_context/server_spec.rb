@@ -58,6 +58,13 @@ RSpec.describe RailsAiContext::Server do
       expect(server.build.name).to eq("shop-rails-ai-context")
     end
 
+    it "leaves a name the app configured itself" do
+      stub_const("ENV", ENV.to_h.merge("RAILS_AI_CONTEXT_SERVER_NAME" => "shop-rails-ai-context"))
+      allow(RailsAiContext.configuration).to receive(:server_name).and_return("billing-ctx")
+
+      expect(described_class.announced_name).to eq("billing-ctx")
+    end
+
     it "ignores a blank RAILS_AI_CONTEXT_SERVER_NAME" do
       stub_const("ENV", ENV.to_h.merge("RAILS_AI_CONTEXT_SERVER_NAME" => " "))
 
