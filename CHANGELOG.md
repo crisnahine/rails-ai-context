@@ -96,8 +96,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   byte order mark at the head of a config is kept, where it cost the file
   its contents, and an entry of the user's under the gem's own name - the
   HTTP one SETUP.md describes - is kept in place of the gem's, where it was
-  overwritten. `doctor` says to make such a file valid JSON before running
-  the install again.
+  overwritten. `doctor` says to make such a file valid JSON holding an
+  object before running the install again, where it called one that parsed
+  valid whatever it held.
 - **In a C or POSIX locale, a container's default, the binary reads paths
   and files as UTF-8 when they are**, as Rails does once it boots. An app
   folder or a folder of apps whose path holds characters outside ASCII, a
