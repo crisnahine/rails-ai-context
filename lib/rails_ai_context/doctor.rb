@@ -332,7 +332,19 @@ module RailsAiContext
               next Check.new(name: cfg[:label], status: :warn, message: "#{shown} is empty", fix: "Run `#{command(:install)}`")
             end
 
-            McpConfigGenerator.read_json(full_path)
+            data = McpConfigGenerator.read_json(full_path)
+            # The install merges only into an object, with an object under
+            # the tool's servers key, and leaves anything else as it is.
+            root_key = McpConfigGenerator::TOOL_CONFIGS.fetch(tool)[:root_key]
+            shape = if !data.is_a?(Hash) then "it is JSON but not an object"
+            elsif !data[root_key].nil? && !data[root_key].is_a?(Hash) then %("#{root_key}" is not an object)
+            end
+            if shape
+              invalid << shown
+              next Check.new(name: cfg[:label], status: :fail, message: "#{shown} cannot take the gem's entry: #{shape}",
+                             fix: unparseable_fix([ shown ]))
+            end
+
             Check.new(name: cfg[:label], status: :pass, message: "#{shown} valid", fix: nil)
           rescue JSON::ParserError => e
             invalid << shown
@@ -359,8 +371,8 @@ module RailsAiContext
       end
     end
 
-    # Install leaves a config it cannot parse as it is, so running it alone
-    # would change nothing there. A workspace's config above the app is
+    # Install leaves a config it cannot parse, or merge into, as it is, so
+    # running it alone would change nothing there. A workspace's config above the app is
     # written by `init` run in the workspace, never by this app's install.
     def unparseable_fix(paths)
       run = if paths.any? { |path| path.start_with?("../") }
@@ -368,7 +380,8 @@ module RailsAiContext
       else
         "`#{command(:install)}`"
       end
-      "Make #{paths.join(', ')} valid JSON (the install leaves a file it cannot parse as it is), then run #{run}"
+      "Make #{paths.join(', ')} valid JSON holding an object (the install leaves a file it cannot merge into as it is), " \
+        "then run #{run}"
     end
 
     def check_codex_env_staleness

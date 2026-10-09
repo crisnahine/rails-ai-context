@@ -664,7 +664,26 @@ RSpec.describe RailsAiContext::Doctor do
       it "asks for the file to be made valid before init runs, in a standalone install" do
         allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
 
-        expect(check.fix).to eq("Make .mcp.json valid JSON (the install leaves a file it cannot parse as it is), then run `rails-ai-context init`")
+        expect(check.fix).to eq("Make .mcp.json valid JSON holding an object (the install leaves a file it cannot merge into as it is), " \
+                                "then run `rails-ai-context init`")
+      end
+    end
+
+    # The install refuses to merge into anything but an object.
+    context "when a JSON config parses but holds no object to merge into" do
+      before do
+        allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude copilot])
+        write(".mcp.json", "[1, 2]")
+        write(".vscode/mcp.json", %({"servers": ["x"]}))
+      end
+
+      it "reports both, as the install would refuse them" do
+        expect(check.status).to eq(:fail)
+        expect(check.message).to include("2 of 2")
+        expect(check.fix).to start_with("Make .mcp.json, .vscode/mcp.json valid JSON holding an object")
+        expect(described_class.new(RailsAiContext::StaticApp.new(@root)).run[:checks].map(&:message).join)
+          .not_to include("has invalid JSON")
       end
     end
 
@@ -755,8 +774,8 @@ RSpec.describe RailsAiContext::Doctor do
 
       expect(check.status).to eq(:fail)
       expect(check.message).to include(".vscode/mcp.json")
-      expect(check.fix).to eq("Make ../.vscode/mcp.json valid JSON (the install leaves a file it cannot parse as it is), " \
-                              "then run `rails-ai-context init` in the folder that holds it")
+      expect(check.fix).to eq("Make ../.vscode/mcp.json valid JSON holding an object (the install leaves a file it cannot merge " \
+                              "into as it is), then run `rails-ai-context init` in the folder that holds it")
     end
 
     it "passes over a config above it that names no server of the gem's" do
