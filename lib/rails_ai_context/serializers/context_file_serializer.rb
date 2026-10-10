@@ -55,14 +55,19 @@ module RailsAiContext
       end
 
       # Callers that pay for an introspection before writing check the format
-      # first, so a name nothing can write is refused before the work.
+      # first, so a name nothing can write is refused before the work. The
+      # names come in the order the CLI's help lists them, and a single name
+      # (a command's --format or argument) may also be `all`; a list, which
+      # is config.ai_tools, may not.
       def self.validate_format!(format)
         return if format.nil? || format == :all
 
         unknown = Array(format).reject { |fmt| ALL_FORMATS.include?(fmt) }
         return if unknown.empty?
 
-        raise ArgumentError, "Unknown format: #{unknown.first}. Valid formats: #{ALL_FORMATS.map(&:to_s).join(', ')}"
+        valid = (Install::AiTool.all.map(&:key) & ALL_FORMATS) | ALL_FORMATS
+        valid += [ :all ] unless format.is_a?(Array)
+        raise ArgumentError, "Unknown format: #{unknown.first}. Valid formats: #{valid.join(', ')}"
       end
 
       # Write context files, skipping unchanged ones.

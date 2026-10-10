@@ -199,6 +199,17 @@ RSpec.describe RailsAiContext::Serializers::ContextFileSerializer do
         expect { serializer.call }.to raise_error(ArgumentError, /Unknown format/)
       end
     end
+
+    # A name typed for --format or ai:context_for may also be `all`, which the
+    # list left out; config.ai_tools, a list, may not.
+    it "names every format a command takes, `all` included, in the order the CLI's help does" do
+      expect { described_class.validate_format!(:bogus) }.to raise_error(
+        ArgumentError, "Unknown format: bogus. Valid formats: claude, cursor, copilot, opencode, codex, json, all"
+      )
+      expect { described_class.validate_format!(%i[claude bogus]) }.to raise_error(
+        ArgumentError, "Unknown format: bogus. Valid formats: claude, cursor, copilot, opencode, codex, json"
+      )
+    end
   end
 
   describe "section markers" do
