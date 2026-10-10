@@ -66,6 +66,10 @@ module RailsAiContext
 
           stat = ActiveRecord::Base.connection_pool.stat
           lines = [ "## Connection Pool", "" ]
+          # Read in-process, so the counts are the MCP server's own. 0 connections
+          # said nothing about an app server running beside it.
+          lines << "_This MCP server process's pool: the counts are its own connections. Each app server process keeps a pool of its own, of the size configured here._"
+          lines << ""
           lines << "| Metric | Value |"
           lines << "|--------|-------|"
           lines << "| Pool size | #{stat[:size]} |"
@@ -233,10 +237,49 @@ module RailsAiContext
           value.is_a?(Hash) ? value.map { |k, v| "#{k}: #{v}" }.join(", ") : value.to_s
         end
 
+        # Whose numbers these are depends on where the store keeps its entries.
+        def cache_scope(cache)
+          case cache.class.name.demodulize
+          when "MemoryStore"
+            "_A MemoryStore lives inside one process, so these numbers are this MCP server's own. " \
+              "Each app server process holds entries of its own that no other process sees._"
+          when "NullStore" then "_A NullStore keeps nothing, in this process or any other._"
+          when "FileStore"
+            "_The app's processes on this machine share these files#{" under `#{relative_path(cache.cache_path)}`" if cache.respond_to?(:cache_path)}._"
+          else
+            "_The app's processes in this environment share this store, so these numbers are theirs too._"
+          end
+        end
+
+        def relative_path(path)
+          path.to_s.delete_prefix("#{rails_app.root}/")
+        end
+
+        # A store no other process can read is nobody's real cache.
+        PROCESS_STORES = /\A:(memory|null)_store\b/
+
+        # This process runs one environment's store; another environment that
+        # configures a shared one (Redis, Memcached, Solid Cache) keeps the
+        # app's real cache there.
+        def configured_elsewhere
+          config = cached_context[:env_config]
+          return [] unless config.is_a?(Hash)
+
+          Array(config[:environments]).filter_map do |env|
+            next if env[:name].to_s == rails_env_name.to_s
+
+            store = (env[:notable] || {})["cache_store"]
+            next unless store && !store.match?(PROCESS_STORES)
+
+            # The store's name; its options are rails_get_env_config's to show, unshortened.
+            "- #{env[:name]}: `#{store[/\A:\w+/] || store}` (`#{env[:file]}`)"
+          end
+        end
+
         def gather_cache
           cache = Rails.cache
           lines = [ "## Cache", "" ]
-          lines << "**Store:** #{cache.class.name.demodulize}"
+          lines << "**Store:** #{cache.class.name.demodulize}, this MCP server process's `Rails.cache` (#{rails_env_name})"
 
           if cache.respond_to?(:stats)
             cache_stat_lines(cache.stats).each { |line| lines << line }
@@ -261,6 +304,13 @@ module RailsAiContext
             lines << "**Size:** #{shape[/size=(\d+)/, 1] || "unknown"} bytes"
           else
             lines << "_Stats not available for #{cache.class.name}. Supported: Redis, MemoryStore._"
+          end
+
+          lines << "" << cache_scope(cache)
+          elsewhere = configured_elsewhere
+          if elsewhere.any?
+            lines.push("", "**The app's cache in other environments:**", *elsewhere,
+                       "_`rails_get_env_config(environment:\"...\")` shows each one's options._")
           end
 
           lines << ""
