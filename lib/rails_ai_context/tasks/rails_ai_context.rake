@@ -97,14 +97,20 @@ def say_conflict(key, status)
   puts "⚠️  #{text}" if text
 end unless defined?(say_conflict)
 
+# Each returns the line's write status (:updated, :inserted, :unchanged,
+# :conflict, :absent), so the run can name the initializer when it moved.
 def save_tool_mode_to_initializer(mode)
-  say_conflict(:tool_mode, RailsAiContext::Install::SelectionRecord.write_tool_mode(mode, root: Rails.root))
+  status = RailsAiContext::Install::SelectionRecord.write_tool_mode(mode, root: Rails.root)
+  say_conflict(:tool_mode, status)
+  status
 rescue => e
   RailsAiContext.debug_fail(e, nil, label: "save_tool_mode_to_initializer")
 end unless defined?(save_tool_mode_to_initializer)
 
 def save_context_files_to_initializer(value)
-  say_conflict(:context_files, RailsAiContext::Install::SelectionRecord.write_context_files(value, root: Rails.root))
+  status = RailsAiContext::Install::SelectionRecord.write_context_files(value, root: Rails.root)
+  say_conflict(:context_files, status)
+  status
 rescue => e
   RailsAiContext.debug_fail(e, nil, label: "save_context_files_to_initializer")
 end unless defined?(save_context_files_to_initializer)
@@ -131,14 +137,19 @@ end unless defined?(tool_mode_configured?)
 # `record_initializer:` is false on an ordinary `ai:context` run. The YAML is
 # this gem's own file and is refreshed every time, but the initializer is the
 # user's Rails config: rewriting it unasked would renormalize their line and
-# drop any key this version does not recognise.
-def save_selection(ai_tools, tool_mode, record_initializer: false)
+# drop any key this version does not recognise. `initializer_moved:` says the
+# run already rewrote the initializer's mode or context_files line, so the
+# file is named once, whichever of its lines moved.
+def save_selection(ai_tools, tool_mode, record_initializer: false, initializer_moved: false)
   result = RailsAiContext::Install::SelectionRecord.write(
     ai_tools, root: Rails.root,
     extra_yaml: { "tool_mode" => tool_mode.to_s,
                   "context_files" => RailsAiContext.configuration.context_files },
     initializer: record_initializer
   )
+  if initializer_moved && %i[unchanged absent skipped].include?(result[:initializer])
+    result = result.merge(initializer: :updated)
+  end
 
   RailsAiContext::Install::SelectionRecord.messages(result).each do |level, text|
     puts "#{level == :warn ? '⚠️ ' : '💾'} #{text}"
@@ -261,14 +272,19 @@ namespace :ai do
     end
 
     # Prompt for tool_mode if not yet configured in initializer
+    initializer_moved = false
     unless tool_mode_configured?
       setup = prompt_setup
       RailsAiContext.configuration.tool_mode = setup.tool_mode
       RailsAiContext.configuration.context_files = setup.context_files
-      save_tool_mode_to_initializer(setup.tool_mode)
-      save_context_files_to_initializer(setup.context_files)
+      statuses = [ save_tool_mode_to_initializer(setup.tool_mode),
+                   save_context_files_to_initializer(setup.context_files) ]
+      initializer_moved = statuses.any? { |status| %i[updated inserted].include?(status) }
 
       unless setup.context_files
+        # Recorded like any other answer, or an app with no initializer
+        # line to hold it was asked again on every run.
+        save_selection(ai_tools, setup.tool_mode, record_initializer: prompted, initializer_moved: initializer_moved)
         puts "MCP-only install: no context files written."
         ensure_mcp_configs(ai_tools)
         next
@@ -285,7 +301,7 @@ namespace :ai do
     # is only touched on the run that actually asked the user.
     save_selection(ai_tools || RailsAiContext.configuration.ai_tools,
                    RailsAiContext.configuration.tool_mode,
-                   record_initializer: prompted)
+                   record_initializer: prompted, initializer_moved: initializer_moved)
 
     # Auto-create/update per-tool MCP config files when tool_mode is :mcp
     ensure_mcp_configs(ai_tools) if RailsAiContext.configuration.tool_mode == :mcp
