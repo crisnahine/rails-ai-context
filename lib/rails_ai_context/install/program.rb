@@ -289,6 +289,18 @@ module RailsAiContext
         false
       end
 
+      # The selected tools whose MCP config a context run keeps up to date in
+      # the app: every one, but for one a workspace's config above already
+      # serves. The workspace set that one up, and a config of the app's own
+      # beside it would start a second server for the same app.
+      def own_config_tools(tools, root:)
+        Array(tools).reject do |tool|
+          config = AiTool.find(tool)&.mcp_config or next true
+          serving = RailsAiContext::McpConfigGenerator.serving_config(root.to_s, tool)
+          serving && serving != File.join(root.to_s, config[:path])
+        end
+      end
+
       # `standalone: nil` lets the generator detect the install mode from
       # Gemfile.lock, so every entry writes the same command form for the
       # same app (no config ping-pong). `servers:` replaces the app's own

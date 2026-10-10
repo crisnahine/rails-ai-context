@@ -345,6 +345,22 @@ RSpec.describe RailsAiContext::Install::Program do
     end
   end
 
+  describe ".own_config_tools" do
+    # A workspace's config above serves the app already; a second config in
+    # the app would start a second server for it.
+    it "leaves out a tool a workspace's config serves, and keeps the rest" do
+      Dir.mktmpdir do |workspace|
+        app = File.join(workspace, "a")
+        FileUtils.mkdir_p(app)
+        File.write(File.join(workspace, ".mcp.json"), JSON.generate("mcpServers" => {
+          "rails-ai-context-a" => { "command" => "rails-ai-context", "args" => %w[serve --app-path a] }
+        }))
+
+        expect(described_class.own_config_tools(%i[claude cursor], root: app)).to eq(%i[cursor])
+      end
+    end
+  end
+
   describe ".mark_gitignore" do
     it "appends the two entries once and says nothing the second time" do
       Dir.mktmpdir do |root|
