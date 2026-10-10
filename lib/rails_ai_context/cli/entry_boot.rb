@@ -40,13 +40,15 @@ module RailsAiContext
       # The boot tier needs config/environment.rb. The static tier only needs
       # source: an engine keeps its dummy app under spec/dummy, so its root
       # has app/ and no config/, and it is a real target.
+      #
+      # The framework check reads the bundle, so it runs last: asked of every
+      # directory a walk passes (app/models, db/migrate), it parsed Gemfiles
+      # no app was found beside.
       def self.app_present?(root, allow_source_only: false)
-        return false if other_framework?(root)
-        return true if File.exist?(File.join(root, "config", "environment.rb"))
-        return false unless allow_source_only
-        return true if File.exist?(File.join(root, "config", "application.rb"))
-
-        source_file?(File.join(root, "app"))
+        present = File.exist?(File.join(root, "config", "environment.rb")) ||
+          (allow_source_only && (File.exist?(File.join(root, "config", "application.rb")) ||
+                                 source_file?(File.join(root, "app"))))
+        present && !other_framework?(root)
       end
 
       # Whether app/ holds a Ruby file, as app/**/*.rb would match one: the

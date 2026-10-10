@@ -20,6 +20,18 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
       Dir.mktmpdir { |dir| expect(described_class.app_present?(dir)).to be false }
     end
 
+    # A walk asks this of every directory it passes (app/models, db/migrate),
+    # and the framework check reads the bundle: asked first, it parsed a
+    # Gemfile beside no app.
+    it "reads no bundle for a directory that holds no app" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile"), %(gem "sinatra"\n))
+        expect(described_class).not_to receive(:other_framework?)
+
+        expect(described_class.app_present?(dir, allow_source_only: true)).to be false
+      end
+    end
+
     # An engine keeps its dummy app under spec/dummy; its root has app/ and
     # no config/. The static tier can read it; the boot tier cannot.
     it "accepts a source-only engine repo only when asked to" do

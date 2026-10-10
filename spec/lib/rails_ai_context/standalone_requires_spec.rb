@@ -38,6 +38,28 @@ RSpec.describe "the files the install path loads on their own" do
     expect($?.exitstatus).to eq(0), out
   end
 
+  # Every one of these is a gem an app's bundle pins (a Rails 8 lockfile names
+  # prism, json and securerandom). Loaded here first, the app's copy loads over
+  # ours at the boot - "already initialized constant", then a mixed library.
+  it "reads the Gemfile, the Ruby it declares and config/boot.rb without loading a gem the app pins" do
+    script = <<~RUBY
+      #{STANDALONE_FILES.map { |f| "require #{File.join("rails_ai_context", f).inspect}" }.join("\n")}
+      RailsAiContext.define_singleton_method(:log_warn) { |m| }
+      dir = File.realpath(Dir.mktmpdir)
+      File.write(File.join(dir, "Gemfile"), %(ruby "3.3.6"\ngem "rails"\ngem("pg")\ngroup :development do\n  gem "rails-ai-context" if true\nend\n))
+      root = File.join(dir, "apps/shop")
+      FileUtils.mkdir_p(File.join(root, "config"))
+      File.write(File.join(root, "config/boot.rb"), %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n))
+      spec = RailsAiContext::GemLock.for(dir)
+      p spec.gemfile_gems, spec.ruby_versions, RailsAiContext::GemLock.boot_gemfile(root) == File.join(dir, "Gemfile")
+      p $LOADED_FEATURES.grep(%r{/(prism|json|strscan|securerandom)(\\.rb|\\.so|\\.bundle)\\z})
+    RUBY
+    out = `ruby -rtmpdir -rfileutils -I #{lib.shellescape} -e #{script.shellescape} 2>&1`
+
+    expect($?.exitstatus).to eq(0), out
+    expect(out.lines.map(&:strip)).to eq([ %(["rails", "pg", "rails-ai-context"]), { "Gemfile" => "3.3.6" }.inspect, "true", "[]" ])
+  end
+
   # Loading is not the same as running. legacy_cleanup only reached its
   # `to_set` when `init` actually called it.
   it "runs the legacy prompt without the entry file" do
