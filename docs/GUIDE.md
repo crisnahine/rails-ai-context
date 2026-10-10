@@ -1715,6 +1715,8 @@ Requires the `listen` gem:
 gem "listen", group: :development
 ```
 
+The standalone binary's `rails-ai-context watch` also finds a `listen` installed with `gem install listen`, the way it finds its own dependencies outside the app's bundle; a `listen` the app's bundle locks still wins.
+
 Watches for changes in: `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `spec/`, plus the app directories of packs, in-repo engines and `extra_app_paths`, and regenerates only the files that changed (diff-aware, skips unchanged files).
 
 ---
@@ -1851,6 +1853,10 @@ bundle add listen --group development
 
 # Then run
 rails ai:watch
+
+# Standalone install: no Gemfile change
+gem install listen
+rails-ai-context watch
 ```
 
 ### Tool responses show "not available"

@@ -66,6 +66,22 @@ RSpec.describe RailsAiContext::Watcher do
         expect($stderr).to receive(:puts).with(/listen.*gem is required/)
         expect { watcher.start }.to raise_error(SystemExit)
       end
+
+      # The app's Gemfile is the place only when the gem itself is in it;
+      # a standalone install reaches a listen installed beside it.
+      it "points an in-Gemfile install at the Gemfile" do
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
+
+        expect($stderr).to receive(:puts).with("Add to your Gemfile:  gem 'listen', group: :development")
+        expect { watcher.start }.to raise_error(SystemExit)
+      end
+
+      it "points a standalone install at gem install" do
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+
+        expect($stderr).to receive(:puts).with("Install it:  gem install listen")
+        expect { watcher.start }.to raise_error(SystemExit)
+      end
     end
   end
 

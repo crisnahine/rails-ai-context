@@ -51,6 +51,8 @@ rails-ai-context watch              # Auto-regenerate on changes
 rails-ai-context version            # Show version
 ```
 
+`watch` needs the `listen` gem. It uses the app's when its bundle locks one, and otherwise one installed beside this gem: `gem install listen`, no Gemfile change.
+
 ## How standalone mode works
 
 1. **Loads only its boot shim** before the app - the binary requires the two files it needs to boot Rails, then `config/environment.rb`, and requires the gem itself only after the boot returns. Nothing it loads first is a gem an app pins: it reads the Gemfile and `config/boot.rb` with Ruby's own Ripper, not the prism gem, and loads json only once the app's bundle is set up

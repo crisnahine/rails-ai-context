@@ -346,6 +346,7 @@ class RailsAiContextCLI < Thor
     desc "watch", "Watch for changes and auto-regenerate context files"
     option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
     def watch
+      reach_installed_gem("listen")
       boot_rails!(command: "watch", allow_static: true)
       ::RailsAiContext::Watcher.new.start
     end
@@ -991,6 +992,29 @@ class RailsAiContextCLI < Thor
       entry_boot
       require_relative "../lib/rails_ai_context/cli/app_root"
       ::RailsAiContext::CLI::AppRoot
+    end
+
+    # A gem this binary uses when it is there - `listen`, for watch - is no
+    # dependency of it, so the binstub never activated it, and the app's
+    # bundle hides every gem the app does not lock: a standalone install
+    # could not see a listen installed beside it. It is reached the way this
+    # gem's own dependencies are, found among the installed gems before the
+    # boot and put back behind the app's bundle after it, so a copy the app
+    # locks still wins. Under bundle exec the bundle decides.
+    def reach_installed_gem(name)
+      return if ENV["BUNDLE_BIN_PATH"]
+
+      found = [ Gem::Specification.find_by_name(name) ]
+      found.each do |spec|
+        spec.runtime_dependencies.each { |dep| found << dep.to_spec unless found.any? { |had| had.name == dep.name } }
+      end
+      # A default gem loads from Ruby's own directories already, and the
+      # binstub's stash leaves them out the same way.
+      found.reject!(&:default_gem?)
+      found.each { |spec| spec.full_require_paths.each { |path| $LOAD_PATH << path unless $LOAD_PATH.include?(path) } }
+      entry_boot.preboot_gem_specs = found.to_h { |spec| [ spec.name, spec ] }.merge(entry_boot.preboot_gem_specs)
+    rescue Gem::LoadError
+      nil
     end
 
     # Stdlib only, so it is safe to load before the app boots.
