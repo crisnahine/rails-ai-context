@@ -119,6 +119,15 @@ module RailsAiContext
           RailsAiContext.configuration
         end
 
+        # Every tool's arguments are checked through ArgumentSchema, so an
+        # app whose locale files do not load still gets argument errors.
+        def input_schema(*args)
+          return super if args.empty?
+
+          value = args.first
+          super(value.is_a?(Hash) ? ArgumentSchema.new(value) : value)
+        end
+
         # A bare `Rails.env` raises NameError under --no-boot or early boot death.
         def rails_env_name
           RailsAiContext.environment_name
