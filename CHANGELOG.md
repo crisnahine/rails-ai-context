@@ -376,8 +376,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pending read from that database's dump as `rails_get_schema` reads it),
   the schema rule lists each database's tables under its own heading and
   triggers on each one's dump and migrations, and full mode's schema and
-  migrations sections cover them all. A Rails 8 app's Solid Queue, Cache
-  and Cable dumps count as the databases they are.
+  migrations sections cover them all. A database whose every table is
+  Solid Queue's, Solid Cache's or Solid Cable's, as a Rails 8 app's queue,
+  cache and cable are, is named for its framework in one phrase (`queue:
+  Solid Queue (13 tables)`); its tables, the framework's own, stay out of
+  the schema rule and full mode's dump, and its dump out of the rule's
+  `paths:`.
 - **Claude Code and Copilot read the tools guide once.** Both load the root
   file and the always-on tools rule file on every request, and both files
   carried the whole guide and the protocol, about 95 lines twice. With root

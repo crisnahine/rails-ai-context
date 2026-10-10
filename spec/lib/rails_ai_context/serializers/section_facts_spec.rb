@@ -49,7 +49,8 @@ RSpec.describe RailsAiContext::Serializers::SectionFacts do
           adapter: "postgresql", total_tables: 3, tables: {},
           secondary_databases: {
             "analytics" => { adapter: "static_parse", total_tables: 3, tables: { "events" => {}, "page_views" => {}, "settings" => {} } },
-            "queue" => { adapter: "static_parse", total_tables: 1, tables: { "solid_queue_jobs" => {} } }
+            "reporting" => { adapter: "static_parse", total_tables: 1, tables: { "daily_totals" => {} } },
+            "queue" => { adapter: "static_parse", total_tables: 2, tables: { "solid_queue_jobs" => {}, "solid_queue_processes" => {} } }
           }
         },
         multi_database: { databases: [ { name: "primary", adapter: "postgresql" }, { name: "analytics", adapter: "sqlite3" } ] },
@@ -60,9 +61,11 @@ RSpec.describe RailsAiContext::Serializers::SectionFacts do
       }
     end
 
-    it "counts each database's tables, named the way database.yml names it" do
+    # Rails 8's queue, cache and cable databases hold the framework's tables:
+    # one phrase each says what they are, at no cost per table.
+    it "counts each database's tables, and names a framework's database for its framework" do
       expect(described_class.database_line(ctx))
-        .to eq("- Database: PostgreSQL - 3 tables; analytics: SQLite - 3 tables; queue: 1 table")
+        .to eq("- Database: PostgreSQL - 3 tables; analytics: SQLite - 3 tables; reporting: 1 table; queue: Solid Queue (2 tables)")
     end
 
     it "counts each database's migrations" do

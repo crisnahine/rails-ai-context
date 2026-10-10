@@ -329,6 +329,28 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
     it "keeps a single-database app's rule without database headings" do
       expect(schema_rule(context)).not_to include("## primary")
     end
+
+    # Rails 8's queue, cache and cable databases: the framework's tables, read
+    # on every load of the rule, said nothing about the app.
+    it "leaves out a database a Rails framework keeps to itself" do
+      multi_context[:schema][:secondary_databases]["queue"] = {
+        adapter: "static_parse", total_tables: 2, dump: "db/queue_schema.rb",
+        tables: { "solid_queue_jobs" => { columns: [ { name: "id" } ] }, "solid_queue_processes" => { columns: [ { name: "id" } ] } }
+      }
+
+      content = schema_rule(multi_context)
+
+      expect(content).to include("# Database Tables (4)", "## analytics (SQLite, 2 tables)", "- **page_views**")
+      expect(content).not_to include("queue", "solid_queue")
+    end
+
+    it "keeps a Rails 8 app's rule as a single database's" do
+      context[:schema][:secondary_databases] = {
+        "cache" => { adapter: "static_parse", total_tables: 1, dump: "db/cache_schema.rb", tables: { "solid_cache_entries" => { columns: [] } } }
+      }
+
+      expect(schema_rule(context)).to eq(schema_rule(context.merge(schema: context[:schema].except(:secondary_databases))))
+    end
   end
 
   it "names the files it did not generate and why" do

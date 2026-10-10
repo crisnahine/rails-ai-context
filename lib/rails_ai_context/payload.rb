@@ -33,6 +33,10 @@ module RailsAiContext
       pending_migrations: %i[migrations pending]
     }.freeze
 
+    # Rails' own frameworks that keep a database of their own: a Rails 8 app
+    # gets one each for Solid Queue, Solid Cache and Solid Cable.
+    FRAMEWORK_DATABASE_GEMS = %w[solid_queue solid_cache solid_cable].freeze
+
     module_function
 
     # The section, or nil when it is absent, failed, or refused - one guard
@@ -99,6 +103,33 @@ module RailsAiContext
       return {} unless found.is_a?(Hash)
 
       found.select { |_, info| info.is_a?(Hash) && info[:tables].is_a?(Hash) }
+    end
+
+    # The secondary databases that hold tables of the app's own.
+    def app_databases(schema)
+      secondary_databases(schema).reject { |_, info| database_framework(info) }
+    end
+
+    # Those whose every table a Rails framework owns.
+    def framework_databases(schema)
+      secondary_databases(schema).select { |_, info| database_framework(info) }
+    end
+
+    # The frameworks owning every table of a database, by name ("Solid
+    # Queue"), or nil when any table is the app's own. Their tables are the
+    # framework's schema, so a context file names the database and leaves
+    # the tables to the tools. The names are the ones rails_get_schema
+    # knows those gems' tables by.
+    def database_framework(info)
+      tables = info.is_a?(Hash) && info[:tables].is_a?(Hash) ? info[:tables].keys.map(&:to_s) : []
+      return nil if tables.empty?
+
+      owners = tables.map do |table|
+        FRAMEWORK_DATABASE_GEMS.find { |gem| table.match?(Tools::GetSchema::GEM_TABLES.fetch(gem)) }
+      end
+      return nil if owners.include?(nil)
+
+      (FRAMEWORK_DATABASE_GEMS & owners).map { |gem| gem.split("_").map(&:capitalize).join(" ") }.join(" and ")
     end
 
     # A name in two databases answers `database`'s when given, else the primary's.

@@ -46,12 +46,15 @@ module RailsAiContext
       end
 
       # Every database's tables, the primary's first. With more than one, each
-      # gets a heading, since a table name can be in two of them.
+      # gets a heading, since a table name can be in two of them. A database
+      # a Rails framework keeps to itself (Rails 8's queue, cache and cable)
+      # is no part of it: its tables are the framework's, CLAUDE.md names it,
+      # and its dump says nothing this listing would help with.
       def render_schema_reference
         schema = Payload.section(context, :schema)
         return nil unless schema
 
-        secondary = Payload.secondary_databases(schema)
+        secondary = Payload.app_databases(schema)
         databases = [ [ nil, schema[:tables] || {} ] ] + secondary.map { |name, db| [ name, db[:tables] ] }
         databases.reject! { |_, tables| tables.empty? }
         return nil if databases.empty?
