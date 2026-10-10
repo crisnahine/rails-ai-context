@@ -904,10 +904,58 @@ module RailsAiContext
             truncated = text[0...max]
             truncated += "\n\n---\n_Response truncated (#{text.length} chars). Use `detail:\"summary\"` for an overview, or filter by a specific item (e.g. `table:\"users\"`)._"
             truncated += suffix if suffix
-            MCP::Tool::Response.new([ { type: "text", text: truncated } ])
+            MCP::Tool::Response.new([ { type: "text", text: cli_form(truncated) } ])
           else
             text += suffix if suffix
-            MCP::Tool::Response.new([ { type: "text", text: text } ])
+            MCP::Tool::Response.new([ { type: "text", text: cli_form(text) } ])
+          end
+        end
+
+        # A call to one of this gem's tools as an answer writes it:
+        # `rails_get_schema(table:"posts")`. Under tool_mode :cli no MCP server
+        # is set up, so the answer names the command that runs instead, as the
+        # context files do; a lone `detail:"summary"` hint becomes `detail=summary`.
+        MCP_CALL = /\b(rails_\w+)\(([^()]*)\)/
+        PARAM_HINT = /`((?:\w+:(?:"[^"`]*"|[\w.]+)(?:,\s*)?)+)`/
+
+        def cli_form(text)
+          return text unless RailsAiContext.configuration.tool_mode == :cli && text.is_a?(String)
+
+          names = BaseTool.registered_tools.map { |tool| tool.tool_name.to_s }
+          converted = text.gsub(MCP_CALL) do
+            whole = Regexp.last_match(0)
+            name, args = Regexp.last_match(1), Regexp.last_match(2)
+            params = names.include?(name) && cli_params(args)
+            next whole unless params
+
+            short = name.sub(/\Arails_get_/, "").sub(/\Arails_/, "")
+            command = RailsAiContext::InstallMode.standalone? ? "rails-ai-context tool #{short}" : "rails 'ai:tool[#{short}]'"
+            [ command, *params ].join(" ")
+          end
+          converted.gsub(PARAM_HINT) { (params = cli_params(Regexp.last_match(1))) ? "`#{params.join(' ')}`" : Regexp.last_match(0) }
+        rescue StandardError => e
+          RailsAiContext.debug_fail(e, text, label: "cli_form")
+        end
+
+        # `model:"User", files:["a.rb","b.rb"]` as `model=User files=a.rb,b.rb`,
+        # quoted for a shell where a value needs it; nil when the text is not
+        # keyword arguments.
+        def cli_params(args)
+          return [] if args.strip.empty?
+
+          call = RailsAiContext::AstCache.parse_string("f(#{args})").value.statements.body.first
+          hash = call.is_a?(Prism::CallNode) ? call.arguments&.arguments&.first : nil
+          return nil unless hash.is_a?(Prism::KeywordHashNode)
+
+          hash.elements.map do |pair|
+            return nil unless pair.is_a?(Prism::AssocNode) && pair.key.is_a?(Prism::SymbolNode)
+
+            value = case (node = pair.value)
+            when Prism::StringNode, Prism::SymbolNode then node.unescaped
+            when Prism::ArrayNode then node.elements.map { |e| e.respond_to?(:unescaped) ? e.unescaped : e.slice }.join(",")
+            else node.slice
+            end
+            "#{pair.key.unescaped}=#{value.match?(%r{\A[\w.,/:@+-]*\z}) && !value.empty? ? value : "\"#{value.gsub(/["\\$`]/) { "\\#{Regexp.last_match(0)}" }}\""}"
           end
         end
 
@@ -940,7 +988,7 @@ module RailsAiContext
           Thread.current[:rails_ai_context_call_params] = nil
           banner = static_tier_banner
           text += banner if banner
-          MCP::Tool::Response.new([ { type: "text", text: text } ], error: true)
+          MCP::Tool::Response.new([ { type: "text", text: cli_form(text) } ], error: true)
         end
 
         private

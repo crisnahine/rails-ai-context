@@ -50,7 +50,7 @@ preset: full
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
 | `ai_tools` | Array of symbols | `nil` (all five) | Which AI tools to generate context for. Options: `:claude`, `:cursor`, `:copilot`, `:opencode`, `:codex`. Unset, it reads the selection the installer recorded, and all five when there is none |
-| `tool_mode` | Symbol | `:mcp` | `:mcp` (MCP server primary, CLI fallback) or `:cli` (CLI only, no MCP server). Any other value is refused |
+| `tool_mode` | Symbol | `:mcp` | `:mcp` (MCP server primary, CLI fallback) or `:cli` (CLI only, no MCP server). Any other value is refused. Under `:cli` the tools' own next-step hints name the command (`rails-ai-context tool schema table=posts`, or the rake task when the gem is in the Gemfile) rather than an MCP call |
 | `context_files` | Boolean | `true` | Set `false` for MCP-only: the server and the CLI still answer, and no context file is written or touched |
 
 #### MCP only
