@@ -663,7 +663,9 @@ Migration code generation with duplicate/nonexistent column warnings, reversibil
 Before the code it warns about what the app's migrations already hold: a
 file already named what the generator would name this one (`rails generate
 migration` refuses that name), and a migration not yet run that already adds
-the column or creates the table. It also warns about a `create_table` for a
+the column or creates the table when it runs (a `def down`, a `dir.down` or a
+`revert` block only undoes, so what it adds does not count). It also warns
+about a `create_table` for a
 table that exists and a `null: false` column with no default on a table with
 rows (the row count is the database's estimate), and refuses a column type no
 adapter knows. For `remove_column`, `rename_column` and `change_type` it lists
