@@ -516,15 +516,14 @@ module RailsAiContext
 
             matched_line = false
             search_patterns.each do |search_name|
-              # Match render "partial_name" or render partial: "partial_name"
-              # Allow content before search_name (e.g. "shared/status_badge" matches "status_badge")
-              next unless line.match?(/render\s.*["'][^"']*#{Regexp.escape(search_name)}["']/)
+              # Match render "partial_name" or render partial: "partial_name",
+              # the name whole: "comments/form" is another directory's form.
+              next unless line.match?(/render\s.*["']#{Regexp.escape(search_name)}["']/)
 
-              # For short basename matches, verify directory context
+              # A bare name reaches the partial only from its own directory.
               if search_name == basename && dir_prefix.length > 0
-                # Only match if the full path is referenced, or the render is in the same directory
                 file_dir = File.dirname(file).sub("#{views_dir}/", "")
-                next unless line.include?(dir_prefix) || file_dir == dir_prefix
+                next unless file_dir == dir_prefix
               end
 
               locals_passed = extract_locals_from_render(line)
