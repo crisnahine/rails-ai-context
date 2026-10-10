@@ -490,7 +490,9 @@ module RailsAiContext
         return if context[:depth] >= MAX_PARTIAL_DEPTH
 
         locals = locals.merge(local => record) if local && record
-        return if locals.values.none? { |t| t.loop || t.collection }
+        # A partial rendered with no records can still walk one the action
+        # loaded: `render "dashboard/list"` over `@posts.each`.
+        return if locals.values.none? { |t| t.loop || t.collection } && env.ivars.values.none?(&:collection)
 
         file, relative = partial_file(name, context)
         tree = file && template_tree(file)

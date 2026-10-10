@@ -1199,6 +1199,20 @@ end
         expect(n1_risks.map { |r| r.values_at(:model, :association, :action, :risk) }).to eq([ [ "User", "posts", "show", "high" ] ])
       end
     end
+
+    # The blog's dashboard walks @posts in a partial it renders with no
+    # locals, 13 queries the scan never saw.
+    context "a partial rendered with no locals that walks the action's collection" do
+      before do
+        File.write(fixture_ctrl, "class N1TestController < ApplicationController\n  def index\n    @posts = Post.order(:id)\n  end\nend\n")
+        File.write(fixture_view, "<%= render \"n1_test/list\" %>\n")
+        File.write(File.join(views_dir, "_list.html.erb"), "<% @posts.each do |post| %><%= post.user.name %><% end %>\n")
+      end
+
+      it "is read in the partial" do
+        expect(n1_risks).to contain_exactly(a_hash_including(model: "Post", association: "user", view: "n1_test/_list.html.erb", risk: "high"))
+      end
+    end
   end
 
   # The blog's `Post.with_author.recent` was a HIGH, its with_author scope
