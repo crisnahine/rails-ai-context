@@ -19,10 +19,20 @@ module RailsAiContext
     # `config.auto_mount = true` is visible when the mount decision is made;
     # the middleware stack is built later in the boot finisher, so adding to
     # it here still takes effect.
+    #
+    # Placed straight after ActionDispatch::Callbacks, which every Rails
+    # version this gem supports puts in the stack, so the app's executor,
+    # code reloader and logging still wrap each MCP request. At the end of
+    # the stack it sat behind ActiveRecord::Migration::CheckPending, which
+    # answers every request with the pending-migration page in development -
+    # the read-only tools that would report the migration were unreachable
+    # exactly when they mattered. Active Record puts CheckPending after
+    # Callbacks too, and an app's own operations run after the frameworks',
+    # so this lands in front of it.
     initializer "rails_ai_context.middleware", after: :load_config_initializers do |app|
       if RailsAiContext.configuration.auto_mount
         require_relative "middleware"
-        app.middleware.use RailsAiContext::Middleware
+        app.middleware.insert_after ActionDispatch::Callbacks, RailsAiContext::Middleware
       end
     end
 
