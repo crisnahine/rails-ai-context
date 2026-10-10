@@ -778,7 +778,9 @@ it "still explains a database that does not exist" do
 
     it "waits on another process's write lock as the app connection would" do
       conn.execute("PRAGMA journal_mode = DELETE")
-      writer = IO.popen([ RbConfig.ruby, "-rsqlite3", "-e", <<~RUBY, File.join(dir, "t.sqlite3") ])
+      # The bundle first, so the writer has the sqlite3 this process has,
+      # whatever newer one is installed beside it.
+      writer = IO.popen([ RbConfig.ruby, "-rbundler/setup", "-rsqlite3", "-e", <<~RUBY, File.join(dir, "t.sqlite3") ])
         db = SQLite3::Database.new(ARGV[0])
         db.execute("BEGIN EXCLUSIVE")
         db.execute("INSERT INTO nums VALUES (9)")
