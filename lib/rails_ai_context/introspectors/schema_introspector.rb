@@ -336,6 +336,7 @@ module RailsAiContext
             entry[:stored] = stored_generated?(col)
           end
           entry[:enum_type] = col.sql_type.to_s if col.type == :enum
+          entry[:default] = boolean_default(col) if col.type == :boolean
           # PostgreSQL gives an array's default as its literal ({}), which the
           # static tier reads the way Rails dumps it ([]).
           if col.respond_to?(:array?) && col.array?
@@ -348,6 +349,17 @@ module RailsAiContext
           end
           entry.compact
         end
+      end
+
+      # MySQL keeps a boolean's default as 1 or 0, which schema.rb, the static
+      # tier and PostgreSQL all spell true or false: the column's own type reads it.
+      def boolean_default(col)
+        return col.default unless col.default.is_a?(String)
+
+        value = connection.lookup_cast_type_from_column(col).deserialize(col.default)
+        value.nil? ? col.default : value.to_s
+      rescue StandardError => e
+        RailsAiContext.debug_fail(e, col.default, label: "boolean_default")
       end
 
       # MySQL's dumper writes an enum or set column by its full SQL type, and a timestamp as one.

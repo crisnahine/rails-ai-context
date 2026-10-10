@@ -86,6 +86,18 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
+    # MySQL keeps a boolean default as 1; schema.rb and the static tier write true.
+    it "spells a boolean column's default true or false, as schema.rb does" do
+      connection = ActiveRecord::Base.connection
+      connection.create_table(:boolean_defaults, force: true) { |t| t.boolean :flag, default: true }
+      column = connection.columns(:boolean_defaults).find { |c| c.name == "flag" }
+      expect(introspector.send(:boolean_default, column)).to eq("true")
+      stored_as_zero = column.dup.tap { |c| c.instance_variable_set(:@default, "0") }
+      expect(introspector.send(:boolean_default, stored_as_zero)).to eq("false")
+    ensure
+      connection&.drop_table(:boolean_defaults, if_exists: true)
+    end
+
     context "when ActiveRecord is not connected and no schema file" do
       before do
         allow(introspector).to receive(:active_record_connected?).and_return(false)
