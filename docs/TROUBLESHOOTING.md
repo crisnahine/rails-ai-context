@@ -171,7 +171,7 @@ The MCP SDK answers only requests whose `Host` header is `127.0.0.1`, `::1` or `
 
 ### HTTP answers 403 "does not serve MCP over HTTP in production"
 
-The mounted engine and `auto_mount` refuse every request in production unless the app sets `config.allow_http_in_production = true`. Set it only with the endpoint behind your app's authentication; see [Security](SECURITY.md#mcp-http-transport).
+The mounted engine and `auto_mount` refuse every request outside development and test (production, staging) unless the app sets `config.allow_http_in_production = true`. Set it only with the endpoint behind your app's authentication; see [Security](SECURITY.md#mcp-http-transport).
 
 ---
 

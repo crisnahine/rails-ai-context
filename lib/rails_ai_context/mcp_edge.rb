@@ -67,15 +67,24 @@ module RailsAiContext
       end
 
       # The middleware and the engine ride the app's own web server, which in
-      # production is the one the network reaches, and every tool answers
-      # whoever asks. Serving there is the app's decision, so without it the
-      # answer is a refusal that says how to make it.
+      # a deployed environment is the one the network reaches, and every tool
+      # answers whoever asks. Serving there is the app's decision, so without
+      # it the answer is a refusal that says how to make it. Deployed is any
+      # environment but development and test: a staging app is reached the
+      # way production is.
       def production_refusal
         config = RailsAiContext.configuration
-        return nil if config.allow_http_in_production || RailsAiContext.environment_name != "production"
+        env = RailsAiContext.environment_name
+        return nil if config.allow_http_in_production || LOCAL_ENVIRONMENTS.include?(env)
 
-        log_production_refusal
-        [ 403, { "Content-Type" => "application/json" }, [ error_frame(INVALID_REQUEST, PRODUCTION_REFUSAL) ] ]
+        log_production_refusal(env)
+        [ 403, { "Content-Type" => "application/json" }, [ error_frame(INVALID_REQUEST, production_refusal_message(env)) ] ]
+      end
+
+      def production_refusal_message(env)
+        "rails-ai-context does not serve MCP over HTTP in the #{env} environment, where every tool " \
+          "would answer whoever can reach this app. To serve it here, put the endpoint behind your app's " \
+          "authentication and set config.allow_http_in_production = true."
       end
 
       # Memoization is the caller's: the middleware holds one per instance
@@ -96,16 +105,15 @@ module RailsAiContext
 
       # Once per process: a client that keeps retrying would otherwise fill
       # the production log with the same line.
-      def log_production_refusal
+      def log_production_refusal(env)
         return if @production_refusal_logged
 
         @production_refusal_logged = true
-        RailsAiContext.log_warn "[rails-ai-context] Refused an MCP request. #{PRODUCTION_REFUSAL}"
+        RailsAiContext.log_warn "[rails-ai-context] Refused an MCP request. #{production_refusal_message(env)}"
       end
     end
 
-    PRODUCTION_REFUSAL = "rails-ai-context does not serve MCP over HTTP in production, where every tool " \
-      "would answer whoever can reach this app. To serve it here, put the endpoint behind your app's " \
-      "authentication and set config.allow_http_in_production = true."
+    # The environments the endpoint answers in without allow_http_in_production.
+    LOCAL_ENVIRONMENTS = %w[development test].freeze
   end
 end

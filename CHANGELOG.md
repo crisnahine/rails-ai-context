@@ -51,10 +51,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   list (`random`, `clock_timestamp`, `gen_random_uuid`, `pg_sleep` and its
   variants) is refused from the plan, closing the family without a list
   that has to grow.
-- **The endpoint inside the app refuses in production unless the app opts
-  in.** The mounted engine and `auto_mount` answered every tool to whoever
-  could reach a production app. Both now answer 403 with a JSON-RPC error
-  that names the setting, and log the refusal once per process;
+- **The endpoint inside the app refuses outside development and test
+  unless the app opts in.** The mounted engine and `auto_mount` answered
+  every tool to whoever could reach a production or staging app. Both now
+  answer 403 with a JSON-RPC error that names the environment and the
+  setting, and log the refusal once per process;
   `config.allow_http_in_production = true` lets them answer, for an
   endpoint behind the app's own authentication. Doctor's "MCP HTTP
   endpoint" check fails `auto_mount` with it on and warns for the engine.
