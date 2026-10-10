@@ -1266,6 +1266,66 @@ RSpec.describe RailsAiContext::Doctor do
         expect(gitignore_check_for(dir).status).to eq(:pass)
       end
     end
+
+    # Git answers what a commit takes: every ignore rule it reads, and the
+    # files it tracks already, which no rule takes back out.
+    context "inside a git repository" do
+      def git(dir, *args)
+        system("git", "-C", dir, *args, out: File::NULL, err: File::NULL) or raise "git #{args.join(' ')} failed"
+      end
+
+      def repo_with(files)
+        app_with(files) do |dir|
+          git(dir, "init", "-q")
+          yield dir
+        end
+      end
+
+      # A monorepo keeps its rules at its root, above the app.
+      it "reads the ignore rules above the app" do
+        repo_with(".gitignore" => "/backend/config/master.key\n", "backend/config/master.key" => "x\n") do |dir|
+          check = gitignore_check_for(File.join(dir, "backend"))
+
+          expect(check).to have_attributes(status: :pass, message: "Secret files gitignored: config/master.key")
+        end
+      end
+
+      it "reads info/exclude" do
+        repo_with("config/master.key" => "x\n") do |dir|
+          File.write(File.join(dir, ".git", "info", "exclude"), "/config/master.key\n")
+
+          expect(gitignore_check_for(dir)).to have_attributes(status: :pass, message: "Secret files gitignored: config/master.key")
+        end
+      end
+
+      it "fails a key git tracks whatever .gitignore says, naming the command that stops tracking it" do
+        repo_with(".gitignore" => "/config/*.key\n", "config/master.key" => "x\n") do |dir|
+          git(dir, "add", "-f", "config/master.key")
+
+          expect(gitignore_check_for(dir)).to have_attributes(status: :fail, message: "config/master.key is committed",
+                                                              fix: "Run `git rm --cached config/master.key` and rotate it: the history still holds it")
+        end
+      end
+
+      it "asks for an ignore rule as well when none covers the committed key" do
+        repo_with(".gitignore" => "log/\n", "config/master.key" => "x\n") do |dir|
+          git(dir, "add", "config/master.key")
+
+          expect(gitignore_check_for(dir).fix).to eq("Run `git rm --cached config/master.key`, add `config/master.key` to .gitignore, " \
+                                                     "and rotate it: the history still holds it")
+        end
+      end
+
+      it "says a literal secret in a config git tracks is committed" do
+        repo_with(".gitignore" => "/config/database.yml\n", "config/database.yml" => "development:\n  password: hunter2\n") do |dir|
+          git(dir, "add", "-f", "config/database.yml")
+          check = gitignore_check_for(dir)
+
+          expect(check).to have_attributes(status: :warn, message: "A literal secret in config/database.yml (`password` on line 2), which is committed")
+          expect(check.fix).to end_with("or gitignore the file and run `git rm --cached config/database.yml`")
+        end
+      end
+    end
   end
 
   # Stale means the run the fix names would rewrite the file: a file that
