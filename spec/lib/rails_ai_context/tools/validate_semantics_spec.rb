@@ -544,4 +544,38 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
       end
     end
   end
+
+  # On an app with web-console, brakeman's forked parse workers died
+  # marshalling the Binding bindex hangs on a parse error, and the whole scan
+  # rescued to no findings. A DEBUG=1 run printed some 440 lines of rescued
+  # exceptions, since brakeman's parser turns $DEBUG on when it sees DEBUG.
+  describe "the brakeman scan" do
+    let(:seen) { {} }
+
+    before do
+      allow(described_class).to receive(:brakeman_available?).and_return(true)
+      stub_const("Brakeman", Class.new { def self.run(_options); end })
+      allow(Brakeman).to receive(:run) do |options|
+        seen[:options] = options
+        seen[:debug] = ENV.fetch("DEBUG", nil)
+        Struct.new(:filtered_warnings).new([])
+      end
+    end
+
+    around do |example|
+      saved = ENV.fetch("DEBUG", nil)
+      ENV["DEBUG"] = "1"
+      example.run
+    ensure
+      saved ? ENV["DEBUG"] = saved : ENV.delete("DEBUG")
+    end
+
+    it "parses in this process, with DEBUG out of brakeman's sight" do
+      described_class.check_brakeman_security([ "app/models/post.rb" ])
+
+      expect(seen[:options]).to include(parallel_checks: false)
+      expect(seen[:debug]).to be_nil
+      expect(ENV.fetch("DEBUG", nil)).to eq("1")
+    end
+  end
 end
