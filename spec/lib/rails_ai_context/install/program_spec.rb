@@ -345,6 +345,23 @@ RSpec.describe RailsAiContext::Install::Program do
     end
   end
 
+  # Typed outside the app, `init --app-path shop` reported `.mcp.json`,
+  # which reads as a file where the user stands.
+  describe "paths, named from where the command was typed" do
+    it "names each file from the surface's place" do
+      Dir.mktmpdir do |root|
+        File.write(File.join(root, ".gitignore"), "log/\n")
+        surface = surface_class.new
+        surface.define_singleton_method(:place) { "shop" }
+
+        described_class.write_mcp_configs(surface, tools: %i[claude], tool_mode: :mcp, root: root, standalone: true)
+        described_class.mark_gitignore(surface, root: root)
+
+        expect(surface.text).to include("Created/Updated shop/.mcp.json", "Updated shop/.gitignore")
+      end
+    end
+  end
+
   describe ".own_config_tools" do
     # A workspace's config above serves the app already; a second config in
     # the app would start a second server for it.

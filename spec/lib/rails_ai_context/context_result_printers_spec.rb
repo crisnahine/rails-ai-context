@@ -81,8 +81,29 @@ RSpec.describe "not-applicable context files on every surface" do
       out = `ruby -I #{lib} #{exe} context --app-path #{dir} --no-boot 2>&1`
 
       expect($?.exitstatus).to eq(0), out
-      expect(out).to include("  Not applicable: .claude/rules/rails-models.md (no models)")
+      expect(out).to include("Not applicable: #{File.join(dir, '.claude', 'rules', 'rails-models.md')} (no models)")
       expect(File.exist?(File.join(dir, ".claude", "rules", "rails-models.md"))).to be false
+    end
+  end
+
+  # Named from the app root inside the app, and from where the command was
+  # typed outside it: a bare `CLAUDE.md` after `--app-path shop` reads as a
+  # file in the directory the user is in.
+  it "names the files from where the CLI was typed" do
+    exe = File.join(repo_root, "exe", "rails-ai-context")
+    lib = File.join(repo_root, "lib")
+
+    Dir.mktmpdir do |tmp|
+      dir = File.join(File.realpath(tmp), "shop")
+      FileUtils.mkdir_p(File.join(dir, "config"))
+      File.write(File.join(dir, "config", "application.rb"), "module Shop; class Application; end; end\n")
+      File.write(File.join(dir, "config", "environment.rb"), "\n")
+
+      inside, = Open3.capture2e("ruby", "-I", lib, exe, "context", "--no-boot", chdir: dir)
+      outside, = Open3.capture2e("ruby", "-I", lib, exe, "context", "--app-path", "shop", "--no-boot", chdir: File.dirname(dir))
+
+      expect(inside).to include("  Not applicable: .claude/rules/rails-models.md (no models)")
+      expect(outside).to include("  Not applicable: shop/.claude/rules/rails-models.md (no models)")
     end
   end
 

@@ -138,10 +138,8 @@ module RailsAiContext
           outcome = { removed: [], trimmed: [], kept: [], failed: [] }
 
           app_roots.each do |app_root|
-            prefix = relative_to(app_root, root)
-            prefix = prefix == "." ? "" : "#{prefix}/"
             Cleanup.remove(tools: [ key ], keeping: selected.map(&:to_sym), root: app_root).each do |bucket, paths|
-              outcome[bucket].concat(paths.map { |path| "#{prefix}#{path}" })
+              outcome[bucket].concat(paths.map { |path| shown(surface, File.join(app_root.to_s, path), root) })
             end
           end
           outcome[:removed].each { |path| surface.say "  Removed #{path}", :ok }
@@ -157,7 +155,7 @@ module RailsAiContext
               tools: [ key ], output_dir: dir,
               warn: lambda { |path, reason|
                 left << path
-                surface.say "Could not update #{relative_to(path, root)}: #{reason}", :warn
+                surface.say "Could not update #{shown(surface, path, root)}: #{reason}", :warn
               }
             )
             say_mcp_removed(surface, paths, base: dir, root: root)
@@ -181,9 +179,8 @@ module RailsAiContext
         users = selected.filter_map { |key| AiTool.find(key) }.reject { |other| other.key == tool.key }
         paths = tool.context_paths & users.flat_map(&:context_paths)
         present = app_roots.flat_map do |app_root|
-          prefix = relative_to(app_root, root)
-          paths.select { |path| File.exist?(File.join(app_root.to_s, path)) }
-            .map { |path| prefix == "." ? path : "#{prefix}/#{path}" }
+          paths.map { |path| File.join(app_root.to_s, path) }.select { |full| File.exist?(full) }
+            .map { |full| shown(surface, full, root) }
         end
         return false if present.empty?
 
@@ -207,7 +204,7 @@ module RailsAiContext
 
         surface.say ""
         surface.say "CLI mode starts no MCP server, but these configs still start rails-ai-context:", :emph
-        held.each { |tool| surface.say "  #{tool.mcp_config[:path]}" }
+        held.each { |tool| surface.say "  #{shown(surface, File.join(root.to_s, tool.mcp_config[:path]), root)}" }
         surface.say ""
         input = surface.ask("Remove rails-ai-context from them? (y/N)").to_s.strip.downcase
         %w[y yes].include?(input) ? held.map(&:key) : []
@@ -218,7 +215,7 @@ module RailsAiContext
 
         paths = RailsAiContext::McpConfigGenerator.remove(
           tools: tools, output_dir: root.to_s,
-          warn: ->(path, reason) { surface.say "Could not update #{relative_to(path, root)}: #{reason}", :warn }
+          warn: ->(path, reason) { surface.say "Could not update #{shown(surface, path, root)}: #{reason}", :warn }
         )
         say_mcp_removed(surface, paths, base: root, root: root)
       end
@@ -229,9 +226,9 @@ module RailsAiContext
       def say_mcp_removed(surface, paths, base:, root:)
         paths.each do |path|
           if File.exist?(path)
-            surface.say "  Removed rails-ai-context from #{relative_to(path, root)}", :ok
+            surface.say "  Removed rails-ai-context from #{shown(surface, path, root)}", :ok
           else
-            surface.say "  Removed #{relative_to(path, root)} (rails-ai-context was its only server)", :ok
+            surface.say "  Removed #{shown(surface, path, root)} (rails-ai-context was its only server)", :ok
             prune_emptied(surface, File.dirname(path), base: base, root: root)
           end
         end
@@ -245,7 +242,7 @@ module RailsAiContext
         while dir.start_with?("#{base}/") && relative_to(dir, base).start_with?(".") && Dir.exist?(dir) &&
               !File.symlink?(dir) && Dir.empty?(dir)
           Dir.rmdir(dir)
-          surface.say "  Removed #{relative_to(dir, root)}/", :ok
+          surface.say "  Removed #{shown(surface, "#{dir}/", root)}", :ok
           dir = File.dirname(dir)
         end
       rescue SystemCallError
@@ -269,10 +266,10 @@ module RailsAiContext
         return if lines.empty?
 
         File.open(gitignore, "a") { |f| lines.each { |line| f.puts line } }
-        surface.say "Updated .gitignore", :ok
+        surface.say "Updated #{shown(surface, gitignore, root)}", :ok
       rescue SystemCallError, IOError => e
         RailsAiContext.log_warn "[rails-ai-context] could not write .gitignore: #{e.message}"
-        surface.say "Could not update .gitignore - add .ai-context.json and .codex/config.toml by hand", :warn
+        surface.say "Could not update #{shown(surface, gitignore, root)} - add .ai-context.json and .codex/config.toml by hand", :warn
       end
 
       # Whether a commit would leave the Codex config out, which it must: it
@@ -310,15 +307,25 @@ module RailsAiContext
           tools: tools, output_dir: root.to_s, tool_mode: tool_mode, standalone: standalone, servers: servers
         )
         result = generator.call
-        result[:written].each { |f| surface.say "Created/Updated #{relative_to(f, root)}", :ok }
-        result[:skipped].each { |f| surface.say "#{relative_to(f, root)} unchanged - skipped", :muted }
-        result[:notes]&.each { |f, note| surface.say "  #{relative_to(f, root)}: #{note}", :muted }
+        result[:written].each { |f| surface.say "Created/Updated #{shown(surface, f, root)}", :ok }
+        result[:skipped].each { |f| surface.say "#{shown(surface, f, root)} unchanged - skipped", :muted }
+        result[:notes]&.each { |f, note| surface.say "  #{shown(surface, f, root)}: #{note}", :muted }
         result[:failed].each do |f|
-          surface.say "Could not write #{relative_to(f, root)} - that tool will not auto-discover the MCP server", :warn
+          surface.say "Could not write #{shown(surface, f, root)} - that tool will not auto-discover the MCP server", :warn
           surface.say result[:reasons][f], :warn if result[:reasons]&.[](f)
         end
         surface.say "Skipped MCP config files (CLI-only mode)", :muted if tool_mode == :cli
         result
+      end
+
+      # A path as the person running the install reads it: named from the
+      # root, or from where they stand when that is outside it
+      # (Surface#place). A directory keeps its trailing slash.
+      def shown(surface, path, root)
+        relative = relative_to(path, root)
+        relative = "#{relative}/" if path.to_s.end_with?("/")
+        place = surface.respond_to?(:place) ? surface.place : nil
+        place ? File.join(place, relative) : relative
       end
 
       def relative_to(path, root)
