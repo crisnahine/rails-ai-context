@@ -52,7 +52,9 @@ module RailsAiContext
         tests_data = cached_context[:tests] || {}
         framework = tests_data[:framework] || detect_framework
 
-        if model
+        if type == "system" && (model || controller)
+          generate_system_test(model&.strip, controller&.strip, framework, tests_data)
+        elsif model
           generate_model_test(model.strip, framework, tests_data)
         elsif controller
           generate_controller_test(controller.strip, framework, tests_data)
@@ -1628,6 +1630,94 @@ module RailsAiContext
           full = File.expand_path(path, test_root)
           relative = RailsAiContext::PathResolver.suite_relative(rails_app.root.to_s, path)
           [ relative, (relative if RailsAiContext::SafePath.contained?(full, test_root) && File.file?(full)) ]
+        end
+
+        # A system test walks the subject's pages in a browser: its index and
+        # one record's page, from the routes its controller answers. `type`
+        # was never read, so a model's system test came back as its model test.
+        def generate_system_test(model_name, ctrl_name, framework, tests_data)
+          ctrl_class = if ctrl_name
+            RailsAiContext::Payload.find_controller(cached_context, ctrl_name)
+          else
+            models = cached_context[:models] || {}
+            key = fuzzy_find_key(models.keys, model_name)
+            unless key
+              return not_found_response("Model", model_name, models.keys.sort,
+                recovery_tool: "Call rails_get_model_details(detail:\"summary\") to see all models")
+            end
+            RailsAiContext::Payload.controller_for_route_key(cached_context, key.to_s.underscore.pluralize)&.first
+          end
+          unless ctrl_class
+            return text_response("No controller serves #{ctrl_name || model_name}'s pages, so a system test has none to visit. " \
+              "Use `type:\"unit\"` for the model's own test.")
+          end
+
+          snake = RailsAiContext::Payload.controller_route_key(cached_context, ctrl_class)
+          routes = RouteCoverage.all_by_controller(cached_context[:routes] || {})[snake] || []
+          pages = dedupe_routes(routes).select { |route| route[:verb] == "GET" && %w[index show].include?(route[:action].to_s) }
+          rspec = framework.to_s.include?("rspec")
+          path, existing = conventional_test_path(rspec, "system", snake.camelize)
+          res = resource_info(ctrl_class, snake, tests_data)
+          res[:factory] = find_factory_name(res[:model], tests_data) if rspec && res[:model]
+          res[:login] = login_filters(ctrl_class, pages)
+
+          lines = [ *existing_test_lines(existing), "# #{existing || path}", "", "```ruby", "# frozen_string_literal: true", "" ]
+          todo = if res[:login].any?
+            "  # TODO: #{login_phrase(ctrl_class, res)}; a browser signs in the way a user does, through the app's login page, before these visits."
+          end
+          subject = system_subject_lines(lines, res, rspec, snake, todo)
+
+          name_by_path = route_names_by_path(routes)
+          pages.each do |route|
+            show = route[:action].to_s == "show"
+            resolved = url_expression(route, name_by_path, show ? subject : nil, res, tests_data, factories: rspec)
+            label = show ? "showing a #{res[:name]}" : "visiting the index"
+            lines << "" unless lines.last == ""
+            if resolved.nil?
+              lines.concat(rspec ? rspec_skip_body(label, unresolved_reason(route, res)) : minitest_skip_test(label, unresolved_reason(route, res)))
+              next
+            end
+
+            # The current path is compared without the host, so the assertion names the path.
+            path_expr = resolved[:url].sub(/_url\b/, "_path")
+            lines << (rspec ? "  it \"#{label}\" do" : "  test \"#{label}\" do")
+            resolved[:prelude].each { |l| lines << "    #{l}" }
+            lines << "    visit #{rspec ? path_expr : resolved[:url]}"
+            lines << (rspec ? "    expect(page).to have_current_path(#{path_expr})" : "    assert_current_path #{path_expr}")
+            lines << "  end"
+          end
+          if pages.empty?
+            lines << "  # TODO: #{ctrl_class} answers no GET index or show route to visit."
+          end
+          lines.push("end", "```")
+
+          if !rspec && !File.file?(File.join(RailsAiContext::PathResolver.test_root(rails_app.root.to_s), "test", "application_system_test_case.rb"))
+            lines.push("", "_This app has no test/application_system_test_case.rb, which the test inherits from: " \
+                           "`bin/rails generate system_test #{snake}` writes one._")
+          end
+          text_response(lines.join("\n"))
+        end
+
+        # The test's opening and the record a show page needs: a fixture, a
+        # factory, or a TODO when the app has neither.
+        def system_subject_lines(lines, res, rspec, snake, todo)
+          if rspec
+            lines.push("require \"rails_helper\"", "", "RSpec.describe \"#{snake.camelize}\", type: :system do", *todo)
+            return nil unless res[:model]
+
+            if res[:factory]
+              lines << "  let(:#{rspec_let_name(res[:name])}) { create(:#{res[:factory]}) }"
+              return rspec_let_name(res[:name])
+            end
+            lines << "  # TODO: build a #{res[:model]} from this app's own test data for the show page"
+            return nil
+          end
+
+          lines.push("require \"application_system_test_case\"", "", "class #{snake.camelize.delete("::")}Test < ApplicationSystemTestCase", *todo)
+          return nil unless res[:model] && res[:fixture_key]
+
+          lines.push("  setup do", "    @#{res[:name]} = #{fixture_accessor(res[:fixture_set])}(:#{res[:fixture_key]})", "  end")
+          "@#{res[:name]}"
         end
 
         # ── Helpers ──────────────────────────────────────────────────────

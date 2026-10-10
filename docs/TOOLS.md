@@ -375,8 +375,10 @@ Test scaffolding that matches your project's patterns (fixtures vs factories, RS
 |:----------|:-----|:--------|:------------|
 | `model` | string | - | Model to generate a model test for (e.g., `User`) |
 | `controller` | string | - | Controller to generate a request test for (e.g., `PostsController`) |
-| `file` | string | - | File to generate tests for, relative to Rails root; the type is detected |
-| `type` | enum | `unit` | `unit`, `request`, `system` |
+| `file` | string | - | File to generate tests for, relative to Rails root; the type is detected (a job gets a job test under test/jobs or spec/jobs) |
+| `type` | enum | `unit` | `unit`, `request`, `system`. With `model` or `controller`, `system` writes a system test that visits the subject's index and show pages |
+
+When the subject's test file exists already, the cases come anyway, addressed to that file, to add the ones it lacks. A controller behind a login filter gets a test that signs in with the app's own sign-in helper (Rails 8's `sign_in_as`, or one its suite defines) and a users fixture or factory; without one, a TODO says the requests are redirected or refused until the test signs in. Devise and Doorkeeper keep their own sign-in lines.
 
 ### `rails_validate`
 

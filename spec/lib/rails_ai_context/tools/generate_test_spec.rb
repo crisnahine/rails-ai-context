@@ -2353,6 +2353,66 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
     end
   end
 
+  # `type` was never read: `model: "Product", type: "system"` answered that
+  # test/models/product_test.rb already exists.
+  describe "a system test" do
+    def system_test(framework, root, tests = {})
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+      allow(described_class).to receive(:cached_context).and_return({
+        tests: { framework: framework, fixture_names: { "products" => %w[radio] }, factory_names: {} }.merge(tests),
+        models: { "Product" => { table_name: "products" } },
+        controllers: { controllers: { "ProductsController" => { actions: %w[index show create] } } },
+        routes: { by_controller: { "products" => [
+          { verb: "GET", path: "/products", action: "index", name: "products" },
+          { verb: "POST", path: "/products", action: "create" },
+          { verb: "GET", path: "/products/:id", action: "show", name: "product" }
+        ] } }
+      })
+      described_class.call(model: "Product", type: "system").content.first[:text]
+    end
+
+    it "visits the model's pages in a minitest system test" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "test", "models"))
+        File.write(File.join(root, "test", "models", "product_test.rb"), "class ProductTest < ActiveSupport::TestCase\nend\n")
+
+        text = system_test("minitest", root)
+
+        expect(text).to include("# test/system/products_test.rb")
+        expect(text).to include("class ProductsTest < ApplicationSystemTestCase")
+        expect(text).to include("    @product = products(:radio)")
+        expect(text).to include("    visit products_url\n    assert_current_path products_path")
+        expect(text).to include("    visit product_url(@product)\n    assert_current_path product_path(@product)")
+        expect(text).not_to include("product_test.rb already exists")
+        expect(text).not_to include("post ")
+        expect(text).to include("This app has no test/application_system_test_case.rb")
+      end
+    end
+
+    it "writes a system spec for rspec" do
+      Dir.mktmpdir do |root|
+        text = system_test("rspec", root, factory_names: { "products.rb" => %w[product] }, factories: { count: 1 })
+
+        expect(text).to include("# spec/system/products_spec.rb")
+        expect(text).to include("RSpec.describe \"Products\", type: :system do")
+        expect(text).to include("    visit products_path\n    expect(page).to have_current_path(products_path)")
+      end
+    end
+
+    it "says so when no controller serves the model's pages" do
+      Dir.mktmpdir do |root|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({
+          tests: { framework: "minitest" }, models: { "Setting" => { table_name: "settings" } }, controllers: { controllers: {} }
+        })
+
+        text = described_class.call(model: "Setting", type: "system").content.first[:text]
+
+        expect(text).to include("No controller serves Setting's pages")
+      end
+    end
+  end
+
   # bazaar's OrdersController inherits require_login from a hand-written
   # Authentication concern, and every request its generated test sent came
   # back a 302 to /session/new with nothing to say why. Its create reads the
@@ -2396,6 +2456,17 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
         expect(text).to include("  setup do\n    sign_in_as users(:one)\n")
         expect(text).not_to include("# TODO: OrdersController runs require_login")
         expect(text).to include("the setup signs in with sign_in_as._")
+      end
+    end
+
+    it "names the login filter in a system test, which signs in through the login page" do
+      Dir.mktmpdir do |root|
+        orders_test(root)
+        text = described_class.call(controller: "OrdersController", type: "system").content.first[:text]
+
+        expect(text).to include("# test/system/orders_test.rb")
+        expect(text).to include("  # TODO: OrdersController runs require_login (from Authentication) before index; " \
+                                "a browser signs in the way a user does")
       end
     end
 
