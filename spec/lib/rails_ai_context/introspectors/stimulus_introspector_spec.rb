@@ -160,6 +160,44 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
     end
   end
 
+  # bazaar's cart listed `countValueChanged`, a callback Stimulus runs, as an
+  # action the markup could wire.
+  describe "a controller's change callbacks" do
+    it "reads them as lifecycle callbacks, not actions, and records what it calls itself" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/javascript/controllers"))
+        File.write(File.join(root, "app/javascript/controllers/cart_controller.js"), <<~JS)
+          import { Controller } from "@hotwired/stimulus"
+          export default class extends Controller {
+            connect() {
+              this.render()
+            }
+
+            add() {
+              this.countValue++
+            }
+
+            countValueChanged() {
+              this.render()
+            }
+
+            itemTargetConnected(element) {
+            }
+
+            render() {
+            }
+          }
+        JS
+
+        controller = described_class.new(double("app", root: Pathname.new(root))).call[:controllers].first
+
+        expect(controller[:actions]).to eq(%w[add render])
+        expect(controller[:lifecycle]).to eq(%w[connect countValueChanged itemTargetConnected])
+        expect(controller[:self_calls]).to eq(%w[render])
+      end
+    end
+  end
+
   describe "controller discovery outside app/javascript/controllers" do
     def introspect(root)
       described_class.new(double("app", root: Pathname.new(root))).call

@@ -447,6 +447,47 @@ RSpec.describe RailsAiContext::Tools::GetStimulus do
       end
     end
 
+    # bazaar's copy-paste markup wired every action to click, offered the
+    # cart's own render helper as an action, and left out the class
+    # attribute the dropdown reads, which throws "Missing attribute".
+    context "the copy-paste markup" do
+      around do |example|
+        Dir.mktmpdir("stimulus-markup") do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app/views/products"))
+          File.write(File.join(dir, "app/views/products/index.html.erb"),
+                     %(<input data-controller="search" data-action="input->search#queue keydown.esc->search#queue">\n))
+          @root = dir
+          example.run
+        end
+      end
+
+      before do
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(@root)))
+        allow(described_class).to receive(:cached_context).and_return({ stimulus: { controllers: [
+          { name: "search", targets: [], actions: %w[queue render reset], self_calls: %w[render], values: {},
+            outlets: %w[result-list], classes: %w[open noResults], file: "app/javascript/controllers/search_controller.js" }
+        ] } })
+      end
+
+      def markup
+        described_class.call(controller: "search", detail: "full").content.first[:text][/```html\n(.*?)```/m, 1]
+      end
+
+      it "wires an action to the events the app's own markup uses" do
+        expect(markup).to include(%(data-action="input->search#queue"\ndata-action="keydown.esc->search#queue"))
+        expect(markup).not_to include("click->")
+      end
+
+      it "leaves out a helper the controller calls itself, and names no event for an action no markup wires" do
+        expect(markup).not_to include("search#render")
+        expect(markup).to include(%(data-action="search#reset"))
+      end
+
+      it "writes the class and outlet attributes the controller reads" do
+        expect(markup).to include(%(data-search-open-class="..."), %(data-search-no-results-class="..."), %(data-search-result-list-outlet="..."))
+      end
+    end
+
     context "when the app is API-only" do
       before do
         allow(described_class).to receive(:cached_context).and_return(
