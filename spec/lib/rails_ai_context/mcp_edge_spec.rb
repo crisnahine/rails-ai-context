@@ -37,6 +37,36 @@ RSpec.describe RailsAiContext::McpEdge do
     end
   end
 
+  describe ".serve" do
+    let(:base) { RailsAiContext::Tools::BaseTool }
+    let(:transport) { instance_double(MCP::Server::Transports::StreamableHTTPTransport) }
+
+    def env_for(session)
+      Rack::MockRequest.env_for("/mcp", method: "POST", input: "{}", "HTTP_MCP_SESSION_ID" => session)
+    end
+
+    # The SDK answers a request inside a session with a streaming body, and
+    # the tool runs when the web server calls it - after serve has returned.
+    it "runs a streaming body in the session of the client that sent the request" do
+      seen = nil
+      allow(transport).to receive(:handle_request).and_return([ 200, {}, proc { |_stream| seen = base.current_session } ])
+
+      _status, _headers, body = described_class.serve(env_for("client-a"), transport)
+      expect(base.current_session).to eq(base::DEFAULT_SESSION)
+
+      body.call(StringIO.new)
+
+      expect(seen).to eq("client-a")
+      expect(base.current_session).to eq(base::DEFAULT_SESSION)
+    end
+
+    it "hands an enumerable body back untouched" do
+      allow(transport).to receive(:handle_request).and_return([ 200, {}, [ "{}" ] ])
+
+      expect(described_class.serve(env_for("client-a"), transport).last).to eq([ "{}" ])
+    end
+  end
+
   describe ".build_transport" do
     it "returns a streamable HTTP transport" do
       expect(described_class.build_transport)

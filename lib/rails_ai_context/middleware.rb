@@ -14,8 +14,12 @@ module RailsAiContext
       @mutex = Mutex.new
     end
 
+    # The transport is built on the first MCP request, not the first request
+    # of any kind: building it builds the whole MCP server.
     def call(env)
-      McpEdge.rack_call(env, transport: transport) { @app.call(env) }
+      return @app.call(env) unless McpEdge.mcp_request?(env)
+
+      McpEdge.serve(env, transport)
     end
 
     private

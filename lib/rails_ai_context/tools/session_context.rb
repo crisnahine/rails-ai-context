@@ -52,7 +52,7 @@ module RailsAiContext
         when "summary"
           render_summary
         when "reset"
-          session_reset!
+          current_session_reset!
           text_response("Session cleared. All query records removed.")
         else
           text_response("Unknown action: #{action}. Use status, summary, or reset.")

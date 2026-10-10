@@ -222,20 +222,64 @@ RSpec.describe "BaseTool shared caches under concurrency" do
 
     # The standalone `rails-ai-context serve --transport http` app is the
     # third HTTP entry point and serves many clients from one process too, so
-    # it needs the same session scoping the other two got.
-    it "scopes the standalone rack app's requests to the client's session" do
-      seen = nil
-      transport = instance_double(MCP::Server::Transports::StreamableHTTPTransport)
-      allow(transport).to receive(:handle_request) do
-        seen = base.current_session
-        [ 200, {}, [ "{}" ] ]
+    # it needs the same session scoping the other two got. Driven through the
+    # real SDK transport: it answers a tool call with a streaming body that
+    # runs the tool when the server calls it, after the app has returned, and
+    # a stand-in transport that answered at once hid exactly that.
+    describe "the standalone rack app over the real transport" do
+      let(:app) do
+        server = RailsAiContext::Server.new(RailsAiContext.default_app, transport: :http)
+        server.send(:build_rack_app, MCP::Server::Transports::StreamableHTTPTransport.new(server.build))
       end
 
-      app = RailsAiContext::Server.new(RailsAiContext.default_app).send(:build_rack_app, transport)
-      app.call(rack_request("standalone-7").env.merge("PATH_INFO" => "/mcp"))
+      def post(app, message, session: nil)
+        env = Rack::MockRequest.env_for("/mcp", method: "POST", input: JSON.generate(message),
+          "CONTENT_TYPE" => "application/json", "HTTP_ACCEPT" => "application/json, text/event-stream")
+        env.merge!("HTTP_MCP_SESSION_ID" => session, "HTTP_MCP_PROTOCOL_VERSION" => "2025-06-18") if session
+        status, headers, body = app.call(env)
+        out = StringIO.new
+        body.respond_to?(:each) ? body.each { |chunk| out << chunk } : body.call(out)
+        [ status, headers, out.string ]
+      end
 
-      expect(seen).to eq("standalone-7")
-      expect(base.current_session).to eq(base::DEFAULT_SESSION)
+      def open_session(app)
+        _status, headers, = post(app, { jsonrpc: "2.0", id: 1, method: "initialize",
+          params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "spec", version: "1" } } })
+        headers["mcp-session-id"].tap { |id| post(app, { jsonrpc: "2.0", method: "notifications/initialized" }, session: id) }
+      end
+
+      def session_tool(app, session, arguments)
+        _status, _headers, body = post(app, { jsonrpc: "2.0", id: 2, method: "tools/call",
+          params: { name: "rails_session_context", arguments: arguments } }, session: session)
+        JSON.parse(body[/^data: (.*)$/, 1]).dig("result", "content", 0, "text")
+      end
+
+      it "keeps each client's record to itself" do
+        a = open_session(app)
+        b = open_session(app)
+        session_tool(app, a, mark: "get_schema:a_only")
+        session_tool(app, b, mark: "get_routes:b_only")
+
+        a_status = session_tool(app, a, action: "status")
+        b_status = session_tool(app, b, action: "status")
+
+        expect(a_status).to include("a_only")
+        expect(a_status).not_to include("b_only")
+        expect(b_status).to include("b_only")
+        expect(b_status).not_to include("a_only")
+      end
+
+      it "lets one client's reset clear its own record only" do
+        a = open_session(app)
+        b = open_session(app)
+        session_tool(app, a, mark: "get_schema:a_only")
+        session_tool(app, b, mark: "get_routes:b_only")
+
+        session_tool(app, b, action: "reset")
+
+        expect(session_tool(app, a, action: "status")).to include("a_only")
+        expect(session_tool(app, b, action: "status")).to include("No queries recorded")
+      end
     end
 
     # The controller memoizes its transport on the class, so building one here

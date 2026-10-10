@@ -8,6 +8,10 @@ Status: accepted
 
 **One client's session record was served to another.** `SESSION_CONTEXT[:queries]` was a single flat hash. Over stdio that is right - one process is one conversation - but the middleware, the engine controller and the standalone HTTP server each serve every client from one process, so `rails_session_context` listed calls the asking client never made. The record is now bucketed per conversation: all three HTTP entry points wrap each request in `BaseTool.with_session(<Mcp-Session-Id>)`, and stdio falls through to a single default bucket, unchanged.
 
+**The scope ended before the tool ran.** The SDK answers a request inside a session with a streaming body, and the tool runs when the web server calls that body - after the entry point has returned, so the scope around `handle_request` was already gone and the middleware and the standalone server recorded every client in the default bucket again. `McpEdge.serve` hands the web server a body that re-enters the client's session. The engine controller calls the body itself, inside its own scope.
+
+**One client's reset emptied every client's record.** `action: "reset"` cleared the whole hash. It clears the calling conversation's bucket now (`current_session_reset!`). `session_reset!` still clears them all, for a change that makes every earlier answer stale: live reload.
+
 **`session_queries` handed out live entries.** It returned `values.dup`, a shallow copy, so the entry hashes stayed live inside the record and kept being mutated by later calls - a caller's snapshot changed under it. It now copies each entry.
 
 **The record grew without bound, keyed by a client-controlled header.** Bucketing per conversation introduced a hash whose keys come from `Mcp-Session-Id`, in a process that stays up. Three things were wrong at once: the hash had a default block, so merely *reading* a session's history created a bucket; nothing capped the id's length; and nothing evicted. Reading no longer writes, ids are truncated to `MAX_SESSION_ID_LENGTH`, and the number of remembered conversations is capped at `MAX_SESSIONS`.

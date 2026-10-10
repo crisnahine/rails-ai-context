@@ -329,9 +329,20 @@ module RailsAiContext
           end
         end
 
+        # Every conversation's record: for a change that makes every earlier
+        # answer stale (live reload), and for a test that starts clean.
         def session_reset!
           SESSION_CONTEXT[:mutex].synchronize do
             SESSION_CONTEXT[:queries].clear
+          end
+        end
+
+        # The calling conversation's record alone, which is what a client's
+        # `action: "reset"` asks for. One HTTP process serves every client,
+        # and clearing them all let one client empty the others' records.
+        def current_session_reset!
+          SESSION_CONTEXT[:mutex].synchronize do
+            SESSION_CONTEXT[:queries].delete(current_session)
           end
         end
 
