@@ -1209,6 +1209,26 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       RailsAiContext.configuration.max_search_results = previous_cap
     end
 
+    # The cap counts context lines, so a cap of 1 or 2 cut the first match
+    # behind its own leading context and the answer read "No results found".
+    [ true, false ].each do |rg|
+      it "still shows the first match under a cap below its leading context, #{rg ? 'with ripgrep' : 'with the Ruby fallback'}" do
+        skip "requires ripgrep" if rg && !described_class.send(:ripgrep_available?)
+        allow(described_class).to receive(:ripgrep_available?).and_return(false) unless rg
+        previous_cap = RailsAiContext.configuration.max_search_results
+        RailsAiContext.configuration.max_search_results = 1
+
+        with_search_app("app/models/order.rb" => "class Order\n  validates :total\n\n  before_save :compute_total\nend\n") do
+          text = described_class.call(pattern: "compute_total").content.first[:text]
+
+          expect(text).to include("> app/models/order.rb:4: before_save :compute_total")
+          expect(text).to include("first 3 lines scanned")
+        end
+      ensure
+        RailsAiContext.configuration.max_search_results = previous_cap
+      end
+    end
+
     it "reports a file's whole match count beside what the page shows" do
       with_search_app("app/services/thing.rb" => (([ "  def call" ] * 20).join("\n") + "\n")) do
         text = described_class.call(pattern: "def call", context_lines: 0, limit: 5, group_by_file: true).content.first[:text]
