@@ -43,29 +43,33 @@ module RailsAiContext
       DEFINITIONS.key?(key) ? key : nil
     end
 
-    # Framing goes to err and tool output to out so a pipe keeps its order;
-    # one failing tool costs itself, not the rest of the preset. A run that
-    # produced nothing at all answers false, which is what the surfaces exit
-    # non-zero on.
+    # The headers and the answers are one document on out, in order. With
+    # the headers on err, a redirect that caught both streams got them ahead
+    # of the buffered answers: the second tool's header above the first
+    # tool's output. One failing tool costs itself, not the rest of the
+    # preset, and its error goes to err once out is flushed, so it still
+    # lands under its own header. A run that produced nothing at all
+    # answers false, which is what the surfaces exit non-zero on.
     def self.run(name, out: $stdout, err: $stderr)
       key = resolve(name)
       return false unless key
 
       preset = DEFINITIONS[key]
 
-      err.puts "=" * 60
-      err.puts " Preset: #{name} - #{preset[:desc]}"
-      err.puts "=" * 60
-      err.puts ""
+      out.puts "=" * 60
+      out.puts " Preset: #{name} - #{preset[:desc]}"
+      out.puts "=" * 60
+      out.puts ""
       produced = 0
       preset[:tools].each do |tool_spec|
-        err.puts "-" * 40
-        err.puts "Running: #{tool_spec[:name]}"
-        err.puts "-" * 40
+        out.puts "-" * 40
+        out.puts "Running: #{tool_spec[:name]}"
+        out.puts "-" * 40
         out.puts CLI::ToolRunner.new(tool_spec[:name], tool_spec[:params]).run
         out.puts ""
         produced += 1
       rescue => e
+        out.flush
         err.puts "  [error] #{tool_spec[:name]}: #{e.message}"
       end
       produced.positive?

@@ -37,14 +37,19 @@ RSpec.describe RailsAiContext::Presets do
   end
 
   describe ".run" do
-    it "runs every tool in the preset, framing on err and tool output on out" do
+    # With the headers on err, a redirect catching both streams put the
+    # second tool's header above the first tool's output.
+    it "runs every tool in the preset, each header and its answer in order on out" do
       out = StringIO.new
       err = StringIO.new
       expect(described_class.run("migration", out: out, err: err)).to be true
 
-      expect(err.string).to include("Preset: migration")
-      expect(err.string.scan(/^Running: /).size).to eq(3)
-      expect(out.string).not_to be_empty
+      expect(out.string).to start_with("=" * 60 + "\n Preset: migration")
+      sections = out.string.split(/^-{40}\nRunning: (\S+)\n-{40}\n/).drop(1).each_slice(2).to_h
+      expect(sections.keys).to eq(%w[get_schema runtime_info performance_check])
+      expect(sections["get_schema"]).to include("Schema Summary")
+      expect(sections["runtime_info"]).to include("Runtime Info")
+      expect(err.string).to be_empty
     end
 
     it "answers false for a name that matches no preset and prints nothing" do
