@@ -393,6 +393,7 @@ class RailsAiContextCLI < Thor
       tool_mode = setup.tool_mode
       context_files = setup.context_files
       dropped = program.ask_removed_tools(program_surface, previous: previous_tools, selected: ai_tools)
+      unwired = tool_mode == :cli ? program.ask_mcp_removal(program_surface, root: Dir.pwd) : []
       # One-time v5.0.0 legacy UI-pattern files cleanup prompt
       ::RailsAiContext::LegacyCleanup.prompt_legacy_files(ai_tools, root: Dir.pwd) if context_files
 
@@ -407,6 +408,7 @@ class RailsAiContextCLI < Thor
       boot_rails!(command: "init", allow_static: true) if context_files
 
       program.remove_tools(program_surface, dropped, selected: ai_tools, root: Dir.pwd)
+      program.remove_mcp_entries(program_surface, unwired, root: Dir.pwd)
       record_selection(ai_tools, tool_mode, context_files)
       write_mcp_configs(ai_tools, tool_mode)
       add_to_gitignore(context_files)
@@ -551,6 +553,10 @@ class RailsAiContextCLI < Thor
       context_files = setup.context_files
 
       cleanup_removed_tools(previous, ai_tools, root: dir, app_roots: apps.map(&:root)) if previous.any?
+      if tool_mode == :cli
+        program = ::RailsAiContext::Install::Program
+        program.remove_mcp_entries(program_surface, program.ask_mcp_removal(program_surface, root: dir), root: dir)
+      end
 
       apps.each do |app|
         $stderr.puts ""
@@ -674,8 +680,7 @@ class RailsAiContextCLI < Thor
         next unless ai_tools.include?(tool.key)
 
         # The MCP config is this folder's, so it leaves the per-app list.
-        per_app = tool.files.split(" + ").reject { |part| part == tool.mcp_config[:path] }.join(" + ")
-        files = context_files ? "#{per_app} in each app" : "no context files"
+        files = context_files ? "#{tool.files_label(mcp: false)} in each app" : "no context files"
         files = "#{tool.mcp_config[:path]} #{where}; #{files}" if tool_mode == :mcp
         $stderr.puts "  #{tool.name.ljust(16)} -> #{files}"
       end
@@ -713,7 +718,7 @@ class RailsAiContextCLI < Thor
       $stderr.puts "Your setup:"
       ::RailsAiContext::Install::AiTool.all.each do |tool|
         next unless ai_tools.include?(tool.key)
-        $stderr.puts "  #{tool.name.ljust(16)} -> #{context_files ? tool.files : 'MCP config only'}"
+        $stderr.puts "  #{tool.name.ljust(16)} -> #{context_files ? tool.files_label(mcp: tool_mode == :mcp) : 'MCP config only'}"
       end
       unless context_files
         $stderr.puts ""

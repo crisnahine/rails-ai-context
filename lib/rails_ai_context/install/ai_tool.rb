@@ -76,6 +76,13 @@ module RailsAiContext
         )
       ].freeze
 
+      # What a summary lists for the tool. `files` names Codex CLI's MCP
+      # config beside its context files, and a CLI-mode or per-app summary
+      # writes no MCP config, so it leaves that part out.
+      def files_label(mcp: true)
+        mcp ? files : context_files
+      end
+
       class << self
         def all
           ALL
