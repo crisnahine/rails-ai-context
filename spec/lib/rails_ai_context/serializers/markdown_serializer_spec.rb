@@ -127,7 +127,8 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
         auth: { authentication: {}, authorization: { policies: %w[PostPolicy], ability_class: "app/models/ability.rb" } }
       }
 
-      output = described_class.new(context).call
+      # The protocol further down names Pundit and CanCan as questions to ask.
+      output = described_class.new(context).call[/^## Authentication.*?(?=^## )/m]
 
       expect(output).to include("### Policy Classes (app/policies)")
       expect(output).to include("- `PostPolicy`")

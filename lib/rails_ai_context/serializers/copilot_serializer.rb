@@ -29,6 +29,8 @@ module RailsAiContext
 
     # Internal: full-mode Copilot serializer (wraps MarkdownSerializer)
     class FullCopilotSerializer < MarkdownSerializer
+      include FullSerializerBehavior
+
       private
 
       def header

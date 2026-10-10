@@ -4,14 +4,19 @@ module RailsAiContext
   module Serializers
     # Generates AI-friendly markdown context files from introspection data.
     # Outputs: CLAUDE.md (for Claude Code), copilot-instructions.md, etc.
+    #
+    # Full mode's root files are the only file OpenCode and Codex load whole,
+    # so they close with the tools guide and the protocol the compact files
+    # carry, not the data alone.
     class MarkdownSerializer < Base
       include TestCommandDetection
       include StackOverviewHelper
+      include ToolGuideHelper
 
       MARKDOWN_SPECIAL_CHARS = /([\\`*_{\}\[\]()+\-#.!~|])/
 
       SECTIONS = %i[
-        schema models routes jobs gems conventions controllers views turbo active_storage
+        schema models routes jobs gems conventions controllers views stimulus turbo active_storage
         action_text i18n config assets auth api tests rake_tasks devops action_mailbox
         migrations seeds middleware engines multi_database
       ].freeze
@@ -21,6 +26,8 @@ module RailsAiContext
         sections = [ header, app_overview ]
         SECTIONS.each { |key| sections << send("#{key}_section") if Payload.section(context, key) }
         sections << warnings_section if context[:_warnings]&.any?
+        sections << rules_section
+        sections << render_tools_guide_compact.join("\n").rstrip
         sections << footer
         sections.compact.join("\n\n")
       end
@@ -53,22 +60,44 @@ module RailsAiContext
         arch_labels = arch_labels_hash
         pattern_labels = pattern_labels_hash
 
-        lines = [ "## Overview" ]
+        lines = []
         lines << "- **Architecture:** #{arch.map { |a| arch_labels[a] || a }.join(', ')}" if arch.any?
         lines << "- **Patterns:** #{patterns.map { |p| pattern_labels[p] || p }.join(', ')}" if patterns.any?
-        lines.join("\n")
+        # The static tier has no conventions, and a heading over nothing reads as a section that failed.
+        [ "## Overview", *lines ].join("\n") if lines.any?
       end
 
+      # Each column with its type and default, then the table's indexes and
+      # foreign keys: the facts a migration has to agree with.
       def schema_section
         schema = Payload.section(context, :schema)
 
         lines = [ "## Database Schema (#{Introspectors::SchemaConventions.relations_phrase(schema[:tables])})" ]
         schema[:tables]&.each do |name, data|
-          cols = (data[:columns] || []).map { |c| c[:type] ? "`#{c[:name]}` (#{c[:type]})" : "`#{c[:name]}`" }.join(", ")
           lines << "### #{escape_markdown(name)}"
-          lines << cols
+          lines << ([ (data[:columns] || []).map { |c| column_text(c) }.join(", ") ] + table_key_lines(data)).join("\n")
         end
         lines.join("\n\n")
+      end
+
+      def column_text(column)
+        details = [ column[:type], ("default #{column[:default] == "" ? '""' : column[:default]}" unless column[:default].nil?) ].compact
+        details.any? ? "`#{column[:name]}` (#{details.join(', ')})" : "`#{column[:name]}`"
+      end
+
+      def table_key_lines(data)
+        indexes = Array(data[:indexes]).map do |index|
+          columns = Array(index[:columns]).join("+")
+          where = Introspectors::SchemaConventions.where_clause(index[:where])
+          index[:unique] ? "#{columns} (unique#{where})" : "#{columns}#{where}"
+        end
+        foreign_keys = Array(data[:foreign_keys]).map do |fk|
+          "#{Introspectors::SchemaConventions.key_text(fk[:column])} → #{fk[:to_table]}"
+        end
+        lines = []
+        lines << "- Indexes: #{indexes.join('; ')}" if indexes.any?
+        lines << "- Foreign keys: #{foreign_keys.join('; ')}" if foreign_keys.any?
+        lines
       end
 
       def models_section
@@ -85,26 +114,56 @@ module RailsAiContext
 
           assocs = SectionFacts.associations_list(data).join(", ")
           lines << "- Table: `#{data[:table_name]}`" if data[:table_name]
+          concerns = ConcernMembership.app_owned(data[:concerns], project_root)
+          lines << "- Concerns: #{concerns.join(', ')}" if concerns.any?
           lines << "- Associations: #{assocs}" if assocs.present?
           if data[:validations]&.any?
             vals = data[:validations].map { |v| [ v[:kind], SectionFacts.validation_target(v) ].reject(&:empty?).join(" ") }.join("; ")
             lines << "- Validations: #{vals}"
           end
-          lines << "- Enums: #{data[:enums].is_a?(Hash) ? data[:enums].keys.join(', ') : Array(data[:enums]).join(', ')}" if data[:enums]&.any?
+          lines.concat(model_detail_lines(data))
         end
         lines.join("\n")
+      end
+
+      # What the compact files and the models rule file already state, which
+      # the "everything" file left out.
+      def model_detail_lines(data)
+        lines = []
+        scopes = scope_names(Array(data[:scopes]))
+        lines << "- Scopes: #{scopes.join(', ')}" if scopes.any?
+        callbacks = data[:callbacks].is_a?(Hash) ? data[:callbacks] : {}
+        if callbacks.any?
+          lines << "- Callbacks: #{callbacks.map { |kind, names| "#{kind} #{Array(names).map { |n| callback_name(n) }.join(', ')}" }.join('; ')}"
+        end
+        enums = data[:enums].is_a?(Hash) ? data[:enums] : Array(data[:enums]).to_h { |name| [ name, nil ] }
+        lines << "- Enums: #{enums.map { |name, values| values ? "#{name} (#{SectionFacts.enum_values(values)})" : name }.join('; ')}" if enums.any?
+        Array(data[:constants]).each { |c| lines << "- #{c[:name]}: #{Array(c[:values]).join(', ')}" if c.is_a?(Hash) }
+        lines
+      end
+
+      def callback_name(callback)
+        callback.is_a?(Hash) ? (callback[:method] || callback[:name]).to_s : callback.to_s
       end
 
       def routes_section
         routes = Payload.section(context, :routes)
         return unless routes
 
-        lines = [ "## Routes (#{routes[:total_routes]} total#{RouteCoverage.suffix(routes)})" ]
-        routes[:by_controller]&.sort&.each do |ctrl, actions|
+        # The app's own routes, each PATCH/PUT pair one entry as the count has
+        # it. What Rails' engines draw (Active Storage, Action Mailbox, Turbo)
+        # is counted, not listed: the tools leave it out the same way.
+        lines = [ "## Routes", "", "#{RouteCoverage.summary(routes)}." ]
+        RouteCoverage.app_controllers(routes).sort.each do |ctrl, actions|
           lines << "### #{escape_markdown(ctrl)}"
           actions.each do |r|
             lines << "- `#{r[:verb]} #{r[:path]}` → #{r[:action]}"
           end
+        end
+        framework = RouteCoverage.by_controller(routes).keys.select { |ctrl| RouteCoverage.framework_controller?(ctrl) }
+        if framework.any?
+          owners = framework.map { |ctrl| ctrl.split("/").first }.uniq.sort
+          lines << "" << "_Plus #{CountPhrase.call(RouteCoverage.framework_route_count(routes), 'framework route')} (#{owners.join(', ')}), not listed._"
         end
         Array(routes[:engine_routes]).each do |group|
           Array(group[:routes]).group_by { |r| r[:controller].to_s }.sort.each do |ctrl, actions|
@@ -192,10 +251,28 @@ module RailsAiContext
 
         if data[:helpers]&.any?
           lines << "### Helpers"
-          data[:helpers].each { |h| lines << "- `#{h[:file]}`: #{h[:methods].join(', ')}" }
+          data[:helpers].each do |h|
+            methods = Array(h[:methods])
+            lines << (methods.any? ? "- `#{h[:file]}`: #{methods.join(', ')}" : "- `#{h[:file]}` (no methods)")
+          end
         end
 
         lines << "- View components: #{data[:view_components].size}" if data[:view_components]&.any?
+        lines.join("\n")
+      end
+
+      def stimulus_section
+        controllers = Payload.stimulus_controllers(context).select { |c| c.is_a?(Hash) && c[:name] }
+        return if controllers.empty?
+
+        lines = [ "## Stimulus Controllers (#{controllers.size})" ]
+        controllers.each do |c|
+          values = c[:values].is_a?(Hash) ? c[:values].map { |name, type| "#{name} (#{type})" } : Array(c[:values])
+          parts = { "targets" => Array(c[:targets]), "values" => values, "actions" => Array(c[:actions]),
+                    "outlets" => Array(c[:outlets]), "classes" => Array(c[:classes]) }
+            .reject { |_, list| list.empty? }.map { |kind, list| "#{kind}: #{list.join(', ')}" }
+          lines << "- `#{c[:name]}`#{" - #{parts.join('; ')}" if parts.any?}"
+        end
         lines.join("\n")
       end
 
@@ -363,15 +440,17 @@ module RailsAiContext
         data = Payload.section(context, :devops)
 
         lines = [ "## DevOps" ]
-        if data[:puma]
-          lines << "### Puma"
-          lines << "- Threads: #{data[:puma][:threads_min]}-#{data[:puma][:threads_max]}" if data[:puma][:threads_min]
-          lines << "- Workers: #{data[:puma][:workers]}" if data[:puma][:workers]
-        end
         lines << "- Deployment: #{data[:deployment]}" if data[:deployment]
         if data[:docker]
           lines << "- Docker: #{data[:docker][:multi_stage] ? 'multi-stage' : 'single-stage'} build"
         end
+        # Last and only with a line under it: a bare "### Puma" took the
+        # deployment lines after it for its own.
+        puma = data[:puma].is_a?(Hash) ? data[:puma] : {}
+        puma_lines = []
+        puma_lines << "- Threads: #{puma[:threads_min]}-#{puma[:threads_max]}" if puma[:threads_min]
+        puma_lines << "- Workers: #{puma[:workers]}" if puma[:workers]
+        lines.push("### Puma", *puma_lines) if puma_lines.any?
         lines.join("\n") if lines.size > 1
       end
 
@@ -540,6 +619,11 @@ module RailsAiContext
         lines.join("\n")
       end
 
+      # The AI tools' files carry their own (FullSerializerBehavior).
+      def rules_section
+        nil
+      end
+
       def footer
         <<~MD
           ---
@@ -553,12 +637,13 @@ module RailsAiContext
       end
     end
 
-    # Shared behavior for full-mode serializers (FullClaudeSerializer, FullOpencodeSerializer).
-    # Provides behavioral rules footer and architecture summary.
+    # Shared behavior for the full-mode serializers of the AI tools' root
+    # files (FullClaudeSerializer, FullOpencodeSerializer, FullCopilotSerializer).
+    # Provides the behavioral rules section and architecture summary.
     module FullSerializerBehavior
       private
 
-      def footer
+      def rules_section
         rules = []
         rules << "## Behavioral Rules"
         rules << ""
@@ -569,8 +654,6 @@ module RailsAiContext
         rules << "- Match the project's architecture style (#{architecture_summary})" if architecture_summary
         test_cmd = detect_test_command
         rules << "- Run `#{test_cmd}` after making changes to verify correctness"
-        rules << ""
-        rules << super
         rules.join("\n")
       end
 
