@@ -44,11 +44,11 @@ module RailsAiContext
       BARE_GUARD_PATTERN = RailsAiContext::Install::InitializerFile::BARE_GUARD
 
       def select_ai_tools
-        @selected_formats = RailsAiContext::Install::Program.select_ai_tools(program_surface)
+        @previous_formats = read_previous_ai_tools
+        @selected_formats = RailsAiContext::Install::Program.select_ai_tools(program_surface, current: @previous_formats)
       end
 
       def cleanup_removed_tools
-        @previous_formats = read_previous_ai_tools
         return unless @previous_formats&.any?
 
         RailsAiContext::Install::Program.cleanup_removed_tools(
@@ -689,7 +689,8 @@ module RailsAiContext
         end
         say ""
         say "Commands:", :yellow
-        say "  rails ai:context                 # Regenerate context files"
+        # An MCP-only install writes no context files, so there are none to regenerate.
+        say "  rails ai:context                 # Regenerate context files" if context_files?
         # What the server serves, skip_tools and custom_tools applied.
         tool_count = RailsAiContext::Server.exposed_tools.size
         say "  rails 'ai:tool[schema]'          # Run any of the #{CountPhrase.call(tool_count, "tool")} from CLI"
@@ -711,22 +712,35 @@ module RailsAiContext
           say "  No MCP server needed - tools work from the terminal."
         end
         say ""
-        say "To add more AI tools later:", :yellow
-        say "  rails ai:context:cursor   # Generate for Cursor"
-        say "  rails ai:context:copilot  # Generate for Copilot"
-        say "  rails generate rails_ai_context:install  # Re-run to pick tools"
-        say ""
-        say "Standalone (no Gemfile needed):", :yellow
-        say "  gem install rails-ai-context"
-        say "  rails-ai-context init          # interactive setup"
-        say "  rails-ai-context serve         # start MCP server"
-        say ""
-        if @selected_formats.include?(:codex)
-          say "Commit context files and MCP configs so your team benefits! (.codex/config.toml stays local - it embeds machine-specific paths; add it to .gitignore)", :green
-        else
-          say "Commit context files and MCP config files so your team benefits!", :green
+        show_more_tools
+        committed = [ ("context files" if context_files?), ("MCP configs" if tool_mode == :mcp) ].compact
+        say "Commit the #{committed.join(' and ')} so your team benefits!", :green
+        # Only where a Codex config was written, and only while a commit
+        # would still take it along.
+        if tool_mode == :mcp && @selected_formats.include?(:codex) &&
+           !RailsAiContext::Install::Program.codex_config_ignored?(Rails.root)
+          say "(.codex/config.toml stays local - it embeds machine-specific paths; add it to .gitignore)", :green
         end
       end
+
+      no_tasks do
+      # The tools this install did not pick, each with the task that adds it.
+      # None when every tool is picked; and an MCP-only install, which writes
+      # no context files, only gets the re-run that picks them.
+      def show_more_tools
+        unselected = RailsAiContext::Install::AiTool.all.reject { |tool| @selected_formats.include?(tool.key) }
+        return if unselected.empty?
+
+        say "To add more AI tools later:", :yellow
+        if context_files?
+          tasks = unselected.to_h { |tool| [ "rails ai:context:#{tool.key}", tool.name ] }
+          width = tasks.keys.map(&:size).max
+          tasks.each { |task, name| say "  #{task.ljust(width)}  # Generate for #{name}" }
+        end
+        say "  rails generate rails_ai_context:install  # Re-run to pick tools"
+        say ""
+      end
+      end # no_tasks
     end
   end
 end

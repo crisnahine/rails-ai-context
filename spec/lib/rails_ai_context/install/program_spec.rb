@@ -81,20 +81,44 @@ RSpec.describe RailsAiContext::Install::Program do
         .to eq(RailsAiContext::Install::AiTool.all.map(&:key))
     end
 
-    it "defaults to every tool out loud on EOF" do
-      surface = surface_class.new(nil)
+    # An empty answer is the default the prompt has always had, and
+    # `--defaults` answers every prompt that way: "No tools selected" over
+    # a run that selected all five read like an error.
+    it "selects every tool on an empty answer and on EOF, saying which and nothing else" do
+      [ "", nil ].each do |answer|
+        surface = surface_class.new(answer)
 
-      expect(described_class.select_ai_tools(surface))
-        .to eq(RailsAiContext::Install::AiTool.all.map(&:key))
-      expect(surface.text).to include("No tools selected - defaulting to all.")
+        expect(described_class.select_ai_tools(surface))
+          .to eq(RailsAiContext::Install::AiTool.all.map(&:key))
+        expect(surface.text).to end_with("\nSelected: Claude Code, Cursor, GitHub Copilot, OpenCode, Codex CLI")
+        expect(surface.text).not_to include("No tools selected")
+      end
     end
 
-    it "defaults to every tool on input that names nothing" do
+    it "says so when the answer names no tool, and selects every one" do
       surface = surface_class.new("9,zebra")
 
       expect(described_class.select_ai_tools(surface))
         .to eq(RailsAiContext::Install::AiTool.all.map(&:key))
-      expect(surface.text).to include("No tools selected - defaulting to all.")
+      expect(surface.text).to include(%("9,zebra" names no tool - selecting all.))
+    end
+
+    # A re-run asks the same question with no hint of the answer it gave
+    # last time.
+    it "shows the current selection above the question" do
+      surface = surface_class.new("1")
+
+      described_class.select_ai_tools(surface, current: %i[claude copilot])
+
+      expect(surface.text).to include("Currently selected: 1,3 (Claude Code, GitHub Copilot)")
+    end
+
+    it "shows no current selection on a first run" do
+      surface = surface_class.new("1")
+
+      described_class.select_ai_tools(surface, current: nil)
+
+      expect(surface.text).not_to include("Currently selected")
     end
   end
 

@@ -670,6 +670,66 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       expect(generator.instance_variable_get(:@selected_formats))
         .to match_array(RailsAiContext::Install::AiTool.all.map(&:key))
     end
+
+    # A re-run asked the question with no hint of the answer it gave before.
+    it "shows the selection a re-run starts from" do
+      File.write(File.join(tmpdir, ".rails-ai-context.yml"), "ai_tools:\n- claude\n- cursor\n")
+      said = []
+      allow(generator).to receive(:say) { |text, *| said << text }
+      allow(generator).to receive(:ask).and_return("1,2")
+
+      generator.select_ai_tools
+
+      expect(said).to include("Currently selected: 1,2 (Claude Code, Cursor)")
+    end
+  end
+
+  # The closing summary told an in-Gemfile user how to install standalone,
+  # offered the tools they had just picked, and asked them to gitignore a
+  # file the step before had already ignored.
+  describe "#show_instructions" do
+    def summary
+      said = []
+      allow(generator).to receive(:say) { |text = "", *| said << text }
+      generator.show_instructions
+      said.join("\n")
+    end
+
+    it "offers only the tools not picked, and no standalone install" do
+      expect(summary).to include("rails ai:context:cursor", "rails ai:context:opencode", "rails ai:context:codex")
+      expect(summary).not_to include("rails ai:context:claude", "rails ai:context:copilot")
+      expect(summary).not_to include("Standalone (no Gemfile needed)", "gem install rails-ai-context")
+    end
+
+    it "offers no more tools when every one is picked" do
+      generator.instance_variable_set(:@selected_formats, RailsAiContext::Install::AiTool.all.map(&:key))
+
+      expect(summary).not_to include("To add more AI tools later")
+    end
+
+    it "asks to gitignore the Codex config only while a commit would take it" do
+      generator.instance_variable_set(:@selected_formats, %i[codex])
+      File.write(File.join(tmpdir, ".gitignore"), "")
+      expect(summary).to include("add it to .gitignore")
+
+      File.write(File.join(tmpdir, ".gitignore"), ".codex/config.toml\n")
+      expect(summary).not_to include("add it to .gitignore")
+    end
+
+    it "names no Codex config and no MCP configs in CLI mode" do
+      generator.instance_variable_set(:@selected_formats, %i[codex])
+      generator.instance_variable_set(:@tool_mode, :cli)
+
+      expect(summary).to include("Codex CLI        -> AGENTS.md\n")
+      expect(summary).not_to include(".codex/config.toml", "MCP configs")
+    end
+
+    it "offers no regeneration when the install writes no context files" do
+      generator.instance_variable_set(:@context_files, false)
+
+      expect(summary).not_to include("rails ai:context ")
+      expect(summary).not_to include("Regenerate context files")
+    end
   end
 
   describe "#select_setup" do
