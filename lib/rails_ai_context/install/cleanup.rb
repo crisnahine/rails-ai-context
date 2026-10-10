@@ -49,8 +49,29 @@ module RailsAiContext
           end
         end
 
+        prune_emptied(outcome, root)
         outcome
       end
+
+      # A tool's dot-directory (.cursor/, .github/) that the removal emptied
+      # goes too, and is reported like any other path. One that holds
+      # anything else stays, and a directory outside the dot-directories -
+      # app/models, emptied of its AGENTS.md - is never removed.
+      def prune_emptied(outcome, root)
+        outcome[:removed].map { |path| File.dirname(path.delete_suffix("/")) }.uniq.each do |dir|
+          while dir.start_with?(".") && dir != "."
+            full = File.join(root.to_s, dir)
+            break unless File.directory?(full) && !File.symlink?(full) && Dir.empty?(full)
+
+            Dir.rmdir(full)
+            outcome[:removed] << "#{dir}/"
+            dir = File.dirname(dir)
+          end
+        rescue SystemCallError
+          next
+        end
+      end
+      private_class_method :prune_emptied
 
       # A symlink is somebody's own arrangement, and writing through one edits
       # a file this run was not asked about.
