@@ -367,7 +367,7 @@ The gem wraps its generated content in section markers:
 <!-- END rails-ai-context -->
 ```
 
-Add your custom rules **outside** these markers - they're preserved on regeneration.
+Add your custom rules **outside** these markers - they're preserved on regeneration. A hand-written `app/models/AGENTS.md` or `app/controllers/AGENTS.md` is kept the same way: your text stays, and the gem's listing goes between the markers above it.
 
 **Step 3: Remove manual maintenance**
 

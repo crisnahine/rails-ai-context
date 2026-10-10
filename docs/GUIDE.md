@@ -209,8 +209,8 @@ A file whose section has nothing in it is not written. An app with no models get
 | File | Purpose | Notes |
 |------|---------|-------|
 | `AGENTS.md` | Main context file | Native OpenCode format. ≤150 lines in compact mode. OpenCode also reads CLAUDE.md as fallback. |
-| `app/models/AGENTS.md` | Model reference | Auto-loaded by OpenCode when reading files in `app/models/`. |
-| `app/controllers/AGENTS.md` | Controller reference | Auto-loaded by OpenCode when reading files in `app/controllers/`. |
+| `app/models/AGENTS.md` | Model reference | Auto-loaded by OpenCode when reading files in `app/models/`. One you wrote yourself keeps its text, with the listing added between markers. |
+| `app/controllers/AGENTS.md` | Controller reference | Auto-loaded by OpenCode when reading files in `app/controllers/`. One you wrote yourself keeps its text, with the listing added between markers. |
 
 ### Cursor (5 files)
 
