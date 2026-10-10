@@ -47,12 +47,9 @@ module RailsAiContext
           return result
         end
 
-        case SectionMarkerWriter.write_with_markers(cursorrules_path, render_cursorrules_legacy)
-        when :written then result[:written] << cursorrules_path
-        when :skipped then result[:skipped] << cursorrules_path
-        end
-
-        result
+        SectionMarkerWriter.report(
+          SectionMarkerWriter.write_with_markers(cursorrules_path, render_cursorrules_legacy), cursorrules_path, result
+        )
       end
 
       private

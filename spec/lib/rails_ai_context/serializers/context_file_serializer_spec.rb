@@ -259,6 +259,25 @@ RSpec.describe RailsAiContext::Serializers::ContextFileSerializer do
       end
     end
 
+    # The writer used to prepend a fresh block, keeping the old one below.
+    it "leaves a file with a lost END marker as it is and names it with the reason" do
+      Dir.mktmpdir do |dir|
+        allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
+        filepath = File.join(dir, "CLAUDE.md")
+        described_class.new(context, format: :claude).call
+        broken = File.read(filepath).sub("<!-- END rails-ai-context -->", "") + "\n# My notes\n"
+        File.write(filepath, broken)
+
+        2.times do
+          result = described_class.new(context, format: :claude).call
+
+          expect(result[:not_applicable][filepath]).to eq(RailsAiContext::Serializers::SectionMarkerWriter::UNPAIRED)
+          expect(result[:written]).not_to include(filepath)
+        end
+        expect(File.read(filepath)).to eq(broken)
+      end
+    end
+
     it "does not use markers for JSON format" do
       Dir.mktmpdir do |dir|
         allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
