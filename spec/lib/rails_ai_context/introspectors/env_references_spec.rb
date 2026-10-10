@@ -56,6 +56,24 @@ RSpec.describe RailsAiContext::Introspectors::EnvReferences do
     expect(names_in("lib/tasks/setup.rake")).to eq(%w[KEPT])
   end
 
+  # Rails' generated database.yml shows `url: <%= ENV["MY_APP_DATABASE_URL"] %>`
+  # in a comment, and the app was said to read it.
+  it "does not read the tag on a YAML comment line, and keeps the lines after it numbered" do
+    write("config/database.yml", <<~YAML)
+      # As a URL instead:
+      #   production:
+      #     url: <%= ENV["MY_APP_DATABASE_URL"] %>
+      production:
+        password: <%= ENV["APP_DATABASE_PASSWORD"] %>
+    YAML
+    write("config/cable.yml", "production:\n  # <%= ENV[\"OLD_REDIS\"] %>\n  url: <%= ENV.fetch(\"REDIS_URL\") { \"redis://localhost:6379/1\" } %>\n")
+
+    refs = described_class.scan(@root)
+
+    expect(refs[File.join(@root, "config/database.yml")]).to eq([ { name: "APP_DATABASE_PASSWORD", line: 5, bracket: true } ])
+    expect(refs[File.join(@root, "config/cable.yml")]).to eq([ { name: "REDIS_URL", line: 3, default_unread: true } ])
+  end
+
   it "skips a file too large to read and still reads the ENV in the files next to it" do
     write("db/seeds.rb", "User.create!(name: \"#{"x" * 200}\")\n")
     write("config/initializers/keys.rb", "KEY = ENV.fetch(\"API_KEY\")\n")

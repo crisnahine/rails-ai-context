@@ -36,7 +36,9 @@ module RailsAiContext
           next if !ruby?(path) && !source.include?("<%")
 
           refs = references(ruby_source(path, source))
-          refs = refs.map { |ref| ref.except(:default).merge(default_unread: true) } if names_only
+          # Whether a site has a default is its shape, not its value: a site
+          # with none still raises or reads nil, and says so.
+          refs = refs.map { |ref| ref.key?(:default) ? ref.except(:default).merge(default_unread: true) : ref } if names_only
           found[path] = refs if refs.any?
         end
       rescue SystemCallError => e
@@ -77,10 +79,17 @@ module RailsAiContext
         script?(path) || path.end_with?(*RUBY_EXTENSIONS)
       end
 
+      # A YAML comment line still runs through ERB, but what its tag writes
+      # goes with the comment: database.yml's `#   url: <%= ENV["MY_APP_DATABASE_URL"] %>`
+      # names a variable nothing uses.
+      YAML_COMMENT_LINE = /^[ \t]*#.*$/
+
       # ERB tags carry the Ruby of a `.yml` or `.erb` file.
       def ruby_source(path, source)
         return source if ruby?(path)
 
+        # Blanked, not dropped, so every line keeps its number.
+        source = source.gsub(YAML_COMMENT_LINE) { |line| " " * line.size } if path.end_with?(".yml", ".yaml")
         RailsAiContext::ErbSource.ruby_in_place(source)
       end
 
