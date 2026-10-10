@@ -342,6 +342,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   home directory holding them while the binary looked for the app, and an
   initializer holding them stopped the binary with an encoding error. A
   folder named in another encoding is read byte by byte, as before.
+- **A context file whose markers do not pair up is left as it is.** A lost
+  `<!-- END rails-ai-context -->` had a fresh section prepended and the old
+  one kept below it, so CLAUDE.md carried the gem's section twice from then
+  on. With a marker missing, a second pair pasted in or END before BEGIN,
+  nothing says where the gem's section ends, so a run now writes nothing to
+  that file and names it `unpaired rails-ai-context marker, left as it is`.
+  A regenerated section keeps a double backslash, where it was written as
+  one.
 
 ## [5.32.2] - 2026-10-07
 

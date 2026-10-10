@@ -188,7 +188,9 @@ rails ai:context
 
 ### "My custom content in CLAUDE.md was overwritten"
 
-The gem uses section markers (`<!-- BEGIN/END rails-ai-context -->`) to preserve user content. Content outside these markers is preserved. If markers were removed, the gem may overwrite.
+The gem writes its section between `<!-- BEGIN rails-ai-context -->` and `<!-- END rails-ai-context -->` and replaces only what lies between them, so text above and below the markers survives every run; text inside them does not. A file with no markers at all gets the section added at the top, and its own text kept below.
+
+If one marker goes missing, or the file holds a second pair, nothing says where the gem's section ends. The run then leaves the file as it is and reports it as `unpaired rails-ai-context marker, left as it is`. Put the lost marker back where the gem's section ends, or delete the leftover section with its markers, and the next run updates the file again.
 
 ### "Generated files are too large"
 

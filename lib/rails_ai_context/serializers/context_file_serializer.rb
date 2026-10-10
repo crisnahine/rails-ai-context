@@ -90,9 +90,7 @@ module RailsAiContext
         # - a different path from a boot that started and failed.
         output_dir = RailsAiContext.configuration.output_dir_for(RailsAiContext.default_app)
         generate_root = RailsAiContext.configuration.generate_root_files
-        written = []
-        skipped = []
-        not_applicable = {}
+        result = { written: [], skipped: [], not_applicable: {} }
 
         seen_root_files = Set.new
 
@@ -110,7 +108,7 @@ module RailsAiContext
           # generate_root_files = false is a deliberate omission, so it is
           # reported rather than dropped. The JSON dump is no tool's root file.
           unless generate_root || fmt == :json
-            not_applicable[filepath] = "root files disabled"
+            result[:not_applicable][filepath] = "root files disabled"
             next
           end
 
@@ -118,16 +116,16 @@ module RailsAiContext
           content = serialize(fmt)
 
           if fmt == :json
-            write_plain(filepath, content, written, skipped)
+            write_plain(filepath, content, result)
           else
-            write_with_markers(filepath, content, written, skipped)
+            SectionMarkerWriter.report(SectionMarkerWriter.write_with_markers(filepath, content), filepath, result)
           end
         end
 
         # Split rules are always generated regardless of generate_root_files
-        generate_split_rules(formats, output_dir, written, skipped, not_applicable)
+        generate_split_rules(formats, output_dir, result)
 
-        { written: written, skipped: skipped, not_applicable: not_applicable }
+        result
       end
 
       private
@@ -137,12 +135,12 @@ module RailsAiContext
       end
 
       # JSON and other formats that don't support HTML comments
-      def write_plain(filepath, content, written, skipped)
+      def write_plain(filepath, content, result)
         if File.exist?(filepath) && same_payload?(File.read(filepath), content)
-          skipped << filepath
+          result[:skipped] << filepath
         else
           RailsAiContext::SafeFile.atomic_write(filepath, content)
-          written << filepath
+          result[:written] << filepath
         end
       end
 
@@ -159,25 +157,14 @@ module RailsAiContext
         false
       end
 
-      # Wrap content in section markers so user content is preserved.
-      # Delegates to SectionMarkerWriter (also used by CursorRulesSerializer
-      # for .cursorrules) so the marker contract is implemented in exactly
-      # one place.
-      def write_with_markers(filepath, content, written, skipped)
-        case SectionMarkerWriter.write_with_markers(filepath, content)
-        when :written then written << filepath
-        when :skipped then skipped << filepath
-        end
-      end
-
-      def generate_split_rules(formats, output_dir, written, skipped, not_applicable)
+      def generate_split_rules(formats, output_dir, result)
         serializers = formats.filter_map { |fmt| RULES_SERIALIZERS[fmt] }.uniq
 
         serializers.each do |serializer|
-          result = serializer.new(context).call(output_dir)
-          written.concat(result[:written])
-          skipped.concat(result[:skipped])
-          not_applicable.merge!(result[:not_applicable] || {})
+          rules = serializer.new(context).call(output_dir)
+          result[:written].concat(rules[:written])
+          result[:skipped].concat(rules[:skipped])
+          result[:not_applicable].merge!(rules[:not_applicable] || {})
         end
       end
     end

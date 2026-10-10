@@ -20,16 +20,25 @@ module RailsAiContext
       # nothing new still put a diff in a repo that commits its context files.
       GENERATED_LINE = /^> Generated: .*\n/
 
+      BLOCK = /#{Regexp.escape(BEGIN_MARKER)}.*?#{Regexp.escape(END_MARKER)}\n?/m
+
+      # Why a run left a file alone: with a marker lost, or a second block
+      # pasted in, nothing says where the gem's block ends.
+      UNPAIRED = "unpaired rails-ai-context marker, left as it is"
+
       module_function
 
       # Write `content` to `filepath` wrapped in markers. If the file already
       # exists with markers, replace only the marker block (preserving user
       # content outside). If the file exists WITHOUT markers, prepend the
       # marker block so AI tools read our context first while keeping the
-      # user's prior content intact below.
+      # user's prior content intact below. A file whose markers do not pair
+      # up is not written: replacing a guess at the block could take the
+      # user's text, and prepending a new one duplicated the old for good.
       #
       # Returns :written if the file changed (created or block updated),
-      # :skipped if the file already had the exact same marker block.
+      # :skipped if the file already had the exact same marker block,
+      # :unpaired if its markers do not pair up.
       def write_with_markers(filepath, content)
         marked_content = "#{BEGIN_MARKER}\n#{content}\n#{END_MARKER}\n"
 
@@ -40,13 +49,11 @@ module RailsAiContext
           existing = RailsAiContext::SafeFile.read_text(filepath)
           marked_content = marked_content.b if existing.encoding == Encoding::BINARY
 
-          new_content = if existing.include?(BEGIN_MARKER) && existing.include?(END_MARKER)
-            existing.sub(
-              /#{Regexp.escape(BEGIN_MARKER)}.*?#{Regexp.escape(END_MARKER)}\n?/m,
-              marked_content
-            )
-          else
-            "#{marked_content}\n#{existing}"
+          new_content = case markers(existing)
+          # A block, so a backslash in the content is not read as a backreference.
+          when :pair then existing.sub(BLOCK) { marked_content }
+          when :none then "#{marked_content}\n#{existing}"
+          else return :unpaired
           end
 
           return :skipped if same_but_for_timestamp?(existing, new_content)
@@ -57,6 +64,27 @@ module RailsAiContext
           atomic_write(filepath, marked_content)
           :written
         end
+      end
+
+      # :pair for one BEGIN marker before one END marker, :none for neither,
+      # :unpaired for anything else: a lone marker, two blocks, END first.
+      def markers(text)
+        begins = text.scan(BEGIN_MARKER).size
+        ends = text.scan(END_MARKER).size
+        return :none if begins.zero? && ends.zero?
+        return :pair if begins == 1 && ends == 1 && text.index(BEGIN_MARKER) < text.index(END_MARKER)
+
+        :unpaired
+      end
+
+      # Files a write's outcome under the bucket a context run reports it in.
+      def report(outcome, filepath, result)
+        case outcome
+        when :written then result[:written] << filepath
+        when :skipped then result[:skipped] << filepath
+        when :unpaired then result[:not_applicable][filepath] = UNPAIRED
+        end
+        result
       end
 
       def same_but_for_timestamp?(existing, candidate)

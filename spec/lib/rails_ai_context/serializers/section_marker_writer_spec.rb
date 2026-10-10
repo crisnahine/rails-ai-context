@@ -51,4 +51,48 @@ RSpec.describe RailsAiContext::Serializers::SectionMarkerWriter do
       expect(File.binread(path)).to eq("caf\xE9\n\n#{begin_marker}\nnew ✓\n#{end_marker}\n".b)
     end
   end
+
+  # The replacement went through String#sub's backreference syntax, which
+  # reads two backslashes as one.
+  it "writes a backslash in the content as it is" do
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "CLAUDE.md")
+      File.write(path, "#{begin_marker}\nold\n#{end_marker}\n")
+
+      described_class.write_with_markers(path, "a \\\\ b \\1")
+
+      expect(File.read(path)).to eq("#{begin_marker}\na \\\\ b \\1\n#{end_marker}\n")
+    end
+  end
+
+  # A lost END marker had a fresh block prepended and the old one kept below
+  # it, so every later run carried the gem's section twice. Nothing says where
+  # a block without its pair ends, and a guess could take the user's text.
+  describe "a file whose markers do not pair up" do
+    {
+      "a BEGIN marker without its END" => ->(b, e) { "# Mine\n\n#{b}\nold block\n\nmore of mine\n" },
+      "an END marker without its BEGIN" => ->(b, e) { "# Mine\nold block\n#{e}\nmore of mine\n" },
+      "END before BEGIN" => ->(b, e) { "#{e}\nmine\n#{b}\n" },
+      "two blocks" => ->(b, e) { "#{b}\none\n#{e}\n\n#{b}\ntwo\n#{e}\n" }
+    }.each do |shape, build|
+      it "leaves #{shape} as it is and says so" do
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, "CLAUDE.md")
+          before = build.call(begin_marker, end_marker)
+          File.write(path, before)
+
+          expect(described_class.write_with_markers(path, "new")).to eq(:unpaired)
+          expect(File.read(path)).to eq(before)
+        end
+      end
+    end
+
+    it "reports the file with the reason, apart from what was written" do
+      result = { written: [], skipped: [], not_applicable: {} }
+
+      described_class.report(:unpaired, "/app/CLAUDE.md", result)
+
+      expect(result).to eq(written: [], skipped: [], not_applicable: { "/app/CLAUDE.md" => described_class::UNPAIRED })
+    end
+  end
 end
