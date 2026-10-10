@@ -397,6 +397,8 @@ end
 
 Every tool count and list in the generated files is the set the server serves: the built-in tools `skip_tools` leaves, plus `custom_tools`. A custom tool gets a row in the tools table with the first sentence of its description.
 
+The workflow examples name the app's own most connected model, one of its controllers, a template and a partial it renders. An app with none of one gets an obvious placeholder (`YourModel`, `shared/your_partial`) rather than a name that reads like the app's.
+
 The `tool_mode` is selected during `rails generate rails_ai_context:install`.
 
 ---
