@@ -94,6 +94,27 @@ RSpec.describe RailsAiContext::LegacyCleanup do
       end
     end
 
+    # `--app-path ../b` typed from a sibling: the rm runs where it was typed.
+    it "names the files and the rm line from where the command was typed" do
+      Dir.mktmpdir do |dir|
+        create(dir, UI_CLAUDE)
+        described_class.prompt_legacy_files(nil, root: dir, io: io, warn_only: true, place: "../b")
+        expect(io.string).to include("  ../b/#{UI_CLAUDE}\n")
+        expect(io.string).to include("  rm -f ../b/#{UI_CLAUDE}\n")
+      end
+    end
+
+    it "quotes a place the shell would split or expand" do
+      Dir.mktmpdir do |dir|
+        create(dir, UI_CLAUDE)
+        described_class.prompt_legacy_files(nil, root: dir, io: io, warn_only: true, place: "../my app's")
+        line = io.string.lines.find { |l| l.include?("rm -f") }.strip
+        expect(line).to eq(%q(rm -f '../my app'\''s/.claude/rules/rails-ui-patterns.md'))
+        out = IO.popen([ "sh", "-c", "printf '%s\\n' #{line.delete_prefix('rm -f ')}" ], &:read)
+        expect(out).to eq("../my app's/#{UI_CLAUDE}\n")
+      end
+    end
+
     it "prints manual-delete instructions when stdin is not a TTY" do
       allow($stdin).to receive(:tty?).and_return(false)
       Dir.mktmpdir do |dir|
