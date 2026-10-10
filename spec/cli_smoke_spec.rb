@@ -264,6 +264,81 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
     end
   end
 
+  # Thor answers `help <command>` only: after a command it read --help as an
+  # argument the command does not take, and as the name to run for tool and
+  # preset.
+  describe "a command's --help" do
+    let(:exe) { File.expand_path("../exe/rails-ai-context", __dir__) }
+    let(:lib) { File.expand_path("../lib", __dir__) }
+
+    %w[tool serve context inspect watch doctor init preset facts version].each do |command|
+      it "prints #{command}'s help and exits 0" do
+        Dir.mktmpdir do |dir|
+          out = `cd #{dir} && ruby -I #{lib} #{exe} #{command} --help 2>&1`
+
+          expect($?.exitstatus).to eq(0), out
+          expect(out).to start_with("Usage:\n  rails-ai-context #{command}")
+        end
+      end
+    end
+
+    it "takes -h and a switch before the flag the same way" do
+      Dir.mktmpdir do |dir|
+        out = `cd #{dir} && ruby -I #{lib} #{exe} tool --app-path #{dir} -h 2>&1`
+
+        expect($?.exitstatus).to eq(0), out
+        expect(out).to start_with("Usage:\n  rails-ai-context tool")
+      end
+    end
+
+    it "leaves a tool's own --help to the tool" do
+      Dir.mktmpdir do |dir|
+        out = `cd #{dir} && ruby -I #{lib} #{exe} tool schema --help 2>&1`
+
+        expect($?.exitstatus).to eq(0), out
+        expect(out).to start_with("rails_get_schema - ")
+      end
+    end
+
+    it "names inspect as it is typed when it is given an argument it does not take" do
+      Dir.mktmpdir do |dir|
+        out = `cd #{dir} && ruby -I #{lib} #{exe} inspect extra 2>&1`
+
+        expect($?.exitstatus).to eq(1), out
+        expect(out).to include(%("rails-ai-context inspect" was called with arguments ["extra"]))
+        expect(out).not_to include("inspect_app")
+      end
+    end
+  end
+
+  # Thor's "was called with arguments" said nothing about why.
+  it "refuses doctor --no-boot in words" do
+    exe = File.expand_path("../exe/rails-ai-context", __dir__)
+    lib = File.expand_path("../lib", __dir__)
+
+    out = `ruby -I #{lib} #{exe} doctor --no-boot 2>&1`
+
+    expect($?.exitstatus).to eq(1), out
+    expect(out).to eq("Error: doctor diagnoses the app's boot, so it cannot skip it. Run it without --no-boot.\n")
+  end
+
+  # The boot came first, a minute for a hung one, and the refusal named
+  # Ruby symbols.
+  it "refuses an unknown serve transport before booting, in plain words" do
+    exe = File.expand_path("../exe/rails-ai-context", __dir__)
+    lib = File.expand_path("../lib", __dir__)
+
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "config"))
+      File.write(File.join(dir, "config", "environment.rb"), "raise 'booted'\n")
+
+      out = `cd #{dir} && ruby -I #{lib} #{exe} serve --transport bogus 2>&1`
+
+      expect($?.exitstatus).to eq(1), out
+      expect(out).to eq("Error: Unknown transport 'bogus'. Use stdio or http.\n")
+    end
+  end
+
   # Nine frames of backtrace where a one-line refusal belongs. `tool` already
   # gave one; doctor, inspect and watch did not.
   describe "an --app-path that does not exist" do

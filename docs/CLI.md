@@ -293,7 +293,8 @@ rails 'ai:preset[architecture]'
 ### `tree`
 
 Print a tree of every command. `rails-ai-context help <command>` lists that
-command's options.
+command's options, and so do `rails-ai-context <command> --help` and `-h`
+(after a tool's name, `--help` is that tool's: `tool schema --help`).
 
 ```bash
 rails-ai-context tree

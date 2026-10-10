@@ -92,18 +92,69 @@ class RailsAiContextCLI < Thor
       true
     end
 
+    # The words Thor is handed: switches behind the command name, and a
+    # command's --help turned into `help <command>`.
+    def self.normalize_argv(argv)
+      help_request(reorder_switches(argv))
+    end
+
+    # Every switch this binary declares, global or per-command, and its type.
+    def self.switch_types
+      declared = class_options.values + commands.each_value.flat_map { |c| c.options.values }
+      declared.each_with_object({}) do |option, table|
+        ([ option.switch_name ] + Array(option.aliases)).each { |name| table[name] = option.type }
+      end
+    end
+
+    HELP_FLAGS = %w[--help -h].freeze
+
+    # `<command> --help` asks for that command's help, which Thor only gives
+    # as `help <command>`: it read the flag as an argument the command does
+    # not take, and `tool` and `preset` as the name to run. After a tool's
+    # name the flag is that tool's (`tool schema --help` lists its params).
+    def self.help_request(argv)
+      command, *rest = argv
+      return argv if command.nil? || command.start_with?("-") || command == "help"
+
+      at = rest.index { |arg| HELP_FLAGS.include?(arg) } or return argv
+      return argv if command == "tool" && named_tool?(rest.first(at))
+
+      [ "help", command ]
+    end
+
+    # Whether these words after `tool` hold a tool name: a word that is
+    # neither a switch nor the value a switch before it takes.
+    def self.named_tool?(words)
+      types = switch_types
+      value_next = false
+      words.each do |word|
+        if value_next
+          value_next = false
+        elsif word.start_with?("-")
+          type = types[word.split("=", 2).first]
+          value_next = !word.include?("=") && !type.nil? && type != :boolean
+        else
+          return true
+        end
+      end
+      false
+    end
+
+    # Thor names the command by its method in an argument error, and
+    # `inspect` is defined as inspect_app; the name a user types is the
+    # first word of the command's usage.
+    def self.handle_argument_error(command, error, args, arity)
+      super(command.dup.tap { |public_name| public_name.name = command.usage.split.first }, error, args, arity)
+    end
+
     # Thor reads a leading switch as "no command given" and falls back to
     # `help`, which answers `rails-ai-context --app-path /x doctor` with usage
     # and exit 0. Move every switch this binary declares
     # (global or per-command) behind the command name; anything else is left
     # where it is, so `--help`, `--version` and an unknown switch keep their
     # own answers.
-    def self.normalize_argv(argv)
-      declared = class_options.values + commands.each_value.flat_map { |c| c.options.values }
-      switches = declared.each_with_object({}) do |option, table|
-        ([ option.switch_name ] + Array(option.aliases)).each { |name| table[name] = option.type }
-      end
-
+    def self.reorder_switches(argv)
+      switches = switch_types
       globals = []
       rest = argv.dup
       while (token = rest.first) && token.start_with?("-")
@@ -199,11 +250,22 @@ class RailsAiContextCLI < Thor
       exit 1 if runner.error
     end
 
+    # What Server#start takes; the gem's server cannot be loaded to ask it
+    # before the app boots. streamable_http is http's other name there.
+    SERVE_TRANSPORTS = %w[stdio http streamable_http].freeze
+
     desc "serve", "Start MCP server (stdio transport)"
     option :transport, type: :string, default: "stdio", desc: "Transport: stdio or http"
     option :port, type: :numeric, desc: "HTTP port (only for http transport; default: config http_port, else 6029)"
     option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
     def serve
+      # Checked before the boot, which can take a minute, and in the words
+      # the option is typed in rather than as Ruby symbols.
+      unless SERVE_TRANSPORTS.include?(options[:transport])
+        $stderr.puts "Error: Unknown transport '#{options[:transport]}'. Use stdio or http."
+        exit 1
+      end
+
       boot_rails!(command: "serve", allow_static: true)
 
       transport = options[:transport].to_sym
@@ -276,7 +338,15 @@ class RailsAiContextCLI < Thor
 
     desc "doctor", "Run diagnostic checks and report AI readiness score"
     option :strict, type: :boolean, default: false, desc: "Exit 1 when any check fails (CI gate)"
+    # Declared so the flag every other command takes is refused in words,
+    # not with Thor's "was called with arguments"; hidden from the help.
+    option :no_boot, type: :boolean, default: false, hide: true
     def doctor
+      if options[:no_boot]
+        $stderr.puts "Error: doctor diagnoses the app's boot, so it cannot skip it. Run it without --no-boot."
+        exit 1
+      end
+
       # Diagnosing a boot failure needs the app, so doctor never serves the
       # static tier; it does read a source-only tree, to name what is missing.
       boot_rails!(command: "doctor", allow_source_only: true,
@@ -682,9 +752,18 @@ class RailsAiContextCLI < Thor
     def print_tool_list(no_boot: false)
       # No app is no refusal here: the app-less listing is the answer.
       resolve_app_root!(required: false)
-      if !no_boot && entry_boot.app_present?(Dir.pwd) && try_boot_for_list
-        puts ::RailsAiContext::CLI::ToolRunner.tool_list
-        return
+      if entry_boot.app_present?(Dir.pwd, allow_source_only: true)
+        outcome = enter_app(command: "tool", allow_static: true, no_boot: no_boot, allow_source_only: true)
+        unless outcome.tier == :absent
+          # The list still comes; a boot failure's whole report, meant for a
+          # command that stops on it, would read as this command failing.
+          if outcome.kind == :boot_failed
+            $stderr.puts "[rails-ai-context] App boot failed (#{outcome.reason}); " \
+                         "tools answer from source, and custom tools may be missing from this list."
+          end
+          puts ::RailsAiContext::CLI::ToolRunner.tool_list
+          return
+        end
       end
 
       begin
@@ -709,18 +788,6 @@ class RailsAiContextCLI < Thor
       end
     end
 
-    # Attempts the normal boot path, catching the `exit 1` boot_rails! raises
-    # on a missing app or a failed boot (both come through as SystemExit).
-    # Returns true only when the app booted successfully; other `tool`
-    # subcommands don't have a fallback so they call boot_rails! directly and
-    # let that exit propagate.
-    def try_boot_for_list
-      boot_rails!(command: "tool")
-      true
-    rescue SystemExit
-      false
-    end
-
     # Pull a value-taking flag (--flag VALUE or --flag=VALUE) out of the
     # pass-through args that stop_on_unknown_option! leaves after the tool
     # name. Returns the value, or nil when the flag isn't present.
@@ -742,6 +809,19 @@ class RailsAiContextCLI < Thor
     # than being recognised by name.
     def boot_rails!(command:, allow_static: false, no_boot: false, allow_source_only: allow_static,
                     boot_failure_hint: nil)
+      outcome = enter_app(command: command, allow_static: allow_static, no_boot: no_boot,
+                          allow_source_only: allow_source_only)
+      outcome.messages.each { |line| $stderr.puts line }
+      return unless outcome.tier == :absent
+
+      $stderr.puts boot_failure_hint if boot_failure_hint && outcome.reason
+      $stderr.puts "  #{@app_above_hint}" if @app_above_hint && !outcome.reason
+      exit 1
+    end
+
+    # The app this command reads, booted or read from source as the command
+    # allows. Prints nothing: the outcome carries the lines to say.
+    def enter_app(command:, allow_static:, no_boot:, allow_source_only:)
       resolve_app_root!
       environment_opt = @environment_override || options[:environment]
       # Apps read RAILS_ENV in config/boot.rb, before anything the gem can
@@ -753,14 +833,8 @@ class RailsAiContextCLI < Thor
 
       # A command that can serve the static tier reads a source-only tree
       # instead of refusing it.
-      outcome = entry_boot.call(root: Dir.pwd, allow_static: allow_static, no_boot: no_boot || options[:no_boot],
-                                allow_source_only: allow_source_only, command: command, doctor: doctor_command)
-      outcome.messages.each { |line| $stderr.puts line }
-      return unless outcome.tier == :absent
-
-      $stderr.puts boot_failure_hint if boot_failure_hint && outcome.reason
-      $stderr.puts "  #{@app_above_hint}" if @app_above_hint && !outcome.reason
-      exit 1
+      entry_boot.call(root: Dir.pwd, allow_static: allow_static, no_boot: no_boot || options[:no_boot],
+                      allow_source_only: allow_source_only, command: command, doctor: doctor_command)
     end
 
     # Which app this command reads, decided once and before anything reads
