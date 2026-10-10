@@ -27,6 +27,9 @@ module RailsAiContext
         # have its note consumed by the inner one.
         discarded = discarded_detail(kwargs)
         kwargs = listify_arrays(normalize_detail(kwargs))
+        # Before the call reads anything: an edit since the last call drops
+        # the caches and reloads the app's code (see the method).
+        RailsAiContext::Tools::BaseTool.refresh_if_files_changed!
         Thread.current[:rails_ai_context_call_params] = session_params(kwargs)
 
         # Held across the tool body: a concurrent live reload must not unload

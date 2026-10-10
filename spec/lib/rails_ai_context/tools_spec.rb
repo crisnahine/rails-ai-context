@@ -215,12 +215,17 @@ RSpec.describe "MCP Tool Integration" do
 
     after { RailsAiContext.configuration.live_reload = :auto }
 
+    def file_check_on?
+      !RailsAiContext::Tools::BaseTool::FILE_CHECK[:mark].nil?
+    end
+
     context "when live_reload is false" do
-      it "skips entirely" do
+      it "starts no watch, and has each call check the files instead" do
         RailsAiContext.configuration.live_reload = false
 
         expect(RailsAiContext::LiveReload).not_to receive(:new)
         server_wrapper.send(:maybe_start_live_reload, mcp_server)
+        expect(file_check_on?).to be true
       end
     end
 
@@ -229,11 +234,12 @@ RSpec.describe "MCP Tool Integration" do
         RailsAiContext.configuration.live_reload = :auto
         live_reload = instance_double(RailsAiContext::LiveReload)
         allow(RailsAiContext::LiveReload).to receive(:new).and_return(live_reload)
-        allow(live_reload).to receive(:start)
+        allow(live_reload).to receive(:start).and_return(Object.new)
 
         server_wrapper.send(:maybe_start_live_reload, mcp_server)
 
         expect(live_reload).to have_received(:start)
+        expect(file_check_on?).to be false
       end
     end
 
@@ -244,6 +250,7 @@ RSpec.describe "MCP Tool Integration" do
 
         expect { server_wrapper.send(:maybe_start_live_reload, mcp_server) }.not_to raise_error
         expect($stderr).to have_received(:puts).with(a_string_matching(/Live reload unavailable/))
+        expect(file_check_on?).to be true
       end
     end
 

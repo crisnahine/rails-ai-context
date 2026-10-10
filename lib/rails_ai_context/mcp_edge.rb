@@ -56,9 +56,14 @@ module RailsAiContext
       # and the controller one per class. The standalone server builds its
       # own transport because start_http also needs the underlying server
       # for the banner and live reload.
+      #
+      # The middleware and the engine never start live reload, so their tool
+      # calls check the app's files themselves.
       def build_transport(app = nil)
         app ||= Rails.application
-        MCP::Server::Transports::StreamableHTTPTransport.new(Server.new(app, transport: :http).build)
+        transport = MCP::Server::Transports::StreamableHTTPTransport.new(Server.new(app, transport: :http).build)
+        Tools::BaseTool.check_files_per_call!(app)
+        transport
       end
     end
   end

@@ -141,7 +141,7 @@ module RailsAiContext
         skipped_tools: self.class.skipped_tools(config),
         name: self.class.announced_name(config),
         version: config.server_version,
-        instructions: "Ground truth engine for Rails apps. Live Prism AST introspection. Zero stale data.",
+        instructions: "Ground truth engine for Rails apps. Live Prism AST introspection. Answers follow edits to the app's files.",
         tools: merge_tools(active_tools(config), validated_custom_tools),
         resource_templates: Resources.resource_templates,
         configuration: mcp_config
@@ -327,15 +327,17 @@ module RailsAiContext
     # :auto  - try to load `listen`, print a tip to stderr if missing
     # true   - try to load `listen`, raise if missing
     # false  - skip entirely
+    #
+    # Without a watch, each tool call checks the app's files itself
+    # (BaseTool.refresh_if_files_changed!), so answers still follow edits.
     def maybe_start_live_reload(mcp_server)
       mode = RailsAiContext.configuration.live_reload
 
-      return if mode == false
+      return Tools::BaseTool.check_files_per_call!(app) if mode == false
 
       begin
         live_reload = LiveReload.new(app, mcp_server)
-        live_reload.start
-        @live_reload = live_reload
+        @live_reload = live_reload if live_reload.start
       rescue LoadError
         if mode == true
           raise LoadError, "Live reload requires the `listen` gem. Add to your Gemfile: gem 'listen', group: :development"
@@ -344,6 +346,7 @@ module RailsAiContext
         # :auto mode - skip with a tip
         $stderr.puts "[rails-ai-context] Live reload unavailable (add `listen` gem for auto-refresh)"
       end
+      Tools::BaseTool.check_files_per_call!(app) unless @live_reload
     end
 
     def build_rack_app(transport)

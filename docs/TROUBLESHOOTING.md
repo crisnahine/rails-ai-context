@@ -156,6 +156,7 @@ directory. Fixes:
 ### MCP server responds slowly
 
 - Check `config.cache_ttl` - lower values mean more frequent re-introspection
+- Without the `listen` gem, each call first checks the app's files for edits, about 100 ms at 10,000 files; adding `listen` to the development group replaces that check with live reload
 - Check `config.preset` - `:standard` is faster than `:full`
 - Large schema files (>10MB) slow down schema introspection
 - Run `rails ai:doctor` - it checks schema size and view count

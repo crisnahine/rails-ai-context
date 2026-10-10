@@ -143,6 +143,9 @@ module RailsAiContext
       # the handler's return value into the JSON-RPC response without renaming
       # keys, so snake_case would leak to clients as-is.
       def handle_read(params)
+        # A read introspects afresh, but the booted tier reads reflection,
+        # which only a code reload brings up to date after an edit.
+        Tools::BaseTool.refresh_if_files_changed!
         # Resource reads introspect just like tool calls do, and they bypassed
         # SafeCall entirely - so a live reload could unload constants while one
         # was reading them and hand back a short list with nothing raised.

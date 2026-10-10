@@ -317,7 +317,7 @@ Thread-safe parse cache using `Concurrent::Map`:
 - A file whose stat (mtime, size, inode) matches the last read answers without reading or hashing it, but only once that file was already two seconds older than the read, so a same-size rewrite within one mtime tick is still read
 - Bounded at 500 parses; a recorded stat is dropped with its parse
 - Shared by all AST-based introspectors
-- Cleared on `reset_all_caches!` (triggered by live reload)
+- Cleared on `reset_all_caches!` (when a server sees the files change: live reload, or the check at each call)
 
 ### RunCache
 
@@ -329,13 +329,14 @@ Answers kept for one introspection run and dropped when it ends: the file list f
 
 Introspection results are cached at three levels:
 
-1. **Introspection cache** - Full context hash, invalidated by TTL (`config.cache_ttl`, default: 60s) and fingerprint change
+1. **Introspection cache** - Full context hash, invalidated by TTL (`config.cache_ttl`, default: 60s) and, in a server, as soon as the fingerprint changes
 2. **AST cache** - Per-file parse results, invalidated by file content change (SHA256), with a stat shortcut for a file older than the read
 3. **Run cache** - File lists, stats and directory answers for one introspection run, dropped when it ends
 
-The **Fingerprinter** computes a composite SHA256 from all watched directories (`app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `spec/`, the Gemfile and `Gemfile.lock` (or `gems.rb` and `gems.locked`), `package.json`, `tsconfig.json`, `config.ru`, the Rakefile). When the fingerprint changes, the introspection cache is invalidated even if TTL hasn't expired.
+The **Fingerprinter** computes a composite SHA256 from all watched directories (`app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `spec/`, the Gemfile and `Gemfile.lock` (or `gems.rb` and `gems.locked`), `package.json`, `tsconfig.json`, `config.ru`, the Rakefile). When the fingerprint changes, a server drops the introspection cache even if the TTL hasn't expired, and in the booted tier reloads the app's code first, so what reflection reads (an association, an enum) is current too:
 
-**Live Reload** watches these directories and calls `reset_all_caches!` when changes are detected, then notifies connected MCP clients via `notify_resources_list_changed`.
+- **Live Reload** (the `listen` gem in the app's bundle) watches these directories and calls `reset_all_caches!` when changes are detected, then notifies connected MCP clients via `notify_resources_list_changed`.
+- **Without it** - no `listen`, which a new Rails 8 app does not bundle, `live_reload = false`, or the endpoints mounted inside the app - each tool call and resource read checks the fingerprint first. The walk stats every watched file: a few milliseconds on a typical app, about 100 ms at 10,000 files. A call made within ten walks' time of the last check, up to a second, shares it, so a burst of calls on a large app pays for one walk. Inside a request the app serves, Rails' own reloader has already reloaded the code.
 
 ---
 
