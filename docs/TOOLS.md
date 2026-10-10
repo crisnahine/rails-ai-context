@@ -773,6 +773,8 @@ In addition to tools, AI clients can read structured data through **resource tem
 
 The legacy `rails://models/{name}` form is still accepted.
 
+A read for a name the app does not have - a model, a controller, an action, a view - fails with a JSON-RPC `-32602` error whose message gives the reason and whose `data.available` lists the names there are. So does a view over the size cap. A path refused on policy fails as `Resource not found`, without saying why.
+
 Plus 9 static resources (schema, routes, conventions, gems, controllers, config, tests, migrations, engines).
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>

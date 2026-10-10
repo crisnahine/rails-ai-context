@@ -169,10 +169,14 @@ RSpec.describe RailsAiContext::Resources do
       expect(parsed["columns"]).to eq([ "id", "name" ])
     end
 
-    it "returns error for an unknown model" do
-      result = read_handler.call(uri: "rails://models/NonExistent")
-      parsed = JSON.parse(result.first[:text])
-      expect(parsed["error"]).to match(/not found/)
+    # It succeeded with an `{"error": ...}` body, which a client cannot tell
+    # from data. The read fails with the reason and the names there are.
+    it "fails the read for an unknown model with the reason and the models there are" do
+      expect { read_handler.call(uri: "rails://models/NonExistent") }
+        .to raise_error(MCP::Server::RequestHandlerError, "Model 'NonExistent' not found") { |error|
+          expect(error.error_code).to eq(-32602)
+          expect(error.error_data).to eq(uri: "rails://models/NonExistent", available: [ "User" ])
+        }
     end
 
     it "raises a not-found error for a completely unknown URI" do

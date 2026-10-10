@@ -42,11 +42,7 @@ module RailsAiContext
         key = Payload.fuzzy_find_key(models.keys, name) || name
         data = models[key]
 
-        unless data
-          available = models.keys.sort.first(20)
-          content = JSON.pretty_generate(error: "Model '#{name}' not found", available: available)
-          return [ { uri: uri, mimeType: "application/json", text: content } ]
-        end
+        raise ResourceUnavailable.new("Model '#{name}' not found", available: models.keys.sort.first(20)) unless data
 
         # Enrich with schema columns if available
         table_name = data[:table_name]
@@ -61,11 +57,7 @@ module RailsAiContext
         controllers = context.dig(:controllers, :controllers) || {}
         key = Payload.find_controller(context, name)
 
-        unless key
-          available = controllers.keys.sort.first(20)
-          content = JSON.pretty_generate(error: "Controller '#{name}' not found", available: available)
-          return [ { uri: uri, mimeType: "application/json", text: content } ]
-        end
+        raise ResourceUnavailable.new("Controller '#{name}' not found", available: controllers.keys.sort.first(20)) unless key
 
         [ { uri: uri, mimeType: "application/json", text: JsonBudget.for_resource(controllers[key]) } ]
       end
@@ -81,19 +73,12 @@ module RailsAiContext
         prefix_action = key && (controllers.dig(key, :actions) || []).any? { |a| a.to_s.casecmp?(action_name) }
         return resolve_controller(uri, "#{controller_name}/#{action_name}") if whole && !prefix_action
 
-        unless key
-          content = JSON.pretty_generate(error: "Controller '#{controller_name}' not found")
-          return [ { uri: uri, mimeType: "application/json", text: content } ]
-        end
+        raise ResourceUnavailable.new("Controller '#{controller_name}' not found", available: controllers.keys.sort.first(20)) unless key
 
         info = controllers[key]
         actions = info[:actions] || []
         action = actions.find { |a| a.to_s.casecmp?(action_name) }
-
-        unless action
-          content = JSON.pretty_generate(error: "Action '#{action_name}' not found in #{key}", available: actions)
-          return [ { uri: uri, mimeType: "application/json", text: content } ]
-        end
+        raise ResourceUnavailable.new("Action '#{action_name}' not found in #{key}", available: actions.map(&:to_s)) unless action
 
         # Build action-specific data
         applicable = ActionFilters.for(context, key, action)
@@ -116,12 +101,10 @@ module RailsAiContext
         case result.refusal
         when :traversal, :outside then raise RailsAiContext::Error, "Path not allowed: #{path}"
         when :sensitive then raise RailsAiContext::Error, "Path not allowed: #{path} (sensitive file)"
-        when :too_large
-          text = JSON.pretty_generate(error: "File too large: #{path}")
-          return [ { uri: uri, mimeType: "application/json", text: text } ]
+        when :too_large then raise ResourceUnavailable, "File too large: #{path}"
         when :missing
-          text = JSON.pretty_generate(error: "View not found: #{path}. Paths are relative to app/views; the extension is optional (posts/index and posts/index.html.erb both resolve).")
-          return [ { uri: uri, mimeType: "application/json", text: text } ]
+          raise ResourceUnavailable, "View not found: #{path}. Paths are relative to app/views; the extension is " \
+            "optional (posts/index and posts/index.html.erb both resolve)."
         end
 
         [ { uri: uri, mimeType: RailsAiContext::ViewFile.mime_type(result.relative), text: content.to_s } ]
@@ -154,13 +137,7 @@ module RailsAiContext
         # A name that resolved to no controller and matched no route key is
         # not a controller with no routes, and a zero-route success document
         # cannot say which of the two it is.
-        if selected.empty? && key.nil?
-          text = JSON.pretty_generate(
-            error: "Controller '#{controller}' not found",
-            available: names.sort
-          )
-          return [ { uri: uri, mimeType: "application/json", text: text } ]
-        end
+        raise ResourceUnavailable.new("Controller '#{controller}' not found", available: names.sort) if selected.empty? && key.nil?
 
         routes = by_controller.flat_map { |name, entries|
           next [] unless selected.include?(name.to_s)

@@ -48,6 +48,18 @@ module RailsAiContext
   class Error < StandardError; end
   class ConfigurationError < Error; end
 
+  # A resource read with nothing to hand back: a name the app does not have,
+  # or a file over the size cap. It carries the reason and what the client
+  # can use instead (`available:`), for the error the read answers with.
+  class ResourceUnavailable < Error
+    attr_reader :data
+
+    def initialize(message, **data)
+      super(message)
+      @data = data
+    end
+  end
+
   class << self
     # Global configuration
     attr_writer :configuration
