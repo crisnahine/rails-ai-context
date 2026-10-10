@@ -283,7 +283,7 @@ Instead of stdio, you can mount the MCP server inside your Rails app:
 mount RailsAiContext::Engine, at: "/mcp"
 ```
 
-Each connected MCP client that opens the server-push channel (a long-lived SSE `GET /mcp`) holds one server thread for the life of the connection. With Puma's default small thread pool, a handful of connected clients can exhaust it - fine for development, but raise the thread count (or prefer the standalone `rails-ai-context serve --transport http` process) if several clients or other traffic share the app.
+The mounted engine answers the server-push channel (a long-lived SSE `GET /mcp`) with 405, which the MCP spec allows a server that sends no server-initiated messages: live reload, the one thing that sends them, runs only in the standalone `rails-ai-context serve --transport http` process. Clients carry on over POST, a connected client holds a server thread only while one of its requests runs, and `rails server` stops without waiting for clients to disconnect.
 
 Then point your AI tool's MCP config to the HTTP endpoint instead of a command:
 

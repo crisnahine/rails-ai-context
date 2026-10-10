@@ -142,8 +142,7 @@ mount RailsAiContext::Engine, at: "/mcp"
 
 Point the client at `http://localhost:3000/mcp`. There is also a standalone HTTP process: `rails-ai-context serve --transport http --port 6029`.
 
-> [!WARNING]
-> Each connected client that opens the SSE channel holds one server thread for the life of the connection. Fine for development; raise Puma's thread count or use the standalone HTTP process if several clients share the app.
+The mounted engine opens no server-push channel (it answers that `GET` with 405, as the MCP spec allows), so a connected client holds a server thread only while one of its requests runs.
 
 ### CLI
 

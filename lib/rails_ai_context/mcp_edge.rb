@@ -10,6 +10,7 @@ module RailsAiContext
   # failure looks like on the wire. Their genuine differences (streaming,
   # header handling, memoization lifetime) stay with them.
   module McpEdge
+    INVALID_REQUEST = -32600
     INTERNAL_ERROR = -32603
 
     class << self

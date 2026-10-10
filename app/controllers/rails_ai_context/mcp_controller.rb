@@ -21,12 +21,14 @@ module RailsAiContext
     # The MCP SDK's SSE writer calls stream.flush after every event, but
     # Live's buffer writes straight through to the client and defines no
     # flush - the NoMethodError would 500 the request after the payload was
-    # already delivered and tear down long-lived GET streams.
+    # already delivered.
     class FlushableStream < SimpleDelegator
       def flush; end
     end
 
     def handle
+      return refuse_server_push if request.get?
+
       Tools::BaseTool.with_session_for(request.env) do
         serve_transport
       end
@@ -68,21 +70,6 @@ module RailsAiContext
         stream = FlushableStream.new(stream) unless stream.respond_to?(:flush)
         begin
           body.call(stream)
-          # A GET opens the server-push channel: the transport registers the
-          # stream and returns, expecting it to outlive this call. Live closes
-          # the response when the action returns, so hold the thread until the
-          # transport's keepalive (or the client) closes the stream. Live also
-          # sends headers only on the first write - the transport writes
-          # nothing until its first keepalive ping, so commit with an SSE
-          # comment up front or clients sit waiting on headers.
-          if request.get?
-            begin
-              stream.write(": connected\n\n")
-            rescue IOError
-              nil
-            end
-            wait_for_stream_close
-          end
         ensure
           begin
             response.stream.close
@@ -111,22 +98,18 @@ module RailsAiContext
       end
     end
 
-    def wait_for_stream_close
-      sleep 0.5 until stream_finished?
-    rescue IOError
-      nil
-    end
-
-    # A client hangup aborts the buffer instead of closing it, so `closed?`
-    # alone leaves this thread parked until the transport's next keepalive
-    # write notices the hangup - up to the keepalive interval per dropped
-    # client. Live's buffer reports the hangup through `connected?`; the plain
-    # buffer used off the streaming path does not define it, so ask first.
-    def stream_finished?
-      stream = response.stream
-      return true if stream.closed?
-
-      stream.respond_to?(:connected?) && !stream.connected?
+    # The engine has nothing to push: live reload, the one thing that sends
+    # a server-initiated message, runs only in the standalone server. Held
+    # open, the GET channel carried keepalive pings and nothing else, cost a
+    # server thread per connected client, and a client that stayed connected
+    # kept `rails server` from stopping. A server without the channel answers
+    # the GET with 405, which clients read as "POST only".
+    def refuse_server_push
+      self.status = 405
+      response.headers["Allow"] = "POST, DELETE"
+      response.headers["Content-Type"] = "application/json"
+      self.response_body = McpEdge.error_frame(McpEdge::INVALID_REQUEST,
+        "Method not allowed: this endpoint opens no server-push stream. Send requests with POST.")
     end
 
     class << self
