@@ -232,7 +232,7 @@ Those are AI coding interfaces. This gem is a data layer that makes *any* of the
 
 ### My AI tool doesn't see the MCP server
 
-Run `rails ai:doctor` - it checks MCP config files for all configured tools. See [Troubleshooting](TROUBLESHOOTING.md) for detailed steps.
+Run `rails ai:doctor` - it checks each configured tool's MCP config file, and whether the command it holds can start. See [Troubleshooting](TROUBLESHOOTING.md) for detailed steps.
 
 ### Tools return empty results
 

@@ -290,7 +290,7 @@ unmarked file was generated with the app running.
 
 | Command | Description |
 |---------|-------------|
-| `rails ai:doctor` | Run up to 25 diagnostic checks. Reports pass/warn/fail with fix suggestions. AI readiness score (0-100). `STRICT=1` exits 1 when a check fails. |
+| `rails ai:doctor` | Run the diagnostic checks that apply to the app. Reports pass/warn/fail with fix suggestions. AI readiness score (0-100). `STRICT=1` exits 1 when a check fails. |
 | `rails ai:watch` | Watch for file changes and auto-regenerate context files. Requires `listen` gem. |
 | `rails ai:inspect` | Print introspection summary to stdout. Useful for debugging. |
 | `rails ai:facts` | Print a short schema facts summary (tables, columns, indexes, associations, dependencies). |
@@ -1652,7 +1652,7 @@ config.introspectors += %i[api]
 rails ai:doctor
 ```
 
-Runs up to 25 checks and reports an AI readiness score (0-100). A check that does not apply to the app prints no row:
+Runs the checks below and reports an AI readiness score (0-100). A check that does not apply to the app prints no row:
 
 | Check | What it verifies |
 |-------|------------------|
@@ -1668,7 +1668,7 @@ Runs up to 25 checks and reports an AI readiness score (0-100). A check that doe
 | Migrations | Migration files exist, counted over every database the app migrates, and in an engine's `test/dummy` the engine's own |
 | Context files | Generated context files exist where `config.output_dir` puts them, and a context run would leave them as they are. A file a run would rewrite, because an older version of the gem wrote it or the app changed under it, is named; a file that is only older than the code is not. No row on an MCP-only install |
 | Initializer guard | Shown only when `config/initializers/rails_ai_context.rb` has no guard, or guards on `defined?(RailsAiContext)` alone |
-| MCP configs | Each selected tool's MCP config file exists, parses, and holds a rails-ai-context server whose command can start: `bundle exec` only where the app's lockfile carries the gem and the bundle's copy has its executable, the `rails-ai-context` binary only where it is on PATH, and a warning when that binary runs beside a copy the bundle carries. The command is looked up, never run. Skipped in CLI-only mode |
+| MCP configs | Each selected tool's MCP config file exists, parses, and holds a rails-ai-context server whose command can start: `bundle exec` only where the app's lockfile carries the gem and the bundle's copy has its executable, the `rails-ai-context` binary only where it is on PATH, and a warning when a config runs that binary in an app whose bundle carries the gem. The command is looked up, never run. Skipped in CLI-only mode |
 | Codex env snapshot | The `PATH` saved in `.codex/config.toml` (the app's, or a folder of apps' above it) still reaches each server's command, and a saved `GEM_HOME` still exists. Only when Codex is selected |
 | MCP server | MCP server can be built, with an `mcp` gem this gem supports (warns, as the boot does, when the app's bundle pins one outside that range) |
 | Introspector health | Every configured introspector returns data |
