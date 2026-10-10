@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
 
 RSpec.describe RailsAiContext::Tools::ReviewChanges do
   before { described_class.reset_cache! }
@@ -71,6 +72,25 @@ RSpec.describe RailsAiContext::Tools::ReviewChanges do
         expect(text).to include("**Routes:**")
         expect(text).to include("posts#show")
       end
+    end
+
+    # git reads an argument that starts with a dash as an option, and
+    # `git diff --output=<path>` writes the diff to that path.
+    it "refuses a ref git would read as an option, and writes nothing" do
+      Dir.mktmpdir do |dir|
+        result = described_class.call(ref: "--output=#{File.join(dir, "diff")}")
+
+        expect(result.error?).to be(true)
+        expect(result.content.first[:text]).to include("Ref not allowed")
+        expect(Dir.children(dir)).to be_empty
+      end
+    end
+
+    it "says a ref that names no commit is unknown, rather than unchanged" do
+      result = described_class.call(ref: "no-such-branch-#{Process.pid}")
+
+      expect(result.error?).to be(true)
+      expect(result.content.first[:text]).to include("Unknown ref")
     end
 
     it "handles missing git gracefully" do

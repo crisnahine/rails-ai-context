@@ -659,7 +659,7 @@ PR/commit review with per-file context and warnings.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `ref` | string | `HEAD` | Git ref to diff against. `HEAD` reviews uncommitted changes |
+| `ref` | string | `HEAD` | Git ref to diff against: a branch, a tag, `HEAD~3` or a commit SHA. `HEAD` reviews uncommitted changes. A ref that names no commit is refused |
 | `files` | array | - | Review only these changed files (omit for all) |
 
 ### `rails_runtime_info`
