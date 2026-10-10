@@ -56,7 +56,7 @@ rails generate rails_ai_context:install  # Select "Claude Code"
 This creates:
 - `.mcp.json` - MCP auto-discovery config (auto-detected on project open)
 - `CLAUDE.md` - Root context file
-- `.claude/rules/rails-schema.md` - Schema rules (loaded when editing the schema dump or `db/migrate/` files)
+- `.claude/rules/rails-schema.md` - Schema rules (loaded when editing a schema dump or a migration, each database's in a multi-database app)
 - `.claude/rules/rails-models.md` - Model rules (loaded when editing `app/models/`)
 - `.claude/rules/rails-context.md` - General context rules (always loaded)
 - `.claude/rules/rails-mcp-tools.md` - Tool reference: detail levels and the table of every tool (always loaded; the protocol, workflows and rules are in CLAUDE.md, so they are not loaded twice, and here only when `generate_root_files` is off)

@@ -391,8 +391,8 @@ namespace :ai do
     puts "Rails #{context[:rails_version]} | Ruby #{context[:ruby_version]}"
     puts ""
 
-    if (schema = RailsAiContext::Payload.section(context, :schema))
-      puts "📦 Database: #{RailsAiContext::CountPhrase.call(schema[:total_tables], "table")} (#{RailsAiContext::SchemaAdapter.label(context)})"
+    if (database = RailsAiContext::Serializers::SectionFacts.database_line(context))
+      puts "📦 #{database.delete_prefix("- ")}"
     end
 
     if context[:models] && !context[:models].is_a?(Hash)

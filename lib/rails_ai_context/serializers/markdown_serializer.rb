@@ -68,12 +68,22 @@ module RailsAiContext
       end
 
       # Each column with its type and default, then the table's indexes and
-      # foreign keys: the facts a migration has to agree with.
+      # foreign keys: the facts a migration has to agree with. Every
+      # database's, the primary's first; a table name can be in two of them.
       def schema_section
         schema = Payload.section(context, :schema)
+        secondary = Payload.secondary_databases(schema)
 
-        lines = [ "## Database Schema (#{Introspectors::SchemaConventions.relations_phrase(schema[:tables])})" ]
-        schema[:tables]&.each do |name, data|
+        sections = [ database_schema_text(schema[:tables], secondary.any? ? "primary" : nil) ]
+        secondary.each { |name, db| sections << database_schema_text(db[:tables], name, db[:note]) }
+        sections.join("\n\n")
+      end
+
+      def database_schema_text(tables, database = nil, note = nil)
+        phrase = Introspectors::SchemaConventions.relations_phrase(tables)
+        lines = [ database ? "## Database Schema: #{database} (#{phrase})" : "## Database Schema (#{phrase})" ]
+        lines << "_#{note}._" if note
+        tables&.each do |name, data|
           lines << "### #{escape_markdown(name)}"
           lines << ([ (data[:columns] || []).map { |c| column_text(c) }.join(", ") ] + table_key_lines(data)).join("\n")
         end
@@ -466,18 +476,27 @@ module RailsAiContext
       def migrations_section
         data = Payload.section(context, :migrations)
 
-        lines = [ "## Migrations" ]
-        lines << "- Total: #{data[:total]}"
-        lines << "- Schema version: #{data[:schema_version]}" if data[:schema_version]
+        # The other databases' own migrations, which the primary's counts leave out.
+        secondary = data[:secondary_databases].is_a?(Hash) ? data[:secondary_databases] : {}
+        primary = " (primary)" if secondary.any?
 
-        pending = Payload.pending_migrations(context)
-        if pending.any?
-          lines << "### Pending Migrations (#{pending.size})"
-          pending.each { |m| lines << "- `#{m[:version]}` #{m[:name]}" }
+        lines = [ "## Migrations" ]
+        lines << "- Total: #{data[:total]}#{primary}"
+        lines << "- Schema version: #{data[:schema_version]}#{primary}" if data[:schema_version]
+        secondary.each do |name, db|
+          lines << "- #{name}: #{SectionFacts.migration_counts(db[:total], db[:pending])} in #{Array(db[:migrations_paths]).join(', ')}"
+        end
+
+        pending = { "primary" => Payload.pending_migrations(context) }.merge(secondary.transform_values { |db| Array(db[:pending]) })
+        pending.each do |name, migrations|
+          next if migrations.empty?
+
+          lines << "### Pending Migrations#{": #{name}" if secondary.any?} (#{migrations.size})"
+          migrations.each { |m| lines << "- `#{m[:version]}` #{m[:name]}" }
         end
 
         if data[:recent]&.any?
-          lines << "### Recent Migrations"
+          lines << "### Recent Migrations#{": primary" if secondary.any?}"
           data[:recent].each do |m|
             actions = m[:actions]&.any? ? " (#{m[:actions].join(', ')})" : ""
             lines << "- `#{m[:version]}` #{m[:name]}#{actions}"

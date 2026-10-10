@@ -96,6 +96,14 @@ module RailsAiContext
       database_label(primary)
     end
 
+    # A secondary database's adapter: its database.yml entry, else the dialect
+    # its structure.sql is in. nil when neither says; schema.rb does not.
+    def secondary_label(context, name, schema)
+      multi = context.is_a?(Hash) ? context[:multi_database] : nil
+      databases = Tools::SectionFetch.usable?(multi) ? Array(multi[:databases]) : []
+      database_label(databases.find { |db| db.is_a?(Hash) && db[:name].to_s == name.to_s }) || from_dialect(schema)
+    end
+
     # These are ActiveRecord adapter names (`postgresql`), not gem names; the two
     # overlap only at sqlite3/mysql2/trilogy.
     #

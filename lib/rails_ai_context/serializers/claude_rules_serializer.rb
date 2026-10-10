@@ -16,6 +16,9 @@ module RailsAiContext
         "rails-components.md" => { renderer: :render_components_reference, reason: "no view components" }
       }.freeze
 
+      # Per database; the tools have the rest.
+      TABLES_SHOWN = 30
+
       # @param output_dir [String] Rails root path
       # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
       def call(output_dir)
@@ -42,34 +45,65 @@ module RailsAiContext
         lines.join("\n")
       end
 
+      # Every database's tables, the primary's first. With more than one, each
+      # gets a heading, since a table name can be in two of them.
       def render_schema_reference
         schema = Payload.section(context, :schema)
         return nil unless schema
-        tables = schema[:tables] || {}
-        return nil if tables.empty?
 
-        lines = [
-          "---",
-          "paths:",
-          # The glob has to name the dump the app committed, or the rule never
-          # triggers on a :sql app: db/schema.rb is never opened there.
-          "  - \"#{schema_dump_path}\"",
-          '  - "db/migrate/**"',
-          "---",
-          "",
-          "# Database Tables (#{tables.size})",
-          ""
-        ]
+        secondary = Payload.secondary_databases(schema)
+        databases = [ [ nil, schema[:tables] || {} ] ] + secondary.map { |name, db| [ name, db[:tables] ] }
+        databases.reject! { |_, tables| tables.empty? }
+        return nil if databases.empty?
+
+        lines = [ "---", "paths:", *schema_rule_paths(secondary).map { |path| "  - \"#{path}\"" }, "---", "" ]
+        lines << "# Database Tables (#{databases.sum { |_, tables| tables.size }})"
+        lines << ""
         lines.concat(SectionFacts.static_notice_lines(context))
         lines << "_Snapshot - may be stale after migrations. Use #{tool_ref("rails_get_schema", 'table:"name"', "table=name")} for live data._"
-        lines << ""
 
+        databases.each do |name, tables|
+          lines << ""
+          lines.concat(database_heading_lines(name, tables, secondary)) if secondary.any?
+          lines.concat(table_reference_lines(tables, name, schema))
+        end
+
+        lines.join("\n")
+      end
+
+      # The dumps and migrations the tables are read from, each database's, so
+      # opening any of them brings the rule in. The primary's has to name the
+      # dump the app committed, or the rule never triggers on a :sql app:
+      # db/schema.rb is never opened there.
+      def schema_rule_paths(secondary)
+        paths = [ schema_dump_path, "db/migrate/**" ]
+        secondary.each_value do |db|
+          paths << db[:dump] if db[:dump]
+          Array(db[:migrations_paths]).each { |dir| paths << "#{dir}/**" }
+        end
+        paths.uniq
+      end
+
+      def database_heading_lines(name, tables, secondary)
+        relations = Introspectors::SchemaConventions.relations_phrase(tables)
+        return [ "## primary (#{SchemaAdapter.label(context)}, #{relations})", "" ] unless name
+
+        db = secondary[name]
+        adapter = SchemaAdapter.secondary_label(context, name, db)
+        lines = [ "## #{name} (#{[ adapter, relations ].compact.join(', ')})", "" ]
+        # Where the snapshot comes from: a booted run reads the primary live, this from its files.
+        lines.push("_#{db[:note]}._", "") if db[:note]
+        lines
+      end
+
+      def table_reference_lines(tables, database, schema)
+        lines = []
         skip_cols = %w[id created_at updated_at]
         keep_cols = %w[type deleted_at discarded_at]
         # Get enum values from models introspection if available
         models = Payload.models(context)
 
-        tables.keys.sort.first(30).each do |name|
+        tables.keys.sort.first(TABLES_SHOWN).each do |name|
           data = tables[name]
           columns = data[:columns] || []
           col_count = columns.size
@@ -117,8 +151,7 @@ module RailsAiContext
           lines << "- **#{name}** (#{count_phrase(col_count, 'col')})#{col_str}#{fk_str}#{idx_str}"
 
           # Include enum values if model has them
-          model_name = name.classify
-          model_data = models[model_name]
+          model_data = table_model(models, name, database, schema)
           if model_data.is_a?(Hash) && model_data[:enums]&.any?
             model_data[:enums].each do |attr, values|
               lines << "  #{attr}: #{SectionFacts.enum_values(values)}"
@@ -126,11 +159,23 @@ module RailsAiContext
           end
         end
 
-        if tables.size > 30
-          lines << "- ...#{count_phrase(tables.size - 30, "more table")} (use #{tool_named("rails_get_schema")})"
+        if tables.size > TABLES_SHOWN
+          lines << "- ...#{count_phrase(tables.size - TABLES_SHOWN, "more table")} (use #{tool_named("rails_get_schema")})"
         end
 
-        lines.join("\n")
+        lines
+      end
+
+      # The model named after the table. Another database's table of that name
+      # is some other model's: the one that reads from that database.
+      def table_model(models, table, database, schema)
+        named = models[table.classify]
+        return named unless database
+        return named if named.is_a?(Hash) && Payload.model_databases(schema, named).include?(database)
+
+        models.keys.sort.map { |name| models[name] }.find do |data|
+          data.is_a?(Hash) && data[:table_name] == table && Payload.model_databases(schema, data).include?(database)
+        end
       end
 
       def render_models_reference

@@ -1306,6 +1306,48 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
+    # The schema rule file's paths: name them, so opening either brings the rule in.
+    it "names the dump and the migrations directories each secondary database is read from" do
+      Dir.mktmpdir do |dir|
+        write_app(dir, "config/database.yml" => <<~YAML,
+                    #{RailsAiContext.environment_name}:
+                      primary:
+                        adapter: sqlite3
+                        database: db/dev.sqlite3
+                      analytics:
+                        adapter: sqlite3
+                        database: db/analytics.sqlite3
+                        migrations_paths: db/analytics_migrate
+                      queue:
+                        adapter: sqlite3
+                        database: db/queue.sqlite3
+                        migrations_paths: db/queue_migrate
+                  YAML
+                       "db/schema.rb" => "ActiveRecord::Schema[8.1].define(version: 1) do\n  create_table \"users\" do |t|\n  end\nend\n",
+                       "db/analytics_schema.rb" => "ActiveRecord::Schema[8.1].define(version: 1) do\n  create_table \"page_views\" do |t|\n  end\nend\n",
+                       "db/analytics_migrate/20260101000001_create_page_views.rb" => create_posts,
+                       "db/queue_migrate/20240101000000_create_jobs.rb" => create_posts.sub("CreatePosts", "CreateJobs").sub(":posts", ":jobs"))
+
+        secondary = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:secondary_databases]
+
+        expect(secondary["analytics"]).to include(dump: "db/analytics_schema.rb", migrations_paths: [ "db/analytics_migrate" ])
+        # Replayed from its migrations: the dump it will be written to is still the one to name.
+        expect(secondary["queue"]).to include(dump: "db/queue_schema.rb", migrations_paths: [ "db/queue_migrate" ])
+      end
+    end
+
+    it "names no migrations directory a dump's database does not have" do
+      Dir.mktmpdir do |dir|
+        write_app(dir, "db/schema.rb" => "ActiveRecord::Schema[8.1].define(version: 1) do\n  create_table \"users\" do |t|\n  end\nend\n",
+                       "db/queue_schema.rb" => "ActiveRecord::Schema[8.1].define(version: 1) do\n  create_table \"solid_queue_jobs\" do |t|\n  end\nend\n")
+
+        queue = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:secondary_databases]["queue"]
+
+        expect(queue[:dump]).to eq("db/queue_schema.rb")
+        expect(queue).not_to have_key(:migrations_paths)
+      end
+    end
+
     it "reads no migrations_paths outside the app" do
       Dir.mktmpdir do |outside|
         write_app(outside, "20240101000000_create_posts.rb" => create_posts)

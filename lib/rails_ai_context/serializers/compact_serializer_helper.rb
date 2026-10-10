@@ -57,11 +57,8 @@ module RailsAiContext
           lines << "- Async: #{parts.join(', ')}" if parts.any?
         end
 
-        migrations = Payload.section(context, :migrations)
-        if migrations
-          line = "- Migrations: #{migrations[:total]} total"
-          line += ", #{Payload.pending_migrations(context).size} pending" if migrations.key?(:pending)
-          lines << line
+        if (migrations_line = SectionFacts.migrations_line(context))
+          lines << migrations_line
         end
 
         lines.concat(full_preset_stack_lines)
