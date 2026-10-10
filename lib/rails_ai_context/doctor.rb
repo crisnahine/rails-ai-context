@@ -112,19 +112,77 @@ module RailsAiContext
       end
     end
 
+    # Every database the app migrates is asked, as db:migrate:status asks
+    # it. One that does not exist or does not answer is a finding of its own:
+    # no migration can be read from it, and every tool that reads the
+    # database answers from files alone.
     def check_pending_migrations
       return nil unless defined?(ActiveRecord::Base)
 
-      pending = RailsAiContext::PendingMigrations.live(RailsAiContext::PendingMigrations.migrate_dirs_for(app.root))
-      return nil unless pending
+      databases = database_states
+      return nil if databases.empty?
+
+      pending = databases.flat_map { |db| Array(db[:pending]).map { db[:name] } }
+      return unreachable_database_check(databases, pending) if databases.any? { |db| db[:error] }
 
       if pending.empty?
         Check.new(name: "Pending migrations", status: :pass, message: "No pending migrations", fix: nil)
       else
         Check.new(name: "Pending migrations", status: :fail,
-          message: "#{count_phrase(pending.size, "pending migration")} - schema data will be stale",
+          message: "#{pending_phrase(pending, databases)} - schema data will be stale",
           fix: "Run `rails db:migrate`")
       end
+    end
+
+    # "2 pending migrations", and in an app of several databases, in which.
+    def pending_phrase(pending, databases)
+      phrase = count_phrase(pending.size, "pending migration")
+      return phrase if databases.one?
+
+      by_database = pending.tally
+      return "#{phrase} in #{by_database.keys.first}" if by_database.one?
+
+      "#{phrase} (#{by_database.map { |name, count| "#{count} in #{name}" }.join(', ')})"
+    end
+
+    # Each database the app migrates in this environment, through its own
+    # connection: [{ name:, config:, pending: or error: }], none without a
+    # database configuration to read.
+    def database_states
+      return @database_states if defined?(@database_states)
+
+      @database_states = begin
+        primary = ActiveRecord::Base.connection_db_config.name
+        ActiveRecord::Base.configurations.configs_for(env_name: RailsAiContext.environment_name).map do |db_config|
+          own = db_config.name == primary
+          dirs = own ? primary_migrate_dirs : PendingMigrations.migrate_dirs_of(app.root, db_config.name)
+          { name: db_config.name, config: db_config, **MigrationStatus.of_database(db_config, dirs, primary: own) }
+        end
+      rescue StandardError => e
+        RailsAiContext.debug_fail(e, [], label: "database_states")
+      end
+    end
+
+    def unreachable_database_check(databases, pending)
+      env = RailsAiContext.environment_name
+      missing, failing = databases.select { |db| db[:error] }.partition { |db| db[:error].is_a?(ActiveRecord::NoDatabaseError) }
+      shown = ->(db) { databases.one? ? db[:config].database.to_s : "#{db[:name]} (#{db[:config].database})" }
+      said = []
+      if missing.any?
+        said << "the #{env} #{missing.one? ? "database" : "databases"} #{missing.map(&shown).join(' and ')} " \
+                "#{missing.one? ? "does" : "do"} not exist"
+      end
+      failing.each { |db| said << "the #{env} database #{shown.(db)} cannot be reached: #{first_error_line(db[:error].message)}" }
+      said << pending_phrase(pending, databases) if pending.any?
+
+      fixes = []
+      fixes << "Run `#{"RAILS_ENV=#{env} " unless env == "development"}bin/rails db:prepare`" if missing.any? || pending.any?
+      fixes << "Start the database server, or fix its settings in config/database.yml" if failing.any?
+      Check.new(name: "Database", status: :fail, message: said.join("; "), fix: fixes.join("; "))
+    end
+
+    def primary_migrate_dirs
+      PendingMigrations.migrate_dirs_for(app.root)
     end
 
     def check_models
@@ -183,13 +241,29 @@ module RailsAiContext
       end
     end
 
+    # Every database's migrations, a file two of them share counted once.
     def check_migrations
-      count = RailsAiContext::PendingMigrations.migration_files(RailsAiContext::PendingMigrations.migrate_dirs_for(app.root), root: app.root).size
-      if count.positive?
-        Check.new(name: "Migrations", status: :pass, message: count_phrase(count, "migration file"), fix: nil)
-      else
-        Check.new(name: "Migrations", status: :warn, message: "No migrations", fix: nil)
+      files = migration_dirs_by_database.transform_values { |dirs| migration_files_in(dirs) }
+      total = files.values.flatten.uniq.size
+      unless total.positive?
+        return Check.new(name: "Migrations", status: :warn, message: "No migrations", fix: nil)
       end
+
+      where = files.select { |_, paths| paths.any? }.map { |name, paths| "#{paths.size} in #{name}" }
+      message = count_phrase(total, "migration file")
+      message += " (#{where.join(', ')})" if files.size > 1
+      Check.new(name: "Migrations", status: :pass, message: message, fix: nil)
+    end
+
+    def migration_files_in(dirs)
+      PendingMigrations.migration_files(dirs, root: app.root).map { |file| file[:path] }
+    end
+
+    # Each database's migrations directories, by the name database.yml gives it.
+    def migration_dirs_by_database
+      primary = DatabaseYml.primary_name(app.root) || "primary"
+      secondaries = DatabaseYml.task_secondaries(app.root).keys.to_h { |name| [ name, PendingMigrations.migrate_dirs_of(app.root, name) ] }
+      { primary => primary_migrate_dirs }.merge(secondaries)
     end
 
     # ── Context file checks ───────────────────────────────────────────

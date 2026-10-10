@@ -34,7 +34,11 @@ module RailsAiContext
     # The entry's migrations_paths, else db/migrate as Rails runs it; a dump with no entry here takes the generator's db/<name>_migrate.
     # Only the dirs Rails migrates: an engine's renumbered copy in db/migrate would read as pending.
     def migrate_dirs_for(root, dump_path = nil)
-      name = Introspectors::SchemaDumpPath.database_name(root, dump_path)
+      migrate_dirs_of(root, Introspectors::SchemaDumpPath.database_name(root, dump_path))
+    end
+
+    # The same, for the database database.yml names `name`.
+    def migrate_dirs_of(root, name)
       entry = RailsAiContext::DatabaseYml.entry(root, name)
       Introspectors::MigrationReplay.configured_dirs(root, entry) ||
         [ File.join(root.to_s, "db", name == "primary" || entry ? "migrate" : "#{name}_migrate") ]
