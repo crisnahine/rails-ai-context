@@ -165,15 +165,23 @@ module RailsAiContext
         secret_key secret private_key
       ].freeze
 
-      # SQL injection tautology patterns: OR 1=1, OR true, OR ''='', UNION SELECT, etc.
+      # SQL injection tautology patterns: OR 1=1, OR true, OR ''='', etc.
       TAUTOLOGY_PATTERNS = [
         /\bOR\s+1\s*=\s*1\b/i,
         /\bOR\s+true\b/i,
         /\bOR\s+'[^']*'\s*=\s*'[^']*'/i,
         /\bOR\s+"[^"]*"\s*=\s*"[^"]*"/i,
-        /\bOR\s+\d+\s*=\s*\d+/i,
-        /\bUNION\s+(ALL\s+)?SELECT\b/i
+        /\bOR\s+\d+\s*=\s*\d+/i
       ].freeze
+
+      # A UNION takes its column names from its first SELECT, so rows of
+      # another table - a wildcard's columns included - come out under those
+      # names, past the redaction that reads them. Any UNION is refused, in
+      # every spelling: `UNION ALL`, `UNION DISTINCT`, and the parenthesised
+      # `UNION (SELECT ...)` MySQL 8 and MariaDB take, which the narrower
+      # pattern this replaces let through. INTERSECT and EXCEPT return only
+      # rows of their first SELECT, so they stay.
+      SET_UNION = /\bUNION\b/i
 
       HARD_ROW_CAP = 1000
 
@@ -464,7 +472,16 @@ module RailsAiContext
             "Name the columns you want in the SELECT list instead." ]
         end
 
-        # Check for SQL injection tautology patterns (OR 1=1, UNION SELECT, etc.)
+        # On PostgreSQL a "union" inside a string literal is data; its plan
+        # layer reads the query itself. Elsewhere the raw text decides.
+        if (postgres ? mask_sql_literals(cleaned) : cleaned).match?(SET_UNION)
+          return [ false,
+            "Blocked: UNION is not run. A UNION takes its column names from its first SELECT, " \
+            "so rows of another table would come out under those names, past the redaction that " \
+            "reads them. Query each table on its own; a recursive CTE needs UNION, so it is not run either." ]
+        end
+
+        # Check for SQL injection tautology patterns (OR 1=1, OR true, etc.)
         tautology = TAUTOLOGY_PATTERNS.find { |p| cleaned.match?(p) }
         return [ false, "Blocked: SQL injection pattern detected (#{cleaned[tautology]})" ] if tautology
 
@@ -503,13 +520,17 @@ module RailsAiContext
       # identifier is never touched. This is good enough for the textual layer;
       # the plan layer, whose deparser output does not depend on
       # standard_conforming_strings, is the final authority (see .call).
+      # A double-quoted identifier is matched so it is skipped whole: a quote
+      # inside one (`AS "a'b"`) would otherwise open a literal that swallows
+      # the SQL after it.
       PG_TEXT_LITERAL = /
-        \$(\w*)\$.*?\$\1\$
+        (?<ident>"(?:""|[^"])*")
+        | \$(?<tag>(?:[A-Za-z_]\w*)?)\$.*?\$\k<tag>\$
         | [eE]'(?:\\.|''|[^'])*'
         | (?:[uU]&|[bBxX])?'(?:''|[^'])*'
       /mx
       def self.mask_sql_literals(text)
-        text.gsub(PG_TEXT_LITERAL, "''")
+        text.gsub(PG_TEXT_LITERAL) { Regexp.last_match[:ident] || "''" }
       end
 
       # Returns the first sensitive column name the SQL names, or nil. Two rules,
