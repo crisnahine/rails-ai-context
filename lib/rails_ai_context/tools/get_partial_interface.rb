@@ -92,14 +92,20 @@ module RailsAiContext
         # The resolved file, not the caller's spelling: a bare name has no
         # directory for a render site to be matched against.
         prefixed = prefix_partial_paths?(root)
-        render_sites = view_dirs.flat_map { |dir| find_render_sites(dir, partial_name, root, prefixed) }
+        render_sites = view_dirs.flat_map { |dir| find_render_sites(dir, partial_name, root, prefixed) } +
+                       code_render_sites(root, canonical_name(partial_name))
         method_calls = {}
 
         # Primary: locals from render call sites (ground truth)
         render_locals = render_sites.flat_map { |rs| rs[:locals] || [] }.uniq
 
         # Secondary: local_assigns checks + defined? guards in partial source
-        source_locals = extract_local_variable_references(source, Introspectors::HelperNames.for(root))
+        helpers = Introspectors::HelperNames.for(root)
+        source_locals = if file_path.end_with?(".jbuilder")
+          jbuilder_locals(source, helpers)
+        else
+          extract_local_variable_references(source, helpers)
+        end
 
         # Combine: render-site locals first, then source-detected locals
         # Filter out noise: single chars, capitalized words, known helpers
@@ -309,10 +315,14 @@ module RailsAiContext
           code = match[0].strip
           next if code.start_with?("#")
 
-          # 1. Standalone ERB output: <%= local_name %> or <%= local_name.method %>
-          if (m = code.match(/\A\s*([a-z_]\w*)\s*(?:\z|\.|\()/))
+          # 1. Standalone ERB output: <%= local_name %> or <%= local_name.method %>.
+          # A name called with parentheses is a method, and one ending in
+          # _path or _url a route helper: `dom_id(notification)` and
+          # `mark_read_notification_path(notification)` were listed as locals.
+          if (m = code.match(/\A\s*([a-z_]\w*)\s*(?:\z|\.)/))
             name = m[1]
-            locals << name unless known_non_locals.include?(name) || block_params.include?(name) || helpers.include?(name)
+            locals << name unless known_non_locals.include?(name) || block_params.include?(name) ||
+                                  helpers.include?(name) || route_helper?(name)
           end
 
           # 2. defined?(local) guard pattern
@@ -332,6 +342,95 @@ module RailsAiContext
         locals.reject { |l| l.match?(/\A(each|map|select|reject|find|collect|do|end)\z/) }.to_a.sort
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "extract_local_variable_references")
+      end
+
+      # Every template a render site can sit in, jbuilder's Ruby included.
+      SITE_GLOB = "**/*.{erb,haml,slim,jbuilder}"
+
+      # "shared/_status_badge.html.erb" as a render call names it: "shared/status_badge".
+      private_class_method def self.canonical_name(partial_name)
+        parts = partial_name.split("/")
+        (parts[0...-1] + [ parts.last.delete_prefix("_").sub(/\..*\z/, "") ]).join("/")
+      end
+
+      private_class_method def self.route_helper?(name)
+        name.match?(/_(?:path|url)\z/)
+      end
+
+      # Names Ruby cannot tell from a method call at parse time that a jbuilder
+      # template reads without defining them itself.
+      JBUILDER_NON_LOCALS = %w[json local_assigns params request controller current_page? render cache!].to_set.freeze
+
+      # A jbuilder partial is Ruby throughout, so the ERB tag scan found none
+      # of its locals: `invoice` in api/v1/invoices/_invoice.json.jbuilder.
+      # A local reads as a bare name the file never assigns, which Prism marks
+      # as a variable call; a helper or a route helper is not one.
+      private_class_method def self.jbuilder_locals(source, helpers)
+        names = Set.new
+        visit = lambda do |node|
+          names << node.name.to_s if node.is_a?(Prism::CallNode) && node.variable_call?
+          node.compact_child_nodes.each(&visit)
+        end
+        visit.call(RailsAiContext::AstCache.parse_string(source).value)
+        names.reject { |name| JBUILDER_NON_LOCALS.include?(name) || helpers.include?(name) || route_helper?(name) }.sort
+      rescue => e
+        RailsAiContext.debug_fail(e, [], label: "jbuilder_locals")
+      end
+
+      # Where a partial is named outside a render call: turbo_stream.prepend
+      # in a .turbo_stream.erb, broadcast_prepend_to in a model, json.partial!
+      # and json.array! in jbuilder. Ruby code outside the views names a
+      # partial by its full path, since it has no view directory of its own.
+      CODE_DIRS = %w[app/models app/controllers app/jobs app/channels app/helpers].freeze
+      # The keywords Turbo and jbuilder take beside a partial, which are not its locals.
+      PARTIAL_CALL_KEYWORDS = %w[target targets action attributes method html content renderable request_id as].freeze
+
+      private_class_method def self.partial_arg_sites(content, relative, names, skip_spans: [])
+        lines = content.lines
+        sites = []
+        content.to_enum(:scan, Introspectors::ViewTemplateIntrospector::PARTIAL_ARG).each do
+          match = Regexp.last_match
+          at = match.begin(0)
+          next unless names.include?(match[2])
+          next if skip_spans.any? { |from, to| at >= from && at < to }
+
+          # The line the call starts on, which a trailing comma carries onto this one.
+          start = content[0...at].count("\n")
+          start -= 1 while start.positive? && lines[start - 1].rstrip.end_with?(",")
+          call = call_lines(lines, start)
+          sites << { file: relative, line: start + 1, locals: partial_call_locals(call), snippet: call.squish }
+        end
+        sites
+      end
+
+      # The line a call starts on and every line a trailing comma carries it onto.
+      private_class_method def self.call_lines(lines, index)
+        taken = []
+        lines[index..].each do |line|
+          taken << line
+          break unless line.split("%>", 2).first.rstrip.end_with?(",")
+        end
+        taken.join.split("%>", 2).first
+      end
+
+      # The locals a call hands the partial: its `locals:` hash, the name
+      # `as:` gives each record, or json.partial!'s own keywords.
+      private_class_method def self.partial_call_locals(call)
+        named = call[/\bas:\s*:(\w+)/, 1]
+        (extract_locals_from_render(call) - PARTIAL_CALL_KEYWORDS + [ named ]).compact.uniq
+      end
+
+      private_class_method def self.code_render_sites(root, canonical)
+        CODE_DIRS.flat_map { |kind| RailsAiContext::PathResolver.dirs_for(root, kind) }.uniq.flat_map do |dir|
+          Dir.glob(File.join(dir, "**", "*.rb")).sort.flat_map do |path|
+            content = safe_read(path)
+            next [] unless content&.include?(canonical)
+
+            partial_arg_sites(content, RailsAiContext::PortablePath.relativize(path, root), [ canonical ])
+          end
+        end
+      rescue => e
+        RailsAiContext.debug_fail(e, [], label: "code_render_sites")
       end
 
       # Find all views that render this partial and extract the locals they pass.
@@ -359,7 +458,7 @@ module RailsAiContext
 
         object_paths = {}
 
-        view_files = RailsAiContext::ViewFile.glob(root, views_dir, RailsAiContext::ViewFile::MARKUP_GLOB)
+        view_files = RailsAiContext::ViewFile.glob(root, views_dir, SITE_GLOB)
 
         view_files.each do |file|
           content = safe_read(file)
@@ -371,8 +470,10 @@ module RailsAiContext
           # Per call, not per line: `render(` and a call split over lines are
           # one call whose arguments the line alone does not hold.
           covered = 0
+          spans = []
           Introspectors::ViewTemplateIntrospector.render_calls(content).each do |at, args|
             args = args.split("%>", 2).first
+            spans << [ at, at + args.length ]
             # A render inside another's arguments is already part of that call's site.
             next if at < covered
 
@@ -417,6 +518,11 @@ module RailsAiContext
 
             sites << { file: relative, line: line_num, locals: [], snippet: snippet }
           end
+
+          # A bare name reaches the partial only from its own directory.
+          file_dir = File.dirname(file).sub("#{views_dir}/", "")
+          names = dir_prefix.empty? || file_dir == dir_prefix ? search_patterns : [ canonical ]
+          sites.concat(partial_arg_sites(content, relative, names, skip_spans: spans))
         end
 
         sites

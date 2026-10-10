@@ -431,7 +431,13 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
       "a keyword argument spread over lines without parentheses" => [ "edit.html.slim",
         %(= render partial: "form",\n  locals: { product: @product }\n), %w[form] ],
       "a template and a hashrocket partial" => [ "new.html.erb",
-        %(<%= render template: "products/base" %>\n<%= render :partial => "legacy" %>\n), %w[products/base legacy] ]
+        %(<%= render template: "products/base" %>\n<%= render :partial => "legacy" %>\n), %w[products/base legacy] ],
+      # bazaar's reviews/create.turbo_stream.erb listed only reviews/form.
+      "a turbo_stream action's partial" => [ "update.turbo_stream.erb",
+        %(<%= turbo_stream.replace @product, partial: "products/product", locals: { product: @product } %>\n), %w[products/product] ],
+      "jbuilder's json.partial! and json.array! partial:" => [ "index.json.jbuilder",
+        %(json.array! @products, partial: "products/product", as: :product\njson.partial! "shared/meta", page: 1\n),
+        %w[products/product shared/meta] ]
     }.each do |label, (name, source, expected)|
       it "reads #{label}" do
         expect(partials_in(name, source)).to include(*expected)
