@@ -276,6 +276,15 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
       end
     end
 
+    # Read without Erubi's trim mode, `<%- if @widget -%>` was a unary minus
+    # and the parse lost the render inside it.
+    it "reads a template written with trim tags" do
+      template = "<%- if @widget -%>\n  <%= render \"shared/nope\" -%>\n<%- end -%>\n"
+      with_app_file("app/views/widgets/show.html.erb", template) do |file, path|
+        expect(described_class.check_rails_semantics(file, path).join).to include("render \"shared/nope\" - partial not found")
+      end
+    end
+
     it "says which checks were skipped when the AST parse fails, instead of reading as clean" do
       allow(RailsAiContext::AstCache).to receive(:parse_string).and_raise(RuntimeError, "prism exploded")
 

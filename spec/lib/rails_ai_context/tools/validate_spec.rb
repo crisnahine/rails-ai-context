@@ -287,6 +287,43 @@ RSpec.describe RailsAiContext::Tools::Validate do
     end
   end
 
+  # Rails compiles a template with Erubi's trim mode, where `<%-` and `-%>`
+  # are tags. Read as plain ERB they were Ruby's unary minus, every template
+  # written with them failed, and the installed pre-commit hook blocked it.
+  describe "ERB" do
+    let(:dir) { File.join(Rails.root, "tmp", "erb_check") }
+
+    before { FileUtils.mkdir_p(dir) }
+    after { FileUtils.rm_rf(dir) }
+
+    def validate_erb(name, content)
+      File.write(File.join(dir, name), content)
+      described_class.call(files: [ "tmp/erb_check/#{name}" ]).content.first[:text]
+    end
+
+    it "passes a template written with trim tags" do
+      text = validate_erb("list.html.erb", <<~ERB)
+        <ul>
+        <%- @products.each do |product| -%>
+          <li><%= product.name -%></li>
+        <%- end -%>
+        </ul>
+        <%# a comment -%>
+        <%= render "products/product", product: @product -%>
+      ERB
+
+      expect(text).to include("1/1 files passed")
+    end
+
+    it "still fails an if left open and an end with nothing to close, in trim tags" do
+      open_if = validate_erb("open_if.html.erb", "<div>\n<%- if @product -%>\n  <%= @product.name -%>\n</div>\n")
+      extra_end = validate_erb("extra_end.html.erb", "<div>\n  <%= @product.name -%>\n<%- end -%>\n</div>\n")
+
+      expect(open_if).to include("0/1 files passed")
+      expect(extra_end).to include("0/1 files passed")
+    end
+  end
+
   # Every Stimulus controller is an ES module in a package that declares no
   # type, and `node -c` passed each one of them however broken it was.
   describe "JavaScript" do

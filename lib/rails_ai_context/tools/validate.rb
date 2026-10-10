@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require "open3"
-require "erb"
 require "json"
 require "set"
 require "prism"
@@ -219,10 +218,7 @@ module RailsAiContext
         return [ false, "file too large", [] ] if File.size(full_path) > RailsAiContext.configuration.max_file_size
 
         content = File.binread(full_path).force_encoding("UTF-8")
-        processed = content.gsub("<%=", "<%")
-
-        erb_src = +ERB.new(processed).src
-        erb_src.force_encoding("UTF-8")
+        erb_src = RailsAiContext::ErbSource.compiled(content)
         compiled = "# encoding: utf-8\ndef __erb_syntax_check\n#{erb_src}\nend"
 
         result = AstCache.parse_string(compiled, ruby: app_ruby_version)

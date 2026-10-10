@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "erb"
+
 module RailsAiContext
   # The Ruby inside ERB tags. Two readers need it for different reasons - a
   # template's ivars, and the ENV names a `.yml` or a view reads - and a
@@ -12,6 +14,16 @@ module RailsAiContext
     # @return [Boolean] whether the source carries any ERB tag at all
     def tagged?(source)
       source.to_s.include?("<%")
+    end
+
+    # The whole template as the Ruby it compiles to, for a parse. Rails'
+    # Erubi trims with `-`, so `<%-` and `-%>` are tags and not a minus sign.
+    # An output tag becomes a code tag: `<%= form_with do |f| %>` opens a
+    # block Erubi allows and stdlib ERB would wrap in parentheses. Each
+    # template line stays one line, below the magic comments ERB writes first.
+    def compiled(source)
+      src = +ERB.new(source.to_s.gsub("<%=", "<%"), trim_mode: "-").src
+      src.force_encoding("UTF-8")
     end
 
     # The code tag bodies, joined. Order is kept; line numbers are not.
