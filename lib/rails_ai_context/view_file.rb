@@ -31,6 +31,20 @@ module RailsAiContext
 
     RUBY_HANDLER_EXTENSIONS = %w[rb ruby builder jbuilder rabl prawn arb].freeze
 
+    # The language a template's source is written in, by its handler.
+    TEMPLATE_MIME_TYPES = {
+      "erb" => "text/x-erb", "haml" => "text/x-haml", "slim" => "text/x-slim",
+      "liquid" => "text/x-liquid", "md" => "text/markdown", "markdown" => "text/markdown"
+    }.freeze
+
+    # What a file with no handler of its own is: the raw handler serves it as written.
+    FORMAT_MIME_TYPES = {
+      "html" => "text/html", "text" => "text/plain", "js" => "text/javascript", "css" => "text/css",
+      "xml" => "application/xml", "json" => "application/json", "ics" => "text/calendar", "csv" => "text/csv",
+      "vcf" => "text/vcard", "vtt" => "text/vtt", "md" => "text/markdown", "svg" => "image/svg+xml",
+      "rss" => "application/rss+xml", "atom" => "application/atom+xml", "yaml" => "application/yaml"
+    }.freeze
+
     MARKUP_GLOB = "**/*.{erb,haml,slim}"
 
     module_function
@@ -110,6 +124,19 @@ module RailsAiContext
     def fence(path)
       ext = File.extname(path.to_s).delete_prefix(".").downcase
       RUBY_HANDLER_EXTENSIONS.include?(ext) ? "ruby" : ext
+    end
+
+    # The type of a template's source, not of what it renders: the view
+    # resource hands back the file as written, so `show.json.jbuilder` is
+    # Ruby and `index.html.erb` is ERB. A file the raw handler serves is what
+    # its format says, and anything else is plain text.
+    def mime_type(path)
+      extensions = File.basename(path.to_s).split(".").drop(1).map(&:downcase)
+      handler = extensions.last.to_s
+      handler = extensions[-2].to_s if handler == "raw"
+      return "text/x-ruby" if RUBY_HANDLER_EXTENSIONS.include?(handler)
+
+      TEMPLATE_MIME_TYPES[handler] || FORMAT_MIME_TYPES.fetch(handler, "text/plain")
     end
 
     # app/views/layouts also holds the partials those layouts render, and the

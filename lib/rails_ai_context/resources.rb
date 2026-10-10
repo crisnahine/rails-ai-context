@@ -84,11 +84,13 @@ module RailsAiContext
       mime_type: "application/json"
     ).freeze
 
+    # No mime_type: the spec has a template carry one only when every
+    # resource it matches shares it, and a views directory holds ERB, HAML,
+    # jbuilder and more. Each read names its own.
     VIEW_TEMPLATE = MCP::ResourceTemplate.new(
       uri_template: "rails-ai-context://views/{path}",
       name: "View Template",
-      description: "View template content for a specific path relative to app/views",
-      mime_type: "text/html"
+      description: "View template source for a specific path relative to app/views"
     ).freeze
 
     ROUTES_TEMPLATE = MCP::ResourceTemplate.new(

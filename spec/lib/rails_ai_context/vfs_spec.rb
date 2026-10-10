@@ -382,7 +382,17 @@ RSpec.describe RailsAiContext::VFS do
       it "resolves a view URI" do
         result = described_class.resolve("rails-ai-context://views/#{test_dir_name}/index.html.erb")
         expect(result.first[:text]).to include("<h1>VFS Test</h1>")
-        expect(result.first[:mimeType]).to eq("text/html")
+        expect(result.first[:mimeType]).to eq("text/x-erb")
+      end
+
+      # The resource hands back source. A jbuilder template is Ruby, and it
+      # came back labelled text/html.
+      it "labels a template by the language its source is written in" do
+        File.write(views_dir.join(test_dir_name, "_item.json.jbuilder"), "json.id item.id")
+
+        result = described_class.resolve("rails-ai-context://views/#{test_dir_name}/_item.json.jbuilder")
+
+        expect(result.first[:mimeType]).to eq("text/x-ruby")
       end
 
       it "blocks path traversal" do

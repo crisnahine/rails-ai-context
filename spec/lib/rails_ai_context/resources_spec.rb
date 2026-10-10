@@ -18,6 +18,12 @@ RSpec.describe RailsAiContext::Resources do
       expect(uris).to include("rails://controllers")
     end
 
+    # Views hold ERB, HAML, jbuilder and more, and a template carries a type
+    # only when every resource it matches shares it.
+    it "gives the view template no single type" do
+      expect(described_class::VIEW_TEMPLATE.to_h).not_to have_key(:mimeType)
+    end
+
     it "defines name, description, mime_type, and key for each resource" do
       described_class::STATIC_RESOURCES.each do |uri, meta|
         expect(meta).to have_key(:name), "#{uri} missing :name"
