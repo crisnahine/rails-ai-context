@@ -229,7 +229,7 @@ its exact name blocks it; see [SECURITY.md](SECURITY.md).
 
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
-| `output_dir` | String | Rails.root | Directory for generated context files |
+| `output_dir` | String | Rails.root | Directory for generated context files. OpenCode reads `app/models/AGENTS.md` and `app/controllers/AGENTS.md` beside the code, so those two are written only where the directory exists under it, and named `no app/models under output_dir` otherwise |
 
 ---
 

@@ -188,6 +188,8 @@ RSpec.describe RailsAiContext::Serializers::OpencodeRulesSerializer do
 
   it "reports a missing directory instead of dropping the file silently" do
     Dir.mktmpdir do |dir|
+      allow(Rails).to receive(:root).and_return(Pathname.new(dir))
+
       result = described_class.new(context).call(dir)
 
       expect(result[:not_applicable]).to eq(
@@ -195,6 +197,25 @@ RSpec.describe RailsAiContext::Serializers::OpencodeRulesSerializer do
         File.join(dir, "app", "controllers", "AGENTS.md") => "app/controllers not present"
       )
       expect(Dir.exist?(File.join(dir, "app"))).to be false
+    end
+  end
+
+  # With config.output_dir elsewhere, the app has app/models; only the output
+  # dir lacks it, and "app/models not present" said otherwise.
+  it "says it is the output_dir that lacks the directory, when the app has it" do
+    Dir.mktmpdir do |app|
+      Dir.mktmpdir do |out|
+        FileUtils.mkdir_p(File.join(app, "app", "models"))
+        allow(Rails).to receive(:root).and_return(Pathname.new(app))
+
+        result = described_class.new(context).call(out)
+
+        expect(result[:not_applicable]).to eq(
+          File.join(out, "app", "models", "AGENTS.md") => "no app/models under output_dir",
+          File.join(out, "app", "controllers", "AGENTS.md") => "app/controllers not present"
+        )
+        expect(Dir.exist?(File.join(out, "app"))).to be false
+      end
     end
   end
 end

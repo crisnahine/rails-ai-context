@@ -32,7 +32,7 @@ module RailsAiContext
           if Dir.exist?(File.dirname(filepath))
             RuleFile.new(filepath, send(rule[:renderer]), rule[:reason])
           else
-            RuleFile.new(filepath, nil, "#{File.dirname(relative)} not present")
+            RuleFile.new(filepath, nil, missing_directory_reason(File.dirname(relative), output_dir))
           end
         end
 
@@ -40,6 +40,14 @@ module RailsAiContext
       end
 
       private
+
+      # OpenCode reads these beside the code, so they go only into a
+      # directory that exists. Under an output_dir that is not the app, the
+      # app's own directory is there; it is the output_dir that lacks one.
+      def missing_directory_reason(dir, output_dir)
+        elsewhere = File.expand_path(output_dir) != File.expand_path(project_root)
+        elsewhere && Dir.exist?(File.join(project_root, dir)) ? "no #{dir} under output_dir" : "#{dir} not present"
+      end
 
       def render_models_reference
         models = Payload.models(context)

@@ -352,6 +352,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its block replaced, and any other file keeps its text and gets the
   listing between markers above it, with a note that claims the block
   rather than the file. Dropping the AI tool takes out only that block.
+- **With `config.output_dir` set, the OpenCode per-directory files say why
+  they were not written.** They are written only into a directory that
+  exists, since OpenCode reads them beside the code, and the run reported
+  `app/models not present` for an app that has one; it is the output
+  directory that lacks it, and the reason now says `no app/models under
+  output_dir`.
 - **The split rule files end with a newline.** The fourteen files under
   `.claude/rules/`, `.cursor/rules/`, `.github/instructions/` and
   `app/*/AGENTS.md` stopped at their last character, so an editor or an
