@@ -243,6 +243,15 @@ module RailsAiContext
         # scanner and the database disagree on, nothing unread reaches the database.
         sql = comment_free(sql, mysql: mysql)
 
+        # ── Layer 1b: PostgreSQL semantic check (planning only) ─────
+        # EXPLAIN (VERBOSE, FORMAT JSON) in a read-only transaction plans the
+        # query without running it, so whole-row serialisation, an expanded
+        # sensitive column and a VOLATILE admin function are caught before any
+        # execution - the normal path and the EXPLAIN path alike.
+        if (refusal = postgresql_plan_refusal(sql, config.query_timeout))
+          return error_response(refusal)
+        end
+
         # ── EXPLAIN mode ────────────────────────────────────────────
         if explain
           return execute_explain(sql, config.query_timeout)
@@ -258,14 +267,20 @@ module RailsAiContext
 
         # ── Layer 4: Redact sensitive columns ───────────────────────
         # Skip for SHOW/DESCRIBE/EXPLAIN - see SCHEMA_METADATA_PREFIX.
-        redacted = sql.match?(SCHEMA_METADATA_PREFIX) ? result : redact_results(result)
+        schema_metadata = sql.match?(SCHEMA_METADATA_PREFIX)
+        redacted = schema_metadata ? result : redact_results(result, provenance_sensitive_indices(sql))
 
         # ── Format output ───────────────────────────────────────────
+        # The truncation note rides every format (for CSV, after a blank line so
+        # a parser still reads the block); the unbounded-SQLite note stays off
+        # CSV, which is meant to be plain data.
+        cut = !schema_metadata && result.respond_to?(:truncated) && result.truncated
+        truncation = cut ? truncation_note([ row_limit, HARD_ROW_CAP ].min, format) : ""
         output = case format
         when "csv"
-          format_csv(redacted)
+          format_csv(redacted) + truncation
         else
-          format_table(redacted) + unbounded_note(result)
+          format_table(redacted) + truncation + unbounded_note(result)
         end
 
         text_response(output)
@@ -748,6 +763,277 @@ module RailsAiContext
         result.is_a?(ResultProxy) && result.unbounded ? UNBOUNDED_SQLITE_NOTE : ""
       end
 
+      # Says, in every format, that the row cap held rows back, so a reader (or a
+      # parser) is not told a partial answer is the whole one. For CSV it sits
+      # after a blank line, outside the comma block.
+      private_class_method def self.truncation_note(cap, format)
+        detail = if cap >= HARD_ROW_CAP
+          "the 1000-row hard cap"
+        else
+          "the row limit of #{cap}; pass limit: up to 1000 to see more"
+        end
+        note = "#{cap} rows shown; the query returned at least this many (#{detail})."
+        format == "csv" ? "\n\n#{note}" : "\n\n_#{note}_"
+      end
+
+      # ── Layer 1b: PostgreSQL semantic analysis ──────────────────────
+      # Plans the query inside a read-only transaction with EXPLAIN (VERBOSE,
+      # FORMAT JSON) - planning only, nothing runs, not even a VOLATILE admin
+      # function (the planner does not fold one). Refuses three things the
+      # textual layer cannot see: a whole-row reference (`alias.*`) to a relation
+      # that has a sensitive column; a sensitive column used anywhere but as a
+      # plain pass-through output (a ROW(tbl.*) the planner expanded, a WHERE
+      # oracle); and any VOLATILE function outside the harmless allowlist.
+      private_class_method def self.postgresql_plan_refusal(sql, timeout)
+        return nil unless postgres_adapter?
+
+        target = strip_leading_explain(sql)
+        return nil unless target.match?(/\A\s*(SELECT|WITH)\b/i)
+
+        plan = explain_plan(target, timeout)
+        return nil unless plan
+
+        nodes = []
+        collect_plan_nodes(plan, nodes)
+        aliases = plan_alias_map(nodes)
+        exprs = plan_expressions(nodes)
+
+        if (rel = whole_row_leak(exprs, aliases))
+          return "Blocked: the query serialises a whole row of `#{rel}`, which carries every " \
+            "column including the sensitive ones. Name the columns you need in the SELECT list."
+        end
+        if (col = sensitive_column_in_plan(exprs))
+          return "Blocked: the query's plan uses the sensitive column `#{col}` (expanded from a " \
+            "wildcard or a row reference). Name the non-sensitive columns you need; `#{col}` is " \
+            "never returned."
+        end
+        if (fn = volatile_function_in_plan(exprs))
+          return "Blocked: function #{fn} is VOLATILE - it can change server or session state, " \
+            "which a read-only transaction does not prevent. rails_query runs inspection reads only."
+        end
+        nil
+      rescue StandardError
+        # Planning failed (syntax the executor will also reject, a permission
+        # error): let normal execution raise the real error. The name blocklist
+        # in validate_sql already stopped the known admin functions.
+        nil
+      end
+
+      # Run EXPLAIN in its own read-only transaction and parse the JSON plan.
+      private_class_method def self.explain_plan(sql, timeout)
+        conn = ActiveRecord::Base.connection
+        json = nil
+        conn.transaction do
+          conn.execute("SET TRANSACTION READ ONLY")
+          conn.execute("SET LOCAL statement_timeout = '#{(timeout * 1000).to_i}'")
+          row = conn.select_all("EXPLAIN (VERBOSE, FORMAT JSON) #{sql}").rows.first
+          json = row&.first
+          raise ActiveRecord::Rollback
+        end
+        data = JSON.parse(json.to_s)
+        data.is_a?(Array) ? data.first&.dig("Plan") : nil
+      end
+
+      # Strip a leading EXPLAIN [ (opts) | ANALYZE | VERBOSE ... ] so the
+      # semantic check reads the statement a raw EXPLAIN would run - an
+      # EXPLAIN ANALYZE that would otherwise execute the body.
+      private_class_method def self.strip_leading_explain(sql)
+        sql.sub(/\A\s*EXPLAIN\s+(?:\([^)]*\)\s*|ANALYZE\s+|VERBOSE\s+)*/i, "")
+      end
+
+      private_class_method def self.collect_plan_nodes(node, acc)
+        return unless node.is_a?(Hash)
+        acc << node
+        Array(node["Plans"]).each { |child| collect_plan_nodes(child, acc) }
+      end
+
+      # alias (downcased) => relation name (downcased). The alias defaults to the
+      # relation name when the query gave none, which is how `users.*` resolves.
+      private_class_method def self.plan_alias_map(nodes)
+        map = {}
+        nodes.each do |node|
+          rel = node["Relation Name"]
+          next unless rel
+          name = (node["Alias"] || rel).to_s.downcase
+          map[name] = rel.to_s.downcase
+        end
+        map
+      end
+
+      # Every expression string a node carries: the projected Output entries
+      # kept apart (they may be plain pass-throughs) from the conditions, keys
+      # and function calls, which never are.
+      PLAN_COND_KEYS = [
+        "Filter", "Index Cond", "Recheck Cond", "Hash Cond", "Merge Cond",
+        "Join Filter", "One-Time Filter", "TID Cond", "Function Call",
+        "Sort Key", "Group Key", "Presorted Key", "Order By", "Cache Key"
+      ].freeze
+      private_class_method def self.plan_expressions(nodes)
+        outputs = []
+        conds = []
+        nodes.each do |node|
+          outputs.concat(Array(node["Output"]))
+          PLAN_COND_KEYS.each { |k| conds.concat(Array(node[k])) }
+        end
+        { outputs: outputs, conds: conds, all: outputs + conds }
+      end
+
+      # A whole-row `alias.*` reference to a relation that holds a sensitive
+      # column. An unresolved alias is refused only when some relation in the
+      # plan is sensitive, so a whole-row read of a non-sensitive table is fine.
+      private_class_method def self.whole_row_leak(exprs, aliases)
+        any_sensitive = aliases.values.any? { |rel| sensitive_relation?(rel) }
+        exprs[:all].each do |expr|
+          expr.to_s.scan(/([A-Za-z_]\w*)\.\*/) do |(al)|
+            rel = aliases[al.downcase]
+            return rel if rel && sensitive_relation?(rel)
+            return (rel || al) if rel.nil? && any_sensitive
+          end
+        end
+        nil
+      end
+
+      # A sensitive column name in the plan that is not a plain pass-through
+      # output. The textual layer has already refused any query whose own text
+      # names a sensitive column, so a name here came from a wildcard, a row
+      # reference the planner expanded, or a view - never from a column the
+      # caller asked for by name.
+      private_class_method def self.sensitive_column_in_plan(exprs)
+        sensitive = schema_sensitive_columns.to_a
+        return nil if sensitive.empty?
+
+        # Conditions and keys are never a pass-through: any sensitive name is a leak (or an oracle).
+        exprs[:conds].each do |expr|
+          sensitive.each { |col| return col if expr.to_s.downcase.match?(/\b#{Regexp.escape(col)}\b/) }
+        end
+        # An Output entry is allowed when it is exactly a bare column reference
+        # (a plain SELECT * column, redacted later by name/provenance).
+        exprs[:outputs].each do |expr|
+          next if passthrough_output?(expr)
+          sensitive.each { |col| return col if expr.to_s.downcase.match?(/\b#{Regexp.escape(col)}\b/) }
+        end
+        nil
+      end
+
+      PASSTHROUGH_OUTPUT = /\A\(?\s*(?:[A-Za-z_]\w*\.)?[A-Za-z_]\w*\s*\)?\z/
+      private_class_method def self.passthrough_output?(expr)
+        expr.to_s.match?(PASSTHROUGH_OUTPUT)
+      end
+
+      # A VOLATILE function (pg_proc.provolatile = 'v') named anywhere in the
+      # plan, outside the harmless allowlist. This closes the admin-function
+      # family - pg_terminate_backend, pg_advisory_lock, set_config and the rest -
+      # without an ever-growing name list.
+      private_class_method def self.volatile_function_in_plan(exprs)
+        names = Set.new
+        exprs[:all].each do |expr|
+          expr.to_s.scan(/([A-Za-z_]\w*)\s*\(/) { |(fn)| names << fn.downcase }
+        end
+        names.subtract(PG_VOLATILE_ALLOWLIST)
+        return nil if names.empty?
+
+        conn = ActiveRecord::Base.connection
+        quoted = names.map { |n| conn.quote(n) }.join(", ")
+        volatile = conn.select_values(
+          "SELECT DISTINCT lower(proname) FROM pg_proc " \
+          "WHERE lower(proname) IN (#{quoted}) AND provolatile = 'v'"
+        )
+        volatile.first
+      end
+
+      private_class_method def self.sensitive_relation?(relation)
+        relation_sensitive_columns.key?(relation.to_s.downcase)
+      end
+
+      # relation name (downcased) => its sensitive column names, for relations
+      # that have at least one. Live connection first, cached context as a
+      # fallback, memoised for the run.
+      private_class_method def self.relation_sensitive_columns
+        RailsAiContext::RunCache.fetch([ :query_relation_sensitive ]) do
+          by_relation = relation_columns
+          by_relation.each_with_object({}) do |(rel, cols), acc|
+            flagged = cols.select { |c| sensitive_column?(c) }
+            acc[rel] = flagged unless flagged.empty?
+          end
+        end
+      end
+
+      private_class_method def self.relation_columns
+        from_connection_relation_columns || from_context_relation_columns || {}
+      end
+
+      private_class_method def self.from_connection_relation_columns
+        conn = ActiveRecord::Base.connection
+        conn.tables.each_with_object({}) do |t, acc|
+          acc[t.to_s.downcase] = conn.columns(t).map { |c| c.name.to_s.downcase }
+        end
+      rescue StandardError
+        nil
+      end
+
+      private_class_method def self.from_context_relation_columns
+        tables = cached_context&.dig(:schema, :tables)
+        return nil unless tables.is_a?(Hash)
+
+        tables.each_with_object({}) do |(name, data), acc|
+          cols = Array(data.is_a?(Hash) && data[:columns]).map do |col|
+            (col.is_a?(Hash) ? col[:name] : col).to_s.downcase
+          end
+          acc[name.to_s.downcase] = cols
+        end
+      rescue StandardError
+        nil
+      end
+
+      private_class_method def self.postgres_adapter?
+        ActiveRecord::Base.connection.adapter_name.to_s.match?(POSTGRES_ADAPTER)
+      rescue StandardError
+        false
+      end
+
+      # Output columns whose provenance (PG::Result#ftable / #ftablecol) traces
+      # to a sensitive base column, so a renamed sensitive column is redacted
+      # whatever its output name. Describe-only (no execution); PostgreSQL only.
+      private_class_method def self.provenance_sensitive_indices(sql)
+        return [] unless postgres_adapter?
+
+        conn = ActiveRecord::Base.connection
+        raw = conn.raw_connection
+        stmt = "rac_prov_#{Process.pid}_#{rand(1 << 30)}"
+        begin
+          raw.prepare(stmt, sql)
+          desc = raw.describe_prepared(stmt)
+        ensure
+          raw.exec("DEALLOCATE #{stmt}") rescue nil
+        end
+
+        oid_columns = {}
+        indices = []
+        desc.nfields.times do |i|
+          oid = desc.ftable(i)
+          col = desc.ftablecol(i)
+          next if oid.nil? || oid.to_i.zero? || col.to_i.zero?
+
+          names = (oid_columns[oid] ||= attribute_names_for(conn, oid))
+          name = names[col.to_i]
+          indices << i if name && sensitive_column?(name)
+        end
+        indices
+      rescue StandardError
+        []
+      end
+
+      # attnum => column name for one relation oid.
+      private_class_method def self.attribute_names_for(conn, oid)
+        rows = conn.select_rows(
+          "SELECT attnum, attname FROM pg_attribute " \
+          "WHERE attrelid = #{oid.to_i} AND attnum > 0 AND NOT attisdropped"
+        )
+        rows.each_with_object({}) { |(num, name), acc| acc[num.to_i] = name.to_s }
+      rescue StandardError
+        {}
+      end
+
       # ── EXPLAIN execution ────────────────────────────────────────────
       private_class_method def self.execute_explain(sql, timeout)
         unless sql.match?(/\A\s*(SELECT|WITH)\b/i)
@@ -946,38 +1232,36 @@ module RailsAiContext
         [ "'", '"', "`" ].all? { |quote| tail.count(quote).even? }
       end
 
-      # The text carries the limit. This holds it whatever the database made of that text.
+      # The text carries the limit. This holds it whatever the database made of
+      # that text, and marks the result truncated when it reached the cap, so
+      # the answer can say rows were held back instead of cutting them silently.
       private_class_method def self.cap_rows(result, sql, limit)
         cap = [ limit, HARD_ROW_CAP ].min
-        return result if sql.match?(SCHEMA_METADATA_PREFIX) || result.rows.size <= cap
+        return result if sql.match?(SCHEMA_METADATA_PREFIX) || result.rows.size < cap
 
-        ResultProxy.new(result.columns, result.rows.first(cap), result.respond_to?(:unbounded) && result.unbounded)
+        unbounded = result.respond_to?(:unbounded) && result.unbounded
+        ResultProxy.new(result.columns, result.rows.first(cap), unbounded, true)
       end
 
       # ── Column redaction (Layer 4) ──────────────────────────────────
-      private_class_method def self.redact_results(result)
-        allowed = allowed_columns
-        redacted_cols = config.query_redacted_columns.map(&:downcase).to_set - allowed
-        encrypted_cols = Set.new
-
-        models_data = cached_context&.dig(:models)
-        if models_data.is_a?(Hash)
-          models_data.each_value do |data|
-            next unless data.is_a?(Hash)
-            (data[:encrypts] || []).each { |col| encrypted_cols << col.to_s.downcase }
-          end
-        end
+      # Redact a column by the one sensitivity rule applied to its OUTPUT name,
+      # plus any index flagged by provenance (PostgreSQL maps the output column
+      # to its base column, so a sensitive column reaches [FILTERED] whatever
+      # name it was given). The name rule keeps the apps-only exemption via
+      # sensitive_column?, which subtracts config.query_allowed_columns.
+      private_class_method def self.redact_results(result, provenance_indices = [])
         columns = result.columns
         rows = result.rows
 
-        # Match both real column names and aliases that end with sensitive suffixes
-        sensitive_suffixes = %w[password secret token key digest hash].freeze
-        redacted_indices = columns.each_with_index.filter_map { |col, i|
-          col_down = col.downcase
-          i if encrypted_cols.include?(col_down) || redacted_cols.include?(col_down) ||
-               (!allowed.include?(col_down) &&
-                (col_down.end_with?(*sensitive_suffixes) || col_down.match?(/password|secret|token/)))
-        }
+        # An `encrypts` column is filtered even when the app allows its name:
+        # an encrypted-at-rest attribute is never meant to be read back raw.
+        encrypted = encrypted_column_set
+
+        redacted_indices = columns.each_index.select do |i|
+          provenance_indices.include?(i) ||
+            encrypted.include?(columns[i].to_s.downcase) ||
+            sensitive_column?(columns[i])
+        end
 
         return result if redacted_indices.empty?
 
@@ -1068,9 +1352,9 @@ module RailsAiContext
         message.lines.first&.strip || message.strip
       end
 
-      # Quacks like ActiveRecord::Result for redacted output, or for a SQLite
-      # query that ran in-process with no time limit.
-      ResultProxy = Struct.new(:columns, :rows, :unbounded)
+      # Quacks like ActiveRecord::Result for redacted output, for a SQLite query
+      # that ran in-process with no time limit, or for a result the row cap cut.
+      ResultProxy = Struct.new(:columns, :rows, :unbounded, :truncated)
       UNBOUNDED_SQLITE_NOTE = "\n\n_This SQLite query ran without a time limit: query_timeout needs a file-backed database, " \
         "a platform with fork, and nothing that only the app's own connection has._"
     end
