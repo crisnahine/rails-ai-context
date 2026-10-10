@@ -525,5 +525,19 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
         expect(result[:stream_subscriptions].map { |s| s[:stream] }).to eq([ "room, (1, chat" ])
       end
     end
+
+    # shopapp's comments frame read src: `product_comments_path(@product`.
+    it "keeps a src route helper's closing parenthesis" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/views/products"))
+        File.write(File.join(dir, "app/views/products/show.html.erb"),
+                   %(<%= turbo_frame_tag "comments", src: product_comments_path(@product), loading: :lazy %>\n) +
+                   %(<%= turbo_frame_tag("tabs", src: tab_path(@product, tab: "a")) do %>\n<% end %>\n))
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:turbo_frames].map { |f| f[:src] }).to eq([ "product_comments_path(@product)", "tab_path(@product, tab: \"a\")" ])
+      end
+    end
   end
 end

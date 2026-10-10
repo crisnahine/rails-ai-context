@@ -1119,4 +1119,26 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       )
     end
   end
+
+  # ledger's index read `render json: accounts.map { |a| ... .as_json` and
+  # bazaar's create `redirect_to @product (notice: t(".created")`.
+  describe "the render map's calls" do
+    before { allow(described_class).to receive(:cached_context).and_return({}) }
+
+    it "keeps each call's arguments whole" do
+      code = <<~RUBY
+        def create
+          respond_to do |format|
+            format.html { redirect_to @product, notice: t(".created"), status: :see_other }
+            format.json { render json: accounts.map { |a| AccountSerializer.new(a).as_json }, status: :created }
+          end
+        end
+      RUBY
+
+      map = described_class.send(:extract_render_map, code)
+
+      expect(map[:redirects]).to eq([ "redirect_to @product (notice: t(\".created\"))" ])
+      expect(map[:renders]).to eq([ "render json: accounts.map { |a| AccountSerializer.new(a).as_json }, status: :created" ])
+    end
+  end
 end

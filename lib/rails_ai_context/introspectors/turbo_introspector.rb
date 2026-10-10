@@ -130,8 +130,19 @@ module RailsAiContext
         args.map(&:strip).reject(&:empty?)
       end
 
+      # The src value whole, up to the comma or bracket that ends it at the top
+      # level: a match that stopped at the first `)` cut
+      # `product_comments_path(@product)` short of its own.
       def frame_src(line)
-        line[/src:\s*["']?([^"',\s)]+)/, 1]
+        start = line =~ /\bsrc:\s*/ or return nil
+        value = +""
+        RailsAiContext::Brackets.each_top_level(line[(start + Regexp.last_match(0).length)..], comments: :ruby) do |piece, kind|
+          break if kind == :comment || (kind == :char && [ ",", ")", "}" ].include?(piece))
+
+          value << piece
+        end
+        value = value.sub(/\s*(?:-?%>|\bdo\b).*\z/m, "").strip
+        value.empty? ? nil : value.gsub(/\A["']|["']\z/, "")
       end
 
       # `turbo_stream_from :notifications`, `"notifications"`, `@room`,
