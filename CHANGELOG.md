@@ -360,6 +360,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MCP tools in their Cursor description and Copilot name. In CLI mode each
   of them names the command now (`rails 'ai:tool[model_details]'
   model=Name`), the trim note included; MCP mode reads as before.
+- **A static-tier CLAUDE.md no longer shows an empty Architecture
+  heading.** Without a boot there is no conventions section, so the
+  heading stood over a blank line before the services and jobs it held
+  and read as a section that came up empty; the names now follow it
+  directly, and the blank line only separates them from a pattern list.
 - **Claude Code and Copilot read the tools guide once.** Both load the root
   file and the always-on tools rule file on every request, and both files
   carried the whole guide and the protocol, about 95 lines twice. With root
