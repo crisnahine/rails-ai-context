@@ -2352,4 +2352,60 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       expect(text).to include("validates_date of date_of_birth")
     end
   end
+
+  # bazaar's OrdersController inherits require_login from a hand-written
+  # Authentication concern, and every request its generated test sent came
+  # back a 302 to /session/new with nothing to say why. Its create reads the
+  # session cart, yet the test posted every orders column as `order:` params.
+  describe "a controller behind a login filter that is not Devise's" do
+    def orders_test(root)
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+      allow(described_class).to receive(:cached_context).and_return({
+        tests: { framework: "minitest", test_helper_setup: [], fixture_names: { "users" => %w[one], "orders" => %w[first] } },
+        models: { "Order" => { table_name: "orders" } },
+        schema: { tables: { "orders" => { columns: [ { name: "id", type: "integer" }, { name: "number", type: "string" } ] } } },
+        controllers: { controllers: { "OrdersController" => {
+          actions: %w[index create], strong_params: [],
+          filters: [ { kind: "before", name: "require_login", from_concern: "Authentication" } ]
+        } } },
+        routes: { by_controller: { "orders" => [ { verb: "GET", path: "/orders", action: "index", name: "orders" },
+                                                 { verb: "POST", path: "/orders", action: "create" } ] } }
+      })
+      described_class.call(controller: "OrdersController").content.first[:text]
+    end
+
+    it "says the requests need a signed-in user when the app's tests have no sign-in helper" do
+      Dir.mktmpdir do |root|
+        text = orders_test(root)
+
+        expect(text).to include("# TODO: OrdersController runs require_login (from Authentication) before index, create, " \
+                                "so each request here is redirected or refused until the test signs in")
+        expect(text).to include("_OrdersController runs require_login (from Authentication) before index, create; " \
+                                "the requests are redirected or refused until the test signs in (see the TODO)._")
+      end
+    end
+
+    it "signs in with the app's own helper and a users fixture" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "test", "test_helpers"))
+        File.write(File.join(root, "test", "test_helpers", "session_test_helper.rb"),
+                   "module SessionTestHelper\n  def sign_in_as(user)\n  end\nend\n")
+
+        text = orders_test(root)
+
+        expect(text).to include("  setup do\n    sign_in_as users(:one)\n")
+        expect(text).not_to include("# TODO: OrdersController runs require_login")
+        expect(text).to include("the setup signs in with sign_in_as._")
+      end
+    end
+
+    it "posts no params a controller with no strong params never reads" do
+      Dir.mktmpdir do |root|
+        text = orders_test(root)
+
+        expect(text).to include("OrdersController declares no strong params, so the action reads no order params")
+        expect(text).not_to include("params: { order:")
+      end
+    end
+  end
 end

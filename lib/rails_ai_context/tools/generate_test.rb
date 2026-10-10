@@ -526,6 +526,12 @@ module RailsAiContext
           res = resource_info(ctrl_class, snake, tests_data).merge(unimplemented: unimplemented, controller: ctrl_class,
                                                                    route_key: snake, outcomes: {}, chain: chain,
                                                                    route_names: RouteCoverage.by_controller(routes).values.flatten.filter_map { |r| r[:name] })
+          # Devise and Doorkeeper have their own sign-in lines; any other login
+          # filter is named, with the app's own sign-in helper when it has one.
+          unless devise_app?(tests_data) || doorkeeper_controller?(ctrl_class)
+            res[:login] = login_filters(ctrl_class, ctrl_routes)
+            res[:sign_in] = app_sign_in_helper if res[:login].any?
+          end
 
           if framework.to_s.include?("rspec")
             generate_rspec_request(ctrl_class, snake, ctrl_routes, tests_data, res)
@@ -562,7 +568,11 @@ module RailsAiContext
           sp = strong_params.find { |p| p[:name] == "#{singular}_params" } || strong_params.first
           columns = schema_content_columns(table)
           attrs = Array(sp && sp[:permits]).map(&:to_s)
-          attrs = columns if attrs.empty?
+          # A controller read whole that declares no *_params method takes no
+          # model params: bazaar's OrdersController#create reads the session
+          # cart, and a POST of every orders column sent nothing it reads.
+          no_strong_params = info.key?(:strong_params) && strong_params.empty?
+          attrs = columns if attrs.empty? && !no_strong_params
 
           # A permitted param need not be a column: nested attributes, virtual
           # writers, a password a model stores as a digest. create! raises
@@ -576,7 +586,7 @@ module RailsAiContext
           validation_uniques = Array(model_data[:validations])
             .select { |v| v[:kind] == "uniqueness" }
             .flat_map { |v| Array(v[:attributes]).map(&:to_s) }
-          unique_attrs = (validation_uniques + unique_index_columns(table)).uniq & attrs
+          unique_attrs = (validation_uniques + unique_index_columns(table)).uniq & (no_strong_params ? columns : attrs)
           fixture = model_key ? model_fixture(model_key, table, tests_data) : fixture_key_for(table, tests_data)&.then { |key| [ table, key ] }
 
           {
@@ -587,10 +597,11 @@ module RailsAiContext
             fixture_key: fixture&.last,
             param_key: (sp && sp[:requires]) || singular,
             attrs: attrs.sort,
-            record_attrs: (attrs - non_columns).sort,
+            record_attrs: ((no_strong_params ? columns : attrs) - non_columns).sort,
             non_column_attrs: non_columns.sort,
             json_api: info[:api_controller] == true || info[:respond_to_formats] == [ "json" ],
-            unique_attrs: unique_attrs
+            unique_attrs: unique_attrs,
+            no_strong_params: no_strong_params
           }
         end
 
@@ -661,6 +672,9 @@ module RailsAiContext
           lines.concat(minitest_auth_lines(ctrl_class, tests_data, doorkeeper, res[:test_case]))
 
           setup = minitest_setup_lines(res, tests_data, doorkeeper)
+          user_key = res[:sign_in] && fixture_key_for("users", tests_data)
+          setup.unshift("#{res[:sign_in]} users(:#{user_key})") if user_key
+          lines.concat(login_todo_lines(ctrl_class, res)) unless user_key
           setup.unshift(devise_mapping(res, routes)) if res[:test_case]
           setup.compact!
           if setup.any?
@@ -683,7 +697,82 @@ module RailsAiContext
 
           lines << "end"
           lines << "```"
+          lines.concat(login_note(ctrl_class, res, signed_in: user_key))
           text_response(lines.join("\n"))
+        end
+
+        # A before filter that keeps a request out until someone signs in.
+        # Nothing marks one as such, so the name decides: authenticate_user!,
+        # Rails 8's require_authentication, a hand-written require_login.
+        LOGIN_FILTER = /\A(?:authenticate\w*|require_(?:authentication|user)|\w*(?:login|logged_in|signed_in|sign_in)\w*)[!?]?\z/
+
+        # The login filters that run on the actions the test requests, each
+        # with those actions: bazaar's OrdersController inherits require_login,
+        # and every request its generated test sent came back a 302.
+        def login_filters(ctrl_class, routes)
+          root = rails_app.root.to_s
+          found = {}
+          routes.map { |route| (route[:action] || "index").to_s }.uniq.each do |action|
+            RailsAiContext::ActionFilters.for(cached_context, ctrl_class, action, root: root)[:chain].each do |filter|
+              next unless filter[:kind].to_s == "before" && filter[:name].to_s.match?(LOGIN_FILTER)
+
+              (found[filter[:name].to_s] ||= { filter: filter, actions: [] })[:actions] << action
+            end
+          end
+          found.values
+        rescue => e
+          RailsAiContext.debug_fail(e, [], label: "login_filters")
+        end
+
+        SIGN_IN_HELPER = /^\s*def\s+((?:sign|log)_?in(?:_as)?|login(?:_as)?)\b/
+
+        # The sign-in helper the app's own tests define: Rails 8's generator
+        # writes sign_in_as into test/test_helpers, and a hand-rolled suite
+        # keeps a log_in_as in its test helper or spec/support.
+        def app_sign_in_helper
+          root = RailsAiContext::PathResolver.test_root(rails_app.root.to_s)
+          real_root = File.realpath(root).to_s
+          files = %w[test spec].flat_map do |base|
+            dir = File.join(root, base)
+            safe_glob(dir, "*_helper.rb", real_root) + safe_glob(dir, "{test_helpers,support}/**/*.rb", real_root)
+          end
+          files.first(50).each do |path|
+            name = RailsAiContext::SafeFile.read(path).to_s[SIGN_IN_HELPER, 1]
+            return name if name
+          end
+          nil
+        rescue => e
+          RailsAiContext.debug_fail(e, nil, label: "app_sign_in_helper")
+        end
+
+        def login_phrase(ctrl_class, res)
+          filters = res[:login].map do |login|
+            origin = login[:filter][:from_concern] || login[:filter][:from]
+            "#{login[:filter][:name]}#{" (from #{origin})" if origin}"
+          end
+          actions = res[:login].flat_map { |login| login[:actions] }.uniq
+          "#{ctrl_class} runs #{filters.join(" and ")} before #{actions.join(", ")}"
+        end
+
+        # What the test has to do that it cannot: without a signed-in user each
+        # request below is redirected or refused, and the test fails for a
+        # reason it does not state.
+        def login_todo_lines(ctrl_class, res)
+          return [] if Array(res[:login]).empty?
+
+          how = if res[:sign_in]
+            "sign in with #{res[:sign_in]} and a user from this app's own test data"
+          else
+            "this app's tests define no sign-in helper, so sign a user in first the way the app's login does"
+          end
+          [ "  # TODO: #{login_phrase(ctrl_class, res)}, so each request here is redirected or refused until the test signs in: #{how}." ]
+        end
+
+        def login_note(ctrl_class, res, signed_in:)
+          return [] if Array(res[:login]).empty?
+
+          signed = signed_in ? "the setup signs in with #{res[:sign_in]}" : "the requests are redirected or refused until the test signs in (see the TODO)"
+          [ "", "_#{login_phrase(ctrl_class, res)}; #{signed}._" ]
         end
 
         # The Devise include is a fact about the app; the sign_in is only
@@ -759,7 +848,7 @@ module RailsAiContext
           resolved = request_target(route, name_by_path, subject, res, tests_data)
           return minitest_skip_test(label, unresolved_reason(route, res)) unless resolved
           if res[:attrs].empty?
-            return minitest_skip_test(label, "no permitted attributes detected; fill in valid params for POST #{route[:path]}")
+            return minitest_skip_test(label, no_params_reason(res, "POST #{route[:path]}"))
           end
 
           params = request_params_literal(res, subject ? :fixture : :placeholder)
@@ -777,7 +866,7 @@ module RailsAiContext
           resolved = request_target(route, name_by_path, subject, res, tests_data)
           return minitest_skip_test(label, unresolved_reason(route, res)) unless resolved
           if res[:attrs].empty?
-            return minitest_skip_test(label, "no permitted attributes detected; fill in valid params for #{route[:verb]} #{route[:path]}")
+            return minitest_skip_test(label, no_params_reason(res, "#{route[:verb]} #{route[:path]}"))
           end
 
           params = request_params_literal(res, :fixture)
@@ -1012,6 +1101,12 @@ module RailsAiContext
           if res[:controller_spec] && (mapping = devise_mapping(res, routes))
             lines.push(mapping.start_with?("#") ? "  #{mapping}" : "  before { #{mapping} }", "")
           end
+          user_factory = res[:sign_in] && find_factory_name("User", tests_data)
+          if user_factory
+            lines.push("  let(:user) { create(:#{user_factory}) }", "  before { #{res[:sign_in]}(user) }", "")
+          elsif (todo = login_todo_lines(ctrl_class, res)).any?
+            lines.push(*todo, "")
+          end
 
           subject_expr = rspec_subject_lines(lines, res, factory)
           attrs_available = rspec_attributes_lines(lines, res, factory)
@@ -1030,6 +1125,7 @@ module RailsAiContext
 
           lines << "end"
           lines << "```"
+          lines.concat(login_note(ctrl_class, res, signed_in: user_factory))
           text_response(lines.join("\n"))
         end
 
@@ -1167,9 +1263,21 @@ module RailsAiContext
           out
         end
 
+        # No permitted attributes to send. A controller that declares no
+        # strong params takes none, so the skip says that instead of asking
+        # for a params hash the action never reads.
+        def no_params_reason(res, request = nil)
+          unless res[:no_strong_params]
+            return "no permitted attributes detected; fill in valid params#{" for #{request}" if request}"
+          end
+
+          "#{res[:controller]} declares no strong params, so the action reads no #{res[:param_key]} params; " \
+            "set up what it does read before #{request || "the request"}"
+        end
+
         def rspec_create_body(route, name_by_path, res, tests_data, attrs_available)
           label = "creates a new #{res[:model] || res[:name]}"
-          return rspec_skip_body(label, "no permitted attributes detected; fill in valid params") unless attrs_available && res[:model]
+          return rspec_skip_body(label, no_params_reason(res)) unless attrs_available && res[:model]
 
           resolved = rspec_target(route, name_by_path, nil, res, tests_data)
           return rspec_skip_body(label, unresolved_reason(route, res)) unless resolved
@@ -1188,7 +1296,7 @@ module RailsAiContext
         def rspec_update_body(route, name_by_path, res, tests_data, subject_expr, attrs_available)
           label = "updates the #{res[:name]}"
           return rspec_skip_body(label, "requires a persisted #{res[:name]} record") unless subject_expr
-          return rspec_skip_body(label, "no permitted attributes detected; fill in valid params") unless attrs_available
+          return rspec_skip_body(label, no_params_reason(res)) unless attrs_available
 
           resolved = rspec_target(route, name_by_path, subject_expr, res, tests_data)
           return rspec_skip_body(label, unresolved_reason(route, res)) unless resolved
