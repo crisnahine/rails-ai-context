@@ -1418,6 +1418,63 @@ it "still explains a database that does not exist" do
     end
   end
 
+  describe "MariaDB statement timeout (execute_mysql)" do
+    # MariaDB ignores MySQL's MAX_EXECUTION_TIME hint, so a long query would run
+    # unbounded and hold the connection. It is bounded with MariaDB's own
+    # `SET STATEMENT max_statement_time = <seconds> FOR <query>`, which scopes the
+    # limit to the one statement (no session setting to restore on the pool).
+    let(:query_result) { ActiveRecord::Result.new(%w[x], [ [ 1 ] ]) }
+    let(:conn) do
+      Class.new do
+        attr_reader :statements
+        def initialize(result)
+          @result = result
+          @statements = []
+        end
+
+        def mariadb? = true
+        def execute(sql) = @statements << sql
+
+        def transaction
+          @statements << "BEGIN"
+          yield
+        rescue ActiveRecord::Rollback
+          @statements << "ROLLBACK"
+        end
+
+        def select_all(sql)
+          @statements << sql
+          @result
+        end
+      end.new(query_result)
+    end
+
+    it "bounds the query with SET STATEMENT max_statement_time, not the MySQL hint" do
+      described_class.send(:execute_mysql, conn, "SELECT 1 AS x\nLIMIT 100", 5)
+
+      select = conn.statements.find { |s| s.include?("SELECT 1 AS x") }
+      expect(select).to start_with("SET STATEMENT max_statement_time=5.0 FOR ")
+      expect(select).not_to include("MAX_EXECUTION_TIME")
+    end
+
+    it "still issues SET TRANSACTION READ ONLY before the transaction and rolls back" do
+      described_class.send(:execute_mysql, conn, "SELECT 1 AS x", 5)
+
+      set_index = conn.statements.index { |s| s.match?(/\ASET TRANSACTION READ ONLY/i) }
+      expect(set_index).to be < conn.statements.index("BEGIN")
+      expect(conn.statements).to include("ROLLBACK")
+    end
+
+    it "reads MariaDB's max_statement_time interruption as the timeout" do
+      allow(described_class).to receive(:execute_sqlite)
+        .and_raise(ActiveRecord::StatementInvalid,
+                   "Mysql2::Error: Query execution was interrupted (max_statement_time exceeded)")
+
+      text = described_class.call(sql: "SELECT SLEEP(8)").content.first[:text]
+      expect(text).to start_with("Query exceeded 5 second timeout")
+    end
+  end
+
   describe "CSV format" do
     it "escapes newlines in cell values" do
       columns = %w[id note]

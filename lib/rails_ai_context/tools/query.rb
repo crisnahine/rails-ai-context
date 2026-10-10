@@ -288,7 +288,7 @@ module RailsAiContext
       rescue ActiveRecord::ConnectionNotEstablished, ActiveRecord::NoDatabaseError => e
         text_response("Database unavailable: #{clean_error_message(e.message)}\n\n**Troubleshooting:**\n- Check `config/database.yml` for correct host/port/credentials\n- Try `RAILS_ENV=test` if the development DB is remote\n- Run `bin/rails db:create` if the database doesn't exist yet")
       rescue ActiveRecord::StatementInvalid => e
-        if e.message.match?(/timeout|statement_timeout|MAX_EXECUTION_TIME|maximum statement execution time exceeded/i)
+        if e.message.match?(/timeout|statement_timeout|MAX_EXECUTION_TIME|max_statement_time|maximum statement execution time exceeded/i)
           text_response("Query exceeded #{config.query_timeout} second timeout. Simplify the query or add indexes.")
         # Only a missing DATABASE. Postgres words a missing column and a
         # missing table the same way ("... does not exist"), and matching
@@ -630,8 +630,14 @@ module RailsAiContext
       end
 
       private_class_method def self.execute_mysql(conn, sql, timeout)
-        # Inject MAX_EXECUTION_TIME hint for per-query timeout
-        hinted_sql = if sql.match?(/\ASELECT/i)
+        # Per-query timeout. MySQL honours the MAX_EXECUTION_TIME optimizer hint;
+        # MariaDB ignores it (a long query would run unbounded, holding the
+        # connection), so there the statement is bounded with MariaDB's own
+        # `SET STATEMENT max_statement_time = <seconds> FOR <query>`, which scopes
+        # the limit to this one statement and needs no restore on the pool.
+        bounded_sql = if mariadb_server?(conn)
+          "SET STATEMENT max_statement_time=#{[ timeout.to_f, 0.001 ].max} FOR #{sql}"
+        elsif sql.match?(/\ASELECT/i)
           sql.sub(/\ASELECT/i, "SELECT /*+ MAX_EXECUTION_TIME(#{(timeout * 1000).to_i}) */")
         else
           sql
@@ -647,10 +653,21 @@ module RailsAiContext
         result = nil
         conn.execute("SET TRANSACTION READ ONLY")
         conn.transaction do
-          result = conn.select_all(hinted_sql)
+          result = conn.select_all(bounded_sql)
           raise ActiveRecord::Rollback
         end
         result
+      end
+
+      # MariaDB and MySQL share the mysql2/trilogy adapters but bound a query
+      # differently; the adapter answers `mariadb?` on Rails 7.1+, and the
+      # server version string is the fallback.
+      private_class_method def self.mariadb_server?(conn)
+        return conn.mariadb? if conn.respond_to?(:mariadb?)
+
+        conn.select_value("SELECT VERSION()").to_s.include?("MariaDB")
+      rescue StandardError
+        false
       end
 
       # sqlite3-ruby cannot interrupt a running statement, so a killable child runs it instead.
