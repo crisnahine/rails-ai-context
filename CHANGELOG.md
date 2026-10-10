@@ -352,6 +352,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its block replaced, and any other file keeps its text and gets the
   listing between markers above it, with a note that claims the block
   rather than the file. Dropping the AI tool takes out only that block.
+- **The split rule files end with a newline.** The fourteen files under
+  `.claude/rules/`, `.cursor/rules/`, `.github/instructions/` and
+  `app/*/AGENTS.md` stopped at their last character, so an editor or an
+  end-of-file fixer rewrote each one and git flagged it. Files written by
+  an earlier version are rewritten once.
 - **A context file whose markers do not pair up is left as it is.** A lost
   `<!-- END rails-ai-context -->` had a fresh section prepended and the old
   one kept below it, so CLAUDE.md carried the gem's section twice from then
