@@ -955,12 +955,17 @@ module RailsAiContext
       def self.check_brakeman_security(files)
         return {} unless brakeman_available?
 
-        tracker = Brakeman.run(
-          app_path: rails_app.root.to_s,
-          quiet: true,
-          report_progress: false,
-          print_report: false
-        )
+        tracker = BrakemanGuard.quietly do
+          Brakeman.run(
+            app_path: rails_app.root.to_s,
+            quiet: true,
+            report_progress: false,
+            print_report: false,
+            # Forked parse workers cannot Marshal the Binding web-console's bindex
+            # hangs on a parse error, and the crash took every finding with it.
+            parallel_checks: false
+          )
+        end
 
         warnings = tracker.filtered_warnings
         return {} if warnings.empty?
@@ -987,7 +992,7 @@ module RailsAiContext
         return @brakeman_available unless @brakeman_available.nil?
 
         @brakeman_available = begin
-          require "brakeman"
+          BrakemanGuard.quietly { require "brakeman" }
           true
         rescue LoadError
           false

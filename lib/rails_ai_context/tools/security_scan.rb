@@ -123,7 +123,7 @@ module RailsAiContext
         }
         options[:run_checks] = Set.new(resolved_checks) if resolved_checks
 
-        tracker = Brakeman.run(options)
+        tracker = BrakemanGuard.quietly { Brakeman.run(options) }
         {
           warnings: tracker.filtered_warnings,
           checks_run: tracker.checks.checks_run.map(&:to_s)
@@ -363,7 +363,7 @@ module RailsAiContext
       end
 
       private_class_method def self.load_brakeman
-        require "brakeman"
+        BrakemanGuard.quietly { require "brakeman" }
         true
       rescue LoadError
         false
