@@ -30,6 +30,50 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
     expect(records).to all(include(controller: "posts", restful: true))
   end
 
+  # Rails' Resource#default_actions: an api_only route set draws no new or
+  # edit, so an API app's static answer listed helpers that do not exist.
+  describe "an api_only app" do
+    def api_routes(source)
+      listener = described_class.new(api_only: true)
+      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(Prism.parse(source).value)
+      listener.results.select { |r| r[:type] == :route }.map { |r| [ r[:verb], r[:path], r[:action] ] }
+    end
+
+    it "draws no new or edit for a resource, plural or singular" do
+      routes = api_routes(<<~RUBY)
+        Rails.application.routes.draw do
+          resources :accounts
+          resource :profile
+        end
+      RUBY
+
+      expect(routes.map(&:last).uniq).to contain_exactly("index", "create", "show", "update", "destroy")
+      expect(routes.map { |r| r[1] }).not_to include("/accounts/new", "/accounts/:id/edit", "/profile/new", "/profile/edit")
+    end
+
+    it "draws new or edit when only: asks for it, and except: works on the API defaults" do
+      routes = api_routes(<<~RUBY)
+        Rails.application.routes.draw do
+          resources :drafts, only: %i[new edit]
+          resources :notes, except: :destroy
+        end
+      RUBY
+
+      expect(routes).to include([ "GET", "/drafts/new", "new" ], [ "GET", "/drafts/:id/edit", "edit" ])
+      expect(routes.select { |r| r[1].start_with?("/notes") }.map(&:last).uniq).to contain_exactly("index", "create", "show", "update")
+    end
+
+    it "leaves an engine's table alone" do
+      routes = api_routes(<<~RUBY)
+        Blog::Engine.routes.draw do
+          resources :posts
+        end
+      RUBY
+
+      expect(routes.map(&:last)).to include("new", "edit")
+    end
+  end
+
   # Ruby reads `api_v1_gift-cards_redeem_path` as a subtraction, and Rails
   # names that route `api_v1_gift_cards_redeem`.
   it "writes a path-derived name the way Rails does" do

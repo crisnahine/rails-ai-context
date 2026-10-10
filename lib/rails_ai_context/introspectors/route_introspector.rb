@@ -386,7 +386,8 @@ module RailsAiContext
         scope = draw[:scope] || []
         already_read << [ path, scope ]
         ast = SourceIntrospector.walk(path, {
-          routes: -> { Listeners::RoutesDslListener.new(scope: scope, route_set: method(:route_set_prefixes), names: @route_names, multi_path: multi_path_routes?) },
+          routes: -> { Listeners::RoutesDslListener.new(scope: scope, route_set: method(:route_set_prefixes), names: @route_names,
+                                                        multi_path: multi_path_routes?, api_only: api_only_app?) },
           mounts: -> { Listeners::MountListener.new(prefix: draw[:prefix], name_prefix: draw[:name_prefix]) }
         })
         records = ast[:routes] || []
@@ -477,6 +478,14 @@ module RailsAiContext
       end
 
       # Rails 8.1 raises on `get "/a", "/b"`; with no version locked the routes are not guessed.
+      # config.api_only reaches the route set Rails builds for the app, which
+      # then draws no new or edit route for a resource.
+      def api_only_app?
+        return @api_only_app if defined?(@api_only_app)
+
+        @api_only_app = AppKind.api_only?(app.root)
+      end
+
       def multi_path_routes?
         return @multi_path_routes if defined?(@multi_path_routes)
 

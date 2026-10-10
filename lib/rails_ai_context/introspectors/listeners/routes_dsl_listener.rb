@@ -38,9 +38,11 @@ module RailsAiContext
         # `route_set` answers { prefix:, name_prefix: } for an app class that draws routes.
         # `names` is the set of route names taken so far, shared by every file of one table.
         # `multi_path`: the app's Rails draws every path of `get "/a", "/b"`; 8.1 raises instead.
-        def initialize(scope: [], route_set: nil, names: Set.new, multi_path: false)
+        # `api_only`: the app sets config.api_only, so its own table draws no new or edit route.
+        def initialize(scope: [], route_set: nil, names: Set.new, multi_path: false, api_only: false)
           super()
           @multi_path = multi_path
+          @api_only = api_only
           @stack = scope.map { |frame| frame.merge(node: nil) }
           @route_set = route_set
           @concern_blocks = {}
@@ -246,6 +248,12 @@ module RailsAiContext
 
         def current_route_set
           @stack.reverse.find { |f| f[:route_set] }&.dig(:route_set)
+        end
+
+        # The app's config.api_only reaches its own route set only: an engine's
+        # table, or a route set class the app draws, keeps its own setting.
+        def api_only_table?
+          @api_only && @stack.none? { |f| f[:engine] || f[:route_set] }
         end
 
         # The controller a route without one of its own takes: the innermost
@@ -610,7 +618,7 @@ module RailsAiContext
           member = layout[:member_path]
           member_name = layout[:member_name]
           controller = resource_controller(name, opts, singular: singular)
-          actions = requested_actions(singular ? SINGULAR_ACTIONS : PLURAL_ACTIONS, opts)
+          actions = requested_actions(singular ? SINGULAR_ACTIONS : PLURAL_ACTIONS, opts, api_only: api_only_table?)
 
           actions.each do |action|
             case action
@@ -949,8 +957,11 @@ module RailsAiContext
           end
         end
 
-        def requested_actions(all, opts)
+        # Rails' Resource#default_actions: an api_only route set leaves out new
+        # and edit, unless `only:` asks for them by name.
+        def requested_actions(all, opts, api_only: false)
           actions = all
+          actions -= %i[new edit] if api_only && !opts[:only]
           actions &= Array(opts[:only]).map(&:to_sym) if opts[:only]
           actions -= Array(opts[:except]).map(&:to_sym) if opts[:except]
           actions
