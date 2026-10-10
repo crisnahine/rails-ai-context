@@ -93,7 +93,7 @@ module RailsAiContext
         text = +"Tool #{label} failed: #{error.class}: #{error.message.to_s.lines.first&.strip}\n"
         text << "At: #{origin}\n" unless origin.empty?
         text << "Recovery: retry with a narrower query (a single table, model, or " \
-                "controller), or run `rails-ai-context doctor` to check app health."
+                "controller), or run `#{RailsAiContext.doctor_command}` to check app health."
         MCP::Tool::Response.new([ { type: "text", text: text } ], error: true)
       end
 

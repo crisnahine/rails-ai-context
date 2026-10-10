@@ -472,8 +472,20 @@ class RailsAiContextCLI < Thor
         add_to_gitignore(context_files, root: app.root)
       end
 
+      # JSON and TOML hold UTF-8 alone, so an app whose folder is named in
+      # another encoding cannot be named there: left out, the others' entries
+      # are still written, where its name failed the whole file.
+      configured, unnamed = apps.partition do |app|
+        [ app.server.app_path, app.server.gemfile ].compact.all? { |path| path.dup.force_encoding(Encoding::UTF_8).valid_encoding? }
+      end
+      unnamed.each do |app|
+        $stderr.puts ""
+        $stderr.puts "Warning: #{app.path}/ is left out of this folder's MCP configs: its folder name is not UTF-8, which " \
+                     "JSON and TOML require. Rename it, or run `rails-ai-context init` inside it for a config of its own."
+      end
+
       $stderr.puts ""
-      write_mcp_configs(ai_tools, tool_mode, root: dir, servers: apps.map(&:server))
+      write_mcp_configs(ai_tools, tool_mode, root: dir, servers: configured.map(&:server))
       # This folder's own .gitignore, when it has one: the Codex config here
       # embeds this machine's PATH and GEM_HOME too.
       add_to_gitignore(false, root: dir)
@@ -486,11 +498,11 @@ class RailsAiContextCLI < Thor
         $stderr.puts "MCP-only setup: no context files written."
       end
 
-      show_workspace_instructions(dir, apps, ai_tools, tool_mode, context_files)
+      show_workspace_instructions(dir, apps, ai_tools, tool_mode, context_files, configured: configured)
       return if failed.empty?
 
       $stderr.puts "Error: no context files for #{failed.map { |app| "#{app.path}/" }.join(', ')} - see the output above. " \
-                   "Retry with `#{app_root.command_line([ "rails-ai-context", "--app-path", app_root.display(failed.first.root, Dir.pwd), "context" ])}`."
+                   "Retry with `#{app_root.command_line([ "rails-ai-context", "--app-path", app_root.option_path(app_root.display(failed.first.root, Dir.pwd)), "context" ])}`."
       exit 1
     end
 
@@ -563,7 +575,7 @@ class RailsAiContextCLI < Thor
               "= #{spec.version}" ], false ]
     end
 
-    def show_workspace_instructions(dir, apps, ai_tools, tool_mode, context_files)
+    def show_workspace_instructions(dir, apps, ai_tools, tool_mode, context_files, configured: apps)
       $stderr.puts ""
       $stderr.puts "=" * 50
       $stderr.puts " rails-ai-context initialized for #{apps.size == 1 ? '1 app' : "#{apps.size} apps"}"
@@ -580,11 +592,11 @@ class RailsAiContextCLI < Thor
         files = "#{tool.mcp_config[:path]} #{where}; #{files}" if tool_mode == :mcp
         $stderr.puts "  #{tool.name.ljust(16)} -> #{files}"
       end
-      if tool_mode == :mcp
+      if tool_mode == :mcp && configured.any?
         $stderr.puts ""
         $stderr.puts "MCP servers, one per app:"
-        width = apps.map { |app| app.server_name.size }.max
-        apps.each do |app|
+        width = configured.map { |app| app.server_name.size }.max
+        configured.each do |app|
           how = if app.standalone then ""
           elsif app.server.gemfile then " (bundle exec, BUNDLE_GEMFILE=#{app.server.gemfile})"
           else " (bundle exec)"
@@ -592,7 +604,8 @@ class RailsAiContextCLI < Thor
           $stderr.puts "  #{app.server_name.ljust(width)} -> #{app.path}/#{how}"
         end
       end
-      first = app_root.command_line([ app_root.display(apps.first.root, Dir.pwd) ])
+      example = configured.first || apps.first
+      first = app_root.command_line([ app_root.option_path(app_root.display(example.root, Dir.pwd)) ])
       $stderr.puts ""
       $stderr.puts "Commands, from here:"
       $stderr.puts "  rails-ai-context --app-path #{first} context    # Regenerate that app's context files" if context_files
@@ -624,7 +637,7 @@ class RailsAiContextCLI < Thor
       result = @app_root_result
       typed = @app_path_override || options[:app_path]
       binary = "rails-ai-context"
-      binary = app_root.command_line([ "rails-ai-context", "--app-path", typed ]) if result&.explicit && typed && result.root != result.cwd
+      binary = app_root.command_line([ "rails-ai-context", "--app-path", app_root.option_path(typed) ]) if result&.explicit && typed && result.root != result.cwd
       $stderr.puts ""
       $stderr.puts "Commands:"
       $stderr.puts "  #{binary} context    # Regenerate context files" if context_files
@@ -739,7 +752,7 @@ class RailsAiContextCLI < Thor
       # A command that can serve the static tier reads a source-only tree
       # instead of refusing it.
       outcome = entry_boot.call(root: Dir.pwd, allow_static: allow_static, no_boot: no_boot || options[:no_boot],
-                                allow_source_only: allow_source_only, command: command)
+                                allow_source_only: allow_source_only, command: command, doctor: doctor_command)
       outcome.messages.each { |line| $stderr.puts line }
       return unless outcome.tier == :absent
 
@@ -811,6 +824,16 @@ class RailsAiContextCLI < Thor
       exec(handoff.env, RbConfig.ruby, bundle, "exec", "rails-ai-context", *ORIGINAL_ARGV, chdir: cwd)
     rescue Gem::Exception, SystemCallError
       nil
+    end
+
+    # The doctor run for this app as the command was typed: from where it was
+    # typed, with the --app-path it named, under bundle exec when it ran so.
+    def doctor_command
+      result = @app_root_result
+      typed = @app_path_override || options[:app_path]
+      words = ENV["BUNDLE_BIN_PATH"] ? %w[bundle exec rails-ai-context] : %w[rails-ai-context]
+      words += [ "--app-path", app_root.option_path(typed) ] if result&.explicit && typed && result.root != result.cwd
+      app_root.command_line([ *words, "doctor" ])
     end
 
     def refuse_no_app!

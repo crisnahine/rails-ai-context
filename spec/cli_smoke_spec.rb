@@ -525,7 +525,7 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         _out, err, status = Open3.capture3("ruby", "-I", lib, exe, "--app-path", "work", "tool", "schema", "--no-boot", chdir: dir)
 
         expect(status.exitstatus).to eq(1)
-        expect(err).to include("No Rails app found in #{File.join(File.realpath(dir), 'work')}, and 2 below it")
+        expect(err).to include("#{File.join(File.realpath(dir), 'work')} is no Rails app, and holds 2 below it")
         expect(err).to include("rails-ai-context --app-path work/a tool schema --no-boot\n")
       end
     end
@@ -541,6 +541,56 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
 
         expect(status.exitstatus).to eq(0), err
         expect(servers(dir).keys).to eq(%w[rails-ai-context-a])
+      end
+    end
+
+    # Two folders named outside ASCII both slug to `app`, so the gem numbers
+    # one; its numbered name is its own to drop when that app goes.
+    it "drops a numbered entry of its own when its app is gone" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "\u0431\u043b\u043e\u0433"))
+        rails_app(File.join(dir, "\u0448\u043e\u043f"))
+        init(dir, "1\n3\n")
+        expect(servers(dir).keys).to eq(%w[rails-ai-context-app rails-ai-context-app-2])
+        FileUtils.rm_rf(File.join(dir, "\u0431\u043b\u043e\u0433"))
+
+        _out, err, status = init(dir, "1\n3\n")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(servers(dir)).to eq("rails-ai-context-app" => servers(dir)["rails-ai-context-app"])
+        expect(servers(dir)["rails-ai-context-app"]["args"].last).to eq("\u0448\u043e\u043f")
+      end
+    end
+
+    # JSON and TOML hold UTF-8 alone; the app named in Latin-1 used to fail
+    # every config, the other apps' entries with it.
+    it "leaves an app whose folder name is not UTF-8 out of the folder's MCP configs" do
+      Dir.mktmpdir do |dir|
+        begin
+          rails_app(File.join(dir, "caf\xE9".b))
+        rescue Errno::EILSEQ
+          skip "this filesystem refuses names that are not UTF-8"
+        end
+        rails_app(File.join(dir, "plain"))
+
+        _out, err, status = init(dir, "1\n3\n")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(servers(dir).keys).to eq(%w[rails-ai-context-plain])
+        expect(err.b).to include("is left out of this folder's MCP configs: its folder name is not UTF-8".b)
+      end
+    end
+
+    # A relative path that starts with a dash would be read as an option.
+    it "spells an app folder that starts with a dash from the folder" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "-api"))
+        rails_app(File.join(dir, "web"))
+
+        _out, err, status = init(dir, "1\n3\n")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(servers(dir)["rails-ai-context-api"]["args"]).to eq(%w[serve --app-path ./-api])
       end
     end
 

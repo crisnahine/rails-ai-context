@@ -757,9 +757,10 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
       end
 
       # An app that only a teammate's machine has, or one named through a
-      # variable the tool expands, is no app this run can judge gone; a
-      # numbered name is as likely a second entry made by hand.
-      it "keeps entries it cannot judge, and numbered ones" do
+      # variable the tool expands, is no app this run can judge gone. A
+      # numbered name the gem gave an app that has its own name now is its
+      # own leftover: kept, the app had two servers.
+      it "keeps entries it cannot judge, and drops a numbered one of its own" do
         FileUtils.mkdir_p(File.join(@dir, ".cursor"))
         File.write(File.join(@dir, ".cursor/mcp.json"), JSON.generate("mcpServers" => {
           "rails-ai-context-prod" => { "command" => "rails-ai-context", "args" => %w[serve --app-path ${userHome}/apps/prod] },
@@ -770,7 +771,7 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
         described_class.new(tools: [ :cursor ], output_dir: @dir, tool_mode: :mcp, servers: servers).call
 
         expect(JSON.parse(File.read(File.join(@dir, ".cursor/mcp.json")))["mcpServers"].keys)
-          .to eq(%w[rails-ai-context-prod rails-ai-context-shared rails-ai-context-a-2 rails-ai-context-a rails-ai-context-b])
+          .to eq(%w[rails-ai-context-prod rails-ai-context-shared rails-ai-context-a rails-ai-context-b])
       end
 
       # taplo and Even Better TOML wrap a long array, one element a line.
@@ -852,6 +853,11 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
 
         expect(result[:failed]).to eq([ File.join(dir, ".vscode/mcp.json") ])
         expect(File.read(File.join(dir, ".vscode/mcp.json"))).to eq(jsonc)
+        # json 3 refuses the comment json 2 passed over: named for it either way.
+        expect(result[:reasons][File.join(dir, ".vscode/mcp.json")]).to include("it holds comments")
+
+        File.write(File.join(dir, ".vscode/mcp.json"), jsonc.sub("  // mine\n", ""))
+        result = generate(dir, tools: [ :copilot ])
         expect(result[:reasons][File.join(dir, ".vscode/mcp.json")]).to include("does not parse as JSON")
       end
     end

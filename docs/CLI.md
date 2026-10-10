@@ -74,7 +74,8 @@ that reads an app finds it the way `bin/rails` and Bundler do: the working
 directory if it is an app, else the nearest app root above it (a directory with
 `config/application.rb`, `config/environment.rb`, or a `bin/rails` that boots an
 app or an engine; never `$HOME`, `node_modules` or a gem install), else the one
-app a level or two below it. A walk names the app it chose on stderr, as
+app a level or two below it - looked for everywhere but `/`, `$HOME` and the
+directories above it, which hold too much to search. A walk names the app it chose on stderr, as
 `[rails-ai-context] using app at a/`, so `serve` keeps stdout clean. A folder
 holding several apps is refused with one `--app-path` command per app, and
 `tool --list` there lists the tools without an app. The chosen root is the

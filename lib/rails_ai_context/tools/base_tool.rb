@@ -486,7 +486,7 @@ module RailsAiContext
           else reason ? "App boot failed (#{reason})" : "Static mode"
           end
           "[STATIC] #{headline}. Serving static analysis; runtime-only data is marked " \
-            "[UNAVAILABLE]. Run `rails-ai-context doctor` for details."
+            "[UNAVAILABLE]. Run `#{RailsAiContext.doctor_command}` for details."
         end
 
         # Tools that only make sense against a booted app must refuse in the
@@ -500,7 +500,7 @@ module RailsAiContext
           remedy = case RailsAiContext.static_kind
           when :requested then "Rerun without `--no-boot`."
           when :source_only then "This tree has no `config/environment.rb`; add one (or run from the app root) for runtime data."
-          else "Fix the boot failure (see `rails-ai-context doctor`)."
+          else "Fix the boot failure (see `#{RailsAiContext.doctor_command}`)."
           end
           text_response(
             "[UNAVAILABLE: static tier] #{capability} requires a booted Rails app" \
