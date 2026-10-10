@@ -660,6 +660,16 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
       expect(described_class.call.content.first[:text]).to include("+1 more")
     end
 
+    # A heading over every route named the filter whole, so the route whose
+    # action skips it read as guarded by it.
+    it "says which actions a filter runs on, and which skip it" do
+      controllers = described_class.cached_context[:controllers][:controllers]
+      controllers["PostsController"][:filters] << { kind: "before", name: "authenticate!", skipped: true, only: %w[create] }
+
+      text = described_class.call.content.first[:text]
+      expect(text).to include("filters: authenticate! (skipped on: create), audit, set_post (only: show, edit, update, destroy)")
+    end
+
     it "starts with the filter a prepend puts first" do
       previous = RailsAiContext.tier
       RailsAiContext.tier = :static
