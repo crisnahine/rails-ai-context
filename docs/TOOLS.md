@@ -224,6 +224,13 @@ that nests its own validator class stays a concern. Every concern is named by
 the constant its file declares, so an app inflection (`sdg/tag_list.rb`
 declaring `SDG::TagList`) is answered under the name the app has.
 
+The private methods are listed under their own heading, since an includer
+gets them too, and the listing counts them apart from the public ones. The
+macros an `included` block declares are listed, `helper_method` among them. An
+`include` under a condition (`include Pagy::Backend if defined?(Pagy::Backend)`)
+carries the condition; on a booted app it also says when the module is not
+defined, so was never mixed in.
+
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `name` | string | - | Concern name (e.g., `Trackable`, `Admin::ExportControllerConcern`). Omit to list all concerns |
