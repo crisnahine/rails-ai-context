@@ -86,11 +86,19 @@ module RailsAiContext
       return [] unless schema.is_a?(Hash)
 
       primary = (schema[:tables].is_a?(Hash) ? schema[:tables] : {}).map { |name, data| [ nil, name, data ] }
-      secondary = (schema[:secondary_databases].is_a?(Hash) ? schema[:secondary_databases] : {}).flat_map do |db, info|
-        tables = info.is_a?(Hash) && info[:tables].is_a?(Hash) ? info[:tables] : {}
-        tables.map { |name, data| [ db.to_s, name, data ] }
+      secondary = secondary_databases(schema).flat_map do |db, info|
+        info[:tables].map { |name, data| [ db.to_s, name, data ] }
       end
       primary + secondary
+    end
+
+    # Each database past the primary that the schema section read tables
+    # for, by its database.yml name.
+    def secondary_databases(schema)
+      found = schema.is_a?(Hash) ? schema[:secondary_databases] : nil
+      return {} unless found.is_a?(Hash)
+
+      found.select { |_, info| info.is_a?(Hash) && info[:tables].is_a?(Hash) }
     end
 
     # A name in two databases answers `database`'s when given, else the primary's.

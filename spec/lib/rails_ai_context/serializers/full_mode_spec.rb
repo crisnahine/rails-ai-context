@@ -108,5 +108,23 @@ RSpec.describe "full mode's root files" do
       expect(output).not_to include("## Overview", "### Puma")
       expect(output).to include("- Deployment: kamal", "- `posts_helper.rb` (no methods)")
     end
+
+    it "states every database's schema and migrations" do
+      context[:schema][:secondary_databases] = {
+        "analytics" => { adapter: "static_parse", total_tables: 1, note: "Parsed from db/analytics_schema.rb (from committed dump, not a live connection)",
+                         tables: { "page_views" => { columns: [ { name: "id", type: "integer" }, { name: "path", type: "string" } ] } } }
+      }
+      context[:migrations] = {
+        total: 3, schema_version: "20261009140925", pending: [], recent: [],
+        secondary_databases: { "analytics" => { total: 4, migrations_paths: [ "db/analytics_migrate" ],
+                                                pending: [ { version: "20261009141117", name: "AddBrowserToPageViews" } ] } }
+      }
+
+      expect(output).to include("## Database Schema: primary (1 table)", "## Database Schema: analytics (1 table)",
+                                "_Parsed from db/analytics_schema.rb (from committed dump, not a live connection)._",
+                                "### page\\_views\n\n`id` (integer), `path` (string)")
+      expect(output).to include("- Total: 3 (primary)", "- analytics: 4 total, 1 pending in db/analytics_migrate",
+                                "### Pending Migrations: analytics (1)\n- `20261009141117` AddBrowserToPageViews")
+    end
   end
 end

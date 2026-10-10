@@ -365,6 +365,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   heading stood over a blank line before the services and jobs it held
   and read as a section that came up empty; the names now follow it
   directly, and the blank line only separates them from a pattern list.
+- **The generated files count every database's tables and migrations.** In
+  an app with a second database, CLAUDE.md, AGENTS.md, `.cursorrules`,
+  copilot-instructions.md and the overview rule files counted the
+  primary's alone ("Migrations: 3 total" with 7 on disk), and
+  `.claude/rules/rails-schema.md` listed only the primary's tables, its
+  `paths:` missing `db/analytics_schema.rb` and `db/analytics_migrate/**`.
+  The Database and Migrations lines now name each other database after the
+  primary (`analytics: SQLite - 3 tables`, `analytics: 4 total, 1 pending`,
+  pending read from that database's dump as `rails_get_schema` reads it),
+  the schema rule lists each database's tables under its own heading and
+  triggers on each one's dump and migrations, and full mode's schema and
+  migrations sections cover them all. A Rails 8 app's Solid Queue, Cache
+  and Cable dumps count as the databases they are.
 - **Claude Code and Copilot read the tools guide once.** Both load the root
   file and the always-on tools rule file on every request, and both files
   carried the whole guide and the protocol, about 95 lines twice. With root

@@ -179,6 +179,80 @@ RSpec.describe RailsAiContext::Introspectors::MigrationIntrospector do
     end
   end
 
+  # A multi-database app's other migrations directories hold migrations the
+  # primary's count leaves out: "3 total" on an app with 6.
+  describe "other databases" do
+    def write_app(dir, files)
+      files.each do |path, body|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+        File.write(File.join(dir, path), body)
+      end
+    end
+
+    let(:database_yml) do
+      <<~YAML
+        #{RailsAiContext.environment_name}:
+          primary:
+            adapter: sqlite3
+            database: db/dev.sqlite3
+          analytics:
+            adapter: sqlite3
+            database: db/analytics.sqlite3
+            migrations_paths: db/analytics_migrate
+          cache:
+            adapter: sqlite3
+            database: db/cache.sqlite3
+      YAML
+    end
+
+    it "counts each one's own migrations, pending against its own dump" do
+      hide_const("ActiveRecord")
+
+      Dir.mktmpdir do |dir|
+        write_app(dir, "config/database.yml" => database_yml,
+                       "db/migrate/20260101000001_create_users.rb" => "class CreateUsers; end\n",
+                       "db/schema.rb" => "ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do\nend\n",
+                       "db/analytics_migrate/20260101000002_create_page_views.rb" => "class CreatePageViews; end\n",
+                       "db/analytics_migrate/20260101000003_add_browser_to_page_views.rb" => "class AddBrowserToPageViews; end\n",
+                       "db/analytics_schema.rb" => "ActiveRecord::Schema[8.1].define(version: 2026_01_01_000002) do\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:total]).to eq(1)
+        expect(result[:pending]).to eq([])
+        # cache shares the primary's db/migrate, so it has no files of its own to count.
+        expect(result[:secondary_databases]).to eq(
+          "analytics" => {
+            total: 2, migrations_paths: [ "db/analytics_migrate" ],
+            pending: [ { version: "20260101000003", name: "AddBrowserToPageViews" } ]
+          }
+        )
+      end
+    end
+
+    it "says nothing pending for a database whose dump is not written yet" do
+      hide_const("ActiveRecord")
+
+      Dir.mktmpdir do |dir|
+        write_app(dir, "config/database.yml" => database_yml,
+                       "db/analytics_migrate/20260101000002_create_page_views.rb" => "class CreatePageViews; end\n")
+
+        analytics = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:secondary_databases]["analytics"]
+
+        expect(analytics[:total]).to eq(1)
+        expect(analytics).not_to have_key(:pending)
+      end
+    end
+
+    it "adds nothing to a single-database app" do
+      Dir.mktmpdir do |dir|
+        write_app(dir, "db/migrate/20260101000001_create_users.rb" => "class CreateUsers; end\n")
+
+        expect(described_class.new(RailsAiContext::StaticApp.new(dir)).call).not_to have_key(:secondary_databases)
+      end
+    end
+  end
+
   it "lists the migrations in the migrations_paths database.yml names" do
     Dir.mktmpdir do |dir|
       FileUtils.mkdir_p(%w[config db/main_migrate].map { |path| File.join(dir, path) })

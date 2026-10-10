@@ -51,6 +51,15 @@ module RailsAiContext
       format, path = Introspectors::SchemaDumpPath.present(root)
       return nil unless format == :sql
 
+      recorded(format, path)
+    end
+
+    # What one dump records as applied: structure.sql's whole set, schema.rb's
+    # newest version. A secondary database's dump answers for that database.
+    def self.recorded(format, path)
+      return nil unless path && File.exist?(path)
+      return from_schema_rb(path) unless format == :sql
+
       content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
       return nil unless content
 

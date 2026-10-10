@@ -566,9 +566,16 @@ module RailsAiContext
           next if parsed[:tables].blank?
 
           parsed[:note] = "Parsed from #{relative_dump_path(path)} (from committed dump, not a live connection)"
-          found[name] = parsed
+          found[name] = parsed.merge(database_files(path, migrate_dir_for_dump(path)))
         end
         replay_secondary_migrations(dumps)
+      end
+
+      # Where a secondary database's schema lives, app-relative, so a rule
+      # file can name its dump and the migrations directories it has.
+      def database_files(dump, migrate_dirs)
+        dirs = migrate_dirs.select { |dir| Dir.exist?(dir) }.map { |dir| relative_dump_path(dir) }
+        { dump: (relative_dump_path(dump) if dump), migrations_paths: (dirs if dirs.any?) }.compact
       end
 
       # A database whose dump is not written yet answers from its own migrations_paths.
@@ -586,7 +593,7 @@ module RailsAiContext
           dumps[name] = {
             adapter: "static_parse", tables: tables, total_tables: SchemaConventions.table_count(tables),
             note: "Reconstructed from the migrations in #{dirs.map { |dir| relative_dump_path(dir) }.join(', ')} (#{connection_state}, no #{dump ? relative_dump_path(dump) : "#{name}_schema.rb"})"
-          }
+          }.merge(database_files(dump, dirs))
         end
         dumps
       end

@@ -40,6 +40,49 @@ RSpec.describe RailsAiContext::Serializers::SectionFacts do
     end
   end
 
+  # A Rails 7.1 app with a SQLite analytics database beside its PostgreSQL
+  # primary: the counts named the primary's alone.
+  describe "every database" do
+    let(:ctx) do
+      {
+        schema: {
+          adapter: "postgresql", total_tables: 3, tables: {},
+          secondary_databases: {
+            "analytics" => { adapter: "static_parse", total_tables: 3, tables: { "events" => {}, "page_views" => {}, "settings" => {} } },
+            "queue" => { adapter: "static_parse", total_tables: 1, tables: { "solid_queue_jobs" => {} } }
+          }
+        },
+        multi_database: { databases: [ { name: "primary", adapter: "postgresql" }, { name: "analytics", adapter: "sqlite3" } ] },
+        migrations: {
+          total: 3, pending: [],
+          secondary_databases: { "analytics" => { total: 4, pending: [ { version: "20261009141117", name: "AddBrowserToPageViews" } ] } }
+        }
+      }
+    end
+
+    it "counts each database's tables, named the way database.yml names it" do
+      expect(described_class.database_line(ctx))
+        .to eq("- Database: PostgreSQL - 3 tables; analytics: SQLite - 3 tables; queue: 1 table")
+    end
+
+    it "counts each database's migrations" do
+      expect(described_class.migrations_line(ctx)).to eq("- Migrations: 3 total, 0 pending; analytics: 4 total, 1 pending")
+    end
+
+    it "gives no pending count where nothing says what was applied" do
+      ctx[:migrations] = { total: 3, secondary_databases: { "analytics" => { total: 4 } } }
+
+      expect(described_class.migrations_line(ctx)).to eq("- Migrations: 3 total; analytics: 4 total")
+    end
+
+    it "reads a single-database app as before" do
+      single = { schema: { adapter: "postgresql", total_tables: 3, tables: {} }, migrations: { total: 3, pending: [] } }
+
+      expect(described_class.database_line(single)).to eq("- Database: PostgreSQL - 3 tables")
+      expect(described_class.migrations_line(single)).to eq("- Migrations: 3 total, 0 pending")
+    end
+  end
+
   describe ".assets_line" do
     it "answers nil for the fixture, whose assets section reports no pipeline" do
       expect(described_class.assets_line(context)).to be_nil

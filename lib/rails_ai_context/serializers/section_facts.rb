@@ -33,11 +33,36 @@ module RailsAiContext
         models.any? ? "- Models: #{models.size}" : nil
       end
 
+      # The primary first, then each other database by its database.yml name:
+      # a count that leaves one out undercounts the app.
       def database_line(ctx)
         schema = Payload.section(ctx, :schema)
         return nil unless schema
 
-        "- Database: #{SchemaAdapter.label(ctx)} - #{CountPhrase.call(schema[:total_tables].to_i, "table")}"
+        parts = [ "#{SchemaAdapter.label(ctx)} - #{CountPhrase.call(schema[:total_tables].to_i, "table")}" ]
+        Payload.secondary_databases(schema).each do |name, db|
+          tables = CountPhrase.call(db[:total_tables].to_i, "table")
+          adapter = SchemaAdapter.secondary_label(ctx, name, db)
+          parts << "#{name}: #{adapter ? "#{adapter} - #{tables}" : tables}"
+        end
+        "- Database: #{parts.join('; ')}"
+      end
+
+      # The same databases, the ones with migrations of their own.
+      def migrations_line(ctx)
+        migrations = Payload.section(ctx, :migrations)
+        return nil unless migrations
+
+        pending = Payload.pending_migrations(ctx) if migrations.key?(:pending)
+        parts = [ migration_counts(migrations[:total], pending) ]
+        secondary = migrations[:secondary_databases].is_a?(Hash) ? migrations[:secondary_databases] : {}
+        secondary.each { |name, db| parts << "#{name}: #{migration_counts(db[:total], db[:pending])}" }
+        "- Migrations: #{parts.join('; ')}"
+      end
+
+      # No pending count when nothing says what has been applied: zero would read as up to date.
+      def migration_counts(total, pending)
+        pending ? "#{total.to_i} total, #{pending.size} pending" : "#{total.to_i} total"
       end
 
       def auth_line(ctx)

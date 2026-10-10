@@ -246,6 +246,91 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
     end
   end
 
+  # A Rails 7.1 app with a SQLite analytics database beside its PostgreSQL
+  # primary: the rule listed the primary's tables, and its paths missed
+  # db/analytics_schema.rb and db/analytics_migrate/**.
+  describe "an app with more than one database" do
+    let(:multi_context) do
+      serializer_context(
+        schema: {
+          adapter: "postgresql", total_tables: 2,
+          tables: {
+            "users" => { columns: [ { name: "id" }, { name: "email", type: "string" } ], primary_key: "id" },
+            "settings" => { columns: [ { name: "id" }, { name: "key", type: "string" } ], primary_key: "id" }
+          },
+          secondary_databases: {
+            "analytics" => {
+              adapter: "static_parse", total_tables: 2,
+              tables: {
+                "page_views" => { columns: [ { name: "id" }, { name: "path", type: "string" } ], primary_key: "id" },
+                "settings" => { columns: [ { name: "id" }, { name: "metric", type: "string" } ], primary_key: "id" }
+              },
+              note: "Parsed from db/analytics_schema.rb (from committed dump, not a live connection)",
+              dump: "db/analytics_schema.rb", migrations_paths: [ "db/analytics_migrate" ]
+            }
+          }
+        },
+        multi_database: { databases: [ { name: "primary", adapter: "postgresql" }, { name: "analytics", adapter: "sqlite3" } ] },
+        models: {
+          "Setting" => { associations: [], validations: [], table_name: "settings", enums: { "scope" => { "global" => 0 } } },
+          "Analytics::Setting" => { associations: [], validations: [], table_name: "settings", database: { writing: "analytics" },
+                                    enums: { "period" => { "daily" => 0, "weekly" => 1 } } }
+        }
+      )
+    end
+
+    def schema_rule(ctx)
+      Dir.mktmpdir do |dir|
+        described_class.new(ctx).call(dir)
+        File.read(File.join(dir, ".claude", "rules", "rails-schema.md"))
+      end
+    end
+
+    it "triggers on every database's dump and migrations" do
+      expect(schema_rule(multi_context)).to start_with(<<~FRONTMATTER)
+        ---
+        paths:
+          - "db/schema.rb"
+          - "db/migrate/**"
+          - "db/analytics_schema.rb"
+          - "db/analytics_migrate/**"
+        ---
+      FRONTMATTER
+    end
+
+    it "lists every database's tables under a heading naming the database" do
+      content = schema_rule(multi_context)
+
+      expect(content).to include("# Database Tables (4)")
+      expect(content).to include("## primary (PostgreSQL, 2 tables)\n\n- **settings** (2 cols) - key:string\n")
+      expect(content).to include("## analytics (SQLite, 2 tables)\n\n" \
+                                 "_Parsed from db/analytics_schema.rb (from committed dump, not a live connection)._\n\n" \
+                                 "- **page_views** (2 cols) - path:string\n- **settings** (2 cols) - metric:string\n")
+    end
+
+    it "puts each settings table's enums under its own database" do
+      primary, analytics = schema_rule(multi_context).split("## analytics")
+
+      expect(primary).to include("scope: global")
+      expect(primary).not_to include("period:")
+      expect(analytics).to include("period: daily, weekly")
+      expect(analytics).not_to include("scope:")
+    end
+
+    it "names the database when only another database has tables" do
+      multi_context[:schema][:tables] = {}
+
+      content = schema_rule(multi_context)
+
+      expect(content).to include("# Database Tables (2)", "## analytics (SQLite, 2 tables)")
+      expect(content).not_to include("## primary")
+    end
+
+    it "keeps a single-database app's rule without database headings" do
+      expect(schema_rule(context)).not_to include("## primary")
+    end
+  end
+
   it "names the files it did not generate and why" do
     context[:models] = {}
     context[:schema] = { tables: {} }
