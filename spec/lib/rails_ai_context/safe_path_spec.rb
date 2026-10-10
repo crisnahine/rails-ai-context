@@ -300,5 +300,21 @@ RSpec.describe RailsAiContext::SafePath do
         expect(described_class.canonical(File.join(dir, "link/../link/app"))).to eq(File.join(real, "target/app"))
       end
     end
+
+    # Dir.children hands a Latin-1 name back as a broken UTF-8 string and
+    # realpath answers it as bytes. Joining those raised, on every Ruby for a
+    # UTF-8 name below, and on 3.1 for any path, whose delete_prefix left a
+    # broken string whole.
+    it "spells a place under a folder whose name is not UTF-8, there yet or not" do
+      Dir.mktmpdir do |dir|
+        latin = File.join(File.realpath(dir).b, "caf\xE9".b)
+        Dir.mkdir(latin)
+        broken = latin.dup.force_encoding(Encoding::UTF_8)
+
+        expect(described_class.canonical(broken).b).to eq(latin)
+        expect(described_class.canonical(File.join(broken, "app")).b).to eq(File.join(latin, "app"))
+        expect(described_class.canonical(File.join(broken, "\u0448\u043e\u043f")).b).to eq(File.join(latin, "\u0448\u043e\u043f".b))
+      end
+    end
   end
 end
