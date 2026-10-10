@@ -71,6 +71,15 @@ RSpec.describe RailsAiContext::GemLock do
     expect(lock.path_remotes).to eq([ "engines/billing" ])
   end
 
+  # The binary hands a command to the app's own copy of the gem, which it
+  # finds through the section that copy is locked from.
+  it "names the source each gem is locked from" do
+    expect(lock.source("devise")).to eq([ :git ])
+    expect(lock.source("billing")).to eq([ :path, "engines/billing" ])
+    expect(lock.source("rails")).to eq([ :gem ])
+    expect(lock.source("sidekiq")).to be_nil
+  end
+
   it "names a PATH remote in a lockfile with CRLF line ends" do
     File.write(File.join(@root, "Gemfile.lock"), lock_text.gsub("\n", "\r\n"))
 

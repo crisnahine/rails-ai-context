@@ -67,6 +67,9 @@ end
 # copy runs when no installed spec names it.
 EXE_PATH = File.expand_path(__FILE__).freeze
 
+# The command as typed, for the run a handoff to the app's bundled copy starts.
+ORIGINAL_ARGV = ARGV.dup.freeze
+
 # After one of these tools' names `--environment` is its filter, never RAILS_ENV: this is
 # decided before boot, when no tool schema can load. cli_smoke_spec holds it to the schemas.
 ENVIRONMENT_PARAM_TOOLS = %w[env_config].freeze
@@ -792,7 +795,22 @@ class RailsAiContextCLI < Thor
       $stderr.puts app_root.notice(result, cwd) if result.walked
       warning = app_root.bundle_warning(result.root, cwd)
       $stderr.puts warning if warning
+      hand_off_to_bundle!(result.root, cwd)
       result
+    end
+
+    # The app's bundle carries its own copy of the gem: the command runs as
+    # `bundle exec rails-ai-context` would run it, from where it was typed,
+    # so one copy answers - the one the app's MCP configs start. When bundle
+    # cannot be started this copy carries on.
+    def hand_off_to_bundle!(root, cwd)
+      handoff = app_root.bundled_handoff(root) or return
+      bundle = Gem.bin_path("bundler", "bundle")
+      $stderr.puts "[rails-ai-context] This app's bundle has rails-ai-context #{handoff.version}; " \
+                   "running that copy, as bundle exec does."
+      exec(handoff.env, RbConfig.ruby, bundle, "exec", "rails-ai-context", *ORIGINAL_ARGV, chdir: cwd)
+    rescue Gem::Exception, SystemCallError
+      nil
     end
 
     def refuse_no_app!

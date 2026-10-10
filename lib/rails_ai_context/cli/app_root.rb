@@ -21,6 +21,11 @@ module RailsAiContext
       # app above it either, or the one --app-path named. Without
       # --app-path, one app below is root; several leave root nil. cwd is
       # where the caller stood.
+      # Set on the run a handoff starts, so the bundled copy never hands off again.
+      HANDOFF_ENV = "RAILS_AI_CONTEXT_HANDOFF"
+
+      Handoff = Struct.new(:env, :version, keyword_init: true)
+
       Result = Struct.new(:root, :walked, :below, :base, :explicit, :cwd, keyword_init: true) do
         # A folder that is no app and holds apps below it: what `init` sets
         # up as a whole, where every other command needs exactly one.
@@ -277,6 +282,52 @@ module RailsAiContext
       rescue StandardError
         nil
       end
+
+      # When the app's own bundle carries another copy of rails-ai-context,
+      # the run the binary hands the command to: that copy, as `bundle exec`
+      # runs it, which is the copy the app's MCP configs start. Run from here
+      # instead, two copies met in one process - this one loads its first
+      # files before the boot, the bundle's load the rest over them ("already
+      # initialized constant") - and the command ran half of each.
+      #
+      # nil when this process is that copy, under bundle exec or as the same
+      # installed files, and when the bundled copy cannot be found installed:
+      # a bundle not installed yet fails to boot, which the static tier
+      # answers, where bundle exec would only fail.
+      def self.bundled_handoff(root)
+        return nil if ENV["BUNDLE_BIN_PATH"] || ENV[HANDOFF_ENV]
+
+        require_relative "../gem_lock"
+        lock = GemLock.for(root)
+        version = lock.version("rails-ai-context") or return nil
+        gemfile = GemLock.bundle(root).gemfile
+        return nil unless gemfile && File.file?(gemfile)
+
+        copy = bundled_copy(lock.source("rails-ai-context"), version, gemfile)
+        return nil if copy.nil? || real(copy).b == real(OWN_COPY).b
+
+        Handoff.new(env: { "BUNDLE_GEMFILE" => File.expand_path(gemfile), HANDOFF_ENV => "1" }, version: version)
+      rescue StandardError
+        nil
+      end
+
+      # This copy's root, as a bundle would name it.
+      OWN_COPY = File.expand_path("../../..", __dir__)
+
+      # The directory the bundle loads the gem from: a path source's, or the
+      # installed gem a rubygems source resolves to. A git checkout, or one
+      # installed under a vendored bundle path, is nil: its install is not
+      # seen from here.
+      def self.bundled_copy(source, version, gemfile)
+        case source&.first
+        when :path
+          dir = File.expand_path(source[1].to_s, File.dirname(gemfile))
+          dir if File.file?(File.join(dir, "rails-ai-context.gemspec"))
+        when :gem
+          Gem::Specification.find_all_by_name("rails-ai-context", "= #{version}").first&.full_gem_path
+        end
+      end
+      private_class_method :bundled_copy
 
       # Whether config/boot.rb points Bundler at this Gemfile.
       def self.boot_bundle?(root, gemfile)
