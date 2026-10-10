@@ -70,6 +70,10 @@ EXE_PATH = File.expand_path(__FILE__).freeze
 # The command as typed, for the run a handoff to the app's bundled copy starts.
 ORIGINAL_ARGV = ARGV.dup.freeze
 
+# The environment this binary was started in, before an app's boot sets up
+# the app's bundle in it.
+STARTING_ENV = ENV.to_h.freeze
+
 # After one of these tools' names `--environment` is its filter, never RAILS_ENV: this is
 # decided before boot, when no tool schema can load. cli_smoke_spec holds it to the schemas.
 ENVIRONMENT_PARAM_TOOLS = %w[env_config].freeze
@@ -567,9 +571,24 @@ class RailsAiContextCLI < Thor
     # bundle can be another app's (`init --app-path ../b` run from a).
     def write_mcp_configs(ai_tools, tool_mode, root: Dir.pwd, servers: nil)
       standalone = servers ? nil : ::RailsAiContext::InstallMode.standalone?(root: root)
-      ::RailsAiContext::Install::Program.write_mcp_configs(
-        program_surface, tools: ai_tools, tool_mode: tool_mode, root: root, servers: servers, standalone: standalone
-      )
+      in_starting_env do
+        ::RailsAiContext::Install::Program.write_mcp_configs(
+          program_surface, tools: ai_tools, tool_mode: tool_mode, root: root, servers: servers, standalone: standalone
+        )
+      end
+    end
+
+    # Codex's config copies PATH and the gem variables out of this process
+    # for the server Codex starts, so they are copied as the binary was
+    # started. The app's boot sets up its bundle in this process, putting
+    # GEM_HOME at the bundle's path and the bundle's bin directory first on
+    # PATH, which no shell running the binary outside that bundle has.
+    def in_starting_env
+      now = ENV.to_h
+      ENV.replace(STARTING_ENV)
+      yield
+    ensure
+      ENV.replace(now) if now
     end
 
     # A folder of apps, set up as a whole. The AI tools are chosen once; each

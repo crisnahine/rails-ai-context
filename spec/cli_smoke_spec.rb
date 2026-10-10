@@ -1080,6 +1080,32 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       end
     end
 
+    # Codex's config copies PATH and the gem variables out of the process,
+    # and init writes it after the boot, whose Bundler.setup puts the app's
+    # bundle into them.
+    it "writes Codex's environment as the binary was started in, not as the app's boot left it" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "application.rb"), "")
+        # What Bundler.setup leaves in the environment, then a boot that fails into the static tier.
+        File.write(File.join(dir, "config", "environment.rb"), <<~RUBY)
+          ENV["BUNDLE_BIN_PATH"] = "/the/bundle/exe/bundle"
+          ENV["GEM_HOME"] = "/the/bundle"
+          ENV["PATH"] = "/the/bundle/bin" + File::PATH_SEPARATOR + ENV["PATH"]
+          raise "boom"
+        RUBY
+
+        _out, err, status = Open3.capture3("ruby", "-I", lib, exe, "init", chdir: dir, stdin_data: "5\n1\n")
+
+        expect(status.exitstatus).to eq(0), err
+        codex = File.read(File.join(dir, ".codex", "config.toml"))
+        expect(codex).not_to include("/the/bundle")
+        expect(codex).to include(%(PATH = #{JSON.generate(ENV.fetch("PATH"))}))
+      end
+    end
+
     # `rails ai:context` brings the MCP configs up to date on every run; the
     # binary's `context` left an app taken out of its bundle with context
     # files naming the binary beside configs that still started
