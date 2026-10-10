@@ -47,7 +47,10 @@ def boot_quietly
   require "rails_ai_context"
 end unless defined?(boot_quietly)
 
+# A stdio client gives up on `initialize` after about 30 seconds, so a hung
+# boot has to fail before that for the client to see why (STDIO_TIMEOUT).
 def boot_and_serve(transport)
+  RailsAiContext::BootManager.default_timeout = RailsAiContext::BootManager::STDIO_TIMEOUT if transport == :stdio
   boot_quietly
   RailsAiContext.start_mcp_server(transport: transport)
 end unless defined?(boot_and_serve)

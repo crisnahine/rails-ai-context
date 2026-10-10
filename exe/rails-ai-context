@@ -266,6 +266,14 @@ class RailsAiContextCLI < Thor
         exit 1
       end
 
+      # A stdio client is waiting for the answer to `initialize` and gives up
+      # after about 30 seconds; BootManager::STDIO_TIMEOUT says why the boot
+      # gets less than that.
+      if options[:transport] == "stdio"
+        entry_boot
+        ::RailsAiContext::BootManager.default_timeout = ::RailsAiContext::BootManager::STDIO_TIMEOUT
+      end
+
       boot_rails!(command: "serve", allow_static: true)
 
       transport = options[:transport].to_sym

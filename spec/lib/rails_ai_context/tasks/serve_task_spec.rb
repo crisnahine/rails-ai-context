@@ -14,12 +14,24 @@ RSpec.describe "ai:serve rake tasks" do
     Rake::Task.define_task(:environment)
   end
 
-  after { Rake.application = @previous_application }
+  after do
+    Rake.application = @previous_application
+    RailsAiContext::BootManager.default_timeout = nil
+  end
 
-  { "ai:serve" => :stdio, "ai:serve_http" => :http }.each do |task_name, transport|
-    it "guards the boot and starts the #{transport} transport" do
+  around do |example|
+    original = ENV.delete("RAILS_AI_CONTEXT_BOOT_TIMEOUT")
+    example.run
+  ensure
+    ENV["RAILS_AI_CONTEXT_BOOT_TIMEOUT"] = original if original
+  end
+
+  # A stdio client gives up on `initialize` after about 30 seconds, so the
+  # stdio task's boot gets less than that; an HTTP client is not waiting.
+  { "ai:serve" => [ :stdio, 20 ], "ai:serve_http" => [ :http, 60 ] }.each do |task_name, (transport, timeout)|
+    it "guards the boot for #{timeout}s and starts the #{transport} transport" do
       expect(RailsAiContext::BootManager).to receive(:guard)
-        .with(timeout: RailsAiContext::BootManager.env_timeout)
+        .with(timeout: timeout)
         .and_return(RailsAiContext::BootManager::Result.new(status: :booted))
       expect(RailsAiContext).to receive(:start_mcp_server).with(transport: transport)
 

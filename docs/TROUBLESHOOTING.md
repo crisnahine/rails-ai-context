@@ -105,6 +105,19 @@ ruby -v
 
 For Codex CLI specifically, the env section in `.codex/config.toml` must match your current Ruby environment. Re-run install if you changed Ruby versions.
 
+### Answers say "Boot did not finish within 20s"
+
+The app's boot hung, usually an initializer waiting on a service that is
+down (Redis, Elasticsearch, a secrets store). A stdio server gives the boot 20
+seconds, because its client stops waiting for the first answer after about 30
+(Claude Code, the MCP Inspector), and then serves the static tier; every other
+command gives it 60. Start the service, or, for an app that is healthy but
+slow to boot, raise both limits in the server's MCP entry: the boot's with
+`RAILS_AI_CONTEXT_BOOT_TIMEOUT` (seconds) in its `env`, and the client's with
+its own setting (Claude Code reads `MCP_TIMEOUT`, in milliseconds). Raising
+only the boot's leaves a client that gives up first. `rails ai:serve` has no
+static tier, so it exits with the same message instead.
+
 ### A server set up for a folder of apps fails to start
 
 `rails-ai-context init` run in a folder of apps writes entries that name each app relative to that folder (`--app-path shop`, and for an in-Gemfile app `BUNDLE_GEMFILE=shop/Gemfile`, or the monorepo's shared Gemfile its `config/boot.rb` names). Claude Code, Codex and OpenCode start a server in the folder they were launched in, so:

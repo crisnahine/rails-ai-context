@@ -31,6 +31,25 @@ module RailsAiContext
 
     DEFAULT_TIMEOUT = 60
 
+    # A stdio server's client is waiting for the answer to `initialize`, and
+    # Claude Code and the MCP Inspector give up after about 30 seconds. So a
+    # stdio server bounds the boot below that, and a hung boot ends in the
+    # static tier (from rake, in an error the client can show) while the
+    # client still listens. Answering `initialize` before the boot instead
+    # would load the MCP SDK and json ahead of the app's bundle, and the
+    # tools/list that follows depends on the app's own config.
+    STDIO_TIMEOUT = 20
+
+    class << self
+      # The limit when RAILS_AI_CONTEXT_BOOT_TIMEOUT is unset. A stdio server
+      # sets it to STDIO_TIMEOUT before it boots.
+      attr_writer :default_timeout
+
+      def default_timeout
+        @default_timeout || DEFAULT_TIMEOUT
+      end
+    end
+
     # Bundler names every gem the bundle lacks; an app missing its whole bundle
     # is thousands of characters. DEBUG keeps the full list.
     MISSING_GEMS = /\ACould not find ((?:[^\s,]+, )+[^\s,]+) in (.+)\z/
@@ -151,10 +170,10 @@ module RailsAiContext
     # One parse of RAILS_AI_CONTEXT_BOOT_TIMEOUT for every boot surface, so a
     # bad value degrades the same way everywhere.
     def self.env_timeout
-      Integer(ENV.fetch("RAILS_AI_CONTEXT_BOOT_TIMEOUT", DEFAULT_TIMEOUT))
+      Integer(ENV.fetch("RAILS_AI_CONTEXT_BOOT_TIMEOUT", default_timeout))
     rescue ArgumentError
-      $stderr.puts "[rails-ai-context] WARNING: RAILS_AI_CONTEXT_BOOT_TIMEOUT=#{ENV['RAILS_AI_CONTEXT_BOOT_TIMEOUT']} is not a number - using #{DEFAULT_TIMEOUT}s"
-      DEFAULT_TIMEOUT
+      $stderr.puts "[rails-ai-context] WARNING: RAILS_AI_CONTEXT_BOOT_TIMEOUT=#{ENV['RAILS_AI_CONTEXT_BOOT_TIMEOUT']} is not a number - using #{default_timeout}s"
+      default_timeout
     end
   end
 end
