@@ -99,13 +99,15 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
           Post: {
             table_name: "posts",
             associations: [
-              { macro: :has_many, name: :comments, class_name: "Comment", foreign_key: "commentable_id" }
+              { macro: :has_many, name: :comments, class_name: "Comment", foreign_key: "commentable_id",
+                declared_options: { "as" => ":commentable" } }
             ]
           },
           Photo: {
             table_name: "photos",
             associations: [
-              { macro: :has_many, name: :comments, class_name: "Comment", foreign_key: "commentable_id" }
+              { macro: :has_many, name: :comments, class_name: "Comment", foreign_key: "commentable_id",
+                options: { as: :commentable } }
             ]
           }
         }
@@ -136,6 +138,25 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
         comment_section = text.split("## ").find { |s| s.start_with?("Comment") }
         expect(comment_section).to include("Post")
         expect(comment_section).to include("Photo")
+      end
+
+      # Tag reached the interface's key through Tagging and was drawn as
+      # implementing it; only `as:` makes a model one.
+      it "counts only a model that declares `as:` as implementing the interface" do
+        poly_models[:Tag] = {
+          table_name: "tags",
+          associations: [
+            { macro: :has_many, name: :comments, class_name: "Comment", foreign_key: "tag_id" },
+            { macro: :has_many, name: :posts, class_name: "Post", through: "comments", foreign_key: "commentable_id",
+              source_type: "Post" }
+          ]
+        }
+
+        text = described_class.call(format: "text").content.first[:text]
+        mermaid = described_class.call(format: "mermaid").content.first[:text]
+
+        expect(text).to include("belongs_to → Commentable (polymorphic) [Post, Photo]")
+        expect(mermaid).not_to include("Tag -.->|implements|")
       end
     end
 
@@ -240,14 +261,37 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
       end
     end
 
-    context "no cycles present" do
-      it "shows no cycles section when no cycles found" do
-        response = described_class.call(format: "text", show_cycles: true)
-        text = response.content.first[:text]
-        # The standard test data has User->Post->Comment which are bidirectional
-        # but DFS from the test data may or may not detect cycles depending on
-        # the direction. We just verify the section renders cleanly.
-        expect(text).to include("Dependency Graph")
+    # A belongs_to and the has_many at its other end are one foreign key, and
+    # sixteen such pairs on one app were listed as circular dependencies.
+    context "models joined both ways" do
+      it "lists no cycle for an association and its inverse" do
+        text = described_class.call(format: "text", show_cycles: true).content.first[:text]
+
+        expect(text).to include("## Circular Dependencies\nNone.")
+        expect(text).to include("**Cycles:** 0")
+      end
+
+      it "lists no cycle for a model whose key points at its own table" do
+        models_data[:Category] = {
+          table_name: "categories",
+          associations: [
+            { macro: :belongs_to, name: :parent, class_name: "Category", foreign_key: "parent_id" },
+            { macro: :has_many, name: :children, class_name: "Category", foreign_key: "parent_id" }
+          ]
+        }
+
+        text = described_class.call(format: "mermaid", show_cycles: true).content.first[:text]
+
+        expect(text).to include("## Circular Dependencies\nNone.")
+      end
+
+      it "lists the cycle two foreign keys make between two tables" do
+        models_data[:User][:associations] << { macro: :belongs_to, name: :pinned_post, class_name: "Post", foreign_key: "pinned_post_id" }
+
+        text = described_class.call(format: "text", show_cycles: true).content.first[:text]
+
+        expect(text).to match(/^- (User → Post → User|Post → User → Post)$/)
+        expect(text).to include("**Cycles:** 1")
       end
     end
 
