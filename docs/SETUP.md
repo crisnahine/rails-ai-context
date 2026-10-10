@@ -59,7 +59,7 @@ This creates:
 - `.claude/rules/rails-schema.md` - Schema rules (loaded when editing the schema dump or `db/migrate/` files)
 - `.claude/rules/rails-models.md` - Model rules (loaded when editing `app/models/`)
 - `.claude/rules/rails-context.md` - General context rules (always loaded)
-- `.claude/rules/rails-mcp-tools.md` - Tool reference (always loaded)
+- `.claude/rules/rails-mcp-tools.md` - Tool reference: detail levels and the table of every tool (always loaded; the protocol, workflows and rules are in CLAUDE.md, so they are not loaded twice, and here only when `generate_root_files` is off)
 - `.claude/rules/rails-components.md` - Component rules (loaded when editing `app/components/` or `app/views/components/`, written only when the app has view components)
 
 Keeping your own `CLAUDE.md`? Add `--mcp-only` and only `.mcp.json` is
@@ -156,7 +156,7 @@ This creates:
 - `.github/instructions/rails-models.instructions.md` - Model rules
 - `.github/instructions/rails-controllers.instructions.md` - Controller rules
 - `.github/instructions/rails-context.instructions.md` - Context rules
-- `.github/instructions/rails-mcp-tools.instructions.md` - Tool reference
+- `.github/instructions/rails-mcp-tools.instructions.md` - Tool reference: detail levels and the table of every tool (the protocol and workflows are in copilot-instructions.md, and here only when `generate_root_files` is off)
 
 ### Manual MCP config
 

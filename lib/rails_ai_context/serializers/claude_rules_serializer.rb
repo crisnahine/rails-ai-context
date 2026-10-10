@@ -234,8 +234,11 @@ module RailsAiContext
         lines.join("\n")
       end
 
+      # Always loaded beside CLAUDE.md, which carries the guide whenever root
+      # files are on; without CLAUDE.md this is the only place for the guide.
       def render_mcp_tools_reference
-        render_tools_guide.join("\n")
+        guide = RailsAiContext.configuration.generate_root_files ? render_tools_reference("CLAUDE.md") : render_tools_guide
+        guide.join("\n")
       end
     end
   end

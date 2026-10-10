@@ -204,7 +204,7 @@ A file whose section has nothing in it is not written. An app with no models get
 | `.claude/rules/rails-schema.md` | Database table listing | Auto-loaded by Claude Code alongside CLAUDE.md. |
 | `.claude/rules/rails-models.md` | Model listing with associations | Auto-loaded by Claude Code alongside CLAUDE.md. |
 | `.claude/rules/rails-context.md` | Project context and conventions | Auto-loaded by Claude Code alongside CLAUDE.md. |
-| `.claude/rules/rails-mcp-tools.md` | Full MCP tool reference | Parameters, detail levels, pagination, workflow guide. |
+| `.claude/rules/rails-mcp-tools.md` | Tool reference | Detail levels and the table of every tool. Loaded beside CLAUDE.md, which carries the protocol, the workflows and the rules, so they are not read twice; with `generate_root_files` off it carries them itself. |
 | `.claude/rules/rails-components.md` | View component listing | Written only when the app has view components. |
 
 ### OpenCode (3 files)
@@ -233,7 +233,7 @@ A file whose section has nothing in it is not written. An app with no models get
 | `.github/instructions/rails-models.instructions.md` | Model context | `applyTo: app/models/**/*.rb` - loaded when editing models. |
 | `.github/instructions/rails-controllers.instructions.md` | Controller context | `applyTo: app/controllers/**/*.rb` - loaded when editing controllers. |
 | `.github/instructions/rails-context.instructions.md` | Project context and conventions | `applyTo: **/*` - loaded everywhere. |
-| `.github/instructions/rails-mcp-tools.instructions.md` | MCP tool reference | `applyTo: **/*` - loaded everywhere. |
+| `.github/instructions/rails-mcp-tools.instructions.md` | Tool reference | `applyTo: **/*` - loaded everywhere. Detail levels and the table; the protocol and workflows are in copilot-instructions.md, or here too with `generate_root_files` off. |
 
 ### Generic (1 file)
 
