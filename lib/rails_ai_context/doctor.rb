@@ -764,6 +764,10 @@ module RailsAiContext
 
     def check_mcp_buildable
       Server.new(app).build
+      if (pinned = unsupported_pin("mcp"))
+        return Check.new(name: "MCP server", status: :warn, message: "MCP server builds, but #{pinned}", fix: bundle_update_fix("mcp"))
+      end
+
       Check.new(name: "MCP server", status: :pass, message: "MCP server builds successfully", fix: nil)
     rescue => e
       Check.new(name: "MCP server", status: :fail,
@@ -926,11 +930,30 @@ module RailsAiContext
 
     def check_prism
       require "prism"
-      Check.new(name: "Prism parser", status: :pass, message: "Prism available for AST-based validation", fix: nil)
+      if (pinned = unsupported_pin("prism"))
+        return Check.new(name: "Prism parser", status: :warn, message: pinned, fix: bundle_update_fix("prism"))
+      end
+
+      Check.new(name: "Prism parser", status: :pass, message: "Prism #{Prism::VERSION} available for AST-based validation", fix: nil)
     rescue LoadError
       Check.new(name: "Prism parser", status: :warn,
         message: "Prism not installed (validation falls back to subprocess, semantic checks limited)",
         fix: "Add: `gem 'prism'` (included in Ruby 3.3+)")
+    end
+
+    # A dependency the app's bundle pins outside what this gem needs, said as
+    # the binary warns of it at boot: the app's copy is the one loaded, since
+    # two copies in one process would each load half of it. nil when none is.
+    def unsupported_pin(name)
+      dependency = Gem.loaded_specs["rails-ai-context"]&.runtime_dependencies&.find { |dep| dep.name == name } or return nil
+      loaded = Gem.loaded_specs[name] or return nil
+      return nil if dependency.requirement.satisfied_by?(loaded.version)
+
+      "the app locks #{name} #{loaded.version}; this gem needs #{name} #{dependency.requirement}, so the tools that use it may fail"
+    end
+
+    def bundle_update_fix(name)
+      "Run `bundle update #{name}` in the app, after relaxing any pin its Gemfile puts on #{name}"
     end
 
     # Asked of the scanner rather than `require`: brakeman outside the app's bundle still scans.

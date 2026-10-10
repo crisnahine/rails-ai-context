@@ -1670,11 +1670,11 @@ Runs up to 25 checks and reports an AI readiness score (0-100). A check that doe
 | Initializer guard | Shown only when `config/initializers/rails_ai_context.rb` has no guard, or guards on `defined?(RailsAiContext)` alone |
 | MCP configs | Each selected tool's MCP config file exists, parses, and holds a rails-ai-context server whose command can start: `bundle exec` only where the app's lockfile carries the gem and the bundle's copy has its executable, the `rails-ai-context` binary only where it is on PATH, and a warning when that binary runs beside a copy the bundle carries. The command is looked up, never run. Skipped in CLI-only mode |
 | Codex env snapshot | The `PATH` saved in `.codex/config.toml` (the app's, or a folder of apps' above it) still reaches each server's command, and a saved `GEM_HOME` still exists. Only when Codex is selected |
-| MCP server | MCP server can be built |
+| MCP server | MCP server can be built, with an `mcp` gem this gem supports (warns, as the boot does, when the app's bundle pins one outside that range) |
 | Introspector health | Every configured introspector returns data |
 | Preset coverage | The preset covers the features the app has |
 | ripgrep | `rg` binary installed (optional, falls back to Ruby) |
-| Prism parser | Prism is available for AST-based validation |
+| Prism parser | Prism is available for AST-based validation, at a version this gem supports (warns, as the boot does, when the app's bundle pins one below it) |
 | Brakeman | Brakeman is available for `rails_security_scan` (optional) |
 | Live reload | `listen` gem installed (optional, enables MCP live reload) |
 | MCP stdio hygiene | On a standalone install, or where a config starts the `rails-ai-context` binary itself, gem activation prints nothing on stdout |
