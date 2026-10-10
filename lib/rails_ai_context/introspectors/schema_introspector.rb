@@ -352,11 +352,12 @@ module RailsAiContext
       end
 
       # MySQL keeps a boolean's default as 1 or 0, which schema.rb, the static
-      # tier and PostgreSQL all spell true or false: the column's own type reads it.
+      # tier and PostgreSQL all spell true or false: Active Model's boolean
+      # type reads it, as the column's own cast type does on every adapter.
       def boolean_default(col)
         return col.default unless col.default.is_a?(String)
 
-        value = connection.lookup_cast_type_from_column(col).deserialize(col.default)
+        value = ActiveModel::Type::Boolean.new.cast(col.default)
         value.nil? ? col.default : value.to_s
       rescue StandardError => e
         RailsAiContext.debug_fail(e, col.default, label: "boolean_default")
