@@ -639,12 +639,22 @@ A polymorphic `belongs_to` lists the models that implement it, the ones that dec
 
 Migration code generation with duplicate/nonexistent column warnings, reversibility flags, table name normalization. The generated class is stamped with the app's own Rails version (from the booted app, or from `Gemfile.lock` under `--no-boot`); when neither names one, the output says which version it fell back to.
 
+Before the code it warns about what the app's migrations already hold: a
+file already named what the generator would name this one (`rails generate
+migration` refuses that name), and a migration not yet run that already adds
+the column or creates the table. It also warns about a `create_table` for a
+table that exists and a `null: false` column with no default on a table with
+rows (the row count is the database's estimate), and refuses a column type no
+adapter knows. For `remove_column`, `rename_column` and `change_type` it lists
+the lines in `app/`, `lib/` and `config/` that name the column, the code the
+change breaks.
+
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `action` | enum | *required* | `add_column`, `remove_column`, `rename_column`, `add_index`, `add_association`, `change_type`, `create_table` |
 | `table` | string | *required* | Table name |
-| `column` | string | - | Column name |
-| `type` | string | - | Column type (e.g., `string`, `integer`, `references`) |
+| `column` | string | - | Column name; for `add_association`, the reference (`user`, `parent`) |
+| `type` | string | - | Column type (e.g., `string`, `integer`, `references`); for `add_association` with `column`, the table the reference points at. A `parent` reference with no `parents` table points at its own table |
 | `new_name` | string | - | New column name, for `rename_column` only |
 | `options` | string | - | Extra options (e.g., `null: false, default: 0`) |
 

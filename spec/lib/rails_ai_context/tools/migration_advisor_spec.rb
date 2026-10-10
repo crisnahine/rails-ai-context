@@ -50,6 +50,102 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       expect(text).to include("Reversible:** Yes")
     end
 
+    # A pending migration that already adds the column got no word, and the
+    # generator command offered then stopped with "Another migration is
+    # already named add_discount_percent_to_users".
+    context "with the change already written in a pending migration" do
+      around do |example|
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db", "migrate"))
+          File.write(File.join(dir, "db", "migrate", "20260101000000_add_discount_percent_to_users.rb"),
+                     "class AddDiscountPercentToUsers < ActiveRecord::Migration[8.1]\n  def change\n" \
+                     "    add_column :users, :discount_percent, :integer\n  end\nend\n")
+          @root = dir
+          example.run
+        end
+      end
+
+      before do
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(@root))
+        context = described_class.cached_context
+        context[:schema][:pending_migrations] = [ { version: "20260101000000", name: "AddDiscountPercentToUsers" } ]
+        allow(described_class).to receive(:cached_context).and_return(context)
+      end
+
+      it "names the pending migration and the name the generator refuses" do
+        text = described_class.call(action: "add_column", table: "users", column: "discount_percent", type: "decimal").content.first[:text]
+
+        expect(text).to include("**Warning:** Another migration is already named `add_discount_percent_to_users` " \
+                                "(`db/migrate/20260101000000_add_discount_percent_to_users.rb`, not yet run)")
+        expect(text).to include("**Warning:** Pending migration `20260101000000 AddDiscountPercentToUsers` already adds " \
+                                "`discount_percent` (integer) to `users`: run `bin/rails db:migrate`")
+        expect(text).not_to include("**Run:**")
+      end
+
+      it "names only the clash once that migration has run" do
+        described_class.cached_context[:schema][:pending_migrations] = []
+        text = described_class.call(action: "add_column", table: "users", column: "discount_percent", type: "decimal").content.first[:text]
+
+        expect(text).to include("Another migration is already named `add_discount_percent_to_users`")
+        expect(text).not_to include("Pending migration")
+      end
+    end
+
+    it "refuses a column type no adapter knows" do
+      text = described_class.call(action: "add_column", table: "users", column: "sku", type: "strnig").content.first[:text]
+      expect(text).to include("**Error:** Unknown column type `strnig`. Did you mean `string`?")
+      expect(text).not_to include("add_column :users")
+    end
+
+    it "warns that null: false without a default fails on a table with rows" do
+      context = described_class.cached_context.merge(database_stats: { tables: [ { table: "users", approximate_rows: 12 } ] })
+      allow(described_class).to receive(:cached_context).and_return(context)
+
+      text = described_class.call(action: "add_column", table: "users", column: "sku", type: "string", options: "null: false").content.first[:text]
+      expect(text).to include("**Warning:** `null: false` without a default fails as `users` holds about 12 rows")
+      expect(described_class.call(action: "add_column", table: "users", column: "sku", type: "string", options: "null: false, default: \"\"")
+        .content.first[:text]).not_to include("without a default")
+    end
+
+    it "warns that create_table fails on a table that exists" do
+      text = described_class.call(action: "create_table", table: "users", column: "name:string").content.first[:text]
+      expect(text).to include("**Warning:** Table `users` already exists.")
+    end
+
+    # A `parent` reference wrote add_reference ... foreign_key: true to a `parents`
+    # table no app has, and told the reader to add app/models/parent.rb.
+    it "writes a parent reference on a table to the table itself" do
+      text = described_class.call(action: "add_association", table: "posts", column: "parent").content.first[:text]
+
+      expect(text).to include("add_reference :posts, :parent, foreign_key: { to_table: :posts }")
+      expect(text).to include("belongs_to :parent, class_name: \"Post\", optional: true")
+      expect(text).not_to include("parent.rb")
+    end
+
+    # Affected Models listed the table's associations, which a dropped plain
+    # column does not move, and not the code that reads it.
+    it "lists the code that names a column it drops" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        File.write(File.join(dir, "app", "models", "user.rb"), "class User < ApplicationRecord\n  def token = self.api_token\nend\n")
+        File.write(File.join(dir, "app", "controllers", "base_controller.rb"), "User.find_by(api_token: token)\n")
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(dir))
+
+        text = described_class.call(action: "remove_column", table: "users", column: "api_token").content.first[:text]
+        expect(text).to include("## Code that names `api_token` (2 lines)")
+        expect(text).to include("- `app/controllers/base_controller.rb:1` User.find_by(api_token: token)",
+                                "- `app/models/user.rb:2` def token = self.api_token")
+        expect(text).not_to include("has_many :posts")
+      end
+    end
+
+    it "names the column's rename parameter by its name" do
+      text = described_class.call(action: "rename_column", table: "users", column: "name").content.first[:text]
+      expect(text).to include("`column` (the old name) and `new_name` are required")
+      expect(text).not_to include("Affected Models")
+    end
+
     it "warns when adding a column that already exists" do
       response = described_class.call(action: "add_column", table: "users", column: "email", type: "string")
       text = response.content.first[:text]
@@ -149,10 +245,10 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       expect(text).to include("t.string :name")
     end
 
-    it "warns about irreversible change_type" do
+    it "names the down that reverses change_type" do
       response = described_class.call(action: "change_type", table: "posts", column: "title", type: "text")
       text = response.content.first[:text]
-      expect(text).to include("Reversible:** No")
+      expect(text).to include("**Reversible:** Yes, through the `down` above, which restores `string`")
       expect(text).to include("data loss")
     end
 
