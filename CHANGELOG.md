@@ -35,11 +35,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   minus `query_allowed_columns` - and a query naming any real sensitive
   column of the schema is refused before it runs, on every adapter, as is
   a column-alias list (`t(a, b, c)`) that would rename a wildcard's
-  columns. On PostgreSQL the result is also redacted by where each column
+  columns. Rails' own bookkeeping tables are left out of that set, so
+  `ar_internal_metadata.key` does not make the word `key` refused, and on
+  PostgreSQL a name inside a string literal (`LIKE '%secret%'`, a JSON key)
+  is data, allowed only when the query's plan was read and cleared. On PostgreSQL the result is also redacted by where each column
   comes from, so a view that renames `api_token` to `t` returns
   `[FILTERED]`, and a sensitive column passed through a materialized CTE, a
   subquery or a set operation, where its origin cannot be pinned, is
   refused.
+- **`rails_query` refuses every spelling of UNION.** The check matched
+  only `UNION SELECT` and `UNION ALL SELECT`; MySQL and MariaDB also take
+  `UNION DISTINCT SELECT` and a parenthesised `UNION (SELECT ...)`, and
+  either one returned another table's rows under the first SELECT's
+  column names - a password digest under `posts.user_id` - past the
+  redaction that reads names. Any UNION is refused now, on every adapter,
+  with that reason, where it was called an "SQL injection pattern".
 - **Session- and server-affecting functions no longer run under the
   read-only transaction.** `pg_terminate_backend`, `pg_reload_conf`,
   `pg_stat_reset*`, `pg_advisory_lock*`, `set_config`, `pg_notify`,
