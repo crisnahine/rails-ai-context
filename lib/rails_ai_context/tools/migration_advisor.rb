@@ -238,8 +238,19 @@ module RailsAiContext
 
         TABLE_BLOCKS = %i[create_table change_table].freeze
 
+        # What a migration does when it runs, not what it takes back on a
+        # rollback: `def down`, a reversible's `dir.down` and a `revert`
+        # block hold the undo.
+        def undo?(node)
+          return node.name == :down if node.is_a?(Prism::DefNode)
+          return false unless node.is_a?(Prism::CallNode) && node.block
+
+          node.receiver ? node.name == :down : node.name == :revert
+        end
+
         def collect_changes(node, block_table, changes)
           return unless node.is_a?(Prism::Node)
+          return if undo?(node)
 
           if node.is_a?(Prism::CallNode)
             args = Array(node.arguments&.arguments)

@@ -89,6 +89,42 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
         expect(text).to include("Another migration is already named `add_discount_percent_to_users`")
         expect(text).not_to include("Pending migration")
       end
+
+      # A migration that drops a column re-adds it on rollback, and the
+      # advisor read that as the pending migration's own change.
+      it "reads no column a pending migration adds only on rollback" do
+        File.write(File.join(@root, "db", "migrate", "20260102000000_drop_legacy_columns.rb"), <<~RUBY)
+          class DropLegacyColumns < ActiveRecord::Migration[8.1]
+            def up
+              remove_column :users, :legacy_score
+            end
+
+            def down
+              add_column :users, :legacy_score, :integer
+            end
+          end
+        RUBY
+        File.write(File.join(@root, "db", "migrate", "20260103000000_reshape_flags.rb"), <<~RUBY)
+          class ReshapeFlags < ActiveRecord::Migration[8.1]
+            def change
+              reversible do |dir|
+                dir.up { remove_column :users, :old_flag }
+                dir.down { add_column :users, :old_flag, :boolean }
+              end
+              revert { add_column :users, :stale_note, :string }
+            end
+          end
+        RUBY
+        described_class.cached_context[:schema][:pending_migrations] += [
+          { version: "20260102000000", name: "DropLegacyColumns" }, { version: "20260103000000", name: "ReshapeFlags" }
+        ]
+
+        texts = %w[legacy_score old_flag stale_note].map do |column|
+          described_class.call(action: "add_column", table: "users", column: column, type: "integer").content.first[:text]
+        end
+
+        expect(texts).to all(satisfy { |text| !text.include?("Pending migration") })
+      end
     end
 
     it "refuses a column type no adapter knows" do
