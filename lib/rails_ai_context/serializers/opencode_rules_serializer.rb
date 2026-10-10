@@ -9,6 +9,9 @@ module RailsAiContext
     # Generated files:
     #   app/models/AGENTS.md      - model listing, loaded when editing models
     #   app/controllers/AGENTS.md - controller listing, loaded when editing controllers
+    #
+    # Teams write these by hand too, so one the gem did not generate keeps
+    # its text and gets the gem's listing as a marked block.
     class OpencodeRulesSerializer < Base
       include StackOverviewHelper
 
@@ -33,7 +36,7 @@ module RailsAiContext
           end
         end
 
-        write_rule_files(entries)
+        write_rule_files(entries, shared: true)
       end
 
       private

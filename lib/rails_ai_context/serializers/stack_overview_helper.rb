@@ -214,28 +214,31 @@ module RailsAiContext
       # A nil render means the app has nothing to put in that file. It is
       # reported rather than dropped, so a deliberate omission never looks
       # like a failed generation.
+      #
+      # A rules directory's names are the gem's own. `shared:` is for names
+      # users write by hand too (OpenCode's app/models/AGENTS.md): a file
+      # there the gem did not generate whole keeps its text and gets the
+      # gem's block, as a root file does.
       # @param entries [Array<RuleFile>]
       # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
-      def write_rule_files(entries)
-        written = []
-        skipped = []
-        not_applicable = {}
+      def write_rule_files(entries, shared: false)
+        result = { written: [], skipped: [], not_applicable: {} }
 
         entries.each do |entry|
           if entry.content.nil?
-            not_applicable[entry.path] = entry.reason || "nothing to document"
+            result[:not_applicable][entry.path] = entry.reason || "nothing to document"
             next
           end
 
-          if File.exist?(entry.path) && File.read(entry.path) == entry.content
-            skipped << entry.path
+          outcome = if shared
+            SectionMarkerWriter.write_whole_or_block(entry.path, entry.content)
           else
-            SafeFile.atomic_write(entry.path, entry.content)
-            written << entry.path
+            SectionMarkerWriter.write_whole(entry.path, entry.content)
           end
+          SectionMarkerWriter.report(outcome, entry.path, result)
         end
 
-        { written: written, skipped: skipped, not_applicable: not_applicable }
+        result
       end
 
       def project_root

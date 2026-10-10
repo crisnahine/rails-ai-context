@@ -102,6 +102,90 @@ RSpec.describe RailsAiContext::Serializers::OpencodeRulesSerializer do
     end
   end
 
+  # Teams write app/models/AGENTS.md by hand for OpenCode and Codex, and every
+  # run replaced it with the listing: no prompt, no backup, no warning.
+  describe "a per-directory AGENTS.md the user wrote" do
+    let(:mine) { "# Our model rules\n\nNever call Post.destroy_all.\n" }
+    let(:generated_note) { "> #{RailsAiContext::Install::Cleanup::GENERATED_NOTE}" }
+
+    def models_file(dir)
+      File.join(dir, "app", "models", "AGENTS.md")
+    end
+
+    def write_mine(dir)
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      File.write(models_file(dir), mine)
+    end
+
+    it "keeps the user's text and adds the listing as a marked block" do
+      Dir.mktmpdir do |dir|
+        write_mine(dir)
+
+        result = described_class.new(context).call(dir)
+        content = File.read(models_file(dir))
+
+        expect(result[:written]).to include(models_file(dir))
+        expect(content).to end_with(mine)
+        expect(content).to start_with("#{RailsAiContext::Serializers::SectionMarkerWriter::BEGIN_MARKER}\n# ActiveRecord Models (2)")
+        expect(content).to include("has_many :posts", RailsAiContext::Serializers::SectionMarkerWriter::END_MARKER)
+      end
+    end
+
+    it "claims the block, not the file" do
+      Dir.mktmpdir do |dir|
+        write_mine(dir)
+
+        described_class.new(context).call(dir)
+        content = File.read(models_file(dir))
+
+        expect(content).not_to include(generated_note)
+        expect(content).to include("> #{RailsAiContext::Serializers::SectionMarkerWriter::BLOCK_NOTE}")
+      end
+    end
+
+    it "replaces only its block on the next run" do
+      Dir.mktmpdir do |dir|
+        write_mine(dir)
+        described_class.new(context).call(dir)
+        File.write(models_file(dir), File.read(models_file(dir)) + "Added later.\n")
+
+        context[:models]["Tag"] = { table_name: "tags", associations: [], validations: [] }
+        described_class.new(context).call(dir)
+        content = File.read(models_file(dir))
+
+        expect(content).to include("# ActiveRecord Models (3)", "Never call Post.destroy_all.", "Added later.")
+        expect(content.scan(RailsAiContext::Serializers::SectionMarkerWriter::BEGIN_MARKER).size).to eq(1)
+      end
+    end
+
+    it "rewrites a file it generated whole, whole" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        described_class.new(context).call(dir)
+        expect(File.read(models_file(dir))).to include(generated_note)
+
+        context[:models]["Tag"] = { table_name: "tags", associations: [], validations: [] }
+        described_class.new(context).call(dir)
+        content = File.read(models_file(dir))
+
+        expect(content).to start_with("# ActiveRecord Models (3)")
+        expect(content).not_to include(RailsAiContext::Serializers::SectionMarkerWriter::BEGIN_MARKER)
+      end
+    end
+
+    it "leaves the user's text as it was once the AI tool is dropped" do
+      Dir.mktmpdir do |dir|
+        write_mine(dir)
+        described_class.new(context).call(dir)
+
+        outcome = RailsAiContext::Install::Cleanup.remove(tools: %i[opencode codex], keeping: [], root: dir)
+
+        expect(File.read(models_file(dir))).to eq(mine)
+        expect(outcome[:trimmed]).to include("app/models/AGENTS.md")
+      end
+    end
+  end
+
   it "reports a missing directory instead of dropping the file silently" do
     Dir.mktmpdir do |dir|
       result = described_class.new(context).call(dir)
