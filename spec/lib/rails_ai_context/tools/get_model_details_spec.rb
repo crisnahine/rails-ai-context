@@ -248,7 +248,19 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       result = described_class.call(model: "User")
       text = result.content.first[:text]
       expect(text).to include("rails_get_schema")
-      expect(text).to include("rails_get_controllers")
+      expect(text).to include("rails_analyze_feature")
+    end
+
+    # The hint named "#{name.pluralize}Controller" whether the app had one or
+    # not, and sent the reader to a controller that does not exist.
+    it "names the model's controller only when the app has it" do
+      expect(described_class.call(model: "User").content.first[:text]).not_to include("rails_get_controllers")
+
+      context = described_class.cached_context.merge(
+        controllers: { controllers: { "UsersController" => { file: "app/controllers/users_controller.rb", actions: %w[index] } } }
+      )
+      allow(described_class).to receive(:cached_context).and_return(context)
+      expect(described_class.call(model: "User").content.first[:text]).to include("`rails_get_controllers(controller:\"UsersController\")` for actions")
     end
 
     it "handles model with error in data" do

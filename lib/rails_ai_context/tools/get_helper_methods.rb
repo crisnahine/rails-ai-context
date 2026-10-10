@@ -204,11 +204,15 @@ module RailsAiContext
           end
         end
 
-        # Cross-reference hints
-        controller_name = underscore.split("/").last
-        lines << ""
-        lines << "_Next: `rails_get_view(controller:\"#{controller_name}\")` for views"
-        lines << " | `rails_get_controllers(controller:\"#{controller_name.camelize}Controller\")` for controller_"
+        # Cross-reference hints, to the views and the controller the helper is
+        # named for, and only those the app has: ApplicationHelper has no
+        # controller of its own to send the reader to.
+        route_key = relative_under(file_path, helper_dirs).delete_suffix(".rb").delete_suffix("_helper")
+        hints = []
+        hints << "`rails_get_view(controller:\"#{route_key}\")` for views" if RailsAiContext::PathResolver.view_dirs(root).any? { |dir| Dir.exist?(File.join(dir, route_key)) }
+        controller = Payload.controller_for_route_key(cached_context, route_key)&.first
+        hints << "`rails_get_controllers(controller:\"#{controller}\")` for controller" if controller
+        lines << "" << "_Next: #{hints.join(' | ')}_" if hints.any?
 
         text_response(lines.join("\n"))
       end
