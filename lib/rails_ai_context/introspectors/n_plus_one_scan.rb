@@ -34,6 +34,10 @@ module RailsAiContext
         calculate to_sql explain update_all delete_all destroy_all touch_all
       ].to_set.freeze
 
+      # Calls a has_many answers from the counter column a counter_cache
+      # keeps, with no query (Reflection#has_active_cached_counter?).
+      COUNTER_READS = %i[size any? empty? none?].to_set.freeze
+
       PRELOAD = /\.(?:includes|preload|eager_load)\(/
       STRICT_LOCALS = /\#\s+locals:\s+\((.*?)\)/m
       MAX_PARTIAL_DEPTH = 4
@@ -52,6 +56,7 @@ module RailsAiContext
         @models = models.is_a?(Hash) ? models.select { |_, d| d.is_a?(Hash) && !d[:error] } : {}
         @risks = []
         @counted = Set.new.compare_by_identity
+        @counter_reads = Set.new.compare_by_identity
         @trees = {}
         @record_partials = {}
       end
@@ -283,6 +288,9 @@ module RailsAiContext
 
       def visit_call(node, env, context)
         @counted << node.receiver if node.name == :count && node.block.nil? && node.receiver.is_a?(Prism::CallNode)
+        if COUNTER_READS.include?(node.name) && node.block.nil? && node.arguments.nil? && node.receiver.is_a?(Prism::CallNode)
+          @counter_reads << node.receiver
+        end
         record_access(node, env, context)
 
         collection = loop_collection(node, env, context)
@@ -337,9 +345,42 @@ module RailsAiContext
         read = association_read(record.models, node.name.to_s)
         return unless read && !inverse?(record, read)
 
-        record.models.select { |model| association(model, read) || association_read([ model ], node.name.to_s) }.each do |model|
+        models = record.models.select { |model| association(model, read) || association_read([ model ], node.name.to_s) }
+        models = models.reject { |model| cached_counter?(model, read) } if @counter_reads.include?(node)
+        models.each do |model|
           add_risk(model, read, record.loop.chain, context, counted: @counted.include?(node))
         end
+      end
+
+      # Whether `owner.name.size` reads a counter column, as Rails decides:
+      # the has_many's own counter_cache, or a belongs_to on the other side
+      # whose counter_cache keeps the column the has_many reads
+      # (`#{name}_count` unless it names one).
+      def cached_counter?(owner, name)
+        assoc = association(owner, name)
+        return false unless assoc && assoc[:type].to_s == "has_many" && !assoc[:through]
+
+        own = counter_cache(assoc)
+        return own[:active] if own
+
+        target = target_model(owner, assoc) or return false
+        Array(@models.dig(target, :associations)).any? do |inverse|
+          next false unless inverse.is_a?(Hash) && inverse[:type].to_s == "belongs_to"
+          next false unless (kept = counter_cache(inverse)) && kept[:active]
+
+          (kept[:column] || "#{target.demodulize.underscore.pluralize}_count") == "#{name}_count" &&
+            (inverse[:polymorphic] || target_model(target, inverse) == owner)
+        end
+      end
+
+      # A declared counter_cache as { column:, active: }, read off the
+      # option's text in either tier; nil when none is declared.
+      def counter_cache(assoc)
+        text = assoc.dig(:declared_options, "counter_cache")&.to_s
+        return nil if text.nil? || text == "false"
+
+        column = text == "true" ? nil : text[/\A:?"?(\w+)"?\z/, 1] || text[/column: :?"?(\w+)/, 1]
+        { column: column, active: !text.match?(/active: false/) }
       end
 
       # Rails sets the inverse of `@product.reviews` on each review, so
