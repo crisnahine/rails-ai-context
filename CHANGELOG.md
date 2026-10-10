@@ -51,6 +51,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   list (`random`, `clock_timestamp`, `gen_random_uuid`, `pg_sleep` and its
   variants) is refused from the plan, closing the family without a list
   that has to grow.
+- **The endpoint inside the app refuses in production unless the app opts
+  in.** The mounted engine and `auto_mount` answered every tool to whoever
+  could reach a production app. Both now answer 403 with a JSON-RPC error
+  that names the setting, and log the refusal once per process;
+  `config.allow_http_in_production = true` lets them answer, for an
+  endpoint behind the app's own authentication. Doctor's "MCP HTTP
+  endpoint" check fails `auto_mount` with it on and warns for the engine.
+- **No walk follows a symlink out of the app.** `rails_get_stimulus`
+  parsed a controller linked in from outside the app and printed its
+  targets and values, and so did the view, layout, partial, helper,
+  JavaScript, locale, environment-file, seed and concern scans and the
+  booted source reads. A file whose real path is outside the app is now
+  neither listed nor read, unless it sits in a directory the app links in,
+  such as a pack.
+- **A log, partial or concern refused on policy is an error result.**
+  `rails_read_logs file:`, `rails_get_partial_interface partial:` and
+  `rails_get_concern name:` answered "not found" for a file that links out
+  of the app, and their lists still offered it. They now answer `Path not
+  allowed: <name>` with `isError: true` (exit 1 on the CLI), no list offers
+  a refused entry, and `rails_diagnose` returns its diagnosis for a refused
+  `file:` as an error result.
 
 ### Added
 
@@ -646,6 +667,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   way** and keeps controller namespaces.
 - **`rails_get_edit_context`'s not-found answer no longer offers the same
   path back.**
+- **The documented engine mount loads where the gem is not.** README,
+  GUIDE and SETUP showed a mount that raised `NameError` in production
+  with the gem in the development group, and after the gem was removed.
+  They now show `mount RailsAiContext::Engine, at: "/mcp" if
+  defined?(RailsAiContext::Engine)`.
+- **`serve --transport http` stops on SIGTERM or Ctrl-C every time and
+  exits 0.** About one stop in five hung once a client had connected:
+  Puma's graceful stop ran inside the signal handler and deadlocked. A
+  request still running is cut off after 3 seconds, and `bin/rails
+  ai:serve_http` no longer prints `bin/rails aborted! SignalException`.
+- **`rails server` stops with an MCP client connected to the mounted
+  engine.** The engine answers the server-push GET with 405 instead of
+  holding a thread per client.
+- **Each HTTP client keeps its own session record**, and a
+  `rails_session_context` reset clears the caller's alone. The record holds
+  the call the client made, not the tools a composite tool called inside
+  it, and `mark` refuses an empty mark or one naming no tool.
+- **The HTTP error frame is JSON even when the app's `to_json` raises**
+  (Rails 7.0-8.0 with json 3).
+- **`auto_mount` answers while a migration is pending**; the mounted
+  engine, inside routing, still does not, as the docs say.
+- **The `http_bind` warning and docs say what a non-loopback bind
+  serves.**
+- **`rails_read_logs` works on logs with non-ASCII lines.** On Ruby before
+  3.4 the redaction patterns raised `RegexpError` on such a line, breaking
+  read_logs and `rails_diagnose`'s log section. `search:` now reaches back
+  through the last 4 MB of a log and says how many lines it searched, where
+  it searched only the last `lines` lines.
+- **The view resource labels a template by the language of its source**,
+  where every view read was `text/html`.
+- **A resource read for a name the app does not have fails with JSON-RPC
+  -32602**, naming the URI and the names that exist, where it came back as
+  a successful read holding an `error` key.
 
 ## [5.32.2] - 2026-10-07
 
