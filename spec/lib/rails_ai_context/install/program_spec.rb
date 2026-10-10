@@ -136,17 +136,15 @@ RSpec.describe RailsAiContext::Install::Program do
       expect(described_class.select_setup(surface_class.new(nil)).to_a).to eq([ :mcp, true ])
     end
 
-    it "uses one label per mode" do
-      surface = surface_class.new("1")
-      described_class.select_setup(surface)
-      expect(surface.text).to include("Selected: MCP + CLI fallback")
-    end
-
-    it "says what MCP-only leaves alone" do
-      surface = surface_class.new("3")
-      described_class.select_setup(surface)
-      expect(surface.text).to include("MCP config only (no context files)")
-      expect(surface.text).to include("leaves CLAUDE.md, AGENTS.md and rules untouched")
+    it "confirms each answer in the words the question offered it" do
+      { "1" => "Selected: MCP config + context files",
+        "2" => "Selected: Context files only (CLI mode, no MCP server)",
+        "3" => "Selected: MCP config only (leaves CLAUDE.md, AGENTS.md and rules untouched)" }.each do |answer, line|
+        surface = surface_class.new(answer)
+        described_class.select_setup(surface)
+        expect(surface.text).to include("  #{answer}. ")
+        expect(surface.text).to end_with("\n#{line}")
+      end
     end
   end
 
