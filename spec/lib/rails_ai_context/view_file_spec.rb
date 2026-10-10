@@ -148,4 +148,22 @@ RSpec.describe RailsAiContext::ViewFile do
       expect(described_class.alternate_of(nil)).to be_nil
     end
   end
+
+  describe ".mime_type" do
+    it "names the language of the source, not what it renders" do
+      {
+        "posts/index.html.erb" => "text/x-erb",
+        "posts/_post.json.jbuilder" => "text/x-ruby",
+        "feeds/index.atom.builder" => "text/x-ruby",
+        "components/card.rb" => "text/x-ruby",
+        "posts/show.html.haml" => "text/x-haml",
+        "posts/show.html.slim" => "text/x-slim",
+        "pages/about.md" => "text/markdown",
+        "pages/terms.html" => "text/html",
+        "pages/legal.html.raw" => "text/html",
+        "exports/report.csv" => "text/csv",
+        "posts/show.html.weird" => "text/plain"
+      }.each { |path, type| expect(described_class.mime_type(path)).to eq(type), path }
+    end
+  end
 end

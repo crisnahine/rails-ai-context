@@ -124,8 +124,7 @@ module RailsAiContext
           return [ { uri: uri, mimeType: "application/json", text: text } ]
         end
 
-        mime = result.relative.end_with?(".rb") ? "text/x-ruby" : "text/html"
-        [ { uri: uri, mimeType: mime, text: content.to_s } ]
+        [ { uri: uri, mimeType: RailsAiContext::ViewFile.mime_type(result.relative), text: content.to_s } ]
       end
 
       def resolve_routes(uri, controller)
