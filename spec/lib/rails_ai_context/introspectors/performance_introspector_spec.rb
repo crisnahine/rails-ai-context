@@ -935,6 +935,7 @@ end
       end
     end
 
+    # `length` loads the comments; `size` would read Comment's counter_cache.
     context "low risk: association is already preloaded" do
       before do
         File.write(fixture_ctrl, <<~RUBY)
@@ -946,7 +947,7 @@ end
         RUBY
         File.write(fixture_view, <<~ERB)
           <% @posts.each do |post| %>
-            <p><%= post.comments.size %></p>
+            <p><%= post.comments.length %></p>
           <% end %>
         ERB
       end
@@ -977,7 +978,7 @@ end
         RUBY
         File.write(fixture_view, <<~ERB)
           <% @posts.each do |post| %>
-            <p><%= post.comments.size %></p>
+            <p><%= post.comments.length %></p>
           <% end %>
         ERB
       end
@@ -1000,7 +1001,7 @@ end
         RUBY
         File.write(fixture_view, <<~ERB)
           <% @posts.each do |post| %>
-            <p><%= post.comments.size %></p>
+            <p><%= post.comments.length %></p>
           <% end %>
         ERB
       end
@@ -1168,6 +1169,34 @@ end
 
       it "is read as Ruby" do
         expect(n1_risks).to contain_exactly(a_hash_including(model: "Post", association: "user", view: "n1_test/index.json.jbuilder"))
+      end
+    end
+
+    # The blog's `post.comments.any?` drew a HIGH and advice to preload,
+    # though Comment's counter_cache answers it with no query at all.
+    context "a has_many sized in the loop" do
+      before do
+        File.write(fixture_ctrl, <<~RUBY)
+          class N1TestController < ApplicationController
+            def index
+              @posts = Post.order(:id)
+            end
+
+            def show
+              @users = User.order(:id)
+            end
+          end
+        RUBY
+        File.write(fixture_view, <<~ERB)
+          <% @posts.each do |post| %>
+            <%= post.comments.size %> <%= post.comments.any? %> <%= post.comments.empty? %> <%= post.comments.none? %>
+          <% end %>
+        ERB
+        File.write(File.join(views_dir, "show.html.erb"), "<% @users.each do |user| %><%= user.posts.size %><% end %>\n")
+      end
+
+      it "reads the counter a belongs_to's counter_cache keeps, and queries where none is kept" do
+        expect(n1_risks.map { |r| r.values_at(:model, :association, :action, :risk) }).to eq([ [ "User", "posts", "show", "high" ] ])
       end
     end
   end
