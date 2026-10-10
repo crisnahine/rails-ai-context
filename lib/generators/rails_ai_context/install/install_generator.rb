@@ -647,6 +647,14 @@ module RailsAiContext
           @selected_formats, root: Rails.root, warn_only: options[:defaults]
         )
 
+        # The configuration was loaded at boot, before the questions above:
+        # without the answers the files came out in the mode the app had
+        # before, MCP form under a choice of CLI.
+        config = RailsAiContext.configuration
+        config.ai_tools = @selected_formats
+        config.tool_mode = tool_mode
+        config.context_files = context_files?
+
         begin
           result = RailsAiContext.generate_context(format: @selected_formats)
           style = RailsAiContext::ContextFileReport.style(:emoji)

@@ -30,6 +30,29 @@ RSpec.describe "not-applicable context files on every surface" do
     generator.send(:generate_context_files)
   end
 
+  # The configuration was loaded at boot, before the installer's questions,
+  # so a switch to CLI mode wrote every file in MCP form.
+  it "generates in the mode the installer was just told" do
+    generator = RailsAiContext::Generators::InstallGenerator.new
+    generator.instance_variable_set(:@selected_formats, [ :claude ])
+    generator.instance_variable_set(:@tool_mode, :cli)
+    allow(RailsAiContext::LegacyCleanup).to receive(:prompt_legacy_files)
+    allow(generator).to receive(:say)
+    config = RailsAiContext.configuration
+    was = [ config.tool_mode, config.ai_tools, config.context_files ]
+    seen = nil
+    allow(RailsAiContext).to receive(:generate_context) do
+      seen = [ config.tool_mode, config.ai_tools, config.context_files ]
+      { written: [], skipped: [], not_applicable: {} }
+    end
+
+    generator.send(:generate_context_files)
+
+    expect(seen).to eq([ :cli, [ :claude ], true ])
+  ensure
+    config.tool_mode, config.ai_tools, config.context_files = was
+  end
+
   it "names them in the install generator output" do
     generator = RailsAiContext::Generators::InstallGenerator.new
     generator.instance_variable_set(:@selected_formats, [ :claude ])
