@@ -15,8 +15,12 @@ module RailsAiContext
 
     attr_reader :app
 
-    def initialize(app = nil)
+    # `place:` names the app root as the person who started the watch typed
+    # it, when they typed it outside the root, so the files it reports are
+    # named from there.
+    def initialize(app = nil, place: nil)
       @app = app || RailsAiContext.default_app
+      @place = place
       @watch = ChangeWatch.new(@app)
     end
 
@@ -33,7 +37,8 @@ module RailsAiContext
       LegacyCleanup.prompt_legacy_files(
         RailsAiContext.configuration.ai_tools,
         root: root,
-        warn_only: true
+        warn_only: true,
+        place: @place
       )
 
       listener = @watch.start { |_paths, _reloaded| regenerate }
@@ -78,7 +83,7 @@ module RailsAiContext
       # rewrites every tool's files for a user who picked one, and writes
       # nothing at all under an MCP-only install.
       result = RailsAiContext.generate_context
-      ContextFileReport.each_line(result, RESULT_LINES, root: app.root) { |_bucket, text| $stderr.puts "  #{text}" }
+      ContextFileReport.each_line(result, RESULT_LINES, root: app.root, place: @place) { |_bucket, text| $stderr.puts "  #{text}" }
     rescue => e
       $stderr.puts "[rails-ai-context] Error regenerating: #{e.message}"
     end

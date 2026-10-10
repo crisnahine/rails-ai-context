@@ -20,13 +20,16 @@ module RailsAiContext
     # @param root [String, Pathname] project root directory
     # @param io [IO] stream for output (stderr by default)
     # @param warn_only [Boolean] skip prompt even if TTY, only print warning
-    def prompt_legacy_files(ai_tools, root:, io: $stderr, warn_only: false)
+    # @param place [String, nil] the root as the person who typed the
+    #   command names it, when they typed it outside the root: the files and
+    #   the rm line are named from there, so the rm removes them where it is run
+    def prompt_legacy_files(ai_tools, root:, io: $stderr, warn_only: false, place: nil)
       allowed = ai_tools ? Array(ai_tools).map(&:to_sym).to_set : nil
 
       present = LEGACY_FILES.filter_map do |entry|
         next if allowed && !allowed.include?(entry[:ai_tool])
         full = File.join(root.to_s, entry[:path])
-        [ entry[:path], full ] if File.exist?(full)
+        [ place ? File.join(place, entry[:path]) : entry[:path], full ] if File.exist?(full)
       end
       return if present.empty?
 
@@ -38,7 +41,7 @@ module RailsAiContext
 
       if warn_only || !$stdin.tty?
         io.puts "Delete manually when ready:"
-        io.puts "  rm -f #{present.map(&:first).join(' ')}"
+        io.puts "  #{rm_line(present)}"
         return
       end
 
@@ -55,8 +58,18 @@ module RailsAiContext
         end
       else
         io.puts "  Kept. Delete manually when ready:"
-        io.puts "    rm -f #{present.map(&:first).join(' ')}"
+        io.puts "    #{rm_line(present)}"
       end
+    end
+
+    # The rm a reader can paste: each path a single shell word.
+    def rm_line(present)
+      words = present.map do |(shown, _)|
+        next shown if shown.match?(%r{\A[A-Za-z0-9_\-.,:+/@]+\z})
+
+        "'#{shown.gsub("'") { %q('\\'') }}'"
+      end
+      "rm -f #{words.join(' ')}"
     end
   end
 end
