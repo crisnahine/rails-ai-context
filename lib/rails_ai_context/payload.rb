@@ -21,6 +21,7 @@ module RailsAiContext
       explicit_broadcasts: %i[turbo explicit_broadcasts],
       stream_subscriptions: %i[turbo stream_subscriptions],
       jobs: %i[jobs jobs],
+      workers: %i[jobs workers],
       channels: %i[jobs channels],
       mailers: %i[jobs mailers],
       available_locales: %i[i18n available_locales],
