@@ -30,8 +30,26 @@ module RailsAiContext
         # Before the call reads anything: an edit since the last call drops
         # the caches and reloads the app's code (see the method).
         RailsAiContext::Tools::BaseTool.refresh_if_files_changed!
-        Thread.current[:rails_ai_context_call_params] = session_params(kwargs)
 
+        answer = -> { answer_call(discarded) { super(**kwargs) } }
+
+        # Only the call the client made is its query. A composite tool answers
+        # by calling others, and each of those recorded itself, so one
+        # get_context read as four calls the client never made - and the
+        # first inner call took the outer one's params with it.
+        return answer.call if Thread.current[:rails_ai_context_call]
+
+        Thread.current[:rails_ai_context_call] = { tool: self, params: session_params(kwargs) }
+        begin
+          answer.call
+        ensure
+          Thread.current[:rails_ai_context_call] = nil
+        end
+      end
+
+      private
+
+      def answer_call(discarded)
         # Held across the tool body: a concurrent live reload must not unload
         # constants while this call is reading them.
         #
@@ -43,17 +61,12 @@ module RailsAiContext
         RailsAiContext::CodeReloader.with_app_code do
           begin
             # One call is one run: what it reads per controller or per route is read once.
-            append_note(RailsAiContext::RunCache.around { super(**kwargs) }, invalid_detail_note(discarded))
+            append_note(RailsAiContext::RunCache.around { yield }, invalid_detail_note(discarded))
           rescue StandardError => e
-            # A failed call must not leak its recorded params into the next
-            # call's session entry.
-            Thread.current[:rails_ai_context_call_params] = nil
             failure_response(e)
           end
         end
       end
-
-      private
 
       # The declared params are the contract, so a tool whose method takes
       # **kwargs refuses the same keys as one that names them.

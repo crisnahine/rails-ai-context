@@ -750,8 +750,10 @@ Session-aware context tracking across tool calls within a conversation. Pass `ac
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `action` | enum | - | `status` (queried tools with timestamps), `summary` (short recap), `reset` (clear the session) |
-| `mark` | string | - | Record a tool and its params as already queried (e.g., `get_schema:users`) |
+| `action` | enum | - | `status` (queried tools with timestamps), `summary` (short recap), `reset` (clear this conversation's record) |
+| `mark` | string | - | Record a tool and its params as already queried (e.g., `get_schema:users`). The tool must be one the server has; a short name such as `schema` is taken |
+
+Each conversation has its own record: over HTTP, one server process serves every client, and each client's `Mcp-Session-Id` keeps its calls, and its `reset`, to itself. A tool that answers by calling others (`rails_get_context`, `rails_diagnose`, `rails_review_changes`) is recorded as the one call the client made.
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
 

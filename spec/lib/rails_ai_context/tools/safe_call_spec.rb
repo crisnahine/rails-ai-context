@@ -96,6 +96,32 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
       expect(RailsAiContext::Tools::BaseTool.session_queries.last[:params]).to eq(sql: "REDACTED")
     end
 
+    # A composite tool answers by calling others. Those calls are how it
+    # answered, not queries the client made, and the first of them used to
+    # take the outer call's params with it.
+    it "records the call the client made, not the tools it called to answer" do
+      inner = build_tool do
+        tool_name "rails_spec_inner"
+        input_schema(properties: { name: { type: "string" } })
+        def self.call(name: nil, server_context: nil)
+          text_response("inner")
+        end
+      end
+      outer = build_tool do
+        tool_name "rails_spec_outer"
+        input_schema(properties: { table: { type: "string" } })
+        define_singleton_method(:call) do |table: nil, server_context: nil|
+          inner.call(name: "x")
+          text_response("outer")
+        end
+      end
+
+      outer.call(table: "users")
+
+      expect(RailsAiContext::Tools::BaseTool.session_queries.map { |q| [ q[:tool], q[:params] ] })
+        .to eq([ [ "rails_spec_outer", { table: "users" } ] ])
+    end
+
     it "does not leak a failed call's params into the next call" do
       tool = build_tool do
         input_schema(properties: { table: { type: "string" } })

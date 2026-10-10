@@ -1012,9 +1012,6 @@ module RailsAiContext
         # would not answer. Guidance and "found nothing" stay informational
         # via text_response and empty_response.
         def error_response(text)
-          # A failed call must not leak its recorded params into the next
-          # call's session entry.
-          Thread.current[:rails_ai_context_call_params] = nil
           banner = static_tier_banner
           text += banner if banner
           MCP::Tool::Response.new([ { type: "text", text: cli_form(text) } ], error: true)
@@ -1046,14 +1043,17 @@ module RailsAiContext
         end
 
         # Every answered call is recorded so session_context(action:"status")
-        # can list it. SessionContext itself is skipped to avoid recursion.
+        # can list it: the call SafeCall says the client made, once, with its
+        # own params. A tool another tool called answers it, not the client.
+        # SessionContext itself is skipped to avoid recursion.
         def record_call(text)
+          call = Thread.current[:rails_ai_context_call]
+          return unless call && call[:tool].equal?(self) && !call[:recorded]
           return unless respond_to?(:tool_name) && tool_name != "rails_session_context"
 
           summary = text.lines.first&.strip&.truncate(80)
-          params = Thread.current[:rails_ai_context_call_params] || {}
-          session_record(tool_name, params, summary)
-          Thread.current[:rails_ai_context_call_params] = nil
+          session_record(tool_name, call[:params], summary)
+          call[:recorded] = true
         end
 
         def session_key(tool_name, params)
