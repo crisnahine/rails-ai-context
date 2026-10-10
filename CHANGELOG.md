@@ -57,6 +57,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the gem without `rails-ai-context` and every MCP config's
   `bundle exec rails-ai-context serve` failed to start. Outside a checkout
   the files on disk are the list.
+- **`rails_review_changes` shows what a migration's tables hold now.** Each
+  affected table's line was the first line of `rails_get_schema`, which is
+  its heading (`products: ## Table: products`); it is now the table's
+  current columns, or "not in the schema yet" for one the migration
+  creates. The routes line drops the heading marks it carried.
 - **A folder of apps keeps its MCP configs true as apps come and go**
   (#429). Folders named outside ASCII all make the name `app`, so the gem
   numbered its own entries (`rails-ai-context-app-2`) and then never

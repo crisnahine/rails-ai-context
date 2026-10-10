@@ -255,11 +255,16 @@ module RailsAiContext
                 tables = source.scan(/(?:create_table|add_column|remove_column|rename_column|add_index|add_reference)\s+:(\w+)/).flatten.uniq
                 if tables.any?
                   lines << "" << "**Affects tables:** #{tables.join(', ')}"
+                  # The table as the schema has it now: its columns, or none
+                  # yet for a table the migration creates. get_schema's first
+                  # line was only its heading.
+                  schema = cached_context&.dig(:schema)
                   tables.first(2).each do |t|
-                    begin
-                      result = GetSchema.call(table: t, detail: "summary")
-                      lines << "  #{t}: #{response_text(result).lines.first&.strip}" unless empty?(result)
-                    rescue => e; RailsAiContext.debug_fail(e, nil, label: "review_changes context lookup"); end
+                    columns = Array(RailsAiContext::Payload.schema_table(schema, t)&.dig(:columns)).filter_map { |c| c[:name] if c.is_a?(Hash) }
+                    shown = columns.first(8).join(", ") + (columns.size > 8 ? ", ..." : "")
+                    lines << "  #{t}: #{columns.any? ? "#{count_phrase(columns.size, "column")} now (#{shown})" : "not in the schema yet"}"
+                  rescue => e
+                    RailsAiContext.debug_fail(e, nil, label: "review_changes context lookup")
                   end
                 end
               end
@@ -268,7 +273,8 @@ module RailsAiContext
           when :routes
             begin
               result = GetRoutes.call(detail: "summary")
-              lines << "" << "**Current routes:** #{response_text(result).lines.first&.strip}"
+              summary = response_text(result).lines.first&.strip&.sub(/\A#+\s*/, "")
+              lines << "" << "**Current routes:** #{summary}" unless summary.to_s.empty?
             rescue => e; RailsAiContext.debug_fail(e, nil, label: "review_changes context lookup"); end
           end
 
