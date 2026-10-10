@@ -192,6 +192,19 @@ RSpec.describe RailsAiContext::Serializers::ContextFileSerializer do
       end
     end
 
+    it "ends every file it writes with a newline" do
+      Dir.mktmpdir do |dir|
+        allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+
+        written = described_class.new(context, format: :all).call[:written]
+
+        expect(written.grep(%r{/app/models/AGENTS\.md\z})).not_to be_empty
+        expect(written.reject { |f| f.end_with?(".json") }.reject { |f| File.read(f).end_with?("\n") }).to eq([])
+      end
+    end
+
     it "raises for unknown format" do
       Dir.mktmpdir do |dir|
         allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)

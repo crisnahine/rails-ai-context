@@ -432,10 +432,25 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
 
         first = helper.write_rule_files([ rule_file(path, "content") ])
         expect(first).to eq(written: [ path ], skipped: [], not_applicable: {})
-        expect(File.read(path)).to eq("content")
+        expect(File.read(path)).to eq("content\n")
 
         second = helper.write_rule_files([ rule_file(path, "content") ])
         expect(second).to eq(written: [], skipped: [ path ], not_applicable: {})
+      end
+    end
+
+    # Without the newline, editors and end-of-file fixers rewrote every rule
+    # file, and git flagged each one.
+    it "ends a file with one newline, whether or not the render has one" do
+      Dir.mktmpdir do |root|
+        helper = test_class.new({})
+        bare = File.join(root, "bare.md")
+        ended = File.join(root, "ended.md")
+
+        helper.write_rule_files([ rule_file(bare, "one\ntwo"), rule_file(ended, "one\ntwo\n") ])
+
+        expect(File.read(bare)).to eq("one\ntwo\n")
+        expect(File.read(ended)).to eq("one\ntwo\n")
       end
     end
 

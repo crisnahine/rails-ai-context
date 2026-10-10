@@ -52,7 +52,10 @@ module RailsAiContext
       end
 
       # A file the gem owns whole, rewritten only when it says something else.
+      # It ends with a newline, as a text file does: without one, editors and
+      # end-of-file fixers rewrote every rule file and git flagged each.
       def write_whole(filepath, content)
+        content = "#{content}\n" unless content.end_with?("\n")
         return :skipped if File.exist?(filepath) && RailsAiContext::SafeFile.read_text(filepath) == content
 
         atomic_write(filepath, content)
