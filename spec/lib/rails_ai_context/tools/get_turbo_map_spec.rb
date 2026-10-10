@@ -480,6 +480,18 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
       expect(text).not_to include("No broadcasters found for this stream")
     end
 
+    it "reads Current.user, Rails 8's signed-in user, as a User record" do
+      turbo[:stream_subscriptions] = [
+        { stream: "Current.user, notifications", parts: [ { expr: "Current.user" }, { literal: "notifications" } ],
+          file: "app/views/layouts/_notifications.html.erb", line: 2 }
+      ]
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(wiring(text, "Current.user, notifications")).to include("**Broadcasters:** `broadcast_prepend_to (app/models/notification.rb:24)`")
+      expect(text).not_to include("Can't tell whether `broadcast_prepend_to (app/models/notification.rb:24)`")
+      expect(text).not_to include("Subscription to `Current.user, notifications`")
+    end
+
     it "says it can't tell where a stream names nothing it resolves, and warns only where it is sure" do
       text = described_class.call(detail: "full").content.first[:text]
 

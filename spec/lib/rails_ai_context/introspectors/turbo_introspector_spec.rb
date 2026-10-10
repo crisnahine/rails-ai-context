@@ -442,6 +442,28 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
         expect(result[:model_broadcasts]).to eq([])
       end
     end
+
+    # The blog's notification broadcast named its stream `user` alone, so the
+    # map warned on both ends of a stream that is wired.
+    it "reads a stream passed as several arguments from all of them" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "notification.rb"), <<~RUBY)
+          class Notification < ApplicationRecord
+            belongs_to :user
+            after_create_commit -> { broadcast_prepend_to user, :notifications, target: "notifications" }
+            after_update_commit -> { broadcast_replace_to [user, :notifications] }
+          end
+        RUBY
+
+        broadcasts = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:explicit_broadcasts]
+
+        expect(broadcasts.map { |b| b.slice(:method, :stream, :parts) }).to eq([
+          { method: "broadcast_prepend_to", stream: "user, notifications", parts: [ { expr: "user" }, { literal: "notifications" } ] },
+          { method: "broadcast_replace_to", stream: "user, notifications", parts: [ { expr: "user" }, { literal: "notifications" } ] }
+        ])
+      end
+    end
   end
 
   describe "one controller scan feeding four lists" do

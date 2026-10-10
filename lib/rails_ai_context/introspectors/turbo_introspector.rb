@@ -233,8 +233,8 @@ module RailsAiContext
           owner ||= owner_name(record)
           {
             method: hit[:name],
-            stream: call_stream(hit[:arguments].first),
-            parts: stream_parts(hit[:arguments].first, hit[:computed]),
+            stream: call_stream(hit[:arguments]),
+            parts: stream_parts(hit[:arguments], hit[:computed]),
             # The class the call sits in, which an expression such as `user` is read against.
             owner: owner,
             target: hit[:options][:target]&.to_s,
@@ -251,11 +251,11 @@ module RailsAiContext
       # the record it names. A record streams under its GlobalID, so
       # `[product, :reviews]` in a model and `@product, :reviews` in a view are
       # one stream when both name a Product. Nil for an interpolated name,
-      # which only its text can be compared by.
-      def stream_parts(argument, computed)
-        return nil if argument.nil?
-
-        parts = (argument.is_a?(Array) ? argument : [ argument ]).map do |value|
+      # which only its text can be compared by. A `broadcast_*_to` call takes
+      # its stream as every positional argument, so `user, :notifications`
+      # and `[user, :notifications]` are the same two parts.
+      def stream_parts(arguments, computed)
+        parts = Array(arguments).flatten.map do |value|
           case value
           when Symbol then { literal: value.to_s }
           when String
@@ -371,13 +371,17 @@ module RailsAiContext
       end
 
       # `"post_#{post.id}"` reads as `post_{id}`; a symbol, a string or a bare
-      # identifier as itself; anything else is dynamic.
-      def call_stream(argument)
-        text = argument.to_s
-        return normalize_interpolation(text) if text.match?(/\A["'].*#\{/)
-        return text if argument.is_a?(Symbol) || text.match?(/\A\w+\z/)
+      # identifier as itself; anything else is dynamic. Several arguments
+      # are one stream, labelled part by part as a subscription is.
+      def call_stream(arguments)
+        labels = Array(arguments).flatten.map do |argument|
+          text = argument.to_s
+          next normalize_interpolation(text) if text.match?(/\A["'].*#\{/)
+          next text if argument.is_a?(Symbol) || text.match?(/\A\w+\z/)
 
-        "(dynamic)"
+          return "(dynamic)"
+        end
+        labels.empty? ? "(dynamic)" : labels.join(", ")
       end
 
       def detect_morph_meta

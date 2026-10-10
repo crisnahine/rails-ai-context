@@ -504,8 +504,10 @@ module RailsAiContext
       end
 
       # In a model, `self` is the record and a bare name one of its
-      # belongs_to or has_one associations.
+      # belongs_to or has_one associations; `Current.user` reads as in a view.
       private_class_method def self.model_side_record(expr, owner, models)
+        return view_side_record(expr, models) if expr.start_with?("Current.")
+
         name = expr.delete_prefix("self.")
         return (models.key?(owner) ? owner : nil) if name == "self"
         return nil unless name.match?(/\A[a-z_]\w*\z/) && models[owner].is_a?(Hash)
@@ -516,11 +518,12 @@ module RailsAiContext
         assoc && Introspectors::TableName.model_for(assoc[:class_name] || name.camelize, owner, models)
       end
 
-      # In a view, `@product`, `product` and `current_user` name a record by
-      # the model their name spells, and `@order.user` one through the first
-      # model's association.
+      # In a view, `@product`, `product`, `current_user` and `Current.user`
+      # (Rails 8's authentication keeps the signed-in user there) name a
+      # record by the model their name spells, and `@order.user` one through
+      # the first model's association.
       private_class_method def self.view_side_record(expr, models)
-        head, *chain = expr.delete_prefix("@").split(".")
+        head, *chain = expr.delete_prefix("@").delete_prefix("Current.").split(".")
         return nil unless head.to_s.match?(/\A[a-z_]\w*\z/) && chain.all? { |name| name.match?(/\A[a-z_]\w*\z/) }
 
         named = head.delete_prefix("current_")
