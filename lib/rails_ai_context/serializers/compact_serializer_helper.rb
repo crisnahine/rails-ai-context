@@ -132,21 +132,23 @@ module RailsAiContext
         "_Context trimmed. Use #{tools_noun} for full details._"
       end
 
-      # Counts non-blank physical lines. `keep` holds the trailing how-to-behave sections, so an
-      # over-budget file loses the data above them, which the MCP tools answer in full.
-      def enforce_max_lines(lines, keep: [])
+      # Counts non-blank physical lines. `head` (the title block) and `keep`
+      # (the trailing how-to-behave sections: commands, warnings, rules, the
+      # tools guide and its protocol) are never cut. An over-budget file
+      # loses the data between them, which the tools answer in full, down to
+      # none of it, so a budget smaller than the kept sections leaves just
+      # them: the guide is what makes a compact file worth reading.
+      def enforce_max_lines(lines, head: [], keep: [])
         # The BEGIN/END markers the writer adds count against the budget.
         max = RailsAiContext.configuration.claude_max_lines - SectionMarkerWriter::MARKER_LINES
+        head = physical(head)
         body = physical(lines)
         tail = physical(keep)
-        return (body + tail).join("\n") if content_count(body) + content_count(tail) <= max
-
-        # A hard cap: a tail too big to fit is trimmed from the end like any other overflow.
-        budget = max - 1 - content_count(tail)
-        return truncate(body + tail, max - 1).join("\n") if budget <= 0
+        fixed = content_count(head) + content_count(tail)
+        return (head + body + tail).join("\n") if fixed + content_count(body) <= max
 
         separator = tail.empty? ? [] : [ "" ]
-        (truncate(body, budget) + separator + tail).join("\n")
+        (head + truncate(body, max - 1 - fixed) + separator + tail).join("\n")
       end
 
       def physical(lines)
@@ -246,15 +248,9 @@ module RailsAiContext
 
       # The compact pipeline behind CLAUDE.md, AGENTS.md, .cursorrules and copilot-instructions.md.
       def render_compact_rules
-        lines = []
-        lines.concat(render_header)
-        lines.concat(render_stack_overview)
-        lines.concat(render_key_models)
-        lines.concat(render_notable_gems)
-        lines.concat(render_architecture)
-
+        data = render_stack_overview + render_key_models + render_notable_gems + render_architecture
         instructions = render_commands + render_warnings + render_footer + render_tools_guide_compact
-        enforce_max_lines(lines, keep: instructions)
+        enforce_max_lines(data, head: render_header, keep: instructions)
       end
     end
   end

@@ -46,7 +46,9 @@ RSpec.describe RailsAiContext::Serializers::CopilotSerializer do
     # against a budget of 150: the BEGIN/END markers were added after the trim.
     # They are part of what the gem writes, so they come out of the budget.
     it "counts the markers, so the written block never exceeds the budget" do
-      allow(RailsAiContext.configuration).to receive(:claude_max_lines).and_return(20)
+      whole = described_class.new(serializer_context).call.lines.grep_v(/\A\s*\z/).size
+      budget = whole - 2 + RailsAiContext::Serializers::SectionMarkerWriter::MARKER_LINES
+      allow(RailsAiContext.configuration).to receive(:claude_max_lines).and_return(budget)
 
       Dir.mktmpdir do |dir|
         path = File.join(dir, "CLAUDE.md")
@@ -56,20 +58,22 @@ RSpec.describe RailsAiContext::Serializers::CopilotSerializer do
 
         block = File.read(path).lines
         expect(block.first).to start_with("<!-- BEGIN rails-ai-context -->")
-        expect(block.grep_v(/\A\s*\z/).size).to be <= 20
+        expect(block.join).to include("_Context trimmed.")
+        expect(block.grep_v(/\A\s*\z/).size).to be <= budget
       end
     end
 
-    it "caps the file at the configured compact line budget" do
+    # A budget smaller than the guide used to cut the guide and the protocol
+    # to one line, while the docs said they are kept whole.
+    it "cuts the data and keeps the title, the rules and the tools guide whole" do
       allow(RailsAiContext.configuration).to receive(:claude_max_lines).and_return(20)
 
       output = described_class.new(serializer_context).call
 
-      # Two lines under the budget: the writer's BEGIN/END markers spend them,
-      # and a heading the cut left bare goes with its body, which can land the
-      # output one line lower again.
-      expect(output.lines.grep_v(/\A\s*\z/).size).to be_between(17, 18)
-      expect(output).to end_with("_Context trimmed. Use MCP tools for full details._")
+      expect(output).to start_with("# TestApp - Copilot Context")
+      expect(output).not_to include("## Key models")
+      expect(output.index("_Context trimmed.")).to be < output.index("## Commands")
+      expect(output).to include("## Rules", "Anti-Hallucination Protocol", "### All #{RailsAiContext::Server.exposed_tools.size} tools")
     end
   end
 

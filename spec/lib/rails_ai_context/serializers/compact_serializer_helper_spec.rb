@@ -8,8 +8,8 @@ RSpec.describe RailsAiContext::Serializers::CompactSerializerHelper do
     Class.new do
       include RailsAiContext::Serializers::CompactSerializerHelper
 
-      def cap(lines, keep: [])
-        send(:enforce_max_lines, lines, keep: keep)
+      def cap(lines, head: [], keep: [])
+        send(:enforce_max_lines, lines, head: head, keep: keep)
       end
     end.new
   end
@@ -217,18 +217,30 @@ RSpec.describe RailsAiContext::Serializers::CompactSerializerHelper do
       expect(output).to include("```ruby\nx = 1\n# set up\n```")
     end
 
-    # The budget is a hard cap, so a tail that cannot fit is trimmed like any
-    # other overflow rather than pushing the file over. A heading left bare by
-    # that cut goes too, which can put the output under the cap.
-    it "falls back to trimming the tail when the rules alone exceed the budget" do
+    # The kept sections are the how-to-behave half of the file: at 60 lines
+    # the tools guide and the protocol were cut to one line and the note,
+    # while the docs said they are kept whole. They are, and a budget
+    # smaller than they are leaves just them.
+    it "keeps the rules whole when they alone exceed the budget" do
       with_budget(3)
       body = [ "# App", "- Models: 3" ]
 
       output = host.cap(body, keep: rules)
 
-      expect(content_lines(output)).to eq(3)
-      expect(output).to include("- Models: 3")
-      expect(output).to end_with("_Context trimmed. Use MCP tools for full details._")
+      expect(output).to eq("_Context trimmed. Use MCP tools for full details._\n\n## Rules\n- rule one\n- rule two\n")
+    end
+
+    # The title and the [STATIC] notice under it say what the file is.
+    it "keeps the title block above the cut" do
+      with_budget(6)
+      head = [ "# App - AI Context", "", "> Rails 8.0 | Ruby 3.4", "" ]
+      body = [ "## Stack", "- Models: 3", "- Routes: 9", "" ]
+
+      output = host.cap(body, head: head, keep: rules)
+
+      expect(output).to start_with("# App - AI Context\n\n> Rails 8.0 | Ruby 3.4\n")
+      expect(output).not_to include("- Routes: 9")
+      expect(output).to match(/- rule two\s*\z/)
     end
   end
 

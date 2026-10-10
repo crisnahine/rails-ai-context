@@ -146,8 +146,9 @@ rails ai:context
 ```
 
 - CLAUDE.md, AGENTS.md, .cursorrules and copilot-instructions.md ≤150 non-blank
-  lines (`claude_max_lines`). Over budget, data lines are cut and the Commands,
-  Warnings, Rules and MCP-tools sections kept whole
+  lines (`claude_max_lines`). Over budget, the data sections are cut first; the
+  title and the Commands, Warnings, Rules and Tools sections are never cut, so a
+  budget smaller than they are (about 110 lines) leaves just them
 - Files contain a project overview + MCP tool reference
 - AI uses MCP tools for detailed data on-demand
 - **Best for:** all apps, especially large ones (30+ models)
@@ -1396,7 +1397,7 @@ end
 | `preset` | Symbol | `:full` | Introspector preset (`:full` or `:standard`) |
 | `introspectors` | Array | 40 (full preset) | Which introspectors to run |
 | `context_mode` | Symbol | `:compact` | `:compact` or `:full` |
-| `claude_max_lines` | Integer | `150` | Max non-blank lines in a compact context file's gem-managed block, the `<!-- BEGIN/END rails-ai-context -->` markers included. Over budget, data lines are cut and the Commands, Warnings, Rules and MCP-tools sections kept whole |
+| `claude_max_lines` | Integer | `150` | Budget for the non-blank lines of a compact context file's gem-managed block, the `<!-- BEGIN/END rails-ai-context -->` markers included. Over budget, the data sections (Stack, Key models, Gems, Architecture) are cut first, down to none; the title and the Commands, Warnings, Rules and Tools sections are never cut, so they set the smallest file a budget can give (about 110 lines with the anti-hallucination protocol) |
 | `max_tool_response_chars` | Integer | `200_000` | Safety cap for MCP tool responses and resource payloads |
 | `cache_ttl` | Integer | `60` | Cache TTL in seconds for introspection results |
 | `custom_tools` | Array | `[]` | Additional MCP tool classes to register alongside built-in tools |

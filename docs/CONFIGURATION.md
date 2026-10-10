@@ -90,7 +90,7 @@ empty list wrote every tool's files.
 | `introspectors` | Array of symbols | (from preset) | Override the introspector list directly |
 | `generate_root_files` | Boolean | `true` | Set `false` to generate split rules only: no CLAUDE.md, AGENTS.md, .cursorrules or copilot-instructions.md (`.ai-context.json` is still written) |
 | `anti_hallucination_rules` | Boolean | `true` | Embed 6-rule verification protocol in generated context files |
-| `claude_max_lines` | Integer | `150` | Max non-blank lines in a compact context file's gem-managed block, the `<!-- BEGIN/END rails-ai-context -->` markers included. Over budget, data lines are cut and the Commands, Warnings, Rules and MCP-tools sections kept whole. Must be positive |
+| `claude_max_lines` | Integer | `150` | Budget for the non-blank lines of a compact context file's gem-managed block, the `<!-- BEGIN/END rails-ai-context -->` markers included. Over budget, the data sections (Stack, Key models, Gems, Architecture) are cut first, down to none; the title and the Commands, Warnings, Rules and Tools sections are never cut, so they set the smallest file a budget can give (about 110 lines with the anti-hallucination protocol). Must be positive |
 
 ### MCP Server
 
