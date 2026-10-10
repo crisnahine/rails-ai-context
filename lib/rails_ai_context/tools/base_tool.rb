@@ -947,7 +947,7 @@ module RailsAiContext
             next whole unless params
 
             short = name.sub(/\Arails_get_/, "").sub(/\Arails_/, "")
-            command = RailsAiContext::InstallMode.standalone? ? "rails-ai-context tool #{short}" : "rails 'ai:tool[#{short}]'"
+            command = RailsAiContext::InstallMode.tool_command(short)
             [ command, *params ].join(" ")
           end
           converted.gsub(PARAM_HINT) { (params = cli_params(Regexp.last_match(1))) ? "`#{params.join(' ')}`" : Regexp.last_match(0) }

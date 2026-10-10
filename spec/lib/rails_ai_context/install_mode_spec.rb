@@ -87,4 +87,49 @@ RSpec.describe RailsAiContext::InstallMode do
       end
     end
   end
+  # What a reader runs, from one place: the context files, the tools' hints
+  # and the CLI's help all ask here.
+  describe ".form, .command and .tool_command" do
+    let(:tmpdir) { Dir.mktmpdir }
+    let(:lock_with_gem) { "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails-ai-context (5.13.0)\n" }
+
+    before { allow(Rails).to receive(:root).and_return(Pathname.new(tmpdir)) }
+    after  { FileUtils.remove_entry(tmpdir) }
+
+    it "names the rake tasks in an app that bundles the gem" do
+      File.write(File.join(tmpdir, "Gemfile.lock"), lock_with_gem)
+      FileUtils.mkdir_p(File.join(tmpdir, "config"))
+      File.write(File.join(tmpdir, "config/application.rb"), "")
+
+      expect(described_class.form).to eq(:tasks)
+      expect(described_class.command(:serve)).to eq("rails ai:serve")
+      expect(described_class.tool_command("schema")).to eq("rails 'ai:tool[schema]'")
+    end
+
+    it "names the installed binary where the app's bundle lacks the gem" do
+      File.write(File.join(tmpdir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (7.1.0)\n")
+
+      expect(described_class.form).to eq(:standalone)
+      expect(described_class.command(:serve)).to eq("rails-ai-context serve")
+      expect(described_class.tool_command("schema")).to eq("rails-ai-context tool schema")
+    end
+
+    # A mountable engine's root bundles the gem, but its rake tasks run in
+    # the dummy app as app:ai:*, so neither rake form exists there.
+    it "names the binary in the bundle at an engine's root" do
+      File.write(File.join(tmpdir, "Gemfile.lock"), lock_with_gem)
+      File.write(File.join(tmpdir, "shelf.gemspec"), "")
+
+      expect(described_class.form).to eq(:bundled)
+      expect(described_class.command(:serve)).to eq("bundle exec rails-ai-context serve")
+      expect(described_class.command(:context)).to eq("bundle exec rails-ai-context context")
+      expect(described_class.command(:install)).to eq("rails generate rails_ai_context:install")
+      expect(described_class.tool_command("schema")).to eq("bundle exec rails-ai-context tool schema")
+    end
+
+    it "keeps a caller's own standalone answer" do
+      expect(described_class.command(:serve, standalone: true)).to eq("rails-ai-context serve")
+      expect(described_class.command(:serve, standalone: false)).to eq("rails ai:serve")
+    end
+  end
 end

@@ -31,8 +31,47 @@ module RailsAiContext
 
     module_function
 
-    def command(job, standalone: standalone?)
-      COMMANDS.fetch(job)[standalone ? 0 : 1]
+    # @param standalone [Boolean, nil] the standalone answer the caller
+    #   already has; nil asks the root's own form
+    # @param form [Symbol, nil] :standalone, :bundled or :tasks (see #form)
+    def command(job, standalone: nil, form: nil)
+      form ||= standalone.nil? ? self.form : (standalone ? :standalone : :tasks)
+      standalone_form, task_form = COMMANDS.fetch(job)
+      case form
+      when :standalone then standalone_form
+      # The generator runs at an engine's root as it does in an app.
+      when :bundled then job == :install ? task_form : "bundle exec #{standalone_form}"
+      else task_form
+      end
+    end
+
+    # One tool's command, `short` being its name without the rails_ /
+    # rails_get_ prefix (`schema`), in the form `form` runs it.
+    def tool_command(short, form: self.form)
+      case form
+      when :standalone then "rails-ai-context tool #{short}"
+      when :bundled then "bundle exec rails-ai-context tool #{short}"
+      else "rails 'ai:tool[#{short}]'"
+      end
+    end
+
+    # How a reader at the root runs this gem:
+    #   :standalone - the installed binary; the app's bundle lacks the gem.
+    #   :bundled    - the binary in the root's own bundle. The bundle has the
+    #                 gem but the root is a gem's, with no app for the rake
+    #                 tasks to load: a mountable engine's root, whose tasks
+    #                 run in its dummy app as app:ai:*.
+    #   :tasks      - the app's rake tasks.
+    def form(root: nil)
+      root ||= app_root
+      return :standalone if standalone?(root: root)
+
+      gem_root?(root) ? :bundled : :tasks
+    end
+
+    def gem_root?(root)
+      !File.exist?(File.join(root.to_s, "config", "application.rb")) &&
+        Dir.glob(File.join(root.to_s, "*.gemspec")).any?
     end
 
     # `root:` asks about one app; without it, the app under analysis. Either

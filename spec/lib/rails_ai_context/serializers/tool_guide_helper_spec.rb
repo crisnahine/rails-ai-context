@@ -9,7 +9,7 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
     Class.new do
       include RailsAiContext::Serializers::ToolGuideHelper
       # Make private methods accessible for testing
-      public :cli_cmd, :tool_call_inline, :standalone_install?
+      public :cli_cmd, :serve_cmd, :tool_call_inline, :install_form
     end
   end
 
@@ -324,32 +324,52 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
     end
   end
 
-  describe "#standalone_install?" do
+  describe "#install_form" do
     let(:tmpdir) { Dir.mktmpdir }
+    let(:bundled) { "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails-ai-context (5.13.0)\n" }
 
     before { allow(Rails).to receive(:root).and_return(Pathname.new(tmpdir)) }
     after  { FileUtils.remove_entry(tmpdir) }
 
-    it "is false when the Gemfile.lock lists rails-ai-context" do
-      File.write(File.join(tmpdir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails-ai-context (5.13.0)\n")
-      expect(helper.standalone_install?).to be(false)
+    it "is the rake tasks when the Gemfile.lock lists rails-ai-context" do
+      File.write(File.join(tmpdir, "Gemfile.lock"), bundled)
+      expect(helper.install_form).to eq(:tasks)
     end
 
-    it "is true when the Gemfile.lock does not list rails-ai-context" do
+    it "is standalone when the Gemfile.lock does not list rails-ai-context" do
       File.write(File.join(tmpdir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (7.1.0)\n")
-      expect(helper.standalone_install?).to be(true)
+      expect(helper.install_form).to eq(:standalone)
+      expect(helper.cli_cmd("schema")).to eq("rails-ai-context tool schema")
     end
 
-    it "defaults to false (in-Gemfile) when there is no Gemfile.lock at all" do
-      expect(helper.standalone_install?).to be(false)
+    it "defaults to the rake tasks (in-Gemfile) when there is no Gemfile.lock at all" do
+      expect(helper.install_form).to eq(:tasks)
+    end
+
+    # A mountable engine's root: the rake tasks run in its dummy app as
+    # app:ai:*, so `rails 'ai:tool[...]'` and `rails ai:serve` do not exist there.
+    it "is the binary in the bundle at a gem's root, which has no app of its own" do
+      File.write(File.join(tmpdir, "Gemfile.lock"), bundled)
+      File.write(File.join(tmpdir, "shelf.gemspec"), "")
+      expect(helper.install_form).to eq(:bundled)
+      expect(helper.cli_cmd("schema", "table=users")).to eq("bundle exec rails-ai-context tool schema table=users")
+      expect(helper.serve_cmd).to eq("bundle exec rails-ai-context serve")
+    end
+
+    it "is the rake tasks for an app that also ships a gemspec" do
+      File.write(File.join(tmpdir, "Gemfile.lock"), bundled)
+      File.write(File.join(tmpdir, "shop.gemspec"), "")
+      FileUtils.mkdir_p(File.join(tmpdir, "config"))
+      File.write(File.join(tmpdir, "config/application.rb"), "")
+      expect(helper.install_form).to eq(:tasks)
     end
 
     it "memoizes the result for the lifetime of the instance" do
       File.write(File.join(tmpdir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (7.1.0)\n")
-      expect(helper.standalone_install?).to be(true)
+      expect(helper.install_form).to eq(:standalone)
 
-      File.write(File.join(tmpdir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails-ai-context (5.13.0)\n")
-      expect(helper.standalone_install?).to be(true), "expected the memoized value to stick within one instance"
+      File.write(File.join(tmpdir, "Gemfile.lock"), bundled)
+      expect(helper.install_form).to eq(:standalone), "expected the memoized value to stick within one instance"
     end
   end
 

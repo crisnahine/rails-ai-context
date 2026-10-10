@@ -446,23 +446,22 @@ module RailsAiContext
       # Generate zsh-safe CLI command. In-Gemfile installs go through the rake
       # task (`rails 'ai:tool[name]'`); standalone installs (gem not in the
       # host app's Gemfile) have no rake tasks at all, so they use the CLI
-      # binary directly (`rails-ai-context tool name`).
+      # binary directly (`rails-ai-context tool name`), and an engine's root,
+      # whose tasks run in its dummy app, uses the binary in its bundle.
       def cli_cmd(tool_name, params = nil)
-        cmd = standalone_install? ? "rails-ai-context tool #{tool_name}" : "rails 'ai:tool[#{tool_name}]'"
+        cmd = RailsAiContext::InstallMode.tool_command(tool_name, form: install_form)
         cmd += " #{params}" if params
         cmd
       end
 
       def serve_cmd
-        RailsAiContext::InstallMode.command(:serve, standalone: standalone_install?)
+        RailsAiContext::InstallMode.command(:serve, form: install_form)
       end
 
       # Delegates to InstallMode (shared with the CLI surfaces), memoized per
       # serializer instance because cli_cmd runs once per documented tool.
-      def standalone_install?
-        return @standalone_install if defined?(@standalone_install)
-
-        @standalone_install = RailsAiContext::InstallMode.standalone?
+      def install_form
+        @install_form ||= RailsAiContext::InstallMode.form
       end
 
       # Inline tool call for workflow steps (shorter format).
