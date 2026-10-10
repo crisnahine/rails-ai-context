@@ -539,10 +539,14 @@ class RailsAiContextCLI < Thor
       record = ::RailsAiContext::Install::SelectionRecord
       # A workspace's apps are named from the workspace, where the run started.
       place = root == Dir.pwd ? program_surface.place : app_root.display(root, Dir.pwd)
-      conflicts = [
-        record.conflict_message(:context_files, record.write_context_files(context_files, root: root), place: place),
-        record.conflict_message(:tool_mode, record.write_tool_mode(tool_mode, root: root), place: place)
-      ].compact
+      lines = { context_files: record.write_context_files(context_files, root: root),
+                tool_mode: record.write_tool_mode(tool_mode, root: root) }
+      conflicts = lines.filter_map { |key, status| record.conflict_message(key, status, place: place) }
+      # The initializer is reported once, whichever of its three lines moved:
+      # a mode switch that rewrote it said nothing.
+      if lines.values.any? { |status| %i[updated inserted].include?(status) } && %i[unchanged absent].include?(result[:initializer])
+        result = result.merge(initializer: :updated)
+      end
 
       (record.messages(result, place: place) + conflicts).each do |level, text|
         $stderr.puts(level == :warn ? "Warning: #{text}" : text)

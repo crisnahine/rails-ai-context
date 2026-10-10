@@ -1021,9 +1021,11 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         initializer = File.join(dir, "config", "initializers", "rails_ai_context.rb")
         File.write(initializer, "RailsAiContext.configure do |config|\n  config.tool_mode = :mcp\nend\n")
 
-        `cd #{dir} && printf '1\\n2\\n' | ruby -I #{lib} #{exe} init --no-boot 2>&1`
+        out = `cd #{dir} && printf '1\\n2\\n' | ruby -I #{lib} #{exe} init --no-boot 2>&1`
 
         expect(File.read(initializer)).to include("config.tool_mode = :cli")
+        # The mode line moved, so the file it is in is named, as for the tools.
+        expect(out).to include("Updated config/initializers/rails_ai_context.rb")
       end
     end
 
