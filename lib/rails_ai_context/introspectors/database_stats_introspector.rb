@@ -62,14 +62,22 @@ module RailsAiContext
         { adapter: "mysql", tables: tables, total_tables: tables.size }
       end
 
+      # SQLite keeps no row estimate a query can read without ANALYZE, and
+      # COUNT(*) walks the whole table on every introspection. A count that
+      # stops at the cap reads at most that many rows; a table past it is
+      # reported as at least the cap.
+      SQLITE_COUNT_CAP = 100_000
+
       def collect_sqlite_stats
         conn = ActiveRecord::Base.connection
         # Use conn.tables as authoritative list - never interpolate user input
         table_names = (conn.tables - SqliteVirtualTables.hidden(conn)).reject { |t| t.start_with?("ar_internal_metadata", "schema_migrations") }
 
         tables = table_names.map do |table|
-          count = conn.select_value("SELECT COUNT(*) FROM #{conn.quote_table_name(table)}").to_i
-          { table: table, approximate_rows: count }
+          count = conn.select_value("SELECT COUNT(*) FROM (SELECT 1 FROM #{conn.quote_table_name(table)} LIMIT #{SQLITE_COUNT_CAP + 1})").to_i
+          entry = { table: table, approximate_rows: [ count, SQLITE_COUNT_CAP ].min }
+          entry[:at_least] = true if count > SQLITE_COUNT_CAP
+          entry
         end.sort_by { |t| -t[:approximate_rows] }
 
         { adapter: "sqlite", tables: tables, total_tables: tables.size }

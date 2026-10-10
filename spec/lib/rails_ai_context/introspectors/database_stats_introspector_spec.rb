@@ -14,6 +14,19 @@ RSpec.describe RailsAiContext::Introspectors::DatabaseStatsIntrospector do
       expect(result[:total_tables]).to be_a(Integer)
     end
 
+    # COUNT(*) read every SQLite table whole on each introspection; the count
+    # now stops at the cap, and a table past it is a floor.
+    it "counts a SQLite table only up to the cap" do
+      stub_const("#{described_class}::SQLITE_COUNT_CAP", 2)
+      connection = ActiveRecord::Base.connection
+      connection.create_table(:ds_counted, force: true) { |t| t.string :name }
+      3.times { |i| connection.execute("INSERT INTO ds_counted (name) VALUES ('row #{i}')") }
+
+      expect(introspector.call[:tables].find { |t| t[:table] == "ds_counted" }).to eq(table: "ds_counted", approximate_rows: 2, at_least: true)
+    ensure
+      connection&.drop_table(:ds_counted, if_exists: true)
+    end
+
     it "counts no SQLite virtual table or its shadow tables" do
       connection = ActiveRecord::Base.connection
       connection.execute("CREATE VIRTUAL TABLE ds_fts USING fts5 (title)")
