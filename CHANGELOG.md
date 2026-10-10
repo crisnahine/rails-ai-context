@@ -360,6 +360,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MCP tools in their Cursor description and Copilot name. In CLI mode each
   of them names the command now (`rails 'ai:tool[model_details]'
   model=Name`), the trim note included; MCP mode reads as before.
+- **A small `claude_max_lines` no longer cuts the tools guide.** Below
+  about 110 lines the budget was a hard cap that trimmed the file from the
+  end, so at 60 the four compact files kept the data and lost the
+  anti-hallucination protocol and the whole tool reference to one line and
+  the trim note, though the docs said those sections are kept whole. The
+  title block and the Commands, Warnings, Rules and Tools sections are now
+  never cut: the data sections between them go first, down to none, so
+  those sections set the smallest file a budget can give.
 - **Full mode keeps the anti-hallucination protocol and the tools guide.**
   `context_mode :full` (`rails ai:context:full`, `CONTEXT_MODE=full`) wrote
   CLAUDE.md, AGENTS.md and copilot-instructions.md without them, so OpenCode
