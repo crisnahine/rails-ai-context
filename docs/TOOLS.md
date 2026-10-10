@@ -430,15 +430,17 @@ action's body and the before filters that run for it say what its instance
 variables hold (`@reviews = @product.reviews.latest`, `@orders =
 current_user.orders`), and its templates and the partials they render say what
 walks them: `@reviews.each do |review|`, `render @reviews`, `render partial:,
-collection:`, `json.array!`, or a loop record passed to a partial as a local.
+collection:`, `json.array!`, a loop record passed to a partial as a local, or a
+loop in a partial rendered with no locals (`render "dashboard/list"`).
 A `review.user` read there is a risk; the same name anywhere else is not. The
 row names the action and the view the call sits in. `high` means the query
 preloads nothing, `medium` that it preloads other associations, and `low` that
 it preloads this one; a named scope in the query counts with its body, so
-`Post.with_author` preloads what `scope :with_author, -> { includes(:user) }` does. `.count` on an association runs a query per record even
-when preloaded, so it stays `high`. `.size`, `.any?`, `.empty?` and `.none?` on
-a has_many whose other side keeps a `counter_cache` read the counter column, so
-they are not a risk. The inverse Rails sets on each record of
+`Post.with_author` preloads what `scope :with_author, -> { includes(:user) }`
+does. `.count` on an association runs a query per record even when preloaded,
+so it stays `high`. `.size`, `.any?`, `.empty?` and `.none?` on a has_many
+whose other side keeps a `counter_cache` read the counter column, so they are
+not a risk. The inverse Rails sets on each record of
 `@product.reviews` (`review.product`) is not a risk, and a branch on a local
 the render passes as a literal (`show_seller: false`) is not read. ERB and
 jbuilder are read; Haml and Slim templates are not, and neither are serializers.
