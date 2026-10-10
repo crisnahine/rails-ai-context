@@ -57,6 +57,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the gem without `rails-ai-context` and every MCP config's
   `bundle exec rails-ai-context serve` failed to start. Outside a checkout
   the files on disk are the list.
+- **The binary runs an app's own copy of the gem when its bundle has one.**
+  In an app whose Gemfile carries rails-ai-context at another version or
+  from a `path:` copy, the global binary loaded its own files before the
+  boot and the bundle's over them: "already initialized constant" warnings,
+  and a command that ran half of each copy (`version` said one release, the
+  server announced another). It now runs the command as
+  `bundle exec rails-ai-context` would, from where it was typed, and says
+  so on stderr: that is the copy the app's MCP configs start. A bundle not
+  installed yet is left alone, so its failed boot still serves the static
+  tier.
 - **The binary loads no gem the app pins before the app boots.** Run from a
   subdirectory of an app (#427) or a folder holding one, it asked of every
   directory it passed whether a non-Rails framework lived there, which

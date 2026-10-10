@@ -44,8 +44,9 @@ module RailsAiContext
       attr_reader :gemfile_gems
 
       def initialize(versions, ruby_versions: {}, ruby_engine: nil, reason: nil, absent: false, direct: nil, path_remotes: [],
-                     outside_gemfile: nil, no_repo: false, gemfile_gems: nil)
+                     outside_gemfile: nil, no_repo: false, gemfile_gems: nil, sources: {})
         @versions = versions
+        @sources = sources
         @gemfile_gems = gemfile_gems
         @outside_gemfile = outside_gemfile
         @no_repo = no_repo
@@ -87,6 +88,11 @@ module RailsAiContext
 
       def present?(name)
         @versions.key?(name.to_s)
+      end
+
+      # Where the lockfile takes a gem from: [:gem] (a rubygems source), [:path, remote] or [:git]; nil when unlocked.
+      def source(name)
+        @sources[name.to_s]
       end
 
       def version(name)
@@ -277,13 +283,16 @@ module RailsAiContext
       in_specs = false
       in_dependencies = false
       in_path = false
+      in_git = false
       path_remotes = []
+      sources = {}
       specs_section = false
       content.each_line do |line|
         if line.match?(/\A\S/)
           in_specs = false
           in_dependencies = line.start_with?("DEPENDENCIES")
           in_path = line.strip == "PATH"
+          in_git = line.strip == "GIT"
         elsif in_path && (match = line.match(REMOTE_LINE))
           path_remotes << match[1].strip
         elsif in_dependencies && (match = line.match(DEPENDENCY_LINE))
@@ -296,6 +305,7 @@ module RailsAiContext
           # per platform. The text before the first hyphen is the version; a
           # prerelease tag ("1.70.0-beta1") is dropped along with the platform.
           versions[match[1]] ||= match[2].split("-", 2).first
+          sources[match[1]] ||= if in_path then [ :path, path_remotes.last ] elsif in_git then [ :git ] else [ :gem ] end
         elsif (match = line.match(RUBY_LINE)) && match[1].match?(PLAIN_VERSION)
           ruby_version = [ match[1], engine_name(match[2], match[3]) ]
         end
@@ -306,7 +316,8 @@ module RailsAiContext
       return Spec.new({}, reason: "#{File.basename(path)} has no specs section") unless specs_section
 
       facts = gemfile(bundle)
-      Spec.new(versions, **declared_ruby(ruby_version, root, bundle, facts), direct: direct, path_remotes: path_remotes)
+      Spec.new(versions, **declared_ruby(ruby_version, root, bundle, facts), direct: direct, path_remotes: path_remotes,
+               sources: sources)
     end
     private_class_method :parse
 

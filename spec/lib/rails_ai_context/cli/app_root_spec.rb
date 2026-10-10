@@ -337,6 +337,60 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
       end
     end
 
+    describe ".bundled_handoff" do
+      def locked_from(root, source)
+        File.write(File.join(root, "Gemfile"), %(gem "rails-ai-context"\n))
+        File.write(File.join(root, "Gemfile.lock"), "#{source}\nPLATFORMS\n  ruby\n\nDEPENDENCIES\n  rails-ai-context!\n")
+      end
+
+      def path_copy(path)
+        dir(path).tap { |copy| File.write(File.join(copy, "rails-ai-context.gemspec"), "") }
+      end
+
+      before { stub_const("ENV", ENV.to_h.except("BUNDLE_BIN_PATH", described_class::HANDOFF_ENV)) }
+
+      # Two copies in one process: this one's files load before the boot,
+      # the bundle's over them.
+      it "hands the command to the bundle's own copy, found where its lockfile names it" do
+        root = app("shop")
+        copy = path_copy("vendor/rails-ai-context")
+        locked_from(root, "PATH\n  remote: ../vendor/rails-ai-context\n  specs:\n    rails-ai-context (5.0.0)\n")
+
+        handoff = described_class.bundled_handoff(root)
+
+        expect(handoff.version).to eq("5.0.0")
+        expect(handoff.env).to eq("BUNDLE_GEMFILE" => File.join(root, "Gemfile"), described_class::HANDOFF_ENV => "1")
+        expect(File.directory?(copy)).to be true
+      end
+
+      it "runs on when the bundle's copy is this one, or this run is already the bundle's" do
+        root = app("shop")
+        locked_from(root, "PATH\n  remote: #{described_class::OWN_COPY}\n  specs:\n    rails-ai-context (5.0.0)\n")
+        expect(described_class.bundled_handoff(root)).to be_nil
+
+        path_copy("vendor/rails-ai-context")
+        locked_from(root, "PATH\n  remote: ../vendor/rails-ai-context\n  specs:\n    rails-ai-context (5.0.0)\n")
+        stub_const("ENV", ENV.to_h.merge("BUNDLE_BIN_PATH" => "/usr/bin/bundle"))
+        expect(described_class.bundled_handoff(root)).to be_nil
+        stub_const("ENV", ENV.to_h.except("BUNDLE_BIN_PATH").merge(described_class::HANDOFF_ENV => "1"))
+        expect(described_class.bundled_handoff(root)).to be_nil
+      end
+
+      # A bundle not installed yet fails to boot, which the static tier
+      # answers; bundle exec would only fail.
+      it "runs on when the bundle's copy is not installed, or the bundle holds none" do
+        root = app("shop")
+        locked_from(root, "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails-ai-context (0.0.1)\n")
+        expect(described_class.bundled_handoff(root)).to be_nil
+
+        locked_from(root, "PATH\n  remote: ../nowhere\n  specs:\n    rails-ai-context (5.0.0)\n")
+        expect(described_class.bundled_handoff(root)).to be_nil
+
+        locked_from(root, "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (8.0.0)\n")
+        expect(described_class.bundled_handoff(root)).to be_nil
+      end
+    end
+
     it "names the app above a wrong --app-path" do
       root = app("shop")
       models = dir("shop/app/models")
