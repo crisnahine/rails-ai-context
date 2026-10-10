@@ -11,7 +11,7 @@
 ---
 
 > [!CAUTION]
-> This gem is designed for **development environments**. The query tool is disabled in production by default. Sensitive files are blocked. All 45 tools are read-only.
+> This gem is designed for **development environments**. The query tool, and MCP over HTTP from inside the app, are disabled in production by default. Sensitive files are blocked. All 45 tools are read-only.
 
 ## Design principles
 
@@ -346,11 +346,11 @@ The `rails_migration_advisor` tool validates input:
 
 ## MCP HTTP transport
 
-When using HTTP transport (Rack middleware or McpController):
+No HTTP entry point authenticates a client: every tool answers whoever reaches the endpoint.
 
-- **Default bind**: `127.0.0.1` (localhost only - not exposed to network)
-- **`auto_mount` is `false` by default** - must be explicitly enabled
-- **Doctor checks** fail if `auto_mount` is true in production, and report it as enabled elsewhere
+**Inside the app** - the mounted engine and `auto_mount` - the endpoint is on your app's own web server, so it is as reachable as the app is. In production both refuse every request with a 403 and a JSON-RPC error that says how to opt in, and log the refusal once. `config.allow_http_in_production = true` lets them answer there. Set it only with the endpoint behind your app's authentication, such as a routes constraint around the mount. `auto_mount` answers before routing, so nothing in the app can guard it, and doctor's "MCP HTTP endpoint" check fails that pair. With the option on and the engine, it warns.
+
+`auto_mount` is `false` by default, and the engine exists only where you mount it. Mount it guarded, `if defined?(RailsAiContext::Engine)`, so the routes file still loads where the gem is not installed.
 
 The McpController uses thread-safe transport initialization with mutex synchronization.
 

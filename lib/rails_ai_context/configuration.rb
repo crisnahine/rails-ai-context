@@ -19,7 +19,7 @@ module RailsAiContext
       ai_tools tool_mode preset context_mode context_files generate_root_files claude_max_lines
       anti_hallucination_rules
       server_name cache_ttl max_tool_response_chars
-      live_reload live_reload_debounce auto_mount http_path http_bind http_port
+      live_reload live_reload_debounce auto_mount http_path http_bind http_port allow_http_in_production
       output_dir skip_tools excluded_models excluded_controllers
       excluded_route_prefixes excluded_filters excluded_middleware excluded_association_names excluded_paths
       excluded_concerns
@@ -207,6 +207,11 @@ module RailsAiContext
 
     # Whether to auto-mount the MCP HTTP endpoint
     attr_accessor :auto_mount
+
+    # Whether the endpoint inside the app (the mounted engine and auto_mount)
+    # answers in production, where it would answer every tool to whoever can
+    # reach the app. Off, it refuses there with a 403 (default: false).
+    attr_accessor :allow_http_in_production
 
     # HTTP transport settings. http_port's writer validates, below.
     attr_accessor :http_path, :http_bind
@@ -407,6 +412,7 @@ module RailsAiContext
         .ssh/* .aws/credentials .aws/config .netrc .pgpass .my.cnf
       ]
       @auto_mount          = false
+      @allow_http_in_production = false
       @http_path           = "/mcp"
       @http_bind           = "127.0.0.1"
       @http_port           = 6029

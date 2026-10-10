@@ -323,6 +323,39 @@ RSpec.describe RailsAiContext::McpController do
     end
   end
 
+  describe "in production" do
+    let(:transport) { instance_double(MCP::Server::Transports::StreamableHTTPTransport, handle_request: nil) }
+    let(:controller) { described_class.new }
+
+    before do
+      RailsAiContext::McpEdge.instance_variable_set(:@production_refusal_logged, nil)
+      allow(RailsAiContext).to receive(:environment_name).and_return("production")
+      allow(RailsAiContext).to receive(:log_warn)
+      described_class.instance_variable_set(:@mcp_transport, transport)
+      controller.instance_variable_set(:@_request, ActionDispatch::TestRequest.create("REQUEST_METHOD" => "POST"))
+      controller.instance_variable_set(:@_response, ActionDispatch::TestResponse.new)
+      controller.instance_variable_set(:@_action_name, "handle")
+    end
+
+    it "refuses with a 403 that says how to opt in, and never reaches the transport" do
+      controller.handle
+
+      expect(controller.response.status).to eq(403)
+      expect(controller.response.media_type).to eq("application/json")
+      expect(JSON.parse(controller.response.body).dig("error", "message")).to include("allow_http_in_production")
+      expect(transport).not_to have_received(:handle_request)
+    end
+
+    it "serves once the app opts in" do
+      allow(RailsAiContext.configuration).to receive(:allow_http_in_production).and_return(true)
+      allow(transport).to receive(:handle_request).and_return([ 200, { "Content-Type" => "application/json" }, [ "{}" ] ])
+
+      controller.handle
+
+      expect(controller.response.status).to eq(200)
+    end
+  end
+
   describe "class hierarchy" do
     it "inherits from ActionController::API" do
       expect(described_class).to be < ActionController::API

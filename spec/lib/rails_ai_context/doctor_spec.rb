@@ -75,7 +75,7 @@ RSpec.describe RailsAiContext::Doctor do
 
     it "includes deep checks" do
       names = result[:checks].map(&:name)
-      expect(names).to include("Context files", "Preset coverage", "Secrets in .gitignore", "MCP auto_mount")
+      expect(names).to include("Context files", "Preset coverage", "Secrets in .gitignore", "MCP HTTP endpoint")
     end
 
     it "runs at least 15 checks" do
@@ -96,9 +96,34 @@ RSpec.describe RailsAiContext::Doctor do
     end
 
     it "checks security settings" do
-      auto_mount = result[:checks].find { |c| c.name == "MCP auto_mount" }
-      expect(auto_mount).not_to be_nil
-      expect(auto_mount.status).to eq(:pass)
+      endpoint = result[:checks].find { |c| c.name == "MCP HTTP endpoint" }
+      expect(endpoint).not_to be_nil
+      expect(endpoint.status).to eq(:pass)
+    end
+
+    describe "the HTTP endpoint in production" do
+      def endpoint_check
+        doctor.send(:check_security_http_endpoint)
+      end
+
+      it "passes auto_mount, which refuses in production unless the app opts in" do
+        allow(RailsAiContext.configuration).to receive(:auto_mount).and_return(true)
+
+        expect(endpoint_check.status).to eq(:pass)
+      end
+
+      it "warns when the app lets the engine answer in production" do
+        allow(RailsAiContext.configuration).to receive(:allow_http_in_production).and_return(true)
+
+        expect(endpoint_check.status).to eq(:warn)
+      end
+
+      # auto_mount answers before routing, so no authentication can sit in front of it.
+      it "fails auto_mount answering in production" do
+        allow(RailsAiContext.configuration).to receive_messages(allow_http_in_production: true, auto_mount: true)
+
+        expect(endpoint_check.status).to eq(:fail)
+      end
     end
 
     it "checks preset coverage" do

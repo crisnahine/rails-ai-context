@@ -102,6 +102,7 @@ empty list wrote every tool's files.
 | `live_reload` | Symbol/Boolean | `:auto` | - | `:auto` (uses `listen` gem if available), `true`, or `false`. A server with no watch running checks the app's files at each tool call instead, so its answers follow edits either way |
 | `live_reload_debounce` | Float | `1.5` | - | Seconds to wait before processing file changes |
 | `auto_mount` | Boolean | `false` | - | Auto-mount Rack middleware for HTTP transport |
+| `allow_http_in_production` | Boolean | `false` | - | Let the mounted engine and `auto_mount` answer in production. Off, they refuse there with a 403 and a JSON-RPC error saying how to opt in. Every tool answers whoever reaches the endpoint, so set it only with the endpoint behind your app's authentication (see [SECURITY.md](SECURITY.md#mcp-http-transport)) |
 | `http_path` | String | `"/mcp"` | - | HTTP endpoint path |
 | `http_bind` | String | `"127.0.0.1"` | - | HTTP bind address |
 | `http_port` | Integer | `6029` | 1 to 65535 | HTTP listen port |

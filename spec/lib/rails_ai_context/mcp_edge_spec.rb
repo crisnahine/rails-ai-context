@@ -78,6 +78,49 @@ RSpec.describe RailsAiContext::McpEdge do
     end
   end
 
+  # The middleware and the engine ride the app's own web server, so in
+  # production every tool would answer whoever reaches the app.
+  describe ".production_refusal" do
+    before { described_class.instance_variable_set(:@production_refusal_logged, nil) }
+
+    def in_environment(name)
+      allow(RailsAiContext).to receive(:environment_name).and_return(name)
+    end
+
+    it "lets development and test through" do
+      %w[development test].each do |name|
+        in_environment(name)
+        expect(described_class.production_refusal).to be_nil
+      end
+    end
+
+    it "refuses in production with a JSON-RPC error that says how to opt in" do
+      in_environment("production")
+
+      status, headers, body = described_class.production_refusal
+
+      expect(status).to eq(403)
+      expect(headers).to eq("Content-Type" => "application/json")
+      expect(JSON.parse(body.join).dig("error", "message")).to include("config.allow_http_in_production = true")
+    end
+
+    it "serves in production once the app opts in" do
+      in_environment("production")
+      allow(RailsAiContext.configuration).to receive(:allow_http_in_production).and_return(true)
+
+      expect(described_class.production_refusal).to be_nil
+    end
+
+    it "logs the refusal once, however often the client retries" do
+      in_environment("production")
+      allow(RailsAiContext).to receive(:log_warn)
+
+      3.times { described_class.production_refusal }
+
+      expect(RailsAiContext).to have_received(:log_warn).with(/Refused an MCP request/).once
+    end
+  end
+
   describe ".build_transport" do
     it "returns a streamable HTTP transport" do
       expect(described_class.build_transport)
