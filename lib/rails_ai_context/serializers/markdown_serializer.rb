@@ -70,12 +70,15 @@ module RailsAiContext
       # Each column with its type and default, then the table's indexes and
       # foreign keys: the facts a migration has to agree with. Every
       # database's, the primary's first; a table name can be in two of them.
+      # A database a Rails framework keeps to itself is named, not dumped.
       def schema_section
         schema = Payload.section(context, :schema)
-        secondary = Payload.secondary_databases(schema)
+        secondary = Payload.app_databases(schema)
 
         sections = [ database_schema_text(schema[:tables], secondary.any? ? "primary" : nil) ]
         secondary.each { |name, db| sections << database_schema_text(db[:tables], name, db[:note]) }
+        frameworks = Payload.framework_databases(schema).map { |name, db| SectionFacts.framework_database_text(name, db) }
+        sections << "Framework databases, their tables not listed: #{frameworks.join('; ')}" if frameworks.any?
         sections.join("\n\n")
       end
 

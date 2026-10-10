@@ -90,6 +90,31 @@ RSpec.describe RailsAiContext::Payload do
     end
   end
 
+  describe ".database_framework" do
+    def database(*tables)
+      { tables: tables.to_h { |name| [ name, {} ] } }
+    end
+
+    it "names the framework that owns every table of a database" do
+      expect(described_class.database_framework(database("solid_queue_jobs", "solid_queue_processes"))).to eq("Solid Queue")
+      expect(described_class.database_framework(database("solid_cache_entries"))).to eq("Solid Cache")
+      expect(described_class.database_framework(database("solid_cable_messages", "solid_queue_jobs"))).to eq("Solid Queue and Solid Cable")
+    end
+
+    it "names none for a database holding a table of the app's own, or no table" do
+      expect(described_class.database_framework(database("solid_queue_jobs", "page_views"))).to be_nil
+      expect(described_class.database_framework(database)).to be_nil
+      expect(described_class.database_framework(nil)).to be_nil
+    end
+
+    it "sorts the secondary databases into the app's and the frameworks'" do
+      schema = { tables: {}, secondary_databases: { "analytics" => database("page_views"), "queue" => database("solid_queue_jobs") } }
+
+      expect(described_class.app_databases(schema).keys).to eq([ "analytics" ])
+      expect(described_class.framework_databases(schema).keys).to eq([ "queue" ])
+    end
+  end
+
   describe ".section" do
     it "answers the section only when it is a healthy hash" do
       expect(described_class.section({ turbo: { turbo_frames: [] } }, :turbo)).to eq({ turbo_frames: [] })

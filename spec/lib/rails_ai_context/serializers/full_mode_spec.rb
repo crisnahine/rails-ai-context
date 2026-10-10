@@ -112,7 +112,8 @@ RSpec.describe "full mode's root files" do
     it "states every database's schema and migrations" do
       context[:schema][:secondary_databases] = {
         "analytics" => { adapter: "static_parse", total_tables: 1, note: "Parsed from db/analytics_schema.rb (from committed dump, not a live connection)",
-                         tables: { "page_views" => { columns: [ { name: "id", type: "integer" }, { name: "path", type: "string" } ] } } }
+                         tables: { "page_views" => { columns: [ { name: "id", type: "integer" }, { name: "path", type: "string" } ] } } },
+        "queue" => { adapter: "static_parse", total_tables: 1, tables: { "solid_queue_jobs" => { columns: [ { name: "id", type: "integer" } ] } } }
       }
       context[:migrations] = {
         total: 3, schema_version: "20261009140925", pending: [], recent: [],
@@ -125,6 +126,9 @@ RSpec.describe "full mode's root files" do
                                 "### page\\_views\n\n`id` (integer), `path` (string)")
       expect(output).to include("- Total: 3 (primary)", "- analytics: 4 total, 1 pending in db/analytics_migrate",
                                 "### Pending Migrations: analytics (1)\n- `20261009141117` AddBrowserToPageViews")
+      # Solid Queue's database is named, its tables left to the tools.
+      expect(output).to include("Framework databases, their tables not listed: queue: Solid Queue (1 table)")
+      expect(output).not_to include("solid\\_queue\\_jobs", "Database Schema: queue")
     end
   end
 end

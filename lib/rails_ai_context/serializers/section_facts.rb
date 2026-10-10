@@ -43,9 +43,18 @@ module RailsAiContext
         Payload.secondary_databases(schema).each do |name, db|
           tables = CountPhrase.call(db[:total_tables].to_i, "table")
           adapter = SchemaAdapter.secondary_label(ctx, name, db)
-          parts << "#{name}: #{adapter ? "#{adapter} - #{tables}" : tables}"
+          parts << (framework_database_text(name, db) || "#{name}: #{adapter ? "#{adapter} - #{tables}" : tables}")
         end
         "- Database: #{parts.join('; ')}"
+      end
+
+      # A database a Rails framework keeps to itself, as every file names it:
+      # "queue: Solid Queue (13 tables)". Its tables are the framework's, so
+      # no file lists them. nil for a database of the app's own.
+      def framework_database_text(name, db)
+        framework = Payload.database_framework(db) or return nil
+
+        "#{name}: #{framework} (#{CountPhrase.call(db[:total_tables].to_i, "table")})"
       end
 
       # The same databases, the ones with migrations of their own.

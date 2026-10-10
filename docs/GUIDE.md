@@ -201,7 +201,7 @@ A file whose section has nothing in it is not written. An app with no models get
 | File | Purpose | Notes |
 |------|---------|-------|
 | `CLAUDE.md` | Main context file | ≤150 lines in compact mode. Claude Code reads this automatically. |
-| `.claude/rules/rails-schema.md` | Database table listing | Every database's tables, each database under its own heading when the app has more than one. Loaded when Claude Code opens a schema dump or a migration. |
+| `.claude/rules/rails-schema.md` | Database table listing | Every database's tables, each database under its own heading when the app has more than one. A database of Solid Queue, Solid Cache or Solid Cable tables only, as Rails 8's queue, cache and cable are, is named in CLAUDE.md instead (`queue: Solid Queue (13 tables)`). Loaded when Claude Code opens a schema dump or a migration. |
 | `.claude/rules/rails-models.md` | Model listing with associations | Auto-loaded by Claude Code alongside CLAUDE.md. |
 | `.claude/rules/rails-context.md` | Project context and conventions | Auto-loaded by Claude Code alongside CLAUDE.md. |
 | `.claude/rules/rails-mcp-tools.md` | Tool reference | Detail levels and the table of every tool. Loaded beside CLAUDE.md, which carries the protocol, the workflows and the rules, so they are not read twice; with `generate_root_files` off it carries them itself. |
