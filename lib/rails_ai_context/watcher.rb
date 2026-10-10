@@ -54,7 +54,13 @@ module RailsAiContext
       end
     rescue LoadError
       $stderr.puts "Error: The `listen` gem is required for watch mode."
-      $stderr.puts "Add to your Gemfile:  gem 'listen', group: :development"
+      # A standalone install reaches an installed listen; the app's Gemfile
+      # is the place only when the gem itself is in it.
+      if InstallMode.standalone?
+        $stderr.puts "Install it:  gem install listen"
+      else
+        $stderr.puts "Add to your Gemfile:  gem 'listen', group: :development"
+      end
       exit 1
     end
 

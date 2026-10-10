@@ -119,7 +119,7 @@ rails 'ai:tool[conventions]'
 | `rails 'ai:tool[NAME]'` | `rails-ai-context tool NAME` | Run any tool |
 | `rails ai:tool` | `rails-ai-context tool --list` | List all tools |
 | `rails ai:doctor` | `rails-ai-context doctor` | Diagnostics |
-| `rails ai:watch` | `rails-ai-context watch` | Auto-regenerate on change |
+| `rails ai:watch` | `rails-ai-context watch` | Auto-regenerate on change (needs `listen`: in the Gemfile, or `gem install listen` standalone) |
 | `rails ai:context` | `rails-ai-context context` | Regenerate context files |
 
 ---
