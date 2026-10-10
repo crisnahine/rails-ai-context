@@ -848,6 +848,7 @@ class RailsAiContextCLI < Thor
     # otherwise load the gem standalone and list from that. Only execution
     # (running a specific tool) genuinely needs a live app.
     def print_tool_list(no_boot: false)
+      @no_boot = true if no_boot
       # No app is no refusal here: the app-less listing is the answer.
       resolve_app_root!(required: false)
       if entry_boot.app_present?(Dir.pwd, allow_source_only: true)
@@ -920,6 +921,9 @@ class RailsAiContextCLI < Thor
     # The app this command reads, booted or read from source as the command
     # allows. Prints nothing: the outcome carries the lines to say.
     def enter_app(command:, allow_static:, no_boot:, allow_source_only:)
+      # Read by the hand-off, which resolving the root may start: `tool`
+      # takes --no-boot after the tool's name, where Thor never sees it.
+      @no_boot = true if no_boot
       resolve_app_root!
       environment_opt = @environment_override || options[:environment]
       # Apps read RAILS_ENV in config/boot.rb, before anything the gem can
@@ -990,8 +994,20 @@ class RailsAiContextCLI < Thor
     # `bundle exec rails-ai-context` would run it, from where it was typed,
     # so one copy answers - the one the app's MCP configs start. When bundle
     # cannot be started this copy carries on.
+    #
+    # Only a run that boots the app hands off, since booting runs the app's
+    # bundle anyway. One that promises to run nothing of the app's -
+    # --no-boot, init --mcp-only - keeps to this copy: bundle exec would
+    # evaluate the app's Gemfile and start whatever copy of the gem the app
+    # names, on a repo just cloned code nobody has read. Nor does a bundle
+    # not installed yet, where bundle exec would only fail and this copy
+    # answers from source.
     def hand_off_to_bundle!(root, cwd)
+      return if options[:no_boot] || @no_boot || options[:mcp_only]
+
       handoff = app_root.bundled_handoff(root) or return
+      return unless app_root.bundle_ready?(handoff.env, root)
+
       bundle = Gem.bin_path("bundler", "bundle")
       $stderr.puts "[rails-ai-context] This app's bundle has rails-ai-context #{handoff.version}; " \
                    "running that copy, as bundle exec does."

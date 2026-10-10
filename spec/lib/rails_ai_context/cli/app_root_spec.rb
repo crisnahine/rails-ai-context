@@ -398,6 +398,35 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
       end
     end
 
+    # bundle exec fails where a gem the app locks is not installed, as in a
+    # repo cloned and not yet bundled; this copy answers from source there.
+    describe ".bundle_ready?" do
+      def bundle_standing_in(name, body)
+        File.join(tmp, name).tap { |path| File.write(path, body) }
+      end
+
+      it "is what bundle check answers, asked to write nothing" do
+        seen = File.join(tmp, "argv")
+        ready = bundle_standing_in("ready", %(File.write(#{seen.inspect}, ARGV.join(" ")); exit 0\n))
+        missing = bundle_standing_in("missing", %(exit 1\n))
+
+        expect(described_class.bundle_ready?({}, tmp, bundle: ready)).to be(true)
+        expect(File.read(seen)).to eq("check --dry-run")
+        expect(described_class.bundle_ready?({}, tmp, bundle: missing)).to be(false)
+      end
+
+      # A Gemfile edited since its lock sends Bundler to the network.
+      it "gives up on a check that runs past its time, and leaves no process behind" do
+        pid_file = File.join(tmp, "pid")
+        slow = bundle_standing_in("slow", %(File.write(#{pid_file.inspect}, Process.pid.to_s); sleep 30\n))
+
+        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        expect(described_class.bundle_ready?({}, tmp, bundle: slow, seconds: 0.5)).to be(false)
+        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 5
+        expect { Process.kill(0, File.read(pid_file).to_i) }.to raise_error(Errno::ESRCH)
+      end
+    end
+
     it "names the app above a wrong --app-path" do
       root = app("shop")
       models = dir("shop/app/models")
