@@ -1128,6 +1128,35 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     end
   end
 
+  describe "pending migrations a database could not answer for" do
+    let(:declared) { { "posts" => { columns: [ { name: "title", type: "string" } ] } } }
+
+    it "says they are not known when the database does not answer" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "static_parse", tables: declared, schema_version: "20260101000000", note: "Parsed from db/schema.rb (no DB connection)",
+                  pending_unknown: "the database does not exist yet (`bin/rails db:create`, then `bin/rails db:migrate`)" },
+        models: {}
+      })
+
+      text = described_class.call.content.first[:text]
+      expect(text).to include("**Pending migrations:** not known: the database does not exist yet")
+      expect(text).not_to include("**Pending migrations:** none")
+    end
+
+    # Created but not migrated: the listing is the dump's, and the connection's pending list stands.
+    it "says the connected database holds none of the dump's tables" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "static_parse", tables: declared, schema_version: "20260101000000", connected_tables: 0,
+                  note: "Parsed from db/schema.rb (connected, no tables yet)", pending_migrations: [ { version: "20260101000000", name: "CreatePosts" } ] },
+        models: {}
+      })
+
+      text = described_class.call.content.first[:text]
+      expect(text).to include("_db/schema.rb declares 1 table; the connected database has none of them. Run `rails db:migrate`._")
+      expect(text).to include("**Pending migrations:** 1 - 20260101000000")
+    end
+  end
+
   describe "singular pluralization with exactly one table" do
     before do
       allow(described_class).to receive(:cached_context).and_return({
