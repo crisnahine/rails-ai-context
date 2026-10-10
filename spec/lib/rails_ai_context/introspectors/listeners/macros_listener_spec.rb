@@ -46,6 +46,10 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener do
     expect(results.first[:target]).to eq("company")
   end
 
+  it "detects broadcasts_refreshes, which takes no stream" do
+    expect(parse_and_dispatch("broadcasts_refreshes").map { |r| r[:macro] }).to eq([ :broadcasts_refreshes ])
+  end
+
   it "detects generates_token_for" do
     results = parse_and_dispatch("generates_token_for :email_verification, expires_in: 2.hours")
     expect(results.first[:macro]).to eq(:generates_token_for)

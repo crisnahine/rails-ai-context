@@ -182,6 +182,44 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
     end
   end
 
+  # detail:"full" promises source code, and a lambda printed its marker alone;
+  # turbo-rails' broadcast macros were not listed at all.
+  describe "callbacks no method body can show" do
+    it "prints a lambda's declaration and what a broadcast macro runs on each event" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "review.rb"), <<~RUBY)
+          class Review < ApplicationRecord
+            after_create_commit -> { broadcast_prepend_to [product, :reviews], target: "reviews" }
+            broadcasts_refreshes
+          end
+        RUBY
+        models = RailsAiContext::Introspectors::ModelIntrospector.new(RailsAiContext::StaticApp.new(dir)).static_call
+        described_class.reset_cache!
+        allow(described_class).to receive(:cached_context).and_return(models: models)
+
+        full = described_class.call(model: "Review", detail: "full").content.first[:text]
+        standard = described_class.call(model: "Review").content.first[:text]
+
+        expect(full).to include(<<~TEXT)
+          ### [inline_block] (line 2)
+          ```ruby
+            after_create_commit -> { broadcast_prepend_to [product, :reviews], target: "reviews" }
+          ```
+        TEXT
+        expect(full).to include(<<~TEXT)
+          ### broadcasts_refreshes (turbo-rails) (line 3)
+          ```ruby
+            broadcasts_refreshes
+          ```
+          _turbo-rails runs `broadcast_refresh_later` on this event._
+        TEXT
+        expect(standard).to include("- **after_create_commit** → `[inline_block]`, `broadcasts_refreshes (turbo-rails)`")
+        expect(standard).to include("- **after_destroy_commit** → `broadcasts_refreshes (turbo-rails)`")
+      end
+    end
+  end
+
   describe "concern callbacks with detail:full" do
     let(:tmpdir) { Dir.mktmpdir }
     let(:concern_dir) { File.join(tmpdir, "app", "models", "concerns") }

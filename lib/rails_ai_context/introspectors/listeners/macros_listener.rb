@@ -30,7 +30,7 @@ module RailsAiContext
         STORE_MACROS = %i[store store_accessor].to_set.freeze
 
         BROADCAST_MACROS = %i[
-          broadcasts broadcasts_to broadcasts_refreshes_to
+          broadcasts broadcasts_to broadcasts_refreshes broadcasts_refreshes_to
         ].to_set.freeze
 
         # Model gems' class macros, each listed as written; aasm's block is read in full.
