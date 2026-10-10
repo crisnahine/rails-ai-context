@@ -60,7 +60,7 @@ module RailsAiContext
         each_view_line do |file, line, line_num|
           next unless line.include?("turbo_stream_from")
 
-          subscriptions << { stream: subscription_stream(line), file: file, line: line_num, snippet: line.strip }
+          subscriptions << { stream: subscription_stream(line), parts: subscription_parts(line), file: file, line: line_num, snippet: line.strip }
         end
         subscriptions
       rescue => e
@@ -222,15 +222,21 @@ module RailsAiContext
           next unless hit[:receiver].nil?
 
           owner ||= owner_name(record)
-          { model: owner, macro: hit[:name], stream: macro_stream(hit), file: record.file, line: hit[:line], snippet: hit[:snippet] }
+          { model: owner, macro: hit[:name], stream: macro_stream(hit), streams: macro_streams(hit, owner),
+            file: record.file, line: hit[:line], snippet: hit[:snippet] }
         end
       end
 
       def explicit_entries(record, hits)
+        owner = nil
         hits.map do |hit|
+          owner ||= owner_name(record)
           {
             method: hit[:name],
             stream: call_stream(hit[:arguments].first),
+            parts: stream_parts(hit[:arguments].first, hit[:computed]),
+            # The class the call sits in, which an expression such as `user` is read against.
+            owner: owner,
             target: hit[:options][:target]&.to_s,
             partial: hit[:options][:partial]&.to_s,
             file: record.file,
@@ -238,6 +244,104 @@ module RailsAiContext
             snippet: hit[:snippet]
           }
         end
+      end
+
+      # A stream as the parts Turbo builds its name from: a literal (a symbol
+      # or a string) or an expression, which rails_get_turbo_map resolves to
+      # the record it names. A record streams under its GlobalID, so
+      # `[product, :reviews]` in a model and `@product, :reviews` in a view are
+      # one stream when both name a Product. Nil for an interpolated name,
+      # which only its text can be compared by.
+      def stream_parts(argument, computed)
+        return nil if argument.nil?
+
+        parts = (argument.is_a?(Array) ? argument : [ argument ]).map do |value|
+          case value
+          when Symbol then { literal: value.to_s }
+          when String
+            return nil if value.match?(/\A["'].*#\{/m)
+
+            Array(computed).include?(value) ? { expr: value } : { literal: value }
+          else return nil
+          end
+        end
+        parts.empty? ? nil : parts
+      end
+
+      # The streams a broadcast macro sends to (turbo-rails broadcastable.rb):
+      # `broadcasts` and `broadcasts_refreshes` to the stream they name, the
+      # model's plural by default, on create, and to the record itself on
+      # update and destroy; the `_to` forms to what the method a symbol names,
+      # or a lambda, returns for the record.
+      def macro_streams(hit, owner)
+        first = hit[:arguments].first
+        named = first.is_a?(Symbol) || (first.is_a?(String) && !Array(hit[:computed]).include?(first))
+        case hit[:name]
+        when "broadcasts", "broadcasts_refreshes"
+          plural = named ? first.to_s : owner.to_s.underscore.tr("/", "_").pluralize
+          [ [ { literal: plural } ], [ { expr: "self" } ] ]
+        else
+          parts = named ? [ { expr: first.to_s } ] : lambda_parts(first.to_s)
+          parts && [ parts ]
+        end
+      end
+
+      # `->(card) { [card.board, :cards] }`: each part read against the record
+      # the lambda is given, so `card.board` is the record's own `board`.
+      def lambda_parts(source)
+        lambda = first_node(AstCache.parse_string(source).value) { |node| node.is_a?(Prism::LambdaNode) } or return nil
+        param = lambda.parameters&.parameters&.requireds&.first
+        param_name = param.respond_to?(:name) ? param.name : nil
+        body = lambda.body&.body&.last or return nil
+        elements = body.is_a?(Prism::ArrayNode) ? body.elements : [ body ]
+        parts = elements.map do |element|
+          case element
+          when Prism::SymbolNode, Prism::StringNode then { literal: element.unescaped }
+          when Prism::CallNode
+            reads_param = element.receiver.is_a?(Prism::LocalVariableReadNode) && element.receiver.name == param_name
+            return nil unless reads_param && element.arguments.nil?
+
+            { expr: element.name.to_s }
+          when Prism::LocalVariableReadNode
+            return nil unless element.name == param_name
+
+            { expr: "self" }
+          else return nil
+          end
+        end
+        parts.empty? ? nil : parts
+      rescue StandardError => e
+        RailsAiContext.debug_fail(e, nil, label: "lambda_parts")
+      end
+
+      def first_node(node, &block)
+        return node if yield(node)
+
+        node.compact_child_nodes.each do |child|
+          found = first_node(child, &block)
+          return found if found
+        end
+        nil
+      end
+
+      # A view's `turbo_stream_from` arguments as stream parts: a symbol or a
+      # string is a literal, anything else an expression (`@product`,
+      # `current_user`) the tool resolves against the app's models.
+      def subscription_parts(line)
+        code = line[/turbo_stream_from\b.*?(?=\s*-?%>|\s*\bdo\b|\z)/m] or return nil
+        call = first_node(AstCache.parse_string(code).value) { |node| node.is_a?(Prism::CallNode) && node.name == :turbo_stream_from }
+        arguments = call&.arguments&.arguments&.reject { |arg| arg.is_a?(Prism::KeywordHashNode) }
+        return nil if arguments.nil? || arguments.empty?
+
+        arguments.map do |arg|
+          case arg
+          when Prism::SymbolNode, Prism::StringNode then { literal: arg.unescaped }
+          when Prism::InterpolatedStringNode then return nil
+          else { expr: arg.slice }
+          end
+        end
+      rescue StandardError => e
+        RailsAiContext.debug_fail(e, nil, label: "subscription_parts")
       end
 
       # A concerns directory is an autoload root, so its path name carries no
