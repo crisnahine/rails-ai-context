@@ -597,34 +597,48 @@ module RailsAiContext
       end
 
       private_class_method def self.find_callers(class_name, real_root, own_file = nil)
-        callers = Set.new
-        search_dirs = caller_search_dirs(real_root)
+        callers, truncated = callers_of({ class_name => own_file }, real_root)
+        [ callers[class_name], truncated ]
+      end
+
+      # The files that name each service, from one pass over the tree:
+      # analyze_feature asks for every service a feature matched at once. The
+      # services' own files are not read.
+      #
+      # @param services [Hash{String => String, nil}] class name => the file defining it
+      # @return [Array(Hash{String => Array<String>}, Boolean)] the callers of each, by path,
+      #   and whether the scan stopped at MAX_CALLER_SCAN_FILES
+      def self.callers_of(services, real_root)
         # A bare `include?` matched `Billing::Invoices::Create` inside
         # `Workers::Billing::Invoices::CreateReminderWorker`, and the
         # underscored-path skip dropped the one real caller, whose path
         # contains the service's own path as a prefix.
-        reference = /(?<![\w:])(?:::)?#{Regexp.escape(class_name)}(?![\w:])/
+        references = services.keys.to_h { |name| [ name, /(?<![\w:])(?:::)?#{Regexp.escape(name)}(?![\w:])/ ] }
         # A second file declaring the same short name under its own namespace
         # is not a caller of this one, so the declaration is not a reference.
-        definition = /\b(?:class|module)\s+(?:::)?#{Regexp.escape(class_name)}(?![\w:])/
+        definitions = services.keys.to_h { |name| [ name, /\b(?:class|module)\s+(?:::)?#{Regexp.escape(name)}(?![\w:])/ ] }
 
         # The paths first, so the ceiling is measured against the files there
         # are rather than the files read: a tree of exactly the cap skips
         # nothing and must not say it stopped.
-        paths = search_dirs.flat_map { |dir| safe_glob(dir, "**/*.rb", real_root) }.uniq
-        paths.reject! { |real| real == own_file } if own_file
+        paths = caller_search_dirs(real_root).flat_map { |dir| safe_glob(dir, "**/*.rb", real_root) }.uniq
+        paths -= services.values.compact
         truncated = paths.size > MAX_CALLER_SCAN_FILES
 
+        callers = services.keys.to_h { |name| [ name, [] ] }
         paths.first(MAX_CALLER_SCAN_FILES).each do |real|
           source = safe_read(real)
           next unless source
-          next unless source.match?(reference)
-          next unless source.gsub(definition, "").match?(reference)
 
-          callers << real.sub("#{real_root}/", "")
+          references.each do |name, reference|
+            next unless source.match?(reference)
+            next unless source.gsub(definitions[name], "").match?(reference)
+
+            callers[name] << real.sub("#{real_root}/", "")
+          end
         end
 
-        [ callers.to_a.sort, truncated ]
+        [ callers.transform_values(&:sort), truncated ]
       end
 
       private_class_method def self.detect_common_pattern(stats)
