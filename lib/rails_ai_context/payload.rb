@@ -321,15 +321,20 @@ module RailsAiContext
     def fuzzy_find_key(keys, query)
       return nil if query.nil? || keys.nil? || keys.empty?
       q = query.to_s.strip
-      return nil if q.empty?
+      # No class or table name is this long, and inflecting a 100 KB query
+      # once per key took seconds to match nothing.
+      return nil if q.empty? || q.length > MAX_KEY_QUERY
       q_down = q.downcase
       q_under = q.underscore.downcase
+      q_single = q.singularize.downcase
+      q_class = q.classify.downcase
 
       keys.find { |k| k.to_s.downcase == q_down } ||
         keys.find { |k| k.to_s.underscore.downcase == q_under } ||
-        keys.find { |k| k.to_s.downcase == q.singularize.downcase } ||
-        keys.find { |k| k.to_s.downcase == q.classify.downcase }
+        keys.find { |k| k.to_s.downcase == q_single } ||
+        keys.find { |k| k.to_s.downcase == q_class }
     end
+    MAX_KEY_QUERY = 256
 
     # The controller a name means: "posts", "PostsController", "admin/posts",
     # "Admin::PostsController", and a route key whose declared constant does
