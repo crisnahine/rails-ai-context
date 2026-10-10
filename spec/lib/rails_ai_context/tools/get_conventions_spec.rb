@@ -411,6 +411,50 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
         expect(text).to include("unless current_user.can_[permission]?")
         expect(text).to include("@record = current_user.[association].build([params_method])")
       end
+    end
+
+    # bazaar authorizes with Pundit and got a `can_[permission]?` guard it
+    # has no method for; its Api::V1::ProductsController read as a second
+    # ProductsController.
+    context "with Pundit's authorize and a namespaced controller" do
+      before do
+        File.write(File.join(controllers_dir, "products_controller.rb"), <<~RUBY)
+          class ProductsController < ApplicationController
+            def create
+              @product = current_user.products.build(product_params)
+              authorize @product
+              if @product.save
+                redirect_to @product
+              else
+                render :new, status: :unprocessable_entity
+              end
+            end
+          end
+        RUBY
+        FileUtils.mkdir_p(File.join(controllers_dir, "api", "v1"))
+        File.write(File.join(controllers_dir, "api", "v1", "products_controller.rb"), <<~RUBY)
+          module Api
+            module V1
+              class ProductsController < BaseController
+                def create
+                  product = Product.new(product_params)
+                  product.save
+                  render json: product
+                end
+              end
+            end
+          end
+        RUBY
+      end
+
+      it "authorizes the record the Pundit way and keeps the namespace" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("  @record = [Model].new([params_method])\n  authorize @record\n")
+        expect(text).not_to include("can_[permission]")
+        expect(text).to include("- Api::V1::ProductsController: build → save → render json")
+        expect(text).to include("- ProductsController: permission check → build → save → redirect/render")
+      end
 
       # A guard or flash string repeated across controllers is one convention.
       it "lists a repeated check and flash string once" do
