@@ -41,7 +41,7 @@ module RailsAiContext
           result[name] = details
         end
 
-        { controllers: inherit_class_declarations(fill_inherited_actions(result)) }
+        { controllers: inherit_class_declarations(fill_inherited_actions(inherit_api_controller(result))) }
       end
 
       # Static tier: every controller goes through the source-only extractor;
@@ -60,7 +60,7 @@ module RailsAiContext
         engine = PathResolver.bundle_engine_root(root)
         unread = Pathname.new(engine).relative_path_from(Pathname.new(File.expand_path(root))).to_s if engine
         {
-          controllers: inherit_class_declarations(fill_inherited_actions(result)),
+          controllers: inherit_class_declarations(fill_inherited_actions(inherit_api_controller(result))),
           note: "Parsed statically from app/controllers (app not booted)#{"; the engine at #{unread} is not read unbooted" if unread}",
           unread_engine: unread
         }.compact
@@ -136,6 +136,28 @@ module RailsAiContext
       # carries. Every walk reads the listing as it was, before any entry took
       # on its ancestors' actions, and the child's own filters come off the
       # union: an inherited method the child names in a callback is a filter.
+      # A controller is an API controller when a base it inherits is one. A
+      # file names only its own parent, so Api::V1::PostsController <
+      # BaseController read as no API controller though BaseController is an
+      # ActionController::API; the chain is followed through the listing.
+      def inherit_api_controller(result)
+        result.each do |name, info|
+          next unless info.is_a?(Hash) && info[:api_controller] == false
+
+          seen = Set[name]
+          parent = ActionResolver.resolve_entry_name(result, info[:parent_class], name)
+          while parent && result[parent].is_a?(Hash) && seen.add?(parent)
+            if result[parent][:api_controller]
+              info[:api_controller] = true
+              break
+            end
+
+            parent = ActionResolver.resolve_entry_name(result, result[parent][:parent_class], parent)
+          end
+        end
+        result
+      end
+
       def fill_inherited_actions(result)
         unions = result.each_with_object({}) do |(name, info), acc|
           next unless info.is_a?(Hash)

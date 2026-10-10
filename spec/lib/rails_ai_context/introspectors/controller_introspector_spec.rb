@@ -1256,6 +1256,29 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
     end
 
+    # The blog's Api::V1::PostsController inherits ActionController::API
+    # through Api::V1::BaseController, and read as no API controller unbooted.
+    it "marks a controller an API controller when a base it inherits is one" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "api", "v1"))
+        File.write(File.join(dir, "app", "controllers", "api", "v1", "base_controller.rb"),
+                   "module Api\n  module V1\n    class BaseController < ActionController::API\n    end\n  end\nend\n")
+        File.write(File.join(dir, "app", "controllers", "api", "v1", "posts_controller.rb"),
+                   "module Api\n  module V1\n    class PostsController < BaseController\n      def index; end\n    end\n  end\nend\n")
+        File.write(File.join(dir, "app", "controllers", "api", "v1", "drafts_controller.rb"),
+                   "class Api::V1::DraftsController < Api::V1::PostsController\n  def index; end\nend\n")
+        File.write(File.join(dir, "app", "controllers", "pages_controller.rb"),
+                   "class PagesController < ApplicationController\n  def show; end\nend\n")
+
+        controllers = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:controllers]
+
+        expect(controllers.transform_values { |info| info[:api_controller] }).to eq(
+          "Api::V1::BaseController" => true, "Api::V1::PostsController" => true,
+          "Api::V1::DraftsController" => true, "PagesController" => false
+        )
+      end
+    end
+
     # Every tool that needs a path for a controller reads `:file` through
     # Payload, because the name alone cannot carry it - the app's inflector
     # decides the directory.
