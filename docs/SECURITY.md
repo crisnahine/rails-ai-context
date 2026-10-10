@@ -68,6 +68,7 @@ The textual layer cannot see a whole-row serialisation (`SELECT row_to_json(u.*)
 
 - holds a **whole-row reference** (`alias.*`) to a relation that has a sensitive column - this closes `row_to_json(u)`, `to_json(u)`, `u::text`, `array_agg(u)`, `json_agg(u)`, `hstore(u)`, `concat(u.*)`, `string_agg(u::text, …)`, a bare `SELECT u`, and the same through a view, subquery or CTE;
 - **uses a sensitive column** anywhere but as a plain pass-through output - a `ROW(u.*)` the planner expanded into named columns, or a `WHERE` / `ORDER BY` oracle;
+- **launders a sensitive column** through an intermediate the plan's top node does not name - a `MATERIALIZED` CTE, a subquery scan, or a set operation (`INTERSECT` / `EXCEPT`) - so its value would reach a result column that the output-provenance redaction (Layer 4) cannot pin. These are refused rather than redacted;
 - names any **VOLATILE function** (`pg_proc.provolatile = 'v'`) outside a short harmless allowlist (`random`, `clock_timestamp`, `gen_random_uuid`, `timeofday`, `pg_sleep`). This is how the admin-function family is closed robustly, rather than by an ever-growing name list.
 
 A whole-row read of a relation with no sensitive column (`row_to_json(posts.*)`) is allowed.
@@ -80,6 +81,7 @@ After validation, the query runs inside a transaction:
 |:---------|:----------|
 | PostgreSQL | `SET TRANSACTION READ ONLY` + `SET LOCAL statement_timeout` |
 | MySQL | `SET TRANSACTION READ ONLY` + `MAX_EXECUTION_TIME` hint |
+| MariaDB | `SET TRANSACTION READ ONLY` + `SET STATEMENT max_statement_time = <seconds> FOR <query>` (MariaDB ignores MySQL's hint, so a long query would otherwise run unbounded) |
 | SQLite | A read-only connection in a child process, killed at timeout |
 
 On PostgreSQL and MySQL the query executes inside a transaction, then rolls back (even if it could write, it can't). Any other adapter has no database-level guard: the query runs with Layer 1 validation and the row limit only.
@@ -130,7 +132,7 @@ If one of your own columns merely looks sensitive (an `oauth_applications.secret
 config.query_allowed_columns = %w[secret]
 ```
 
-Results are redacted as well: a returned column comes back as `[FILTERED]` when the sensitivity rule flags its **output name**, and on PostgreSQL when its **provenance** (`PG::Result#ftable` / `#ftablecol`, mapped to the base column) is sensitive - so a column that reached the result under a different name is still filtered. `SHOW`, `DESCRIBE` and `EXPLAIN` output is not redacted.
+Results are redacted as well: a returned column comes back as `[FILTERED]` when the sensitivity rule flags its **output name**, and on PostgreSQL when its origin is a sensitive base column - either by **provenance** (`PG::Result#ftable` / `#ftablecol`, mapped to the base column) or by the **plan's top-node `Output`**, whose i-th expression is result column i. The plan path catches a view (or inlined CTE/subquery/join) that renamed a sensitive column to a harmless name: `CREATE VIEW user_tokens AS SELECT id, api_token AS t FROM users; SELECT t FROM user_tokens` returns `t` as `[FILTERED]`. `SHOW`, `DESCRIBE` and `EXPLAIN` output is not redacted.
 
 The exemption covers the results too: an allowed name comes back unredacted. A
 column declared with `encrypts` stays `[FILTERED]` either way - an encrypted-at-rest
