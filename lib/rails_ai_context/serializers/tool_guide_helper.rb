@@ -317,6 +317,21 @@ module RailsAiContext
         lines
       end
 
+      # What a tools rule file adds to a root file that carries the guide: the
+      # detail levels and the table. Claude Code loads CLAUDE.md and its rules
+      # on every request, as Copilot does its instructions, so a whole guide in
+      # both put the guide and the protocol in front of the AI twice.
+      def render_tools_reference(root_file)
+        [
+          "## Tools (#{tool_count}) - Reference",
+          "",
+          "How to use them - the protocol, the workflows and the rules - is in #{root_file}. This file is the reference.",
+          "",
+          *tools_detail_guidance,
+          *tools_table
+        ]
+      end
+
       # Compact tool guide for root files (CLAUDE.md, AGENTS.md) that have line limits.
       # Includes power tools + workflows + rules + dense tool name list (no table).
       def render_tools_guide_compact

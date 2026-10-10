@@ -213,16 +213,31 @@ RSpec.describe "Copilot instructions compliance" do
         expect(missing).to be_empty, "MCP tools file is missing: #{missing.join(%q(, ))}"
       end
 
-      it "MCP tools file has task-based workflow" do
-        file = generated_files["rails-mcp-tools.instructions.md"]
-        expect(file[:content]).to include("Step-by-step workflows")
+      # Copilot loads copilot-instructions.md beside this file, and that one
+      # carries the workflows and the protocol; the code review reads it alone.
+      it "MCP tools file is the reference the root file points from" do
+        content = generated_files["rails-mcp-tools.instructions.md"][:content]
+
+        expect(content).to include("- Reference", "is in .github/copilot-instructions.md", "detail parameter", "rails 'ai:tool[")
+        expect(content).not_to include("Step-by-step workflows", "Anti-Hallucination Protocol")
+        expect(RailsAiContext::Serializers::CopilotSerializer.new(context).call)
+          .to include("Step-by-step workflows", "MANDATORY", "NEVER read")
       end
 
-      it "MCP tools file has mandatory language with CLI fallback" do
-        file = generated_files["rails-mcp-tools.instructions.md"]
-        expect(file[:content]).to include("MANDATORY")
-        expect(file[:content]).to include("NEVER read")
-        expect(file[:content]).to include("rails 'ai:tool[")
+      context "with root files off" do
+        before { allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false) }
+
+        it "MCP tools file has task-based workflow" do
+          file = generated_files["rails-mcp-tools.instructions.md"]
+          expect(file[:content]).to include("Step-by-step workflows")
+        end
+
+        it "MCP tools file has mandatory language with CLI fallback" do
+          file = generated_files["rails-mcp-tools.instructions.md"]
+          expect(file[:content]).to include("MANDATORY")
+          expect(file[:content]).to include("NEVER read")
+          expect(file[:content]).to include("rails 'ai:tool[")
+        end
       end
     end
 

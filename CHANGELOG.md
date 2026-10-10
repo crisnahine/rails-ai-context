@@ -360,6 +360,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MCP tools in their Cursor description and Copilot name. In CLI mode each
   of them names the command now (`rails 'ai:tool[model_details]'
   model=Name`), the trim note included; MCP mode reads as before.
+- **Claude Code and Copilot read the tools guide once.** Both load the root
+  file and the always-on tools rule file on every request, and both files
+  carried the whole guide and the protocol, about 95 lines twice. With root
+  files on, `.claude/rules/rails-mcp-tools.md` and
+  `.github/instructions/rails-mcp-tools.instructions.md` now hold what the
+  root file leaves out, the detail levels and the table of every tool, and
+  point to it for the rest; with `generate_root_files` off they still carry
+  the whole guide. Cursor's agent-requested rule is unchanged.
 - **A small `claude_max_lines` no longer cuts the tools guide.** Below
   about 110 lines the budget was a hard cap that trimmed the file from the
   end, so at 60 the four compact files kept the data and lost the

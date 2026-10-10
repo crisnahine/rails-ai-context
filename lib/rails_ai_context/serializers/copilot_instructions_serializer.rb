@@ -113,7 +113,10 @@ module RailsAiContext
           ""
         ]
 
-        lines.concat(render_tools_guide)
+        # Loaded beside copilot-instructions.md, which carries the guide whenever
+        # root files are on; code review reads only that one.
+        root_files = RailsAiContext.configuration.generate_root_files
+        lines.concat(root_files ? render_tools_reference(".github/copilot-instructions.md") : render_tools_guide)
 
         lines.join("\n")
       end

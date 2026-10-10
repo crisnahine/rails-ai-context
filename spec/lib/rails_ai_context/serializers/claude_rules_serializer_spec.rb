@@ -88,6 +88,34 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
     end
   end
 
+  # Claude Code loads CLAUDE.md and every rule without paths: on each
+  # request, so a whole guide here put the guide and the protocol in front
+  # of the AI twice.
+  describe "rails-mcp-tools.md" do
+    def tools_rule(dir)
+      described_class.new(context).call(dir)
+      File.read(File.join(dir, ".claude", "rules", "rails-mcp-tools.md"))
+    end
+
+    it "carries the reference CLAUDE.md leaves out, and points to CLAUDE.md for the rest" do
+      Dir.mktmpdir do |dir|
+        content = tools_rule(dir)
+
+        expect(content).to start_with("## Tools (#{RailsAiContext::Server.exposed_tools.size}) - Reference")
+        expect(content).to include("is in CLAUDE.md", "### detail parameter", "| `rails_get_schema(table:\"X\")` |")
+        expect(content).not_to include("Anti-Hallucination Protocol", "Step-by-step workflows")
+      end
+    end
+
+    it "carries the whole guide when no CLAUDE.md is written" do
+      allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
+
+      Dir.mktmpdir do |dir|
+        expect(tools_rule(dir)).to include("Anti-Hallucination Protocol", "Step-by-step workflows", "| `rails_get_schema(table:\"X\")` |")
+      end
+    end
+  end
+
   it "skips unchanged files" do
     Dir.mktmpdir do |dir|
       first = described_class.new(context).call(dir)
