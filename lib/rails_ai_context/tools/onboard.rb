@@ -74,8 +74,11 @@ module RailsAiContext
           stats = []
           schema = Payload.section(ctx, :schema)
           if schema
-            table_count = schema[:total_tables] || 0
-            stats << count_phrase(table_count, "table") if table_count > 0
+            own = own_secondary_databases(ctx, schema)
+            table_count = schema[:total_tables].to_i + own.sum { |db| db[:tables] }
+            if table_count > 0
+              stats << count_phrase(table_count, "table") + (own.any? ? " in #{count_phrase(own.size + 1, "database")}" : "")
+            end
           end
 
           models = Payload.models(ctx)
@@ -137,6 +140,10 @@ module RailsAiContext
             # Prefer live adapter from config over static_parse from schema introspector
             adapter = RailsAiContext::SchemaAdapter.label(ctx)
             db = "#{adapter} (#{count_phrase(schema[:total_tables].to_i, 'table')})"
+            # Every database the app's own dumps declare, as rails_get_schema reads them.
+            own_secondary_databases(ctx, schema).each do |other|
+              db += ", plus the #{other[:name]} database#{" on #{other[:adapter]}" if other[:adapter]} (#{count_phrase(other[:tables], 'table')})"
+            end
           elsif RailsAiContext::AppKind.mongoid?(rails_app.root)
             database = RailsAiContext::AppKind.mongoid_database(rails_app.root)
             db = "MongoDB through Mongoid#{" (database #{database})" if database}"
@@ -147,6 +154,10 @@ module RailsAiContext
           end
           rails = named_rails_version(ctx)
           lines << "#{ctx[:app_name]} is a Rails#{" #{rails}" if rails} application#{ruby_clause(ctx)} #{db ? "on #{db}" : "without Active Record"}."
+          solid = schema ? solid_databases(schema) : {}
+          if solid.any?
+            lines << "#{solid.values.uniq.to_sentence} keep#{"s" if solid.values.uniq.one?} their tables in databases of their own: #{solid.keys.join(", ")}."
+          end
           unread = unread_bundle(rails)
           lines << unread if unread
 
@@ -165,6 +176,41 @@ module RailsAiContext
 
           lines << ""
           lines
+        end
+
+        # The tables Rails 8 gives Solid Queue, Solid Cache and Solid Cable,
+        # each gem's in a database of its own: framework infrastructure, not
+        # the app's data.
+        SOLID_TABLES = { /\Asolid_queue_/ => "Solid Queue", /\Asolid_cache_/ => "Solid Cache", /\Asolid_cable_/ => "Solid Cable" }.freeze
+
+        # {database name => the Solid gem whose tables are all it holds}.
+        def solid_databases(schema)
+          secondary = schema[:secondary_databases]
+          return {} unless secondary.is_a?(Hash)
+
+          secondary.each_with_object({}) do |(name, db), found|
+            tables = db.is_a?(Hash) && db[:tables].is_a?(Hash) ? db[:tables].keys.map(&:to_s) : []
+            gems = tables.map { |table| SOLID_TABLES.find { |pattern, _| table.match?(pattern) }&.last }
+            found[name.to_s] = gems.first if gems.any? && gems.uniq.one? && gems.first
+          end
+        end
+
+        # The app's own databases besides the primary, as its schema dumps
+        # declare them: metrics71's analytics database on SQLite went
+        # uncounted beside its PostgreSQL primary. Each is
+        # { name:, adapter:, tables: }, the adapter nil when database.yml does not say.
+        def own_secondary_databases(ctx, schema)
+          secondary = schema[:secondary_databases]
+          return [] unless secondary.is_a?(Hash)
+
+          solid = solid_databases(schema)
+          configured = Array(Payload.section(ctx, :multi_database)&.dig(:databases)).grep(Hash).to_h { |d| [ d[:name].to_s, d ] }
+          secondary.filter_map do |name, db|
+            next if solid.key?(name.to_s) || !db.is_a?(Hash)
+
+            { name: name.to_s, adapter: RailsAiContext::SchemaAdapter.database_label(configured[name.to_s]),
+              tables: (db[:total_tables] || Array(db[:tables]).size).to_i }
+          end
         end
 
         def section_data_model(ctx)

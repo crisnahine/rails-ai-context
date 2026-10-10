@@ -64,6 +64,45 @@ RSpec.describe RailsAiContext::Tools::Onboard do
     end
   end
 
+  # metrics71 keeps its analytics in a SQLite database beside a PostgreSQL
+  # primary, and the overview counted the primary's tables alone. A default
+  # Rails 8 app's queue, cache and cable databases are the framework's own.
+  describe "an app with more than one database" do
+    let(:schema) do
+      {
+        total_tables: 3, tables: { "accounts" => {}, "users" => {}, "settings" => {} },
+        secondary_databases: {
+          "analytics" => { total_tables: 2, tables: { "events" => {}, "page_views" => {} } },
+          "queue" => { total_tables: 2, tables: { "solid_queue_jobs" => {}, "solid_queue_processes" => {} } },
+          "cache" => { total_tables: 1, tables: { "solid_cache_entries" => {} } }
+        }
+      }
+    end
+
+    before do
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(Dir.mktmpdir("rac_multi"))))
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "Metrics", models: {}, schema: schema,
+        multi_database: { databases: [ { name: "primary", adapter: "postgresql" }, { name: "analytics", adapter: "sqlite3" },
+                                       { name: "queue", adapter: "sqlite3" }, { name: "cache", adapter: "sqlite3" } ] }
+      })
+    end
+
+    it "counts every database the app's dumps declare and names the framework's in one line" do
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("on PostgreSQL (3 tables), plus the analytics database on SQLite (2 tables).")
+      expect(text).to include("\nSolid Queue and Solid Cache keep their tables in databases of their own: queue, cache.\n")
+      expect(text).not_to include("solid_queue_jobs")
+    end
+
+    it "counts the app's tables across its databases in the quick overview" do
+      text = described_class.call(detail: "quick").content.first[:text]
+
+      expect(text).to include("5 tables in 2 databases")
+    end
+  end
+
   describe "an app that does not load Active Record" do
     it "says so instead of naming an unknown database" do
       Dir.mktmpdir do |dir|
