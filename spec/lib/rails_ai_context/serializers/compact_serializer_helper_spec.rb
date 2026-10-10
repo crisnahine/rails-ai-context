@@ -303,6 +303,13 @@ RSpec.describe RailsAiContext::Serializers::CompactSerializerHelper do
       expect(lines).to include("**Jobs:** SyncJob")
     end
 
+    # A blank line between the heading and the names left a static-tier
+    # file with a heading that read as empty.
+    it "puts the names right under the heading" do
+      expect(static_host.send(:render_architecture))
+        .to eq([ "## Architecture", "**Services:** PaymentService", "**Jobs:** SyncJob", "" ])
+    end
+
     it "prints no heading when there is nothing under it" do
       host = Class.new do
         include RailsAiContext::Serializers::CompactSerializerHelper

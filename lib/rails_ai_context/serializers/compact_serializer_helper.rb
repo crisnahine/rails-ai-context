@@ -204,11 +204,17 @@ module RailsAiContext
 
         # The scan decides, so services under a configured extra path show wherever
         # the conventions walk looked.
+        names = []
         services = service_names
-        lines << "" << "**Services:** #{services.join(', ')}" if services.any?
-
+        names << "**Services:** #{services.join(', ')}" if services.any?
         jobs = job_names
-        lines << "**Jobs:** #{jobs.join(', ')}" if jobs.any?
+        names << "**Jobs:** #{jobs.join(', ')}" if jobs.any?
+
+        # The blank line sets the names apart from a pattern list. With no list
+        # above them - the static tier reads no conventions - it left the
+        # heading standing over nothing.
+        lines << "" if lines.any? && names.any?
+        lines.concat(names)
         return [] if lines.empty?
 
         [ "## Architecture", *lines, "" ]
