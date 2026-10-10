@@ -34,15 +34,19 @@ def abort_boot_failure(result, timeout)
 end unless defined?(abort_boot_failure)
 
 # Boots through Rake's environment task so app hooks run, with boot output kept off
-# stdout (the JSON-RPC stream); the guard adds the timeout and the rescue.
-def boot_and_serve(transport)
+# stdout (the JSON-RPC stream, or a JSON=1 envelope); the guard adds the timeout
+# and the rescue.
+def boot_quietly
   timeout = RailsAiContext::BootManager.env_timeout
   result = RailsAiContext::BootManager.guard(timeout: timeout) do
     Rake::Task["environment"].invoke
   end
   abort_boot_failure(result, timeout) unless result.booted?
   require "rails_ai_context"
+end unless defined?(boot_quietly)
 
+def boot_and_serve(transport)
+  boot_quietly
   RailsAiContext.start_mcp_server(transport: transport)
 end unless defined?(boot_and_serve)
 
@@ -167,8 +171,11 @@ end unless defined?(add_ai_tool_to_initializer)
 
 namespace :ai do
   desc "Run an MCP tool from the CLI: rails 'ai:tool[schema]' table=users detail=full"
-  task :tool, [ :name ] => :environment do |_t, args|
-    require "rails_ai_context"
+  task :tool, [ :name ] do |_t, args|
+    # Booted here rather than as a prerequisite, so what the app prints while
+    # it boots goes to stderr, as it does from the binary: with JSON=1, stdout
+    # is the envelope and nothing else.
+    boot_quietly
 
     name = args[:name]
 
