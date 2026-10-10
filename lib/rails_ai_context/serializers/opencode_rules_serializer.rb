@@ -58,7 +58,7 @@ module RailsAiContext
           "# ActiveRecord Models (#{models.size})",
           "",
           "> #{Install::Cleanup::GENERATED_NOTE}",
-          "> Check here first for scopes, constants, associations. Read model files for business logic/methods.",
+          "> #{MODELS_READING}",
           ""
         ]
         if (notice = SectionFacts.static_notice(context))

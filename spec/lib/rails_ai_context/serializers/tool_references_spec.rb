@@ -46,6 +46,14 @@ RSpec.describe "the tools every generated file names" do
 
     # A backtick inside a span (`undefined method `foo` for nil`) cuts it in
     # two, and each half starts or ends with the space beside the inner one.
+    # "Read model files for business logic" sat beside "NEVER read ... model
+    # files" in the same AI's context.
+    it "tells the AI to read a model file only to edit it, in every file" do
+      generated_files.each do |path, content|
+        expect(content).not_to include("Read model files for"), path
+      end
+    end
+
     it "keeps every code span whole" do
       generated_files.each do |path, content|
         broken = content.lines.select do |line|

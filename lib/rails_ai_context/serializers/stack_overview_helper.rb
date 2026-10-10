@@ -14,6 +14,11 @@ module RailsAiContext
 
       IN_REPO_ENGINES_SHOWN = 5
 
+      # The models listings' line on reading, in the tools guide's terms: the
+      # tools are the reference, and a file is read to edit it. "Read model
+      # files for business logic" sat beside "NEVER read ... model files".
+      MODELS_READING = "Check here first for scopes, constants, associations. Read a model file only when you edit it."
+
       # Returns an array of summary lines for full-preset introspectors.
       # Each line is only added if the introspector returned meaningful data.
       def full_preset_stack_lines(ctx = context)
