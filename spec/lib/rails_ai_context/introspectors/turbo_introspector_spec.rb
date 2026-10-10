@@ -222,8 +222,8 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
         { id: "post", src: nil, file: "app/views/posts/show.html.erb", line: 1, snippet: "<%= turbo_frame_tag :post do %>" }
       ])
       expect(result[:model_broadcasts]).to eq([
-        { model: "Comment", macro: "broadcasts_to", stream: nil, file: "app/models/comment.rb", line: 7,
-          snippet: "broadcasts_to ->(comment) { [comment.post, :comments] }" }
+        { model: "Comment", macro: "broadcasts_to", stream: nil, streams: [ [ { expr: "post" }, { literal: "comments" } ] ],
+          file: "app/models/comment.rb", line: 7, snippet: "broadcasts_to ->(comment) { [comment.post, :comments] }" }
       ])
     end
 
@@ -239,7 +239,7 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
       result = described_class.new(app).call
 
       expect(result[:stream_subscriptions]).to eq([
-        { stream: "@post", file: "app/views/posts/index.html.erb", line: 1, snippet: "<%= turbo_stream_from @post %>" }
+        { stream: "@post", parts: [ { expr: "@post" } ], file: "app/views/posts/index.html.erb", line: 1, snippet: "<%= turbo_stream_from @post %>" }
       ])
       expect(result[:explicit_broadcasts]).to eq([])
     end
@@ -434,9 +434,9 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
 
         expect(result[:explicit_broadcasts]).to eq([
-          { method: "broadcast_append_to", stream: "posts", target: "list", partial: "posts/post",
+          { method: "broadcast_append_to", stream: "posts", parts: [ { literal: "posts" } ], owner: "Post", target: "list", partial: "posts/post",
             file: "app/models/post.rb", line: 3, snippet: 'broadcast_append_to "posts", target: "list", partial: "posts/post"' },
-          { method: "broadcast_replace_to", stream: "post_{id}", target: nil, partial: nil,
+          { method: "broadcast_replace_to", stream: "post_{id}", parts: nil, owner: "RefreshJob", target: nil, partial: nil,
             file: "app/jobs/refresh_job.rb", line: 2, snippet: 'broadcast_replace_to("post_#{post.id}")' }
         ])
         expect(result[:model_broadcasts]).to eq([])

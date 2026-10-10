@@ -52,10 +52,21 @@ module RailsAiContext
 
           if stream
             stream_lower = stream.downcase
-            mentions = ->(entry) { entry[:stream]&.downcase&.include?(stream_lower) || entry[:snippet]&.downcase&.include?(stream_lower) }
+            names = lambda do |entry|
+              labelled = entry[:streams] ? entry[:streams].map { |parts| parts_label(parts) } : [ entry[:parts] ? parts_label(entry[:parts]) : entry[:stream] ]
+              labelled.compact
+            end
+            mentions = ->(entry) { names.call(entry).any? { |name| name.downcase.include?(stream_lower) } || entry[:snippet]&.downcase&.include?(stream_lower) }
+            all_streams = (model_broadcasts + rb_broadcasts + view_subscriptions).flat_map(&names).uniq.sort
             model_broadcasts = model_broadcasts.select(&mentions)
             rb_broadcasts = rb_broadcasts.select(&mentions)
             view_subscriptions = view_subscriptions.select(&mentions)
+            # The frames and responses are not streams, so the answer was the
+            # whole map with no word that the filter matched nothing.
+            if model_broadcasts.empty? && rb_broadcasts.empty? && view_subscriptions.empty?
+              known = all_streams.any? ? " Streams in this app: #{all_streams.map { |s| "`#{s}`" }.join(', ')}." : ""
+              return empty_response("No broadcast or `turbo_stream_from` matches stream:\"#{stream}\".#{known}")
+            end
           end
 
           if controller
@@ -66,10 +77,11 @@ module RailsAiContext
             # A broadcast belongs to the controller when it sits in its path or
             # feeds a stream one of its surviving views subscribes to (a job
             # broadcasting to a stream the controller's views listen on).
-            matched_streams = view_subscriptions.map { |s| s[:stream] }.compact
+            models = Payload.models(cached_context)
+            subscribed = subscription_streams(view_subscriptions, models)
             rb_broadcasts = rb_broadcasts.select { |b|
               controller_file?(b[:file], ctrl_lower) ||
-                (b[:stream] && matched_streams.any? { |ss| streams_match?(b[:stream], ss) })
+                broadcast_streams([], [ b ], models).any? { |cast| subscribed.any? { |sub| stream_relation(sub, cast, models) == :match } }
             }
           end
 
@@ -185,7 +197,7 @@ module RailsAiContext
           lines << "## Explicit Broadcasts (#{rb_broadcasts.size})"
           rb_broadcasts.each do |b|
             target_label = b[:target] ? " target: `#{b[:target]}`" : ""
-            lines << "- `#{b[:method]}` → stream: `#{b[:stream]}`#{target_label} (`#{b[:file]}:#{b[:line]}`)"
+            lines << "- `#{b[:method]}` → stream: `#{b[:parts] ? parts_label(b[:parts]) : b[:stream]}`#{target_label} (`#{b[:file]}:#{b[:line]}`)"
           end
           lines << ""
         end
@@ -278,7 +290,7 @@ module RailsAiContext
         if rb_broadcasts.any?
           lines << "## Explicit Broadcasts (#{rb_broadcasts.size})"
           rb_broadcasts.each do |b|
-            lines << "### `#{b[:method]}` → `#{b[:stream]}`"
+            lines << "### `#{b[:method]}` → `#{b[:parts] ? parts_label(b[:parts]) : b[:stream]}`"
             lines << "- **File:** `#{b[:file]}:#{b[:line]}`"
             lines << "- **Target:** `#{b[:target]}`" if b[:target]
             lines << "- **Partial:** `#{b[:partial]}`" if b[:partial]
@@ -322,10 +334,19 @@ module RailsAiContext
               lines << "- **Subscribers:** #{wiring[:subscribers].map { |s| "`#{s}`" }.join(', ')}"
             end
             if wiring[:broadcasters].any? && wiring[:subscribers].empty?
-              lines << "- _No subscribers found for this stream_"
+              lines << if wiring[:unsure]
+                "- _Can't tell whether a subscriber matches: a part of a stream here names nothing this reading resolves_"
+              else
+                "- _No subscribers found for this stream_"
+              end
             end
             if wiring[:subscribers].any? && wiring[:broadcasters].empty?
-              lines << "- _No broadcasters found for this stream_"
+              lines << if wiring[:unknown].any?
+                "- _Can't tell whether #{wiring[:unknown].map { |b| "`#{b}`" }.join(', ')} broadcast#{"s" if wiring[:unknown].one?} here: " \
+                  "a part of its stream names nothing this reading resolves_"
+              else
+                "- _No broadcasters found for this stream_"
+              end
             end
             lines << ""
           end
@@ -343,41 +364,24 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
-      # Detect mismatches between broadcasts and subscriptions
+      # A broadcast or a subscription as the wiring compares them: its label,
+      # where it is, and its stream's parts with each expression resolved to
+      # the model whose record it names. Nil parts compare by label alone.
+      WiredStream = Data.define(:label, :where, :parts)
+
+      # Warnings only where the wiring is sure: a stream whose parts this
+      # reading could not resolve is "can't tell", not a mismatch.
       private_class_method def self.detect_mismatches(model_broadcasts, rb_broadcasts, view_subscriptions)
         warnings = []
+        build_stream_wiring(model_broadcasts, rb_broadcasts, view_subscriptions).each do |label, wiring|
+          next if wiring[:unknown].any? || wiring[:unsure]
 
-        # Collect all broadcast stream names
-        broadcast_streams = Set.new
-        model_broadcasts.each { |b| broadcast_streams << b[:stream] if b[:stream] && !b[:stream].include?("dynamic") && !b[:stream].include?("self") }
-        rb_broadcasts.each { |b| broadcast_streams << b[:stream] if b[:stream] && !b[:stream].include?("dynamic") }
-
-        # Collect all subscription stream names
-        subscription_streams = Set.new
-        view_subscriptions.each { |s| subscription_streams << s[:stream] if s[:stream] && !s[:stream].include?("dynamic") }
-
-        # Broadcasts without subscribers - use fuzzy matching for dynamic streams
-        orphan_broadcasts = broadcast_streams.reject { |bs|
-          subscription_streams.any? { |ss| streams_match?(bs, ss) }
-        }
-        orphan_broadcasts.each do |stream|
-          source = rb_broadcasts.find { |b| b[:stream] == stream }
-          source ||= model_broadcasts.find { |b| b[:stream] == stream }
-          file_ref = source ? " (#{source[:file]}:#{source[:line]})" : ""
-          warnings << "Broadcast to `#{stream}` has no matching `turbo_stream_from`#{file_ref}"
+          if wiring[:subscribers].any? && wiring[:broadcasters].empty?
+            warnings << "Subscription to `#{label}` has no matching broadcast (#{wiring[:subscribers].join(', ')})"
+          elsif wiring[:broadcasters].any? && wiring[:subscribers].empty?
+            warnings << "Broadcast to `#{label}` has no matching `turbo_stream_from` (#{wiring[:broadcasters].join(', ')})"
+          end
         end
-
-        # Subscriptions without broadcasters - use fuzzy matching
-        orphan_subscriptions = subscription_streams.reject { |ss|
-          broadcast_streams.any? { |bs| streams_match?(bs, ss) }
-        }
-        orphan_subscriptions.each do |stream|
-          next if stream.include?(",") || stream.include?("@")
-          source = view_subscriptions.find { |s| s[:stream] == stream }
-          file_ref = source ? " (#{source[:file]}:#{source[:line]})" : ""
-          warnings << "Subscription to `#{stream}` has no matching broadcast#{file_ref}"
-        end
-
         warnings.sort
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "detect_mismatches")
@@ -402,31 +406,172 @@ module RailsAiContext
         false
       end
 
-      # Build a wiring map: stream name → { broadcasters: [...], subscribers: [...] }
+      # stream label => { subscribers:, broadcasters:, unknown: [broadcasters
+      # it cannot tell about], unsure: a broadcast that might reach some
+      # subscriber }. Each subscription lists the broadcasts that reach it, and
+      # a broadcast that reaches none gets an entry of its own. Turbo names a
+      # stream by its parts, so a model's `[product, :reviews]` and a view's
+      # `@product, :reviews` are one stream when both are a Product.
       private_class_method def self.build_stream_wiring(model_broadcasts, rb_broadcasts, view_subscriptions)
+        models = Payload.models(cached_context)
+        casts = broadcast_streams(model_broadcasts, rb_broadcasts, models)
+        reached = Set.new
+        unsure = Set.new
         wiring = {}
 
-        model_broadcasts.each do |b|
-          next unless b[:stream] && !b[:stream].include?("dynamic")
-          wiring[b[:stream]] ||= { broadcasters: [], subscribers: [] }
-          wiring[b[:stream]][:broadcasters] << "#{b[:model]}.#{b[:macro]} (#{b[:file]}:#{b[:line]})"
+        subscription_streams(view_subscriptions, models).each do |sub|
+          entry = (wiring[sub.label] ||= { broadcasters: [], subscribers: [], unknown: [] })
+          entry[:subscribers] << sub.where
+          casts.each_with_index do |cast, index|
+            case stream_relation(sub, cast, models)
+            when :match
+              entry[:broadcasters] << cast.where
+              reached << index
+            when :unknown
+              entry[:unknown] << cast.where
+              unsure << index
+            end
+          end
         end
 
-        rb_broadcasts.each do |b|
-          next unless b[:stream] && !b[:stream].include?("dynamic")
-          wiring[b[:stream]] ||= { broadcasters: [], subscribers: [] }
-          wiring[b[:stream]][:broadcasters] << "#{b[:method]} (#{b[:file]}:#{b[:line]})"
+        casts.each_with_index do |cast, index|
+          next if reached.include?(index)
+
+          entry = (wiring[cast.label] ||= { broadcasters: [], subscribers: [], unknown: [] })
+          entry[:broadcasters] << cast.where
+          entry[:unsure] = true if unsure.include?(index)
         end
 
-        view_subscriptions.each do |s|
-          next unless s[:stream] && !s[:stream].include?("dynamic")
-          wiring[s[:stream]] ||= { broadcasters: [], subscribers: [] }
-          wiring[s[:stream]][:subscribers] << "#{s[:file]}:#{s[:line]}"
-        end
-
+        wiring.each_value { |entry| %i[broadcasters subscribers unknown].each { |key| entry[key].uniq! } }
         wiring.sort_by { |k, _| k }.to_h
       rescue => e
         RailsAiContext.debug_fail(e, {}, label: "build_stream_wiring")
+      end
+
+      private_class_method def self.subscription_streams(view_subscriptions, models)
+        view_subscriptions.filter_map do |s|
+          next unless s[:stream]
+
+          WiredStream.new(label: s[:stream], where: "#{s[:file]}:#{s[:line]}", parts: resolve_parts(s[:parts], models, nil))
+        end
+      end
+
+      # `broadcasts` and `broadcasts_refreshes` send to two streams, the
+      # model's plural on create and the record on update and destroy, so
+      # each stream is its own entry, labelled with the events it carries.
+      MACRO_EVENTS = [ " on create", " on update and destroy" ].freeze
+
+      private_class_method def self.broadcast_streams(model_broadcasts, rb_broadcasts, models)
+        streams = []
+        model_broadcasts.each do |b|
+          where = "#{b[:model]}.#{b[:macro]} (#{b[:file]}:#{b[:line]})"
+          if b[:streams]
+            two = b[:streams].size == 2
+            b[:streams].each_with_index do |parts, index|
+              streams << WiredStream.new(label: parts_label(parts), where: "#{where}#{MACRO_EVENTS[index] if two}",
+                                         parts: resolve_parts(parts, models, b[:model]))
+            end
+          elsif b[:stream]
+            streams << WiredStream.new(label: b[:stream], where: where, parts: nil)
+          end
+        end
+        rb_broadcasts.each do |b|
+          next unless b[:stream]
+
+          label = b[:parts] ? parts_label(b[:parts]) : b[:stream]
+          streams << WiredStream.new(label: label, where: "#{b[:method]} (#{b[:file]}:#{b[:line]})",
+                                     parts: resolve_parts(b[:parts], models, b[:owner]))
+        end
+        streams
+      end
+
+      # Parts as a subscription label spells them: `user, notifications`.
+      private_class_method def self.parts_label(parts)
+        parts.map { |part| part[:literal] || part[:expr] }.join(", ")
+      end
+
+      # Each expression as the model whose record it names, when one does;
+      # `owner` is the class a broadcast sits in, nil for a view.
+      private_class_method def self.resolve_parts(parts, models, owner)
+        return nil unless parts.is_a?(Array)
+
+        parts.map do |part|
+          next part unless part[:expr]
+
+          model = owner ? model_side_record(part[:expr], owner, models) : view_side_record(part[:expr], models)
+          model ? { record: model } : part
+        end
+      end
+
+      # In a model, `self` is the record and a bare name one of its
+      # belongs_to or has_one associations.
+      private_class_method def self.model_side_record(expr, owner, models)
+        name = expr.delete_prefix("self.")
+        return (models.key?(owner) ? owner : nil) if name == "self"
+        return nil unless name.match?(/\A[a-z_]\w*\z/) && models[owner].is_a?(Hash)
+
+        assoc = Array(models[owner][:associations]).find do |a|
+          a.is_a?(Hash) && a[:name].to_s == name && %w[belongs_to has_one].include?(a[:type].to_s) && !a[:polymorphic]
+        end
+        assoc && Introspectors::TableName.model_for(assoc[:class_name] || name.camelize, owner, models)
+      end
+
+      # In a view, `@product`, `product` and `current_user` name a record by
+      # the model their name spells, and `@order.user` one through the first
+      # model's association.
+      private_class_method def self.view_side_record(expr, models)
+        head, *chain = expr.delete_prefix("@").split(".")
+        return nil unless head.to_s.match?(/\A[a-z_]\w*\z/) && chain.all? { |name| name.match?(/\A[a-z_]\w*\z/) }
+
+        named = head.delete_prefix("current_")
+        found = models.keys.map(&:to_s).select { |key| key.demodulize.underscore == named }
+        model = found.one? ? found.first : nil
+        chain.each { |name| model = model && model_side_record(name, model, models) }
+        model
+      end
+
+      # :match, :differ, or :unknown when a part names something this
+      # reading cannot resolve.
+      private_class_method def self.stream_relation(a, b, models)
+        unless a.parts && b.parts
+          return :match if streams_match?(a.label, b.label)
+
+          return [ a.label, b.label ].any? { |label| label.include?("dynamic") } ? :unknown : :differ
+        end
+        return :differ unless a.parts.size == b.parts.size
+
+        relations = a.parts.zip(b.parts).map { |x, y| part_relation(x, y, models) }
+        return :differ if relations.include?(:differ)
+
+        relations.include?(:unknown) ? :unknown : :match
+      end
+
+      private_class_method def self.part_relation(x, y, models)
+        if x[:literal] && y[:literal]
+          x[:literal] == y[:literal] ? :match : :differ
+        elsif x[:record] && y[:record]
+          return :match if x[:record] == y[:record]
+
+          # A record streams under its own class, so a parent and its STI
+          # subclass may or may not be one stream.
+          sti_related?(x[:record], y[:record], models) ? :unknown : :differ
+        elsif (x[:literal] && y[:record]) || (x[:record] && y[:literal])
+          :differ
+        else
+          :unknown
+        end
+      end
+
+      private_class_method def self.sti_related?(a, b, models)
+        ancestors = lambda do |name|
+          chain = []
+          while (parent = models.dig(name, :parent_model)) && !chain.include?(parent)
+            chain << parent
+            name = parent
+          end
+          chain
+        end
+        ancestors.call(a).include?(b) || ancestors.call(b).include?(a)
       end
     end
   end

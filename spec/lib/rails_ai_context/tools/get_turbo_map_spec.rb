@@ -55,19 +55,15 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
     end
   end
 
+  # bazaar's stream:"nope" answered with the whole map and no word that
+  # nothing matched: the frames and responses are not streams to filter.
   describe ".call with stream filter" do
-    it "filters results by stream name" do
-      result = described_class.call(stream: "nonexistent_stream_xyz")
-      text = result.content.first[:text]
-      # With a nonsense filter, should get no matching results
-      expect(text).to include("Turbo Map")
-    end
-
-    it "reports no matching turbo usage with bad filter" do
+    it "says no stream matches a filter that matches none" do
       result = described_class.call(stream: "nonexistent_stream_xyz", detail: "standard")
       text = result.content.first[:text]
-      # Should either show empty results or a helpful hint
-      expect(text).to match(/No Turbo usage matching|Turbo Map/)
+
+      expect(text).to start_with("No broadcast or `turbo_stream_from` matches stream:\"nonexistent_stream_xyz\".")
+      expect(text).not_to include("## Turbo Frames")
     end
   end
 
@@ -282,6 +278,8 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
         - **Stream subscriptions:** 1 (`turbo_stream_from` in views)
         - **Turbo Frames:** 3 (`turbo_frame_tag` in views)
 
+        **Warnings:** 2 potential mismatch(es) detected
+
         _Use `detail:"standard"` for stream wiring, or `stream:"name"` to filter._
       TEXT
     end
@@ -313,6 +311,10 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
         - `turbo_frame_tag` `dom_id(@post, :edit)` (`app/views/posts/edit.html.erb:1`)
         - `turbo_frame_tag` `dom_id(@post, :edit)` (`app/views/posts/index.html.erb:2`)
         - `turbo_frame_tag` `post` (`app/views/posts/show.html.erb:1`)
+
+        ## Warnings
+        - Broadcast to `post, comments` has no matching `turbo_stream_from` (Comment.broadcasts_to (app/models/comment.rb:7))
+        - Subscription to `@post` has no matching broadcast (app/views/posts/index.html.erb:1)
 
         _Use `detail:"full"` for DOM IDs and inline templates, or `stream:"name"` to filter._
       TEXT
@@ -364,6 +366,14 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
         ### Stream: `@post`
         - **Subscribers:** `app/views/posts/index.html.erb:1`
         - _No broadcasters found for this stream_
+
+        ### Stream: `post, comments`
+        - **Broadcasters:** `Comment.broadcasts_to (app/models/comment.rb:7)`
+        - _No subscribers found for this stream_
+
+        ## Warnings
+        - Broadcast to `post, comments` has no matching `turbo_stream_from` (Comment.broadcasts_to (app/models/comment.rb:7))
+        - Subscription to `@post` has no matching broadcast (app/views/posts/index.html.erb:1)
       TEXT
     end
 
@@ -406,7 +416,76 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
         ### `turbo_frame_tag` `post`
         - **File:** `app/views/posts/show.html.erb:1`
         - **Snippet:** `<%= turbo_frame_tag :post do %>`
+
+        ## Stream Wiring
+        ### Stream: `post, comments`
+        - **Broadcasters:** `Comment.broadcasts_to (app/models/comment.rb:7)`
+        - _No subscribers found for this stream_
+
+        ## Warnings
+        - Broadcast to `post, comments` has no matching `turbo_stream_from` (Comment.broadcasts_to (app/models/comment.rb:7))
       TEXT
+    end
+  end
+
+  # bazaar wires all four of its streams, and the map called every one
+  # unwired: array streams read as "(dynamic)" and were never compared.
+  describe "stream wiring by the records and names a stream is built from" do
+    let(:models) do
+      {
+        "Product" => { associations: [] },
+        "User" => { associations: [] },
+        "Review" => { associations: [ { type: "belongs_to", name: "product" } ] },
+        "Notification" => { associations: [ { type: "belongs_to", name: "user" } ] }
+      }
+    end
+    let(:turbo) do
+      {
+        model_broadcasts: [
+          { model: "Product", macro: "broadcasts_refreshes", stream: "self (model plural, refreshes)",
+            streams: [ [ { literal: "products" } ], [ { expr: "self" } ] ], file: "app/models/product.rb", line: 27 }
+        ],
+        explicit_broadcasts: [
+          { method: "broadcast_prepend_to", stream: "(dynamic)", parts: [ { expr: "user" }, { literal: "notifications" } ],
+            owner: "Notification", file: "app/models/notification.rb", line: 24 },
+          { method: "broadcast_prepend_to", stream: "(dynamic)", parts: [ { expr: "product" }, { literal: "reviews" } ],
+            owner: "Review", file: "app/models/review.rb", line: 10 },
+          { method: "broadcast_replace_to", stream: "(dynamic)", parts: [ { expr: "ledger" }, { literal: "rows" } ],
+            owner: "Review", file: "app/models/review.rb", line: 12 }
+        ],
+        stream_subscriptions: [
+          { stream: "current_user, notifications", parts: [ { expr: "current_user" }, { literal: "notifications" } ],
+            file: "app/views/layouts/application.html.erb", line: 18 },
+          { stream: "@product", parts: [ { expr: "@product" } ], file: "app/views/products/show.html.erb", line: 2 },
+          { stream: "@product, reviews", parts: [ { expr: "@product" }, { literal: "reviews" } ], file: "app/views/products/show.html.erb", line: 3 },
+          { stream: "@report, rows", parts: [ { expr: "@report" }, { literal: "rows" } ], file: "app/views/reports/show.html.erb", line: 1 }
+        ]
+      }
+    end
+
+    before do
+      allow(described_class).to receive(:cached_context).and_return(models: models, turbo: turbo)
+    end
+
+    def wiring(text, stream)
+      text[/### Stream: `#{Regexp.escape(stream)}`\n(.*?)(?=\n\n|\z)/m, 1]
+    end
+
+    it "wires a model's record and names to the view's record of the same model" do
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(wiring(text, "@product, reviews")).to include("**Broadcasters:** `broadcast_prepend_to (app/models/review.rb:10)`")
+      expect(wiring(text, "current_user, notifications")).to include("`broadcast_prepend_to (app/models/notification.rb:24)`")
+      expect(wiring(text, "@product")).to include("`Product.broadcasts_refreshes (app/models/product.rb:27) on update and destroy`")
+      expect(text).not_to include("No broadcasters found for this stream")
+    end
+
+    it "says it can't tell where a stream names nothing it resolves, and warns only where it is sure" do
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(wiring(text, "@report, rows")).to include("_Can't tell whether `broadcast_replace_to (app/models/review.rb:12)` broadcasts here")
+      expect(text).not_to include("Subscription to `@report, rows`")
+      expect(text).to include("Broadcast to `products` has no matching `turbo_stream_from`")
     end
   end
 

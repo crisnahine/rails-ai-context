@@ -338,12 +338,12 @@ What locals to pass to a partial and what methods are called on them. Render sit
 
 ### `rails_get_turbo_map`
 
-Turbo Stream broadcast-to-subscription wiring with mismatch warnings.
+Turbo Stream broadcast-to-subscription wiring with mismatch warnings. Streams are compared the way Turbo names them, part by part: a record by its model, a symbol or string by its text. So `broadcast_prepend_to [product, :reviews]` in Review, whose `product` is a belongs_to, reaches `turbo_stream_from @product, :reviews`, and `broadcasts_refreshes` reaches `turbo_stream_from @product` on update and destroy and the model's plural stream on create. A part that names nothing the map can resolve (no model by that name, a method rather than an association) is reported as "can't tell", never as a mismatch.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
-| `stream` | string | - | Filter by stream or channel name (e.g., `notifications`) |
+| `stream` | string | - | Filter by stream or channel name (e.g., `notifications`); a name no broadcast or subscription carries says so and lists the app's streams |
 | `controller` | string | - | Filter by controller name (e.g., `messages`) |
 
 ### `rails_get_frontend_stack`
