@@ -687,6 +687,8 @@ PR/commit review with per-file context and warnings.
 
 Live database pool stats, table sizes, pending migrations, cache stats, queue depth.
 
+The pool and the cache are read inside the MCP server process, and the answer says so: the pool's counts are that process's own connections, and a `MemoryStore`'s entries are its own, since each app server process holds its own. A store the processes share (Redis, Memcached, Solid Cache, a file store) is the app's. Another environment that configures a shared store is named, as where the app's cache lives there.
+
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |

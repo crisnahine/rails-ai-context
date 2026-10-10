@@ -141,6 +141,35 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
         expect(text).not_to include("Stats not available for MemoryStore")
       end
 
+      # 0 entries in the MCP server's own MemoryStore read as the app's cache
+      # being empty, and 0 connections as the app holding none.
+      it "says the store and the pool are this MCP server process's own" do
+        allow(Rails).to receive(:cache).and_return(ActiveSupport::Cache::MemoryStore.new)
+
+        cache = described_class.call(section: "cache").content.first[:text]
+        pool = described_class.call(section: "connections").content.first[:text]
+
+        expect(cache).to include("**Store:** MemoryStore, this MCP server process's `Rails.cache`")
+        expect(cache).to include("A MemoryStore lives inside one process, so these numbers are this MCP server's own.")
+        expect(pool).to include("_This MCP server process's pool: the counts are its own connections.")
+      end
+
+      it "names the shared store another environment keeps the app's cache in" do
+        allow(Rails).to receive(:cache).and_return(ActiveSupport::Cache::MemoryStore.new)
+        allow(described_class).to receive(:rails_env_name).and_return("development")
+        allow(described_class).to receive(:cached_context).and_return(env_config: { environments: [
+          { name: "development", file: "config/environments/development.rb", notable: { "cache_store" => ":memory_store" } },
+          { name: "production", file: "config/environments/production.rb",
+            notable: { "cache_store" => ':redis_cache_store, { url: ENV.fetch("REDIS_URL") { "redi...' } },
+          { name: "test", file: "config/environments/test.rb", notable: { "cache_store" => ":null_store" } }
+        ] })
+
+        text = described_class.call(section: "cache").content.first[:text]
+
+        expect(text).to include("**The app's cache in other environments:**\n- production: `:redis_cache_store` (`config/environments/production.rb`)\n")
+        expect(text).not_to include("null_store")
+      end
+
       # A store that does answer #stats returns a Hash, and Hash#inspect is
       # still an object dumped into prose.
       it "renders a stats hash as facts" do
