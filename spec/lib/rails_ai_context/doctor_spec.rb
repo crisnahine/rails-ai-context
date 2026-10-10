@@ -1092,12 +1092,48 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
 
-    it "passes and says so when no sensitive file exists" do
+    it "passes and says so when no secret file exists" do
       app_with("app/models/user.rb" => "class User; end\n") do |dir|
         check = gitignore_check_for(dir)
 
         expect(check.status).to eq(:pass)
-        expect(check.message).to eq("No sensitive files found")
+        expect(check.message).to eq("No secret files found")
+      end
+    end
+
+    # A stock app commits all of these, and none holds a secret: the
+    # credentials are encrypted, and the configs read their passwords
+    # through ERB.
+    it "passes a stock app's committed files" do
+      files = {
+        "config/credentials.yml.enc" => "x\n", "config/master.key" => "x\n", ".gitignore" => "/.env*\n/config/*.key\n",
+        "config/database.yml" => "production:\n  database: shop\n  password: <%= ENV[\"SHOP_DATABASE_PASSWORD\"] %>\n  pool: 5\n",
+        "config/storage.yml" => "local:\n  service: Disk\n  root: <%= Rails.root.join(\"storage\") %>\n",
+        "config/cable.yml" => "development:\n  adapter: async\nproduction:\n  url: <%= ENV.fetch(\"REDIS_URL\") { \"redis://localhost:6379/1\" } %>\n"
+      }
+      app_with(files) do |dir|
+        check = gitignore_check_for(dir)
+
+        expect(check.status).to eq(:pass)
+        expect(check.message).to eq("Secret files gitignored: config/master.key")
+      end
+    end
+
+    it "warns about a config that holds a secret as a literal, naming the line" do
+      app_with("config/database.yml" => "development:\n  adapter: postgresql\n  password: hunter2 # local only\n",
+               "config/cable.yml" => "production:\n  url: redis://:s3cret@redis.internal:6379/1\n", ".gitignore" => "/.env*\n") do |dir|
+        check = gitignore_check_for(dir)
+
+        expect(check.status).to eq(:warn)
+        expect(check.message).to eq("A literal secret in config/cable.yml (`url` on line 2), config/database.yml (`password` on line 3), " \
+                                    "which .gitignore does not cover")
+        expect(check.fix).to include("<%= ENV[")
+      end
+    end
+
+    it "passes over a literal secret in a config .gitignore covers" do
+      app_with("config/database.yml" => "development:\n  password: hunter2\n", ".gitignore" => "/config/database.yml\n") do |dir|
+        expect(gitignore_check_for(dir).status).to eq(:pass)
       end
     end
 
@@ -1114,14 +1150,13 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
 
-    # database.yml, credentials.yml.enc and .env.development are often committed on purpose.
-    it "warns, naming them, when only files an app may commit on purpose are unignored" do
-      app_with("config/database.yml" => "x\n", "config/credentials.yml.enc" => "x\n", ".env.development" => "A=1\n",
-               "config/application.yml" => "k: v\n", ".gitignore" => "/config/application.yml\n") do |dir|
+    # Rails' own .gitignore leaves out every .env file, as the tools do.
+    it "fails an environment file .gitignore does not cover, whatever environment it names" do
+      app_with(".env.development" => "A=1\n", "config/application.yml" => "k: v\n", ".gitignore" => "/config/application.yml\n") do |dir|
         check = gitignore_check_for(dir)
 
-        expect(check.status).to eq(:warn)
-        expect(check.message).to eq("Committed, and never read by the tools: .env.development, config/credentials.yml.enc, config/database.yml")
+        expect(check.status).to eq(:fail)
+        expect(check.message).to eq(".env.development not in .gitignore")
       end
     end
 
@@ -1130,7 +1165,7 @@ RSpec.describe RailsAiContext::Doctor do
         check = gitignore_check_for(dir)
 
         expect(check.status).to eq(:pass)
-        expect(check.message).to eq("Sensitive files gitignored: .env")
+        expect(check.message).to eq("Secret files gitignored: .env")
       end
     end
 
@@ -1140,7 +1175,7 @@ RSpec.describe RailsAiContext::Doctor do
         check = gitignore_check_for(dir)
 
         expect(check.status).to eq(:pass)
-        expect(check.message).to eq("Sensitive files gitignored: config/application.yml, config/master.key")
+        expect(check.message).to eq("Secret files gitignored: config/application.yml, config/master.key")
       end
     end
 
@@ -1154,19 +1189,20 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
 
-    it "advises gitignoring only the files no app commits on purpose when there is no .gitignore" do
+    # The encrypted credentials are committed by design; the key is what stays out.
+    it "advises gitignoring the key, never the encrypted credentials, when there is no .gitignore" do
       app_with("config/master.key" => "x\n", "config/credentials.yml.enc" => "x\n", "config/database.yml" => "x\n") do |dir|
         check = gitignore_check_for(dir)
 
         expect(check.status).to eq(:fail)
-        expect(check.message).to eq("No .gitignore found - config/master.key would be committed; also committed: config/credentials.yml.enc, config/database.yml")
+        expect(check.message).to eq("No .gitignore found - config/master.key would be committed")
         expect(check.fix).to eq("Create .gitignore with: `config/master.key`")
       end
-      app_with("config/credentials.yml.enc" => "x\n") do |dir|
+      app_with("config/credentials.yml.enc" => "x\n", "config/credentials/production.yml.enc" => "x\n") do |dir|
         check = gitignore_check_for(dir)
 
-        expect(check.status).to eq(:warn)
-        expect(check.message).to eq("Committed, and never read by the tools: config/credentials.yml.enc")
+        expect(check.status).to eq(:pass)
+        expect(check.message).to eq("No secret files found")
       end
     end
 
