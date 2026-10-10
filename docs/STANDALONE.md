@@ -51,7 +51,7 @@ rails-ai-context watch              # Auto-regenerate on changes
 rails-ai-context version            # Show version
 ```
 
-`watch` needs the `listen` gem. It uses the app's when its bundle locks one, and otherwise one installed beside this gem: `gem install listen`, no Gemfile change.
+`watch` needs the `listen` gem, and `serve`'s live reload uses it when it is there. Both use the app's when its bundle locks one, and otherwise one installed beside this gem: `gem install listen`, no Gemfile change. Without it, `serve` still answers from the current files: each tool call checks them first.
 
 ## How standalone mode works
 

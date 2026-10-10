@@ -335,7 +335,7 @@ Introspection results are cached at three levels:
 
 The **Fingerprinter** computes a composite SHA256 from all watched directories (`app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `spec/`, the Gemfile and `Gemfile.lock` (or `gems.rb` and `gems.locked`), `package.json`, `tsconfig.json`, `config.ru`, the Rakefile). When the fingerprint changes, a server drops the introspection cache even if the TTL hasn't expired, and in the booted tier reloads the app's code first, so what reflection reads (an association, an enum) is current too:
 
-- **Live Reload** (the `listen` gem in the app's bundle) watches these directories and calls `reset_all_caches!` when changes are detected, then notifies connected MCP clients via `notify_resources_list_changed`.
+- **Live Reload** (the `listen` gem: the app's bundle's, or for the standalone binary one installed beside it) watches these directories and calls `reset_all_caches!` when changes are detected, then notifies connected MCP clients via `notify_resources_list_changed`.
 - **Without it** - no `listen`, which a new Rails 8 app does not bundle, `live_reload = false`, or the endpoints mounted inside the app - each tool call and resource read checks the fingerprint first. The walk stats every watched file: a few milliseconds on a typical app, about 100 ms at 10,000 files. A call made within ten walks' time of the last check, up to a second, shares it, so a burst of calls on a large app pays for one walk. Inside a request the app serves, Rails' own reloader has already reloaded the code.
 
 ---

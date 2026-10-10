@@ -992,7 +992,7 @@ module RailsAiContext
     rescue LoadError
       Check.new(name: "Live reload", status: :warn,
         message: "`listen` gem not installed (live reload unavailable)",
-        fix: "Add: `gem 'listen', group: :development`")
+        fix: standalone? ? "Run: `gem install listen`" : "Add: `gem 'listen', group: :development`")
     end
 
     # ── Security checks ───────────────────────────────────────────────

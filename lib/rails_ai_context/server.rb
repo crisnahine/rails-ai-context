@@ -347,12 +347,14 @@ module RailsAiContext
         live_reload = LiveReload.new(app, mcp_server)
         @live_reload = live_reload if live_reload.start
       rescue LoadError
-        if mode == true
-          raise LoadError, "Live reload requires the `listen` gem. Add to your Gemfile: gem 'listen', group: :development"
-        end
+        # A standalone install reaches an installed listen; the app's Gemfile
+        # is the place only when the gem itself is in it.
+        remedy = InstallMode.standalone? ? "Install it: gem install listen" : "Add to your Gemfile: gem 'listen', group: :development"
+        raise LoadError, "Live reload requires the `listen` gem. #{remedy}" if mode == true
 
-        # :auto mode - skip with a tip
-        $stderr.puts "[rails-ai-context] Live reload unavailable (add `listen` gem for auto-refresh)"
+        # :auto mode - skip with a tip. Answers still follow edits: each tool
+        # call checks the app's files instead.
+        $stderr.puts "[rails-ai-context] Live reload off: no `listen` gem, so each tool call checks for changed files instead. #{remedy}"
       end
       Tools::BaseTool.check_files_per_call!(app) unless @live_reload
     end

@@ -1747,6 +1747,8 @@ Add the `listen` gem (you may already have it from Watch Mode):
 gem "listen", group: :development
 ```
 
+The standalone binary's `rails-ai-context serve` also finds a `listen` installed with `gem install listen`, as `watch` does; a `listen` the app's bundle locks still wins.
+
 Live reload is **enabled by default** when the `listen` gem is available. No configuration needed.
 
 ### Configuration
