@@ -637,7 +637,7 @@ Bundled topic index with weighted keyword search. Optional on-demand GitHub fetc
 
 ### `rails_query`
 
-Safe read-only SQL with 4-layer security: regex validation, `SET TRANSACTION READ ONLY`, timeout, column redaction. [Learn about the security model →](SECURITY.md)
+Safe read-only SQL with layered security: regex validation, a PostgreSQL plan check (whole-row leaks, expanded sensitive columns and VOLATILE admin functions refused before anything runs), `SET TRANSACTION READ ONLY`, timeout, and column redaction. [Learn about the security model →](SECURITY.md)
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -647,6 +647,8 @@ Safe read-only SQL with 4-layer security: regex validation, `SET TRANSACTION REA
 | `explain` | boolean | `false` | Show query plan instead of results |
 
 > Disabled in production by default.
+
+> Name the columns you need. A query that references a sensitive column (directly, or through an alias or expression), serialises a whole row, carries a column-alias list that renames a wildcard, or calls a session-effecting function is refused with a message that says why. `SELECT *` is allowed and its sensitive columns come back `[FILTERED]`. When the row limit holds rows back, the answer says so in every format.
 
 ### `rails_read_logs`
 
