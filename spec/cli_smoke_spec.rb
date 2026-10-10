@@ -1023,6 +1023,43 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       end
     end
 
+    # init wrote its MCP configs and cleaned up JSON configs before the boot,
+    # loading this gem's json under the app's pinned copy. Every question
+    # now comes first, then the boot, then every write.
+    it "asks every question before the app boots, and writes nothing until it has" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "application.rb"), "")
+        File.write(File.join(dir, "config", "environment.rb"), "$stderr.puts 'APP BOOTING'\nraise 'boom'\n")
+        File.write(File.join(dir, ".rails-ai-context.yml"), "ai_tools:\n- claude\n- cursor\ntool_mode: mcp\n")
+
+        _out, err, status = Open3.capture3("ruby", "-I", lib, exe, "init", chdir: dir, stdin_data: "1\n1\ny\n")
+
+        expect(status.exitstatus).to eq(0), err
+        asked = err.index("Remove their generated files?")
+        booted = err.index("APP BOOTING")
+        recorded = err.index("Updated .rails-ai-context.yml")
+        expect([ asked, booted, recorded ]).to all(be_an(Integer)), err
+        expect(asked).to be < booted
+        expect(booted).to be < recorded
+      end
+    end
+
+    it "boots nothing for an MCP-only setup" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "application.rb"), "")
+        File.write(File.join(dir, "config", "environment.rb"), "$stderr.puts 'APP BOOTING'\nraise 'boom'\n")
+
+        _out, err, status = Open3.capture3("ruby", "-I", lib, exe, "init", "--mcp-only", chdir: dir, stdin_data: "1\n")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(err).not_to include("APP BOOTING")
+        expect(err).to include("MCP-only setup: no context files written.")
+        expect(File.exist?(File.join(dir, ".mcp.json"))).to be(true)
+      end
+    end
+
     it "says nothing about legacy rule files on an MCP-only init" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models"))

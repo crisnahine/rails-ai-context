@@ -78,15 +78,25 @@ module RailsAiContext
         setup.tool_mode == :mcp ? "MCP + CLI fallback" : "CLI only"
       end
 
-      # Offers to remove what a re-run dropped from the selection. `keeping:`
-      # protects files the remaining tools share (AGENTS.md).
+      # Offers to remove what a re-run dropped from the selection, and
+      # removes it. `keeping:` protects files the remaining tools share
+      # (AGENTS.md).
       #
       # `app_roots:` names where the context files live when that is not
       # `root`: a workspace keeps them in each app and its MCP entries in
       # itself. Paths are reported relative to `root` either way.
       def cleanup_removed_tools(surface, previous:, selected:, root:, app_roots: [ root ])
+        to_remove = ask_removed_tools(surface, previous: previous, selected: selected)
+        remove_tools(surface, to_remove, selected: selected, root: root, app_roots: app_roots)
+      end
+
+      # The question half of the cleanup, for an entry that asks everything
+      # before it writes anything.
+      #
+      # @return [Array<Symbol>] the dropped tools whose files are to go
+      def ask_removed_tools(surface, previous:, selected:)
         removed = Array(previous).map(&:to_sym) - selected.map(&:to_sym)
-        return if removed.empty?
+        return [] if removed.empty?
 
         surface.say ""
         surface.say "These AI tools were removed from your selection:", :emph
@@ -102,17 +112,16 @@ module RailsAiContext
         surface.say ""
 
         input = surface.ask("Enter choice:").to_s.strip.downcase
-        return if input.empty? || input == "n" || input == "no"
+        return [] if input.empty? || input == "n" || input == "no"
+        return removed if %w[y yes a].include?(input)
 
-        to_remove = if %w[y yes a].include?(input)
-          removed
-        else
-          nums = input.split(/[\s,]+/).filter_map { |n| n.to_i - 1 }
-          nums.filter_map { |i| removed[i] if i >= 0 && i < removed.size }
-        end
-        return if to_remove.empty?
+        nums = input.split(/[\s,]+/).filter_map { |n| n.to_i - 1 }
+        nums.filter_map { |i| removed[i] if i >= 0 && i < removed.size }
+      end
 
-        to_remove.each do |key|
+      # The doing half: each tool's generated files and MCP entries go.
+      def remove_tools(surface, keys, selected:, root:, app_roots: [ root ])
+        keys.each do |key|
           tool = AiTool.find(key)
           outcome = { removed: [], trimmed: [], kept: [], failed: [] }
 
