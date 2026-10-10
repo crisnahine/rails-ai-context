@@ -84,12 +84,21 @@ module RailsAiContext
         end
 
         lines << "- _...#{models.size - 30} more_" if models.size > 30
-        lines << ""
-        lines << "Use #{tool_ref("rails_get_model_details", 'model:"Name"', "model=Name")} for associations, validations, scopes, enums."
-        lines << "Use #{tool_ref("rails_get_view", 'controller:"name"', "controller=name")} for view templates."
-        lines << "Use #{tool_ref("rails_get_test_info", 'model:"Name"', "model=Name")} for existing model tests."
+        lines.concat(tool_pointers(
+          [ "rails_get_model_details", 'model:"Name"', "model=Name", "for associations, validations, scopes, enums." ],
+          [ "rails_get_view", 'controller:"name"', "controller=name", "for view templates." ],
+          [ "rails_get_test_info", 'model:"Name"', "model=Name", "for existing model tests." ]
+        ))
 
         lines.join("\n")
+      end
+
+      # "Use <tool> for ..." lines under a blank one, for the tools the server serves.
+      def tool_pointers(*pointers)
+        served = pointers.select { |name, *| served?(name) }
+        return [] if served.empty?
+
+        [ "", *served.map { |name, mcp_params, cli_params, purpose| "Use #{tool_ref(name, mcp_params, cli_params)} #{purpose}" } ]
       end
 
       def render_controllers_reference
@@ -121,12 +130,13 @@ module RailsAiContext
         jobs = job_names
         lines << "**Jobs:** #{jobs.join(', ')}" if jobs.any?
 
-        lines << ""
-        lines << "Use #{tool_ref("rails_get_controllers", 'controller:"Name", action:"index"', "controller=Name action=index")} for one action's source code."
-        lines << "Use #{tool_ref("rails_get_edit_context", 'file:"path", near:"keyword"', "file=path near=keyword")} for surgical edit context."
-        lines << "Use #{tool_ref("rails_get_view", 'controller:"name"', "controller=name")} for view templates."
-        lines << "Use #{tool_ref("rails_get_test_info", 'controller:"Name"', "controller=Name")} for existing controller tests."
-        lines << "Use #{tool_ref("rails_validate", "files:[...]", "files=...")} to check syntax after editing - do NOT re-read files to verify."
+        lines.concat(tool_pointers(
+          [ "rails_get_controllers", 'controller:"Name", action:"index"', "controller=Name action=index", "for one action's source code." ],
+          [ "rails_get_edit_context", 'file:"path", near:"keyword"', "file=path near=keyword", "for surgical edit context." ],
+          [ "rails_get_view", 'controller:"name"', "controller=name", "for view templates." ],
+          [ "rails_get_test_info", 'controller:"Name"', "controller=Name", "for existing controller tests." ],
+          [ "rails_validate", "files:[...]", "files=...", "to check syntax after editing - do NOT re-read files to verify." ]
+        ))
 
         lines.join("\n")
       end

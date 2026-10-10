@@ -453,7 +453,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   custom tool went unmentioned. Every count, the name list and the tools
   table now read the server's own set, a custom tool getting a row with the
   first sentence of its description, and the installer's and `init`'s
-  summaries count the same.
+  summaries count the same. No workflow step, rule, protocol line or
+  pointer names a skipped tool either: it is left out, or said without the
+  tool, so with `rails_get_context` skipped the model workflow starts from
+  `rails_get_model_details`, and with `rails_validate` skipped no file asks
+  the AI to validate with it.
 - **With `config.output_dir` set, the OpenCode per-directory files say why
   they were not written.** They are written only into a directory that
   exists, since OpenCode reads them beside the code, and the run reported

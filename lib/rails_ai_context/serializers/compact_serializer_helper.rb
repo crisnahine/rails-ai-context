@@ -91,7 +91,10 @@ module RailsAiContext
           extras = model_extras_line(data)
           lines << extras if extras
         end
-        lines << "- _...#{models.size - max_show} more (use #{tool_named("rails_get_model_details")})_" if models.size > max_show
+        if models.size > max_show
+          use = " (use #{tool_named("rails_get_model_details")})" if served?("rails_get_model_details")
+          lines << "- _...#{models.size - max_show} more#{use}_"
+        end
         lines << ""
         lines
       end

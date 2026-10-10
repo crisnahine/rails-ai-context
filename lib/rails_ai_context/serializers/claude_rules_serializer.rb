@@ -63,7 +63,8 @@ module RailsAiContext
         lines << "# Database Tables (#{databases.sum { |_, tables| tables.size }})"
         lines << ""
         lines.concat(SectionFacts.static_notice_lines(context))
-        lines << "_Snapshot - may be stale after migrations. Use #{tool_ref("rails_get_schema", 'table:"name"', "table=name")} for live data._"
+        live = " Use #{tool_ref("rails_get_schema", 'table:"name"', "table=name")} for live data." if served?("rails_get_schema")
+        lines << "_Snapshot - may be stale after migrations.#{live}_"
 
         databases.each do |name, tables|
           lines << ""
@@ -163,7 +164,8 @@ module RailsAiContext
         end
 
         if tables.size > TABLES_SHOWN
-          lines << "- ...#{count_phrase(tables.size - TABLES_SHOWN, "more table")} (use #{tool_named("rails_get_schema")})"
+          use = " (use #{tool_named("rails_get_schema")})" if served?("rails_get_schema")
+          lines << "- ...#{count_phrase(tables.size - TABLES_SHOWN, "more table")}#{use}"
         end
 
         lines
@@ -195,7 +197,11 @@ module RailsAiContext
           ""
         ]
         lines.concat(SectionFacts.static_notice_lines(context))
-        lines << "_Quick reference - use #{tool_ref("rails_get_model_details", 'model:"Name"', "model=Name")} for live data with resolved concerns and callbacks._"
+        lines << if served?("rails_get_model_details")
+          "_Quick reference - use #{tool_ref("rails_get_model_details", 'model:"Name"', "model=Name")} for live data with resolved concerns and callbacks._"
+        else
+          "_Quick reference._"
+        end
         lines << ""
 
         models.keys.sort.each do |name|
@@ -265,11 +271,9 @@ module RailsAiContext
           ""
         ]
         lines.concat(SectionFacts.static_notice_lines(context))
-        lines.concat([
-          "ViewComponent and Phlex components available for reuse.",
-          "Use #{tool_ref("rails_get_component_catalog", 'component:"Name"', "component=Name")} for full details.",
-          ""
-        ])
+        lines << "ViewComponent and Phlex components available for reuse."
+        lines << "Use #{tool_ref("rails_get_component_catalog", 'component:"Name"', "component=Name")} for full details." if served?("rails_get_component_catalog")
+        lines << ""
 
         components.each do |c|
           slots = (c[:slots] || []).map { |s| s[:name] }
