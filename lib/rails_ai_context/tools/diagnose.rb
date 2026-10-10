@@ -106,6 +106,17 @@ module RailsAiContext
           type: :argument_error,
           likely: "A method received wrong number or type of arguments.",
           fix: "1. Check the method signature matches the call site\n2. Use `rails_search_code(pattern:\"method_name\", match_type:\"trace\")` to see definition and callers"
+        },
+        # The authorization gems' two failures, by the words their class names share.
+        /AuthorizationNotPerformed|PolicyScopingNotPerformed/ => {
+          type: :authorization_not_performed,
+          likely: "The action finished without authorizing, and a check that every action does raised: Pundit's `after_action :verify_authorized` (or `verify_policy_scoped`). The message names the controller.",
+          fix: "1. Call `authorize record` (or `policy_scope(Model)`) in the action\n2. If the action is meant to be open, leave it out of the check: `skip_after_action :verify_authorized, only: :action_name`\n3. Use `rails_get_controllers(controller:\"...\", action:\"...\")` to see the filters that run on the action"
+        },
+        /NotAuthorized|AccessDenied/ => {
+          type: :authorization_denied,
+          likely: "An authorization rule refused the current user this action on this record. Pundit's message names the policy method that returned false; CanCanCan's the action and subject.",
+          fix: "1. Read the policy method or ability rule the message names\n2. Check which user and record the request carried\n3. If refusing is expected, rescue it (`rescue_from`) and answer 403 instead of 500"
         }
       }.freeze
 
@@ -144,7 +155,7 @@ module RailsAiContext
         git_section = gather_git_context(file, parsed[:file_refs])
 
         # Recent error logs
-        log_section = gather_log_context(parsed[:exception_class])
+        log_section = gather_log_context(parsed)
 
         # Truncate large sections before assembling final output
         context_sections = truncate_section(context_sections, "Controller Context", MAX_SECTION_CHARS[:controller_context])
@@ -184,6 +195,10 @@ module RailsAiContext
         text_response("Diagnosis error: #{e.message}")
       end
 
+      # A name an error message gives its exception: a class ending the way
+      # exceptions are named, or any namespaced constant.
+      EXCEPTION_CLASS = /[A-Z][\w:]*(?:Error|Exception|Invalid|NotFound|NotSaved|Missing)|[A-Z]\w*(?:::[A-Z]\w*)+/
+
       class << self
         private
 
@@ -191,12 +206,19 @@ module RailsAiContext
           result = { exception_class: nil, message: error_string.strip, file_refs: [], method_name: nil }
 
           # Extract exception class: "NoMethodError: ..." or "ActiveRecord::RecordNotFound ..."
+          first_line = error_string.strip.lines.first.to_s.strip
           if (m = error_string.match(/\A([\w:]+(?:Error|Exception|Invalid|NotFound|NotSaved|Missing))\s*[:—]\s*(.*)/m))
             result[:exception_class] = m[1]
             result[:message] = m[2].strip
           elsif (m = error_string.match(/\A([\w:]+::\w+)\s*[:—]\s*(.*)/m))
             result[:exception_class] = m[1]
             result[:message] = m[2].strip
+          elsif (m = first_line.match(/\A(#{EXCEPTION_CLASS}) \((.*)\):?\z/o))
+            # As a Rails log writes it: "Pundit::NotAuthorizedError (not allowed to ...):".
+            result[:exception_class] = m[1]
+            result[:message] = m[2].strip
+          elsif first_line.match?(/\A#{EXCEPTION_CLASS}\z/o)
+            result[:exception_class] = first_line
           end
 
           # Extract file:line references
@@ -249,27 +271,131 @@ module RailsAiContext
           model_specific = classify_undefined_method_on_model(parsed)
           return model_specific if model_specific
 
+          on_receiver = classify_method_on_receiver(parsed)
+          return on_receiver if on_receiver
+
           error_str = "#{parsed[:exception_class]} #{parsed[:message]}"
 
           ERROR_CLASSIFICATIONS.each do |pattern, info|
             return info if error_str.match?(pattern)
           end
 
+          unclassified(parsed[:exception_class])
+        end
+
+        # No rule here covers the class, so the answer says what it is and
+        # where it comes from, which is where reading starts.
+        def unclassified(exception_class)
+          origin = exception_origin(exception_class)
+          likely = if origin
+            "No rule here covers `#{exception_class}`, which #{origin}. Its message says what failed; " \
+              "what raises it, and why, is in that code."
+          else
+            "Unable to automatically classify this error. Review the full error message and stack trace."
+          end
           {
             type: :unknown,
-            likely: "Unable to automatically classify this error. Review the full error message and stack trace.",
-            fix: "1. Check the error message for clues about what went wrong\n2. Use `rails_search_code` to find the failing code\n3. Use `rails_read_logs(level:\"ERROR\")` for more context"
+            likely: likely,
+            fix: "1. Check the error message for clues about what went wrong\n" \
+                 "2. Use `rails_search_code(pattern:\"#{exception_class&.split("::")&.last || "ErrorName"}\")` to find where the app raises or rescues it\n" \
+                 "3. Use `rails_read_logs(level:\"ERROR\")` for the backtrace"
           }
+        end
+
+        # The Rails namespaces that ship in a gem named for none of them.
+        ACTIONPACK_NAMESPACES = %w[action_controller action_dispatch abstract_controller].to_h { |top| [ top, "actionpack" ] }.freeze
+
+        # Booted, Ruby knows the file that defines the class; statically, or
+        # for a class nothing has loaded yet, a locked gem named after the
+        # class's top namespace is the likely one.
+        def exception_origin(name)
+          return nil if name.to_s.empty?
+
+          unless RailsAiContext.static_tier?
+            # Resolved first: a constant still waiting on its autoload has no location yet.
+            path = name.safe_constantize && (Object.const_source_location(name) rescue nil)&.first
+            if path
+              spec = Gem.loaded_specs.values.find { |s| path.start_with?("#{s.full_gem_path}/") }
+              return "the #{spec.name} gem (#{spec.version}) defines" if spec
+
+              root = "#{rails_app.root}/"
+              return "this app defines in `#{path.delete_prefix(root)}`" if path.start_with?(root)
+            end
+          end
+
+          top = name.split("::").first.to_s.underscore
+          lock = RailsAiContext::GemLock.for(rails_app.root.to_s)
+          gem = [ ACTIONPACK_NAMESPACES[top], top, top.delete("_"), top.dasherize ].compact.uniq.find { |candidate| lock.present?(candidate) }
+          "is likely the #{gem} gem's (the app's bundle locks #{gem} #{lock.version(gem)})" if gem
+        rescue StandardError => e
+          RailsAiContext.debug_fail(e, nil, label: "exception_origin")
+        end
+
+        # Only a nil receiver makes a NoMethodError a nil reference. On any
+        # other object the method is missing from it - a typo, or the wrong
+        # object - and `&.` would hide the error rather than fix it.
+        NIL_RECEIVER = /\bfor nil\b/
+        VISIBILITY = /\A(private|protected) method [`'](\w+[?!=]?)['`] called for/
+
+        def classify_method_on_receiver(parsed)
+          message = parsed[:message].to_s
+          receiver = extract_receiver_class(message)
+          if (m = message.match(VISIBILITY))
+            return {
+              type: :non_public_method,
+              likely: "`#{m[2]}` is #{m[1]} on #{receiver ? "`#{receiver}`" : "the receiver"}, so it cannot be called from outside the object.",
+              fix: "1. Call it from inside the class, or make it public if it is part of the interface\n" \
+                   "2. Use `rails_search_code(pattern:\"#{m[2]}\", match_type:\"definition\")` to see where it is defined and under which visibility"
+            }
+          end
+
+          name = parsed[:method_name]
+          return nil unless name && message.match?(/undefined method/) && message.match?(/ for /) && !message.match?(NIL_RECEIVER)
+
+          defined, suggestion = receiver_methods(receiver, name, class_receiver: message.match?(/for class |:Class\b/))
+          subject = receiver ? "`#{receiver}`" : "The receiver"
+          likely = if defined
+            "#{subject} defines `#{name}` in this process, so the object that raised was not the one you expect, " \
+              "or it ran on code loaded before the method was added: restart a long-running server."
+          else
+            "#{subject} has no method `#{name}`. The receiver is not nil, so this is no nil reference: " \
+              "the name is misspelled, or the method belongs to another object.#{" Did you mean `#{suggestion}`?" if suggestion}"
+          end
+          {
+            type: :undefined_method,
+            likely: likely,
+            fix: "1. #{suggestion ? "Call `#{suggestion}`, the method #{subject} has" : "Check the name against the methods #{subject} defines"}\n" \
+                 "2. Check the call goes to the object you think: an association or a presenter can hand back another class\n" \
+                 "3. Use `rails_search_code(pattern:\"#{name}\", match_type:\"trace\")` to find its definition and its callers"
+          }
+        end
+
+        # Booted, the loaded class answers whether it has the method, and the
+        # name it has that is closest to the one called. Statically there is
+        # no class to ask.
+        def receiver_methods(receiver, name, class_receiver:)
+          return [ false, nil ] if receiver.nil? || RailsAiContext.static_tier?
+
+          klass = receiver.safe_constantize
+          return [ false, nil ] unless klass.is_a?(Module)
+
+          names = (class_receiver ? klass.public_methods : klass.public_instance_methods).map(&:to_s)
+          return [ true, nil ] if names.include?(name)
+
+          [ false, ::DidYouMean::SpellChecker.new(dictionary: names).correct(name).first ]
+        rescue StandardError, ScriptError => e
+          RailsAiContext.debug_fail(e, [ false, nil ], label: "receiver_methods")
         end
 
         # Patterns that name the receiver of a NoMethodError:
         #   "undefined method 'x' for an instance of Article"  (Ruby 3.3+)
         #   "undefined method `x' for #<Article id: 1>"        (Ruby <= 3.2)
+        #   "undefined method `x' for #<struct Summary ...>"   (a Struct, <= 3.2)
         #   "undefined method 'x' for class Article"           (class receiver, 3.3+)
         #   "undefined method `x' for Article:Class"           (class receiver, <= 3.2)
         RECEIVER_PATTERNS = [
           /for an instance of ([A-Z]\w*(?:::\w+)*)/,
-          /for #<([A-Z]\w*(?:::\w+)*)/,
+          /for #<(?:struct )?([A-Z]\w*(?:::\w+)*)/,
           /for class ([A-Z]\w*(?:::\w+)*)/,
           /for ([A-Z]\w*(?:::\w+)*):Class/
         ].freeze
@@ -508,17 +634,94 @@ module RailsAiContext
           status.success?
         end
 
-        def gather_log_context(exception_class)
+        # The window rails_read_logs reads: the log's last megabyte. Fifteen
+        # lines, as this read before, rarely reached back to the error at all.
+        LOG_WINDOW = ReadLogs::MAX_READ_BYTES
+        # How far either side of the error line its request is looked for.
+        ENTRY_SPAN = 400
+        FRAMES_SHOWN = 5
+        LOG_TAG = /\A(\[[^\]]+\]) /
+        ANSI = /\e\[[\d;]*m/
+        REQUEST_LINE = /\A\s*(?:Started [A-Z]+ "|Processing by |Parameters: |Completed \d{3} )/
+        BACKTRACE_FRAME = /\S:\d+:in /
+
+        # The request that raised it: the log entry carrying the error, with
+        # the request's own lines (path, action, parameters, status) and the
+        # first frames of its backtrace, redacted.
+        def gather_log_context(parsed)
+          exception_class = parsed[:exception_class]
           return [] unless exception_class
 
-          begin
-            result = ReadLogs.call(level: "ERROR", lines: 15, search: exception_class)
-            return [] if empty?(result)
+          located = RailsAiContext::SafePath.locate(File.join("log", "#{rails_env_name}.log"), under: rails_app.root.to_s, max_size: Float::INFINITY)
+          return [] unless located.ok?
 
-            [ "## Recent Error Logs", response_text(result), "" ]
-          rescue => e
-            RailsAiContext.debug_fail(e, [], label: "gather_log_context")
+          lines = log_tail(located.realpath)
+          hit = lines.rindex { |line| log_match?(line, parsed) }
+          where = "the last #{count_phrase(lines.size, "line")} of `#{located.relative}`"
+          return [ "## Recent Error Logs", "_No entry for `#{exception_class}` in #{where}._", "" ] unless hit
+
+          tag, entry = log_entry(lines, hit)
+          request = tag ? ", request `#{tag[1..-2]}`" : ""
+          begin
+            redacted = RailsAiContext::Redaction.redact_log_lines(entry)
+          rescue StandardError => e
+            # Never shown unredacted: the entry is named, not printed.
+            return [ "## Recent Error Logs", "_An entry for it#{request} is in #{where}, not shown: redacting it failed (#{e.class})._", "" ]
           end
+          [ "## Recent Error Logs", "_The latest entry for it in #{where}#{request}:_", "```", *redacted, "```", "" ]
+        rescue => e
+          RailsAiContext.debug_fail(e, [], label: "gather_log_context")
+        end
+
+        def log_tail(path)
+          File.open(path, "rb") do |file|
+            cut = file.size > LOG_WINDOW
+            file.seek(-LOG_WINDOW, IO::SEEK_END) if cut
+            lines = file.read.force_encoding("UTF-8").scrub("?").split("\n")
+            # The window's first line starts mid-line.
+            cut ? lines.drop(1) : lines
+          end
+        end
+
+        # A line naming the class, and the method or the message too when the
+        # error gives one, whichever quotes the Ruby that wrote it used.
+        def log_match?(line, parsed)
+          return false unless line.include?(parsed[:exception_class])
+          return line.match?(/[`']#{Regexp.escape(parsed[:method_name])}'/) if parsed[:method_name]
+
+          key = loose(parsed[:message])[0, 60]
+          key == parsed[:exception_class] || loose(line).include?(key)
+        end
+
+        def loose(text)
+          text.to_s.tr("`", "'").gsub(/\s+/, " ").strip
+        end
+
+        # The error line's request: its request-id tag when the log writes one,
+        # else the nearest "Started" line above it.
+        def log_entry(lines, index)
+          tag = lines[index][LOG_TAG, 1]
+          own = ->(line) { tag.nil? || line.start_with?(tag) }
+          text = ->(line) { (tag && line.start_with?(tag) ? line.delete_prefix(tag).delete_prefix(" ") : line).gsub(ANSI, "") }
+
+          from = [ index - ENTRY_SPAN, 0 ].max
+          started = (from...index).reverse_each.find { |i| own.call(lines[i]) && text.call(lines[i]).match?(/\AStarted [A-Z]+ "/) }
+          request = started ? (started...index).select { |i| own.call(lines[i]) && text.call(lines[i]).match?(REQUEST_LINE) } : []
+
+          frames = []
+          ((index + 1)...[ index + ENTRY_SPAN, lines.size ].min).each do |i|
+            # A logger tags a message's first line only, so an untagged line
+            # continues the one above it.
+            next unless own.call(lines[i]) || !lines[i].match?(LOG_TAG)
+
+            line = text.call(lines[i])
+            next if line.strip.empty?
+            break unless line.match?(BACKTRACE_FRAME) && frames.size < FRAMES_SHOWN
+
+            frames << i
+          end
+
+          [ tag, (request + [ index ] + frames).map { |i| text.call(lines[i]).rstrip } ]
         end
 
         # Truncate the content of a named section (identified by "## heading") within a lines array.

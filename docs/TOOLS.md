@@ -654,6 +654,10 @@ Reverse file tail with level filtering and sensitive data redaction.
 
 One-call error diagnosis with classification, context, recent git changes, and log correlation. It does not call a method undefined when the model's method list could be missing one - a concern's, a parent's, or anything past the payload's own cap.
 
+A `NoMethodError` is a nil reference only when the receiver is nil; on any other receiver it is an undefined method, and on a booted app the answer names the receiver's closest method (`totl` → `total`). An error it has no rule for names the gem or app file that defines the exception class. The error can be pasted as Ruby prints it (`NoMethodError: ...`) or as a Rails log writes it (`NoMethodError (...)`).
+
+Log correlation reads the last megabyte of the current environment's log, the window `rails_read_logs` reads, and shows the latest entry for the error: the request that raised it (path, controller action, parameters, status, request id when the log is tagged), the error line and the first backtrace frames, redacted. It says so when the log holds no entry for the error.
+
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `error` | string | *required* | Error message or class |

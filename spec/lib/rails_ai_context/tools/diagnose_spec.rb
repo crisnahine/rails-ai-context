@@ -160,18 +160,84 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
       expect(text).to include("undefined_method_on_model")
     end
 
-    it "falls back to nil_reference when the method is a real association" do
+    # A receiver the message names is not nil, so "use &." was advice for
+    # an error this was not.
+    it "does not call a method a model has a nil reference when the model is the receiver" do
       result = described_class.call(error: "NoMethodError: undefined method `comments` for an instance of Post")
       text = result.content.first[:text]
-      expect(text).to include("nil_reference")
+      expect(text).to include("**Classification:** undefined_method")
+      expect(text).not_to include("nil_reference")
       expect(text).not_to include("undefined_method_on_model")
     end
 
-    it "falls back to nil_reference when the receiver is not a model" do
+    it "does not call a method missing on a receiver that is not a model a nil reference" do
       result = described_class.call(error: "NoMethodError: undefined method `bogus` for an instance of SomeRandomClass")
       text = result.content.first[:text]
-      expect(text).to include("nil_reference")
-      expect(text).not_to include("undefined_method_on_model")
+      expect(text).to include("**Classification:** undefined_method")
+      expect(text).to include("`SomeRandomClass` has no method `bogus`")
+      expect(text).not_to include("safe navigation")
+    end
+
+    it "names the method the receiver has that is closest to a typo" do
+      stub_const("ReceiptSummary", Struct.new(:number, :total, keyword_init: true))
+
+      text = described_class.call(error: "NoMethodError (undefined method 'totl' for an instance of ReceiptSummary)").content.first[:text]
+
+      expect(text).to include("**Error:** `NoMethodError`")
+      expect(text).to include("**Message:** undefined method 'totl' for an instance of ReceiptSummary")
+      expect(text).to include("Did you mean `total`?")
+      expect(text).to include("1. Call `total`")
+    end
+
+    it "reads a Struct receiver the way Ruby 3.2 and older print it" do
+      stub_const("ReceiptSummary", Struct.new(:total))
+
+      text = described_class.call(error: "NoMethodError: undefined method `totl' for #<struct ReceiptSummary total=3>").content.first[:text]
+
+      expect(text).to include("Did you mean `total`?")
+    end
+
+    it "says a private method is private rather than missing" do
+      text = described_class.call(error: "NoMethodError: private method 'secret' called for an instance of Post").content.first[:text]
+
+      expect(text).to include("**Classification:** non_public_method")
+      expect(text).to include("`secret` is private on `Post`")
+    end
+
+    # An exception from a gem came back as `Unknown`: the Rails log's
+    # "Class (message)" shape named no class.
+    it "reads the class of an error written the way a Rails log writes it" do
+      text = described_class.call(error: "Pundit::AuthorizationNotPerformedError (ProductsController)").content.first[:text]
+
+      expect(text).to include("**Error:** `Pundit::AuthorizationNotPerformedError`")
+      expect(text).to include("**Message:** ProductsController")
+      expect(text).to include("**Classification:** authorization_not_performed")
+      expect(text).to include("verify_authorized")
+    end
+
+    it "classifies a refusal by an authorization policy" do
+      text = described_class.call(error: "Pundit::NotAuthorizedError: not allowed to ProductPolicy#new? this Product").content.first[:text]
+
+      expect(text).to include("**Classification:** authorization_denied")
+    end
+
+    it "names the gem an exception it has no rule for comes from" do
+      text = described_class.call(error: "Zeitwerk::Error: wrong constant name").content.first[:text]
+
+      expect(text).to include("**Classification:** unknown")
+      expect(text).to match(/No rule here covers `Zeitwerk::Error`, which the zeitwerk gem \([\d.]+\) defines/)
+    end
+
+    it "names a locked gem after the class's namespace when nothing loaded it" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      lock = instance_double(RailsAiContext::GemLock::Spec)
+      allow(lock).to receive(:present?) { |name| name == "actionpack" }
+      allow(lock).to receive(:version).with("actionpack").and_return("8.1.4")
+      allow(RailsAiContext::GemLock).to receive(:for).and_return(lock)
+
+      text = described_class.call(error: "ActionController::InvalidAuthenticityToken (Can't verify CSRF token authenticity.)").content.first[:text]
+
+      expect(text).to include("which is likely the actionpack gem's (the app's bundle locks actionpack 8.1.4)")
     end
 
     # The method list a model carries is capped for display. Reading it as
@@ -439,6 +505,96 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
         expect(text).not_to include("## Schema Context")
         expect(text).not_to include("Could not load: nope")
       end
+    end
+  end
+
+  # Fifteen lines of the log were read, so an error older than the last few
+  # requests was never found, and a match printed the matching line alone.
+  describe "log correlation" do
+    let(:root) { Dir.mktmpdir }
+    let(:tag) { "[6c1c9afa-e592-456c-a41a-21129b7866be]" }
+
+    before do
+      FileUtils.mkdir_p(File.join(root, "log"))
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+      allow(described_class).to receive(:rails_env_name).and_return("development")
+    end
+
+    after { FileUtils.rm_rf(root) }
+
+    def write_log(lines)
+      File.write(File.join(root, "log", "development.log"), lines.join("\n") + "\n")
+    end
+
+    def log_section(error)
+      described_class.call(error: error).content.first[:text][/## Recent Error Logs.*/m]
+    end
+
+    let(:later_requests) { Array.new(200) { |i| %(Started GET "/up" for 127.0.0.1 at 2026-10-10 14:00:#{i % 60} +0000) } }
+
+    it "shows the request that raised it, however far back, without its request-id tag" do
+      write_log([
+        %(#{tag} Started GET "/orders/3/receipt" for 127.0.0.1 at 2026-10-10 13:59:13 +0000),
+        "#{tag} Processing by OrdersController#receipt as */*",
+        %(#{tag}   Parameters: {"id"=>"3"}),
+        %(#{tag}   Order Load (0.8ms)  SELECT "orders".* FROM "orders" WHERE "orders"."id" = 3),
+        "#{tag} Completed 500 Internal Server Error in 42ms (ActiveRecord: 6.4ms)",
+        "#{tag}   ",
+        "#{tag} NoMethodError (undefined method `totl' for an instance of ReceiptPresenter::Summary):",
+        "#{tag}   ",
+        "#{tag} app/controllers/orders_controller.rb:30:in `receipt'",
+        *later_requests
+      ])
+
+      section = log_section("NoMethodError: undefined method 'totl' for an instance of ReceiptPresenter::Summary")
+
+      expect(section).to include("request `6c1c9afa-e592-456c-a41a-21129b7866be`")
+      expect(section).to include(<<~TEXT)
+        ```
+        Started GET "/orders/3/receipt" for 127.0.0.1 at 2026-10-10 13:59:13 +0000
+        Processing by OrdersController#receipt as */*
+          Parameters: {"id"=>"3"}
+        Completed 500 Internal Server Error in 42ms (ActiveRecord: 6.4ms)
+        NoMethodError (undefined method `totl' for an instance of ReceiptPresenter::Summary):
+        app/controllers/orders_controller.rb:30:in `receipt'
+        ```
+      TEXT
+    end
+
+    it "finds the request in a log that writes no tags" do
+      write_log([
+        %(Started GET "/products/featured?q=x" for 127.0.0.1 at 2026-10-10 14:49:26 +0000),
+        "Processing by ProductsController#featured as */*",
+        %(  Parameters: {"q"=>"x"}),
+        "Completed 500 Internal Server Error in 119ms",
+        "",
+        "Pundit::AuthorizationNotPerformedError (ProductsController):",
+        "",
+        "pundit (2.5.2) lib/pundit/authorization.rb:127:in `verify_authorized'",
+        *later_requests
+      ])
+
+      section = log_section("Pundit::AuthorizationNotPerformedError (ProductsController)")
+
+      expect(section).to include(%(Processing by ProductsController#featured as */*\n  Parameters: {"q"=>"x"}))
+      expect(section).to include("Pundit::AuthorizationNotPerformedError (ProductsController):\npundit (2.5.2) lib/pundit/authorization.rb:127")
+      expect(section).not_to include("request `")
+    end
+
+    it "says when the log holds no entry for it" do
+      write_log(later_requests)
+
+      expect(log_section("Pundit::NotAuthorizedError: not allowed")).to include("_No entry for `Pundit::NotAuthorizedError` in the last 200 lines of `log/development.log`._")
+    end
+
+    it "names an entry it could not redact rather than printing it" do
+      write_log([ "Pundit::NotAuthorizedError (not allowed to ProductPolicy#new? this Product):" ])
+      allow(RailsAiContext::Redaction).to receive(:redact_log_lines).and_raise(RegexpError, "invalid pattern in look-behind")
+
+      section = log_section("Pundit::NotAuthorizedError: not allowed to ProductPolicy#new? this Product")
+
+      expect(section).to include("not shown: redacting it failed (RegexpError)")
+      expect(section).not_to include("ProductPolicy")
     end
   end
 
