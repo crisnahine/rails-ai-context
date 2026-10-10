@@ -112,12 +112,19 @@ module RailsAiContext
     # Each entry is [pattern, replacement]. The replacement is spelled beside
     # the pattern rather than worked out later by grepping the pattern's own
     # source for a distinguishing substring.
+    #
+    # The names are matched, not looked behind for. Under /i Unicode case
+    # folding makes `s` two bytes long (`ſ` is one), so a look-behind holding
+    # one has no fixed length, and Onigmo before Ruby 3.4 raises on it as
+    # soon as the line carries any non-ASCII character - which every
+    # development log's `↳` query-source line does. read_logs then failed
+    # outright, and diagnose lost its log section.
     LOG_PATTERNS = ([
-      [ /(?<=authorization:\s)(?:Bearer\s)?[^\s"',;)\]}]+/i, FILTERED ],
       # A `value` group is filtered in place, keeping the name and the quotes.
-      [ /(?<=cookie:\s)(?<value>#{LOG_VALUE})/i, :value ],
-      [ /(?<=session_id=)(?<value>#{LOG_VALUE})/i, :value ],
-      [ /(?<=_session=)(?<value>#{LOG_VALUE})/i, :value ],
+      [ /authorization:\s(?<value>(?:Bearer\s)?[^\s"',;)\]}]+)/i, :value ],
+      [ /cookie:\s(?<value>#{LOG_VALUE})/i, :value ],
+      [ /session_id=(?<value>#{LOG_VALUE})/i, :value ],
+      [ /_session=(?<value>#{LOG_VALUE})/i, :value ],
       [ PEM_BEGIN, FILTERED ]
     ] + CREDENTIAL_TOKENS.map { |pattern| [ pattern, FILTERED ] }).freeze
 
