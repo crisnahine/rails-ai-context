@@ -176,7 +176,7 @@ Yes. Add content outside the `<!-- BEGIN/END rails-ai-context -->` markers. The 
 
 ### Is introspection slow?
 
-Introspection results are cached with TTL (default: 60s) and fingerprint invalidation. The first call is slower; subsequent calls use cache. Prism AST parsing uses a single-pass Dispatcher - all 8 listeners run in one tree walk.
+Introspection results are cached with TTL (default: 60s) and fingerprint invalidation. The first call is slower; subsequent calls use cache until a watched file changes. Prism AST parsing uses a single-pass Dispatcher - all 8 listeners run in one tree walk.
 
 ### Does this affect my app's performance?
 
@@ -184,7 +184,9 @@ No, as long as the gem sits in the Gemfile's `:development` group, where `bundle
 
 ### How does live reload work?
 
-The `listen` gem watches `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `spec/`. When files change, caches are invalidated and MCP clients are notified. Debounce interval: 1.5s (configurable).
+The `listen` gem watches `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `spec/`. When files change, the app's code is reloaded, caches are invalidated and MCP clients are notified. Debounce interval: 1.5s (configurable).
+
+Without `listen` (a new Rails 8 app does not bundle it), answers still follow edits: each tool call first checks those files and, when one changed, does the same reload and invalidation. The check costs a few milliseconds on a typical app and about 100 ms at 10,000 files, where calls close together share one check. With `listen` there is no per-call check, and clients are told when files change.
 
 ---
 

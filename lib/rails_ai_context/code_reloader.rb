@@ -51,6 +51,19 @@ module RailsAiContext
       app.executor.wrap { yield }
     end
 
+    # Whether this thread is inside a unit of work the app's executor wraps:
+    # a request the app itself serves, through the middleware or the engine.
+    # Rails' reloader runs at the start of one, so reloading again inside it
+    # would repeat that work.
+    def inside_app_executor?
+      return false unless reloadable?
+
+      app = Rails.application
+      app.respond_to?(:executor) && app.executor.active?
+    rescue StandardError
+      false
+    end
+
     # `enable_reloading` is the flag that decides whether Rails unloads
     # anything: with it off, the finisher registers no class_unload callback,
     # so `reload!` runs the prepare callbacks and returns having reloaded

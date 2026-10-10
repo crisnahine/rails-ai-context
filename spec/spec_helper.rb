@@ -41,6 +41,10 @@ RSpec.configure do |config|
   config.before(:each) { RailsAiContext::PathResolver.clear_code_roots }
   # A spec that counts parses or walks needs a cold parse cache, whatever ran before it.
   config.before(:each) { RailsAiContext::AstCache.clear }
+  # Building a server turns on the per-call file check for the whole process;
+  # each example starts with it off, so a file one example writes cannot drop
+  # the caches under the next.
+  config.before(:each) { RailsAiContext::Tools::BaseTool::FILE_CHECK.merge!(app: nil, mark: nil, started: nil, took: 0.0) }
 
   # Skip e2e specs unless explicitly requested via E2E=1.
   # E2E specs spawn fresh Rails apps per install path and take minutes

@@ -709,7 +709,7 @@ Session-aware context tracking across tool calls within a conversation. Pass `ac
 
 ## Live Resources (VFS)
 
-In addition to tools, AI clients can read structured data through **resource templates** - `rails-ai-context://` URIs introspected fresh on every request. Zero stale data.
+In addition to tools, AI clients can read structured data through **resource templates** - `rails-ai-context://` URIs introspected afresh on every request, after the app's code is reloaded for any edit.
 
 | URI Pattern | Returns |
 |:------------|:--------|

@@ -1106,7 +1106,7 @@ The legacy `rails://models/{name}` form is still accepted.
 
 ### Dynamic Resource Templates (VFS)
 
-Live resources introspected fresh on every request - zero stale data:
+Live resources introspected afresh on every request, after the app's code is reloaded for any edit:
 
 | Resource Template | Description |
 |-------------------|-------------|
@@ -1711,6 +1711,8 @@ Watches for changes in: `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `
 ## Live Reload (MCP)
 
 When running the MCP server via `rails ai:serve`, **live reload** automatically invalidates tool caches and notifies connected AI clients when files change - so the AI always has fresh context without manual re-querying.
+
+Without the `listen` gem, which a new Rails 8 app does not bundle, answers still follow edits: each tool call first checks the watched files (a few milliseconds on a typical app, about 100 ms at 10,000 files, where calls close together share one check) and, when one changed, reloads the app's code and drops the caches. What `listen` adds is the notification to the client, and no per-call check.
 
 ### How it works
 

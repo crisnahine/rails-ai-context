@@ -170,7 +170,7 @@ rails-ai-context://views/posts/show.html.erb → template content
 rails-ai-context://routes/posts        → filtered routes
 ```
 
-Every resolve call introspects fresh - zero stale data.
+Every resolve call introspects afresh, once the server has reloaded the app's code for any edit (see Caching).
 
 ### Hydration Layer (`lib/rails_ai_context/hydrators/`)
 
@@ -233,7 +233,7 @@ Four cache layers:
 3. **Run cache** (`RunCache`) - thread-local, lives for one `Introspector#call` or `generate_context`: file lists, stats and directory answers every section would otherwise ask again
 4. **Session cache** (`BaseTool.SESSION_CONTEXT`) - Mutex-protected call history, resets on server restart
 
-`LiveReload` watches files and calls `reset_all_caches!` when changes are detected.
+`LiveReload` watches files and calls `reset_all_caches!` when changes are detected. A server it is not running in - no `listen` gem, `live_reload = false`, or the endpoints mounted in the app - checks the fingerprint at the start of each tool call and resource read instead (`BaseTool.refresh_if_files_changed!`), reloading the app's code and resetting the same caches when it moved. That walk runs outside the introspection cache's mutex, since a code reload waits for running calls, and a call within ten walks' time of the last check shares it.
 
 ### Fingerprinter (`lib/rails_ai_context/fingerprinter.rb`)
 
