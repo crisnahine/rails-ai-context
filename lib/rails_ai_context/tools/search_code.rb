@@ -188,14 +188,18 @@ module RailsAiContext
         # A file named as the path is read whatever it is linked to.
         return error_response("Path not allowed: #{path}") if File.file?(real_search) && sensitive_file?(real_search.delete_prefix("#{real_root}/"))
 
+        # The cap counts context lines too, so one below the first match's
+        # leading context cut the match itself and the answer read "No results
+        # found". It always holds that much.
+        line_cap = [ max_results_cap, context_lines + 1 ].max
         # One row past the cap, so a cut list is knowable rather than silent.
-        fetch_limit = max_results_cap + 1
+        fetch_limit = line_cap + 1
         fetched, search_error = if ripgrep_available?
           search_with_ripgrep(search_pattern, search_path, file_type, fetch_limit, root, context_lines, exclude_tests: exclude_tests)
         else
           search_with_ruby(search_pattern, search_path, file_type, fetch_limit, root, context_lines, exclude_tests: exclude_tests)
         end
-        all_results, truncated = cap_results(fetched)
+        all_results, truncated = cap_results(fetched, line_cap)
 
         # A definition or comment line stays as context, never as a call site.
         if match_type == "call"
@@ -205,7 +209,9 @@ module RailsAiContext
         all_results = confirmed_rows(all_results, root, build_regexp(search_pattern, timeout: 1), context_lines)
 
         if all_results.empty?
-          return empty_response("No results found for '#{original_pattern}' in #{path || 'app'}.")
+          # The lines past a cut were never read, so they may still match.
+          unread = truncated ? " in the first #{count_phrase(line_cap, 'line')} scanned (max_search_results); more lines remain" : ""
+          return empty_response("No results found for '#{original_pattern}' in #{path || 'app'}#{unread}.")
         end
 
         # A non-empty row list whose flags all went missing still found
@@ -253,7 +259,7 @@ module RailsAiContext
         mixed = paginated.any? { |r| !match_row?(r) }
         with_context = mixed ? " (#{count_phrase(paginated.size, 'line')} with context)" : ""
         header = "# Search: `#{original_pattern}`\n" \
-          "**#{capped_match_phrase(match_total, truncated)}#{scanned_note(truncated)}**#{" in #{path}" if path}, " \
+          "**#{capped_match_phrase(match_total, truncated)}#{scanned_note(truncated, line_cap)}**#{" in #{path}" if path}, " \
           "showing #{shown}#{with_context}\n"
         header += "`>` = match line\n" if mixed
         header += "_The limit held only context lines, so this page starts at the next match._\n" if moved_to_match
@@ -456,15 +462,15 @@ module RailsAiContext
 
       # Rows are matches plus context lines; only the flagged ones are matches.
       # Rows are fetched one past the cap so a cut list is knowable.
-      private_class_method def self.cap_results(rows)
-        truncated = rows.size > max_results_cap
-        [ truncated ? rows.first(max_results_cap) : rows, truncated ]
+      private_class_method def self.cap_results(rows, cap = max_results_cap)
+        truncated = rows.size > cap
+        [ truncated ? rows.first(cap) : rows, truncated ]
       end
 
       # The cap is on emitted lines, so a cut list means the count beside it
       # covers only the lines the search got to read.
-      private_class_method def self.scanned_note(truncated)
-        truncated ? " - first #{count_phrase(max_results_cap, 'line')} scanned" : ""
+      private_class_method def self.scanned_note(truncated, cap = max_results_cap)
+        truncated ? " - first #{count_phrase(cap, 'line')} scanned" : ""
       end
 
       private_class_method def self.capped_match_phrase(total, truncated)
