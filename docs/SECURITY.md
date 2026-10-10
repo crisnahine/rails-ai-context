@@ -233,6 +233,11 @@ Open3.capture3("rg", "--no-heading", "--", pattern, directory)
 
 File type parameters accept only alphanumeric characters.
 
+An argument git would read as an option never reaches it: `rails_review_changes`
+resolves its `ref` to a commit first (`git rev-parse --verify <ref>^{commit}`)
+and hands git that commit's SHA. A ref that starts with a dash is refused, so
+`--output=<path>` cannot make `git diff` write a file.
+
 ---
 
 ## Regex injection prevention

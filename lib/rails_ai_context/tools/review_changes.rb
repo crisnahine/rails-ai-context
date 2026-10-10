@@ -50,7 +50,21 @@ module RailsAiContext
           return text_response("Not a git repository. `rails_review_changes` requires a git repository.\n\n**To initialize:** `git init && git add -A && git commit -m 'Initial commit'`")
         end
 
-        changed = get_changed_files(ref, root)
+        ref = ref.to_s.strip
+        ref = "HEAD" if ref.empty?
+        # Every git call below takes the ref as an argument, and one that
+        # starts with a dash is read as an option: `--output=<path>` writes a
+        # file. Past this point git sees the commit the ref names, never the
+        # caller's text.
+        target = "HEAD"
+        unless ref == "HEAD"
+          return error_response("Ref not allowed: #{ref} (git would read it as an option)") if ref.start_with?("-")
+
+          target = resolve_commit(ref, root) or
+            return error_response("Unknown ref: #{ref} names no commit in this repository. Pass a branch, a tag, `HEAD~3` or a commit SHA.")
+        end
+
+        changed = get_changed_files(target, root)
         changed = changed.select { |f| files.any? { |filter| f.include?(filter) } } if files&.any?
 
         if changed.empty?
@@ -61,7 +75,7 @@ module RailsAiContext
         classified = changed.map { |f| { file: f, type: classify_file(f) } }
 
         # Get commit log
-        commits = get_commit_log(ref, root)
+        commits = get_commit_log(target, root)
 
         # Build output
         lines = [ "# Review: #{ref}", "" ]
@@ -81,7 +95,7 @@ module RailsAiContext
         end
 
         # Detect warnings
-        warnings = detect_warnings(classified, root, ref)
+        warnings = detect_warnings(classified, root, target)
         if warnings.any?
           lines << "## Warnings"
           warnings.each { |w| lines << "- #{w}" }
@@ -95,7 +109,7 @@ module RailsAiContext
         lines << ""
 
         show_files.each do |entry|
-          file_lines = gather_file_context(entry[:file], entry[:type], root, ref)
+          file_lines = gather_file_context(entry[:file], entry[:type], root, target)
           lines.concat(file_lines)
         end
 
@@ -120,6 +134,15 @@ module RailsAiContext
 
       class << self
         private
+
+        # @return [String, nil] the full SHA of the commit `ref` names
+        def resolve_commit(ref, root)
+          return nil if ref.match?(/[\0\r\n]/)
+
+          output, status = Open3.capture2("git", "rev-parse", "--verify", "--quiet", "#{ref}^{commit}", chdir: root, err: File::NULL)
+          sha = output.strip
+          sha if status.success? && sha.match?(/\A\h{40,64}\z/)
+        end
 
         def get_changed_files(ref, root)
           if ref == "HEAD"
