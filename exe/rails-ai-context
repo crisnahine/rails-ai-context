@@ -388,7 +388,7 @@ class RailsAiContextCLI < Thor
 
       # --- Every question first, the previous selection read before them ---
       previous_tools = read_previous_ai_tools
-      ai_tools = prompt_ai_tools
+      ai_tools = prompt_ai_tools(current: previous_tools)
       setup = prompt_setup
       tool_mode = setup.tool_mode
       context_files = setup.context_files
@@ -469,8 +469,8 @@ class RailsAiContextCLI < Thor
       )
     end
 
-    def prompt_ai_tools
-      ::RailsAiContext::Install::Program.select_ai_tools(program_surface)
+    def prompt_ai_tools(current: nil)
+      ::RailsAiContext::Install::Program.select_ai_tools(program_surface, current: current)
     end
 
     # The answers, over the configuration the boot loaded from the files as
@@ -547,7 +547,7 @@ class RailsAiContextCLI < Thor
       # Before the prompts, as in an app: what each app recorded last time.
       previous = apps.flat_map { |app| read_previous_ai_tools(root: app.root) || [] }.uniq
 
-      ai_tools = prompt_ai_tools
+      ai_tools = prompt_ai_tools(current: previous)
       setup = prompt_setup
       tool_mode = setup.tool_mode
       context_files = setup.context_files

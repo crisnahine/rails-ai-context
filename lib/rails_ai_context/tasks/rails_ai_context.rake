@@ -145,6 +145,19 @@ rescue => e
 end unless defined?(save_selection)
 
 
+# Where the selection a user would edit lives: the initializer's line when it
+# has one, since that wins on read, else the YAML record. Naming the
+# initializer always sent an app that has none to a file that is not there.
+def ai_tools_record_hint
+  record = RailsAiContext::Install::SelectionRecord
+  initializer = Rails.root.join(record::INITIALIZER)
+  if File.exist?(initializer) && File.read(initializer).match?(/^[ \t]*config\.ai_tools\s*=/)
+    "#{record::INITIALIZER} (config.ai_tools)"
+  else
+    "#{record::YAML_FILE} (ai_tools)"
+  end
+end unless defined?(ai_tools_record_hint)
+
 def read_previous_ai_tools_from_config
   RailsAiContext::Install::SelectionRecord.read(root: Rails.root)
 end unless defined?(read_previous_ai_tools_from_config)
@@ -287,18 +300,15 @@ namespace :ai do
     print_result(RailsAiContext.generate_context)
 
     puts ""
-    if Array(ai_tools).include?(:codex)
-      puts "Done! Commit context files and MCP configs so your team benefits."
+    mcp = RailsAiContext.configuration.tool_mode == :mcp
+    puts mcp ? "Done! Commit the context files and MCP configs so your team benefits." : "Done! Commit these files so your team benefits."
+    # Only where a Codex config was written, and only while a commit would
+    # still take it along.
+    if mcp && Array(ai_tools || RailsAiContext.configuration.ai_tools).include?(:codex) &&
+       !RailsAiContext::Install::Program.codex_config_ignored?(Rails.root)
       puts "(.codex/config.toml stays local - it embeds machine-specific paths; add it to .gitignore)"
-    else
-      puts "Done! Commit these files so your team benefits."
     end
-    puts "Change AI tools: config/initializers/rails_ai_context.rb (config.ai_tools)"
-    puts ""
-    puts "Standalone (no Gemfile needed):"
-    puts "  gem install rails-ai-context"
-    puts "  rails-ai-context init          # interactive setup"
-    puts "  rails-ai-context serve         # start MCP server"
+    puts "Change AI tools: #{ai_tools_record_hint}"
   end
 
   desc "Generate AI context in a specific format (claude, cursor, copilot, opencode, codex, json)"

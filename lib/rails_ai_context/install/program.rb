@@ -2,6 +2,7 @@
 
 # Stdlib only: the standalone binary loads this before the gem entry, so it
 # must stand alone the way the other install files do.
+require "open3"
 require "pathname"
 
 module RailsAiContext
@@ -19,9 +20,11 @@ module RailsAiContext
       module_function
 
       # @param surface [#say, #ask] ask returns the user's line, nil on EOF
+      # @param current [Array<Symbol>, nil] what an earlier run recorded,
+      #   shown above the question so a re-run starts from it
       # @return [Array<Symbol>] never empty; every tool when nothing usable
-      #   was entered, stated out loud so --defaults and EOF read the same.
-      def select_ai_tools(surface)
+      #   was entered, and an answer that named no tool says so.
+      def select_ai_tools(surface, current: nil)
         tools = AiTool.all
         surface.say ""
         surface.say "Which AI tools do you use? (select all that apply)", :emph
@@ -29,6 +32,11 @@ module RailsAiContext
         tools.each { |t| surface.say "  #{t.number}. #{t.name.ljust(16)} -> #{t.files}" }
         surface.say "  a. All of the above"
         surface.say ""
+        chosen = tools.select { |t| Array(current).map(&:to_sym).include?(t.key) }
+        if chosen.any?
+          surface.say "Currently selected: #{chosen.map(&:number).join(',')} (#{chosen.map(&:name).join(', ')})"
+          surface.say ""
+        end
 
         input = surface.ask("Enter numbers separated by commas (e.g. 1,2) or 'a' for all:").to_s.strip.downcase
 
@@ -39,8 +47,11 @@ module RailsAiContext
           input.split(/[\s,]+/).filter_map { |n| by_number[n] }
         end
 
+        # An empty answer is the documented default, all of them, and the
+        # Selected line below says so. Only an answer that named nothing
+        # usable gets a line of its own.
         if selected.empty?
-          surface.say "No tools selected - defaulting to all.", :emph
+          surface.say "#{input.inspect} names no tool - selecting all.", :emph unless input.empty?
           selected = tools.map(&:key)
         end
 
@@ -262,6 +273,20 @@ module RailsAiContext
       rescue SystemCallError, IOError => e
         RailsAiContext.log_warn "[rails-ai-context] could not write .gitignore: #{e.message}"
         surface.say "Could not update .gitignore - add .ai-context.json and .codex/config.toml by hand", :warn
+      end
+
+      # Whether a commit would leave the Codex config out, which it must: it
+      # holds this machine's PATH and GEM_HOME. Git answers, since the line
+      # can sit in any .gitignore or in info/exclude; outside a repository
+      # the app's .gitignore does.
+      def codex_config_ignored?(root)
+        _out, status = Open3.capture2e("git", "check-ignore", "-q", "--", ".codex/config.toml", chdir: root.to_s)
+        return status.exitstatus.zero? if [ 0, 1 ].include?(status.exitstatus)
+
+        gitignore = File.join(root.to_s, ".gitignore")
+        File.exist?(gitignore) && File.read(gitignore).include?(".codex/config.toml")
+      rescue SystemCallError
+        false
       end
 
       # `standalone: nil` lets the generator detect the install mode from
