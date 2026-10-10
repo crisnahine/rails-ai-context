@@ -55,6 +55,9 @@ RSpec.describe "Standalone pre-boot load" do
         # Indented too: a require sitting with the one branch that uses the
         # constant is the file requiring what it names, just later.
         next if source.match?(/^\s*require "#{feature}"$/)
+        # An autoload names the file as surely, and loads it on first use:
+        # how a file keeps a gem an app pins from loading before the boot.
+        next if source.match?(/^\s*autoload :#{constant}, "#{feature}"$/)
 
         "#{file}.rb names #{constant} without require \"#{feature}\""
       }
