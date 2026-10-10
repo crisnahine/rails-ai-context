@@ -9,6 +9,20 @@ module RailsAiContext
   class Server
     attr_reader :app, :transport_type
 
+    STOP_SIGNALS = %w[TERM INT].freeze
+
+    # Seconds a stopping server gives requests still in flight. Puma's
+    # default is to wait for them forever, so one request that never
+    # finished - a tool stuck on a lock, a client that stopped reading - kept
+    # a stopped server running until SIGKILL. Puma then gives the request a
+    # further grace period of its own before it kills the thread, so a stop
+    # ends within about eight seconds.
+    SHUTDOWN_TIMEOUT = 3
+
+    # Past this many seconds after a stop signal the process exits whatever
+    # is still running: the stop above has long had its chance by then.
+    STOP_DEADLINE = 15
+
     # All built-in tools, auto-discovered from Tools::BaseTool subclasses.
     # Kept as a class method (not a constant) so auto-registration works.
     # Legacy constant accessor preserved for backwards compatibility.
@@ -295,7 +309,74 @@ module RailsAiContext
       maybe_start_live_reload(server)
 
       handler = default_rack_handler
-      handler.run(rack_app, **rack_handler_options(handler, config))
+      handler.run(rack_app, **rack_handler_options(handler, config)) do |launcher|
+        stop_outside_signal_handler(launcher) if puma_handler?(handler)
+      end
+    rescue SignalException => e
+      # Puma stops gracefully on SIGTERM and then raises it, so a stop that
+      # had already finished reached rake as "bin/rails aborted!
+      # SignalException: SIGTERM". A stop signal ends the server, quietly.
+      raise unless STOP_SIGNALS.include?(Signal.signame(e.signo))
+    ensure
+      stop_http(transport)
+    end
+
+    # Puma runs a SIGTERM stop inside the signal handler: it writes to its
+    # wake-up pipe there and then joins the server thread, which closes that
+    # pipe on its way out. When the close catches the handler's write still
+    # registered on the pipe, Ruby makes the closer wait for the writer to
+    # let go, which needs a mutex code in a signal handler may not take, so
+    # neither thread moved again: the server printed "Gracefully stopping"
+    # and hung until SIGKILL, and a second signal did nothing because signal
+    # handlers do not nest. Here a stop signal only queues the stop, and an
+    # ordinary thread asks Puma for it - the non-blocking stop its own
+    # SIGINT handler uses - then ends the process if the stop never does.
+    def stop_outside_signal_handler(launcher)
+      stops = Thread::Queue.new
+      booted = Thread::Queue.new
+      trap_stops = -> { STOP_SIGNALS.each { |name| Signal.trap(name) { stops << name } } }
+
+      # Replaced where Puma installs its own handlers, which is before it
+      # binds the port, so no signal reaches Puma's. setup_signals is private
+      # but has kept its name since Puma 2; without it, the handlers are
+      # replaced once Puma has booted.
+      replaced = launcher.respond_to?(:setup_signals, true)
+      if replaced
+        launcher.singleton_class.prepend(Module.new do
+          define_method(:setup_signals) do
+            super()
+            trap_stops.call
+          end
+          private :setup_signals
+        end)
+      end
+
+      events = launcher.events
+      # Puma 7 renamed on_booted; the old name still works there, with a warning.
+      events.public_send(events.respond_to?(:after_booted) ? :after_booted : :on_booted) do
+        trap_stops.call unless replaced
+        booted << true
+      end
+
+      Thread.new do
+        stops.pop
+        # Puma can stop only a server it has started: the port is bound before
+        # the server exists, and a stop asked for in between was dropped.
+        booted.pop
+        launcher.stop
+        sleep STOP_DEADLINE
+        $stderr.puts "[rails-ai-context] Server did not stop within #{STOP_DEADLINE}s of the signal; exiting."
+        exit!(1)
+      end
+    end
+
+    # Closes every session's stream so a connected client sees the server go,
+    # and stops the file watcher, rather than leaving both to process exit.
+    def stop_http(transport)
+      @live_reload&.stop
+      transport&.close
+    rescue StandardError => e
+      RailsAiContext.debug_fail(e, nil, label: "stop_http")
     end
 
     def default_rack_handler
@@ -314,14 +395,14 @@ module RailsAiContext
     # pidfile this server would then write over). Both options are load-bearing:
     # refusing the file still leaves WEB_CONCURRENCY able to start a cluster on
     # its own, and pinning the worker count still lets the file's pidfile and
-    # preload_app! through.
+    # preload_app! through. The third bounds a stop; see SHUTDOWN_TIMEOUT.
     def rack_handler_options(handler, config)
       options = { Host: config.http_bind, Port: config.http_port }
       return options unless puma_handler?(handler)
 
       $stderr.puts "[rails-ai-context] Puma pinned to single mode - MCP sessions are per-process, " \
                    "so config/puma.rb and WEB_CONCURRENCY are not read."
-      options.merge(workers: 0, config_files: [ "-" ])
+      options.merge(workers: 0, config_files: [ "-" ], force_shutdown_after: SHUTDOWN_TIMEOUT)
     end
 
     # The handler is whatever Rackup picked, and only Puma understands these

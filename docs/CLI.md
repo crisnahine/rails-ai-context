@@ -40,6 +40,8 @@ rails-ai-context serve --transport http --port 6029   # HTTP transport
 | `--port` | `http_port` from config, else `6029` | HTTP listen port |
 | `--no-boot` | off | Skip booting the app; answer from source alone |
 
+Ctrl-C or SIGTERM stops the HTTP server and exits 0. Requests still running get 3 seconds, then Puma's own grace period of 5, before they are cut off, and the process exits within 15 seconds of the signal whatever else is still running.
+
 The server announces itself to the client as `server_name` from config, else `rails-ai-context`. The `RAILS_AI_CONTEXT_SERVER_NAME` environment variable takes the place of that default for one process; a `server_name` the app sets itself still wins. A [workspace](#init-standalone-only) entry sets the variable to put its app first, since VS Code names every tool after the announced name and keeps 13 characters of it.
 
 ### `tool`

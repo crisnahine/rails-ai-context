@@ -301,8 +301,10 @@ RSpec.describe RailsAiContext::Server do
     end
 
     it "pins Puma to one process" do
-      expect(options_for(resolved_handler))
-        .to eq(Host: config.http_bind, Port: config.http_port, workers: 0, config_files: [ "-" ])
+      expect(options_for(resolved_handler)).to eq(
+        Host: config.http_bind, Port: config.http_port, workers: 0, config_files: [ "-" ],
+        force_shutdown_after: described_class::SHUTDOWN_TIMEOUT
+      )
     end
 
     # A stand-in rather than a real second handler: webrick and falcon are not
@@ -314,6 +316,113 @@ RSpec.describe RailsAiContext::Server do
     it "says that it dropped the app's puma config" do
       options_for(resolved_handler)
       expect($stderr).to have_received(:puts).with(/single mode/)
+    end
+
+    describe "stopping" do
+      let(:handler) { double("handler") }
+      let(:transport) { instance_double(MCP::Server::Transports::StreamableHTTPTransport, close: nil) }
+
+      before do
+        allow(s).to receive_messages(default_rack_handler: handler, rack_handler_options: {}, tool_banner: "")
+        allow(s).to receive(:maybe_start_live_reload)
+        allow(MCP::Server::Transports::StreamableHTTPTransport).to receive(:new).and_return(transport)
+      end
+
+      # Puma finishes a graceful stop on SIGTERM and then raises it, which
+      # rake reported as "bin/rails aborted! SignalException: SIGTERM".
+      it "returns quietly when a stop signal ends the server" do
+        allow(handler).to receive(:run).and_raise(SignalException, "TERM")
+
+        expect { s.send(:start_http, instance_double(MCP::Server)) }.not_to raise_error
+      end
+
+      it "lets any other signal through" do
+        allow(handler).to receive(:run).and_raise(SignalException, "HUP")
+
+        expect { s.send(:start_http, instance_double(MCP::Server)) }.to raise_error(SignalException)
+      end
+
+      it "closes the transport, so a connected client sees the server go" do
+        allow(handler).to receive(:run)
+
+        s.send(:start_http, instance_double(MCP::Server))
+
+        expect(transport).to have_received(:close)
+      end
+    end
+
+    # Puma ran a SIGTERM stop inside the signal handler, where Ruby can
+    # deadlock it against the server thread closing Puma's wake-up pipe: the
+    # server printed "Gracefully stopping" and hung until SIGKILL.
+    describe "a stop signal" do
+      let(:launcher_class) do
+        Class.new do
+          attr_reader :events, :stops
+
+          def initialize
+            @stops = 0
+            @booted = []
+            @events = Object.new.tap do |events|
+              booted = @booted
+              events.define_singleton_method(:after_booted) { |&block| booted << block }
+            end
+          end
+
+          def stop = @stops += 1
+          def boot! = @booted.each(&:call)
+
+          private
+
+          def setup_signals = Signal.trap("TERM") { :pumas_own_stop }
+        end
+      end
+
+      around do |example|
+        saved = %w[TERM INT].to_h { |name| [ name, Signal.trap(name, "DEFAULT") ] }
+        example.run
+      ensure
+        saved.each { |name, handler| Signal.trap(name, handler || "DEFAULT") }
+      end
+
+      let(:exits) { [] }
+
+      before do
+        allow(s).to receive(:sleep)
+        allow(s).to receive(:exit!) { |status| exits << status }
+      end
+
+      def wait_for
+        deadline = Time.now + 5
+        sleep 0.01 until yield || Time.now > deadline
+      end
+
+      it "only queues the stop, and a thread asks Puma for it once Puma has booted" do
+        launcher = launcher_class.new
+        s.send(:stop_outside_signal_handler, launcher)
+        launcher.send(:setup_signals)
+        handler = Signal.trap("TERM", "DEFAULT")
+
+        handler.call
+        sleep 0.05
+        expect(launcher.stops).to eq(0)
+
+        launcher.boot!
+        wait_for { launcher.stops == 1 }
+        expect(launcher.stops).to eq(1)
+      end
+
+      it "ends the process when the stop never finishes" do
+        launcher = launcher_class.new
+        s.send(:stop_outside_signal_handler, launcher)
+        launcher.send(:setup_signals)
+        launcher.boot!
+
+        Signal.trap("INT", "DEFAULT").call
+        wait_for { exits.any? }
+
+        expect(launcher.stops).to eq(1)
+        expect(exits).to eq([ 1 ])
+      end
     end
 
     it "passes the options to the handler it resolved" do
@@ -372,6 +481,12 @@ RSpec.describe RailsAiContext::Server do
 
       it "does not take over the app's pidfile" do
         expect(resolved(options_for(resolved_handler))[:pidfile]).to be_nil
+      end
+
+      # Puma's own default waits for requests in flight forever, so one that
+      # never finished kept a stopped server running until SIGKILL.
+      it "bounds how long a stop waits for requests in flight" do
+        expect(resolved(options_for(resolved_handler))[:force_shutdown_after]).to eq(described_class::SHUTDOWN_TIMEOUT)
       end
     end
   end
