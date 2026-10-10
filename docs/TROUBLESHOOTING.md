@@ -11,7 +11,7 @@
 ---
 
 > [!TIP]
-> Always start with `rails ai:doctor`. It runs 25 checks and catches most issues automatically.
+> Always start with `rails ai:doctor`. It checks the app, its databases, the MCP configs and the context files, and catches most issues automatically.
 
 ## Diagnostics first
 
@@ -20,7 +20,7 @@ rails ai:doctor          # In-Gemfile
 rails-ai-context doctor  # Standalone
 ```
 
-This runs 25 checks and returns an AI readiness score (0-100). Each failed check includes a fix suggestion.
+This runs every check that applies to the app ([the list](GUIDE.md#diagnostics)) and returns an AI readiness score (0-100). Each check that fails or warns includes a fix suggestion.
 
 ---
 

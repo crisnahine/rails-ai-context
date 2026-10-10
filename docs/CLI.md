@@ -189,7 +189,7 @@ rails-ai-context doctor --strict   # exit 1 when any check fails (CI gate)
 rails ai:doctor STRICT=1           # rake equivalent
 ```
 
-Checks include: schema existence, pending migrations, model files, routes, MCP config validity, introspector health, ripgrep availability, Prism gem, Brakeman gem, listen gem, gitignore security, auto_mount security, schema size, view count, and more.
+Checks include: schema existence, pending migrations in every database (and a database that does not exist or does not answer), model files, routes, whether the command each MCP config holds can start, the Codex env snapshot, whether a context run would rewrite the context files, introspector health, ripgrep availability, the Prism and mcp gems, Brakeman gem, listen gem, secret files and .gitignore, auto_mount security, schema size, view count, and more. The [Guide](GUIDE.md#diagnostics) lists every check.
 
 ### `watch`
 
