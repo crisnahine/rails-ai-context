@@ -1201,6 +1201,37 @@ end
     end
   end
 
+  # The blog's `Post.with_author.recent` was a HIGH, its with_author scope
+  # being `includes(:user)`.
+  describe "a named scope in the loaded chain" do
+    it "reads the scope's body, and the scopes it calls, as preloading" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/controllers"))
+        FileUtils.mkdir_p(File.join(dir, "app/views/feeds"))
+        File.write(File.join(dir, "app/controllers/feeds_controller.rb"), <<~RUBY)
+          class FeedsController < ApplicationController
+            def index = @posts = Post.with_author.recent
+            def show = @posts = Post.feed
+            def edit = @posts = Post.recent
+          end
+        RUBY
+        %w[index show edit].each do |action|
+          File.write(File.join(dir, "app/views/feeds/#{action}.html.erb"), "<% @posts.each do |post| %><%= post.user.name %><% end %>\n")
+        end
+        models = {
+          "Post" => { associations: [ { name: "user", type: "belongs_to" } ],
+                      scopes: [ { name: "with_author", body: "includes(:user)" }, { name: "recent", body: "order(created_at: :desc)" },
+                                { name: "feed", body: "with_author.recent" } ] },
+          "User" => { associations: [ { name: "posts", type: "has_many" } ] }
+        }
+
+        risks = RailsAiContext::Introspectors::NPlusOneScan.new(dir, models).call
+
+        expect(risks.to_h { |r| [ r[:action], r[:risk] ] }).to eq("index" => "low", "show" => "low", "edit" => "high")
+      end
+    end
+  end
+
   describe "NPlusOneScan.controller_actions" do
     it "extracts public actions only" do
       source = <<~RUBY

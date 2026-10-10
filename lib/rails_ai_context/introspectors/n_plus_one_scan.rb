@@ -185,6 +185,7 @@ module RailsAiContext
         return nil if NO_RECORDS.include?(node.name)
 
         written = node.slice[(node.receiver.location.end_offset - node.location.start_offset)..].to_s
+        written += scope_body(receiver.models, node.name.to_s)
         return Type.new(models: receiver.models, collection: false, chain: receiver.chain + written) if one_record?(node.name)
 
         Type.new(models: receiver.models, collection: true, chain: receiver.chain + written, parent: receiver.parent)
@@ -199,6 +200,21 @@ module RailsAiContext
 
       def one_record?(name)
         ONE_RECORD.include?(name) || name.to_s.match?(/\Afind_by_\w+!?\z/)
+      end
+
+      # A named scope's body, read into the chain as if written there:
+      # `Post.with_author` preloads what `scope :with_author, -> {
+      # includes(:user) }` does. A scope the body calls is read in turn.
+      def scope_body(models, name, depth = 0)
+        return "" if depth > 3
+
+        models.filter_map do |model|
+          body = Array(@models.dig(model, :scopes)).find { |s| s.is_a?(Hash) && s[:name].to_s == name }&.dig(:body)
+          next unless body
+
+          called = body.to_s.scan(/\b([a-z_]\w*)\b/).flatten.uniq - [ name ]
+          ".#{body}" + called.map { |inner| scope_body([ model ], inner, depth + 1) }.join
+        end.join
       end
 
       # `current_user` is the signed-in User in Devise and in the Rails 8
