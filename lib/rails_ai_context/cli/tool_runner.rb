@@ -35,14 +35,20 @@ module RailsAiContext
         @out_of_type = {}
       end
 
+      # The answer is what the caller prints to stdout, so whatever the app's
+      # code prints while the tool runs goes to stderr, as it does under
+      # `serve`. Sidekiq's logger, made the first time a tool reaches it,
+      # announced its Redis connection on stdout ahead of a --json envelope.
       def run
-        kwargs = build_kwargs
-        schema = tool_schema
-        validate_kwargs!(kwargs, schema)
-        return extract_output(invalid_required_response) if @invalid_required.any?
+        OutputGuard.quarantine_stdout(across_exec: false) do
+          kwargs = build_kwargs
+          schema = tool_schema
+          validate_kwargs!(kwargs, schema)
+          next extract_output(invalid_required_response) if @invalid_required.any?
 
-        response = tool_class.call(**kwargs)
-        extract_output(response)
+          response = tool_class.call(**kwargs)
+          extract_output(response)
+        end
       end
 
       # List all available tools with short names and descriptions.

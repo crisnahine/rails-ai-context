@@ -565,6 +565,30 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       output = runner.run
       expect(JSON.parse(output)["error"]).to eq(false)
     end
+
+    # Sidekiq's logger, made the first time a tool reaches it, announced its
+    # Redis connection on stdout ahead of the envelope.
+    it "keeps what the app prints while the tool runs off stdout" do
+      custom = Class.new(MCP::Tool) do
+        tool_name "rails_probe_noise"
+        description "probe"
+
+        def self.call
+          $stdout.puts "from $stdout"
+          STDOUT.puts "from STDOUT"
+          system("echo from a child")
+          MCP::Tool::Response.new([ { type: "text", text: "the answer" } ])
+        end
+      end
+      allow(RailsAiContext::Server).to receive(:resolve_custom_tools).and_return([ custom ])
+      runner = described_class.new("rails_probe_noise", [], json_mode: true)
+      answer = nil
+
+      expect {
+        expect { answer = runner.run }.not_to output.to_stdout_from_any_process
+      }.to output(/from \$stdout/).to_stderr_from_any_process
+      expect(JSON.parse(answer)).to include("output" => "the answer", "error" => false)
+    end
   end
 
   describe "#error" do

@@ -360,6 +360,10 @@ rails-ai-context tool schema --table users --json
 JSON=1 rails 'ai:tool[schema]' table=users
 ```
 
+stdout then holds the envelope (`tool`, `output`, `error`) and nothing else.
+Whatever the app prints while it boots or while the tool runs - an
+initializer's `puts`, Sidekiq's Redis connection line - goes to stderr.
+
 ---
 
 ## Common workflows
