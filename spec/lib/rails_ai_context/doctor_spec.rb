@@ -1381,6 +1381,43 @@ RSpec.describe RailsAiContext::Doctor do
     end
   end
 
+  # The binary warns at boot of a dependency the app's bundle pins outside
+  # what the gem needs, and the row that names that dependency says the same.
+  describe "a dependency the app pins outside what the gem needs" do
+    def loaded_with(name, version)
+      spec = Gem::Specification.new do |s|
+        s.name = name
+        s.version = version
+      end
+      allow(Gem).to receive(:loaded_specs).and_return(Gem.loaded_specs.merge(name => spec))
+    end
+
+    def needed(name)
+      Gem.loaded_specs["rails-ai-context"].runtime_dependencies.find { |dep| dep.name == name }.requirement
+    end
+
+    it "passes Prism, naming its version, when the loaded one is supported" do
+      expect(doctor.send(:check_prism)).to have_attributes(status: :pass, message: "Prism #{Prism::VERSION} available for AST-based validation")
+    end
+
+    it "warns on the Prism row about a prism below the floor" do
+      loaded_with("prism", "1.3.0")
+
+      check = doctor.send(:check_prism)
+      expect(check.status).to eq(:warn)
+      expect(check.message).to eq("the app locks prism 1.3.0; this gem needs prism #{needed("prism")}, so the tools that use it may fail")
+      expect(check.fix).to eq("Run `bundle update prism` in the app, after relaxing any pin its Gemfile puts on prism")
+    end
+
+    it "warns on the MCP server row about an mcp below the floor" do
+      loaded_with("mcp", "0.12.0")
+
+      check = doctor.send(:check_mcp_buildable)
+      expect(check.status).to eq(:warn)
+      expect(check.message).to start_with("MCP server builds, but the app locks mcp 0.12.0; this gem needs mcp #{needed("mcp")}")
+    end
+  end
+
   describe "#check_tests" do
     def tests_check(root)
       described_class.new(RailsAiContext::StaticApp.new(root)).send(:check_tests)
