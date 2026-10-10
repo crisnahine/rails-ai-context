@@ -7,7 +7,10 @@ module RailsAiContext
     class << self
       include CountPhrase
 
-      def render(context, inspect_hint: "rails ai:inspect")
+      # `full_json` is the closing line: where the caller's own commands give
+      # the whole payload as JSON, since the binary prints it from inspect and
+      # rake's ai:inspect prints a text summary.
+      def render(context, full_json:)
         lines = []
         lines << "# #{app_name(context)} - Schema Facts"
         lines << "# Generated: #{Time.now.strftime('%Y-%m-%d %H:%M')}"
@@ -17,7 +20,7 @@ module RailsAiContext
         lines.concat(dependencies_section(context))
         lines.concat(architecture_section(context))
         lines << "---"
-        lines << "Run `#{inspect_hint}` for full JSON introspection."
+        lines << full_json
         lines.join("\n")
       end
 

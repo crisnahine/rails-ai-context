@@ -35,6 +35,15 @@ RSpec.describe "the ai:inspect route count" do
       .to include("Routes: 2 app routes across 1 routed controller (31 total incl. framework)")
   end
 
+  # The Codex row named .codex/config.toml beside rails ai:context:codex,
+  # which never writes it: only the install writes an MCP config.
+  it "pairs each command with the files that command writes" do
+    rows = invoke_rake_task("ai:inspect").lines.grep(/rails ai:context:/)
+
+    expect(rows.grep(/Codex CLI/).first).to match(/Codex CLI\s+AGENTS\.md\s+rails ai:context:codex/)
+    expect(rows.join).not_to match(/mcp\.json|config\.toml|opencode\.json/)
+  end
+
   # The summary line states both versions at once. Answering one with a
   # refusal and the other with the interpreter running the task reads as a
   # fact about the app it is not.

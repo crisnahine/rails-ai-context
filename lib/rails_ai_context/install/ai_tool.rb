@@ -94,6 +94,12 @@ module RailsAiContext
           ALL.flat_map { |tool| tool.legacy_paths.map { |path| { path: path, ai_tool: tool.key } } }
         end
       end
+
+      # What `rails ai:context:<key>` writes for the tool: its files without
+      # its MCP config, which only the install writes.
+      def context_files
+        files.split(" + ").reject { |file| file == mcp_config[:path] }.join(" + ")
+      end
     end
   end
 end
