@@ -325,6 +325,33 @@ module RailsAiContext
       # This copy's root, as a bundle would name it.
       OWN_COPY = File.expand_path("../../..", __dir__)
 
+      # How long `bundle check` gets. A Gemfile edited since its lock was
+      # written sends Bundler to the network to resolve it again.
+      BUNDLE_CHECK_SECONDS = 5
+
+      # Whether bundle exec would start: every gem the app locks installed,
+      # answered by `bundle check`, which writes nothing with --dry-run. A
+      # bundle not installed yet only fails under bundle exec, where this copy
+      # answers from source. Polled rather than timed out with Timeout, a gem
+      # an app can pin, which nothing may load before the app's bundle does.
+      def self.bundle_ready?(env, root, bundle: Gem.bin_path("bundler", "bundle"), seconds: BUNDLE_CHECK_SECONDS)
+        pid = Process.spawn(env, RbConfig.ruby, bundle, "check", "--dry-run", chdir: root, in: File::NULL, out: File::NULL, err: File::NULL)
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + seconds
+        loop do
+          _, status = Process.waitpid2(pid, Process::WNOHANG)
+          return status.success? if status
+
+          if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+            Process.kill("KILL", pid)
+            Process.waitpid(pid)
+            return false
+          end
+          sleep 0.05
+        end
+      rescue SystemCallError, Gem::Exception
+        false
+      end
+
       # The directory the bundle loads the gem from: a path source's, or the
       # installed gem a rubygems source resolves to. A git checkout, or one
       # installed under a vendored bundle path, is nil: its install is not

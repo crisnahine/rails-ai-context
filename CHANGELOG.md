@@ -329,9 +329,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a command that ran half of each copy (`version` said one release, the
   server announced another). It now runs the command as
   `bundle exec rails-ai-context` would, from where it was typed, and says
-  so on stderr: that is the copy the app's MCP configs start. A bundle not
-  installed yet is left alone, so its failed boot still serves the static
-  tier.
+  so on stderr: that is the copy the app's MCP configs start. Only a run
+  that boots the app does so, since the boot runs the app's bundle anyway:
+  `--no-boot` and `init --mcp-only` stay on the installed copy, as bundle
+  exec would evaluate the app's Gemfile and start whatever copy the app
+  names, code nobody has read on a repo just cloned. A bundle not
+  installed yet is left alone too (`bundle check` says so), so its failed
+  boot still serves the static tier.
 - **The binary loads no gem the app pins before the app boots.** Run from a
   subdirectory of an app (#427) or a folder holding one, it asked of every
   directory it passed whether a non-Rails framework lived there, which
