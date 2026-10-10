@@ -49,8 +49,17 @@ Gem::Specification.new do |spec|
 
   # A `path:` or vendored Gemfile entry re-evaluates this outside a checkout,
   # where git's "not a git repository" would land on the host app's stderr.
+  # There git lists nothing, and an empty list leaves the gem without its
+  # executable, so `bundle exec rails-ai-context` finds none: the tree on
+  # disk is the list instead.
   spec.files = Dir.chdir(__dir__) do
-    IO.popen([ "git", "ls-files", "-z" ], err: IO::NULL, &:read).split("\x0").reject do |f|
+    listed = begin
+      IO.popen([ "git", "ls-files", "-z" ], err: IO::NULL, &:read).split("\x0")
+    rescue SystemCallError
+      []
+    end
+    listed = Dir.glob("**/*", File::FNM_DOTMATCH).select { |f| File.file?(f) } if listed.empty?
+    listed.reject do |f|
       (File.expand_path(f) == __FILE__) ||
         f.start_with?(*%w[bin/ demo/ gemfiles/ test/ spec/ features/ .git .github appveyor Gemfile])
     end
