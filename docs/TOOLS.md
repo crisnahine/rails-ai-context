@@ -131,7 +131,10 @@ Composite context: schema + model + controller + routes + views for a resource. 
 
 ### `rails_onboard`
 
-Narrative app walkthrough for getting up to speed. It ends with the app's custom
+Narrative app walkthrough for getting up to speed. The stack line counts the
+tables of every database the app's own schema dumps declare, as
+`rails_get_schema` reads them; the databases Rails 8 gives Solid Queue, Solid
+Cache and Solid Cable get one line, without their tables. It ends with the app's custom
 rake tasks (Rakefile, `lib/tasks`, `rakelib`), each with its arguments,
 description and file: the first 15 at `standard`, every one at `full`.
 Then the app's own generators under `lib/generators` (the `bin/rails generate`
