@@ -1549,6 +1549,29 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
             expect(text(pattern: "Money", match_type: "class", exact_match: true)).to include("lib/billing/money.rb:2")
           end
         end
+
+        # The schema promises regex, and both modes escaped it: `\w+Job` and
+        # `generate_.*` found nothing, and `slug` missed `def generate_slug`.
+        it "reads a regex as one, and finds a name anywhere in a def" do
+          extra = {
+            "app/jobs/process_payment_job.rb" => "class ProcessPaymentJob < ApplicationJob\nend\n",
+            "app/models/concerns/sluggable.rb" => "module Sluggable\n  def generate_slug\n  end\n\n  def slug_source\n  end\nend\n"
+          }
+          with_search_app(files.merge(extra)) do
+            expect(text(pattern: "\\w+Job", match_type: "class")).to include("app/jobs/process_payment_job.rb:1")
+            expect(text(pattern: "generate_.*", match_type: "definition")).to include("app/models/concerns/sluggable.rb:2")
+            expect(text(pattern: "slug", match_type: "definition", context_lines: 0)).to include("sluggable.rb:2", "sluggable.rb:5")
+          end
+        end
+
+        it "still reads a predicate's name literally" do
+          with_search_app("app/models/status.rb" => "class Status\n  def valid?\n  end\n\n  def validate\n  end\nend\n") do
+            found = text(pattern: "valid?", match_type: "definition", context_lines: 0)
+
+            expect(found).to include("status.rb:2")
+            expect(found).not_to include("status.rb:5")
+          end
+        end
       end
     end
   end
