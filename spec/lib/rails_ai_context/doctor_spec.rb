@@ -1175,10 +1175,34 @@ RSpec.describe RailsAiContext::Doctor do
     end
   end
 
+  # Stale means the run the fix names would rewrite the file: a file that
+  # run leaves alone is never stale however old it is, so the fix always
+  # clears the warning, and the files are read where config.output_dir puts them.
   describe "#check_context_freshness" do
     subject(:check) { doctor.send(:check_context_freshness) }
 
-    let(:app) { Rails.application }
+    # The context goes to a directory of its own, as config.output_dir names
+    # one, so nothing is written into the app's tree.
+    around do |example|
+      Dir.mktmpdir do |dir|
+        previous = RailsAiContext.configuration.output_dir
+        @out = File.realpath(dir)
+        RailsAiContext.configuration.output_dir = @out
+        example.run
+      ensure
+        RailsAiContext.configuration.output_dir = previous
+      end
+    end
+
+    before { allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude]) }
+
+    def generate
+      RailsAiContext.generate_context(Rails.application)
+    end
+
+    def contents
+      Dir.glob(File.join(@out, "**/*"), File::FNM_DOTMATCH).select { |path| File.file?(path) }.sort.to_h { |path| [ path, File.binread(path) ] }
+    end
 
     # An MCP-only install asked for no context files, so "No context files
     # generated" is the configuration working, not something to fix.
@@ -1188,144 +1212,61 @@ RSpec.describe RailsAiContext::Doctor do
       expect(check).to be_nil
     end
 
-    context "when cursor-only (split rules only, no root file)" do
-      before do
-        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[cursor])
-        allow(File).to receive(:exist?).and_call_original
-        allow(Dir).to receive(:exist?).and_call_original
-
-        cursor_rules_path = File.join(app.root, ".cursor/rules")
-        # No root file, but split rule directory exists
-        allow(File).to receive(:exist?).with(cursor_rules_path).and_return(false)
-        allow(Dir).to receive(:exist?).with(cursor_rules_path).and_return(true)
-        allow(File).to receive(:directory?).and_call_original
-        allow(File).to receive(:directory?).with(cursor_rules_path).and_return(true)
-
-        # Mock split rule files with recent mtime
-        rule_files = [ File.join(cursor_rules_path, "rails-context.mdc") ]
-        allow(Dir).to receive(:glob).and_call_original
-        allow(Dir).to receive(:glob).with(File.join(cursor_rules_path, "**/*")).and_return(rule_files)
-        allow(File).to receive(:mtime).and_call_original
-        allow(File).to receive(:mtime).with(rule_files.first).and_return(Time.now)
-
-        # No stale source dirs
-        %w[app/models app/controllers app/views config db/migrate].each do |dir|
-          allow(Dir).to receive(:exist?).with(File.join(app.root, dir)).and_return(false)
-        end
-      end
-
-      it "detects .cursor/rules as valid context" do
-        expect(check.status).to eq(:pass)
-        expect(check.message).to include(".cursor/rules")
-      end
+    it "warns when the output directory holds none" do
+      expect(check.status).to eq(:warn)
+      expect(check.message).to eq("No context files generated")
     end
 
-    context "when multi-tool configured with existing files" do
-      before do
-        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude copilot])
-        allow(File).to receive(:exist?).and_call_original
-        allow(Dir).to receive(:exist?).and_call_original
+    # A file the run leaves alone keeps its old mtime, and every app file is newer.
+    it "passes files a run would leave alone, however old they are" do
+      generate
+      Dir.glob(File.join(@out, "**/*"), File::FNM_DOTMATCH).each { |path| File.utime(Time.at(0), Time.at(0), path) if File.file?(path) }
 
-        claude_path = File.join(app.root, "CLAUDE.md")
-        allow(File).to receive(:exist?).with(claude_path).and_return(true)
-        allow(File).to receive(:directory?).and_call_original
-        allow(File).to receive(:directory?).with(claude_path).and_return(false)
-        allow(File).to receive(:mtime).and_call_original
-        allow(File).to receive(:mtime).with(claude_path).and_return(Time.now)
-
-        %w[app/models app/controllers app/views config db/migrate].each do |dir|
-          allow(Dir).to receive(:exist?).with(File.join(app.root, dir)).and_return(false)
-        end
-      end
-
-      it "checks the first available file (CLAUDE.md)" do
-        expect(check.status).to eq(:pass)
-        expect(check.message).to include("CLAUDE.md")
-      end
+      expect(check.status).to eq(:pass)
+      expect(check.message).to match(%r{\A#{Regexp.escape(@out)}/CLAUDE\.md and \d+ more context files are up to date\z})
     end
 
-    context "when no context files exist" do
-      before do
-        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude cursor])
-        allow(File).to receive(:exist?).and_call_original
-        allow(Dir).to receive(:exist?).and_call_original
+    it "warns about a file an older version wrote, and passes once the fix has run" do
+      generate
+      claude = File.join(@out, "CLAUDE.md")
+      File.write(claude, File.read(claude).sub("rails-ai-context v#{RailsAiContext::VERSION}", "rails-ai-context v5.31.0"))
 
-        allow(File).to receive(:exist?).with(File.join(app.root, "CLAUDE.md")).and_return(false)
-        allow(Dir).to receive(:exist?).with(File.join(app.root, "CLAUDE.md")).and_return(false)
-        allow(File).to receive(:exist?).with(File.join(app.root, ".cursor/rules")).and_return(false)
-        allow(Dir).to receive(:exist?).with(File.join(app.root, ".cursor/rules")).and_return(false)
-      end
+      expect(check.status).to eq(:warn)
+      expect(check.message).to eq("#{claude} is out of date: written by rails-ai-context v5.31.0, this is v#{RailsAiContext::VERSION}")
+      expect(check.fix).to eq("Run `#{RailsAiContext::InstallMode.command(:context)}` to regenerate")
 
-      it "returns warn with 'no context files generated'" do
-        expect(check.status).to eq(:warn)
-        expect(check.message).to include("No context files generated")
-      end
+      generate
+      expect(doctor.send(:check_context_freshness).status).to eq(:pass)
     end
 
-    # The freshness check read five hardcoded directories while the watch
-    # scope read many more, so an edit in a service or a pack left the
-    # context reported as up to date.
-    context "against a real app tree" do
-      def freshness_for(root)
-        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude])
-        described_class.new(RailsAiContext::StaticApp.new(root)).send(:check_context_freshness)
-      end
+    it "names the directories with newer files when no version explains the change" do
+      generate
+      claude = File.join(@out, "CLAUDE.md")
+      File.write(claude, File.read(claude).sub("## Stack", "## Stack (edited)"))
+      File.utime(Time.at(0), Time.at(0), claude)
 
-      def write_context_file(root)
-        path = File.join(root, "CLAUDE.md")
-        File.write(path, "context")
-        File.utime(Time.now - 3600, Time.now - 3600, path)
-      end
+      expect(check.status).to eq(:warn)
+      expect(check.message).to start_with("#{claude} is out of date: ").and include("app/models")
+    end
 
-      it "names any directory the watch scope covers" do
-        Dir.mktmpdir do |root|
-          write_context_file(root)
-          FileUtils.mkdir_p(File.join(root, "app/services"))
-          File.write(File.join(root, "app/services/billing.rb"), "class Billing; end")
+    it "writes nothing where the context lives" do
+      generate
+      claude = File.join(@out, "CLAUDE.md")
+      File.write(claude, File.read(claude).sub("## Stack", "## Stack (edited)"))
+      before = contents
 
-          check = freshness_for(root)
+      check
 
-          expect(check.status).to eq(:warn)
-          expect(check.message).to include("app/services")
-        end
-      end
+      expect(contents).to eq(before)
+    end
 
-      it "calls the context stale when a model is newer than it" do
-        Dir.mktmpdir do |root|
-          write_context_file(root)
-          FileUtils.mkdir_p(File.join(root, "app/models"))
-          File.write(File.join(root, "app/models/user.rb"), "class User; end")
+    it "reads a tool's rules directory when it has no root file" do
+      allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[cursor])
+      generate
+      File.delete(File.join(@out, ".cursorrules"))
 
-          check = freshness_for(root)
-
-          expect(check.status).to eq(:warn)
-          expect(check.message).to include("stale")
-          expect(check.message).to include("app/models")
-        end
-      end
-
-      it "warns after a routes edit, which the config directory covers" do
-        Dir.mktmpdir do |root|
-          write_context_file(root)
-          FileUtils.mkdir_p(File.join(root, "config"))
-          File.write(File.join(root, "config/routes.rb"), "Rails.application.routes.draw {}")
-
-          check = freshness_for(root)
-
-          expect(check.status).to eq(:warn)
-          expect(check.message).to include("config")
-        end
-      end
-
-      it "ignores our own initializer, which install writes in the same run" do
-        Dir.mktmpdir do |root|
-          write_context_file(root)
-          FileUtils.mkdir_p(File.join(root, "config/initializers"))
-          File.write(File.join(root, "config/initializers/rails_ai_context.rb"), "# installed")
-
-          expect(freshness_for(root).status).to eq(:pass)
-        end
-      end
+      expect(check.status).to eq(:warn)
+      expect(check.message).to include("#{@out}/.cursorrules is out of date")
     end
   end
 

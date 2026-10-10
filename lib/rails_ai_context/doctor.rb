@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "find"
+require "fileutils"
+require "tmpdir"
 
 module RailsAiContext
   # Diagnostic checker that validates the environment and reports
@@ -192,14 +194,8 @@ module RailsAiContext
 
     # ── Context file checks ───────────────────────────────────────────
 
-    # Per-tool context path - sentinel checked for the freshness check.
-    # Other files generated alongside are assumed in-sync (they're written
-    # atomically by the same serializer). For Cursor, `.cursor/rules/` is
-    # the sentinel; `.cursorrules` (v5.9.0 legacy fallback) is generated
-    # atomically next to it, so checking either proves both are fresh.
-    # The first context path is each tool's sentinel: the rest are written
-    # atomically beside it, so its freshness proves theirs.
-    CONTEXT_FILES = Install::AiTool.all.to_h { |tool| [ tool.key, tool.context_paths.first ] }.freeze
+    # Each tool's context files and rule directories, root file first.
+    CONTEXT_PATHS = Install::AiTool.all.to_h { |tool| [ tool.key, tool.context_paths ] }.freeze
 
     # Where each tool's MCP config lives, and how to name it in a report.
     def self.mcp_config_checks
@@ -214,54 +210,91 @@ module RailsAiContext
       # the configuration working, not something to fix.
       return nil unless RailsAiContext.configuration.context_files
 
-      ai_tools = configured_ai_tools
-
-      # Find the first existing context file or split rule directory for configured tools
-      context_file = nil
-      context_label = nil
-      ai_tools.each do |tool|
-        filename = CONTEXT_FILES[tool]
-        next unless filename
-
-        path = File.join(app.root, filename)
-        if File.exist?(path) || Dir.exist?(path)
-          context_file = path
-          context_label = filename
-          break
-        end
-      end
-
-      unless context_file
+      # Where the files are written: config.output_dir, else the app root.
+      output_dir = RailsAiContext.configuration.output_dir_for(app)
+      present = configured_ai_tools.flat_map { |tool| CONTEXT_PATHS.fetch(tool, []) }.uniq
+        .select { |relative| File.exist?(File.join(output_dir, relative)) }
+      if present.empty?
         return Check.new(name: "Context files", status: :warn,
           message: "No context files generated",
           fix: "Run `#{command(:context)}`")
       end
 
-      generated_at = if File.directory?(context_file)
-        # Split rule directories: use the most recent file's mtime
-        Dir.glob(File.join(context_file, "**/*"))
-          .reject { |f| File.directory?(f) }
-          .map { |f| File.mtime(f) }
-          .max || Time.at(0)
-      else
-        File.mtime(context_file)
+      # A context file is stale when the run the fix names would rewrite it,
+      # which is never true of a file that run leaves alone however old it
+      # is, and always true of one an older version of the gem wrote.
+      run = context_file_run(output_dir)
+      stale = run[:written]
+      # Named from the app root, or in full for an output_dir outside it.
+      first = ->(files) { File.join(output_dir, files.first).delete_prefix("#{app.root.to_s.chomp('/')}/") }
+      shown = ->(files) { "#{first.(files)}#{" and #{count_phrase(files.size - 1, "more context file")}" if files.size > 1}" }
+      if stale.empty?
+        fresh = run[:skipped].presence || present
+        return Check.new(name: "Context files", status: :pass,
+          message: "#{shown.(fresh)} #{fresh.one? ? "is" : "are"} up to date", fix: nil)
       end
-      # Freshness is measured over the same scope the watcher and the tool
-      # cache use, so a service or a pack cannot change unnoticed.
-      stale_dirs = Fingerprinter.changed_since(app.root, generated_at)
-        .reject { |dir| only_our_initializer_newer?(dir, generated_at) }
 
-      if stale_dirs.empty?
-        Check.new(name: "Context files", status: :pass, message: "#{context_label} is up to date", fix: nil)
-      else
-        Check.new(name: "Context files", status: :warn,
-          message: "#{context_label} may be stale - #{stale_dirs.join(', ')} changed since last generation",
-          fix: "Run `#{command(:context)}` to regenerate")
+      Check.new(name: "Context files", status: :warn,
+        message: "#{shown.(stale)} #{stale.one? ? "is" : "are"} out of date: #{staleness_reason(output_dir, stale)}",
+        fix: "Run `#{command(:context)}` to regenerate")
+    end
+
+    # The context files run through the writers the context command runs,
+    # into a copy of them, so the copy says which files that run would
+    # rewrite and nothing in the app is touched. Paths relative to the
+    # output directory; the JSON dump is no AI tool's file.
+    #
+    # @return [Hash] { written: [paths a run rewrites], skipped: [paths it leaves] }
+    def context_file_run(output_dir)
+      config = RailsAiContext.configuration
+      Dir.mktmpdir("rails-ai-context-doctor") do |scratch|
+        copy_context_files(output_dir, scratch)
+        previous = config.output_dir
+        result = begin
+          config.output_dir = scratch
+          RailsAiContext.generate_context(app)
+        ensure
+          config.output_dir = previous
+        end
+        result.slice(:written, :skipped).transform_values do |paths|
+          paths.map { |path| path.delete_prefix("#{scratch}/") } - [ ".ai-context.json" ]
+        end
       end
     end
 
+    # Every context file and rule directory there is, and each directory one
+    # of them would go in: a writer leaves a file out where its directory is
+    # missing (app/models/AGENTS.md without app/models).
+    def copy_context_files(output_dir, scratch)
+      (CONTEXT_PATHS.values.flatten.uniq + [ ".ai-context.json" ]).each do |relative|
+        source = File.join(output_dir, relative)
+        target = File.join(scratch, relative)
+        next unless File.directory?(File.dirname(source))
+
+        FileUtils.mkdir_p(File.dirname(target))
+        FileUtils.cp_r(source, File.dirname(target)) if File.exist?(source)
+      end
+    end
+
+    # The version an older gem stamped the files with, else the directories
+    # holding a file newer than the oldest of them, else what is known: a
+    # run would write them (a file not there yet, a changed config).
+    def staleness_reason(output_dir, stale)
+      paths = stale.map { |relative| File.join(output_dir, relative) }.select { |path| File.file?(path) }
+      written_by = paths.lazy.filter_map { |path| SafeFile.read(path)&.[](/generated by rails-ai-context v(\d\S*)/i, 1) }.first
+      if written_by && written_by != RailsAiContext::VERSION
+        return "written by rails-ai-context v#{written_by}, this is v#{RailsAiContext::VERSION}"
+      end
+
+      oldest = paths.map { |path| File.mtime(path) }.min
+      changed = oldest ? Fingerprinter.changed_since(app.root, oldest).reject { |dir| only_our_initializer_newer?(dir, oldest) } : []
+      return "#{changed.join(', ')} changed since #{stale.one? ? "it was" : "they were"} written" if changed.any?
+
+      "a regeneration would write #{stale.one? ? "it" : "them"}"
+    end
+
     # Install writes our initializer in the same run that generates the
-    # context files, so on its own it never means the context is stale.
+    # context files, so on its own it never explains a stale one.
     def only_our_initializer_newer?(dir, generated_at)
       return false unless dir == "config"
 
