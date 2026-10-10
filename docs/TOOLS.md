@@ -696,7 +696,7 @@ Safe read-only SQL with layered security: regex validation, a PostgreSQL plan ch
 
 > Disabled in production by default.
 
-> Name the columns you need. A query that references a sensitive column (directly, or through an alias or expression), serialises a whole row, carries a column-alias list that renames a wildcard, or calls a session-effecting function is refused with a message that says why. `SELECT *` is allowed and its sensitive columns come back `[FILTERED]`. When the row limit holds rows back, the answer says so in every format.
+> Name the columns you need. A query that references a sensitive column (directly, or through an alias or expression), serialises a whole row, carries a column-alias list that renames a wildcard, uses UNION, or calls a session-effecting function is refused with a message that says why. `SELECT *` is allowed and its sensitive columns come back `[FILTERED]`. When the row limit holds rows back, the answer says so in every format.
 
 ### `rails_read_logs`
 
