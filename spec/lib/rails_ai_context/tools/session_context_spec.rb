@@ -66,6 +66,18 @@ RSpec.describe RailsAiContext::Tools::SessionContext do
       expect(text).to include("No queries recorded")
     end
 
+    # One HTTP process serves every client, so a reset is the caller's own.
+    it "clears only the calling conversation's record on reset" do
+      base = RailsAiContext::Tools::BaseTool
+      base.with_session("a") { described_class.call(mark: "get_schema:users") }
+      base.with_session("b") { described_class.call(mark: "get_routes:posts") }
+
+      base.with_session("b") { described_class.call(action: "reset") }
+
+      expect(base.with_session("a") { base.session_queries }.map { |q| q[:tool] }).to eq([ "rails_get_schema" ])
+      expect(base.with_session("b") { base.session_queries }).to be_empty
+    end
+
     it "records a mark under the name the server gives the tool" do
       described_class.call(mark: "schema:users")
 
