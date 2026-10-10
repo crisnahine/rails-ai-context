@@ -658,7 +658,8 @@ module RailsAiContext
         say ""
         say "Commands:", :yellow
         say "  rails ai:context                 # Regenerate context files"
-        tool_count = RailsAiContext::Server.builtin_tools.size
+        # What the server serves, skip_tools and custom_tools applied.
+        tool_count = RailsAiContext::Server.exposed_tools.size
         say "  rails 'ai:tool[schema]'          # Run any of the #{CountPhrase.call(tool_count, "tool")} from CLI"
         if @tool_mode == :mcp
           say "  rails ai:serve                   # Start MCP server (#{CountPhrase.call(tool_count, "live tool")})"

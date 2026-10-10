@@ -97,6 +97,56 @@ module RailsAiContext
         "(.rails-ai-context.yml or config/initializers/rails_ai_context.rb). Take it out of skip_tools to use it."
     end
 
+    # What tools/list answers with: the built-ins skip_tools leaves, then
+    # each custom tool whose name no tool before it claims. The generated
+    # context files count and list this set, so they name no tool the
+    # server lacks and leave out none it serves.
+    def self.exposed_tools(config = RailsAiContext.configuration)
+      merge_tools(active_tools(config), resolve_custom_tools(config), warn: false)
+    end
+
+    def self.active_tools(config)
+      tools = builtin_tools
+      skip = config.skip_tools
+      return tools if skip.empty?
+
+      tools.reject { |t| skip.include?(t.tool_name) }
+    end
+
+    # The MCP SDK refuses a tool list with a repeated name, so one duplicate
+    # takes the whole server down. Two ways they arise:
+    #
+    #   - The same class twice. Naming a BaseTool subclass in custom_tools
+    #     resolves its constant, which autoloads the file, which fires
+    #     `inherited` and enrols it in the registry active_tools reads.
+    #   - Two different classes claiming one name. Deliberate replacement is
+    #     spelled with skip_tools; without it, keep the built-in and say so.
+    def self.merge_tools(builtin, custom, warn: true)
+      merged = (builtin + custom).uniq
+      builtin_names = builtin.to_set { |t| tool_label(t) }
+
+      merged.group_by { |t| tool_label(t) }.flat_map do |name, tools|
+        next tools if tools.size == 1
+
+        # Only skip_tools can settle a clash with a built-in; when both
+        # claimants are custom there is no built-in to skip, and saying so
+        # would send the user after a setting that cannot help.
+        advice = if builtin_names.include?(name)
+          "keeping the built-in. Add #{name.inspect} to config.skip_tools to replace it."
+        else
+          "keeping the first. Give one of them a different tool_name."
+        end
+        $stderr.puts "[rails-ai-context] WARNING: #{tools.size} tools claim the name #{name.inspect}; #{advice}" if warn
+        [ tools.first ]
+      end
+    end
+
+    # MCP::Tool subclasses answer tool_name; anything else falls back to the
+    # class name, which is what the SDK would key on anyway.
+    def self.tool_label(tool)
+      tool.respond_to?(:tool_name) ? tool.tool_name : tool.name
+    end
+
     # The name the server gives the client: config.server_name, and when
     # that is the default, RAILS_AI_CONTEXT_SERVER_NAME in its place. A
     # workspace's entries set the variable so each server announces its app
@@ -142,7 +192,7 @@ module RailsAiContext
         name: self.class.announced_name(config),
         version: config.server_version,
         instructions: "Ground truth engine for Rails apps. Live Prism AST introspection. Answers follow edits to the app's files.",
-        tools: merge_tools(active_tools(config), validated_custom_tools),
+        tools: self.class.merge_tools(self.class.active_tools(config), validated_custom_tools),
         resource_templates: Resources.resource_templates,
         configuration: mcp_config
       )
@@ -168,53 +218,11 @@ module RailsAiContext
 
     private
 
-    def active_tools(config)
-      tools = self.class.builtin_tools
-      skip = config.skip_tools
-      return tools if skip.empty?
-
-      tools.reject { |t| skip.include?(t.tool_name) }
-    end
-
-    # The MCP SDK refuses a tool list with a repeated name, so one duplicate
-    # takes the whole server down. Two ways they arise:
-    #
-    #   - The same class twice. Naming a BaseTool subclass in custom_tools
-    #     resolves its constant, which autoloads the file, which fires
-    #     `inherited` and enrols it in the registry active_tools reads.
-    #   - Two different classes claiming one name. Deliberate replacement is
-    #     spelled with skip_tools; without it, keep the built-in and say so.
-    def merge_tools(builtin, custom)
-      merged = (builtin + custom).uniq
-      builtin_names = builtin.to_set { |t| tool_label(t) }
-
-      merged.group_by { |t| tool_label(t) }.flat_map do |name, tools|
-        next tools if tools.size == 1
-
-        # Only skip_tools can settle a clash with a built-in; when both
-        # claimants are custom there is no built-in to skip, and saying so
-        # would send the user after a setting that cannot help.
-        advice = if builtin_names.include?(name)
-          "keeping the built-in. Add #{name.inspect} to config.skip_tools to replace it."
-        else
-          "keeping the first. Give one of them a different tool_name."
-        end
-        $stderr.puts "[rails-ai-context] WARNING: #{tools.size} tools claim the name #{name.inspect}; #{advice}"
-        [ tools.first ]
-      end
-    end
-
-    # MCP::Tool subclasses answer tool_name; anything else falls back to the
-    # class name, which is what the SDK would key on anyway.
-    def tool_label(tool)
-      tool.respond_to?(:tool_name) ? tool.tool_name : tool.name
-    end
-
     # Read the list off the server rather than rebuilding it. Recomputing it
     # from the registry drops any custom tool that is not a BaseTool, so the
     # banner announced a different set than the server answered with.
     def tool_banner(server)
-      names = server.tools.values.map { |t| tool_label(t) }.sort
+      names = server.tools.values.map { |t| self.class.tool_label(t) }.sort
       "[rails-ai-context] Tools (#{names.size}): #{names.join(', ')}"
     end
 

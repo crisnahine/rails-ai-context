@@ -38,9 +38,15 @@ module RailsAiContext
         RailsAiContext::Payload.architecture(ctx).include?("api_only")
       end
 
-      # Derived from BaseTool.registered_tools - the single source of truth for tool count.
+      # The tools the server serves: the built-ins skip_tools leaves, then
+      # the custom ones. Every count and list in the guide reads this, so none
+      # names a tool tools/list lacks. Resolved once per generation run.
+      def exposed_tools
+        RailsAiContext::RunCache.fetch(:exposed_tools) { RailsAiContext::Server.exposed_tools }
+      end
+
       def tool_count
-        RailsAiContext::Server.builtin_tools.size
+        exposed_tools.size
       end
 
       def tools_header
@@ -238,12 +244,16 @@ module RailsAiContext
         lines
       end
 
-      # Every registered tool declares its own row, so the guide lists what
-      # the registry holds and nothing else.
+      # One row per tool the server serves, in the guide's order: a built-in
+      # declares its own, and a custom tool, which declares none, follows
+      # with the first sentence of its description.
       def tool_rows
-        RailsAiContext::Tools::BaseTool.registered_tools
-          .filter_map { |tool| [ tool, tool.guide_row ] if tool.guide_row }
-          .sort_by { |_tool, row| row.order }
+        builtin = exposed_tools.filter_map do |tool|
+          row = tool.guide_row if tool.respond_to?(:guide_row)
+          [ tool, row ] if row
+        end
+        custom = (exposed_tools - builtin.map(&:first)).map { |tool| [ tool, custom_tool_row(tool) ] }
+        builtin.sort_by { |_tool, row| row.order } + custom
       end
 
       def build_tools_table(include_mcp:)
@@ -292,7 +302,7 @@ module RailsAiContext
         lines
       end
 
-      # Dense one-line-per-tool listing, from the same registry the table uses.
+      # Dense one-line-per-tool listing, from the same rows the table uses.
       def tools_name_list
         all_tools = tool_rows.map { |tool, _row| tool.tool_name }
         [
@@ -303,6 +313,14 @@ module RailsAiContext
       end
 
       private
+
+      # A row for a tool that declares none: its name and the first sentence
+      # of its description, which is all a custom MCP::Tool is sure to have.
+      def custom_tool_row(tool)
+        description = tool.respond_to?(:description_value) ? tool.description_value.to_s : ""
+        summary = description.strip.split(/(?<=\.)\s/).first.to_s.gsub(/\s+/, " ").gsub("|", "\\|")
+        RailsAiContext::Tools::BaseTool::GuideRow.new(mcp: tool.tool_name, summary: summary.empty? ? "Custom tool" : summary)
+      end
 
       # Apps with `config.active_record.schema_format = :sql` dump the schema
       # to db/structure.sql instead of db/schema.rb; guidance that names the

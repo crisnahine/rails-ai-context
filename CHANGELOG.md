@@ -352,6 +352,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its block replaced, and any other file keeps its text and gets the
   listing between markers above it, with a note that claims the block
   rather than the file. Dropping the AI tool takes out only that block.
+- **The generated files count, list and document the tools the server
+  serves.** `config.skip_tools` and `config.custom_tools` reached the server
+  and the CLI but not the context files: with two tools skipped and one
+  added, CLAUDE.md said 45, listed both skipped tools, and its tools table
+  offered `rails 'ai:tool[query]'`, which answers "Unknown tool", while the
+  custom tool went unmentioned. Every count, the name list and the tools
+  table now read the server's own set, a custom tool getting a row with the
+  first sentence of its description, and the installer's and `init`'s
+  summaries count the same.
 - **With `config.output_dir` set, the OpenCode per-directory files say why
   they were not written.** They are written only into a directory that
   exists, since OpenCode reads them beside the code, and the run reported
