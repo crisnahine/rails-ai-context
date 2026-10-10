@@ -491,6 +491,29 @@ RSpec.describe RailsAiContext::Server do
     end
   end
 
+  # The old warning said a non-loopback bind served the network. With the
+  # SDK's Host check a client addressing the machine by IP is refused, and a
+  # client sending `Host: localhost` is not, so it was true of neither.
+  describe "the warning for a bind beyond loopback" do
+    let(:s) { described_class.new(app, transport: :http) }
+
+    it "knows the SDK in this bundle checks the Host header" do
+      expect(s.send(:host_checked?)).to be true
+    end
+
+    it "says who the SDK refuses and who it serves" do
+      warning = s.send(:bind_warning, "0.0.0.0")
+
+      expect(warning).to include("0.0.0.0", %(403 "Invalid Host header"), "Host: localhost", "no authentication")
+    end
+
+    it "says every tool answers where the SDK has no Host check" do
+      allow(s).to receive(:host_checked?).and_return(false)
+
+      expect(s.send(:bind_warning, "0.0.0.0")).to include("Every tool answers whoever reaches it")
+    end
+  end
+
   describe "#build_rack_app" do
     let(:s) { described_class.new(app, transport: :http) }
     let(:mcp_path) { RailsAiContext.configuration.http_path }

@@ -1250,11 +1250,11 @@ if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
   RailsAiContext.configure do |config|
     config.auto_mount = true
     config.http_path  = "/mcp"       # default
-    config.http_port  = 6029          # default
-    config.http_bind  = "127.0.0.1"  # default (localhost only)
   end
 end
 ```
+
+The endpoint is then served by your app's own server, on its address and port; `http_bind` and `http_port` configure only the standalone process.
 
 Both transports are **read-only** - they expose the same 45 tools and never modify your app.
 
@@ -1419,9 +1419,9 @@ end
 | `output_dir` | String | `nil` (Rails.root) | Where to write context files. OpenCode's `app/models/AGENTS.md` and `app/controllers/AGENTS.md` are written only where that directory exists under it |
 | `auto_mount` | Boolean | `false` | Auto-mount HTTP MCP endpoint |
 | `allow_http_in_production` | Boolean | `false` | Let the mounted engine and `auto_mount` answer in production. Off, they refuse there with a 403. See [Security](SECURITY.md#mcp-http-transport) |
-| `http_path` | String | `"/mcp"` | HTTP endpoint path |
-| `http_bind` | String | `"127.0.0.1"` | HTTP bind address |
-| `http_port` | Integer | `6029` | HTTP server port |
+| `http_path` | String | `"/mcp"` | HTTP endpoint path (`auto_mount` and the standalone server) |
+| `http_bind` | String | `"127.0.0.1"` | Address the standalone HTTP server binds. Another address still answers only a loopback `Host` header; see [CONFIGURATION](CONFIGURATION.md#mcp-server) |
+| `http_port` | Integer | `6029` | Port of the standalone HTTP server |
 | `live_reload` | Symbol/Boolean | `:auto` | `:auto`, `true`, or `false` - enable MCP live reload |
 | `live_reload_debounce` | Float | `1.5` | Debounce interval in seconds for live reload |
 | `server_name` | String | `"rails-ai-context"` | The MCP server name the server announces. When it is left at the default, the `RAILS_AI_CONTEXT_SERVER_NAME` environment variable takes its place for one process, which is how a workspace's entries announce their app |
