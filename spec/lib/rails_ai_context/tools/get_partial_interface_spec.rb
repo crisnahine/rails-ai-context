@@ -292,8 +292,8 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
     end
 
     it "finds a render(partial:) call written with parentheses, on one line or over several" do
-      File.write(File.join(@root, "app/views/reports/ai_data/split.html.erb"), <<~ERB)
-        <p>x</p>
+      File.write(File.join(@root, "app/views/reports/ai_data/split.text.erb"), <<~ERB)
+        Report
         <%= render(
               partial: "reports/ai_data/header",
               locals: { title: @title }
@@ -303,27 +303,27 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
 
       text = described_class.call(partial: "reports/ai_data/header", detail: "full").content.first[:text]
 
-      expect(text).to include("`app/views/reports/ai_data/split.html.erb:2` - locals: title")
-      expect(text).to include("`app/views/reports/ai_data/split.html.erb:6` - locals: order")
+      expect(text).to include("`app/views/reports/ai_data/split.text.erb:2` - locals: title")
+      expect(text).to include("`app/views/reports/ai_data/split.text.erb:6` - locals: order")
     end
 
     it "ends a snippet at the call's own last line" do
-      File.write(File.join(@root, "app/views/reports/ai_data/badge.html.haml"),
+      File.write(File.join(@root, "app/views/reports/ai_data/badge.text.haml"),
                  "%div\n  = render \"reports/ai_data/header\", title: 1\n  %p next line\n")
 
       text = described_class.call(partial: "reports/ai_data/header", detail: "full").content.first[:text]
 
-      expect(text).to include("app/views/reports/ai_data/badge.html.haml:2")
+      expect(text).to include("app/views/reports/ai_data/badge.text.haml:2")
       expect(text).not_to include("next line")
     end
 
     it "counts a render nested in another render's arguments as one site" do
-      File.write(File.join(@root, "app/views/reports/ai_data/nested.html.erb"),
+      File.write(File.join(@root, "app/views/reports/ai_data/nested.text.erb"),
                  "<%= render \"reports/ai_data/header\", a: render(\"reports/ai_data/header\") %>\n")
 
       text = described_class.call(partial: "reports/ai_data/header", detail: "full").content.first[:text]
 
-      expect(text.scan("nested.html.erb:1").size).to eq(1)
+      expect(text.scan("nested.text.erb:1").size).to eq(1)
     end
 
     it "says how many calls the list left out" do
@@ -435,6 +435,61 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       expect(text).not_to include("**line**")
       expect(text).to include("- `app/views/api/v1/invoices/index.json.jbuilder:1` - locals: invoice")
       expect(text).to include("- `app/views/api/v1/invoices/show.json.jbuilder:1` - locals: invoice")
+    end
+  end
+
+  # The blog's html and json post partials each listed the other's callers
+  # and locals.
+  describe "partials that share a name across formats" do
+    around do |example|
+      Dir.mktmpdir("partial-formats") do |dir|
+        @root = dir
+        views = File.join(dir, "app/views")
+        %w[posts comments].each { |d| FileUtils.mkdir_p(File.join(views, d)) }
+        FileUtils.mkdir_p(File.join(dir, "app/models"))
+        File.write(File.join(views, "posts/_post.html.erb"), "<%= post.title %><%= show_author %>\n")
+        File.write(File.join(views, "posts/_post.json.jbuilder"), "json.extract! post, :id, :title\n")
+        File.write(File.join(views, "posts/index.html.erb"),
+                   %(<% @posts.each do |post| %>\n  <%= render "posts/post", post: post, show_author: true %>\n<% end %>\n))
+        File.write(File.join(views, "posts/index.json.jbuilder"), %(json.array! @posts, partial: "posts/post", as: :post\n))
+        File.write(File.join(views, "posts/show.json.jbuilder"), %(json.partial! "posts/post", post: @post\n))
+        File.write(File.join(views, "posts/create.turbo_stream.erb"),
+                   %(<%= turbo_stream.prepend "posts", partial: "posts/post", locals: { post: @post } %>\n))
+        File.write(File.join(dir, "app/models/post.rb"), <<~RUBY)
+          class Post < ApplicationRecord
+            after_create_commit -> { broadcast_prepend_to "posts", partial: "posts/post", locals: { post: self } }
+          end
+        RUBY
+        File.write(File.join(views, "posts/_form.html.erb"), "<%= post.title %>\n")
+        File.write(File.join(views, "comments/_form.html.erb"), "<%= comment.body %>\n")
+        File.write(File.join(views, "posts/new.html.erb"), %(<%= render "form", post: @post %>\n))
+        File.write(File.join(views, "posts/show.html.erb"), %(<%= render "comments/form", post: @post, comment: @comment %>\n))
+        example.run
+      end
+    end
+
+    before do
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    def sites_and_locals(name)
+      text = described_class.call(partial: name).content.first[:text]
+      [ text.scan(/^- `(app\/[^`]+)`/).flatten, text[/## Local Variables\n(.*?)\n\n/m, 1].scan(/\*\*(\w+)\*\*/).flatten ]
+    end
+
+    it "gives the html partial the html, turbo_stream and broadcast sites" do
+      sites, locals = sites_and_locals("posts/post")
+
+      expect(sites).to eq(%w[app/views/posts/create.turbo_stream.erb:1 app/views/posts/index.html.erb:2 app/models/post.rb:2])
+      expect(locals).to eq(%w[post show_author])
+    end
+
+    it "gives the json partial the jbuilder sites alone" do
+      sites, locals = sites_and_locals("posts/_post.json.jbuilder")
+
+      expect(sites).to eq(%w[app/views/posts/index.json.jbuilder:1 app/views/posts/show.json.jbuilder:1])
+      expect(locals).to eq(%w[post])
     end
   end
 

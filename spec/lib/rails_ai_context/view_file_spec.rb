@@ -78,6 +78,21 @@ RSpec.describe RailsAiContext::ViewFile do
     end
   end
 
+  describe ".format_of" do
+    it "reads the format a template's name gives, past a locale and a variant, and none where it gives none" do
+      formats = %w[
+        posts/_post.html.erb posts/_post.json.jbuilder posts/create.turbo_stream.erb
+        posts/_post.fr.html+phone.erb posts/_post.erb posts/_post.jbuilder posts/_post.en.erb
+      ].to_h { |name| [ name, described_class.format_of(name) ] }
+
+      expect(formats).to eq(
+        "posts/_post.html.erb" => "html", "posts/_post.json.jbuilder" => "json",
+        "posts/create.turbo_stream.erb" => "turbo_stream", "posts/_post.fr.html+phone.erb" => "html",
+        "posts/_post.erb" => nil, "posts/_post.jbuilder" => nil, "posts/_post.en.erb" => nil
+      )
+    end
+  end
+
   describe ".locate" do
     it "resolves an app/views-relative path with its extension" do
       result = described_class.locate(@root, "posts/index.html.erb")
