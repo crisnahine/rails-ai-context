@@ -184,9 +184,11 @@ module RailsAiContext
                 lines << "**Enums:** #{enum_strs.join('; ')}"
               end
             end
+            # Only after a section: an empty one left a blank line per layer,
+            # four in a row under the heading of a feature with no models.
+            lines << ""
           end
 
-          lines << ""
           matched
         end
 
@@ -218,8 +220,8 @@ module RailsAiContext
                 lines << "- **Skipped filters:** #{split[:skipped].map { |n| "~~#{n}~~" }.join(', ')}"
               end
             end
+            lines << ""
           end
-          lines << ""
         end
 
         # --- AF: Routes ---
@@ -242,8 +244,8 @@ module RailsAiContext
                 lines << "- `#{r[:verb]}` `#{r[:path]}` → #{ctrl}##{r[:action]}#{helper}"
               end
             end
+            lines << ""
           end
-          lines << ""
         end
 
         # --- AF1: Services ---
@@ -283,6 +285,16 @@ module RailsAiContext
             bits << "queue: #{job[:queue]}" if job[:queue]
             bits << Array(job[:retries]).join("; ") if Array(job[:retries]).any?
             bits << "perform(#{job[:perform_signature]})" if job[:perform_signature]
+            bits.any? ? " (#{bits.join(', ')})" : ""
+          end
+          # A Sidekiq worker is not an ActiveJob job, and in an app that runs
+          # its background work that way it is the only job there is.
+          payload_section(Payload.workers(ctx), pattern, lines, "Sidekiq Workers") do |worker|
+            bits = []
+            queue = (worker[:options] || {}).find { |key, _| key.to_s == "queue" }&.last
+            bits << "queue: #{queue}" if queue
+            bits << Array(worker[:retries]).join("; ") if Array(worker[:retries]).any?
+            bits << "#{worker[:entry_point] || "perform"}(#{worker[:perform_signature]})" if worker[:perform_signature]
             bits.any? ? " (#{bits.join(', ')})" : ""
           end
         end

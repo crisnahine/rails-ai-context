@@ -641,6 +641,34 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
     end
   end
 
+  # ledger runs its reminders as Sidekiq workers in app/sidekiq, and the
+  # analysis read only the ActiveJob list: `feature=reminder` found no job and
+  # printed four blank lines under its heading, one per empty layer.
+  describe "a feature run by a Sidekiq worker" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        jobs: { jobs: [], workers: [ { name: "InvoiceReminderJob", file: "app/sidekiq/invoice_reminder_job.rb",
+                                       options: { "queue" => "mailers" }, perform_signature: "invoice_id" } ] }
+      )
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(Dir.mktmpdir("rac_workers"))))
+    end
+
+    it "lists the worker" do
+      text = described_class.call(feature: "reminder").content.first[:text]
+
+      expect(text).to include("## Sidekiq Workers (1)")
+      expect(text).to include("- `app/sidekiq/invoice_reminder_job.rb` (queue: mailers, perform(invoice_id))")
+    end
+
+    it "leaves no run of blank lines for the layers it found nothing in" do
+      text = described_class.call(feature: "reminder").content.first[:text]
+
+      expect(text).to start_with("# Feature Analysis: reminder\n\n## Sidekiq Workers (1)")
+      expect(text).not_to include("\n\n\n")
+    end
+  end
+
   # The glob tier read queue_as out of the job's own file, so a queue
   # inherited from ApplicationJob printed as "default".
   describe "jobs, mailers and channels read from the payload" do
