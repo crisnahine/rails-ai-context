@@ -54,6 +54,14 @@ RSpec.describe RailsAiContext::Tools::GetEditContext do
       expect(text).to include("File not found")
     end
 
+    # The example path was built from the caller's own name, so it handed
+    # `app/models/nonexistent.rb` back as the file to try.
+    it "does not offer the missing path back as a suggestion" do
+      text = described_class.call(file: "app/models/nonexistent.rb", near: "anything").content.first[:text]
+
+      expect(text).to eq("File not found: app/models/nonexistent.rb. No file named nonexistent.rb is under app/.")
+    end
+
     it "returns error when near pattern is not found in file" do
       result = described_class.call(file: "app/models/user.rb", near: "zzz_nonexistent_method")
       text = result.content.first[:text]
