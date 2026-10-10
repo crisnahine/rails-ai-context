@@ -36,8 +36,8 @@ module RailsAiContext
         lines.concat(overview_lines(gems: false, architecture: false, app_dirs: false))
 
         lines << ""
-        lines << "ALWAYS use MCP tools for context - do NOT read reference files directly."
-        lines << "Start with `detail:\"summary\"`. Read files ONLY when you will Edit them."
+        lines << "ALWAYS use #{tools_noun} for context - do NOT read reference files directly."
+        lines << "Start with `#{param_text("detail", "summary")}`. Read files ONLY when you will Edit them."
 
         lines.join("\n")
       end
@@ -61,7 +61,7 @@ module RailsAiContext
           ""
         ]
         lines.concat(SectionFacts.static_notice_lines(context))
-        lines << "_Snapshot - may be stale after migrations. Use `rails_get_schema(table:\"name\")` for live data._"
+        lines << "_Snapshot - may be stale after migrations. Use #{tool_ref("rails_get_schema", 'table:"name"', "table=name")} for live data._"
         lines << ""
 
         skip_cols = %w[id created_at updated_at]
@@ -127,7 +127,7 @@ module RailsAiContext
         end
 
         if tables.size > 30
-          lines << "- ...#{count_phrase(tables.size - 30, "more table")} (use `rails_get_schema` MCP tool)"
+          lines << "- ...#{count_phrase(tables.size - 30, "more table")} (use #{tool_named("rails_get_schema")})"
         end
 
         lines.join("\n")
@@ -147,7 +147,7 @@ module RailsAiContext
           ""
         ]
         lines.concat(SectionFacts.static_notice_lines(context))
-        lines << "_Quick reference - use `rails_get_model_details(model:\"Name\")` for live data with resolved concerns and callbacks._"
+        lines << "_Quick reference - use #{tool_ref("rails_get_model_details", 'model:"Name"', "model=Name")} for live data with resolved concerns and callbacks._"
         lines << ""
 
         models.keys.sort.each do |name|
@@ -219,7 +219,7 @@ module RailsAiContext
         lines.concat(SectionFacts.static_notice_lines(context))
         lines.concat([
           "ViewComponent and Phlex components available for reuse.",
-          "Use `rails_get_component_catalog(component:\"Name\")` for full details.",
+          "Use #{tool_ref("rails_get_component_catalog", 'component:"Name"', "component=Name")} for full details.",
           ""
         ])
 

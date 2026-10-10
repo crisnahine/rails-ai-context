@@ -70,8 +70,8 @@ module RailsAiContext
         lines.concat(overview_lines)
 
         lines << ""
-        lines << "MCP tools available - see rails-mcp-tools.mdc for full reference."
-        lines << "Always call with detail:\"summary\" first, then drill into specifics."
+        lines << "#{tools_noun.upcase_first} available - see rails-mcp-tools.mdc for full reference."
+        lines << "Always call with #{param_text("detail", "summary")} first, then drill into specifics."
 
         lines.join("\n")
       end
@@ -111,7 +111,7 @@ module RailsAiContext
 
         lines << "- ...#{models.size - 30} more" if models.size > 30
         lines << ""
-        lines << "Use `rails_get_model_details` MCP tool with model:\"Name\" for full detail."
+        lines << "Use #{tool_named("rails_get_model_details", "model", "Name")} for full detail."
 
         lines.join("\n")
       end
@@ -136,16 +136,17 @@ module RailsAiContext
         lines.concat(render_compact_controllers_list(controllers))
 
         lines << ""
-        lines << "Use `rails_get_controllers` MCP tool with controller:\"Name\" for full detail."
+        lines << "Use #{tool_named("rails_get_controllers", "controller", "Name")} for full detail."
 
         lines.join("\n")
       end
 
-      # Agent-requested MCP tool reference - loaded on-demand when agent needs tool guidance
+      # Agent-requested tool reference - loaded on-demand when agent needs tool guidance.
+      # The agent picks it by its description, so the description names the mode's tools.
       def render_mcp_tools_rule
         lines = [
           "---",
-          "description: \"Rails MCP tools reference - #{count_phrase(tool_count, "tool")} for schema, models, routes, controllers, search, testing, and more\"",
+          "description: \"Rails #{tool_mode == :cli ? "CLI" : "MCP"} tools reference - #{count_phrase(tool_count, "tool")} for schema, models, routes, controllers, search, testing, and more\"",
           "alwaysApply: false",
           "---",
           ""

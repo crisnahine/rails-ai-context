@@ -25,6 +25,36 @@ module RailsAiContext
         RailsAiContext.configuration.tool_mode
       end
 
+      # A tool named once in prose: its MCP call, or its command where the
+      # app serves no MCP. A pointer in a rules file names the one form to
+      # use; the workflows below show both in :mcp mode.
+      def tool_ref(mcp_name, mcp_params = nil, cli_params = nil)
+        if tool_mode == :cli
+          "`#{cli_cmd(RailsAiContext::CLI::ToolRunner.short_name(mcp_name), cli_params)}`"
+        else
+          "`#{mcp_name}#{"(#{mcp_params})" if mcp_params}`"
+        end
+      end
+
+      # "`rails_get_schema` MCP tool", or the command in :cli mode. A
+      # parameter follows the name in prose, or goes into the command.
+      def tool_named(mcp_name, key = nil, value = nil)
+        return tool_ref(mcp_name, nil, ("#{key}=#{value}" if key)) if tool_mode == :cli
+
+        key ? "`#{mcp_name}` MCP tool with #{param_text(key, value)}" : "`#{mcp_name}` MCP tool"
+      end
+
+      # The tools as a whole, in a sentence: in :cli mode, with how to run one.
+      def tools_noun
+        tool_mode == :cli ? "introspection tools (`#{cli_cmd("TOOL_NAME", "param=value")}`)" : "MCP tools"
+      end
+
+      # A parameter as the mode passes it: detail:"summary" to an MCP tool,
+      # detail=summary on the command line.
+      def param_text(key, value)
+        tool_mode == :cli ? "#{key}=#{value}" : "#{key}:\"#{value}\""
+      end
+
       # True when the app runs in API-only mode (no view layer) - used to swap
       # the view-editing workflow for an API-focused one in the generated guide.
       # Falls back to false (the view workflow) when the includer has no
@@ -59,7 +89,7 @@ module RailsAiContext
           [
             "This project has #{count_phrase(tool_count, "introspection tool")}. **MANDATORY - use these instead of reading files.**",
             "They return ground truth from the running app: real schema, real associations, real filters - not guesses.",
-            "Read files ONLY when you are about to Edit them.",
+            "Run one with `#{cli_cmd("TOOL_NAME", "param=value")}`. Read files ONLY when you are about to Edit them.",
             ""
           ]
         else
@@ -86,7 +116,7 @@ module RailsAiContext
           "",
           "1. **Verify before you write.** Never reference a column, association, route, helper, method, class, partial, or gem you have NOT verified in THIS project via a tool call in THIS turn. If it's not verified here, verify it now. Never invent names that \"sound right.\"",
           "2. **Mark every assumption.** If you must proceed without verification, prefix the relevant output with `[ASSUMPTION]` and state what you're assuming and why. Silent assumptions are forbidden. \"I'd need to check X first\" is a valid and preferred answer.",
-          "3. **Training data describes average Rails. This app isn't average.** When something feels \"obviously\" like standard Rails, query anyway. Factories vs fixtures? Pundit vs CanCan? Devise vs has_secure_password? Check `rails_get_conventions` and `rails_get_gems` BEFORE scaffolding anything.",
+          "3. **Training data describes average Rails. This app isn't average.** When something feels \"obviously\" like standard Rails, query anyway. Factories vs fixtures? Pundit vs CanCan? Devise vs has_secure_password? Check #{tool_ref("rails_get_conventions")} and #{tool_ref("rails_get_gems")} BEFORE scaffolding anything.",
           "4. **Check the inheritance chain before every edit.** Before writing a controller action: inherited `before_action` filters and ancestor classes. Before writing a model method: concerns, includes, STI parents. Inheritance is never flat.",
           "5. **Empty tool output is information, not permission.** \"0 callers found,\" \"no validations,\" or a missing model is a signal to investigate or confirm with the user - not a license to proceed on guesses. Follow `_Next:` hints.",
           "6. **Stale context lies. Re-query after writes.** After any edit, tool output from earlier in this turn may be wrong. Re-query the affected tool before the next write.",
@@ -95,20 +125,17 @@ module RailsAiContext
       end
 
       def tools_detail_guidance
-        detail_param = tool_mode == :cli ? "detail=summary" : "detail:\"summary\""
-        context_tool = tool_mode == :cli ? cli_cmd("context") : "rails_get_context"
-        analyze_tool = tool_mode == :cli ? cli_cmd("analyze_feature") : "rails_analyze_feature"
         [
           "### detail parameter - ALWAYS start with summary",
           "",
-          "Individual lookup tools accept `#{detail_param}`. Use the right level:",
+          "Individual lookup tools accept `#{param_text("detail", "summary")}`. Use the right level:",
           "- **summary** - first call, orient yourself (table list, model names, route overview)",
           "- **standard** - working detail (columns with types, associations, action source) - DEFAULT",
           "- **full** - only when you need indexes, foreign keys, code snippets, or complete content",
           "",
           "Pattern: summary to find the target → standard to understand it → full only if needed.",
           "",
-          "**Do NOT pass `detail` to composite tools** - `#{context_tool}` and `#{analyze_tool}` do not accept it and will return an error.",
+          "**Do NOT pass `detail` to composite tools** - #{tool_ref("rails_get_context")} and #{tool_ref("rails_analyze_feature")} do not accept it and will return an error.",
           ""
         ]
       end
@@ -120,12 +147,12 @@ module RailsAiContext
           "**New to this project?** Get a full walkthrough first:",
           tool_call("rails_onboard(detail:\"standard\")", cli_cmd("onboard", "detail=standard")),
           "",
-          "**`get_context` is your power tool** - bundles schema + model + controller + routes + views in ONE call:",
+          "**#{tool_ref("rails_get_context")} is your power tool** - bundles schema + model + controller + routes + views in ONE call:",
           tool_call("rails_get_context(controller:\"PostsController\", action:\"create\")", cli_cmd("context", "controller=PostsController action=create")),
           tool_call("rails_get_context(model:\"Post\")", cli_cmd("context", "model=Post")),
           tool_call("rails_get_context(feature:\"post\")", cli_cmd("context", "feature=post")),
           "",
-          "**`analyze_feature` for broad discovery** - scans all layers (models, controllers, routes, services, jobs, views, tests):",
+          "**#{tool_ref("rails_analyze_feature")} for broad discovery** - scans all layers (models, controllers, routes, services, jobs, views, tests):",
           tool_call("rails_analyze_feature(feature:\"authentication\")", cli_cmd("analyze_feature", "feature=authentication")),
           "",
           "Use individual tools only when you need deeper detail on a specific layer.",
@@ -154,7 +181,9 @@ module RailsAiContext
           tool_call("rails_search_code(pattern:\"publishable?\", match_type:\"trace\")", cli_cmd("search_code", "pattern=\"publishable?\" match_type=trace")),
           "",
           "**Debug an error (one call - gathers context + git + logs + fix):**",
-          tool_call("rails_diagnose(error:\"NoMethodError: undefined method `foo` for nil\", file:\"app/models/post.rb\")", cli_cmd("diagnose", "error=\"NoMethodError: undefined method foo\" file=app/models/post.rb")),
+          # Single quotes, as Ruby 3.4 prints the name: a backtick would close the code span.
+          tool_call("rails_diagnose(error:\"NoMethodError: undefined method 'foo' for nil\", file:\"app/models/post.rb\")",
+                    cli_cmd("diagnose", "error=\"NoMethodError: undefined method 'foo' for nil\" file=app/models/post.rb")),
           "",
           "**Review changes before merging:**",
           tool_call("rails_review_changes(ref:\"main\")", cli_cmd("review_changes", "ref=main")),
@@ -192,18 +221,16 @@ module RailsAiContext
       end
 
       def tools_antipatterns_section
-        search_tool = tool_mode == :cli ? cli_cmd("search_code") : "rails_search_code"
-        validate_tool = tool_mode == :cli ? cli_cmd("validate") : "rails_validate"
         [
           "### Common mistakes - avoid these",
           "",
-          "- **Don't read #{schema_dump_path}** - use `get_schema`. It adds [indexed]/[unique] hints you'd miss.",
-          "- **Don't read model files for reference** - use `get_model_details`. It resolves concerns, inherited methods, and implicit belongs_to validations.",
-          "- **Prefer `#{search_tool}` over Grep** for method tracing and cross-layer search. It excludes sensitive files, supports `match_type:\"trace\"`, and paginates.",
-          "- **Don't call tools without a target** - `get_model_details()` without `model:` returns a paginated list, not an error. Always specify what you want.",
-          "- **Don't skip validation** - run `#{validate_tool}` after EVERY edit. It catches syntax errors AND Rails-specific issues (missing partials, bad column refs).",
+          "- **Don't read #{schema_dump_path}** - use #{tool_ref("rails_get_schema")}. It adds [indexed]/[unique] hints you'd miss.",
+          "- **Don't read model files for reference** - use #{tool_ref("rails_get_model_details")}. It resolves concerns, inherited methods, and implicit belongs_to validations.",
+          "- **Prefer #{tool_ref("rails_search_code")} over Grep** for method tracing and cross-layer search. It excludes sensitive files, supports `#{param_text("match_type", "trace")}`, and paginates.",
+          "- **Don't call tools without a target** - #{tool_ref("rails_get_model_details", "")} without `#{tool_mode == :cli ? "model=" : "model:"}` returns a paginated list, not an error. Always specify what you want.",
+          "- **Don't skip validation** - run #{tool_ref("rails_validate")} after EVERY edit. It catches syntax errors AND Rails-specific issues (missing partials, bad column refs).",
           "- **Don't ignore cross-references** - tool responses include `_Next:` hints suggesting the best follow-up call. Follow them.",
-          "- **Don't call `detail:\"full\"` first** - start with `summary` to find your target, then drill in. Full responses bury the signal.",
+          "- **Don't call `#{param_text("detail", "full")}` first** - start with `summary` to find your target, then drill in. Full responses bury the signal.",
           ""
         ]
       end
@@ -302,14 +329,17 @@ module RailsAiContext
         lines
       end
 
-      # Dense one-line-per-tool listing, from the same rows the table uses.
+      # Dense one-line listing, from the same rows the table uses: the MCP
+      # names, or in :cli mode the names the command takes.
       def tools_name_list
-        all_tools = tool_rows.map { |tool, _row| tool.tool_name }
-        [
-          "### All #{count_phrase(all_tools.size, "tool")}",
-          "`#{all_tools.join('` `')}`",
-          ""
-        ]
+        cli = tool_mode == :cli
+        names = tool_rows.map do |tool, _row|
+          cli ? RailsAiContext::CLI::ToolRunner.short_name(tool.tool_name) : tool.tool_name
+        end
+        lines = [ "### All #{count_phrase(names.size, "tool")}" ]
+        lines << "Run one as `#{cli_cmd("NAME", "param=value")}`, NAME being one of:" if cli
+        lines << "`#{names.join('` `')}`"
+        lines << ""
       end
 
       private

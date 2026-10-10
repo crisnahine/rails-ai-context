@@ -39,7 +39,7 @@ module RailsAiContext
         lines.concat(overview_lines)
 
         lines << ""
-        lines << "Use MCP tools for detailed data. Start with `detail:\"summary\"`."
+        lines << "Use #{tools_noun} for detailed data. Start with `#{param_text("detail", "summary")}`."
 
         lines.join("\n")
       end
@@ -94,7 +94,7 @@ module RailsAiContext
           ""
         ]
         lines.concat(SectionFacts.static_notice_lines(context))
-        lines << "Use `rails_get_controllers` MCP tool for full details."
+        lines << "Use #{tool_named("rails_get_controllers")} for full details."
         lines << ""
 
         lines.concat(render_compact_controllers_list(controllers))
@@ -106,7 +106,7 @@ module RailsAiContext
         lines = [
           "---",
           "applyTo: \"**/*\"",
-          "name: \"Rails MCP Tools\"",
+          "name: \"Rails #{tool_mode == :cli ? "CLI" : "MCP"} Tools\"",
           "description: \"#{count_phrase(tool_count, "introspection tool")} - schema, models, routes, controllers, search, testing, validation\"",
           "excludeAgent: \"code-review\"",
           "---",
