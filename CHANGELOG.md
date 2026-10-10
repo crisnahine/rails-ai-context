@@ -57,6 +57,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the gem without `rails-ai-context` and every MCP config's
   `bundle exec rails-ai-context serve` failed to start. Outside a checkout
   the files on disk are the list.
+- **A folder of apps keeps its MCP configs true as apps come and go**
+  (#429). Folders named outside ASCII all make the name `app`, so the gem
+  numbered its own entries (`rails-ai-context-app-2`) and then never
+  recognised them: when one app went, the other kept a second server, or
+  one naming a folder that was gone. A numbered name of the gem's own is
+  now dropped like any other. An app folder that starts with a dash is
+  written `./-api`, where `--app-path -api` read as an option and the
+  server never started. A folder named in Latin-1 crashed `init` with
+  "invalid byte sequence in UTF-8"; JSON and TOML hold UTF-8 alone, so that
+  app is now left out of the folder's configs, with a message, and the
+  other apps' entries are written. A config holding comments is named for
+  them under json 3 too, which refuses comments json 2 passed over, where
+  it was blamed on a trailing comma.
+- **Commands the binary prints read as a person would type them.** A path
+  holding a space or a character a shell reads is single-quoted, letters
+  outside ASCII stay as they are (`--app-path 'my apps/шоп'`, where every
+  one was backslashed), and a path that starts with a dash is spelled from
+  the current directory. The several-apps refusal says `<folder> is no
+  Rails app, and holds 2 below it`. The boot-failure hint and the static
+  tier's banner name the doctor command as the binary was run, with its
+  `--app-path` and under `bundle exec` when it ran so: a workspace's
+  server runs with `--app-path`, and a bare `doctor` where its client
+  stands finds the folder of apps.
 - **The pre-commit hook checks a staged file whatever its name.** git
   quotes a name holding a character outside ASCII, a quote or a backslash
   in the list the hook read, so no `.rb` test matched it and the file went

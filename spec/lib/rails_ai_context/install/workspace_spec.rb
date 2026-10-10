@@ -75,8 +75,17 @@ RSpec.describe RailsAiContext::Install::Workspace do
       expect(described_class.generated_name?("web", "apps/web")).to be(false)
     end
 
-    it "does not claim a numbered name, which is as likely a second entry made by hand" do
-      expect(described_class.generated_name?("rails-ai-context-web-2", "apps/web")).to be(false)
+    # Folders named outside ASCII all slug to `app`, so the gem numbers its
+    # own names, and must know them again to drop the entry of an app gone.
+    it "claims a numbered name of its own, from 2 up" do
+      expect(described_class.generated_name?("rails-ai-context-web-2", "apps/web")).to be(true)
+      expect(described_class.generated_name?("rails-ai-context-app-3", "\u0448\u043e\u043f")).to be(true)
+      expect(described_class.generated_name?("rails-ai-context-web-1", "apps/web")).to be(false)
+      expect(described_class.generated_name?("rails-ai-context-web-two", "apps/web")).to be(false)
+    end
+
+    it "slugs a folder named in Latin-1, which is no UTF-8" do
+      expect(described_class.server_names([ "caf\xE9".b ]).values).to eq([ "rails-ai-context-caf" ])
     end
   end
 

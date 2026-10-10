@@ -195,22 +195,29 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
       cwd = File.join(tmp, "work")
       lines = described_class.several_apps(described_class.resolve(cwd: cwd), cwd, %w[tool schema])
       expect(lines).to eq([
-        "Error: No Rails app found in #{cwd}, and 2 below it. Name one with --app-path:",
+        "Error: #{cwd} is no Rails app, and holds 2 below it. Name one with --app-path:",
         "  rails-ai-context --app-path a tool schema",
         "  rails-ai-context --app-path b tool schema"
       ])
     end
 
-    # `=` reads as itself after the command's name; a folder named in
-    # another encoding is escaped byte by byte, not refused.
+    # As a person types it: letters outside ASCII as they are, a word a
+    # shell would split or expand in single quotes, `=` as itself after the
+    # command's name. A folder named in another encoding is escaped byte by
+    # byte, not refused, and a path that starts with a dash is spelled from
+    # here, where it would read as an option.
     it "writes each command the way a shell reads it" do
       app("work/a b")
+      app("work/\u0448\u043e\u043f")
+      app("work/-api")
       latin1_app("work/caf\xE9".b)
       cwd = File.join(tmp, "work")
       lines = described_class.several_apps(described_class.resolve(cwd: cwd), cwd, %w[tool search_code pattern=x$y])
 
-      expect(lines[1]).to eq("  rails-ai-context --app-path a\\ b tool search_code pattern=x\\$y")
-      expect(lines[2].b).to eq("  rails-ai-context --app-path caf\\\xE9 tool search_code pattern=x\\$y".b)
+      expect(lines).to include("  rails-ai-context --app-path ./-api tool search_code 'pattern=x$y'")
+      expect(lines).to include("  rails-ai-context --app-path 'a b' tool search_code 'pattern=x$y'")
+      expect(lines).to include("  rails-ai-context --app-path \u0448\u043e\u043f tool search_code 'pattern=x$y'")
+      expect(lines.map(&:b)).to include("  rails-ai-context --app-path caf\\\xE9 tool search_code pattern=x\\$y".b)
     end
 
     # Names that are no UTF-8 are directories all the same.

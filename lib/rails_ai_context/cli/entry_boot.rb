@@ -81,13 +81,16 @@ module RailsAiContext
         !names.nil? && (names & %w[rails railties]).empty?
       end
 
-      def self.call(root:, allow_static:, no_boot: false, allow_source_only: false, command: nil)
+      # `doctor` is the command that diagnoses this app as it was typed: with
+      # its --app-path, under bundle exec when that is how it ran.
+      def self.call(root:, allow_static:, no_boot: false, allow_source_only: false, command: nil,
+                    doctor: "rails-ai-context doctor")
         messages = []
 
         if allow_static && no_boot
           return absent(root, messages, command: command) unless app_present?(root, allow_source_only: true)
 
-          return enter_static("static mode requested with --no-boot", :requested, root, messages)
+          return enter_static("static mode requested with --no-boot", :requested, root, messages, doctor)
         end
 
         return absent(root, messages, command: command) unless app_present?(root, allow_source_only: allow_source_only)
@@ -97,7 +100,7 @@ module RailsAiContext
         unless app_present?(root)
           return absent(root, messages, command: command) unless allow_static
 
-          return enter_static("no config/environment.rb in the app root", :source_only, root, messages)
+          return enter_static("no config/environment.rb in the app root", :source_only, root, messages, doctor)
         end
 
         # Bundler.setup (in config/boot.rb) strips $LOAD_PATH and the spec
@@ -123,11 +126,12 @@ module RailsAiContext
           end
           result.configure_hint.each { |line| messages << "[rails-ai-context]   #{line}" }
           messages << "[rails-ai-context] Serving static analysis; runtime-only data is marked [UNAVAILABLE]."
-          messages << "[rails-ai-context] Run `rails-ai-context doctor` for boot diagnostics."
-          return enter_static(result.failure_summary, :boot_failed, root, messages)
+          messages << "[rails-ai-context] Run `#{doctor}` for boot diagnostics."
+          return enter_static(result.failure_summary, :boot_failed, root, messages, doctor)
         end
 
         require "rails_ai_context"
+        RailsAiContext.doctor_command = doctor
 
         if defined?(::Rails::VERSION::MAJOR) && ::Rails::VERSION::MAJOR >= 9
           messages << "[rails-ai-context] WARNING: Rails #{::Rails.version} is newer than this gem supports (< 9.0)."
@@ -197,9 +201,10 @@ module RailsAiContext
       # against the filesystem, and every tool response carries the tier banner.
       # A broken install cannot load the gem either; the lines collected so
       # far still go out with the error.
-      def self.enter_static(reason, kind, root, messages)
+      def self.enter_static(reason, kind, root, messages, doctor = nil)
         require_gem_without_app!
         RailsAiContext.tier = :static
+        RailsAiContext.doctor_command = doctor if doctor
         # Every tool response carries this in its footer, so an absolute path in a boot error goes root-relative.
         RailsAiContext.static_reason = RailsAiContext::PortablePath.relativize_text(reason, root)
         RailsAiContext.static_kind = kind

@@ -127,21 +127,29 @@ module RailsAiContext
 
       # Whether `name` is one server_names gives the app at `path` (relative
       # to the workspace) alongside some other set of apps: its folder's name
-      # or its whole path, shortened where that was needed. A numbered name is
-      # not claimed: `rails-ai-context-api-2` is as likely a second entry
-      # somebody made by hand.
+      # or its whole path, shortened where that was needed, numbered where it
+      # was taken. Two folders named outside ASCII both come out `app`, so
+      # the gem numbers its own names, and a numbered one it never claimed
+      # stayed behind when its app went: two servers for one app, or one
+      # that names no folder.
       def generated_name?(name, path)
         rest = name.delete_prefix(PREFIX)
         return false if rest == name
 
-        [ slug(File.basename(path)), slug(path) ].uniq.any? { |base| rest == fit(base, path) }
+        number = rest[/-(\d+)\z/, 1]
+        suffixes = [ "" ]
+        suffixes << "-#{number}" if number && number.to_i >= 2
+        [ slug(File.basename(path)), slug(path) ].uniq.any? do |base|
+          suffixes.any? { |suffix| rest == fit(base, path, suffix) }
+        end
       end
 
       # Letters, digits, `_` and `-`: what every client accepts in a server
-      # name, Codex's bare TOML key included.
+      # name, Codex's bare TOML key included. Read as bytes, so a folder
+      # named in Latin-1 slugs like any other.
       def slug(text)
-        slug = text.gsub(/[^A-Za-z0-9_-]+/, "-").gsub(/-{2,}/, "-").delete_prefix("-").delete_suffix("-")
-        slug.empty? ? "app" : slug
+        slug = text.b.gsub(/[^A-Za-z0-9_-]+/n, "-").gsub(/-{2,}/, "-").delete_prefix("-").delete_suffix("-")
+        slug.empty? ? "app" : slug.force_encoding(Encoding::UTF_8)
       end
 
       # Each numbered try differs from every other in its suffix, so the

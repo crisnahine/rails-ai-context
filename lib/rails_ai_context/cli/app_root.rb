@@ -176,6 +176,12 @@ module RailsAiContext
         path.delete_prefix("#{cwd}/")
       end
 
+      # A path as an --app-path value: one that starts with a dash is read as
+      # an option, so it is spelled from the current directory.
+      def self.option_path(path)
+        path.start_with?("-") ? "./#{path}" : path
+      end
+
       def self.notice(result, cwd)
         "[rails-ai-context] using app at #{display(result.root, cwd).delete_suffix("/")}/"
       end
@@ -184,24 +190,29 @@ module RailsAiContext
       # repeats behind its own --app-path, in place of any it carried.
       def self.several_apps(result, cwd, argv)
         rest = without_app_path(argv)
-        lines = [ "Error: No Rails app found in #{result.base}, and #{result.below.size} below it. Name one with --app-path:" ]
+        lines = [ "Error: #{result.base} is no Rails app, and holds #{result.below.size} below it. Name one with --app-path:" ]
         result.below.each do |root|
-          lines << "  #{command_line([ "rails-ai-context", "--app-path", display(root, cwd), *rest ])}"
+          lines << "  #{command_line([ "rails-ai-context", "--app-path", option_path(display(root, cwd)), *rest ])}"
         end
         lines
       end
 
-      # Words as a shell reads them: Shellwords' escaping, but for an `=`
-      # inside a word, which every shell reads as itself there, and a name
-      # that is not UTF-8 is escaped byte by byte rather than refused.
+      # Words as a shell reads them, as a person would type them: letters
+      # outside ASCII stay as they are, a word holding a space or another
+      # character a shell reads is single-quoted, and a word holding a single
+      # quote, or a name that is not UTF-8, is escaped character by character
+      # (byte by byte for the latter) rather than refused.
       def self.command_line(words)
         words = words.map { |word| word.dup.force_encoding(Encoding::UTF_8) }
-        words = words.map(&:b) unless words.all?(&:valid_encoding?)
+        text = words.all?(&:valid_encoding?)
+        words = words.map(&:b) unless text
         words.map do |word|
           next "''" if word.empty?
-
-          escaped = word.gsub(%r{[^A-Za-z0-9_\-.,:+/@=\n]}) { |char| "\\#{char}" }.gsub("\n", "'\n'")
           # zsh expands a word that starts with `=`.
+          next word if text && word.match?(%r{\A[\p{L}\p{M}\p{N}_\-.,:+/@][\p{L}\p{M}\p{N}_\-.,:+/@=]*\z})
+          next "'#{word}'" if text && !word.include?("'")
+
+          escaped = word.gsub(%r{[^A-Za-z0-9_\-.,:+/@=\n]}n) { |char| "\\#{char}" }.gsub("\n", "'\n'")
           escaped.start_with?("=") ? "\\#{escaped}" : escaped
         end.join(" ")
       end

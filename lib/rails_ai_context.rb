@@ -120,6 +120,15 @@ module RailsAiContext
     # (no config/environment.rb) or :boot_failed. Nil in runtime tier.
     attr_accessor :static_kind
 
+    # The doctor command for this app as the binary was run: a workspace's
+    # server names its app with --app-path, and a bare `doctor` run where the
+    # client stands finds a folder of apps.
+    attr_writer :doctor_command
+
+    def doctor_command
+      @doctor_command || "rails-ai-context doctor"
+    end
+
     # A boot failure naming every unresolved gem runs to thousands of characters; the
     # footer gets the head, and the CLI banner and `doctor` carry the whole of it.
     def static_reason_brief

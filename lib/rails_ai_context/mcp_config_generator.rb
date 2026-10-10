@@ -73,8 +73,11 @@ module RailsAiContext
 
       private
 
+      # A relative path that starts with a dash would be read as an option.
       def anchored(path, folder)
-        folder ? "#{folder}/#{path}" : path
+        return "#{folder}/#{path}" if folder
+
+        path.start_with?("-") ? "./#{path}" : path
       end
     end
 
@@ -316,10 +319,15 @@ module RailsAiContext
       JSON.parse(text)
     end
 
+    COMMENTS_PROBLEM = "it holds comments, which writing it back as JSON would drop"
+
     # Where a JSON parser stopped, when it says (json 2.10 on), and what
     # usually stops it in a config an editor keeps; its own words can run to
-    # the whole file.
-    def self.parse_problem(error)
+    # the whole file. json 3 refuses the comments json 2 passed over, so a
+    # file holding them is named for them whichever parser read it.
+    def self.parse_problem(error, text = nil)
+      return COMMENTS_PROBLEM if text && json_comments?(text)
+
       where = error.message[/line \d+,? column \d+/]
       "it does not parse as JSON#{" at #{where}" if where} (a trailing comma?)"
     end
@@ -409,7 +417,7 @@ module RailsAiContext
       return :skipped if text && stale.empty? && entries.all? { |name, entry| servers[name] == entry }
       # JSON.parse passes over comments, and the file written back would
       # have none.
-      raise ShapeError, "it holds comments, which writing it back as JSON would drop" if text && self.class.json_comments?(text)
+      raise ShapeError, COMMENTS_PROBLEM if text && self.class.json_comments?(text)
 
       stale.each { |name| servers.delete(name) }
       servers.merge!(entries)
@@ -425,7 +433,7 @@ module RailsAiContext
     def parse_json(text)
       JSON.parse(text)
     rescue JSON::ParserError => e
-      raise ShapeError, self.class.parse_problem(e)
+      raise ShapeError, self.class.parse_problem(e, text)
     end
 
     def note_kept(path, kept)
@@ -661,7 +669,7 @@ module RailsAiContext
       data = begin
         JSON.parse(text)
       rescue JSON::ParserError => e
-        return unreadable.call(parse_problem(e))
+        return unreadable.call(parse_problem(e, text))
       end
       servers = data.is_a?(Hash) ? data[root_key] : nil
       return nil unless servers.is_a?(Hash)
@@ -669,7 +677,7 @@ module RailsAiContext
       own = servers.select { |name, entry| own_entry?(name, json_argv(entry)) }.keys
       return nil if own.empty?
       if json_comments?(text)
-        return "it holds comments, which writing it back as JSON would drop, so it is left as it is. " \
+        return "#{COMMENTS_PROBLEM}, so it is left as it is. " \
                "Remove #{own.join(', ')} from it by hand"
       end
 

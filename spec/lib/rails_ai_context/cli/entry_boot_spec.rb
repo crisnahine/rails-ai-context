@@ -317,7 +317,22 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
       RailsAiContext.tier = :runtime
       RailsAiContext.static_reason = nil
       RailsAiContext.static_kind = nil
+      RailsAiContext.doctor_command = nil
       RailsAiContext.configuration.app_root = app_root
+    end
+
+    # A workspace's server names its app with --app-path, and a bare doctor
+    # run where the client stands finds the folder of apps instead.
+    it "sends the static tier's reader to the doctor command it was given" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/models"))
+        File.write(File.join(dir, "app/models/post.rb"), "class Post; end\n")
+
+        described_class.call(root: dir, allow_static: true, no_boot: true, doctor: "rails-ai-context --app-path shop doctor")
+
+        expect(RailsAiContext.doctor_command).to eq("rails-ai-context --app-path shop doctor")
+        expect(RailsAiContext::Tools::BaseTool.send(:static_tier_note)).to include("Run `rails-ai-context --app-path shop doctor`")
+      end
     end
 
     it "answers :absent with the message for a directory that is not an app" do
