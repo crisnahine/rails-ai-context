@@ -56,18 +56,22 @@ module RailsAiContext
             key = Payload.find_controller(ctx, controller) || controller
             info = controllers[key]
             unless info
+              return text_response(application_controller_answer(ctx, controllers)) if key.casecmp?("ApplicationController")
+
               recovery = "Call rails_get_controllers(detail:\"summary\") to see all controllers"
               return not_found_response("Controller", controller, app_controller_names,
                 recovery_tool: data[:unread_engine] ? "#{unread_engine_line(data)} #{recovery}" : recovery)
             end
             return text_response("Error inspecting #{key}: #{info[:error]}") if info[:error]
 
+            chosen = resolution_note(controller, key)
             # Specific action - return source code
             if action
-              return format_action_source(key, info, action)
+              answer = format_action_source(key, info, action)
+              return chosen ? text_response("#{chosen}\n\n#{answer.content.first[:text]}") : answer
             end
 
-            return text_response(format_controller(key, info, ctx))
+            return text_response([ chosen, format_controller(key, info, ctx) ].compact.join("\n\n"))
           end
 
           app_controllers = Payload.app_controllers(ctx)
@@ -86,7 +90,7 @@ module RailsAiContext
           # Listing mode
           case detail
           when "summary"
-            lines = listing_header(page, data)
+            lines = listing_header(page, data, action)
             paginated_names.each do |name|
               info = app_controllers[name]
               action_count = info[:actions]&.size || 0
@@ -97,7 +101,7 @@ module RailsAiContext
             text_response(lines.join("\n"))
 
           when "standard"
-            lines = listing_header(page, data)
+            lines = listing_header(page, data, action)
             paginated_names.each do |name|
               info = app_controllers[name]
               lines << "- **#{name}** - #{Serializers::SectionFacts.actions_phrase(info)}"
@@ -106,7 +110,7 @@ module RailsAiContext
             text_response(lines.join("\n"))
 
           when "full"
-            lines = listing_header(page, data)
+            lines = listing_header(page, data, action)
 
             # Group sibling controllers that share the same parent and identical structure
             paginated_ctrl = app_controllers.select { |k, _| paginated_names.include?(k) }
@@ -177,8 +181,70 @@ module RailsAiContext
         )
       end
 
-      private_class_method def self.listing_header(page, data)
-        [ "# Controllers (#{page[:total]})", "", *(data[:unread_engine] ? [ unread_engine_line(data), "" ] : []) ]
+      private_class_method def self.listing_header(page, data, action = nil)
+        lines = [ "# Controllers (#{page[:total]})", "" ]
+        # An action is one controller's, and the listing used to come back as
+        # though none had been asked for.
+        lines.push("_`action:\"#{action.to_s.truncate(60)}\"` names an action of one controller, so it needs `controller:` too; this is the listing._", "") if action
+        lines.push(unread_engine_line(data), "") if data[:unread_engine]
+        lines
+      end
+
+      # The formats the controller answers: its respond_to blocks, and a
+      # template of another format beside its views, which Rails renders for
+      # that format with no respond_to at all: bazaar's products/index.json.jbuilder
+      # answers products.json, yet the line read "html, turbo_stream". A
+      # plain html-only controller gets no line.
+      private_class_method def self.formats_phrase(info, ctx, name)
+        declared = Array(info[:respond_to_formats]).map(&:to_s)
+        route_key = Payload.controller_route_key(ctx, name)
+        templates = RailsAiContext::PathResolver.view_dirs(rails_app.root.to_s).flat_map do |dir|
+          Dir.glob(File.join(dir, route_key, "*")).filter_map do |path|
+            base = File.basename(path)
+            parts = base.split(".")
+            next if base.start_with?("_") || parts.size < 3 || !File.file?(path)
+
+            [ parts[-2].sub(/\+.*\z/, ""), base ]
+          end
+        end
+        extra = templates.reject { |format, _| declared.include?(format) || format == "html" }
+                         .group_by(&:first).map { |format, found| "#{format} (#{found.map(&:last).sort.join(', ')})" }
+        shown = declared + extra
+        shown.any? ? shown.join(", ") : nil
+      rescue => e
+        RailsAiContext.debug_fail(e, nil, label: "formats_phrase")
+      end
+
+      # A bare name that matched a namespaced controller: `UsersController`
+      # answered for Admin::UsersController without a word that it had.
+      private_class_method def self.resolution_note(asked, key)
+        return nil unless key.include?("::") && !asked.to_s.include?("::") && !asked.to_s.include?("/")
+
+        "_There is no top-level `#{asked.to_s.truncate(60)}`; this is `#{key}`, the controller that name matches._"
+      end
+
+      # ApplicationController is every controller's base and no listed
+      # controller of its own, so asking for it answered "not found" though
+      # the app has one. What it declares is read off a controller that
+      # inherits it.
+      private_class_method def self.application_controller_answer(ctx, controllers)
+        root = rails_app.root.to_s
+        child = controllers.keys.sort_by { |name| [ name.count(":"), name ] }
+                           .find { |name| controllers[name].is_a?(Hash) && controllers[name][:parent_class].to_s.delete_prefix("::") == "ApplicationController" }
+        lines = [ "# ApplicationController", "" ]
+        unless child
+          lines << "The base the app's controllers inherit from. No controller read here inherits it directly, so what it declares is not read."
+          return lines.join("\n")
+        end
+
+        lines << "The base the app's controllers inherit from, not listed as a controller of its own. What it declares reaches every controller that inherits it; as #{child} reads it:"
+        filters = RailsAiContext::ActionFilters.for_controller(ctx, child, root: root)[:inherited].select { |f| f[:from].to_s == "ApplicationController" }
+        lines.push("", "## Filters", *filters.map { |f| filter_line(f) }) if filters.any?
+        settings = RailsAiContext::Introspectors::ControllerSettings.resolve(ctx, child, root: root)[:settings].select { |s| s[:from].to_s == "ApplicationController" }
+        lines.push("", "## Settings", *settings.map { |s| "- `#{s[:text]}`#{" _(through #{s[:via]})_" if s[:via]}" }) if settings.any?
+        lines.push("", "_It declares no filter or setting the controllers below it inherit._") if filters.empty? && settings.empty?
+        lines.push("", "_Next: `rails_get_controllers(controller:\"#{child}\")` for a controller that inherits it_")
+        lines.join("\n")
       end
 
       private_class_method def self.unread_engine_line(data)
@@ -435,17 +501,30 @@ module RailsAiContext
       private_class_method def self.render_and_redirect_calls(code)
         redirects = []
         renders = []
+        tree = RailsAiContext::AstCache.parse_string(code).value
+        action = tree.statements.body.first.then { |node| node.name if node.is_a?(Prism::DefNode) }
         visit = lambda do |node|
           if node.is_a?(Prism::CallNode) && node.receiver.nil? && node.arguments
             case node.name
             when :redirect_to then redirects << redirect_text(node.arguments.arguments)
             when :render then renders << "render #{node.arguments.slice.squish}"
             end
+          elsif action && implicit_format_render?(node)
+            # `format.turbo_stream` with no block renders the action's own
+            # template for that format, a render no `render` call names.
+            renders << "render :#{action}, formats: :#{node.name} (implicit, from `format.#{node.name}`)"
           end
           node.compact_child_nodes.each(&visit)
         end
-        visit.call(RailsAiContext::AstCache.parse_string(code).value)
+        visit.call(tree)
         [ redirects, renders ]
+      end
+
+      RESPONSE_FORMATS = %i[html json xml js turbo_stream csv text].freeze
+
+      private_class_method def self.implicit_format_render?(node)
+        node.is_a?(Prism::CallNode) && node.receiver.is_a?(Prism::LocalVariableReadNode) &&
+          RESPONSE_FORMATS.include?(node.name) && node.arguments.nil? && node.block.nil?
       end
 
       # `redirect_to target (notice: ..., alert: ...)`: the flash it sets, and
@@ -475,7 +554,8 @@ module RailsAiContext
         lines = [ "# #{name}", "" ]
         lines << "**Parent:** `#{resolved_parent(name, info, ctx)}`" if info[:parent_class]
         lines << "**API controller:** yes" if info[:api_controller]
-        lines << "**Formats:** #{info[:respond_to_formats].join(', ')}" if info[:respond_to_formats]&.any?
+        formats = formats_phrase(info, ctx, name)
+        lines << "**Formats:** #{formats}" if formats
         declared = RailsAiContext::Introspectors::ControllerSettings.resolve(ctx, name, root: rails_app.root.to_s)
         lines << "**Layout:** #{RailsAiContext::Introspectors::ControllerSettings.layout_phrase(declared[:layout])}" if declared[:layout]
 

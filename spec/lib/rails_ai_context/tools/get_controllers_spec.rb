@@ -1140,5 +1140,68 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(map[:redirects]).to eq([ "redirect_to @product (notice: t(\".created\"))" ])
       expect(map[:renders]).to eq([ "render json: accounts.map { |a| AccountSerializer.new(a).as_json }, status: :created" ])
     end
+
+    # bazaar's ReviewsController#create answers turbo_stream with
+    # `format.turbo_stream` alone, which renders create.turbo_stream.erb.
+    it "names the template a format with no block renders" do
+      code = "def create\n  respond_to do |format|\n    format.turbo_stream\n    format.html { redirect_to @product }\n  end\nend\n"
+
+      expect(described_class.send(:extract_render_map, code)[:renders])
+        .to eq([ "render :create, formats: :turbo_stream (implicit, from `format.turbo_stream`)" ])
+    end
+  end
+
+  # What bazaar's answers left unsaid: an action given without a controller
+  # was dropped, a bare name answered for a namespaced controller, a jbuilder
+  # template's format was missing, and ApplicationController was "not found".
+  describe "what the answer says it did" do
+    around do |example|
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/controllers"))
+        FileUtils.mkdir_p(File.join(root, "app/views/products"))
+        File.write(File.join(root, "app/views/products/index.html.erb"), "")
+        File.write(File.join(root, "app/views/products/index.json.jbuilder"), "")
+        File.write(File.join(root, "app/controllers/application_controller.rb"),
+                   "class ApplicationController < ActionController::Base\n  before_action :require_login\n  allow_browser versions: :modern\nend\n")
+        @root = root
+        example.run
+      end
+    end
+
+    before do
+      allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(@root))
+      allow(described_class).to receive(:cached_context).and_return({ controllers: { controllers: {
+        "ProductsController" => { actions: %w[index], parent_class: "ApplicationController", respond_to_formats: %w[html],
+                                  filters: [ { kind: "before", name: "require_login" } ] },
+        "Admin::UsersController" => { actions: %w[index], parent_class: "ApplicationController", filters: [] }
+      } } })
+    end
+
+    def text(**args)
+      described_class.call(**args).content.first[:text]
+    end
+
+    it "says an action needs a controller" do
+      expect(text(action: "index")).to include("_`action:\"index\"` names an action of one controller, so it needs `controller:` too; this is the listing._")
+    end
+
+    it "says which controller a bare name was taken to mean" do
+      expect(text(controller: "UsersController"))
+        .to start_with("_There is no top-level `UsersController`; this is `Admin::UsersController`, the controller that name matches._")
+      expect(text(controller: "ProductsController")).to start_with("# ProductsController")
+    end
+
+    it "counts a format a template answers beside the controller's views" do
+      expect(text(controller: "ProductsController")).to include("**Formats:** html, json (index.json.jbuilder)")
+    end
+
+    it "answers for ApplicationController from a controller that inherits it" do
+      answer = text(controller: "ApplicationController")
+
+      expect(answer).to start_with("# ApplicationController")
+      expect(answer).to include("as ProductsController reads it")
+      expect(answer).to include("- `allow_browser versions: :modern`")
+      expect(answer).not_to include("not found")
+    end
   end
 end
