@@ -141,6 +141,7 @@ module RailsAiContext
       end
 
       def tools_power_tool_section
+        ex = guide_examples
         [
           "### Start here - composite tools save multiple calls",
           "",
@@ -148,9 +149,9 @@ module RailsAiContext
           tool_call("rails_onboard(detail:\"standard\")", cli_cmd("onboard", "detail=standard")),
           "",
           "**#{tool_ref("rails_get_context")} is your power tool** - bundles schema + model + controller + routes + views in ONE call:",
-          tool_call("rails_get_context(controller:\"PostsController\", action:\"create\")", cli_cmd("context", "controller=PostsController action=create")),
-          tool_call("rails_get_context(model:\"Post\")", cli_cmd("context", "model=Post")),
-          tool_call("rails_get_context(feature:\"post\")", cli_cmd("context", "feature=post")),
+          tool_call("rails_get_context(controller:\"#{ex.controller}\", action:\"#{ex.action}\")", cli_cmd("context", "controller=#{ex.controller} action=#{ex.action}")),
+          tool_call("rails_get_context(model:\"#{ex.model}\")", cli_cmd("context", "model=#{ex.model}")),
+          tool_call("rails_get_context(feature:\"#{ex.feature}\")", cli_cmd("context", "feature=#{ex.feature}")),
           "",
           "**#{tool_ref("rails_analyze_feature")} for broad discovery** - scans all layers (models, controllers, routes, services, jobs, views, tests):",
           tool_call("rails_analyze_feature(feature:\"authentication\")", cli_cmd("analyze_feature", "feature=authentication")),
@@ -161,48 +162,50 @@ module RailsAiContext
       end
 
       def tools_workflow_section
+        ex = guide_examples
         [
           "### Step-by-step workflows (follow this order)",
           "",
           "**Modify a model** (add field, change validation, add scope):",
-          "1. #{tool_call_inline("rails_get_context", "model:\"Post\"", "context", "model=Post")} - schema + associations + validations in one call",
+          "1. #{tool_call_inline("rails_get_context", "model:\"#{ex.model}\"", "context", "model=#{ex.model}")} - schema + associations + validations in one call",
           "2. Read the model file, make your edit",
-          "3. #{tool_call_inline("rails_migration_advisor", "action:\"add_column\", table:\"posts\", column:\"rating\", type:\"integer\"", "migration_advisor", "action=add_column table=posts column=rating type=integer")} - if schema change needed",
-          "4. #{tool_call_inline("rails_validate", "files:[\"app/models/post.rb\"], level:\"rails\"", "validate", "files=app/models/post.rb level=rails")} - EVERY time after editing",
-          "5. #{tool_call_inline("rails_generate_test", "model:\"Post\"", "generate_test", "model=Post")} - generate tests matching project patterns",
+          "3. #{tool_call_inline("rails_migration_advisor", "action:\"add_column\", table:\"#{ex.table}\", column:\"rating\", type:\"integer\"", "migration_advisor", "action=add_column table=#{ex.table} column=rating type=integer")} - if schema change needed",
+          "4. #{tool_call_inline("rails_validate", "files:[\"#{ex.model_file}\"], level:\"rails\"", "validate", "files=#{ex.model_file} level=rails")} - EVERY time after editing",
+          "5. #{tool_call_inline("rails_generate_test", "model:\"#{ex.model}\"", "generate_test", "model=#{ex.model}")} - generate tests matching project patterns",
           "",
           "**Fix a controller bug:**",
-          "1. #{tool_call_inline("rails_get_context", "controller:\"PostsController\", action:\"create\"", "context", "controller=PostsController action=create")} - action source + routes + views + model",
+          "1. #{tool_call_inline("rails_get_context", "controller:\"#{ex.controller}\", action:\"#{ex.action}\"", "context", "controller=#{ex.controller} action=#{ex.action}")} - action source + routes + views + model",
           "2. Read the controller file, make your fix",
-          "3. #{tool_call_inline("rails_validate", "files:[\"app/controllers/posts_controller.rb\"], level:\"rails\"", "validate", "files=app/controllers/posts_controller.rb level=rails")}",
+          "3. #{tool_call_inline("rails_validate", "files:[\"#{ex.controller_file}\"], level:\"rails\"", "validate", "files=#{ex.controller_file} level=rails")}",
           ""
         ] + (api_only? ? api_endpoint_workflow_lines : view_workflow_lines) + [
           "**Trace a method:**",
-          tool_call("rails_search_code(pattern:\"publishable?\", match_type:\"trace\")", cli_cmd("search_code", "pattern=\"publishable?\" match_type=trace")),
+          tool_call("rails_search_code(pattern:\"#{ex.method_name}\", match_type:\"trace\")", cli_cmd("search_code", "pattern=\"#{ex.method_name}\" match_type=trace")),
           "",
           "**Debug an error (one call - gathers context + git + logs + fix):**",
           # Single quotes, as Ruby 3.4 prints the name: a backtick would close the code span.
-          tool_call("rails_diagnose(error:\"NoMethodError: undefined method 'foo' for nil\", file:\"app/models/post.rb\")",
-                    cli_cmd("diagnose", "error=\"NoMethodError: undefined method 'foo' for nil\" file=app/models/post.rb")),
+          tool_call("rails_diagnose(error:\"NoMethodError: undefined method 'foo' for nil\", file:\"#{ex.model_file}\")",
+                    cli_cmd("diagnose", "error=\"NoMethodError: undefined method 'foo' for nil\" file=#{ex.model_file}")),
           "",
           "**Review changes before merging:**",
           tool_call("rails_review_changes(ref:\"main\")", cli_cmd("review_changes", "ref=main")),
           "",
           "**Generate tests matching project patterns:**",
-          tool_call("rails_generate_test(model:\"Post\")", cli_cmd("generate_test", "model=Post")),
+          tool_call("rails_generate_test(model:\"#{ex.model}\")", cli_cmd("generate_test", "model=#{ex.model}")),
           ""
         ]
       end
 
       # HTML/Hotwire apps get the view-editing workflow.
       def view_workflow_lines
+        ex = guide_examples
         [
           "**Build or modify a view:**",
-          "1. #{tool_call_inline("rails_get_view", "controller:\"posts\"", "view", "controller=posts")} - existing templates, partials, Stimulus refs",
-          "2. #{tool_call_inline("rails_get_partial_interface", "partial:\"shared/status_badge\"", "partial_interface", "partial=shared/status_badge")} - partial locals contract",
-          "3. #{tool_call_inline("rails_get_component_catalog", "component:\"Button\"", "component_catalog", "component=Button")} - ViewComponent/Phlex props, slots, previews",
+          "1. #{tool_call_inline("rails_get_view", "controller:\"#{ex.view_controller}\"", "view", "controller=#{ex.view_controller}")} - existing templates, partials, Stimulus refs",
+          "2. #{tool_call_inline("rails_get_partial_interface", "partial:\"#{ex.partial}\"", "partial_interface", "partial=#{ex.partial}")} - partial locals contract",
+          "3. #{tool_call_inline("rails_get_component_catalog", "component:\"#{ex.component}\"", "component_catalog", "component=#{ex.component}")} - ViewComponent/Phlex props, slots, previews",
           "4. Read the view file, make your edit",
-          "5. #{tool_call_inline("rails_validate", "files:[\"app/views/posts/index.html.erb\"]", "validate", "files=app/views/posts/index.html.erb")}",
+          "5. #{tool_call_inline("rails_validate", "files:[\"#{ex.view_file}\"]", "validate", "files=#{ex.view_file}")}",
           ""
         ]
       end
@@ -210,12 +213,13 @@ module RailsAiContext
       # API-only apps have no view layer - swap in a workflow for modifying
       # a JSON/XML response instead.
       def api_endpoint_workflow_lines
+        ex = guide_examples
         [
           "**Modify a JSON endpoint** (add/change a serialized field, adjust status codes):",
-          "1. #{tool_call_inline("rails_get_controllers", "controller:\"PostsController\", action:\"create\"", "controllers", "controller=PostsController action=create")} - action source + strong params + render map",
-          "2. #{tool_call_inline("rails_get_model_details", "model:\"Post\"", "model_details", "model=Post")} - schema + associations + validations backing the response",
+          "1. #{tool_call_inline("rails_get_controllers", "controller:\"#{ex.controller}\", action:\"#{ex.action}\"", "controllers", "controller=#{ex.controller} action=#{ex.action}")} - action source + strong params + render map",
+          "2. #{tool_call_inline("rails_get_model_details", "model:\"#{ex.model}\"", "model_details", "model=#{ex.model}")} - schema + associations + validations backing the response",
           "3. Read the controller file, make your edit",
-          "4. #{tool_call_inline("rails_validate", "files:[\"app/controllers/posts_controller.rb\"], level:\"rails\"", "validate", "files=app/controllers/posts_controller.rb level=rails")}",
+          "4. #{tool_call_inline("rails_validate", "files:[\"#{ex.controller_file}\"], level:\"rails\"", "validate", "files=#{ex.controller_file} level=rails")}",
           ""
         ]
       end
@@ -343,6 +347,12 @@ module RailsAiContext
       end
 
       private
+
+      # The model, controller and files the examples name, the app's own
+      # where it has them.
+      def guide_examples
+        @guide_examples ||= GuideExamples.new(respond_to?(:context) ? context : {})
+      end
 
       # A row for a tool that declares none: its name and the first sentence
       # of its description, which is all a custom MCP::Tool is sure to have.

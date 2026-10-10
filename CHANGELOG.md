@@ -360,6 +360,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MCP tools in their Cursor description and Copilot name. In CLI mode each
   of them names the command now (`rails 'ai:tool[model_details]'
   model=Name`), the trim note included; MCP mode reads as before.
+- **The tool guide's examples name the app's own model, controller and
+  files.** Every app's workflows said `rails_get_context(model:"Post")`,
+  `app/models/post.rb`, `PostsController`, `publishable?` and
+  `shared/status_badge`, right beside the rule never to name what a tool
+  call has not verified, so an app of Authors and Books read them as its
+  own. They now use the app's most connected model, its controller, a
+  template and a partial it renders and a method its source defines, and
+  an obvious placeholder (`YourModel`) where the app has none. The tools
+  table's mailers row says `mailer:"X"` like the rest, where it said
+  `UserMailer`.
 - **The tool guide names tools as `tools/list` does.** It sent the AI to
   `get_schema` and `get_model_details` and called `get_context` the power
   tool, none of which exists, and the `rails_diagnose` example put a
