@@ -841,7 +841,7 @@ rails_get_concern(type: "model")
   → Lists only model concerns from app/models/concerns/
 ```
 
-**Returns:** Concern listing or full detail including file path, line count, included/extended modules, macros and DSL usage, public methods, class methods, callbacks, and a list of models or controllers that include the concern. Cross-references to related model/controller tools.
+**Returns:** Concern listing or full detail including file path, line count, included/extended modules (a conditional include with its condition), macros and DSL usage (`helper_method` included), public methods, class methods, private methods, callbacks, and a list of models or controllers that include the concern. The listing counts private methods apart from public ones. Cross-references to related model/controller tools.
 
 ### rails_get_callbacks
 
@@ -873,7 +873,9 @@ Within one type the order is the order Rails runs them, base classes first, a
 `before_` or `around_` callback with `prepend: true` first, and
 `after_commit`/`after_rollback` last declared first unless the app runs them in
 order (`load_defaults 7.1`). A method declared again shows once with the later
-declaration's conditions.
+declaration's conditions. A block or lambda callback shows its declaration at
+`detail: "full"`, and turbo-rails' broadcast macros (`broadcasts_refreshes`,
+`broadcasts_to` and the rest) are listed as the commit callbacks they declare.
 
 ### rails_get_helper_methods
 
