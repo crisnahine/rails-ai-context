@@ -7,7 +7,9 @@ module RailsAiContext
   # Alternative to the Rack middleware - integrates with Rails routing,
   # authentication, and middleware stack.
   #
-  # Mount in routes: mount RailsAiContext::Engine, at: "/mcp"
+  # Mount in routes, guarded so the routes file still loads where the gem is
+  # not (production, with the gem in the development group, or after it is
+  # removed): mount RailsAiContext::Engine, at: "/mcp" if defined?(RailsAiContext::Engine)
   class McpController < ActionController::API
     # Live: the transport answers SSE-mode requests with a Rack 3 streaming
     # body (a Proc that writes to a stream). Handing that Proc to a plain

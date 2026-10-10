@@ -280,8 +280,10 @@ Instead of stdio, you can mount the MCP server inside your Rails app:
 
 ```ruby
 # config/routes.rb
-mount RailsAiContext::Engine, at: "/mcp"
+mount RailsAiContext::Engine, at: "/mcp" if defined?(RailsAiContext::Engine)
 ```
+
+The `if` keeps the routes file loading wherever the gem is not: in production, where Bundler skips the `:development` group, and after the gem is removed. An unguarded mount raises `uninitialized constant RailsAiContext::Engine` there, and the app does not boot.
 
 The mounted engine answers the server-push channel (a long-lived SSE `GET /mcp`) with 405, which the MCP spec allows a server that sends no server-initiated messages: live reload, the one thing that sends them, runs only in the standalone `rails-ai-context serve --transport http` process. Clients carry on over POST, a connected client holds a server thread only while one of its requests runs, and `rails server` stops without waiting for clients to disconnect.
 
