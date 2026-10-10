@@ -377,8 +377,12 @@ module RailsAiContext
         # the migration fails on a table that holds any. The row count is the
         # database's own estimate when the app is booted.
         def not_null_warning(table, column)
-          rows = Array(Payload.section(cached_context, :database_stats)&.dig(:tables)).find { |t| t[:table].to_s == table }&.dig(:approximate_rows)
-          held = rows.nil? ? "if `#{table}` holds any rows" : "as `#{table}` holds about #{count_phrase(rows, "row")}"
+          stats = Array(Payload.section(cached_context, :database_stats)&.dig(:tables)).find { |t| t[:table].to_s == table }
+          rows = stats&.dig(:approximate_rows)
+          held = if rows.nil? then "if `#{table}` holds any rows"
+          elsif stats[:at_least] then "as `#{table}` holds at least #{count_phrase(rows, "row")}"
+          else "as `#{table}` holds about #{count_phrase(rows, "row")}"
+          end
           return "**Note:** `#{table}` is empty by the database's estimate, so `null: false` without a default runs; on a table with rows it fails." if rows&.zero?
 
           "**Warning:** `null: false` without a default fails #{held}: add a `default:`, or add `#{column}` nullable, " \
