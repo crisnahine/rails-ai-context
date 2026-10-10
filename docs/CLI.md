@@ -127,7 +127,13 @@ from source alone, which is what you want on a repo you have just cloned, on an
 app whose boot is broken, and in CI where booting costs more than the answer.
 
 The same tier is entered automatically when a boot fails, so you get an answer
-either way. Answers that need a running app are marked `[UNAVAILABLE: ...]`
+either way. A boot that hangs (an initializer waiting on a service that is
+down) counts as failed after `RAILS_AI_CONTEXT_BOOT_TIMEOUT` seconds: 20 for
+`serve` over stdio, whose client waits about 30 seconds for its first answer
+and then gives up, and 60 for every other command. Raise it for an app that
+is healthy but slow to boot, and for stdio also raise the client's own limit
+(Claude Code reads `MCP_TIMEOUT`, in milliseconds), or the client stops
+waiting first. Answers that need a running app are marked `[UNAVAILABLE: ...]`
 rather than guessed, and everything else is tagged `[STATIC]` instead of
 `[VERIFIED]`. `docs/COMPATIBILITY.md` lists which of the 40 introspectors answer
 in which tier.

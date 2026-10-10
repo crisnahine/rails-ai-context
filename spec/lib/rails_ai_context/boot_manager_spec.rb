@@ -231,6 +231,7 @@ RSpec.describe RailsAiContext::BootManager do
       original = ENV["RAILS_AI_CONTEXT_BOOT_TIMEOUT"]
       example.run
     ensure
+      described_class.default_timeout = nil
       if original.nil?
         ENV.delete("RAILS_AI_CONTEXT_BOOT_TIMEOUT")
       else
@@ -241,6 +242,17 @@ RSpec.describe RailsAiContext::BootManager do
     it "returns the default when unset" do
       ENV.delete("RAILS_AI_CONTEXT_BOOT_TIMEOUT")
       expect(described_class.env_timeout).to eq(described_class::DEFAULT_TIMEOUT)
+    end
+
+    # A stdio client gives up on `initialize` after about 30 seconds, and a
+    # 60-second limit let a hung boot outlast it.
+    it "returns the stdio limit, below a client's 30 seconds, once a stdio server sets it" do
+      ENV.delete("RAILS_AI_CONTEXT_BOOT_TIMEOUT")
+      described_class.default_timeout = described_class::STDIO_TIMEOUT
+
+      expect(described_class.env_timeout).to eq(20)
+      ENV["RAILS_AI_CONTEXT_BOOT_TIMEOUT"] = "45"
+      expect(described_class.env_timeout).to eq(45)
     end
 
     it "parses the variable" do
