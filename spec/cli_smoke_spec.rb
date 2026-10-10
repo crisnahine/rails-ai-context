@@ -1060,6 +1060,28 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       end
     end
 
+    # `rails ai:context` brings the MCP configs up to date on every run; the
+    # binary's `context` left an app taken out of its bundle with context
+    # files naming the binary beside configs that still started
+    # `bundle exec`, which no longer starts.
+    it "brings a recorded selection's MCP configs up to date with context, as rails ai:context does" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "Gemfile"), "source \"https://rubygems.org\"\ngem \"rails\"\n")
+        File.write(File.join(dir, ".rails-ai-context.yml"), "ai_tools:\n- claude\ntool_mode: mcp\n")
+        File.write(File.join(dir, ".mcp.json"),
+                   JSON.generate("mcpServers" => { "rails-ai-context" => { "command" => "bundle", "args" => %w[exec rails-ai-context serve] } }))
+
+        _out, err, status = Open3.capture3("ruby", "-I", lib, exe, "context", "--no-boot", chdir: dir)
+
+        expect(status.exitstatus).to eq(0), err
+        expect(JSON.parse(File.read(File.join(dir, ".mcp.json")))["mcpServers"]["rails-ai-context"])
+          .to eq("command" => "rails-ai-context", "args" => [ "serve" ])
+        expect(err).to include("Created/Updated .mcp.json")
+      end
+    end
+
     it "says nothing about legacy rule files on an MCP-only init" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models"))

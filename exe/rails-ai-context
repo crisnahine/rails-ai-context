@@ -314,6 +314,12 @@ class RailsAiContextCLI < Thor
         return
       end
 
+      # `rails ai:context` brings the selected tools' MCP configs up to date
+      # on every run, in the form the install takes now. So does this, or an
+      # app taken out of its bundle got context files naming the binary
+      # beside configs that still start `bundle exec`.
+      refresh_mcp_configs if options[:format].nil?
+
       $stderr.puts "Introspecting Rails app..."
 
       # An explicit --format overrides the recorded selection.
@@ -520,6 +526,16 @@ class RailsAiContextCLI < Thor
       (record.messages(result) + conflicts).each do |level, text|
         $stderr.puts(level == :warn ? "Warning: #{text}" : text)
       end
+    end
+
+    # Only for a selection the app recorded: with none, `rails ai:context`
+    # asks first, and this asks nothing, so it writes no config either.
+    def refresh_mcp_configs
+      config = ::RailsAiContext.configuration
+      return unless config.tool_mode == :mcp && config.ai_tools&.any?
+
+      tools = ::RailsAiContext::Install::Program.own_config_tools(config.ai_tools, root: Dir.pwd)
+      write_mcp_configs(tools, :mcp) if tools.any?
     end
 
     # The install form is the app's own: under bundle exec the process's

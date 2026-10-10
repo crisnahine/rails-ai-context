@@ -111,6 +111,9 @@ end unless defined?(save_context_files_to_initializer)
 
 def ensure_mcp_configs(ai_tools = nil)
   tools = ai_tools || RailsAiContext.configuration.ai_tools || RailsAiContext::McpConfigGenerator::TOOL_CONFIGS.keys
+  tools = RailsAiContext::Install::Program.own_config_tools(tools, root: Rails.root)
+  return if tools.empty?
+
   RailsAiContext::Install::Program.write_mcp_configs(
     install_surface,
     tools: tools, tool_mode: RailsAiContext.configuration.tool_mode, root: Rails.root
@@ -336,6 +339,8 @@ namespace :ai do
   end
 
   namespace :context do
+    # The task's description names the context files; the MCP config comes
+    # with them, below, as the line the installer's tip promises.
     per_tool = RailsAiContext::Install::AiTool.all.to_h { |tool| [ tool.key, tool.context_files ] }
     per_tool.merge(json: ".ai-context.json").each do |fmt, file|
       desc "Generate #{file} context file"
@@ -353,6 +358,13 @@ namespace :ai do
 
         # Add this format to config.ai_tools if not already there
         add_ai_tool_to_initializer(fmt)
+
+        # The tool joins the selection, so its MCP config comes with it, as
+        # `rails ai:context` writes one for every tool selected: the rules
+        # just written tell the AI to call the MCP tools.
+        if RailsAiContext::Install::AiTool.find(fmt) && RailsAiContext.configuration.tool_mode == :mcp
+          ensure_mcp_configs([ fmt ])
+        end
 
         puts ""
         puts "Tip: Run `rails ai:context` to generate all formats at once."
