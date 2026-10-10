@@ -402,25 +402,27 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
   end
 
   # The regenerate line at the foot of the file is read by whoever opens it;
-  # a standalone install has no rake task to run.
+  # a standalone install has no rake task to run, and a plain `rails
+  # ai:context` regenerated the file in compact mode.
   describe "the regenerate command in the footer" do
     let(:minimal) do
       { app_name: "App", rails_version: "8.0", ruby_version: "3.4", schema: {}, models: {},
         routes: {}, gems: {}, conventions: {} }
     end
 
+    # The binary reads context_mode from the config, the one way a standalone app is in full mode.
     it "names the binary in a standalone install" do
       allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
       output = described_class.new(minimal).call
 
-      expect(output).to include("Run `rails-ai-context context` to regenerate.")
+      expect(output).to include("Run `rails-ai-context context` to regenerate it.")
       expect(output).not_to include("rails ai:context")
     end
 
-    it "names the rake task where the app bundles the gem" do
+    it "names a rake run that stays in full mode where the app bundles the gem" do
       allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
 
-      expect(described_class.new(minimal).call).to include("Run `rails ai:context` to regenerate.")
+      expect(described_class.new(minimal).call).to include("Run `CONTEXT_MODE=full rails ai:context` to regenerate it.")
     end
   end
 end

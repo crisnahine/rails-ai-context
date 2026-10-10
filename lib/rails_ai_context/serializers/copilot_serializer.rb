@@ -43,13 +43,6 @@ module RailsAiContext
           Use this context to generate code that fits this project's structure and patterns.
         MD
       end
-
-      def footer
-        <<~MD
-          ---
-          _Auto-generated. Run `#{RailsAiContext::InstallMode.command(:context)}` to regenerate._
-        MD
-      end
     end
   end
 end

@@ -162,6 +162,7 @@ CONTEXT_MODE=full rails ai:context
 
 - Dumps everything into the root files CLAUDE.md, AGENTS.md and copilot-instructions.md: every table with its column types, defaults, indexes and foreign keys; every model with its associations, validations, scopes, callbacks, enum values and constants; the app's own routes (the framework's are counted, not listed); Stimulus controllers; and the rest of the introspection. The split rule files and Cursor's files are the same in both modes
 - Each root file ends with the same tools guide and anti-hallucination protocol the compact files carry, so OpenCode and Codex, which read AGENTS.md alone, get them too
+- A plain `rails ai:context` writes compact files again unless `config.context_mode` is `:full`, so each file's last line names the command that keeps full mode: `CONTEXT_MODE=full rails ai:context`, or for a standalone install `rails-ai-context context`, which reads `context_mode` from `.rails-ai-context.yml`
 - Can produce thousands of lines for large apps
 - **Best for:** small apps (<30 models) where the full dump fits in context
 

@@ -17,8 +17,13 @@ module RailsAiContext
   # case) when neither can be read in full.
   module InstallMode
     # What a reader runs for each job, as [standalone, in the app's bundle].
+    # A full-mode run: the binary takes context_mode from the config, which
+    # is how a standalone app is in full mode at all; the rake task takes
+    # it from the environment for one run, as `ai:context:full` would, but
+    # for the selected AI tools only.
     COMMANDS = {
       context: [ "rails-ai-context context", "rails ai:context" ],
+      context_full: [ "rails-ai-context context", "CONTEXT_MODE=full rails ai:context" ],
       install: [ "rails-ai-context init", "rails generate rails_ai_context:install" ],
       serve: [ "rails-ai-context serve", "rails ai:serve" ],
       tool: [ "rails-ai-context tool", "rails ai:tool" ]

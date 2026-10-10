@@ -149,14 +149,15 @@ RSpec.describe RailsAiContext::Serializers::CopilotSerializer do
       allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
       output = described_class.new(minimal).call
 
-      expect(output).to include("Run `rails-ai-context context` to regenerate.")
+      expect(output).to include("Run `rails-ai-context context` to regenerate it.")
       expect(output).not_to include("rails ai:context")
     end
 
-    it "names the rake task where the app bundles the gem" do
+    # A plain `rails ai:context` regenerated the file in compact mode.
+    it "names a rake run that stays in full mode where the app bundles the gem" do
       allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
 
-      expect(described_class.new(minimal).call).to include("Run `rails ai:context` to regenerate.")
+      expect(described_class.new(minimal).call).to include("Run `CONTEXT_MODE=full rails ai:context` to regenerate it.")
     end
   end
 end

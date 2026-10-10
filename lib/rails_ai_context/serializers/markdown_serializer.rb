@@ -624,10 +624,12 @@ module RailsAiContext
         nil
       end
 
+      # A plain `rails ai:context` regenerates in compact mode unless the
+      # config says full, so the line names the command that keeps it.
       def footer
         <<~MD
           ---
-          _This context file is auto-generated. Run `#{RailsAiContext::InstallMode.command(:context)}` to regenerate._
+          _This context file is auto-generated in full mode. Run `#{RailsAiContext::InstallMode.command(:context_full)}` to regenerate it._
         MD
       end
 
