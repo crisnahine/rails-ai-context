@@ -1126,6 +1126,25 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     it "lists it among the tables a miss names" do
       expect(described_class.call(table: "nope").content.first[:text]).to include("page_views")
     end
+
+    # Matching on the table name alone put analytics' Analytics::Setting on the
+    # primary's `settings`, and counted the primary table as claimed by it.
+    it "keeps a secondary database's model off the primary table of the same name" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { tables: { "settings" => { columns: [ { name: "key", type: "string" } ] },
+                            "audits" => { columns: [ { name: "note", type: "string" } ] } },
+                  secondary_databases: { "analytics" => { tables: { "settings" => { columns: [ { name: "metric", type: "string" } ] },
+                                                                    "audits" => { columns: [ { name: "note", type: "text" } ] } } } } },
+        models: { "Setting" => { table_name: "settings" },
+                  "Analytics::Setting" => { table_name: "settings", database: { writing: "analytics" } },
+                  "Analytics::Audit" => { table_name: "audits", database: { writing: "analytics" } } }
+      })
+
+      text = described_class.call.content.first[:text]
+      expect(text).to include("### settings → **Setting** (0 assoc, 0 val)\n")
+      expect(text).not_to include("**Analytics::Setting**")
+      expect(text).to include("Tables with no model file in this app**: audits")
+    end
   end
 
   describe "pending migrations a database could not answer for" do
@@ -1154,6 +1173,32 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       text = described_class.call.content.first[:text]
       expect(text).to include("_db/schema.rb declares 1 table; the connected database has none of them. Run `rails db:migrate`._")
       expect(text).to include("**Pending migrations:** 1 - 20260101000000")
+    end
+  end
+
+  describe "column marks the listing and the table view share" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "postgresql", tables: { "products" => { columns: [
+          { name: "keywords", type: "string", array: true, default: "[]" },
+          { name: "search_title", type: "string", generated: "lower((title)::text)", stored: true },
+          { name: "api_token", type: "string" }
+        ] } } },
+        models: { "Product" => { table_name: "products", encrypts: [ "api_token" ] } }
+      })
+    end
+
+    it "marks an array, a generated column and an encrypted one in the listing" do
+      text = described_class.call.content.first[:text]
+      expect(text).to include("keywords:string[] [default: []]", "search_title:string [generated, stored]", "api_token:string [encrypted]")
+    end
+
+    # The tool promises [encrypted] hints, and the one-table view dropped them.
+    it "names the encrypted columns in the table view" do
+      %w[standard full].each do |detail|
+        expect(described_class.call(table: "products", detail: detail).content.first[:text])
+          .to include("**Encrypted:** `api_token` (`encrypts`: ciphertext in the database)")
+      end
     end
   end
 
