@@ -268,6 +268,14 @@ module RailsAiContext
       path = at ? argv[at + 1] : argv.find { |arg| arg.start_with?("--app-path=") }&.delete_prefix("--app-path=")
       return nil if path.nil? || path.empty?
 
+      entry_path(path, folder, dir)
+    end
+
+    # A path an entry holds (its --app-path, its BUNDLE_GEMFILE), read the
+    # way entry_app_root reads one.
+    #
+    # @return [String, nil] absolute, nil when another variable is the tool's to expand
+    def self.entry_path(path, folder, dir)
       path = dir + path.delete_prefix(folder) if folder && path.start_with?(folder)
       return nil if path.include?("$")
 
@@ -572,7 +580,7 @@ module RailsAiContext
         dir = parent
         path = File.join(dir, config[:path])
         next unless File.file?(path)
-        return path if app_roots_in(path, config, dir).any? { |root| RailsAiContext::SafePath.canonical(root) == target }
+        return path if app_roots_in(path, tool, dir).any? { |root| RailsAiContext::SafePath.canonical(root) == target }
       end
       nil
     end
@@ -605,19 +613,41 @@ module RailsAiContext
       nil
     end
 
-    # The app every server of ours in one config file names.
-    def self.app_roots_in(path, config, dir)
-      argvs = if config[:format] == :codex_toml
+    # The entries under the gem's names in one config file, read the way the
+    # install reads the file: each one's name, command line and environment,
+    # and whether it is the gem's own by own_entry?'s rule. An unreadable
+    # file raises as the readers below do.
+    #
+    # @return [Array<Hash>] { name:, argv:, env:, own: } each
+    def self.named_entries(path, tool)
+      config = TOOL_CONFIGS.fetch(tool.to_sym)
+      if config[:format] == :codex_toml
         lines = split_bom(RailsAiContext::SafeFile.read_text(path)).first.lines
-        Toml.own_sections(lines).map { |range, _| Toml.argv(lines, range) }
-      else
-        data = read_json(path)
-        servers = data.is_a?(Hash) ? data[config[:root_key]] : nil
-        return [] unless servers.is_a?(Hash)
-
-        servers.filter_map { |name, entry| json_argv(entry) if own_entry?(name, json_argv(entry)) }
+        return Toml.sections(lines) { |name| name.match?(OWN_SERVER_NAME) }.map do |range, name|
+          argv = Toml.argv(lines, range)
+          { name: name, argv: argv, env: Toml.sub_table(lines, range, name, "env"), own: own_entry?(name, argv) }
+        end
       end
-      argvs.filter_map { |argv| entry_app_root(argv, config[:folder_variable], dir) }
+
+      data = read_json(path)
+      servers = data.is_a?(Hash) ? data[config[:root_key]] : nil
+      return [] unless servers.is_a?(Hash)
+
+      # OpenCode calls its environment `environment`, as json_entry writes it.
+      env_key = config[:format] == :opencode_json ? "environment" : "env"
+      servers.filter_map do |name, entry|
+        next unless name.match?(OWN_SERVER_NAME)
+
+        argv = json_argv(entry).map(&:to_s)
+        env = entry[env_key] if entry.is_a?(Hash)
+        { name: name, argv: argv, env: env.is_a?(Hash) ? env.transform_values(&:to_s) : {}, own: own_entry?(name, argv) }
+      end
+    end
+
+    # The app every server of ours in one config file names.
+    def self.app_roots_in(path, tool, dir)
+      folder = TOOL_CONFIGS.fetch(tool.to_sym)[:folder_variable]
+      named_entries(path, tool).filter_map { |entry| entry_app_root(entry[:argv], folder, dir) if entry[:own] }
     rescue SystemCallError, IOError, JSON::ParserError
       []
     end

@@ -70,9 +70,10 @@ ls -la .mcp.json .cursor/ .vscode/ .github/
    - OpenCode: `opencode.json`
    - Codex: `.codex/config.toml`
 
-2. Verify the command works:
+2. Verify the command the config holds works:
    ```bash
-   bundle exec rails ai:serve
+   bundle exec rails-ai-context serve   # in-Gemfile
+   rails-ai-context serve               # standalone
    # Should output nothing (waiting for stdio input)
    # Ctrl+C to stop
    ```
@@ -88,11 +89,17 @@ The install never replaces a config it cannot write back faithfully: one that do
 
 ### "MCP server fails to start"
 
+`rails ai:doctor` (or `rails-ai-context doctor`) checks the command each config holds and says which one cannot start and why. The usual causes:
+
+- `rails-ai-context is not currently included in the bundle`: the config runs `bundle exec rails-ai-context serve`, but the gem left the app's Gemfile. A standalone install runs `rails-ai-context serve`: run `rails-ai-context init` to rewrite the configs.
+- The config runs `rails-ai-context serve` while the app's Gemfile.lock carries the gem: that starts the copy installed outside the bundle, beside the bundle's own. Run `rails generate rails_ai_context:install` to write `bundle exec rails-ai-context serve`.
+- `can't find executable rails-ai-context for gem rails-ai-context`: the bundle's copy of the gem lists no executable, as a `path:` copy of 5.32.2 or earlier outside a git checkout does. Point the Gemfile at a git checkout or a release.
+
 Check for Bundler/Ruby path issues:
 
 ```bash
 which bundle
-which rails
+which rails-ai-context
 ruby -v
 ```
 

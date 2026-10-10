@@ -574,22 +574,53 @@ RSpec.describe RailsAiContext::Doctor do
     end
   end
 
+  # A lockfile as Bundler writes one, holding the gems named.
+  def lockfile(*gems)
+    specs = gems.map { |name| "    #{name} (1.0.0)\n" }.join
+    "GEM\n  remote: https://rubygems.org/\n  specs:\n#{specs}\nPLATFORMS\n  ruby\n\nDEPENDENCIES\n" \
+      "#{gems.map { |name| "  #{name}\n" }.join}\nBUNDLED WITH\n   2.5.0\n"
+  end
+
+  # A directory holding an executable of each name, to stand for a client's PATH.
+  def bin_dir_with(*names)
+    dir = Dir.mktmpdir("bin")
+    names.each do |name|
+      File.write(File.join(dir, name), "#!/bin/sh\n")
+      File.chmod(0o755, File.join(dir, name))
+    end
+    dir
+  end
+
   describe "#check_mcp_json" do
     # Real files in a real app folder: the check reads them the way the
     # generator does.
     around do |example|
       Dir.mktmpdir do |dir|
         @root = File.realpath(dir)
+        @bin = bin_dir_with("bundle", "rails-ai-context")
         example.run
+      ensure
+        FileUtils.rm_rf(@bin)
       end
     end
 
-    subject(:check) { described_class.new(RailsAiContext::StaticApp.new(@root)).send(:check_mcp_json) }
+    let(:app_doctor) { described_class.new(RailsAiContext::StaticApp.new(@root)) }
+
+    subject(:check) { app_doctor.send(:check_mcp_json) }
+
+    before { allow(app_doctor).to receive(:client_path).and_return(@bin) }
 
     def write(path, content)
       FileUtils.mkdir_p(File.dirname(File.join(@root, path)))
       File.binwrite(File.join(@root, path), content)
     end
+
+    def server(command)
+      JSON.generate("mcpServers" => { "rails-ai-context" => { "command" => command.first, "args" => command.drop(1) } })
+    end
+
+    let(:bundled) { %w[bundle exec rails-ai-context serve] }
+    let(:bare) { %w[rails-ai-context serve] }
 
     context "when tool_mode is :cli" do
       before do
@@ -606,7 +637,7 @@ RSpec.describe RailsAiContext::Doctor do
       before do
         allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude cursor copilot])
-        write(".mcp.json", '{"mcpServers":{}}')
+        write(".mcp.json", server(bundled))
       end
 
       it "aggregates all failures into a single check" do
@@ -622,8 +653,8 @@ RSpec.describe RailsAiContext::Doctor do
       before do
         allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude opencode])
-        write(".mcp.json", '{"mcpServers":{}}')
-        write("opencode.json", '{"mcp":{}}')
+        write(".mcp.json", server(bundled))
+        write("opencode.json", JSON.generate("mcp" => { "rails-ai-context" => { "type" => "local", "command" => bundled } }))
       end
 
       it "returns pass with count" do
@@ -636,13 +667,131 @@ RSpec.describe RailsAiContext::Doctor do
       before do
         allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(nil)
-        %w[.mcp.json .cursor/mcp.json .vscode/mcp.json opencode.json].each { |path| write(path, "{}") }
-        write(".codex/config.toml", "")
+        %w[.mcp.json .cursor/mcp.json].each { |path| write(path, server(bundled)) }
+        write(".vscode/mcp.json", JSON.generate("servers" => { "rails-ai-context" => { "command" => "bundle", "args" => bundled.drop(1) } }))
+        write("opencode.json", JSON.generate("mcp" => { "rails-ai-context" => { "type" => "local", "command" => bundled } }))
+        write(".codex/config.toml", %([mcp_servers.rails-ai-context]\ncommand = "bundle"\nargs = ["exec", "rails-ai-context", "serve"]\n))
       end
 
       it "checks all 5 tools and returns pass" do
         expect(check.status).to eq(:pass)
         expect(check.message).to include("5 of 5")
+      end
+    end
+
+    # A config the client reads but that names no server of the gem's starts none.
+    context "when a config holds no rails-ai-context server" do
+      before do
+        allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude codex])
+        write(".mcp.json", '{"mcpServers":{"github":{"command":"gh-mcp"}}}')
+        write(".codex/config.toml", "")
+      end
+
+      it "warns about each, with the install as the fix" do
+        expect(check.status).to eq(:warn)
+        expect(check.message).to eq("2 of 2 MCP configs need attention: .mcp.json (Claude Code), .codex/config.toml (Codex CLI): " \
+                                    "holds no rails-ai-context server")
+        expect(check.fix).to eq("Run `#{RailsAiContext::InstallMode.command(:install)}` to fix")
+      end
+    end
+
+    # The user's own entry under the gem's name, an HTTP one, is theirs to judge.
+    context "when the entry under the gem's name runs no command" do
+      before do
+        allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude])
+        write(".mcp.json", '{"mcpServers":{"rails-ai-context":{"type":"http","url":"http://localhost:6029/mcp"}}}')
+      end
+
+      it "passes it" do
+        expect(check.status).to eq(:pass)
+      end
+    end
+
+    # After `bundle remove rails-ai-context` every config still runs bundle
+    # exec, which Bundler refuses: the gem is not in the bundle.
+    context "when an entry runs bundle exec and the app's bundle has no rails-ai-context" do
+      before do
+        allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude cursor])
+        write("Gemfile", %(gem "rails"\n))
+        write("Gemfile.lock", lockfile("rails"))
+        %w[.mcp.json .cursor/mcp.json].each { |path| write(path, server(bundled)) }
+      end
+
+      it "fails, naming the lockfile and the binary's init" do
+        expect(check.status).to eq(:fail)
+        expect(check.message).to eq("2 of 2 MCP configs need attention: .mcp.json (Claude Code), .cursor/mcp.json (Cursor): " \
+                                    "`bundle exec rails-ai-context serve` cannot start - Gemfile.lock has no rails-ai-context")
+        expect(check.fix).to eq("Run `rails-ai-context init` to fix")
+      end
+    end
+
+    # The bare binary in an app whose bundle carries the gem starts the copy
+    # installed outside the bundle, beside the bundle's own.
+    context "when an entry runs the bare binary and the app's bundle carries rails-ai-context" do
+      before do
+        allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude])
+        write("Gemfile", %(gem "rails"\ngem "rails-ai-context"\n))
+        write("Gemfile.lock", lockfile("rails", "rails-ai-context"))
+        write(".mcp.json", server(bare))
+      end
+
+      it "warns and names the install that writes bundle exec" do
+        expect(check.status).to eq(:warn)
+        expect(check.message).to include("`rails-ai-context serve` starts the gem installed outside the app's bundle, " \
+                                         "while Gemfile.lock carries rails-ai-context 1.0.0")
+        expect(check.fix).to eq("Run `rails generate rails_ai_context:install` to fix")
+      end
+
+      it "fails when the binary is not on PATH either" do
+        allow(app_doctor).to receive(:client_path).and_return(bin_dir_with)
+
+        expect(check.status).to eq(:fail)
+        expect(check.message).to include("`rails-ai-context serve` cannot start - `rails-ai-context` is not on PATH")
+      end
+    end
+
+    context "when the command an entry runs is not on PATH" do
+      before do
+        allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude copilot])
+        allow(app_doctor).to receive(:client_path).and_return(bin_dir_with("bundle"))
+        write(".mcp.json", server(bare))
+        # A PATH the entry sets itself is the one its server gets.
+        write(".vscode/mcp.json", JSON.generate("servers" => {
+          "rails-ai-context" => { "command" => "bundle", "args" => bundled.drop(1), "env" => { "PATH" => "/nonexistent/bin" } }
+        }))
+      end
+
+      it "fails each, naming the PATH it was looked up on" do
+        expect(check.status).to eq(:fail)
+        expect(check.message).to include(".mcp.json (Claude Code): `rails-ai-context serve` cannot start - `rails-ai-context` is not on PATH")
+        expect(check.message).to include(".vscode/mcp.json (GitHub Copilot): `bundle exec rails-ai-context serve` cannot start - " \
+                                         "`bundle` is not on the PATH its env sets")
+        expect(check.fix).to include("Run `gem install rails-ai-context` for the Ruby on PATH")
+      end
+    end
+
+    # A path: copy whose gemspec lists no executable leaves `bundle exec
+    # rails-ai-context` nothing to run.
+    context "when the bundle's copy of the gem lists no executable" do
+      before do
+        allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude])
+        write("Gemfile", %(gem "rails-ai-context", path: "vendor/rails-ai-context"\n))
+        write("Gemfile.lock", lockfile("rails-ai-context"))
+        write(".mcp.json", server(bundled))
+        allow(app_doctor).to receive(:bundled_gem_spec).with(File.join(@root, "Gemfile"))
+          .and_return(instance_double(Gem::Specification, executables: [], full_gem_path: "/vendor/rails-ai-context"))
+      end
+
+      it "fails and says where that copy is" do
+        expect(check.status).to eq(:fail)
+        expect(check.message).to include("`bundle exec rails-ai-context serve` cannot start - the bundle's rails-ai-context at " \
+                                         "/vendor/rails-ai-context lists no `rails-ai-context` executable")
       end
     end
 
@@ -692,7 +841,7 @@ RSpec.describe RailsAiContext::Doctor do
         allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude copilot])
         write(".mcp.json", "\uFEFF\n")
-        write(".vscode/mcp.json", %(\uFEFF{"servers": {}}))
+        write(".vscode/mcp.json", %(\uFEFF{"servers": {"rails-ai-context": {"command": "bundle", "args": ["exec", "rails-ai-context", "serve"]}}}))
       end
 
       # init fills an empty file, so init is the fix.
@@ -708,12 +857,58 @@ RSpec.describe RailsAiContext::Doctor do
       before do
         allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude])
-        write(".mcp.json", %({"mcpServers":{"caf\xC3\xA9":{"command":"x"}}}).b)
+        write(".mcp.json", %({"mcpServers":{"caf\xC3\xA9":{"command":"x"},"rails-ai-context":{"command":"bundle","args":["exec","rails-ai-context","serve"]}}}).b)
       end
 
       it "reads it as UTF-8 whatever the locale" do
         expect(check.status).to eq(:pass)
       end
+    end
+  end
+
+  describe "#check_stdio_activation_hygiene" do
+    around do |example|
+      Dir.mktmpdir do |dir|
+        @root = File.realpath(dir)
+        example.run
+      end
+    end
+
+    let(:app_doctor) { described_class.new(RailsAiContext::StaticApp.new(@root)) }
+
+    before do
+      allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
+      allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude])
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
+    end
+
+    def write_config(command)
+      File.write(File.join(@root, ".mcp.json"), JSON.generate("mcpServers" => { "rails-ai-context" => { "command" => command.first, "args" => command.drop(1) } }))
+    end
+
+    it "takes bundler's word for an in-Gemfile install whose configs run bundle exec" do
+      write_config(%w[bundle exec rails-ai-context serve])
+
+      expect(app_doctor.send(:check_stdio_activation_hygiene).message).to include("activates via bundler")
+    end
+
+    # The binary outside the bundle activates through RubyGems, whatever the install.
+    it "checks the activation when a config starts the binary itself" do
+      write_config(%w[rails-ai-context serve])
+      status = instance_double(Process::Status, success?: true, exitstatus: 0)
+      allow(Open3).to receive(:capture3).and_return([ "", "", status ])
+
+      expect(app_doctor.send(:check_stdio_activation_hygiene).message).to eq("gem activation is silent on stdout")
+    end
+  end
+
+  # Only the bundle this process runs in has its gemspec loaded here.
+  describe "#bundled_gem_spec" do
+    it "answers for the Gemfile this process was bundled from, and for no other" do
+      doctor = described_class.new(Rails.application)
+
+      expect(doctor.send(:bundled_gem_spec, Bundler.default_gemfile.to_s)).to equal(Gem.loaded_specs["rails-ai-context"])
+      expect(doctor.send(:bundled_gem_spec, File.join(Dir.tmpdir, "Gemfile"))).to be_nil
     end
   end
 
@@ -734,11 +929,30 @@ RSpec.describe RailsAiContext::Doctor do
     before do
       allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
       allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude codex])
+      allow(workspace_doctor).to receive(:client_path).and_return(bin_dir_with("bundle", "rails-ai-context"))
     end
 
     def write(path, content)
       FileUtils.mkdir_p(File.dirname(File.join(@work, path)))
       File.write(File.join(@work, path), content)
+    end
+
+    # A workspace entry reaches its app's bundle through the Gemfile its env
+    # names, from the folder's own name for itself where the tool has one.
+    it "reads the bundle a workspace entry's BUNDLE_GEMFILE names" do
+      allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[cursor])
+      write("a/Gemfile", %(gem "rails"\n))
+      write("a/Gemfile.lock", lockfile("rails"))
+      write(".cursor/mcp.json", JSON.generate("mcpServers" => {
+        "rails-ai-context-a" => { "command" => "bundle", "args" => %w[exec rails-ai-context serve --app-path ${workspaceFolder}/a],
+                                  "env" => { "BUNDLE_GEMFILE" => "${workspaceFolder}/a/Gemfile" } }
+      }))
+
+      check = workspace_doctor.send(:check_mcp_json)
+
+      expect(check.status).to eq(:fail)
+      expect(check.message).to include("`bundle exec rails-ai-context serve` cannot start - Gemfile.lock has no rails-ai-context")
+      expect(check.fix).to eq("Run `rails-ai-context init` in the folder that holds ../.cursor/mcp.json to fix")
     end
 
     it "finds its MCP configs in the workspace and names where they are" do
