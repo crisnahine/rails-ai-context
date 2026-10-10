@@ -1,10 +1,15 @@
 # frozen_string_literal: true
 
-require "json"
 require "fileutils"
-require "securerandom"
-require "strscan"
 require_relative "install_mode"
+
+# json and strscan are gems an app's bundle pins, and the install loads this
+# file before the app boots: required here, our copies loaded first and the
+# app's then loaded over them ("already initialized constant"), leaving a
+# mixed library. Each loads when first named, a rescue clause naming
+# JSON::ParserError included.
+autoload :JSON, "json"
+autoload :StringScanner, "strscan"
 
 module RailsAiContext
   # Generates per-tool MCP config files so each AI tool auto-discovers the MCP server.

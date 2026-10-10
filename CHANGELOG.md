@@ -57,6 +57,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the gem without `rails-ai-context` and every MCP config's
   `bundle exec rails-ai-context serve` failed to start. Outside a checkout
   the files on disk are the list.
+- **The binary loads no gem the app pins before the app boots.** Run from a
+  subdirectory of an app (#427) or a folder holding one, it asked of every
+  directory it passed whether a non-Rails framework lived there, which
+  parsed the Gemfile with the prism gem; it read config/boot.rb the same
+  way. A Rails 8 app locks prism, json and securerandom, so a version
+  other than the newest installed loaded over ours at the boot: dozens of
+  "already initialized constant" lines, then a mixed library. The Gemfile
+  and config/boot.rb are now read with Ruby's own Ripper before the boot,
+  a directory is checked for a framework only once it holds an app, and
+  json, strscan and securerandom load when first used.
 - **The install summary names a preset that exists:** it suggested
   `rails 'ai:preset[arch]'`, which answers "Unknown preset". It is
   `ai:preset[architecture]`.

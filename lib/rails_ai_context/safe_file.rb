@@ -1,7 +1,11 @@
 # frozen_string_literal: true
 
 require "fileutils"
-require "securerandom"
+
+# securerandom is a gem an app's bundle pins, and this file loads before the
+# app boots: required here, our copy loaded first and the app's then loaded
+# over it ("already initialized constant"). It loads when first named.
+autoload :SecureRandom, "securerandom"
 
 module RailsAiContext
   # Safe file reading with size limits and error handling.

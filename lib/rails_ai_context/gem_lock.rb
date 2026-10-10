@@ -195,8 +195,12 @@ module RailsAiContext
       real = File.realpath(File.join(real_root, "config/boot.rb"))
       return nil unless SafePath.contained?(real, real_root)
 
-      result = ruby_parse(real) or return nil
-      relative, anchor = Introspectors::AstWalk.each(result.value).lazy.filter_map { |node| bundle_gemfile_path(node) }.first
+      relative, anchor = if loaded?
+        result = ruby_parse(real) or return nil
+        Introspectors::AstWalk.each(result.value).lazy.filter_map { |node| bundle_gemfile_path(node) }.first
+      else
+        Preboot.bundle_gemfile_path(Preboot.tree(real))
+      end
       return nil unless relative
 
       # Relative to __FILE__ the path starts from boot.rb itself, one level below __dir__.
@@ -321,17 +325,14 @@ module RailsAiContext
     def gemfile_entries(bundle)
       return Introspectors::GemfileGems.read_bundle(bundle) if loaded?
 
-      result = ruby_parse(bundle.gemfile) or return nil
-      Introspectors::AstWalk.each(result.value).filter_map do |node|
-        next unless node.is_a?(Prism::CallNode) && node.receiver.nil?
-
-        args = node.arguments&.arguments || []
-        case node.name
-        when :ruby
-          options = args.grep(Prism::KeywordHashNode).flat_map(&:elements).grep(Prism::AssocNode).to_h { |pair| [ literal(pair.key), literal(pair.value) ] }
-          { type: :ruby, version: literal(args.first), engine: options["engine"], engine_version: options["engine_version"] }
-        when :gem then args.first.is_a?(Prism::StringNode) ? { type: :gem, name: args.first.unescaped } : { type: :unknown_gems }
-        when :gemspec, :eval_gemfile then { type: :unknown_gems }
+      tree = Preboot.tree(bundle.gemfile) or return nil
+      Preboot.calls(tree).filter_map do |name, args|
+        case name
+        when "ruby"
+          options = Preboot.options(args)
+          { type: :ruby, version: Preboot.literal(args.first), engine: options["engine"], engine_version: options["engine_version"] }
+        when "gem" then (gem = Preboot.string(args.first)) ? { type: :gem, name: gem } : { type: :unknown_gems }
+        when "gemspec", "eval_gemfile" then { type: :unknown_gems }
         end
       end
     end
@@ -342,20 +343,145 @@ module RailsAiContext
     end
     private_class_method :loaded?
 
-    # AstCache once the gem is loaded; before the boot Prism alone, as AstCache's
-    # concurrent-ruby would load ahead of the app's bundle.
+    # Once the gem is loaded; before that, Preboot reads the file.
     def ruby_parse(path)
-      return nil unless path
-      return AstCache.parse(File.realpath(path)) if loaded?
+      return nil unless path && loaded?
 
-      require "prism"
-      require_relative "introspectors/ast_walk"
-      content = SafeFile.read(path, max_size: MAX_SIZE)
-      content && Prism.parse(content)
-    rescue SystemCallError, ArgumentError, LoadError
+      AstCache.parse(File.realpath(path))
+    rescue SystemCallError, ArgumentError
       nil
     end
     private_class_method :ruby_parse
+
+    # Before the boot the Gemfile and config/boot.rb are read with Ripper,
+    # which ships inside Ruby. Prism is a gem the app's bundle locks (every
+    # Rails 8 app's does), so ours, loaded first, had the app's copy load over
+    # it at the boot: "already initialized constant", then a mixed parser.
+    # AstCache would bring concurrent-ruby in ahead of the bundle the same way.
+    module Preboot
+      module_function
+
+      def tree(path)
+        return nil unless path
+
+        require "ripper"
+        content = SafeFile.read(path, max_size: MAX_SIZE)
+        content && Ripper.sexp(content)
+      rescue SystemCallError, ArgumentError, LoadError
+        nil
+      end
+
+      # Every node, parent first: a Ripper node is an Array led by its type.
+      def each(node, &block)
+        return unless node.is_a?(Array)
+
+        yield node if node.first.is_a?(Symbol)
+        node.each { |child| each(child, &block) }
+      end
+
+      # [name, arguments] of each call with no receiver: `gem "x"`, `gem("x")`, a bare `gemspec`.
+      def calls(tree)
+        found = []
+        each(tree) do |node|
+          case node.first
+          when :command then found << [ ident(node[1]), arguments(node[2]) ]
+          when :method_add_arg then found << [ ident(node[1][1]), arguments(node[2]) ] if node[1].is_a?(Array) && node[1].first == :fcall
+          when :vcall then found << [ ident(node[1]), [] ]
+          end
+        end
+        found
+      end
+
+      def ident(node)
+        node[1] if node.is_a?(Array) && node.first == :@ident
+      end
+
+      def arguments(node)
+        return [] unless node.is_a?(Array)
+
+        case node.first
+        when :arg_paren then arguments(node[1])
+        when :args_add_block then node[1].is_a?(Array) ? node[1] : []
+        else []
+        end
+      end
+
+      # A string as written, nil for anything computed. Escapes stay as
+      # written: no gem name, version or path the Gemfile needs holds one.
+      def string(node)
+        return nil unless node.is_a?(Array) && node.first == :string_literal
+
+        parts = node[1].is_a?(Array) ? node[1].drop(1) : []
+        return "" if parts.empty?
+
+        parts.first[1] if parts.one? && parts.first.is_a?(Array) && parts.first.first == :@tstring_content
+      end
+
+      def literal(node)
+        return string(node) unless node.is_a?(Array) && node.first == :symbol_literal
+
+        symbol = node[1]
+        symbol[1][1] if symbol.is_a?(Array) && symbol.first == :symbol && symbol[1].is_a?(Array)
+      end
+
+      # `engine: "jruby"`, `"engine" => "jruby"` and `:engine => "jruby"` alike.
+      def options(args)
+        args.select { |arg| arg.is_a?(Array) && arg.first == :bare_assoc_hash }.flat_map { |hash| Array(hash[1]) }
+            .select { |pair| pair.is_a?(Array) && pair.first == :assoc_new }
+            .to_h { |pair| [ key(pair[1]), literal(pair[2]) ] }
+      end
+
+      def key(node)
+        node.is_a?(Array) && node.first == :@label ? node[1].delete_suffix(":") : literal(node)
+      end
+
+      # [path, :file or :dir] from config/boot.rb's
+      # `ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../Gemfile", __dir__)`, `=` and `__FILE__` alike.
+      def bundle_gemfile_path(tree)
+        each(tree) do |node|
+          value = case node.first
+          when :opassign then node[3] if env_field?(node[1]) && node[2].is_a?(Array) && node[2][1] == "||="
+          when :assign then node[2] if env_field?(node[1])
+          end
+          found = value && expand_path(value)
+          return found if found
+        end
+        nil
+      end
+
+      def env_field?(node)
+        return false unless node.is_a?(Array) && node.first == :aref_field
+
+        receiver = node[1]
+        args = arguments(node[2])
+        receiver.is_a?(Array) && receiver.first == :var_ref && receiver[1].is_a?(Array) && receiver[1][1] == "ENV" &&
+          args.one? && string(args.first) == "BUNDLE_GEMFILE"
+      end
+
+      def expand_path(node)
+        return nil unless node.is_a?(Array) && node.first == :method_add_arg
+
+        call = node[1]
+        return nil unless call.is_a?(Array) && call.first == :call && ident(call[3]) == "expand_path" &&
+                          call[1].is_a?(Array) && call[1].first == :var_ref && call[1][1].is_a?(Array) && call[1][1][1] == "File"
+
+        path, anchor = args = arguments(node[2])
+        relative = string(path)
+        return nil unless relative && args.size == 2
+
+        if anchor.is_a?(Array) && anchor.first == :var_ref && anchor[1].is_a?(Array) && anchor[1][1] == "__FILE__" then [ relative, :file ]
+        elsif dir_call?(anchor) then [ relative, :dir ]
+        end
+      end
+
+      def dir_call?(node)
+        return false unless node.is_a?(Array)
+
+        (node.first == :vcall && ident(node[1]) == "__dir__") ||
+          (node.first == :method_add_arg && node[1].is_a?(Array) && node[1].first == :fcall && ident(node[1][1]) == "__dir__")
+      end
+    end
+    private_constant :Preboot
 
     # A requirement such as `ruby ">= 3.3.0"` names a range, not a version, so it is left unanswered.
     def gemfile_ruby(entry)
