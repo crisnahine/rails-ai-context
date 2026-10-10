@@ -64,13 +64,19 @@ module RailsAiContext
       # always had, so anything piping input into the installer still works.
       Setup = Struct.new(:tool_mode, :context_files)
 
+      SETUP_CHOICES = [
+        [ "MCP config + context files", "(default)" ],
+        [ "Context files only", "(CLI mode, no MCP server)" ],
+        [ "MCP config only", "(leaves CLAUDE.md, AGENTS.md and rules untouched)" ]
+      ].freeze
+
       def select_setup(surface)
         surface.say ""
         surface.say "What should rails-ai-context write?", :emph
         surface.say ""
-        surface.say "  1. MCP config + context files   (default)"
-        surface.say "  2. Context files only           (CLI mode, no MCP server)"
-        surface.say "  3. MCP config only              (leaves CLAUDE.md, AGENTS.md and rules untouched)"
+        SETUP_CHOICES.each.with_index(1) do |(label, note), number|
+          surface.say "  #{number}. #{label.ljust(29)}#{note}"
+        end
         surface.say ""
 
         input = surface.ask("Enter number (default: 1):").to_s.strip
@@ -83,10 +89,13 @@ module RailsAiContext
         setup
       end
 
+      # The answer in the words the question offered it.
       def setup_label(setup)
-        return "MCP config only (no context files)" unless setup.context_files
-
-        setup.tool_mode == :mcp ? "MCP + CLI fallback" : "CLI only"
+        label, note = if !setup.context_files then SETUP_CHOICES[2]
+        elsif setup.tool_mode == :cli then SETUP_CHOICES[1]
+        else SETUP_CHOICES[0]
+        end
+        note == "(default)" ? label : "#{label} #{note}"
       end
 
       # Offers to remove what a re-run dropped from the selection, and
