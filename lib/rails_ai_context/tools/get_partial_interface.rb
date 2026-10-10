@@ -100,6 +100,10 @@ module RailsAiContext
         prefixed = prefix_partial_paths?(root)
         render_sites = view_dirs.flat_map { |dir| find_render_sites(dir, partial_name, root, prefixed) } +
                        code_render_sites(root, canonical_name(partial_name))
+        # `_post.html.erb` and `_post.json.jbuilder` share a name but not their
+        # callers: each renders only where its format is the one looked up.
+        partial_format = template_format(file_path)
+        render_sites = render_sites.select { |site| renders_format?(site[:file], partial_format) }
         method_calls = {}
 
         # Primary: locals from render call sites (ground truth)
@@ -353,6 +357,26 @@ module RailsAiContext
 
       # Every template a render site can sit in, jbuilder's Ruby included.
       SITE_GLOB = "**/*.{erb,haml,slim,jbuilder}"
+
+      # Whether a site looks a partial of this format up. A template looks in
+      # its own format: a json.jbuilder in json, an html.erb in html, and one
+      # whose name gives none in any. A turbo_stream template looks in html
+      # too (Turbo's request accepts html), as a js one does (Rails' html
+      # fallback for js). Ruby code renders html: a broadcast, or
+      # ApplicationController.render outside a request.
+      private_class_method def self.renders_format?(site_file, format)
+        return true unless format
+        return format == "html" if site_file.end_with?(".rb")
+
+        site_format = template_format(site_file)
+        site_format.nil? || site_format == format || (format == "html" && %w[turbo_stream js].include?(site_format))
+      end
+
+      # A template's format as its name gives it; jbuilder's handler writes
+      # json, its default format, when the name gives none.
+      private_class_method def self.template_format(path)
+        RailsAiContext::ViewFile.format_of(path) || ("json" if path.end_with?(".jbuilder"))
+      end
 
       # "shared/_status_badge.html.erb" as a render call names it: "shared/status_badge".
       private_class_method def self.canonical_name(partial_name)

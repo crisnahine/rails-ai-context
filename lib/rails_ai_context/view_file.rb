@@ -123,6 +123,14 @@ module RailsAiContext
       "#{parts.join(', ')} of `#{segments.join('.').delete_prefix('_')}`"
     end
 
+    # @param path [String] a view path such as "posts/_post.json.jbuilder"
+    # @return [String, nil] the format its name renders for ("json"), or nil
+    #   for a name that gives none, which Rails serves in any format
+    def format_of(path)
+      segments = File.basename(path.to_s).sub(/\.[^.+]+\z/, "").sub(/\+[^.]*\z/, "").split(".")
+      segments.last if segments.size > 1 && FORMAT_EXTENSIONS.include?(segments.last)
+    end
+
     # Labelled by the handler: html, csv and the like render raw, so their tags print as written.
     def fence(path)
       ext = File.extname(path.to_s).delete_prefix(".").downcase
