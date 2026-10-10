@@ -278,6 +278,8 @@ class RailsAiContextCLI < Thor
         ::RailsAiContext::BootManager.default_timeout = ::RailsAiContext::BootManager::STDIO_TIMEOUT
       end
 
+      # Live reload uses `listen` when it is there, standalone included.
+      reach_installed_gem("listen")
       boot_rails!(command: "serve", allow_static: true)
 
       transport = options[:transport].to_sym
@@ -366,6 +368,8 @@ class RailsAiContextCLI < Thor
         exit 1
       end
 
+      # The live reload check asks for `listen` as serve would find it.
+      reach_installed_gem("listen")
       # Diagnosing a boot failure needs the app, so doctor never serves the
       # static tier; it does read a source-only tree, to name what is missing.
       boot_rails!(command: "doctor", allow_source_only: true,
@@ -1017,13 +1021,14 @@ class RailsAiContextCLI < Thor
       ::RailsAiContext::CLI::AppRoot
     end
 
-    # A gem this binary uses when it is there - `listen`, for watch - is no
-    # dependency of it, so the binstub never activated it, and the app's
-    # bundle hides every gem the app does not lock: a standalone install
-    # could not see a listen installed beside it. It is reached the way this
-    # gem's own dependencies are, found among the installed gems before the
-    # boot and put back behind the app's bundle after it, so a copy the app
-    # locks still wins. Under bundle exec the bundle decides.
+    # A gem this binary uses when it is there - `listen`, for watch and for
+    # serve's live reload - is no dependency of it, so the binstub never
+    # activated it, and the app's bundle hides every gem the app does not
+    # lock: a standalone install could not see a listen installed beside it.
+    # It is reached the way this gem's own dependencies are, found among the
+    # installed gems before the boot and put back behind the app's bundle
+    # after it, so a copy the app locks still wins. Under bundle exec the
+    # bundle decides.
     def reach_installed_gem(name)
       return if ENV["BUNDLE_BIN_PATH"]
 

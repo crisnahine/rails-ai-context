@@ -165,6 +165,29 @@ RSpec.describe RailsAiContext::Doctor do
     end
   end
 
+  describe "#check_live_reload" do
+    # `require "listen"` failing, as it does where no listen is reachable.
+    def missing_listen_check
+      allow(doctor).to receive(:require).and_call_original
+      allow(doctor).to receive(:require).with("listen").and_raise(LoadError, "cannot load such file -- listen")
+      doctor.send(:check_live_reload)
+    end
+
+    it "offers gem install in a standalone install, which reaches an installed listen" do
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+
+      check = missing_listen_check
+      expect(check.status).to eq(:warn)
+      expect(check.fix).to eq("Run: `gem install listen`")
+    end
+
+    it "offers the Gemfile line where the app bundles the gem" do
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
+
+      expect(missing_listen_check.fix).to eq("Add: `gem 'listen', group: :development`")
+    end
+  end
+
   describe "#check_introspector_health" do
     subject(:check) { doctor.send(:check_introspector_health) }
 

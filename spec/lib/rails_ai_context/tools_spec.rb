@@ -246,20 +246,35 @@ RSpec.describe "MCP Tool Integration" do
     context "when live_reload is :auto and listen is missing" do
       it "logs a tip and continues" do
         RailsAiContext.configuration.live_reload = :auto
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
         allow(RailsAiContext::LiveReload).to receive(:new).and_raise(LoadError, "cannot load such file -- listen")
 
         expect { server_wrapper.send(:maybe_start_live_reload, mcp_server) }.not_to raise_error
-        expect($stderr).to have_received(:puts).with(a_string_matching(/Live reload unavailable/))
+        expect($stderr).to have_received(:puts).with(
+          "[rails-ai-context] Live reload off: no `listen` gem, so each tool call checks for changed files instead. " \
+          "Add to your Gemfile: gem 'listen', group: :development"
+        )
         expect(file_check_on?).to be true
+      end
+
+      it "names gem install for a standalone install, which reaches an installed listen" do
+        RailsAiContext.configuration.live_reload = :auto
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+        allow(RailsAiContext::LiveReload).to receive(:new).and_raise(LoadError, "cannot load such file -- listen")
+
+        server_wrapper.send(:maybe_start_live_reload, mcp_server)
+        expect($stderr).to have_received(:puts).with(a_string_ending_with("Install it: gem install listen"))
       end
     end
 
     context "when live_reload is true and listen is missing" do
       it "raises LoadError with install instructions" do
         RailsAiContext.configuration.live_reload = true
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
         allow(RailsAiContext::LiveReload).to receive(:new).and_raise(LoadError, "cannot load such file -- listen")
 
-        expect { server_wrapper.send(:maybe_start_live_reload, mcp_server) }.to raise_error(LoadError, /listen/)
+        expect { server_wrapper.send(:maybe_start_live_reload, mcp_server) }
+          .to raise_error(LoadError, "Live reload requires the `listen` gem. Install it: gem install listen")
       end
     end
   end
