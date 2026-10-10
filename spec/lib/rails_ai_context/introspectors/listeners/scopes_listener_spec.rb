@@ -263,4 +263,43 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ScopesListener do
 
     expect(results.first[:body]).to eq('where("a\n  b")')
   end
+
+  # The names were nowhere in the answer: the scopes surfaced as class
+  # methods, untagged.
+  describe "a scope declared in a loop" do
+    it "names one scope per element of a constant the file assigns a literal list" do
+      results = parse_and_dispatch(<<~RUBY)
+        class Notification
+          KINDS = %w[order_shipped price_drop].freeze
+
+          KINDS.each do |kind_name|
+            scope kind_name.to_sym, -> { where(kind: kind_name) }
+          end
+        end
+      RUBY
+
+      expect(results.map { |s| s.slice(:name, :body, :confidence) }).to eq([
+        { name: "order_shipped", body: "where(kind: kind_name)", confidence: "[INFERRED]" },
+        { name: "price_drop", body: "where(kind: kind_name)", confidence: "[INFERRED]" }
+      ])
+    end
+
+    it "reads an inline list and a name built around the element" do
+      results = parse_and_dispatch(<<~RUBY)
+        %i[draft live].each { |state| scope :"\#{state}_only", -> { where(state: state) } }
+        %w[a b].each_with_index { |letter, i| scope "by_\#{letter}", -> { where(letter: letter) } }
+      RUBY
+
+      expect(results.map { |s| s[:name] }).to eq(%w[draft_only live_only by_a by_b])
+    end
+
+    it "names nothing it cannot read the list or the name of" do
+      results = parse_and_dispatch(<<~RUBY)
+        Kind.all.each { |kind| scope kind.name, -> { where(kind: kind) } }
+        STATES.each { |state| scope state, -> { where(state: state) } }
+      RUBY
+
+      expect(results).to be_empty
+    end
+  end
 end
