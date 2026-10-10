@@ -271,7 +271,7 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
       end
 
       it "still reports a failure when the file cannot be written at all" do
-        allow(File).to receive(:write).and_raise(Errno::EACCES)
+        allow(RailsAiContext::SafeFile).to receive(:atomic_write).and_raise(Errno::EACCES)
 
         expect(described_class.write([ :cursor ], root: root)).to include(yaml: :failed)
       end
@@ -286,6 +286,165 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
 
       it "reports the tools it actually recorded" do
         expect(described_class.write(%i[codex emacs], root: root)).to include(tools: [ :codex ])
+      end
+    end
+
+    # The YAML is a config file people annotate (STANDALONE.md's sample is
+    # full of comments). Re-dumping it on every run threw their notes away
+    # even when no value had moved.
+    describe "a YAML record someone annotated" do
+      let(:yaml_path) { File.join(root, ".rails-ai-context.yml") }
+      let(:annotated) do
+        <<~YAML
+          ---
+          # Picked at the team meeting.
+          ai_tools:
+          - claude
+          # - cursor (back once the rules are reviewed)
+          - copilot
+          tool_mode: mcp  # keep MCP, the agents rely on it
+          context_files: true
+
+          # team: lower log tail for our noisy dev log
+          log_lines: 30
+        YAML
+      end
+
+      before { write_yaml(annotated) }
+
+      it "is left byte for byte when no value changed" do
+        result = described_class.write(%i[claude copilot], root: root,
+                                                           extra_yaml: { "tool_mode" => "mcp", "context_files" => true })
+
+        expect(result).to include(yaml: :unchanged)
+        expect(File.read(yaml_path)).to eq(annotated)
+      end
+
+      it "reads the tools as a set, so their order is no change" do
+        result = described_class.write(%i[copilot claude], root: root)
+
+        expect(result).to include(yaml: :unchanged)
+      end
+
+      it "changes a scalar where it stands and keeps the comment after it" do
+        described_class.write(%i[claude copilot], root: root, extra_yaml: { "tool_mode" => "cli" })
+
+        expect(File.read(yaml_path)).to eq(annotated.sub("tool_mode: mcp  #", "tool_mode: cli  #"))
+      end
+
+      it "changes a list in place, keeping the tools it still holds and the comments between them" do
+        described_class.write(%i[claude copilot codex], root: root)
+
+        expect(File.read(yaml_path)).to eq(annotated.sub("- copilot\n", "- copilot\n- codex\n"))
+
+        described_class.write(%i[copilot], root: root)
+
+        expect(File.read(yaml_path)).to eq(annotated.sub("- claude\n", ""))
+        expect(described_class.read(root: root)).to eq([ :copilot ])
+      end
+
+      it "adds a key it did not hold at the end, leaving the rest alone" do
+        File.write(yaml_path, "# mine\nai_tools:\n  - claude\n")
+
+        described_class.write(%i[claude], root: root, extra_yaml: { "context_files" => false })
+
+        expect(File.read(yaml_path)).to eq("# mine\nai_tools:\n  - claude\ncontext_files: false\n")
+      end
+
+      it "rewrites a flow list on its line" do
+        File.write(yaml_path, "ai_tools: [claude]   # ours\npreset: full\n")
+
+        described_class.write(%i[claude cursor], root: root)
+
+        expect(File.read(yaml_path)).to eq("ai_tools: [claude, cursor]   # ours\npreset: full\n")
+      end
+
+      it "reads a symbol as its name" do
+        File.write(yaml_path, "ai_tools:\n- claude\ntool_mode: :mcp\n")
+
+        expect(described_class.write(%i[claude], root: root, extra_yaml: { "tool_mode" => "mcp" })).to include(yaml: :unchanged)
+      end
+
+      # A shape the line edit does not know is caught by reading the result
+      # back; the record is then written whole, so the value is never wrong.
+      it "writes the record whole when it cannot edit it in place" do
+        File.write(yaml_path, "\"ai_tools\": [claude]\n")
+
+        described_class.write(%i[cursor], root: root)
+
+        expect(described_class.read(root: root)).to eq([ :cursor ])
+        expect(YAML.safe_load_file(yaml_path).keys).to eq([ "ai_tools" ])
+      end
+
+      it "writes through a link to the file it names, keeping its mode" do
+        real = File.join(root, "shared.yml")
+        File.write(real, annotated)
+        File.chmod(0o640, real)
+        File.delete(yaml_path)
+        File.symlink(real, yaml_path)
+
+        described_class.write(%i[claude copilot], root: root, extra_yaml: { "tool_mode" => "cli" })
+
+        expect(File.symlink?(yaml_path)).to be(true)
+        expect(File.read(real)).to include("tool_mode: cli")
+        expect(File.stat(real).mode & 0o777).to eq(0o640)
+      end
+    end
+
+    # The initializer is the user's Rails config. A rewrite at two spaces
+    # inside the guard's four-space block, with the note dropped, broke their
+    # Rubocop and announced an update when nothing had changed.
+    describe "an initializer line someone indented and annotated" do
+      let(:initializer) do
+        <<~RUBY
+          if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
+            RailsAiContext.configure do |config|
+              config.ai_tools = %i[claude cursor]
+              config.tool_mode = :mcp   # MCP primary + CLI fallback
+              config.context_files = true # set by ops
+            end
+          end
+        RUBY
+      end
+      let(:path) { File.join(root, "config", "initializers", "rails_ai_context.rb") }
+
+      before { write_initializer(initializer) }
+
+      it "is left byte for byte when it already holds the values" do
+        expect(described_class.write(%i[cursor claude], root: root)).to include(initializer: :unchanged)
+        expect(described_class.write_tool_mode(:mcp, root: root)).to eq(:unchanged)
+        expect(described_class.write_context_files(true, root: root)).to eq(:unchanged)
+        expect(File.read(path)).to eq(initializer)
+      end
+
+      it "changes the value where it stands, swapping the generator's note for the new value's" do
+        expect(described_class.write_tool_mode(:cli, root: root)).to eq(:updated)
+
+        expect(File.read(path)).to eq(initializer.sub(
+          "    config.tool_mode = :mcp   # MCP primary + CLI fallback",
+          "    config.tool_mode = :cli    # CLI only (no MCP server needed)"
+        ))
+      end
+
+      it "keeps a note of the user's own" do
+        described_class.write_context_files(false, root: root)
+
+        expect(File.read(path)).to include("\n    config.context_files = false # set by ops\n")
+      end
+
+      it "keeps the indentation when the tools change" do
+        described_class.write(%i[claude cursor codex], root: root)
+
+        expect(File.read(path)).to include("\n    config.ai_tools = %i[claude cursor codex]\n")
+      end
+
+      it "inserts a missing line at the indentation of the line it sits beside" do
+        File.write(path, initializer.sub("    config.tool_mode = :mcp   # MCP primary + CLI fallback\n", ""))
+
+        expect(described_class.write_tool_mode(:cli, root: root)).to eq(:inserted)
+        expect(File.read(path)).to include(
+          "    config.ai_tools = %i[claude cursor]\n    config.tool_mode = :cli    # CLI only (no MCP server needed)\n"
+        )
       end
     end
 

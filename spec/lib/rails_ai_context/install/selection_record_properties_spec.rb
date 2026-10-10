@@ -177,6 +177,41 @@ RSpec.describe "SelectionRecord properties" do
       "#{noisy.size} state(s) reported a change on an identical rewrite:\n#{noisy.first(10).join("\n")}"
   end
 
+  # Both files are ones a user annotates and commits, so a write that moves
+  # no value must not show up in their diff at all.
+  it "leaves both files byte for byte when a write moves no value" do
+    moved = []
+
+    each_project do |state, root|
+      SR.write([ :codex ], root: root)
+      paths = [ ".rails-ai-context.yml", "config/initializers/rails_ai_context.rb" ]
+        .map { |relative| File.join(root, relative) }.select { |path| File.exist?(path) }
+      before = paths.to_h { |path| [ path, File.binread(path) ] }
+
+      SR.write([ :codex ], root: root)
+
+      moved << state unless before.all? { |path, bytes| File.binread(path) == bytes }
+    end
+
+    expect(moved).to be_empty, "#{moved.size} state(s) rewrote a file with nothing to change:\n#{moved.join("\n")}"
+  end
+
+  it "keeps a comment in a readable YAML record through every write" do
+    lost = []
+
+    each_project do |state, root|
+      path = File.join(root, ".rails-ai-context.yml")
+      next unless File.exist?(path) && SR.send(:readable_yaml, path).is_a?(Hash)
+
+      File.write(path, "#{File.read(path)}# team: keep the log tail short\n")
+      SELECTIONS.each { |selection| SR.write(selection, root: root, extra_yaml: { "tool_mode" => "cli" }) }
+
+      lost << state unless File.read(path).include?("# team: keep the log tail short")
+    end
+
+    expect(lost).to be_empty, "#{lost.size} state(s) lost a comment:\n#{lost.join("\n")}"
+  end
+
   # `rails ai:context:<tool>` adds one. It must never drop what was there.
   it "never loses a recorded tool when adding another" do
     losses = []

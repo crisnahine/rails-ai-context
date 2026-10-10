@@ -272,7 +272,7 @@ module RailsAiContext
 
       def create_new_initializer(path)
         # Always write uncommented so re-install can detect previous selection
-        tools_line = RailsAiContext::Install::SelectionRecord.initializer_line(@selected_formats)
+        tools_line = build_ai_tools_line
 
         tool_mode_line = build_tool_mode_line
 
@@ -315,15 +315,15 @@ module RailsAiContext
         changes = []
 
         # 1. Update ai_tools selection if user picked new tools
-        existing, changed = update_config_line(existing, "config.ai_tools", build_ai_tools_line)
+        existing, changed = update_config_line(existing, :ai_tools, @selected_formats)
         changes << "ai_tools" if changed
 
         # 2. Update tool_mode if user picked a new mode
-        existing, changed = update_config_line(existing, "config.tool_mode", build_tool_mode_line)
+        existing, changed = update_config_line(existing, :tool_mode, tool_mode)
         changes << "tool_mode" if changed
 
         # 3. Record whether this install writes context files at all
-        existing, changed = update_config_line(existing, "config.context_files", build_context_files_line)
+        existing, changed = update_config_line(existing, :context_files, context_files?)
         changes << "context_files" if changed
 
         # 4. Add any missing config sections
@@ -349,19 +349,20 @@ module RailsAiContext
         end
       end
 
-      # Replace or uncomment a config line. Returns [new_content, changed?]
-      def update_config_line(content, key, new_line)
-        # Match both commented and uncommented versions of this config key
-        pattern = /^([ \t]*)#?\s*#{Regexp.escape(key)}\s*=.*$/
-        if content.match?(pattern)
-          updated = content.sub(pattern) do
-            "#{Regexp.last_match(1)}#{new_line.lstrip}"
-          end
-          [ updated, updated != content ]
-        else
-          # Key not found at all - don't add (it's in a section that will be added)
-          [ content, false ]
-        end
+      # A key's line, rewritten where it stands. An assignment in the shape
+      # the record writes keeps its indentation and whatever follows the
+      # value, and is left alone when it already holds the value; any other
+      # assignment, or the commented-out default, becomes the generated line.
+      # A key with no line is not added: it comes with its section.
+      # Returns [new_content, changed?]
+      def update_config_line(content, key, value)
+        record = RailsAiContext::Install::SelectionRecord
+        edited, status = record.edit_config_line(content, key, value, insert: false)
+        return [ edited, status == :updated ] unless %i[conflict absent].include?(status)
+
+        pattern = /^([ \t]*)#?[ \t]*config\.#{key}[ \t]*=.*$/
+        updated = content.sub(pattern) { "#{Regexp.last_match(1)}#{record.config_line(key, value)}" }
+        [ updated, updated != content ]
       end
 
       def configure_block_end_index(content)
@@ -424,27 +425,23 @@ module RailsAiContext
         content.lines.map { |line| line == "\n" ? line : "  #{line}" }.join
       end
 
+      # The three selection lines, at the configure body's indent. Always
+      # written uncommented, so a re-run reads the same answers the last one
+      # recorded.
       def build_ai_tools_line
-        # Always write uncommented so re-install can detect previous selection
-        RailsAiContext::Install::SelectionRecord.initializer_line(@selected_formats)
+        "  #{RailsAiContext::Install::SelectionRecord.config_line(:ai_tools, @selected_formats)}"
       end
 
       def build_tool_mode_line
-        if @tool_mode == :cli
-          "  config.tool_mode = :cli    # CLI only (no MCP server needed)"
-        else
-          "  config.tool_mode = :mcp   # MCP primary + CLI fallback"
-        end
+        "  #{RailsAiContext::Install::SelectionRecord.config_line(:tool_mode, tool_mode)}"
       end
 
-      # Written uncommented either way, so a re-run reads the same answer the
-      # last one recorded.
       def build_context_files_line
-        if context_files?
-          "  config.context_files = true   # write CLAUDE.md, AGENTS.md and rules files"
-        else
-          "  config.context_files = false  # MCP only: no context files are written"
-        end
+        "  #{RailsAiContext::Install::SelectionRecord.config_line(:context_files, context_files?)}"
+      end
+
+      def tool_mode
+        @tool_mode == :cli ? :cli : :mcp
       end
 
       def context_files?
