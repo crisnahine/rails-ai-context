@@ -88,9 +88,16 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::EnvAccessListener do
       expect(results.first[:default]).to be_nil
     end
 
-    it "leaves a block default out" do
+    it "leaves a computed block default out" do
       results = parse_and_dispatch('ENV.fetch("PORT") { compute_port }')
       expect(results.first).to include(has_default: true, default: nil)
+    end
+
+    # Rails' own cable.yml and database.yml write their defaults this way.
+    it "carries a block's literal default, as a second argument's" do
+      expect(parse_and_dispatch('ENV.fetch("REDIS_URL") { "redis://localhost:6379/1" }').first)
+        .to include(has_default: true, default: "redis://localhost:6379/1")
+      expect(parse_and_dispatch('ENV.fetch("RAILS_MAX_THREADS") { 5 }').first[:default]).to eq("5")
     end
   end
 end

@@ -98,9 +98,10 @@ module RailsAiContext
 
       # Named in the answer, because a name missing from it is otherwise
       # indistinguishable from a name the app does not read.
-      SCAN_NOTE = "_Scanned `app`, `config` and `lib` for `.rb`, `.rake`, `.erb` and config `.yml`, plus `config.ru`, `db/seeds` and the Ruby scripts in `bin`. " \
-        "Config YAML on `sensitive_patterns` (config/database.yml) is read for the ENV names in its ERB tags only; " \
-        "credentials, keys and the rest are never read._"
+      SCAN_NOTE = "_Scanned `app`, `config` and `lib` for `.rb`, `.rake`, `.erb` and config `.yml`, plus `config.ru`, `db/seeds` and the Ruby scripts in `bin`; " \
+        "a YAML comment line is skipped, since what its ERB tag writes is thrown away. " \
+        "Config YAML on `sensitive_patterns` (config/database.yml, config/cable.yml, config/storage.yml and the rest) is read for the ENV names in its ERB tags only, " \
+        "so a default there is listed as not read; credentials, keys and the rest are never read._"
 
       private_class_method def self.format_standard(env_vars, env_example, deploy_and_settings, external_services, credentials_keys, encrypted_columns)
         lines = [ "# Environment Configuration", "" ]
@@ -127,6 +128,9 @@ module RailsAiContext
                 " (#{DEFAULTS_DIFFER}; `detail:\"full\"` names each)"
               elsif defaults.size == 1 && defaults.first.is_a?(String)
                 " (default: `#{defaults.first}`)"
+              elsif sites.any? && sites.all? { |v| v[:default_unread] }
+                # Read as no default at all, which for a fetch means a KeyError.
+                " (has a default, not read: #{sites.map { |v| "`#{v[:file]}`" }.uniq.join(', ')} is on `sensitive_patterns`)"
               else
                 ""
               end
@@ -238,8 +242,8 @@ module RailsAiContext
               # most needs, since it raises KeyError when the variable is unset.
               file_locations = v[:files].map { |f|
                 at = f[:line] ? "#{f[:file]}:#{f[:line]}" : f[:file]
-                next at unless disagree?(v[:files])
                 next "#{at} default not read" if f[:default_unread]
+                next at unless disagree?(v[:files])
 
                 case f[:default]
                 when String then "#{at} default: `#{f[:default]}`"
@@ -783,10 +787,12 @@ module RailsAiContext
         groups.sort_by { |k, _| CATEGORY_ORDER.index(k) || 99 }
       end
 
-      # Every site each variable is read at.
+      # Every site each variable is read at, with the file it is in.
       private_class_method def self.sites_by_name(env_vars)
-        env_vars.each_value.with_object(Hash.new { |h, k| h[k] = [] }) do |vars, found|
-          vars.each { |v| found[v[:name]] << v }
+        # The scan keys each file by its realpath.
+        root = "#{File.realpath(rails_app.root.to_s)}/"
+        env_vars.each_with_object(Hash.new { |h, k| h[k] = [] }) do |(path, vars), found|
+          vars.each { |v| found[v[:name]] << v.merge(file: path.to_s.delete_prefix(root)) }
         end
       end
 

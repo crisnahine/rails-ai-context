@@ -591,6 +591,23 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       expect(text).not_to include("db.internal")
     end
 
+    # Rails' cable.yml writes REDIS_URL's default in a block, and the answer
+    # read as a variable with no default, which a fetch would raise for.
+    it "says a default it did not read is there, when that site is the only one" do
+      FileUtils.mkdir_p(File.join(tmpdir, "config"))
+      File.write(File.join(tmpdir, "config", "cable.yml"), %(production:\n  url: <%= ENV.fetch("PA_REDIS_URL") { "redis://cache.internal:6379/1" } %>\n))
+      env_vars = described_class.send(:scan_env_vars, tmpdir)
+      allow(described_class).to receive(:scan_env_vars).and_return(env_vars)
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmpdir)))
+
+      standard = described_class.call(detail: "standard").content.first[:text]
+      full = described_class.call(detail: "full").content.first[:text]
+
+      expect(standard).to include("- `PA_REDIS_URL` (has a default, not read: `config/cable.yml` is on `sensitive_patterns`)")
+      expect(full).to include("- `PA_REDIS_URL` (config/cable.yml:2 default not read)")
+      expect(standard + full).not_to include("cache.internal")
+    end
+
     it "never opens a sensitive file that is not config YAML" do
       File.write(File.join(tmpdir, ".env"), %(SECRET=<%= ENV["NOT_READ"] %>\n))
       FileUtils.mkdir_p(File.join(tmpdir, "config"))

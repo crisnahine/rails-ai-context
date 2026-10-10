@@ -80,9 +80,18 @@ module RailsAiContext
             # `ENV.fetch("PORT", defaults[:port])` has a default, but naming
             # it `defaults[:port]` puts a Ruby expression where a reader
             # expects something to copy into a .env file.
-            default:     literal_value(args[1]),
+            default:     args.size > 1 ? literal_value(args[1]) : block_value(node.block),
             location:    node.location.start_line
           }
+        end
+
+        # `ENV.fetch("REDIS_URL") { "redis://localhost:6379/1" }`: a block whose
+        # one statement is a literal is that default, as a second argument is.
+        def block_value(block)
+          statements = block.body if block.is_a?(Prism::BlockNode)
+          return unless statements.is_a?(Prism::StatementsNode) && statements.body.size == 1
+
+          literal_value(statements.body.first)
         end
 
         def literal_value(node)
