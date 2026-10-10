@@ -451,6 +451,20 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).to include("embeds_many")
       expect(text).to include("orders")
     end
+
+    # The payload carried the collection, and nothing printed it.
+    it "names the collection, and where each field Mongoid adds comes from" do
+      mongoid_models["Customer"].merge!(collection: "clients", fields: [
+        { name: :_id, type: "BSON::ObjectId", implicit: "every document" }, { name: :name, type: "String" },
+        { name: :account_id, type: "Object", implicit: "belongs_to :account" }
+      ])
+      mongoid_models["Address"] = { mongoid: true, embedded_in: "Customer", fields: [], associations: [], validations: [] }
+
+      text = described_class.call(model: "Customer").content.first[:text]
+      expect(text).to include("# Customer\n\n**Collection:** `clients`")
+      expect(text).to include("- `_id`: BSON::ObjectId _(every document)_\n- `name`: String\n- `account_id`: Object _(belongs_to :account)_")
+      expect(described_class.call(model: "Address").content.first[:text]).to include("**Embedded in:** `Customer` (no collection of its own)")
+    end
   end
 
   describe ".call with pagination" do

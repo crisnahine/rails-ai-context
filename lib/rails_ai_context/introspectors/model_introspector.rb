@@ -2082,6 +2082,7 @@ module RailsAiContext
         done[class_name] = false
         parent_name = entry[:superclass] && SuperclassChain.resolve_in_scope(class_name, entry[:superclass], nesting: entry[:nesting]) { |q| q if models.include?(q) }
         parent = parent_name && mongoid_entry(parent_name, entries, models, done)
+        add_discriminator_field(parent) if parent.is_a?(Hash) && parent[:mongoid]
         done[class_name] = if entry[:source].include?("Mongoid::Document") || (parent.is_a?(Hash) && parent[:mongoid])
           mongoid_model_details(entry[:source], class_name, entry[:path], parent: parent && parent[:mongoid] ? [ parent_name, parent ] : nil)
             .merge(file: relative_to_root(entry[:path]))
@@ -2091,6 +2092,14 @@ module RailsAiContext
         end
       rescue => e
         done[class_name] = { error: e.message }
+      end
+
+      # Mongoid adds `_type` to a document class when another subclasses it,
+      # after the fields it already has, and the subclass copies the list.
+      def add_discriminator_field(parent)
+        return if Array(parent[:fields]).any? { |f| f[:name].to_s == "_type" }
+
+        parent[:fields] = Array(parent[:fields]) + [ { name: :_type, type: "String", implicit: "a subclassed document" } ]
       end
 
       def mongoid_candidates
@@ -2230,10 +2239,12 @@ module RailsAiContext
         settled = Array(inherited&.dig(:settled_callbacks)).map { |cb| cb.merge(rank: cb[:rank].to_i + 1) } + settled
         # Mongoid sets after_commit without prepend, as Rails 7.0 does, so it runs last declared first.
         callbacks = chain_order(settled, false)
+        declared = macros.select { |m| m[:macro] == :field }.map { |m| mongoid_field(m) }
+        mixins = ConcernMembership.owned_by(data[:mixins], class_name, root: app.root)
         details = {
           confidence: Confidence::STATIC,
           mongoid: true,
-          fields: macros.select { |m| m[:macro] == :field }.map { |m| mongoid_field(m) },
+          fields: with_implicit_fields(declared, mixins, data[:associations], inherited),
           embeds: macros.select { |m| %i[embeds_many embeds_one embedded_in].include?(m[:macro]) }
                         .map { |m| { type: m[:macro], name: m[:args].first } },
           indexes: macros.select { |m| m[:macro] == :index }.map { |m| m[:text] },
@@ -2270,6 +2281,53 @@ module RailsAiContext
                                  inherited&.dig(:collection) || class_name.tableize.tr("/", "_")
         end
         downgrade_records(details)
+      end
+
+      # The fields each Mongoid::Timestamps module adds, by the module's name.
+      MONGOID_TIMESTAMPS = {
+        "Mongoid::Timestamps" => %w[created_at updated_at],
+        "Mongoid::Timestamps::Short" => %w[c_at u_at],
+        "Mongoid::Timestamps::Created" => %w[created_at],
+        "Mongoid::Timestamps::Created::Short" => %w[c_at],
+        "Mongoid::Timestamps::Updated" => %w[updated_at],
+        "Mongoid::Timestamps::Updated::Short" => %w[u_at]
+      }.freeze
+
+      # The fields Mongoid defines without a `field` line, in the order
+      # `Model.fields` lists them: every document's `_id`, the timestamps an
+      # included Mongoid::Timestamps adds, the declared fields, then the foreign
+      # key each belongs_to or has_and_belongs_to_many keeps. A subclass takes
+      # its parent's list, so only the root of a hierarchy adds `_id`.
+      def with_implicit_fields(declared, mixins, associations, inherited)
+        named = declared.map { |f| f[:name].to_s }.to_set
+        leading = []
+        leading << { name: :_id, type: "BSON::ObjectId", implicit: "every document" } unless inherited
+        Array(mixins).select { |m| m[:ancestor] && m[:receiver].nil? }.each do |mixin|
+          module_name = mixin[:name].to_s.delete_prefix("::")
+          MONGOID_TIMESTAMPS.fetch(module_name, []).each { |name| leading << { name: name.to_sym, type: "Time", implicit: module_name } }
+        end
+        keys = Array(associations).flat_map { |assoc| mongoid_foreign_keys(assoc) }
+        # A `field` line naming one of these redefines it where it already sits.
+        unplaced = declared.to_h { |f| [ f[:name].to_s, f ] }
+        placed = leading.map { |f| unplaced.delete(f[:name].to_s) || f }
+        (placed + unplaced.values + keys.reject { |f| named.include?(f[:name].to_s) }).uniq { |f| f[:name].to_s }
+      end
+
+      # The key a relation keeps on this document; a polymorphic belongs_to
+      # adds its type first, as Mongoid does.
+      def mongoid_foreign_keys(assoc)
+        options = assoc[:options].is_a?(Hash) ? assoc[:options] : {}
+        written = assoc[:foreign_key] || options[:foreign_key]
+        written = nil unless written.is_a?(String) || written.is_a?(Symbol)
+        case assoc[:type].to_s
+        when "belongs_to"
+          key = { name: (written || "#{assoc[:name]}_id").to_sym, type: "Object", implicit: "belongs_to :#{assoc[:name]}" }
+          polymorphic = assoc[:polymorphic] || options[:polymorphic] == true
+          polymorphic ? [ { name: :"#{assoc[:name]}_type", type: "String", implicit: "belongs_to :#{assoc[:name]}, polymorphic: true" }, key ] : [ key ]
+        when "has_and_belongs_to_many"
+          [ { name: (written || "#{assoc[:name].to_s.singularize}_ids").to_sym, type: "Array", implicit: "has_and_belongs_to_many :#{assoc[:name]}" } ]
+        else []
+        end
       end
 
       # A default Mongoid computes (a lambda) is left out, as the replay leaves a computed column default.
