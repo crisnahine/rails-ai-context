@@ -384,38 +384,35 @@ class RailsAiContextCLI < Thor
       refuse_no_app! unless entry_boot.app_present?(Dir.pwd, allow_source_only: true)
 
       require_install_files!
+      program = ::RailsAiContext::Install::Program
 
-      # --- Read previous selection (before prompts) ---
+      # --- Every question first, the previous selection read before them ---
       previous_tools = read_previous_ai_tools
-
-      # --- Prompts (no Rails needed) ---
       ai_tools = prompt_ai_tools
       setup = prompt_setup
       tool_mode = setup.tool_mode
       context_files = setup.context_files
-
-      # --- Cleanup removed tools ---
-      cleanup_removed_tools(previous_tools, ai_tools) if previous_tools&.any?
-
-      # --- One-time v5.0.0 legacy UI-pattern files cleanup prompt ---
+      dropped = program.ask_removed_tools(program_surface, previous: previous_tools, selected: ai_tools)
+      # One-time v5.0.0 legacy UI-pattern files cleanup prompt
       ::RailsAiContext::LegacyCleanup.prompt_legacy_files(ai_tools, root: Dir.pwd) if context_files
 
-      # --- Record the selection (YAML, plus the initializer line) ---
+      # --- Boot, then write ---
+      # Nothing is written before the app's bundle is set up: the MCP configs
+      # and the cleanup read and write JSON, and done first they loaded this
+      # gem's newest json, which the app's pinned copy then loaded over. A
+      # boot that fails falls back to the static tier rather than abandoning
+      # the setup, since setup is exactly what you run on a repo you have
+      # just cloned. An MCP-only setup needs nothing from the app, so it boots
+      # nothing.
+      boot_rails!(command: "init", allow_static: true) if context_files
+
+      program.remove_tools(program_surface, dropped, selected: ai_tools, root: Dir.pwd)
       record_selection(ai_tools, tool_mode, context_files)
-
-      # --- Write per-tool MCP config files (MCP mode only) ---
       write_mcp_configs(ai_tools, tool_mode)
-
-      # --- Add .ai-context.json to .gitignore ---
       add_to_gitignore(context_files)
 
-      # --- Boot Rails, load config, generate context ---
-      # The config files are already on disk by now, so failing here leaves the
-      # app half set up and calls the whole thing a failure. Setup is exactly
-      # what you run on a repo you have just cloned.
-      boot_rails!(command: "init", allow_static: true)
-
       if context_files
+        configure_answers!(ai_tools, tool_mode, context_files)
         $stderr.puts ""
         $stderr.puts "Generating AI context files..."
         print_context_result(::RailsAiContext.generate_context(format: ai_tools))
@@ -472,6 +469,16 @@ class RailsAiContextCLI < Thor
 
     def prompt_ai_tools
       ::RailsAiContext::Install::Program.select_ai_tools(program_surface)
+    end
+
+    # The answers, over the configuration the boot loaded from the files as
+    # they stood before this run: the context files come out in the mode
+    # just chosen, not the one the app had.
+    def configure_answers!(ai_tools, tool_mode, context_files)
+      config = ::RailsAiContext.configuration
+      config.ai_tools = ai_tools
+      config.tool_mode = tool_mode
+      config.context_files = context_files
     end
 
     def prompt_setup
@@ -721,7 +728,8 @@ class RailsAiContextCLI < Thor
       $stderr.puts ""
       $stderr.puts "Commands:"
       $stderr.puts "  #{binary} context    # Regenerate context files" if context_files
-      $stderr.puts "  #{binary} tool NAME  # Run any of the #{RailsAiContext::CountPhrase.call(served_tool_count, "tool")}"
+      tools = served_tool_count
+      $stderr.puts "  #{binary} tool NAME  # Run any of the #{RailsAiContext::CountPhrase.call(tools, "tool")}"
       if tool_mode == :mcp
         $stderr.puts "  #{binary} serve      # Start MCP server"
       end
@@ -740,9 +748,17 @@ class RailsAiContextCLI < Thor
       $stderr.puts ""
     end
 
-    # What the server serves, skip_tools and custom_tools applied.
+    # What the server serves, skip_tools and custom_tools applied. An
+    # MCP-only setup boots nothing, so the gem is loaded here for the count,
+    # once every file is written. Without a boot the custom tools, app
+    # classes, cannot load, so each entry counts as one.
     def served_tool_count
-      ::RailsAiContext::Server.exposed_tools.size
+      return ::RailsAiContext::Server.exposed_tools.size if defined?(::RailsAiContext::Server)
+
+      entry_boot.require_gem_without_app!
+      ::RailsAiContext::Configuration.auto_load!(Dir.pwd)
+      config = ::RailsAiContext.configuration
+      ::RailsAiContext::Server.active_tools(config).size + config.custom_tools.size
     end
 
     def print_context_result(result)
