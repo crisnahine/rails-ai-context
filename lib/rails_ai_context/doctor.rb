@@ -84,7 +84,7 @@ module RailsAiContext
     def standalone?
       return @standalone if defined?(@standalone)
 
-      @standalone = InstallMode.standalone?
+      @standalone = InstallMode.standalone?(root: app.root)
     end
 
     # All configured AI tools; nil (unconfigured) means every tool in the table.
@@ -294,81 +294,229 @@ module RailsAiContext
         fix: "Re-run `#{command(:install)}`, or add `&& RailsAiContext.respond_to?(:configure)` to the guard")
     end
 
+    # One MCP config's answer. A config with a `problem` is named beside it in
+    # the summary, and configs that share one are named together;
+    # `unparseable` is the config as shown, when the install cannot merge into it.
+    ConfigVerdict = Data.define(:label, :status, :problem, :fix, :unparseable)
+
     def check_mcp_json
       if RailsAiContext.configuration.tool_mode == :cli
         return Check.new(name: "MCP configs", status: :pass,
           message: "Skipped (CLI-only mode)", fix: nil)
       end
 
-      ai_tools = configured_ai_tools
-      configs = self.class.mcp_config_checks
-
-      # Check at least the Claude Code config (always expected)
-      tools_to_check = ai_tools & configs.keys
-      tools_to_check = %i[claude] if tools_to_check.empty?
-
-      invalid = []
-      checks = tools_to_check.map do |tool|
-        cfg = configs[tool]
-        # An app in a workspace is served from the folder above it, whose
-        # config, if it cannot be read, is the one to fix.
-        full_path = McpConfigGenerator.serving_config(app.root, tool) ||
-                    McpConfigGenerator.unreadable_config_above(app.root, tool) || File.join(app.root, cfg[:path])
-        unless File.exist?(full_path)
-          next Check.new(name: cfg[:label], status: :warn,
-            message: "No #{cfg[:path]} for MCP auto-discovery",
-            fix: "Run `#{command(:install)}`")
-        end
-
-        # ../.mcp.json for a workspace's.
-        shown = Install::Program.relative_to(full_path, app.root)
-        if cfg[:path].end_with?(".toml")
-          Check.new(name: cfg[:label], status: :pass, message: "#{shown} exists", fix: nil)
-        else
-          begin
-            # An empty file is one install fills.
-            text, = McpConfigGenerator.json_text(full_path)
-            if text.strip.empty?
-              next Check.new(name: cfg[:label], status: :warn, message: "#{shown} is empty", fix: "Run `#{command(:install)}`")
-            end
-
-            data = McpConfigGenerator.read_json(full_path)
-            # The install merges only into an object, with an object under
-            # the tool's servers key, and leaves anything else as it is.
-            root_key = McpConfigGenerator::TOOL_CONFIGS.fetch(tool)[:root_key]
-            shape = if !data.is_a?(Hash) then "it is JSON but not an object"
-            elsif !data[root_key].nil? && !data[root_key].is_a?(Hash) then %("#{root_key}" is not an object)
-            end
-            if shape
-              invalid << shown
-              next Check.new(name: cfg[:label], status: :fail, message: "#{shown} cannot take the gem's entry: #{shape}",
-                             fix: unparseable_fix([ shown ]))
-            end
-
-            Check.new(name: cfg[:label], status: :pass, message: "#{shown} valid", fix: nil)
-          rescue JSON::ParserError => e
-            invalid << shown
-            Check.new(name: cfg[:label], status: :fail,
-              message: "#{shown} has invalid JSON: #{e.message}",
-              fix: unparseable_fix([ shown ]))
-          end
-        end
-      end
-
-      # Aggregate all results into a single summary check
-      failures = checks.select { |c| c.status != :pass }
+      verdicts = mcp_tools_to_check.map { |tool| mcp_config_verdict(tool) }
+      failures = verdicts.reject { |verdict| verdict.status == :pass }
 
       if failures.empty?
-        Check.new(name: "MCP configs", status: :pass,
-          message: "#{checks.size} of #{count_phrase(checks.size, "MCP config")} valid",
+        return Check.new(name: "MCP configs", status: :pass,
+          message: "#{verdicts.size} of #{count_phrase(verdicts.size, "MCP config")} valid",
           fix: nil)
-      else
-        labels = failures.map { |c| c.name }
-        worst_status = failures.any? { |c| c.status == :fail } ? :fail : :warn
-        Check.new(name: "MCP configs", status: worst_status,
-          message: "#{failures.size} of #{count_phrase(checks.size, "MCP config")} #{failures.size == 1 ? "needs" : "need"} attention: #{labels.join(', ')}",
-          fix: invalid.any? ? unparseable_fix(invalid) : "Run `#{command(:install)}` to fix")
       end
+
+      said = failures.group_by(&:problem).map do |problem, group|
+        labels = group.map(&:label).join(", ")
+        problem ? "#{labels}: #{problem}" : labels
+      end
+      unparseable = failures.filter_map(&:unparseable)
+      fixes = ([ (unparseable_fix(unparseable) if unparseable.any?) ] + failures.reject(&:unparseable).map(&:fix)).compact.uniq
+      Check.new(name: "MCP configs", status: failures.any? { |verdict| verdict.status == :fail } ? :fail : :warn,
+        message: "#{failures.size} of #{count_phrase(verdicts.size, "MCP config")} #{failures.size == 1 ? "needs" : "need"} " \
+                 "attention: #{said.join('; ')}",
+        fix: fixes.join("; "))
+    end
+
+    # Check at least the Claude Code config (always expected)
+    def mcp_tools_to_check
+      tools = configured_ai_tools & self.class.mcp_config_checks.keys
+      tools.empty? ? %i[claude] : tools
+    end
+
+    # The config a tool reads for this app, judged as the install would merge
+    # into it and as its client would start the server it names.
+    def mcp_config_verdict(tool)
+      cfg = self.class.mcp_config_checks[tool]
+      label = cfg[:label]
+      install_fix = "Run `#{command(:install)}` to fix"
+      # An app in a workspace is served from the folder above it, whose
+      # config, if it cannot be read, is the one to fix.
+      full_path = mcp_config_path(tool)
+      unless File.exist?(full_path)
+        return ConfigVerdict.new(label: label, status: :warn, problem: nil, fix: install_fix, unparseable: nil)
+      end
+
+      # ../.mcp.json for a workspace's.
+      shown = Install::Program.relative_to(full_path, app.root)
+      unless cfg[:path].end_with?(".toml")
+        # An empty file is one install fills.
+        text, = McpConfigGenerator.json_text(full_path)
+        return ConfigVerdict.new(label: label, status: :warn, problem: nil, fix: install_fix, unparseable: nil) if text.strip.empty?
+
+        data = McpConfigGenerator.read_json(full_path)
+        # The install merges only into an object, with an object under
+        # the tool's servers key, and leaves anything else as it is.
+        root_key = McpConfigGenerator::TOOL_CONFIGS.fetch(tool)[:root_key]
+        if !data.is_a?(Hash) || (!data[root_key].nil? && !data[root_key].is_a?(Hash))
+          return ConfigVerdict.new(label: label, status: :fail, problem: nil, fix: nil, unparseable: shown)
+        end
+      end
+
+      entries = serving_entries(tool, full_path)
+      if entries.empty?
+        return ConfigVerdict.new(label: label, status: :warn, problem: "holds no rails-ai-context server", fix: install_fix,
+                                 unparseable: nil)
+      end
+
+      # An entry under the gem's name that runs something else (an HTTP one)
+      # is its owner's to judge.
+      status, problem, fix = entries.select { |entry| entry[:own] }.filter_map { |entry| entry_trouble(entry, tool, full_path, shown) }
+                                    .min_by { |trouble| trouble.first == :fail ? 0 : 1 }
+      ConfigVerdict.new(label: label, status: status || :pass, problem: problem, fix: fix, unparseable: nil)
+    rescue JSON::ParserError
+      ConfigVerdict.new(label: label, status: :fail, problem: nil, fix: nil, unparseable: shown)
+    rescue SystemCallError, IOError => e
+      ConfigVerdict.new(label: label, status: :warn, problem: "cannot be read: #{e.message}", fix: install_fix, unparseable: nil)
+    end
+
+    def mcp_config_path(tool)
+      McpConfigGenerator.serving_config(app.root, tool) || McpConfigGenerator.unreadable_config_above(app.root, tool) ||
+        File.join(app.root, self.class.mcp_config_checks[tool][:path])
+    end
+
+    # The folder a config sits in, which its client starts the server from.
+    def mcp_config_folder(tool, path)
+      path.delete_suffix(McpConfigGenerator::TOOL_CONFIGS.fetch(tool)[:path]).chomp("/")
+    end
+
+    # The entries under the gem's names in a config that serve this app: the
+    # app's own config's, or a workspace's that point --app-path at the app.
+    def serving_entries(tool, path)
+      folder = mcp_config_folder(tool, path)
+      variable = McpConfigGenerator::TOOL_CONFIGS.fetch(tool)[:folder_variable]
+      target = SafePath.canonical(app.root.to_s)
+      McpConfigGenerator.named_entries(path, tool).select do |entry|
+        SafePath.canonical(McpConfigGenerator.entry_app_root(entry[:argv], variable, folder) || folder) == target
+      end
+    end
+
+    # Why one of the gem's entries cannot start the server for this app, or
+    # starts a copy of the gem other than the app's: [status, problem, fix],
+    # nil when it starts the right one. Fast on purpose: the command is
+    # looked up, never run.
+    def entry_trouble(entry, tool, config_path, shown)
+      argv = entry[:argv]
+      folder = mcp_config_folder(tool, config_path)
+      line = "`#{argv.take_while { |arg| !arg.start_with?("--app-path") }.join(' ')}`"
+      rerun = "Run #{install_command(shown)} to fix"
+      # Codex sets the PATH its env snapshot holds, which the snapshot check reads.
+      path, where = entry_path_variable(entry, tool)
+      found = path.nil? || executable_on?(argv.first.to_s, path, folder)
+      missing = "#{line} cannot start - `#{argv.first}` is not on #{where}"
+
+      if argv[0] == "bundle" && argv[1] == "exec"
+        return [ :fail, missing, "Make `bundle` reachable from #{where}" ] unless found
+
+        bundle = entry_bundle(entry, tool, folder) or return nil
+        lock, gemfile, lock_shown = bundle
+        return [ :fail, "#{line} cannot start - #{lock_shown} has no rails-ai-context", rerun ] if lock_lacks_gem?(lock)
+
+        spec = bundled_gem_spec(gemfile) if argv[2] == "rails-ai-context"
+        if spec && !spec.executables.include?("rails-ai-context")
+          return [ :fail, "#{line} cannot start - the bundle's rails-ai-context at #{spec.full_gem_path} lists no `rails-ai-context` executable",
+                   "Point the Gemfile at a rails-ai-context whose gemspec lists `exe/rails-ai-context` (a git checkout, or a release), " \
+                   "then run `bundle install`" ]
+        end
+      elsif File.basename(argv[0].to_s) == "rails-ai-context"
+        lock = GemLock.for(app.root)
+        if lock.present?("rails-ai-context")
+          bundled = "#{GemLock.bundle(app.root).lock_label} carries rails-ai-context #{lock.version("rails-ai-context")}"
+          return [ :fail, "#{missing}, while #{bundled}", rerun ] unless found
+
+          return [ :warn, "#{line} starts the gem installed outside the app's bundle, while #{bundled}", rerun ]
+        end
+        return [ :fail, missing, "Run `gem install rails-ai-context` for the Ruby on #{where}" ] unless found
+      elsif !found
+        return [ :fail, missing, rerun ]
+      end
+      nil
+    end
+
+    # The PATH an entry's server is started with, and how to name it: its
+    # own env's when it sets one, else the client's. nil when it cannot be
+    # read here: a variable the tool expands, or a Codex snapshot, which
+    # check_codex_env_staleness reads.
+    def entry_path_variable(entry, tool)
+      set = entry[:env]["PATH"]
+      return [ client_path, "PATH" ] if set.nil?
+      return [ nil, "the PATH its env sets" ] if tool == :codex || set.include?("$")
+
+      [ set, "the PATH its env sets" ]
+    end
+
+    # The PATH a client hands the server it starts: the shell's, before
+    # Bundler put its own directories ahead of it.
+    def client_path
+      env = defined?(Bundler) && Bundler.respond_to?(:original_env) ? Bundler.original_env : ENV.to_h
+      env["PATH"].to_s
+    end
+
+    # Whether `command` would start: a path is read from the folder the server
+    # starts in, a bare name from PATH, as the client's spawn finds it.
+    def executable_on?(command, path, folder)
+      return false if command.empty?
+
+      candidates = if command.include?("/") || (File::ALT_SEPARATOR && command.include?(File::ALT_SEPARATOR))
+        [ File.expand_path(command, folder) ]
+      else
+        path.split(File::PATH_SEPARATOR).reject(&:empty?).map { |dir| File.join(File.expand_path(dir, folder), command) }
+      end
+      extensions = Gem.win_platform? ? [ "", *ENV.fetch("PATHEXT", ".EXE;.BAT;.CMD").split(";") ] : [ "" ]
+      candidates.product(extensions).any? { |file, ext| File.file?("#{file}#{ext}") && File.executable?("#{file}#{ext}") }
+    end
+
+    # The bundle `bundle exec` reads for an entry: the Gemfile its env names,
+    # else the app's own, which for an app with none is the one its
+    # config/boot.rb names, as Bundler finds it walking up. nil when it
+    # cannot be told. [lock, Gemfile, lockfile as shown] otherwise.
+    def entry_bundle(entry, tool, folder)
+      named = entry[:env]["BUNDLE_GEMFILE"]
+      dir = if named
+        gemfile = McpConfigGenerator.entry_path(named, McpConfigGenerator::TOOL_CONFIGS.fetch(tool)[:folder_variable], folder)
+        return nil unless gemfile && File.basename(gemfile) == GemLock.gemfile_name(File.dirname(gemfile))
+
+        File.dirname(gemfile)
+      else
+        folder
+      end
+      bundle = GemLock.bundle(dir)
+      shown = SafePath.canonical(dir) == SafePath.canonical(app.root.to_s) ? bundle.lock_label : Install::Program.relative_to(File.join(bundle.dir, bundle.lock_label), app.root)
+      [ GemLock.for(dir), bundle.gemfile, shown ]
+    end
+
+    # Known to lack the gem: a lockfile without it, or with none yet, a
+    # Gemfile that names every gem it holds and not this one.
+    def lock_lacks_gem?(lock)
+      return !lock.present?("rails-ai-context") unless lock.missing?
+
+      gems = lock.gemfile_gems
+      !gems.nil? && !gems.include?("rails-ai-context")
+    end
+
+    # This process's copy of the gem, when it runs in the bundle `gemfile`
+    # belongs to: only then is its gemspec the one `bundle exec` reads.
+    def bundled_gem_spec(gemfile)
+      return nil unless gemfile && defined?(Bundler) && Bundler.respond_to?(:default_gemfile)
+      return nil unless SafePath.canonical(Bundler.default_gemfile.to_s) == SafePath.canonical(gemfile)
+
+      Gem.loaded_specs["rails-ai-context"]
+    rescue StandardError
+      nil
+    end
+
+    # A workspace's config above the app is written by `init` run in the
+    # workspace, never by this app's install.
+    def install_command(shown)
+      shown.start_with?("../") ? "`rails-ai-context init` in the folder that holds #{shown}" : "`#{command(:install)}`"
     end
 
     # Install leaves a config it cannot parse, or merge into, as it is, so
@@ -438,10 +586,13 @@ module RailsAiContext
     # candidate versions). That happens before any gem code runs and corrupts
     # the MCP stdio stream's pure-JSON framing. Re-run the activation the way
     # the standalone binstub does and flag anything that lands on stdout.
-    # In-Gemfile installs activate through the lockfile and are immune.
+    # In-Gemfile installs activate through the lockfile and are immune, unless
+    # a config starts the binary installed outside the bundle all the same.
     def check_stdio_activation_hygiene
-      return Check.new(name: "MCP stdio hygiene", status: :pass,
-        message: "in-Gemfile install activates via bundler (no resolver output)", fix: nil) unless standalone?
+      unless standalone? || serves_installed_binary?
+        return Check.new(name: "MCP stdio hygiene", status: :pass,
+          message: "in-Gemfile install activates via bundler (no resolver output)", fix: nil)
+      end
 
       require "open3"
       # An MCP client launches the binstub from a clean shell; simulate that
@@ -471,6 +622,19 @@ module RailsAiContext
     rescue => e
       Check.new(name: "MCP stdio hygiene", status: :warn,
         message: "could not verify activation hygiene: #{e.message.truncate(60)}", fix: nil)
+    end
+
+    # Whether a config this app is served from starts the `rails-ai-context`
+    # binary itself, which activates the gem through RubyGems.
+    def serves_installed_binary?
+      return false if RailsAiContext.configuration.tool_mode == :cli
+
+      mcp_tools_to_check.any? do |tool|
+        path = McpConfigGenerator.serving_config(app.root, tool) or next false
+        serving_entries(tool, path).any? { |entry| entry[:own] && File.basename(entry[:argv].first.to_s) == "rails-ai-context" }
+      rescue SystemCallError, IOError, JSON::ParserError
+        false
+      end
     end
 
     # ── Introspector health ───────────────────────────────────────────
