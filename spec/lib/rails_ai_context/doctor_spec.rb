@@ -1402,5 +1402,79 @@ RSpec.describe RailsAiContext::Doctor do
         expect([ check.status, check.message ]).to eq([ :pass, "1 migration file" ])
       end
     end
+
+    it "counts every database's migrations, and says which hold them" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(%w[config db/migrate db/analytics_migrate].map { |path| File.join(dir, path) })
+        File.write(File.join(dir, "config/database.yml"),
+                   "#{Rails.env}:\n  primary:\n    adapter: sqlite3\n  analytics:\n    adapter: sqlite3\n    migrations_paths: db/analytics_migrate\n")
+        File.write(File.join(dir, "db/migrate/20240101000000_create_notes.rb"), "class CreateNotes < ActiveRecord::Migration[7.1]; end\n")
+        File.write(File.join(dir, "db/analytics_migrate/20240101000001_create_events.rb"), "class CreateEvents < ActiveRecord::Migration[7.1]; end\n")
+        check = described_class.new(RailsAiContext::StaticApp.new(dir)).send(:check_migrations)
+        expect(check.message).to eq("2 migration files (1 in primary, 1 in analytics)")
+      end
+    end
+  end
+
+  # Every database the app migrates is asked through its own connection, as
+  # `db:migrate:status` asks it; one that cannot be asked is named.
+  describe "#check_pending_migrations" do
+    around do |example|
+      Dir.mktmpdir do |dir|
+        @root = File.realpath(dir)
+        example.run
+      end
+    end
+
+    let(:app_doctor) { described_class.new(RailsAiContext::StaticApp.new(@root)) }
+
+    def write(path, content)
+      FileUtils.mkdir_p(File.dirname(File.join(@root, path)))
+      File.write(File.join(@root, path), content)
+    end
+
+    def database_named(name, database)
+      ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, name, { adapter: "sqlite3", database: database })
+    end
+
+    it "reads a pending migration in a secondary database" do
+      write("config/database.yml", "#{Rails.env}:\n  primary:\n    adapter: sqlite3\n  analytics:\n    adapter: sqlite3\n    " \
+                                   "database: db/analytics.sqlite3\n    migrations_paths: db/analytics_migrate\n")
+      write("db/analytics_migrate/20240101000000_create_events.rb", "class CreateEvents < ActiveRecord::Migration[7.1]\nend\n")
+      analytics = database_named("analytics", File.join(@root, "db/analytics.sqlite3"))
+      allow(ActiveRecord::Base.configurations).to receive(:configs_for).and_call_original
+      allow(ActiveRecord::Base.configurations).to receive(:configs_for).with(env_name: Rails.env)
+        .and_return([ ActiveRecord::Base.connection_db_config, analytics ])
+
+      check = app_doctor.send(:check_pending_migrations)
+
+      expect(check.status).to eq(:fail)
+      expect(check.message).to eq("1 pending migration in analytics - schema data will be stale")
+    end
+
+    def unreachable(error)
+      allow(app_doctor).to receive(:database_states).and_return([
+        { name: "primary", config: database_named("primary", "shop_development"), error: error }
+      ])
+      app_doctor.send(:check_pending_migrations)
+    end
+
+    # The pending row used to vanish with no database, so --strict passed.
+    it "fails, naming a database that does not exist and the command that makes it" do
+      check = unreachable(ActiveRecord::NoDatabaseError.new("Database not found: shop_development"))
+
+      expect(check).to have_attributes(name: "Database", status: :fail, message: "the #{Rails.env} database shop_development does not exist",
+                                       fix: "Run `RAILS_ENV=#{Rails.env} bin/rails db:prepare`")
+    end
+
+    it "fails, naming a database server that does not answer" do
+      check = unreachable(ActiveRecord::ConnectionNotEstablished.new(
+        %(connection to server at "127.0.0.1", port 5432 failed: Connection refused\n\tIs the server running on that host?)
+      ))
+
+      expect(check.message).to eq(%(the #{Rails.env} database shop_development cannot be reached: connection to server at "127.0.0.1", ) +
+                                  "port 5432 failed: Connection refused")
+      expect(check.fix).to eq("Start the database server, or fix its settings in config/database.yml")
+    end
   end
 end
