@@ -1269,7 +1269,7 @@ mount RailsAiContext::Engine, at: "/mcp" if defined?(RailsAiContext::Engine)
 
 The `if` keeps the routes file loading wherever the gem is not: in production, where Bundler skips the `:development` group, and after the gem is removed. An unguarded mount raises `uninitialized constant RailsAiContext::Engine` there, and the app does not boot.
 
-This provides a native Rails controller (`RailsAiContext::McpController`) that delegates to the Streamable HTTP transport. In production it refuses every request with a 403, as `auto_mount` does, unless you set `config.allow_http_in_production = true`; see [Security](SECURITY.md#mcp-http-transport).
+This provides a native Rails controller (`RailsAiContext::McpController`) that delegates to the Streamable HTTP transport. Outside development and test (production, staging) it refuses every request with a 403, as `auto_mount` does, unless you set `config.allow_http_in_production = true`; see [Security](SECURITY.md#mcp-http-transport).
 
 ---
 
@@ -1418,7 +1418,7 @@ end
 | `sensitive_patterns` | Array | `.env`, `.key`, `.pem`, credentials | File patterns blocked from search and read tools |
 | `output_dir` | String | `nil` (Rails.root) | Where to write context files. OpenCode's `app/models/AGENTS.md` and `app/controllers/AGENTS.md` are written only where that directory exists under it |
 | `auto_mount` | Boolean | `false` | Auto-mount HTTP MCP endpoint |
-| `allow_http_in_production` | Boolean | `false` | Let the mounted engine and `auto_mount` answer in production. Off, they refuse there with a 403. See [Security](SECURITY.md#mcp-http-transport) |
+| `allow_http_in_production` | Boolean | `false` | Let the mounted engine and `auto_mount` answer in production and every other environment but development and test. Off, they refuse there with a 403. See [Security](SECURITY.md#mcp-http-transport) |
 | `http_path` | String | `"/mcp"` | HTTP endpoint path (`auto_mount` and the standalone server) |
 | `http_bind` | String | `"127.0.0.1"` | Address the standalone HTTP server binds. Another address still answers only a loopback `Host` header; see [CONFIGURATION](CONFIGURATION.md#mcp-server) |
 | `http_port` | Integer | `6029` | Port of the standalone HTTP server |
@@ -1700,7 +1700,7 @@ Runs the checks below and reports an AI readiness score (0-100). A check that do
 | Live reload | `listen` gem installed (optional, enables MCP live reload) |
 | MCP stdio hygiene | On a standalone install, or where a config starts the `rails-ai-context` binary itself, gem activation prints nothing on stdout |
 | Secrets in .gitignore | Secret files that exist are gitignored: `config/master.key`, `config/credentials/*.key`, every `.env` file, `config/application.yml`, the Codex config and SSH and cloud credentials (fails when one is not). `config/database.yml`, `cable.yml`, `storage.yml` and the like warn only when they hold a password, token or key as a literal value. The encrypted `credentials.yml.enc` is committed by design and never reported |
-| MCP HTTP endpoint | `allow_http_in_production` is off, so the mounted engine and `auto_mount` refuse in production; on, it warns, and with `auto_mount` it fails |
+| MCP HTTP endpoint | `allow_http_in_production` is off, so the mounted engine and `auto_mount` refuse outside development and test; on, it warns, and with `auto_mount` it fails |
 | Schema file size | The schema file is under 80% of `max_schema_file_size` |
 | View aggregation size | `app/views` templates total under 80% of `max_view_total_size` |
 

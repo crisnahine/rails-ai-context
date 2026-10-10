@@ -104,6 +104,16 @@ RSpec.describe RailsAiContext::McpEdge do
       expect(JSON.parse(body.join).dig("error", "message")).to include("config.allow_http_in_production = true")
     end
 
+    # A staging app is reached the way production is.
+    it "refuses in every other environment, naming it" do
+      %w[staging preview].each do |name|
+        in_environment(name)
+        status, _headers, body = described_class.production_refusal
+        expect(status).to eq(403)
+        expect(JSON.parse(body.join).dig("error", "message")).to include("in the #{name} environment")
+      end
+    end
+
     it "serves in production once the app opts in" do
       in_environment("production")
       allow(RailsAiContext.configuration).to receive(:allow_http_in_production).and_return(true)

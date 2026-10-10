@@ -1115,15 +1115,15 @@ module RailsAiContext
       name = "MCP HTTP endpoint"
       if config.allow_http_in_production && config.auto_mount
         Check.new(name: name, status: :fail,
-          message: "auto_mount answers every tool in production, before any authentication (allow_http_in_production is on)",
+          message: "auto_mount answers every tool in production and staging, before any authentication (allow_http_in_production is on)",
           fix: "Turn off `allow_http_in_production`, or replace auto_mount with the engine mounted behind your app's authentication")
       elsif config.allow_http_in_production
         Check.new(name: name, status: :warn,
-          message: "allow_http_in_production is on: a mounted engine answers every tool in production",
+          message: "allow_http_in_production is on: a mounted engine answers every tool in production and staging",
           fix: "Keep the mount behind your app's authentication, and turn the option off if production does not need it")
       else
         Check.new(name: name, status: :pass,
-          message: config.auto_mount ? "auto_mount enabled; refused in production" : "Refused in production (allow_http_in_production is off)",
+          message: config.auto_mount ? "auto_mount enabled; refused outside development and test" : "Refused outside development and test (allow_http_in_production is off)",
           fix: nil)
       end
     end
