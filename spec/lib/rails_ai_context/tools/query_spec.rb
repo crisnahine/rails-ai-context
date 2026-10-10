@@ -1457,4 +1457,278 @@ it "still explains a database that does not exist" do
       Object.const_set(:ActiveRecord, saved) if saved
     end
   end
+
+  # ── Security hardening (rails_query bypass classes) ───────────────
+  describe "session-effecting / administrative functions" do
+    # These run under SET TRANSACTION READ ONLY and keep their effect on the
+    # pooled connection. The name blocklist is the first layer; PostgreSQL's
+    # VOLATILE-function plan check is the robust one (proven against a live DB).
+    %w[
+      pg_terminate_backend pg_cancel_backend pg_reload_conf pg_stat_reset
+      pg_create_restore_point pg_logical_emit_message pg_advisory_lock
+      pg_notify set_config txid_current pg_switch_wal pg_promote
+      pg_drop_replication_slot pg_replication_origin_create
+    ].each do |fn|
+      it "blocks PostgreSQL admin function #{fn}" do
+        valid, error = described_class.validate_sql("SELECT #{fn}(1)")
+        expect(valid).to be false
+        expect(error).to include("administrative function #{fn}")
+      end
+    end
+
+    %w[GET_LOCK RELEASE_LOCK RELEASE_ALL_LOCKS IS_FREE_LOCK IS_USED_LOCK].each do |fn|
+      it "blocks MySQL session function #{fn}" do
+        valid, error = described_class.validate_sql("SELECT #{fn}('x')")
+        expect(valid).to be false
+        expect(error).to include("session function #{fn}")
+      end
+    end
+
+    it "does not trip on a table or column that merely contains a blocked name" do
+      # `set_configuration` is not `set_config(`, `lock_version` is not GET_LOCK(.
+      valid, = described_class.validate_sql("SELECT lock_version, set_configuration FROM widgets")
+      expect(valid).to be true
+    end
+  end
+
+  describe "column-alias list rejection" do
+    it "blocks a CTE column list" do
+      valid, error = described_class.validate_sql("WITH t(a,b,c) AS (SELECT * FROM users) SELECT * FROM t")
+      expect(valid).to be false
+      expect(error).to include("column-alias list")
+    end
+
+    it "blocks a table-alias column list" do
+      valid, error = described_class.validate_sql("SELECT * FROM users AS u(a,b,c,d,e)")
+      expect(valid).to be false
+      expect(error).to include("column-alias list")
+    end
+
+    it "blocks a derived-table column list" do
+      valid, error = described_class.validate_sql("SELECT * FROM (SELECT * FROM users) AS t(a,b,c)")
+      expect(valid).to be false
+      expect(error).to include("column-alias list")
+    end
+
+    it "blocks a table alias column list without AS" do
+      valid, error = described_class.validate_sql("SELECT * FROM users u(a,b,c,d)")
+      expect(valid).to be false
+      expect(error).to include("column-alias list")
+    end
+
+    # A type modifier is digits, a record-function list carries types, a
+    # function call is followed by AS-name not AS-(, a single alias is not a
+    # rename of several columns - none is a column-alias list.
+    it "allows a CAST with a parameterised type" do
+      valid, = described_class.validate_sql("SELECT CAST(amount AS numeric(10,2)) AS a FROM orders")
+      expect(valid).to be true
+    end
+
+    it "allows a varchar length modifier" do
+      valid, = described_class.validate_sql("SELECT id::varchar(255) AS v FROM users")
+      expect(valid).to be true
+    end
+
+    it "allows a multi-argument function call aliased with AS" do
+      valid, = described_class.validate_sql("SELECT coalesce(first_name, last_name) AS nm FROM users")
+      expect(valid).to be true
+    end
+
+    it "allows a record-returning function with a typed column list" do
+      valid, = described_class.validate_sql("SELECT * FROM json_to_recordset('[]') AS t(a int, b text)")
+      expect(valid).to be true
+    end
+
+    it "allows a single-column set-returning-function alias" do
+      valid, = described_class.validate_sql("SELECT * FROM generate_series(1,5) AS g(n)")
+      expect(valid).to be true
+    end
+  end
+
+  describe "schema-aware sensitive column rejection" do
+    # The combustion users table has no sensitive columns, so the real column
+    # set is stubbed to one an app would have - the heuristic catches api_token
+    # / auth_token, which the fixed name list does not.
+    before do
+      allow(described_class).to receive(:real_column_names)
+        .and_return(Set.new(%w[id email name api_token auth_token]))
+    end
+
+    it "blocks a schema column caught only by the heuristic, through an alias" do
+      valid, error = described_class.validate_sql("SELECT api_token AS c FROM users")
+      expect(valid).to be false
+      expect(error).to include("api_token")
+    end
+
+    it "blocks it through an expression" do
+      valid, error = described_class.validate_sql("SELECT upper(auth_token) FROM users")
+      expect(valid).to be false
+      expect(error).to include("auth_token")
+    end
+
+    it "blocks it in a subquery projection" do
+      valid, error = described_class.validate_sql("SELECT (SELECT api_token FROM users LIMIT 1) AS leaked")
+      expect(valid).to be false
+      expect(error).to include("api_token")
+    end
+
+    it "does not trip on a non-sensitive real column" do
+      valid, = described_class.validate_sql("SELECT id, email, name FROM users")
+      expect(valid).to be true
+    end
+
+    it "exempts a schema column the app allows by name" do
+      RailsAiContext.configuration.query_allowed_columns = %w[api_token]
+      valid, = described_class.validate_sql("SELECT api_token FROM users")
+      expect(valid).to be true
+    ensure
+      RailsAiContext.configuration.query_allowed_columns = []
+    end
+  end
+
+  describe "a table or alias that merely contains a sensitive word" do
+    before do
+      allow(described_class).to receive(:real_column_names)
+        .and_return(Set.new(%w[id name api_token]))
+    end
+
+    it "is not a sensitive column reference" do
+      # `tokens` the table, `secrets` the alias - neither is a real column name.
+      valid, = described_class.validate_sql("SELECT t.id FROM tokens t WHERE t.id > 0")
+      expect(valid).to be true
+    end
+  end
+
+  describe ".sensitive_column?" do
+    it "flags names the heuristic catches" do
+      %w[password_digest api_token auth_token remember_token user_secret signing_key sha_hash].each do |c|
+        expect(described_class.sensitive_column?(c)).to be(true), "expected #{c} sensitive"
+      end
+    end
+
+    it "does not flag ordinary columns" do
+      %w[id email name status ssn created_at user_id lock_version].each do |c|
+        expect(described_class.sensitive_column?(c)).to be(false), "expected #{c} not sensitive"
+      end
+    end
+
+    it "exempts an allowed name" do
+      RailsAiContext.configuration.query_allowed_columns = %w[api_token]
+      expect(described_class.sensitive_column?("api_token")).to be false
+    ensure
+      RailsAiContext.configuration.query_allowed_columns = []
+    end
+  end
+
+  describe "PostgreSQL plan analysis helpers" do
+    # Unit-level coverage of the plan walk; the live-database behaviour is
+    # proven end-to-end against a real PostgreSQL 16 in the F2a report.
+    let(:aliases) { { "u" => "users", "p" => "posts" } }
+
+    before do
+      allow(described_class).to receive(:relation_sensitive_columns)
+        .and_return("users" => %w[password_digest api_token])
+      allow(described_class).to receive(:schema_sensitive_columns)
+        .and_return(%w[password_digest api_token])
+    end
+
+    it "flags a whole-row reference to a sensitive relation" do
+      exprs = { all: [ "row_to_json(u.*)" ], outputs: [ "row_to_json(u.*)" ], conds: [] }
+      expect(described_class.send(:whole_row_leak, exprs, aliases)).to eq("users")
+    end
+
+    it "allows a whole-row reference to a non-sensitive relation" do
+      exprs = { all: [ "row_to_json(p.*)" ], outputs: [ "row_to_json(p.*)" ], conds: [] }
+      expect(described_class.send(:whole_row_leak, exprs, aliases)).to be_nil
+    end
+
+    it "flags a sensitive column the planner expanded into a ROW()" do
+      exprs = { all: [], outputs: [ "ROW(id, email, password_digest, api_token)" ], conds: [] }
+      expect(described_class.send(:sensitive_column_in_plan, exprs)).to eq("password_digest")
+    end
+
+    it "allows a sensitive column as a plain pass-through output" do
+      exprs = { all: [], outputs: [ "id", "email", "password_digest", "users.api_token" ], conds: [] }
+      expect(described_class.send(:sensitive_column_in_plan, exprs)).to be_nil
+    end
+
+    it "flags a sensitive column used as a filter oracle" do
+      exprs = { all: [], outputs: [ "id" ], conds: [ "(users.api_token = 'x'::text)" ] }
+      expect(described_class.send(:sensitive_column_in_plan, exprs)).to eq("api_token")
+    end
+
+    it "returns nil for a non-postgres adapter" do
+      expect(described_class.send(:postgresql_plan_refusal, "SELECT * FROM users", 5)).to be_nil
+    end
+  end
+
+  describe "silent-truncation note" do
+    def answer(sql, **opts)
+      described_class.call(sql: sql, **opts).content.first[:text]
+    end
+
+    before do
+      allow(described_class).to receive(:run_guarded)
+        .and_return(ActiveRecord::Result.new(%w[n], (1..150).map { |i| [ i ] }))
+    end
+
+    it "says rows were held back in the table format" do
+      text = answer("SELECT n FROM big", limit: 100)
+      expect(text).to include("100 rows shown; the query returned at least this many")
+      expect(text).to include("pass limit: up to 1000")
+    end
+
+    it "says so in the CSV format, after a blank line outside the block" do
+      text = answer("SELECT n FROM big", limit: 100, format: "csv")
+      expect(text).to match(/\n\n100 rows shown; the query returned at least this many/)
+    end
+
+    it "names the hard cap when the cap is 1000" do
+      allow(described_class).to receive(:run_guarded)
+        .and_return(ActiveRecord::Result.new(%w[n], (1..1000).map { |i| [ i ] }))
+      expect(answer("SELECT n FROM big", limit: 5000)).to include("the 1000-row hard cap")
+    end
+
+    it "does not add the note when the result is under the limit" do
+      allow(described_class).to receive(:run_guarded)
+        .and_return(ActiveRecord::Result.new(%w[n], [ [ 1 ], [ 2 ] ]))
+      expect(answer("SELECT n FROM big", limit: 100)).not_to include("rows shown; the query returned")
+    end
+  end
+
+  describe "result redaction by provenance" do
+    it "redacts an output column flagged by provenance whatever its name" do
+      result = ActiveRecord::Result.new(%w[a b c], [ [ 1, "secret-value", 3 ] ])
+      redacted = described_class.send(:redact_results, result, [ 1 ])
+      expect(redacted.rows.first).to eq([ 1, RailsAiContext::Redaction::FILTERED, 3 ])
+    end
+  end
+
+  describe "a DO block is refused for the right reason" do
+    it "is refused as a disallowed statement, not as multiple statements" do
+      valid, error = described_class.validate_sql("DO $$ BEGIN PERFORM 1; END $$")
+      expect(valid).to be false
+      expect(error).not_to include("multiple statements")
+      expect(error).to include("Only SELECT")
+    end
+
+    it "still blocks a genuine second statement after a dollar-quoted literal" do
+      valid, error = described_class.validate_sql("SELECT $$a$$ AS v; DROP TABLE users")
+      expect(valid).to be false
+      expect(error).to include("multiple statements")
+    end
+  end
+
+  describe ".mask_quoted" do
+    it "blanks a dollar-quoted body so its semicolon is not a separator" do
+      masked = described_class.mask_quoted("DO $$ BEGIN PERFORM 1; END $$")
+      expect(masked).not_to include(";")
+      expect(masked).to start_with("DO ")
+    end
+
+    it "keeps a semicolon that really separates statements" do
+      masked = described_class.mask_quoted("SELECT '--' AS m; SELECT 2")
+      expect(masked).to include(";")
+    end
+  end
 end
