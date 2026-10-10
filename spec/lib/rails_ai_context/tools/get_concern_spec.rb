@@ -177,10 +177,50 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
         expect(text).to include("search_result_url")
       end
 
-      it "does not show private methods" do
+      # An includer gets the private ones too: Authentication's whole
+      # interface to its controllers was private, and read as "1 method".
+      it "lists the private methods under their own heading" do
         result = described_class.call(name: "Searchable")
         text = result.content.first[:text]
-        expect(text).not_to include("normalize_search_terms")
+        expect(text).to include("## Private Methods\n- `normalize_search_terms`")
+        expect(text[/## Public Methods.*?(?=##|\z)/m]).not_to include("normalize_search_terms")
+      end
+
+      it "counts the private methods apart in the listing" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("**Authenticatable** - 1 public method (2 private)")
+      end
+
+      it "shows a helper_method declaration, and nothing past the included block" do
+        File.write(File.join(controller_concerns_dir, "current_session.rb"), <<~RUBY)
+          module CurrentSession
+            extend ActiveSupport::Concern
+
+            included do
+              helper_method :current_user, :logged_in?
+            end
+
+            class_methods do
+              def guarded
+                before_action :require_login
+              end
+            end
+
+            private
+
+            def current_user; end
+
+            def logged_in?; end
+          end
+        RUBY
+        described_class.reset_cache!
+
+        text = described_class.call(name: "CurrentSession").content.first[:text]
+
+        expect(text).to include("## Macros & DSL\n- helper_method :current_user, :logged_in?\n")
+        expect(text).not_to include("- before_action :require_login")
+        expect(text).to include("## Private Methods\n- `current_user`\n- `logged_in?`")
       end
 
       it "shows macros and DSL from included block" do
@@ -379,7 +419,8 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
 
         expect(text).to include("- `visible`")
         expect(text).not_to include("example_usage")
-        expect(text).not_to include("hidden_helper")
+        expect(text[/## Public Methods\n(.*?)(?=^## |\z)/m, 1]).not_to include("hidden_helper")
+        expect(text).to include("## Private Methods\n- `hidden_helper`")
       end
     end
 
@@ -792,6 +833,38 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
   # Huginn's LiquidDroppable defines nothing of its own: every method and the
   # `include Enumerable` belong to nested Drop classes, which the answer
   # credited to the concern.
+  # `include Pagy::Backend if defined?(Pagy::Backend)` was listed as an include
+  # outright, on an app whose pagy has no Backend.
+  context "on a concern whose includes are conditional" do
+    before do
+      File.write(File.join(controller_concerns_dir, "paginatable.rb"), <<~RUBY)
+        module Paginatable
+          extend ActiveSupport::Concern
+          include Bogus::Backend if defined?(Bogus::Backend)
+          include Comparable unless ENV["NO_COMPARE"]
+        end
+      RUBY
+      described_class.reset_cache!
+    end
+
+    it "names each condition and, booted, what it did" do
+      stub_const("Paginatable", Module.new { include Comparable })
+
+      text = described_class.call(name: "Paginatable").content.first[:text]
+
+      expect(text).to include("**Includes:** Bogus::Backend (only `if defined?(Bogus::Backend)`; not mixed in here: `Bogus::Backend` is not defined), " \
+                              "Comparable (only `unless ENV[\"NO_COMPARE\"]`; mixed in here)")
+    end
+
+    it "names each condition alone on the static tier" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+
+      text = described_class.call(name: "Paginatable").content.first[:text]
+
+      expect(text).to include("**Includes:** Bogus::Backend (only `if defined?(Bogus::Backend)`), Comparable (only `unless ENV[\"NO_COMPARE\"]`)")
+    end
+  end
+
   context "on a concern whose nested classes carry the methods and includes" do
     before do
       File.write(File.join(model_concerns_dir, "liquid_droppable.rb"), <<~RUBY)
@@ -878,7 +951,7 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
     described_class.reset_cache!
 
     text = described_class.call(name: "XwikiRequest", detail: "full").content.first[:text]
-    class_section = text[/## Class Methods\n(.*)/m, 1]
+    class_section = text[/## Class Methods\n(.*?)(?=^## |\z)/m, 1]
 
     expect(class_section).to include("### fetch_json(json_hash, *keys)\n```ruby\n    def fetch_json(json_hash, *keys)")
     expect(class_section).not_to include("self.class.fetch_json")
