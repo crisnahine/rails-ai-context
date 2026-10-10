@@ -393,7 +393,7 @@ end
 ```
 
 - **`:mcp`** - context files show MCP tool syntax (e.g. `rails_get_schema(table: "users")`). CLI tools still available as fallback.
-- **`:cli`** - context files show CLI syntax (e.g. `rails 'ai:tool[schema]' table=users`). No MCP server required.
+- **`:cli`** - context files show CLI syntax (e.g. `rails 'ai:tool[schema]' table=users`). No MCP server required. Every file follows it: the root files, the split rule files and OpenCode's per-directory `AGENTS.md`, whose tools rule files then describe the CLI tools.
 
 Every tool count and list in the generated files is the set the server serves: the built-in tools `skip_tools` leaves, plus `custom_tools`. A custom tool gets a row in the tools table with the first sentence of its description.
 

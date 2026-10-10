@@ -3,7 +3,9 @@
 require "spec_helper"
 require "tmpdir"
 
-# Every file a run writes, read back as the AI tool reads it. The guide
+# Every file a run writes, read back as the AI tool reads it. The guide named
+# tools tools/list does not hold (`get_schema`, `get_context`), broke its own
+# code spans, kept "use MCP tools" in eleven files of a CLI-mode app, and
 # counted and listed the 45 built-ins whatever skip_tools and custom_tools
 # made of them.
 RSpec.describe "the tools every generated file names" do
@@ -29,6 +31,49 @@ RSpec.describe "the tools every generated file names" do
 
   def served_names
     RailsAiContext::Server.exposed_tools.map(&:tool_name)
+  end
+
+  describe "in :mcp mode" do
+    before { RailsAiContext.configuration.tool_mode = :mcp }
+
+    it "names only tools the server serves" do
+      generated_files.each do |path, content|
+        named = content.scan(/`((?:rails_)?get_\w+|rails_\w+)[`(]/).flatten.uniq
+
+        expect(named - served_names).to eq([]), "#{path} names #{(named - served_names).join(', ')}"
+      end
+    end
+
+    # A backtick inside a span (`undefined method `foo` for nil`) cuts it in
+    # two, and each half starts or ends with the space beside the inner one.
+    it "keeps every code span whole" do
+      generated_files.each do |path, content|
+        broken = content.lines.select do |line|
+          line.count("`").odd? || line.scan(/`([^`]*)`/).flatten.any? { |span| span.match?(/\A\s|\s\z/) }
+        end
+
+        expect(broken).to eq([]), "#{path}: #{broken.first}"
+      end
+    end
+  end
+
+  describe "in :cli mode" do
+    before { RailsAiContext.configuration.tool_mode = :cli }
+
+    it "sends every file to the commands, none to an MCP tool" do
+      generated_files.each do |path, content|
+        expect(content).not_to match(/\bMCP\b/), "#{path} still says MCP"
+        expect(content.scan(/`rails_\w+/)).to eq([]), "#{path} names an MCP tool"
+      end
+    end
+
+    it "names the command for each pointer in the split files" do
+      files = generated_files
+
+      expect(files["app/models/AGENTS.md"]).to include("`rails 'ai:tool[model_details]' model=Name`")
+      expect(files[".cursor/rules/rails-controllers.mdc"]).to include("Use `rails 'ai:tool[controllers]' controller=Name` for full detail.")
+      expect(files[".claude/rules/rails-context.md"]).to include("ALWAYS use introspection tools (`rails 'ai:tool[TOOL_NAME]' param=value`)")
+    end
   end
 
   describe "with tools skipped and a custom tool added" do

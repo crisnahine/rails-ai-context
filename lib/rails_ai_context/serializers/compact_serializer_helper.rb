@@ -4,9 +4,10 @@ module RailsAiContext
   module Serializers
     # Shared rendering methods for compact-mode serializers (Claude, OpenCode).
     # Include in any serializer that has a `context` reader and includes
-    # StackOverviewHelper, ToolGuideHelper, and TestCommandDetection.
+    # StackOverviewHelper and TestCommandDetection.
     module CompactSerializerHelper
       include CountPhrase
+      include ToolGuideHelper
 
       private
 
@@ -97,7 +98,7 @@ module RailsAiContext
           extras = model_extras_line(data)
           lines << extras if extras
         end
-        lines << "- _...#{models.size - max_show} more (use `rails_get_model_details` tool)_" if models.size > max_show
+        lines << "- _...#{models.size - max_show} more (use #{tool_named("rails_get_model_details")})_" if models.size > max_show
         lines << ""
         lines
       end
@@ -130,7 +131,10 @@ module RailsAiContext
         SectionFacts.warnings(context)
       end
 
-      TRIM_NOTE = "_Context trimmed. Use MCP tools for full details._"
+      # Where the cut detail is: the tools, as the mode reaches them.
+      def trim_note
+        "_Context trimmed. Use #{tools_noun} for full details._"
+      end
 
       # Counts non-blank physical lines. `keep` holds the trailing how-to-behave sections, so an
       # over-budget file loses the data above them, which the MCP tools answer in full.
@@ -176,7 +180,7 @@ module RailsAiContext
         # nested headings and separators included.
         kept.pop while kept.any? && (kept.last.strip.empty? || heading?(kept.last))
         kept << "" if kept.any?
-        kept << TRIM_NOTE
+        kept << trim_note
       end
 
       def heading?(line)

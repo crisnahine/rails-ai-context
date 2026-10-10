@@ -14,6 +14,7 @@ module RailsAiContext
     # its text and gets the gem's listing as a marked block.
     class OpencodeRulesSerializer < Base
       include StackOverviewHelper
+      include ToolGuideHelper
 
       RULE_FILES = {
         "app/models/AGENTS.md" => { renderer: :render_models_reference, reason: "no models" },
@@ -84,9 +85,9 @@ module RailsAiContext
 
         lines << "- _...#{models.size - 30} more_" if models.size > 30
         lines << ""
-        lines << "Use `rails_get_model_details(model:\"Name\")` for associations, validations, scopes, enums."
-        lines << "Use `rails_get_view(controller:\"name\")` for view templates."
-        lines << "Use `rails_get_test_info(model:\"Name\")` for existing model tests."
+        lines << "Use #{tool_ref("rails_get_model_details", 'model:"Name"', "model=Name")} for associations, validations, scopes, enums."
+        lines << "Use #{tool_ref("rails_get_view", 'controller:"name"', "controller=name")} for view templates."
+        lines << "Use #{tool_ref("rails_get_test_info", 'model:"Name"', "model=Name")} for existing model tests."
 
         lines.join("\n")
       end
@@ -99,7 +100,7 @@ module RailsAiContext
           "# Controllers (#{app_controllers.size})",
           "",
           "> #{Install::Cleanup::GENERATED_NOTE}",
-          "> Read controller files directly when editing. Use MCP tools for reference only.",
+          "> Read controller files directly when editing. Use #{tools_noun} for reference only.",
           ""
         ]
         if (notice = SectionFacts.static_notice(context))
@@ -121,11 +122,11 @@ module RailsAiContext
         lines << "**Jobs:** #{jobs.join(', ')}" if jobs.any?
 
         lines << ""
-        lines << "Use `rails_get_controllers(controller:\"Name\", action:\"index\")` for one action's source code."
-        lines << "Use `rails_get_edit_context(file:\"path\", near:\"keyword\")` for surgical edit context."
-        lines << "Use `rails_get_view(controller:\"name\")` for view templates."
-        lines << "Use `rails_get_test_info(controller:\"Name\")` for existing controller tests."
-        lines << "Use `rails_validate(files:[...])` to check syntax after editing - do NOT re-read files to verify."
+        lines << "Use #{tool_ref("rails_get_controllers", 'controller:"Name", action:"index"', "controller=Name action=index")} for one action's source code."
+        lines << "Use #{tool_ref("rails_get_edit_context", 'file:"path", near:"keyword"', "file=path near=keyword")} for surgical edit context."
+        lines << "Use #{tool_ref("rails_get_view", 'controller:"name"', "controller=name")} for view templates."
+        lines << "Use #{tool_ref("rails_get_test_info", 'controller:"Name"', "controller=Name")} for existing controller tests."
+        lines << "Use #{tool_ref("rails_validate", "files:[...]", "files=...")} to check syntax after editing - do NOT re-read files to verify."
 
         lines.join("\n")
       end
