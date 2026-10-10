@@ -129,6 +129,54 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
       expect(hit).to eq(miss.sub("sk_live_zzzzzz", "sk_live_abcdef"))
     end
 
+    # A search ran over the lines a plain tail shows, at most 500, and said
+    # "No entries matching" for an error a few thousand lines up, without
+    # saying how little it had read.
+    describe "search reaching back" do
+      def write_log(count, error_at:)
+        lines = Array.new(count) { |i| "I, [2026-03-29T10:00:00 #1] INFO -- : request #{i}" }
+        lines[error_at] = "E, [2026-03-29T10:00:01 #1] ERROR -- : NoMethodError: undefined method 'charge'"
+        File.write(File.join(log_dir, "test.log"), lines.join("\n") + "\n")
+      end
+
+      it "finds a match thousands of lines up and says it searched the whole file" do
+        write_log(5_000, error_at: 2_000)
+
+        text = described_class.call(search: "NoMethodError").content.first[:text]
+
+        expect(text).to include("undefined method 'charge'")
+        expect(text).to include(%(1 line matching "NoMethodError" in the last 5000 lines (the whole file)))
+      end
+
+      it "says which lines it searched when nothing matches" do
+        write_log(5_000, error_at: 2_000)
+
+        text = described_class.call(search: "Stripe").content.first[:text]
+
+        expect(text).to include(%(No entries matching level:all search:"Stripe" in the last 5000 lines (the whole file)))
+      end
+
+      it "says older lines were not searched when the file outgrows the window" do
+        stub_const("#{described_class}::SEARCH_READ_BYTES", 2_000)
+        write_log(5_000, error_at: 4_990)
+
+        text = described_class.call(search: "NoMethodError").content.first[:text]
+
+        expect(text).to include("undefined method 'charge'")
+        expect(text).to match(/in the last \d+ lines \(the last .*; older lines were not searched\)/)
+      end
+
+      it "shows the last matches when there are more than lines asks for" do
+        write_log(100, error_at: 0)
+
+        text = described_class.call(search: "request", lines: 3).content.first[:text]
+
+        expect(text).to include(%(99 lines matching "request" in the last 100 lines (the whole file); showing the last 3))
+        expect(text).to include("request 99")
+        expect(text).not_to include("request 96")
+      end
+    end
+
     it "respects the lines parameter" do
       result = described_class.call(lines: 3)
       text = result.content.first[:text]

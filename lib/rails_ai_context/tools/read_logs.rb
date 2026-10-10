@@ -13,7 +13,8 @@ module RailsAiContext
         properties: {
           lines: {
             type: "integer",
-            description: "Number of lines to tail from the log file. Default: 50, max: 500."
+            description: "Number of lines to tail from the log file. With `search`, the number of matching lines to show, " \
+              "searched for in the last 4 MB of the file. Default: 50, max: 500."
           },
           level: {
             type: "string",
@@ -26,7 +27,8 @@ module RailsAiContext
           },
           search: {
             type: "string",
-            description: "Case-insensitive text filter. Only lines containing this string are returned."
+            description: "Case-insensitive text filter. Only lines containing this string are returned, " \
+              "searched for in the last 4 MB of the file."
           }
         }
       )
@@ -42,6 +44,13 @@ module RailsAiContext
 
       MAX_READ_BYTES = 1_048_576  # 1MB
       MAX_LINES = 500
+
+      # How far back a search reaches. Searching only the lines a plain tail
+      # shows answered "No entries matching" for an error a few thousand
+      # lines up. Every line in the window is redacted before it is matched,
+      # about half a second per megabyte, so the window is bounded, and the
+      # answer says how much of the file it covered.
+      SEARCH_READ_BYTES = 4 * 1_048_576
 
       LEVEL_HIERARCHY = { "DEBUG" => 0, "INFO" => 1, "WARN" => 2, "ERROR" => 3, "FATAL" => 4 }.freeze
 
@@ -82,8 +91,9 @@ module RailsAiContext
           return empty_response(msg)
         end
 
-        # Tail the file
-        raw_lines = tail_file(path, lines)
+        # Tail the file; a search reads back further and keeps its last matches.
+        searching = !search.to_s.strip.empty?
+        raw_lines, whole_file = searching ? read_window(path, SEARCH_READ_BYTES) : [ tail_file(path, lines), nil ]
         if raw_lines.empty?
           return empty_response("# Log: #{File.basename(path)}\nLog file is empty.\n\n---\nAvailable log files: #{available.join(', ')}")
         end
@@ -97,9 +107,10 @@ module RailsAiContext
         filtered = filter_by_level(raw_lines, level, format)
 
         redacted = RailsAiContext::Redaction.redact_log_lines(filtered, search: search)
+        window = searching ? search_window(raw_lines.size, whole_file) : nil
 
         if redacted.empty?
-          return empty_response("# Log: #{File.basename(path)}\nNo entries matching level:#{level}#{" search:\"#{search}\"" if search}.\n\n---\nAvailable log files: #{available.join(', ')}")
+          return empty_response("# Log: #{File.basename(path)}\nNo entries matching level:#{level}#{" search:\"#{search}\"" if search}#{" #{window}" if window}.\n\n---\nAvailable log files: #{available.join(', ')}")
         end
 
         # Format output
@@ -108,7 +119,14 @@ module RailsAiContext
         level_label = level == "all" ? "all levels" : "#{level}+"
 
         output = [ "# Log: #{File.basename(path)}" ]
-        output << "Size: #{size_label} | Showing last #{count_phrase(redacted.size, "line")} | Level: #{level_label}"
+        if searching
+          matched = redacted.size
+          redacted = redacted.last(lines)
+          shown = redacted.size < matched ? "; showing the last #{redacted.size}" : ""
+          output << "Size: #{size_label} | #{count_phrase(matched, "line")} matching \"#{search}\" #{window}#{shown} | Level: #{level_label}"
+        else
+          output << "Size: #{size_label} | Showing last #{count_phrase(redacted.size, "line")} | Level: #{level_label}"
+        end
         warnings.each { |w| output << "**Warning:** #{w}" } if warnings.any?
         output << ""
         output << "```"
@@ -151,6 +169,30 @@ module RailsAiContext
           lines = content.split("\n")
           lines.last(num_lines)
         end
+      end
+
+      # Every whole line in the last `bytes` of the file, and whether that is
+      # the whole file. A window that starts mid-file drops its first line,
+      # which it holds only the end of.
+      private_class_method def self.read_window(path, bytes)
+        size = File.size(path)
+        return [ [], true ] if size == 0
+
+        whole = size <= bytes
+        File.open(path, "rb") do |f|
+          f.seek(-bytes, IO::SEEK_END) unless whole
+          content = f.read
+          content.force_encoding("UTF-8")
+          content.encode!("UTF-8", invalid: :replace, undef: :replace)
+          lines = content.split("\n")
+          lines.shift unless whole
+          [ lines, whole ]
+        end
+      end
+
+      private_class_method def self.search_window(line_count, whole_file)
+        scope = whole_file ? "the whole file" : "the last #{human_size(SEARCH_READ_BYTES)}; older lines were not searched"
+        "in the last #{count_phrase(line_count, "line")} (#{scope})"
       end
 
       # ── Log format detection + level filtering ─────────────────────

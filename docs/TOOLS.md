@@ -705,9 +705,9 @@ Reverse file tail with level filtering and sensitive data redaction.
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `file` | string | current environment's log | Log file name in `log/` (e.g., `production`, `sidekiq`); the `.log` suffix is optional |
-| `lines` | integer | `50` | Number of lines, max 500 |
+| `lines` | integer | `50` | Number of lines, max 500. With `search`, the number of matching lines to show |
 | `level` | enum | `all` | Minimum level: `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`, `all` |
-| `search` | string | - | Keep lines matching this term. The match runs on the redacted line, so a redacted value cannot be searched for |
+| `search` | string | - | Keep lines matching this term, searched for in the last 4 MB of the file (about 50,000 lines of a typical Rails log); the answer says how many lines that was, and whether older ones were left unsearched. The match runs on the redacted line, so a redacted value cannot be searched for |
 
 ### `rails_diagnose`
 
