@@ -1659,13 +1659,13 @@ Runs up to 25 checks and reports an AI readiness score (0-100). A check that doe
 | Schema | A schema dump file exists |
 | Pending migrations | No migration is pending in any database the app migrates, each read through its own connection as `db:migrate:status` reads it (fails when one is) |
 | Database | Shown in place of Pending migrations when a database the app migrates does not exist (fix: `bin/rails db:prepare`) or its server does not answer (fails) |
-| Models | Model files detected |
+| Models | Model files detected where the tools read them: `app/models`, packs and in-repo engines, and in an engine's `test/dummy` the engine's own |
 | Routes | `config/routes.rb` exists |
-| Gems | The lockfile exists |
-| Controllers | Controller files detected |
-| Views | Files exist under `app/views` |
-| Tests | A test suite is found |
-| Migrations | Migration files exist, counted over every database the app migrates |
+| Gems | The app's lockfile exists, or the one its `config/boot.rb` names (a monorepo's shared bundle, an engine's for its `test/dummy`) |
+| Controllers | Controller files detected, read as Models are |
+| Views | Files exist where the tools read views: `app/views`, packs, and in an engine's `test/dummy` the engine's |
+| Tests | A test suite is found: the app's, or in an engine's `test/dummy` the engine's |
+| Migrations | Migration files exist, counted over every database the app migrates, and in an engine's `test/dummy` the engine's own |
 | Context files | Generated context files exist where `config.output_dir` puts them, and a context run would leave them as they are. A file a run would rewrite, because an older version of the gem wrote it or the app changed under it, is named; a file that is only older than the code is not. No row on an MCP-only install |
 | Initializer guard | Shown only when `config/initializers/rails_ai_context.rb` has no guard, or guards on `defined?(RailsAiContext)` alone |
 | MCP configs | Each selected tool's MCP config file exists, parses, and holds a rails-ai-context server whose command can start: `bundle exec` only where the app's lockfile carries the gem and the bundle's copy has its executable, the `rails-ai-context` binary only where it is on PATH, and a warning when that binary runs beside a copy the bundle carries. The command is looked up, never run. Skipped in CLI-only mode |
