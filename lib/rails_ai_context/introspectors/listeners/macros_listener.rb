@@ -34,7 +34,9 @@ module RailsAiContext
         ].to_set.freeze
 
         # Model gems' class macros, each listed as written; aasm's block is read in full.
+        # `devise` names the modules a model turns on, which no other line says.
         GEM_MACROS = %i[
+          devise
           has_paper_trail audited acts_as_paranoid friendly_id
           mount_uploader mount_uploaders monetize
           pg_search_scope multisearchable searchkick

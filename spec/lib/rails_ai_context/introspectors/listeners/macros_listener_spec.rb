@@ -176,6 +176,21 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener, "gem ma
     expect(results.filter_map { |r| r[:adds] }).to eq([ %w[price], %w[fee] ])
   end
 
+  # The validations devise adds carried "(added by devise :validatable)", and
+  # nothing named :recoverable, :rememberable or :trackable at all.
+  it "reads the modules a devise call turns on, as written" do
+    results = parse_and_dispatch(<<~RUBY)
+      class User < ApplicationRecord
+        devise :database_authenticatable, :registerable,
+               :recoverable, :rememberable, :validatable, :trackable
+      end
+    RUBY
+
+    expect(results.select { |r| r[:macro] == :gem_macro }.map { |r| r[:text] }).to eq(
+      [ "devise :database_authenticatable, :registerable, :recoverable, :rememberable, :validatable, :trackable" ]
+    )
+  end
+
   it "folds a gem macro onto one line without its comments or line continuations" do
     results = parse_and_dispatch(<<~RUBY)
       class Txn < ApplicationRecord
