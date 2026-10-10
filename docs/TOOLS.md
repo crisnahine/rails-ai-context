@@ -338,7 +338,7 @@ outlet the controller reads.
 
 ### `rails_get_partial_interface`
 
-What locals to pass to a partial and what methods are called on them. Render sites are `render` calls, a `partial:` passed to a Turbo Stream action (`turbo_stream.prepend`) or a broadcast (`broadcast_prepend_to` in a model, controller, job or channel), and jbuilder's `json.partial!` and `json.array! ..., partial:`. A site counts only where Rails would render this file: `_post.html.erb` gets the html, Turbo Stream and broadcast sites and `_post.json.jbuilder` the jbuilder ones. A jbuilder partial's locals are the bare names it reads; a helper, a route helper or a call with parentheses is not a local.
+What locals to pass to a partial and what methods are called on them. Render sites are `render` calls, a `partial:` passed to a Turbo Stream action (`turbo_stream.prepend`) or a broadcast (`broadcast_prepend_to` in a model, controller, job or channel), and jbuilder's `json.partial!` and `json.array! ..., partial:`. A site counts only where Rails would render this file: `_post.html.erb` gets the html, Turbo Stream and broadcast sites and `_post.json.jbuilder` the jbuilder ones, and `render "comments/form"` names comments' form, never the one beside the view. A jbuilder partial's locals are the bare names it reads; a helper, a route helper or a call with parentheses is not a local.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|

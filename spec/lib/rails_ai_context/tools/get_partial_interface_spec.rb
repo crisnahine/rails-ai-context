@@ -440,7 +440,7 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
 
   # The blog's html and json post partials each listed the other's callers
   # and locals.
-  describe "partials that share a name across formats" do
+  describe "partials that share a name across formats or directories" do
     around do |example|
       Dir.mktmpdir("partial-formats") do |dir|
         @root = dir
@@ -490,6 +490,12 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
 
       expect(sites).to eq(%w[app/views/posts/index.json.jbuilder:1 app/views/posts/show.json.jbuilder:1])
       expect(locals).to eq(%w[post])
+    end
+
+    # The blog's posts/form claimed the render of comments/form in posts/show.
+    it "reads a name with a directory as that directory's partial" do
+      expect(sites_and_locals("posts/form")).to eq([ %w[app/views/posts/new.html.erb:1], %w[post] ])
+      expect(sites_and_locals("comments/form").first).to eq(%w[app/views/posts/show.html.erb:1])
     end
   end
 
