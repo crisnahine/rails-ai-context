@@ -11,6 +11,8 @@ module RailsAiContext
 
     STOP_SIGNALS = %w[TERM INT].freeze
 
+    LOOPBACK = %w[127.0.0.1 ::1 localhost].freeze
+
     # Seconds a stopping server gives requests still in flight. Puma's
     # default is to wait for them forever, so one request that never
     # finished - a tool stuck on a lock, a client that stopped reading - kept
@@ -298,12 +300,7 @@ module RailsAiContext
       # Build a minimal Rack app that delegates to the MCP transport
       rack_app = build_rack_app(transport)
 
-      loopback = %w[127.0.0.1 ::1 localhost].freeze
-      unless loopback.include?(config.http_bind)
-        $stderr.puts "[rails-ai-context] WARNING: MCP HTTP transport binding to #{config.http_bind} - " \
-                     "this exposes all tools to the network without authentication. " \
-                     "Use 127.0.0.1 (default) unless you have external auth in place."
-      end
+      $stderr.puts bind_warning(config.http_bind) unless LOOPBACK.include?(config.http_bind)
       $stderr.puts "[rails-ai-context] MCP server starting on #{config.http_bind}:#{config.http_port}#{config.http_path}"
       $stderr.puts tool_banner(server)
       maybe_start_live_reload(server)
@@ -368,6 +365,28 @@ module RailsAiContext
         $stderr.puts "[rails-ai-context] Server did not stop within #{STOP_DEADLINE}s of the signal; exiting."
         exit!(1)
       end
+    end
+
+    # What a non-loopback bind does depends on the SDK. One with DNS rebinding
+    # protection answers only a loopback Host header, so a client that
+    # addresses the machine by IP or name is refused with 403 "Invalid Host
+    # header" - while one that sends `Host: localhost` itself gets every tool.
+    # The old warning said the bind served the network, which was true of
+    # neither kind of client. An SDK without the check does serve everyone.
+    def bind_warning(bind)
+      prefix = "[rails-ai-context] WARNING: MCP HTTP transport binding to #{bind} opens its port to the network, with no authentication."
+      unless host_checked?
+        return "#{prefix} Every tool answers whoever reaches it. Use 127.0.0.1 (default) unless you have external auth in place."
+      end
+
+      "#{prefix} The MCP SDK answers only requests whose Host header is 127.0.0.1, ::1 or localhost, so a client that " \
+        "addresses this machine by IP or name gets 403 \"Invalid Host header\", while one that sends Host: localhost gets " \
+        "every tool. Bind it so for a container whose port is published to the host, where the client still connects to " \
+        "localhost; otherwise keep 127.0.0.1 (default)."
+    end
+
+    def host_checked?
+      MCP::Server::Transports::StreamableHTTPTransport.instance_method(:initialize).parameters.any? { |_, name| name == :allowed_hosts }
     end
 
     # Closes every session's stream so a connected client sees the server go,

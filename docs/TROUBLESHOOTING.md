@@ -161,6 +161,14 @@ directory. Fixes:
 - Large schema files (>10MB) slow down schema introspection
 - Run `rails ai:doctor` - it checks schema size and view count
 
+### HTTP answers 403 "Forbidden: Invalid Host header"
+
+The MCP SDK answers only requests whose `Host` header is `127.0.0.1`, `::1` or `localhost`, to stop DNS rebinding. A client that reaches the server by the machine's IP or hostname is refused, whatever `http_bind` says. Connect to `localhost`: through a published container port, or an SSH tunnel (`ssh -L 6029:localhost:6029 your-host`).
+
+### HTTP answers 403 "does not serve MCP over HTTP in production"
+
+The mounted engine and `auto_mount` refuse every request in production unless the app sets `config.allow_http_in_production = true`. Set it only with the endpoint behind your app's authentication; see [Security](SECURITY.md#mcp-http-transport).
+
 ---
 
 ## Context file issues
