@@ -527,6 +527,19 @@ RSpec.describe RailsAiContext::Redaction do
       }.each { |line, expected| expect(described_class.redact_log_line(line)).to eq(expected) }
     end
 
+    # Under /i Unicode case folding gives `s` a two-byte form, so a
+    # look-behind holding one has no fixed length, and Onigmo before Ruby 3.4
+    # raised on every line with a non-ASCII character in it - the `↳` line a
+    # development log writes under each query.
+    it "redacts a line that carries non-ASCII characters" do
+      {
+        "  ↳ app/views/posts/index.html.erb:6 session_id=abc123def" => "  ↳ app/views/posts/index.html.erb:6 session_id=[FILTERED]",
+        "Café Cookie: abc123def" => "Café Cookie: [FILTERED]",
+        "naïve Authorization: Bearer abc123def" => "naïve Authorization: [FILTERED]",
+        "crème brûlée app_session=abc123def" => "crème brûlée app_session=[FILTERED]"
+      }.each { |line, expected| expect(described_class.redact_log_line(line)).to eq(expected) }
+    end
+
     # The value patterns ran to the next space, so a quoted value lost its
     # closing quote and the comma after it.
     it "keeps the quotes and what follows a filtered value" do
