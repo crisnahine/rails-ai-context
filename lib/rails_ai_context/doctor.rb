@@ -35,7 +35,7 @@ module RailsAiContext
       check_live_reload
       check_stdio_activation_hygiene
       check_security_gitignore
-      check_security_auto_mount
+      check_security_http_endpoint
       check_performance_schema_size
       check_performance_view_count
     ].freeze
@@ -1106,15 +1106,24 @@ module RailsAiContext
       @gitignore_case_insensitive = GitIgnore.case_insensitive?(app.root)
     end
 
-    def check_security_auto_mount
+    # The endpoint inside the app - the mounted engine and auto_mount - refuses
+    # in production unless the app sets allow_http_in_production. With it set,
+    # auto_mount answers before routing, where an app keeps its authentication,
+    # so nothing can guard it; the engine can sit behind a routes constraint.
+    def check_security_http_endpoint
       config = RailsAiContext.configuration
-      if config.auto_mount && defined?(Rails.env) && Rails.env.production?
-        Check.new(name: "MCP auto_mount", status: :fail,
-          message: "auto_mount is enabled in production - MCP endpoint is publicly accessible",
-          fix: "Set `config.auto_mount = false` or restrict to development: `config.auto_mount = Rails.env.development?`")
+      name = "MCP HTTP endpoint"
+      if config.allow_http_in_production && config.auto_mount
+        Check.new(name: name, status: :fail,
+          message: "auto_mount answers every tool in production, before any authentication (allow_http_in_production is on)",
+          fix: "Turn off `allow_http_in_production`, or replace auto_mount with the engine mounted behind your app's authentication")
+      elsif config.allow_http_in_production
+        Check.new(name: name, status: :warn,
+          message: "allow_http_in_production is on: a mounted engine answers every tool in production",
+          fix: "Keep the mount behind your app's authentication, and turn the option off if production does not need it")
       else
-        Check.new(name: "MCP auto_mount", status: :pass,
-          message: config.auto_mount ? "auto_mount enabled (non-production)" : "auto_mount disabled (safe)",
+        Check.new(name: name, status: :pass,
+          message: config.auto_mount ? "auto_mount enabled; refused in production" : "Refused in production (allow_http_in_production is off)",
           fix: nil)
       end
     end

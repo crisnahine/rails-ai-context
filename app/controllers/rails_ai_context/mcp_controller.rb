@@ -29,6 +29,9 @@ module RailsAiContext
     end
 
     def handle
+      if (refused = McpEdge.production_refusal)
+        return answer_rack(refused)
+      end
       return refuse_server_push if request.get?
 
       Tools::BaseTool.with_session_for(request.env) do
@@ -98,6 +101,13 @@ module RailsAiContext
         key = name.to_s.casecmp?("content-type") ? "Content-Type" : name
         response.headers[key] = value
       end
+    end
+
+    # A Rack triple answered whole, for the refusals McpEdge builds.
+    def answer_rack((status, headers, body))
+      self.status = status
+      apply_transport_headers(headers)
+      self.response_body = body.join
     end
 
     # The engine has nothing to push: live reload, the one thing that sends

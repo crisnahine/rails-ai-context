@@ -182,7 +182,7 @@ Introspection results are cached with TTL (default: 60s) and fingerprint invalid
 
 ### Does this affect my app's performance?
 
-No, as long as the gem sits in the Gemfile's `:development` group, where `bundle add rails-ai-context --group development` puts it: Bundler then never loads it in production. The gem itself does not check the environment, apart from `rails_query` refusing to run in production by default. Tools execute on demand (not continuously). The MCP server is a separate process (stdio), or an HTTP endpoint that exists only when you mount it or set `auto_mount`.
+No, as long as the gem sits in the Gemfile's `:development` group, where `bundle add rails-ai-context --group development` puts it: Bundler then never loads it in production. Where the gem is loaded in production, it refuses two things there by default: `rails_query`, and MCP over HTTP from inside the app (the mounted engine and `auto_mount`). Tools execute on demand (not continuously). The MCP server is a separate process (stdio), or an HTTP endpoint that exists only when you mount it or set `auto_mount`.
 
 ### How does live reload work?
 

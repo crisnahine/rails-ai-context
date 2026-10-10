@@ -24,6 +24,28 @@ RSpec.describe RailsAiContext::Middleware do
       expect(status).not_to eq(200)
     end
 
+    describe "in production" do
+      before do
+        RailsAiContext::McpEdge.instance_variable_set(:@production_refusal_logged, nil)
+        allow(RailsAiContext).to receive(:environment_name).and_return("production")
+        allow(RailsAiContext).to receive(:log_warn)
+      end
+
+      it "refuses an MCP request without building the MCP server" do
+        allow(RailsAiContext::McpEdge).to receive(:build_transport)
+
+        status, _headers, body = middleware.call(Rack::MockRequest.env_for("/mcp", method: "POST", input: "{}"))
+
+        expect(status).to eq(403)
+        expect(body.join).to include("allow_http_in_production")
+        expect(RailsAiContext::McpEdge).not_to have_received(:build_transport)
+      end
+
+      it "still passes the app's own requests through" do
+        expect(middleware.call(Rack::MockRequest.env_for("/users")).first).to eq(200)
+      end
+    end
+
     it "lets a downstream app exception propagate instead of answering an MCP error frame" do
       raising = described_class.new(->(_env) { raise "app boom" })
       env = Rack::MockRequest.env_for("/users")

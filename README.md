@@ -142,6 +142,8 @@ mount RailsAiContext::Engine, at: "/mcp" if defined?(RailsAiContext::Engine)
 
 The `if` keeps the routes file loading wherever the gem is not: in production, where Bundler skips the `:development` group, and after the gem is removed. An unguarded mount raises `uninitialized constant RailsAiContext::Engine` there, and the app does not boot.
 
+In production the endpoint refuses every request with a 403 unless you set `config.allow_http_in_production = true`, since it has no authentication of its own; see [Security](docs/SECURITY.md#mcp-http-transport).
+
 Point the client at `http://localhost:3000/mcp`. There is also a standalone HTTP process: `rails-ai-context serve --transport http --port 6029`.
 
 The mounted engine opens no server-push channel (it answers that `GET` with 405, as the MCP spec allows), so a connected client holds a server thread only while one of its requests runs.

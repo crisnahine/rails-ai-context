@@ -19,7 +19,7 @@ module RailsAiContext
     def call(env)
       return @app.call(env) unless McpEdge.mcp_request?(env)
 
-      McpEdge.serve(env, transport)
+      McpEdge.production_refusal || McpEdge.serve(env, transport)
     end
 
     private
