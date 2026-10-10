@@ -63,11 +63,14 @@ module RailsAiContext
       seen.map { |relative, path| [ path, relative ] }
     end
 
-    # The paths under one views root, less those of a root declared inside it:
-    # app/views/custom/posts/show is posts/show when app/views/custom is a root.
+    # The paths under one views root, less those of a root declared inside it
+    # (app/views/custom/posts/show is posts/show when app/views/custom is a
+    # root) and those a symlink carries out of the app.
     def glob(root, dir, pattern)
       nested = PathResolver.view_dirs(root).select { |other| other.start_with?("#{dir}/") }
-      Dir.glob(File.join(dir, pattern)).sort.reject { |path| nested.any? { |other| path.start_with?("#{other}/") } }
+      Dir.glob(File.join(dir, pattern)).sort.reject do |path|
+        nested.any? { |other| path.start_with?("#{other}/") } || PathResolver.linked_out?(path, root)
+      end
     end
 
     # The innermost views root holding path: app/views/themes/posts/x renders as

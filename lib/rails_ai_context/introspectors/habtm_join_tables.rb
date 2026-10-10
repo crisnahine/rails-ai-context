@@ -48,7 +48,7 @@ module RailsAiContext
 
       def ruby_files(root)
         ([ root ] + PathResolver.code_roots(root)).uniq.flat_map do |dir|
-          %w[app lib].flat_map { |sub| FileWalk.each_file(File.join(dir, sub), skip: SKIP).select { |f| f.end_with?(".rb") } }
+          %w[app lib].flat_map { |sub| FileWalk.each_file(File.join(dir, sub), skip: SKIP, root: root).select { |f| f.end_with?(".rb") } }
         end.uniq
       end
 

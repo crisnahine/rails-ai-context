@@ -304,11 +304,41 @@ module RailsAiContext
     # Inside the app root, or inside the engine its test/dummy runs in.
     def project_file?(path, root)
       real = File.realpath(path)
-      dirs = RunCache.fetch([ :project_dirs, root.to_s ]) { [ root.to_s, *enclosing_engine_roots(root) ].map { |dir| root_key(dir) } }
-      dirs.any? { |dir| SafePath.contained?(real, dir) }
+      project_dirs(root).any? { |dir| SafePath.contained?(real, dir) }
     rescue SystemCallError
       false
     end
+
+    # A file the app spells inside the project that a symlink carries out of
+    # it: the file is a link, or sits under one, to a place neither the app
+    # root nor the engine its test/dummy runs in holds. A directory the app
+    # links in from elsewhere, such as a pack, keeps its own files, as
+    # Zeitwerk follows it; a file linked from there to anywhere else does not.
+    # A path spelled outside the project, such as a gem's, is not one, nor is
+    # one that resolves nowhere: nothing can be read through it.
+    def linked_out?(path, root)
+      # Resolved as given: a spelled `..` after a link climbs from where the link leads.
+      real = SafePath.real_file(path.to_s)
+      return false if project_dirs(root).any? { |dir| SafePath.contained?(real, dir) }
+
+      spelled = File.expand_path(path.to_s)
+      base = [ root.to_s, *enclosing_engine_roots(root) ].map { |dir| File.expand_path(dir) }
+        .find { |dir| spelled.start_with?(SafePath.dir_prefix(dir)) }
+      return false unless base
+
+      segments = File.dirname(spelled).delete_prefix(base).split(File::SEPARATOR).reject(&:empty?)
+      segments.each_index.none? do |depth|
+        dir = File.join(base, *segments.first(depth + 1))
+        File.symlink?(dir) && SafePath.contained?(real, File.realpath(dir))
+      end
+    rescue SystemCallError
+      false
+    end
+
+    def project_dirs(root)
+      RunCache.fetch([ :project_dirs, root.to_s ]) { [ root.to_s, *enclosing_engine_roots(root) ].map { |dir| root_key(dir) } }
+    end
+    private_class_method :project_dirs
 
     def root_key(root)
       File.realpath(root)

@@ -69,6 +69,7 @@ module RailsAiContext
           [ File.join(code_root, "*.rb") ]
       end
       (trees.map { |dir| File.join(dir, "**", "*.rb") } + code).flat_map { |glob| Dir.glob(glob) }.uniq.sort
+        .reject { |path| PathResolver.linked_out?(path, root) }
     end
     private_class_method :scanned_files
 

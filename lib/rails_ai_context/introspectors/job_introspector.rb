@@ -177,7 +177,7 @@ module RailsAiContext
           @queue_as_walks[file] = begin
             real = File.realpath(file)
             root = app.root.to_s
-            if SourceScan.under_root?(file, real, root, app_root_real)
+            if SourceScan.under_root?(file, real, root, app_root_real) && !PathResolver.linked_out?(file, root)
               relative = SourceScan.relative_file(file, real, root, app_root_real)
               job_candidates.values.find { |candidate| candidate.file == relative }&.ast ||
                 (source = SafeFile.read(file)) && SourceIntrospector.walk_source(source, QUEUE_AS_LISTENERS)
@@ -965,7 +965,8 @@ module RailsAiContext
       end
 
       def app_config_files
-        @app_config_files ||= MAILER_CONFIG_GLOBS.flat_map { |glob| Dir.glob(File.join(app.root.to_s, glob)).sort }.map { |path| path.delete_prefix("#{app.root}/") }
+        @app_config_files ||= MAILER_CONFIG_GLOBS.flat_map { |glob| Dir.glob(File.join(app.root.to_s, glob)).sort }
+          .reject { |path| PathResolver.linked_out?(path, app.root) }.map { |path| path.delete_prefix("#{app.root}/") }
       end
 
       def mailer_config_files
@@ -1253,15 +1254,16 @@ module RailsAiContext
       end
 
       # The file a loaded class was read from, root-relative; nil when the
-      # constant has no source location or it lies outside the app. Compared
-      # as real paths, the way app_defined? does, so a symlinked root keeps it.
+      # constant has no source location, it lies outside the app, or a symlink
+      # carries it out of the app. Compared as real paths, the way app_defined?
+      # does, so a symlinked root keeps it.
       def source_file_for(klass)
         location = Object.const_source_location(klass.name)&.first
         return nil unless location
 
         real = File.realpath(location)
         root = app.root.to_s
-        return nil unless SourceScan.under_root?(location, real, root, app_root_real)
+        return nil unless SourceScan.under_root?(location, real, root, app_root_real) && !PathResolver.linked_out?(location, root)
 
         SourceScan.relative_file(location, real, root, app_root_real)
       rescue NameError, ArgumentError, TypeError, SystemCallError
@@ -1301,7 +1303,7 @@ module RailsAiContext
 
       def channel_source(channel)
         path = channel_absolute_path(channel)
-        return nil unless path && File.exist?(path)
+        return nil unless path && File.exist?(path) && !PathResolver.linked_out?(path, app.root)
         RailsAiContext::SafeFile.read(path)
       end
 

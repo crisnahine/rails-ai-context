@@ -6,11 +6,15 @@ module RailsAiContext
   module FileWalk
     module_function
 
+    # A linked directory is not entered, and a linked file is yielded only
+    # when it stays inside the app (PathResolver.linked_out?).
+    #
     # @param dir [String] directory to walk
     # @param skip [Array<String>] directory names never entered
+    # @param root [String] the app root a linked file may not lead out of
     # @yield [String] each file path
-    def each_file(dir, skip: [])
-      return enum_for(:each_file, dir, skip: skip) unless block_given?
+    def each_file(dir, skip: [], root: dir)
+      return enum_for(:each_file, dir, skip: skip, root: root) unless block_given?
 
       stack = [ dir.to_s ]
       until stack.empty?
@@ -21,7 +25,7 @@ module RailsAiContext
           path = File.join(current, name)
           if File.directory?(path)
             stack << path unless File.symlink?(path)
-          else
+          elsif !File.symlink?(path) || !PathResolver.linked_out?(path, root)
             yield path
           end
         end

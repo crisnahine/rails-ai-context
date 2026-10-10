@@ -116,6 +116,76 @@ RSpec.describe RailsAiContext::PathResolver do
     end
   end
 
+  describe ".linked_out?" do
+    def write(rel, body = "x\n")
+      path = File.join(@root, rel)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, body)
+      path
+    end
+
+    it "is a file the app spells inside it that is a link to a file outside it" do
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "secret.js"), "x\n")
+        mkdirs("app/javascript/controllers")
+        link = File.join(@root, "app/javascript/controllers/leak_controller.js")
+        File.symlink(File.join(outside, "secret.js"), link)
+
+        expect(described_class.linked_out?(link, @root)).to be(true)
+        expect(described_class.linked_out?(write("app/javascript/controllers/own_controller.js"), @root)).to be(false)
+      end
+    end
+
+    it "keeps a link that stays inside the app" do
+      write("shared/coupon.rb")
+      mkdirs("app/models")
+      link = File.join(@root, "app/models/coupon.rb")
+      File.symlink("../../shared/coupon.rb", link)
+
+      expect(described_class.linked_out?(link, @root)).to be(false)
+    end
+
+    it "keeps the files of a directory the app links in from elsewhere, but not a link out of it" do
+      Dir.mktmpdir do |outside|
+        FileUtils.mkdir_p(File.join(outside, "billing/app/models"))
+        File.write(File.join(outside, "billing/app/models/invoice.rb"), "x\n")
+        Dir.mktmpdir do |elsewhere|
+          File.write(File.join(elsewhere, "secret.rb"), "x\n")
+          File.symlink(File.join(elsewhere, "secret.rb"), File.join(outside, "billing/app/models/secret.rb"))
+          mkdirs("packs")
+          File.symlink(File.join(outside, "billing"), File.join(@root, "packs/billing"))
+
+          expect(described_class.linked_out?(File.join(@root, "packs/billing/app/models/invoice.rb"), @root)).to be(false)
+          expect(described_class.linked_out?(File.join(@root, "packs/billing/app/models/secret.rb"), @root)).to be(true)
+        end
+      end
+    end
+
+    it "is not a path spelled outside the app, or one that resolves nowhere" do
+      Dir.mktmpdir do |outside|
+        gem_file = File.join(outside, "lib/thing.rb")
+        FileUtils.mkdir_p(File.dirname(gem_file))
+        File.write(gem_file, "x\n")
+        mkdirs("app/models")
+        File.symlink(File.join(@root, "missing.rb"), File.join(@root, "app/models/dangling.rb"))
+
+        expect(described_class.linked_out?(gem_file, @root)).to be(false)
+        expect(described_class.linked_out?(File.join(@root, "app/models/dangling.rb"), @root)).to be(false)
+        expect(described_class.linked_out?(File.join(@root, "app/models/absent.rb"), @root)).to be(false)
+      end
+    end
+
+    it "sees through a spelled .. that climbs out through a directory link" do
+      Dir.mktmpdir do |outside|
+        FileUtils.mkdir_p(File.join(outside, "dir"))
+        File.write(File.join(outside, "secret.rb"), "x\n")
+        File.symlink(File.join(outside, "dir"), File.join(@root, "link"))
+
+        expect(described_class.linked_out?(File.join(@root, "link/../secret.rb"), @root)).to be(true)
+      end
+    end
+  end
+
   describe ".file_for_constant" do
     it "finds a constant in a concerns directory and one in an in-repo engine's lib" do
       mkdirs("app/models/concerns", "engines/store/lib/store")

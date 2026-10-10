@@ -126,6 +126,8 @@ module RailsAiContext
         return [] unless Dir.exist?(dir)
 
         Dir.glob(File.join(dir, "**/*.rb")).filter_map do |path|
+          next if PathResolver.linked_out?(path, root)
+
           source = RailsAiContext::SafeFile.read(path)
           next if source && !HelperNames.view_helper?(source, path, dir)
 

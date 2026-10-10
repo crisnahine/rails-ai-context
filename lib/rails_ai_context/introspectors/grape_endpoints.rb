@@ -39,7 +39,7 @@ module RailsAiContext
       def read(root)
         classes = {}
         DIRS.each do |dir|
-          FileWalk.each_file(File.join(root, dir)).select { |path| path.end_with?(".rb") }.sort.each do |path|
+          FileWalk.each_file(File.join(root, dir), root: root).select { |path| path.end_with?(".rb") }.sort.each do |path|
             relative = path.delete_prefix("#{root}/")
             source, = SafePath.read(relative, under: root)
             next if source.nil? || source.empty?

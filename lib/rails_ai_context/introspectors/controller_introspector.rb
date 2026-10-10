@@ -327,8 +327,11 @@ module RailsAiContext
         project_relative(path)
       end
 
-      # Under the app root, or `../../app/...` in the engine a test/dummy runs in; nil anywhere else.
+      # Under the app root, or `../../app/...` in the engine a test/dummy runs in; nil anywhere else,
+      # and for a file a symlink carries out of the app.
       def project_relative(path)
+        return nil if PathResolver.linked_out?(path, app.root)
+
         root = "#{app.root.to_s.chomp("/")}/"
         return path.to_s.delete_prefix(root) if path.to_s.start_with?(root)
         return nil unless PathResolver.project_file?(path, app.root)
@@ -988,7 +991,7 @@ module RailsAiContext
 
       def read_source(ctrl)
         path = source_path(ctrl)
-        return nil unless path && File.exist?(path)
+        return nil unless path && File.exist?(path) && !PathResolver.linked_out?(path, app.root)
         RailsAiContext::SafeFile.read(path)
       end
 

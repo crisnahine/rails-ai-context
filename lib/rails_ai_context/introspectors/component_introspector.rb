@@ -40,7 +40,7 @@ module RailsAiContext
         namespaced = PathResolver.namespaced_roots(root).map(&:first).reject do |dir|
           views.any? { |view| view == dir || view.start_with?("#{dir}/") }
         end - dirs.map { |dir| File.expand_path(dir) }
-        paths = (dirs + namespaced).flat_map { |dir| Dir.glob(File.join(dir, "**/*.rb")) }
+        paths = (dirs + namespaced).flat_map { |dir| Dir.glob(File.join(dir, "**/*.rb")) }.reject { |path| PathResolver.linked_out?(path, root) }
 
         components = paths.filter_map do |path|
           next if path.end_with?("_preview.rb")
@@ -354,7 +354,8 @@ module RailsAiContext
       end
 
       def preview_dirs
-        files = PREVIEW_CONFIG_GLOBS.flat_map { |glob| Dir.glob(File.join(root, glob)).sort } + PathResolver.initializer_paths(root)
+        files = PREVIEW_CONFIG_GLOBS.flat_map { |glob| Dir.glob(File.join(root, glob)).sort }.reject { |path| PathResolver.linked_out?(path, root) } +
+                PathResolver.initializer_paths(root)
         configured = files.flat_map do |file|
           SourceIntrospector.walk(file, { previews: Listeners::PreviewPathsListener })[:previews]
         end

@@ -296,6 +296,18 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
         end
       end
 
+      it "never reads a config/locales file linked from outside the app" do
+        Dir.mktmpdir do |outside|
+          File.write(File.join(outside, "secret.yml"), "de:\n  outside_secret: x\n")
+          result = static_result("en.yml" => "en:\n  hello: Hello\n") do |dir|
+            File.symlink(File.join(outside, "secret.yml"), File.join(dir, "config", "locales", "de.yml"))
+          end
+
+          expect(result[:locale_files].map { |f| f[:file] }).to eq([ "en.yml" ])
+          expect(result.to_s).not_to include("outside_secret")
+        end
+      end
+
       it "never reads a sensitive file a load path glob reaches" do
         result = static_result("en.yml" => "en:\n  hello: Hello\n") do |dir|
           File.write(File.join(dir, "config", "database.yml"), "production:\n  password: x\n")

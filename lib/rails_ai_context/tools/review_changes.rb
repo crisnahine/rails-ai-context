@@ -218,8 +218,9 @@ module RailsAiContext
             # was later reverted in the working tree, so don't claim "new".
             full_path = File.join(root, file)
             if ref == "HEAD" && File.file?(full_path)
+              # A file a symlink carries out of the app is not opened to count it.
               line_count = begin
-                File.foreach(full_path).count
+                File.foreach(full_path).count unless RailsAiContext::PathResolver.linked_out?(full_path, root)
               rescue StandardError
                 nil
               end
@@ -249,7 +250,7 @@ module RailsAiContext
           when :migration
             # Parse migration for table/column info
             full_path = File.join(root, file)
-            if File.exist?(full_path)
+            if File.exist?(full_path) && !RailsAiContext::PathResolver.linked_out?(full_path, root)
               source = RailsAiContext::SafeFile.read(full_path)
               if source
                 tables = source.scan(/(?:create_table|add_column|remove_column|rename_column|add_index|add_reference)\s+:(\w+)/).flatten.uniq
@@ -305,7 +306,7 @@ module RailsAiContext
           # Check migrations for missing indexes on foreign key columns
           migration_files.each do |entry|
             full_path = File.join(root, entry[:file])
-            next unless File.exist?(full_path)
+            next unless File.exist?(full_path) && !RailsAiContext::PathResolver.linked_out?(full_path, root)
             source = RailsAiContext::SafeFile.read(full_path) or next
 
             # New columns ending in _id without add_index

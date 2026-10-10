@@ -197,7 +197,7 @@ module RailsAiContext
       end
 
       def component_files(dir, matcher)
-        FileWalk.each_file(dir, skip: scan_skip_dirs).select { |path| File.basename(path).match?(matcher) }
+        FileWalk.each_file(dir, skip: scan_skip_dirs, root: root.to_s).select { |path| File.basename(path).match?(matcher) }
       end
 
       def scan_skip_dirs

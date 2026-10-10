@@ -48,6 +48,20 @@ RSpec.describe RailsAiContext::FileWalk do
     end
   end
 
+  it "yields a linked file only when it stays inside the root" do
+    Dir.mktmpdir do |outside|
+      File.write(File.join(outside, "secret.js"), "")
+      touch("app/javascript/shared.js")
+      touch("app/javascript/controllers/own_controller.js")
+      File.symlink(File.join(outside, "secret.js"), File.join(@root, "app/javascript/controllers/leak_controller.js"))
+      File.symlink("../shared.js", File.join(@root, "app/javascript/controllers/shared_controller.js"))
+
+      walked = described_class.each_file(File.join(@root, "app/javascript/controllers"), root: @root)
+        .map { |path| File.basename(path) }.sort
+      expect(walked).to eq(%w[own_controller.js shared_controller.js])
+    end
+  end
+
   it "answers an enumerator without a block, and nothing for a missing directory" do
     expect(described_class.each_file(File.join(@root, "missing")).to_a).to eq([])
   end

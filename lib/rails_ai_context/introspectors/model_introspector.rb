@@ -1426,13 +1426,16 @@ module RailsAiContext
       # Ruby does not always name the file holding the `class` keyword: a class
       # whose body raised leaves the constant a pending autoload, and Ruby
       # records Zeitwerk's cref.rb, which answers nothing the model declares.
-      # A location inside the app is the model's own file; one outside it is
+      # A location inside the app is the model's own file, unless a symlink
+      # carries it out of the app, when it is not read; one outside it is
       # believed only when no model directory holds a file for the name, which
       # is what a gem's model looks like.
       def model_source_path(model)
         root = File.expand_path(app.root.to_s)
         located = Object.const_source_location(model.name)&.first
-        return located if located && File.expand_path(located).start_with?("#{root}/")
+        if located && File.expand_path(located).start_with?("#{root}/")
+          return PathResolver.linked_out?(located, root) ? nil : located
+        end
 
         declared_source_path(model.name) || located
       rescue NameError, TypeError
@@ -2106,7 +2109,7 @@ module RailsAiContext
         RailsAiContext::PathResolver.model_dirs(app.root).each_with_object({}) do |models_dir, found|
           Dir.glob(File.join(models_dir, "**", "*.rb")).sort.each do |path|
             relative = path.sub("#{models_dir}/", "").sub(/\.rb\z/, "")
-            next if relative == "application_record"
+            next if relative == "application_record" || RailsAiContext::PathResolver.linked_out?(path, app.root)
 
             begin
               next if File.size(path) > RailsAiContext.configuration.max_file_size

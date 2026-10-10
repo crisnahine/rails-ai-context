@@ -35,7 +35,7 @@ module RailsAiContext
       def seed_paths
         @seed_paths ||= begin
           dir = File.join(root, "db/seeds")
-          Dir.exist?(dir) ? Dir.glob(File.join(dir, "**/*.rb")).sort : []
+          Dir.exist?(dir) ? Dir.glob(File.join(dir, "**/*.rb")).sort.reject { |path| PathResolver.linked_out?(path, root) } : []
         end
       end
 

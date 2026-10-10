@@ -22,14 +22,14 @@ module RailsAiContext
         # the fingerprint and the conventions all share.
         def controller_paths(root)
           JS_ROOTS.flat_map { |dir| PathResolver.dirs_for(root, dir) }
-                  .flat_map { |js_root| controller_files(js_root).map { |path| [ path, js_root ] } }
+                  .flat_map { |js_root| controller_files(js_root, root).map { |path| [ path, js_root ] } }
                   .uniq(&:first).sort_by(&:first)
         end
 
         # Walked rather than globbed so node_modules is pruned instead of
         # entered: globbing one real frontend/node_modules costs seconds.
-        def controller_files(js_root)
-          FileWalk.each_file(js_root, skip: SKIP_DIRS).select { |path| File.basename(path).match?(CONTROLLER_FILE) }
+        def controller_files(js_root, root)
+          FileWalk.each_file(js_root, skip: SKIP_DIRS, root: root.to_s).select { |path| File.basename(path).match?(CONTROLLER_FILE) }
         end
 
         JS_FILE = /\.(?:js|ts|jsx|tsx)\z/
@@ -134,7 +134,7 @@ module RailsAiContext
         def js_files(root)
           JS_ROOTS.flat_map { |dir| PathResolver.dirs_for(root, dir) }
                   .flat_map { |js_root|
-                    FileWalk.each_file(js_root, skip: SKIP_DIRS + TEST_DIRS)
+                    FileWalk.each_file(js_root, skip: SKIP_DIRS + TEST_DIRS, root: root.to_s)
                             .select { |path| path.match?(JS_FILE) && !File.basename(path).match?(TEST_FILE) }
                   }
                   .uniq
@@ -312,7 +312,7 @@ module RailsAiContext
           dirs = TEMPLATE_KINDS.flat_map { |kind| PathResolver.dirs_for(root, kind) }.uniq
           dirs += PathResolver.view_dirs(root).reject { |views| dirs.any? { |dir| views == dir || views.start_with?("#{dir}/") } }
           dirs.flat_map { |dir|
-            FileWalk.each_file(dir, skip: SKIP_DIRS).select { |path| path.match?(TEMPLATE_FILE) }.sort
+            FileWalk.each_file(dir, skip: SKIP_DIRS, root: root.to_s).select { |path| path.match?(TEMPLATE_FILE) }.sort
           }.uniq
         end
 

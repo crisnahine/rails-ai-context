@@ -326,6 +326,8 @@ module RailsAiContext
         models_dir = File.join(app.root, "app", "models")
         if Dir.exist?(models_dir)
           Dir.glob(File.join(models_dir, "**", "*.rb")).each do |path|
+            next if PathResolver.linked_out?(path, app.root)
+
             ast = SourceIntrospector.walk(path, { devise: -> { Listeners::GenericMacroListener.new(:devise) } })
             ast[:devise].each do |hit|
               op_val = hit[:options][:omniauth_providers]

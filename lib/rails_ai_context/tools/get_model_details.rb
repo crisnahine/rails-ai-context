@@ -586,9 +586,12 @@ module RailsAiContext
       end
 
       # A carried path can name a gem rather than the app, and joining that to
-      # the app root opens nothing. One reader answers both shapes.
+      # the app root opens nothing. One reader answers both shapes. A file a
+      # symlink carries out of the app is not read.
       private_class_method def self.resolved_model_path(model_name)
-        RailsAiContext::PortablePath.resolve(relative_model_path(model_name), rails_app.root.to_s)
+        root = rails_app.root.to_s
+        path = RailsAiContext::PortablePath.resolve(relative_model_path(model_name), root)
+        path unless path && RailsAiContext::PathResolver.linked_out?(path, root)
       end
 
       # The macro's options are nested under an :options key. Printing that

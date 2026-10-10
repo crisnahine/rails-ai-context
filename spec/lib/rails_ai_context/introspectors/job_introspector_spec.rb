@@ -2346,5 +2346,27 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
         end
       end
     end
+
+    # Rails loads a job file the app links in from outside it; the class is
+    # listed off reflection, but the file is neither named nor read.
+    it "is none for a job file linked from outside the app" do
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "secret.rb"),
+                   "class LinkedOutJob < ActiveJob::Base\n  queue_as { :outside_secret }\n  def perform(id); end\nend\n")
+        link = File.join(Rails.root, "app", "jobs", "linked_out_job.rb")
+        skip "a real linked_out_job.rb is checked in" if File.exist?(link) && !File.symlink?(link)
+
+        File.symlink(File.join(outside, "secret.rb"), link)
+        begin
+          load link
+          job = described_class.new(Rails.application).call[:jobs].find { |j| j[:name] == "LinkedOutJob" }
+          expect(job).not_to have_key(:file)
+          expect(job.to_s).not_to include("outside_secret")
+        ensure
+          FileUtils.rm_f(link) if File.symlink?(link)
+          Object.send(:remove_const, :LinkedOutJob) if Object.const_defined?(:LinkedOutJob)
+        end
+      end
+    end
   end
 end

@@ -52,6 +52,11 @@ module RailsAiContext
     end
     private_class_method :discover
 
+    # The Ruby files under one directory, sorted, less those a symlink carries out of the app.
+    def files(dir, root)
+      Dir.glob(File.join(dir, "**", "*.rb")).sort.reject { |path| PathResolver.linked_out?(path, root) }
+    end
+
     # A concern outside every concerns directory, and the autoload root it is named from.
     Outside = Struct.new(:path, :root_dir, :type)
 
@@ -67,7 +72,7 @@ module RailsAiContext
 
       inside = resolve(root)
       outside_roots(root, inside).flat_map do |dir|
-        Dir.glob(File.join(dir, "**", "*.rb")).sort.filter_map do |path|
+        files(dir, root).filter_map do |path|
           next if inside.any? { |concerns| path.start_with?("#{concerns}/") }
 
           relative = path.delete_prefix("#{dir}/")
@@ -99,7 +104,7 @@ module RailsAiContext
     # The one list the concern listing's headings and its `type:` filter both read,
     # so neither names a value the other refuses.
     def types(root)
-      holding = resolve(root).select { |dir| Dir.glob(File.join(dir, "**", "*.rb")).any? }
+      holding = resolve(root).select { |dir| files(dir, root).any? }
       (holding.map { |dir| type_for(dir) } + outside(root).map(&:type)).uniq.sort
     end
 
@@ -171,7 +176,7 @@ module RailsAiContext
           underscore = name.underscore
           next if underscore.empty? || underscore.include?("..")
 
-          found = searched.find { |dir| file_exist?(dir, "#{underscore}.rb") }
+          found = searched.find { |dir| file_exist?(dir, "#{underscore}.rb") && !PathResolver.linked_out?(File.join(dir, "#{underscore}.rb"), root) }
           [ name, File.join(found, "#{underscore}.rb") ] if found
         end.first
       end

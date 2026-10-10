@@ -204,6 +204,21 @@ raise unless real_path == root || real_path.start_with?(root + File::SEPARATOR)
 
 The VFS (`rails-ai-context://views/{path}`) applies the same protection for view template reads.
 
+### Links out of the app
+
+A file the gem finds on its own, by walking the app or by asking Ruby where a loaded class
+came from, is read only when its real path is inside the app root, or inside a directory the
+app links in from elsewhere, such as a pack symlinked into `packs/`. A symlink from inside the
+app to anywhere else is not followed: the file is neither listed nor read. A tool asked for it
+by name answers as if it were not there; one handed its path refuses it, as described under
+"How a refusal is reported" below. This covers templates and layouts, Stimulus controllers and
+other JavaScript, locale files, environment files, seeds, and the Ruby source of models,
+controllers, jobs, mailers, channels, helpers, components and concerns.
+
+Booted, a class Rails loaded through such a link is still described from what reflection
+answers, such as a job's queue name; only its file goes unread. `rails_security_scan` hands
+the app to Brakeman, which reads it by its own rules.
+
 ### Frontend roots outside the app
 
 Two directories outside `Rails.root` are read, for frontend manifests only: each
