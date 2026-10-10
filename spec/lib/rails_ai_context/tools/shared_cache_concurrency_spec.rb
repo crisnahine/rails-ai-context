@@ -245,7 +245,9 @@ RSpec.describe "BaseTool shared caches under concurrency" do
       def open_session(app)
         _status, headers, = post(app, { jsonrpc: "2.0", id: 1, method: "initialize",
           params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "spec", version: "1" } } })
-        headers["mcp-session-id"].tap { |id| post(app, { jsonrpc: "2.0", method: "notifications/initialized" }, session: id) }
+        # mcp 1.x names the header in lowercase, as Rack 3 asks; 0.13 wrote Mcp-Session-Id.
+        id = headers.find { |name, _| name.casecmp?("mcp-session-id") }&.last
+        id.tap { post(app, { jsonrpc: "2.0", method: "notifications/initialized" }, session: id) }
       end
 
       def session_tool(app, session, arguments)
