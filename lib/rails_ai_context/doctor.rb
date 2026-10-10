@@ -2,6 +2,7 @@
 
 require "find"
 require "fileutils"
+require "open3"
 require "tmpdir"
 
 module RailsAiContext
@@ -1001,34 +1002,89 @@ module RailsAiContext
     # an environment file, a machine's own credentials, and a config file
     # only where it holds a secret as a literal. An encrypted credentials
     # file is committed by design; its key is what stays out.
+    #
+    # Inside a git repository git says what a commit takes: a file it tracks
+    # already, which no ignore rule takes back out, or one no rule covers -
+    # in any .gitignore up to the repository's root, info/exclude or the
+    # global excludes. Outside one, the app's .gitignore is read.
     def check_security_gitignore
       gitignore_path = File.join(app.root, ".gitignore")
       gitignore = File.read(gitignore_path) if File.exist?(gitignore_path)
       files = present_sensitive_files.reject { |file| matches_any?(ENCRYPTED, file) }
-      exposed = gitignore ? files.reject { |file| gitignore_covers?(gitignore, file) } : files
+      git = git_view(files)
+      tracked, covered = git || [ [], gitignore ? files.select { |file| gitignore_covers?(gitignore, file) } : [] ]
+      exposed = files.select { |file| tracked.include?(file) || !covered.include?(file) }
       never, others = exposed.partition { |file| matches_any?(NEVER_COMMIT, file) }
       configs, others = others.partition { |file| matches_any?(SECRET_HOLDING_CONFIGS, file) }
-      literal = configs.filter_map { |file| (where = literal_secret(file)) && "#{file} (#{where})" }
+      literal = configs.filter_map { |file| (where = literal_secret(file)) && [ file, where ] }
+      shown_literal = literal.map { |file, where| "#{file} (#{where})" }.join(", ")
+      # Outside git nothing says whether a file is tracked, and the old word stands.
+      others_committed = git ? others & tracked : others
 
       if never.any?
-        message = gitignore ? never.map { |file| "#{file} not in .gitignore" }.join("; ") : "No .gitignore found - #{never.join(', ')} would be committed"
-        message += "; a literal secret in #{literal.join(', ')}" if literal.any?
-        message += "; also committed: #{others.join(', ')}" if others.any?
-        Check.new(name: "Secrets in .gitignore", status: :fail, message: message,
-          fix: "#{gitignore ? 'Add to .gitignore' : 'Create .gitignore with'}: #{never.map { |file| "`#{file}`" }.join(', ')}")
+        committed, unignored = never.partition { |file| tracked.include?(file) }
+        said = []
+        said << "#{committed.join(', ')} #{committed.one? ? "is" : "are"} committed" if committed.any?
+        if unignored.any?
+          said << (git || gitignore ? unignored.map { |file| "#{file} not in .gitignore" }.join("; ") : "No .gitignore found - #{unignored.join(', ')} would be committed")
+        end
+        said << "a literal secret in #{shown_literal}" if literal.any?
+        said << "also committed: #{others_committed.join(', ')}" if others_committed.any?
+        said << "also not gitignored: #{(others - others_committed).join(', ')}" if (others - others_committed).any?
+        fixes = []
+        fixes << uncommit_fix(committed, committed - covered) if committed.any?
+        fixes << "#{gitignore ? 'Add to .gitignore' : 'Create .gitignore with'}: #{unignored.map { |file| "`#{file}`" }.join(', ')}" if unignored.any?
+        Check.new(name: "Secrets in .gitignore", status: :fail, message: said.join("; "), fix: fixes.join("; "))
       elsif literal.any?
+        committed = literal.map(&:first) & tracked
+        which = if committed.empty? then "which .gitignore does not cover"
+        elsif committed.size == literal.size then "which #{committed.one? ? "is" : "are"} committed"
+        else "committed or not gitignored"
+        end
         Check.new(name: "Secrets in .gitignore", status: :warn,
-          message: "A literal secret in #{literal.join(', ')}, which .gitignore does not cover",
-          fix: "Read it from the environment or credentials (`password: <%= ENV[\"DATABASE_PASSWORD\"] %>`), or gitignore the file")
+          message: "A literal secret in #{shown_literal}, #{which}",
+          fix: "Read it from the environment or credentials (`password: <%= ENV[\"DATABASE_PASSWORD\"] %>`), or gitignore the file" \
+               "#{" and run `git rm --cached #{committed.join(' ')}`" if committed.any?}")
       elsif others.any?
-        Check.new(name: "Secrets in .gitignore", status: :warn,
-          message: "Committed, and never read by the tools: #{others.join(', ')}",
-          fix: "Make sure these hold no secrets, or gitignore them")
+        said = []
+        said << "Committed, and never read by the tools: #{others_committed.join(', ')}" if others_committed.any?
+        said << "#{said.empty? ? "Not" : "not"} gitignored, and never read by the tools: #{(others - others_committed).join(', ')}" if (others - others_committed).any?
+        Check.new(name: "Secrets in .gitignore", status: :warn, message: said.join("; "),
+          fix: "Make sure these hold no secrets, or gitignore them#{" and run `git rm --cached` on the committed ones" if git && others_committed.any?}")
       else
         secrets = files.select { |file| matches_any?(NEVER_COMMIT, file) }
         Check.new(name: "Secrets in .gitignore", status: :pass,
           message: secrets.any? ? "Secret files gitignored: #{secrets.join(', ')}" : "No secret files found", fix: nil)
       end
+    end
+
+    # A committed secret stays in the history git keeps, so taking it out of
+    # the index is half the fix: whoever can read the repository has it.
+    def uncommit_fix(committed, unignored)
+      ignore = unignored.any? ? ", add #{unignored.map { |file| "`#{file}`" }.join(', ')} to .gitignore," : ""
+      "Run `git rm --cached #{committed.join(' ')}`#{ignore} and rotate #{committed.one? ? "it" : "them"}: the history still holds #{committed.one? ? "it" : "them"}"
+    end
+
+    # [tracked, covered by an ignore rule] among files (relative to the app
+    # root), as git answers inside the repository the app is in; nil outside
+    # one, or without git. A rule covers a file whether or not git tracks it.
+    def git_view(files)
+      # No pathspec at all would list every file git tracks.
+      return [ [], [] ] if files.empty?
+
+      root = app.root.to_s
+      out, status = Open3.capture2("git", "--literal-pathspecs", "ls-files", "-z", "--", *files, chdir: root, err: File::NULL)
+      return nil unless status.success?
+
+      tracked = out.split("\0")
+      out, status = Open3.capture2("git", "check-ignore", "--no-index", "-z", "--stdin",
+                                   stdin_data: files.join("\0"), chdir: root, err: File::NULL)
+      # 1 is none covered; anything past it, no answer.
+      return nil unless [ 0, 1 ].include?(status.exitstatus)
+
+      [ tracked, out.split("\0") ]
+    rescue SystemCallError, IOError
+      nil
     end
 
     # Secret by what they are, so no app commits them on purpose. Rails'
