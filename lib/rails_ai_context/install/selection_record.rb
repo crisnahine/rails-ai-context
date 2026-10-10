@@ -4,6 +4,7 @@ require "yaml"
 require "date"
 require "fileutils"
 require_relative "../configuration"
+require_relative "../safe_file"
 
 module RailsAiContext
   module Install
@@ -13,7 +14,10 @@ module RailsAiContext
     # config a user hand-edits. The initializer therefore wins on read.
     #
     # Reading is a textual parse, never an eval or a boot, so the standalone
-    # CLI can answer the question with no Rails in the process.
+    # CLI can answer the question with no Rails in the process. Writing is
+    # textual too, because both files are ones a user annotates: a write
+    # changes the value that moved and nothing around it, and a write that
+    # moves no value leaves the file alone.
     module SelectionRecord
       YAML_FILE = ".rails-ai-context.yml"
       INITIALIZER = "config/initializers/rails_ai_context.rb"
@@ -28,20 +32,34 @@ module RailsAiContext
       # default in the generated initializer is not mistaken for a selection.
       SELECTION_LINE = /^[ \t]*config\.ai_tools\s*=\s*%i\[([^\]]*)\]/
 
-      # Any assignment to the key, in any shape. A hand-written
-      # `config.ai_tools = [:claude]` is not one this module rewrites, but
-      # inserting beside it would leave two assignments: the stale one wins at
-      # boot while `read` returns the fresh one.
-      ANY_ASSIGNMENT = /^[ \t]*config\.ai_tools\s*=/
-
       MODE_LINE = /^[ \t]*config\.tool_mode\s*=\s*:(\w+)/
 
       # Only an uncommented assignment: the generated initializer ships the
       # key commented out, and a comment is not a choice.
-      CONTEXT_FILES_LINE = /^[ \t]*config\.context_files\s*=\s*(true|false)/
+      CONTEXT_FILES_LINE = /^[ \t]*config\.context_files\s*=\s*(true|false)\b/
 
-      # Where a selection line goes when the initializer has none yet.
-      CONFIGURE_BLOCK = /RailsAiContext\.configure do \|config\|\n/
+      # Where a line goes when the initializer has none for its key yet: the
+      # head of the configure block, one step in from it.
+      CONFIGURE_BLOCK = /^([ \t]*)RailsAiContext\.configure do \|config\|\n/
+
+      # The three keys the record writes into the initializer, each as the
+      # assignment it rewrites. The value is captured apart from what stands
+      # before and after it, so a rewrite keeps the line's indentation and
+      # whatever follows the value.
+      ASSIGNMENT = {
+        ai_tools: /^(?<lead>[ \t]*config\.ai_tools[ \t]*=[ \t]*)(?<value>%i\[[^\]\n]*\])(?<rest>[^\n]*)$/,
+        tool_mode: /^(?<lead>[ \t]*config\.tool_mode[ \t]*=[ \t]*)(?<value>:\w+)(?<rest>[^\n]*)$/,
+        context_files: /^(?<lead>[ \t]*config\.context_files[ \t]*=[ \t]*)(?<value>true|false)\b(?<rest>[^\n]*)$/
+      }.freeze
+
+      # The note the generator writes after a value. It describes the value,
+      # so a rewrite swaps it for the new value's; a note of the user's own is
+      # kept as it is.
+      NOTE = {
+        tool_mode: { mcp: "   # MCP primary + CLI fallback", cli: "    # CLI only (no MCP server needed)" },
+        context_files: { true => "   # write CLAUDE.md, AGENTS.md and rules files",
+                         false => "  # MCP only: no context files are written" }
+      }.freeze
 
       module_function
 
@@ -76,8 +94,7 @@ module RailsAiContext
 
       # @return [Symbol] :updated, :inserted, :unchanged, :conflict or :absent
       def write_context_files(value, root:)
-        write_config_line(root, "  config.context_files = #{value ? 'true' : 'false'}",
-                          CONTEXT_FILES_LINE, /^[ \t]*config\.context_files\s*=.*$/)
+        write_config_line(root, :context_files, value ? true : false)
       end
 
       # Only an uncommented line is rewritten - the generated initializer ships
@@ -85,8 +102,7 @@ module RailsAiContext
       #
       # @return [Symbol] :updated, :inserted, :unchanged, :conflict or :absent
       def write_tool_mode(mode, root:)
-        write_config_line(root, "  config.tool_mode = :#{mode}",
-                          MODE_LINE, /^[ \t]*config\.tool_mode\s*=.*$/)
+        write_config_line(root, :tool_mode, mode.to_sym)
       end
 
       # Records the selection in both places and says what it did, because
@@ -104,7 +120,7 @@ module RailsAiContext
         {
           tools: tools,
           yaml: write_yaml(tools, root, extra_yaml),
-          initializer: initializer ? write_initializer(tools, root) : :skipped
+          initializer: initializer ? write_config_line(root, :ai_tools, tools) : :skipped
         }
       end
 
@@ -148,8 +164,42 @@ module RailsAiContext
         !tool_mode(root: root).nil? || initializer_content(root).to_s.match?(/^[ \t]*config\.tool_mode\s*=/)
       end
 
-      def initializer_line(tools)
-        "  config.ai_tools = %i[#{normalize(tools).join(' ')}]"
+      # The line the generator writes for a key, without its indentation.
+      def config_line(key, value)
+        "config.#{key} = #{value_source(key, value)}#{NOTE.dig(key, value)}"
+      end
+
+      # One key's line in an initializer's text. A line in the shape this
+      # record writes gets its value replaced where it stands, and a value it
+      # already holds leaves the text as it was. A key with no line gets one,
+      # beside the selection line or at the head of the configure block, at
+      # the indentation of what it sits beside.
+      #
+      # @param insert [Boolean] false rewrites only; the generator adds a
+      #   missing key with the section it belongs to
+      # @return [Array(String, Symbol)] the text, and :updated, :inserted,
+      #   :unchanged, :conflict or :absent
+      def edit_config_line(content, key, value, insert: true)
+        if (line = content.match(ASSIGNMENT.fetch(key)))
+          return [ content, :unchanged ] if same_value?(key, line[:value], value)
+
+          rewritten = "#{line[:lead]}#{value_source(key, value)}#{note_after(key, value, line[:rest])}"
+          return [ "#{line.pre_match}#{rewritten}#{line.post_match}", :updated ]
+        end
+
+        # Assigned in a shape this record does not rewrite. A second line
+        # beside it would lose at boot and win on read.
+        return [ content, :conflict ] if content.match?(/^[ \t]*config\.#{key}\s*=/)
+        return [ content, :absent ] unless insert
+
+        if key != :ai_tools && (beside = content.match(ASSIGNMENT[:ai_tools]))
+          indent = beside[:lead][/\A[ \t]*/]
+          [ "#{beside.pre_match}#{beside[0]}\n#{indent}#{config_line(key, value)}#{beside.post_match}", :inserted ]
+        elsif (block = content.match(CONFIGURE_BLOCK))
+          [ "#{block.pre_match}#{block[0]}#{block[1]}  #{config_line(key, value)}\n#{block.post_match}", :inserted ]
+        else
+          [ content, :absent ]
+        end
       end
 
       private_class_method def self.yaml_message(status)
@@ -172,7 +222,8 @@ module RailsAiContext
       end
 
       # Everything below is how the record is stored, not what callers ask of
-      # it. The seam is read / write / add / messages / initializer_line.
+      # it. The seam is read / write / add / messages / config_line /
+      # edit_config_line.
       # @return [String, nil] the initializer's source, nil when it is missing
       #   or unreadable.
       private_class_method def self.initializer_content(root)
@@ -196,36 +247,44 @@ module RailsAiContext
         {}
       end
 
-      # One rewriter for the single-value keys this record owns, because the
-      # three branches (rewrite, insert beside the selection, insert into the
-      # configure block) are the file's shape, not the key's.
-      private_class_method def self.write_config_line(root, line, present, assignment)
+      # One key's line written into the initializer file, through the same
+      # edit the generator makes in memory.
+      private_class_method def self.write_config_line(root, key, value)
         path = File.join(root.to_s, INITIALIZER)
         return :absent unless File.exist?(path)
 
-        content = File.read(path)
-        if content.match?(present)
-          updated = content.sub(assignment, line)
-          return :unchanged if updated == content
-
-          File.write(path, updated)
-          :updated
-        elsif content.match?(assignment)
-          # Assigned in a shape this module will not rewrite. A second line
-          # beside it would lose at boot and win on read.
-          :conflict
-        elsif content.match?(SELECTION_LINE)
-          File.write(path, content.sub(/^([ \t]*config\.ai_tools\s*=[^\n]*)$/) { "#{Regexp.last_match(1)}\n#{line}" })
-          :inserted
-        elsif content.match?(CONFIGURE_BLOCK)
-          File.write(path, content.sub(CONFIGURE_BLOCK) { "#{Regexp.last_match(0)}#{line}\n" })
-          :inserted
-        else
-          :absent
-        end
+        content, status = edit_config_line(SafeFile.read_text(path), key, value)
+        replace_file(path, content) if %i[updated inserted].include?(status)
+        status
       rescue StandardError => e
         RailsAiContext.log_warn "[rails-ai-context] could not write #{INITIALIZER}: #{e.message}"
         :unchanged
+      end
+
+      private_class_method def self.value_source(key, value)
+        case key
+        when :ai_tools then "%i[#{normalize(value).join(' ')}]"
+        when :tool_mode then ":#{value}"
+        else value ? "true" : "false"
+        end
+      end
+
+      # The tools are a set: their order on the line is not part of the
+      # selection.
+      private_class_method def self.same_value?(key, source, value)
+        return source == value_source(key, value) unless key == :ai_tools
+
+        normalize(source[/\[(.*)\]/, 1].to_s.split).sort == normalize(value).sort
+      end
+
+      # What follows a new value: the rest of the line as it was when the
+      # user wrote it, and otherwise the generator's note on the new value -
+      # its note on the old one would now describe the wrong value.
+      private_class_method def self.note_after(key, value, rest)
+        notes = NOTE[key]
+        return rest unless notes && (rest.strip.empty? || notes.values.any? { |note| note.strip == rest.strip })
+
+        notes.fetch(value, "")
       end
 
       # A name that is not a tool this gem knows would be written back out as
@@ -248,63 +307,152 @@ module RailsAiContext
       # @return [Symbol] :created, :updated, :unchanged, :replaced or :failed
       private_class_method def self.write_yaml(tools, root, extra = {})
         path = File.join(root.to_s, YAML_FILE)
-        existed = File.exist?(path)
+        wanted = { YAML_KEY => tools.map(&:to_s) }
+        extra.each { |key, value| wanted[key.to_s] = value }
+
+        unless File.exist?(path)
+          replace_file(path, wanted.to_yaml)
+          return :created
+        end
 
         # An unreadable record is replaced, not treated as a reason to give
         # up: this gem owns the file, and refusing would leave the selection
         # unrecordable for good after a single typo. Reported separately so
         # the caller can say the old contents went.
-        data = existed ? readable_yaml(path) : {}
-        replaced = existed && data.nil?
-        data ||= {}
+        data = readable_yaml(path)
+        unless data.is_a?(Hash)
+          replace_file(path, wanted.to_yaml)
+          return :replaced
+        end
 
-        before = existed ? File.read(path) : nil
-        data[YAML_KEY] = tools.map(&:to_s)
-        extra.each { |key, value| data[key.to_s] = value }
-        after = data.to_yaml
+        changed = wanted.filter_map do |key, value|
+          next if data.key?(key) && same_yaml_value?(data[key], value)
 
-        return :unchanged if before == after
+          # The tools already listed keep their places; new ones go after them.
+          if value.is_a?(Array) && data[key].is_a?(Array)
+            listed = data[key].map(&:to_s)
+            value = (listed & value) + (value - listed)
+          end
+          [ key, value ]
+        end.to_h
+        return :unchanged if changed.empty?
 
-        File.write(path, after)
-        return :replaced if replaced
-
-        existed ? :updated : :created
+        replace_file(path, yaml_edited(SafeFile.read_text(path), data, changed))
+        :updated
       rescue StandardError => e
         RailsAiContext.log_warn "[rails-ai-context] could not write #{YAML_FILE}: #{e.message}"
         :failed
       end
 
-      # Rewrites the selection line, or adds one to a configure block that has
-      # none. Creating the initializer itself is the generator's job: a
-      # project without one is not a Rails app this gem installed into.
-      #
-      # @return [Symbol] :updated, :inserted, :unchanged, :conflict or :absent
-      private_class_method def self.write_initializer(tools, root)
-        path = File.join(root.to_s, INITIALIZER)
-        return :absent unless File.exist?(path)
-
-        content = File.read(path)
-        line = initializer_line(tools)
-
-        if content.match?(SELECTION_LINE)
-          updated = content.sub(SELECTION_LINE, line)
-          return :unchanged if updated == content
-
-          File.write(path, updated)
-          :updated
-        elsif content.match?(ANY_ASSIGNMENT)
-          # Assigned in a shape this module will not rewrite. It still wins on
-          # read, so the caller's selection is inert until a human edits it.
-          :conflict
-        elsif content.match?(CONFIGURE_BLOCK)
-          File.write(path, content.sub(CONFIGURE_BLOCK) { "#{Regexp.last_match(0)}#{line}\n" })
-          :inserted
-        else
-          :absent
+      # A value as the config reads it: a symbol is its name, and the order of
+      # the tools is not part of the selection.
+      private_class_method def self.same_yaml_value?(recorded, wanted)
+        case wanted
+        when Array then recorded.is_a?(Array) && recorded.map(&:to_s).sort == wanted.sort
+        when String then (recorded.is_a?(String) || recorded.is_a?(Symbol)) && recorded.to_s == wanted
+        else recorded == wanted
         end
-      rescue StandardError => e
-        RailsAiContext.log_warn "[rails-ai-context] could not write #{INITIALIZER}: #{e.message}"
-        :unchanged
+      end
+
+      # The record's text with each changed key rewritten where it stands and
+      # a new key added at the end, so comments, blank lines and the keys
+      # this gem does not write come through as they were. A text this cannot
+      # edit in place faithfully (a quoted key, an alias, a second document)
+      # is caught by reading the result back, and is written whole instead.
+      private_class_method def self.yaml_edited(text, data, changed)
+        lines = text.lines
+        changed.each do |key, value|
+          if (start = lines.index { |line| line.match?(yaml_key(key)) })
+            finish = yaml_entry_end(lines, start)
+            lines[start...finish] = yaml_rewritten(lines[start...finish], key, value)
+          else
+            lines[-1] = "#{lines[-1]}\n" unless lines.empty? || lines[-1].end_with?("\n")
+            lines.concat(yaml_lines(key, value))
+          end
+        end
+
+        edited = lines.join
+        expected = data.merge(changed)
+        yaml_reads_as?(edited, expected) ? edited : expected.to_yaml
+      end
+
+      private_class_method def self.yaml_key(key)
+        /\A#{Regexp.escape(key)}[ \t]*:(?=[ \t]|\r?\n|\z)/
+      end
+
+      # Where a top-level key's entry ends: past the lines of its value
+      # (indented lines, list items, and the comments and blank lines between
+      # them), short of the comments and blank lines just above the next key,
+      # which belong to that key.
+      private_class_method def self.yaml_entry_end(lines, start)
+        finish = start + 1
+        finish += 1 while finish < lines.size && lines[finish].match?(/\A(?:[ \t]|-(?:[ \t]|\r?\n|\z)|#|\r?\n|\z)/)
+        finish -= 1 while finish > start + 1 && (lines[finish - 1].strip.empty? || lines[finish - 1].lstrip.start_with?("#"))
+        finish
+      end
+
+      # One entry, rewritten. A list keeps the lines of the tools it still
+      # holds and the comments between them; a flow list and a scalar change
+      # on the key's line and keep what follows the value. An entry in any
+      # other shape is written the way YAML writes it.
+      private_class_method def self.yaml_rewritten(entry, key, value)
+        head = entry.first.match(/\A(?<lead>#{Regexp.escape(key)}[ \t]*:[ \t]*)(?<value>[^#\r\n]*?)(?<rest>[ \t]*(?:#[^\r\n]*)?(?:\r?\n)?)\z/)
+        return yaml_lines(key, value) unless head
+
+        if value.is_a?(Array) && head[:value].empty? && value.any?
+          yaml_list_rewritten(entry, value)
+        elsif entry.size == 1 && !head[:value].empty? && (!value.is_a?(Array) || head[:value].match?(/\A\[[^\[\]]*\]\z/))
+          shown = value.is_a?(Array) ? "[#{value.join(', ')}]" : yaml_scalar(value)
+          [ "#{head[:lead]}#{shown}#{head[:rest]}" ]
+        else
+          yaml_lines(key, value)
+        end
+      end
+
+      # A block list edited item by item: an item whose tool is still picked
+      # keeps its line, a dropped tool's line goes, a new tool goes after the
+      # last item at its indentation, and a comment between items stays put.
+      private_class_method def self.yaml_list_rewritten(entry, value)
+        item = /\A(?<indent>[ \t]*)-(?:[ \t]+(?<name>[^#\r\n]*?))?[ \t]*(?:#[^\r\n]*)?\r?\n?\z/
+        held = entry.each_with_index.drop(1).filter_map do |line, index|
+          match = line.match(item) or next
+          [ index, match[:name].to_s.delete("'\""), match[:indent] ]
+        end
+        indent = held.first ? held.first.last : ""
+        newline = entry.first.end_with?("\r\n") ? "\r\n" : "\n"
+
+        lines = entry.dup
+        added = value - held.map { |_, name, _| name }
+        lines.insert((held.last&.first || 0) + 1, *added.map { |name| "#{indent}- #{name}#{newline}" })
+        held.reverse_each { |index, name, _| lines.delete_at(index) unless value.include?(name) }
+        lines
+      end
+
+      # A key and its value the way YAML writes them, without the document
+      # marker.
+      private_class_method def self.yaml_lines(key, value)
+        { key => value }.to_yaml.lines.drop(1)
+      end
+
+      private_class_method def self.yaml_scalar(value)
+        value.to_yaml.delete_prefix("--- ").sub(/\n(?:\.\.\.\n)?\z/, "")
+      end
+
+      private_class_method def self.yaml_reads_as?(text, expected)
+        YAML.safe_load(text, permitted_classes: PERMITTED_YAML) == expected
+      rescue StandardError
+        false
+      end
+
+      # Through a temp file and a rename, so a reader racing the write sees
+      # the old file or the new one; through a link to the file it names, and
+      # keeping that file's mode, so the file stays what it was apart from its
+      # text.
+      private_class_method def self.replace_file(path, content)
+        path = File.realpath(path) if File.symlink?(path)
+        mode = File.stat(path).mode & 0o7777 if File.exist?(path)
+        SafeFile.atomic_write(path, content)
+        File.chmod(mode, path) if mode
       end
     end
   end
