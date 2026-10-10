@@ -53,6 +53,11 @@ module RailsAiContext
       def self.call(feature:, server_context: nil)
         feature = feature.to_s.strip
         return text_response("Please provide a feature keyword (e.g. 'post', 'payment', 'authentication').") if feature.empty?
+        # Every layer word-matches the keyword against every name it holds, so
+        # a 100 KB keyword took ten seconds to match nothing.
+        if name_too_long?(feature)
+          return empty_response("No matches found for '#{echo_input(feature)}'. A feature keyword is a word or two, such as 'payment'.")
+        end
         ctx = cached_context
         pattern = feature.downcase
         root = rails_app.root.to_s
@@ -97,7 +102,7 @@ module RailsAiContext
           else
             "\n\nThis app has no models yet, so there are no feature names to suggest."
           end
-          return text_response("No matches found for '#{feature}'. No models, controllers, routes, services, or views match this keyword.#{hint}")
+          return text_response("No matches found for '#{echo_input(feature)}'. No models, controllers, routes, services, or views match this keyword.#{hint}")
         end
 
         text_response(lines.join("\n"))

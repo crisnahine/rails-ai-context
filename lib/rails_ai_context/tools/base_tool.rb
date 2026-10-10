@@ -383,7 +383,7 @@ module RailsAiContext
         def not_found_response(type, name, available, recovery_tool: nil, note: nil)
           # Don't suggest the exact same string the user typed - that's useless
           suggestions = find_closest_matches(name, available) - [ name ]
-          lines = [ "#{type} '#{name}' not found." ]
+          lines = [ "#{type} '#{echo_input(name)}' not found." ]
           if suggestions.size == 1
             lines << "Did you mean '#{suggestions.first}'?"
           elsif suggestions.any?
@@ -596,6 +596,21 @@ module RailsAiContext
           find_closest_matches(input, available).first
         end
 
+        # Longer than any model, controller, table or file name an app has.
+        MAX_NAME_LENGTH = 256
+        ECHO_LENGTH = 80
+
+        # The caller's input as an answer repeats it: a 100 KB argument came
+        # back whole in a "not found", a 100,321-character reply.
+        def echo_input(value)
+          text = value.to_s
+          text.length > ECHO_LENGTH ? "#{text[0, ECHO_LENGTH]}... (#{text.length} characters)" : text
+        end
+
+        def name_too_long?(value)
+          value.to_s.length > MAX_NAME_LENGTH
+        end
+
         # Every name that matches as well as the best one does. A bare
         # `ReportsController` names three real controllers under different
         # namespaces, and answering with one of them arbitrarily hides the
@@ -606,6 +621,9 @@ module RailsAiContext
           # so it would otherwise surface an arbitrary "Did you mean" suggestion
           # for input that isn't a typo at all - just missing.
           return [] if input.to_s.strip.empty?
+          # No name is this long, and spell-checking a 100 KB string against
+          # every model took seconds to find nothing.
+          return [] if input.to_s.length > MAX_NAME_LENGTH
 
           exact = exact_matches(input, available)
           return exact if exact.any?

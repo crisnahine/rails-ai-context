@@ -209,6 +209,26 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
     end
   end
 
+  # A 100 KB name came back whole in "not found", a 100,321-character reply,
+  # after seconds of spell-checking it against every candidate.
+  describe "a name no app has, 100 KB long" do
+    let(:huge) { "a" * 100_000 }
+
+    it "is echoed shortened, with its length" do
+      text = described_class.not_found_response("Model", huge, %w[User Post]).content.first[:text]
+
+      expect(text).to start_with("Model '#{"a" * 80}... (100000 characters)' not found.")
+      expect(text.length).to be < 300
+    end
+
+    it "is not spell-checked or inflected against the candidates" do
+      expect(DidYouMean::SpellChecker).not_to receive(:new)
+
+      expect(described_class.find_closest_matches(huge, %w[User Post])).to eq([])
+      expect(RailsAiContext::Payload.fuzzy_find_key(%w[User Post], huge)).to be_nil
+    end
+  end
+
   describe ".empty_response and .empty?" do
     it "marks an answer that found nothing without changing what the reader sees" do
       response = described_class.empty_response("No views found for posts.")

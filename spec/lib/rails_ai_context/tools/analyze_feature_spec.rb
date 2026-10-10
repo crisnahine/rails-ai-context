@@ -161,6 +161,16 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       expect(text).to include("Try one of your model names:")
     end
 
+    # Ten seconds of word-matching a 100 KB keyword against every layer,
+    # then the keyword echoed back whole.
+    it "answers a keyword no feature name could be at once, shortened" do
+      expect(described_class).not_to receive(:discover_models)
+
+      text = described_class.call(feature: "a" * 100_000).content.first[:text]
+
+      expect(text).to eq("No matches found for '#{"a" * 80}... (100000 characters)'. A feature keyword is a word or two, such as 'payment'.")
+    end
+
     it "handles missing introspection data gracefully" do
       allow(described_class).to receive(:cached_context).and_return({})
       allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(Dir.pwd)))
