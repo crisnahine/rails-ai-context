@@ -360,6 +360,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MCP tools in their Cursor description and Copilot name. In CLI mode each
   of them names the command now (`rails 'ai:tool[model_details]'
   model=Name`), the trim note included; MCP mode reads as before.
+- **Full mode keeps the anti-hallucination protocol and the tools guide.**
+  `context_mode :full` (`rails ai:context:full`, `CONTEXT_MODE=full`) wrote
+  CLAUDE.md, AGENTS.md and copilot-instructions.md without them, so OpenCode
+  and Codex, which load AGENTS.md alone, got neither, and `tool_mode` had no
+  effect on those files. Each now ends with the compact files' tools guide,
+  protocol included while `anti_hallucination_rules` is on; Copilot's gains
+  the behavioral rules the other two carry. The dump itself says what the
+  compact files already did: column defaults, indexes and foreign keys,
+  each model's concerns, scopes, callbacks, enum values and constants, and
+  the Stimulus controllers. It lists the app's routes as the count has
+  them, each PATCH/PUT pair one entry, and counts the framework's instead of
+  listing ~27 Active Storage, Action Mailbox and Turbo routes; a helper with
+  no methods no longer ends in a bare colon, and the Overview and Puma
+  headings appear only with something under them.
 - **Every generated file states the route count the same way.** CLAUDE.md
   said "12 app routes across 3 routed controllers (39 total incl.
   framework)" while `.claude/rules/rails-context.md`,

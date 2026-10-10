@@ -160,7 +160,8 @@ rails ai:context:full
 CONTEXT_MODE=full rails ai:context
 ```
 
-- Dumps everything into the root files CLAUDE.md, AGENTS.md and copilot-instructions.md (schema, all models, all routes, etc.). The split rule files and Cursor's files are the same in both modes
+- Dumps everything into the root files CLAUDE.md, AGENTS.md and copilot-instructions.md: every table with its column types, defaults, indexes and foreign keys; every model with its associations, validations, scopes, callbacks, enum values and constants; the app's own routes (the framework's are counted, not listed); Stimulus controllers; and the rest of the introspection. The split rule files and Cursor's files are the same in both modes
+- Each root file ends with the same tools guide and anti-hallucination protocol the compact files carry, so OpenCode and Codex, which read AGENTS.md alone, get them too
 - Can produce thousands of lines for large apps
 - **Best for:** small apps (<30 models) where the full dump fits in context
 
@@ -268,8 +269,10 @@ unmarked file was generated with the app running.
 | `rails ai:context:copilot` | compact | Copilot | copilot-instructions.md + .github/instructions/ |
 | `rails ai:context:json` | - | JSON | .ai-context.json |
 | `CONTEXT_MODE=full rails ai:context:claude` | full | Claude | Full dump for Claude only |
-| `CONTEXT_MODE=full rails ai:context:cursor` | full | Cursor | Full dump for Cursor only |
+| `CONTEXT_MODE=full rails ai:context:opencode` | full | OpenCode | Full dump in AGENTS.md, which Codex reads too |
 | `CONTEXT_MODE=full rails ai:context:copilot` | full | Copilot | Full dump for Copilot only |
+
+Cursor's files are the same in both modes, so `CONTEXT_MODE=full` changes nothing for `rails ai:context:cursor`.
 
 ### CLI tools
 
