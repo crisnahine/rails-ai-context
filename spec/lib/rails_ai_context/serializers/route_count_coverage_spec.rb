@@ -87,6 +87,23 @@ RSpec.describe "route counts across every surface" do
       .to include("across 1 routed controller")
   end
 
+  # CLAUDE.md said "12 app routes across 3 routed controllers (39 total)"
+  # while the rule files loaded beside it said "Routes: 39".
+  it "states the count in every file the same way" do
+    Dir.mktmpdir do |dir|
+      root_line = RailsAiContext::Serializers::ClaudeSerializer.new(context).call[/^- Routes: .*$/]
+      rule_lines = [
+        RailsAiContext::Serializers::ClaudeRulesSerializer,
+        RailsAiContext::Serializers::CursorRulesSerializer,
+        RailsAiContext::Serializers::CopilotInstructionsSerializer
+      ].flat_map { |klass| klass.new(context).call(dir)[:written].map { |f| File.read(f)[/^- Routes: .*$/] } }.compact
+
+      expect(root_line).to start_with("- Routes: 1 app route across 1 routed controller (94 total incl. framework")
+      expect(rule_lines.size).to eq(4)
+      expect(rule_lines.uniq).to eq([ root_line ])
+    end
+  end
+
   # A count that is the whole table must not grow a caveat.
   it "stays quiet when nothing was left unexpanded" do
     whole = context.merge(routes: routes.except(:dynamic_routes))

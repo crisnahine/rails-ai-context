@@ -116,7 +116,7 @@ module RailsAiContext
         lines << SectionFacts.models_line(context)
 
         if (routes = Payload.section(context, :routes))
-          lines << "- Routes: #{routes[:total_routes]}#{RouteCoverage.suffix(routes)}"
+          lines << "- Routes: #{RouteCoverage.summary(routes)}"
         end
 
         if gems

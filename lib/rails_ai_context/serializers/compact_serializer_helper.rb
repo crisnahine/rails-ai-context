@@ -41,11 +41,7 @@ module RailsAiContext
         end
 
         routes = Payload.section(context, :routes)
-        if routes
-          lines << "- Routes: #{count_phrase(RouteCoverage.app_route_count(routes), "app route")} across " \
-                   "#{RouteCoverage.controller_phrase(routes)} " \
-                   "(#{routes[:total_routes]} total incl. framework#{RouteCoverage.suffix(routes)})"
-        end
+        lines << "- Routes: #{RouteCoverage.summary(routes)}" if routes
 
         jobs = Payload.section(context, :jobs)
         if jobs

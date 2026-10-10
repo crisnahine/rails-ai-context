@@ -360,6 +360,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MCP tools in their Cursor description and Copilot name. In CLI mode each
   of them names the command now (`rails 'ai:tool[model_details]'
   model=Name`), the trim note included; MCP mode reads as before.
+- **Every generated file states the route count the same way.** CLAUDE.md
+  said "12 app routes across 3 routed controllers (39 total incl.
+  framework)" while `.claude/rules/rails-context.md`,
+  `.cursor/rules/rails-project.mdc` and
+  `.github/instructions/rails-context.instructions.md` said "Routes: 39";
+  an app with no routes of its own read "0 app routes" beside "Routes: 27".
+  The rule files now print CLAUDE.md's line, from one place
+  (`RouteCoverage.summary`), as `rails ai:inspect` does.
 - **The tool guide's examples name the app's own model, controller and
   files.** Every app's workflows said `rails_get_context(model:"Post")`,
   `app/models/post.rb`, `PostsController`, `publishable?` and
