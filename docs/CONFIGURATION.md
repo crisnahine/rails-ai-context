@@ -233,6 +233,24 @@ its exact name blocks it; see [SECURITY.md](SECURITY.md).
 
 ---
 
+## Environment variables
+
+Read from the environment of the process, so an MCP config sets them in its
+server entry's `env`.
+
+| Variable | Read by | Effect |
+|:---------|:--------|:-------|
+| `RAILS_AI_CONTEXT_BOOT_TIMEOUT` | Every command that boots the app, and the `ai:serve`, `ai:serve_http` and `ai:tool` rake tasks | Seconds a boot may take before it counts as failed; a command that can then answers from the static tier. Default 20 for `serve` over stdio and `rails ai:serve`, whose client waits about 30 seconds for its first answer, and 60 for everything else. A value that is not a whole number warns and keeps the default |
+| `RAILS_AI_CONTEXT_SERVER_NAME` | The MCP server | The name it announces for one process, in place of the default `server_name`; a `server_name` the app sets wins. A workspace's MCP entries set it |
+| `DEBUG` | Every command and the MCP server | Any value prints the backtrace of a failed boot, a failed command and an exception that escapes a tool, and names the errors a fallback swallows |
+| `RAILS_ENV`, `RACK_ENV` | Every command | The Rails environment to boot, read the way Rails reads it; `--environment` sets it for one command. Default `development` |
+| `JSON` | `rails 'ai:tool[NAME]'` | `JSON=1` prints the JSON envelope, as `--json` does |
+| `CONTEXT_MODE` | `rails ai:context`, `ai:context:<format>` and `ai:context_for` | `compact` or `full` for one run, in place of `config.context_mode`. Any other value stops the task |
+| `FORMAT` | `rails ai:context_for` | The format when the task is given none: `FORMAT=cursor rails ai:context_for`. Default `claude` |
+| `STRICT` | `rails ai:doctor` | `STRICT=1` (or `true`, `yes`) exits 1 when a check fails, as `doctor --strict` does |
+
+---
+
 ## Presets
 
 ### `:full` (default) - 40 introspectors
