@@ -1678,7 +1678,7 @@ Runs up to 25 checks and reports an AI readiness score (0-100). A check that doe
 | Brakeman | Brakeman is available for `rails_security_scan` (optional) |
 | Live reload | `listen` gem installed (optional, enables MCP live reload) |
 | MCP stdio hygiene | On a standalone install, or where a config starts the `rails-ai-context` binary itself, gem activation prints nothing on stdout |
-| Secrets in .gitignore | Sensitive files that exist are gitignored |
+| Secrets in .gitignore | Secret files that exist are gitignored: `config/master.key`, `config/credentials/*.key`, every `.env` file, `config/application.yml`, the Codex config and SSH and cloud credentials (fails when one is not). `config/database.yml`, `cable.yml`, `storage.yml` and the like warn only when they hold a password, token or key as a literal value. The encrypted `credentials.yml.enc` is committed by design and never reported |
 | MCP auto_mount | `auto_mount` is not on in production |
 | Schema file size | The schema file is under 80% of `max_schema_file_size` |
 | View aggregation size | `app/views` templates total under 80% of `max_view_total_size` |

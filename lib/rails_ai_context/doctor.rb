@@ -970,37 +970,82 @@ module RailsAiContext
 
     # ── Security checks ───────────────────────────────────────────────
 
+    # Of the files the tools refuse to read, the ones that are secret: a key,
+    # an environment file, a machine's own credentials, and a config file
+    # only where it holds a secret as a literal. An encrypted credentials
+    # file is committed by design; its key is what stays out.
     def check_security_gitignore
       gitignore_path = File.join(app.root, ".gitignore")
-      sensitive_files = present_sensitive_files
-
-      return Check.new(name: "Secrets in .gitignore", status: :pass, message: "No sensitive files found", fix: nil) if sensitive_files.empty?
-
       gitignore = File.read(gitignore_path) if File.exist?(gitignore_path)
-      exposed = gitignore ? sensitive_files.reject { |file| gitignore_covers?(gitignore, file) } : sensitive_files
-      never, others = exposed.partition { |file| NEVER_COMMIT.any? { |pattern| File.fnmatch(pattern, file, File::FNM_PATHNAME | File::FNM_DOTMATCH) } }
+      files = present_sensitive_files.reject { |file| matches_any?(ENCRYPTED, file) }
+      exposed = gitignore ? files.reject { |file| gitignore_covers?(gitignore, file) } : files
+      never, others = exposed.partition { |file| matches_any?(NEVER_COMMIT, file) }
+      configs, others = others.partition { |file| matches_any?(SECRET_HOLDING_CONFIGS, file) }
+      literal = configs.filter_map { |file| (where = literal_secret(file)) && "#{file} (#{where})" }
 
       if never.any?
         message = gitignore ? never.map { |file| "#{file} not in .gitignore" }.join("; ") : "No .gitignore found - #{never.join(', ')} would be committed"
+        message += "; a literal secret in #{literal.join(', ')}" if literal.any?
         message += "; also committed: #{others.join(', ')}" if others.any?
         Check.new(name: "Secrets in .gitignore", status: :fail, message: message,
           fix: "#{gitignore ? 'Add to .gitignore' : 'Create .gitignore with'}: #{never.map { |file| "`#{file}`" }.join(', ')}")
+      elsif literal.any?
+        Check.new(name: "Secrets in .gitignore", status: :warn,
+          message: "A literal secret in #{literal.join(', ')}, which .gitignore does not cover",
+          fix: "Read it from the environment or credentials (`password: <%= ENV[\"DATABASE_PASSWORD\"] %>`), or gitignore the file")
       elsif others.any?
         Check.new(name: "Secrets in .gitignore", status: :warn,
           message: "Committed, and never read by the tools: #{others.join(', ')}",
           fix: "Make sure these hold no secrets, or gitignore them")
       else
+        secrets = files.select { |file| matches_any?(NEVER_COMMIT, file) }
         Check.new(name: "Secrets in .gitignore", status: :pass,
-          message: "Sensitive files gitignored: #{sensitive_files.join(', ')}", fix: nil)
+          message: secrets.any? ? "Secret files gitignored: #{secrets.join(', ')}" : "No secret files found", fix: nil)
       end
     end
 
-    # Of the files the tools refuse, those no app commits on purpose; `database.yml`,
-    # `credentials.yml.enc` and `.env.development` often are, so they only warn.
+    # Secret by what they are, so no app commits them on purpose. Rails'
+    # own .gitignore leaves out every .env file and every key.
     NEVER_COMMIT = %w[
-      .env config/master.key config/credentials/*.key config/application.yml .codex/config.toml
+      .env .env.* config/master.key config/credentials/*.key config/application.yml .codex/config.toml
       .netrc .pgpass .aws/credentials **/id_rsa **/id_ed25519 **/id_ecdsa **/id_dsa .ssh/*
     ].freeze
+
+    # Encrypted, and committed by design.
+    ENCRYPTED = %w[config/credentials.yml.enc config/credentials/*.yml.enc config/secrets*.yml.enc].freeze
+
+    # Committed in most apps, and a secret only where one is written in as a
+    # literal rather than read from the environment or credentials.
+    SECRET_HOLDING_CONFIGS = %w[
+      config/database.yml config/secrets*.yml config/cable.yml config/storage.yml config/mongoid.yml config/redis.yml
+      config/settings.local.yml config/settings/*.local.yml
+    ].freeze
+
+    # A key that names a secret, and a URL that carries a password.
+    SECRET_KEY = /password|passwd|secret|token|private_key|api_key|access_key/i
+    URL_PASSWORD = %r{\A[a-z][\w+.-]*://[^:@/\s]*:[^@/\s]+@}i
+    # What a key can hold that is no secret written in: ERB, an alias, a
+    # block scalar, nothing, or a number or a switch.
+    NOT_LITERAL = /\A(?:<%|\*|[|>]|~\z|null\z|""\z|''\z|\d+(?:\.\d+)?\z|(?:true|false|yes|no|on|off)\z)/i
+
+    # Where a config file sets a secret to a literal value ("`password` on
+    # line 12"), or nil. Read line by line, since ERB keeps the file from
+    # parsing as YAML until it runs.
+    def literal_secret(file)
+      content = SafeFile.read(File.join(app.root, file)) or return nil
+      content.each_line.with_index(1) do |line, number|
+        key, value = line.chomp.match(/\A\s*-?\s*["']?([\w-]+)["']?\s*:\s*(.*?)\s*(?:\s#.*)?\z/)&.captures
+        next if key.nil? || value.empty? || value.match?(NOT_LITERAL) || value.include?("<%")
+
+        unquoted = value.delete_prefix('"').delete_suffix('"').delete_prefix("'").delete_suffix("'")
+        return "`#{key}` on line #{number}" if key.match?(SECRET_KEY) || unquoted.match?(URL_PASSWORD)
+      end
+      nil
+    end
+
+    def matches_any?(patterns, file)
+      patterns.any? { |pattern| File.fnmatch(pattern, file, File::FNM_PATHNAME | File::FNM_DOTMATCH) }
+    end
 
     # Every file the tools refuse to read (the one sensitive-pattern list), plus the Codex
     # config our own install writes with this machine's PATH and GEM_HOME. Excluded
