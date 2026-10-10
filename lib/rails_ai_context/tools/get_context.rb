@@ -339,6 +339,7 @@ module RailsAiContext
         lines.join("\n")
       rescue => e
         # Fall back to plain analyze_feature on error
+        RailsAiContext.debug_fail(e, label: "feature_context")
         response_text(AnalyzeFeature.call(feature: feature_name))
       end
     end

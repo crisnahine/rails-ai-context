@@ -73,7 +73,6 @@ module RailsAiContext
           data = tables[name]
           columns = data[:columns] || []
           col_count = columns.size
-          pk_display = Introspectors::SchemaConventions.primary_key_label(data[:primary_key])
 
           # Show column names WITH types for key columns
           # Skip standard Rails FK columns (like user_id, account_id) but keep
