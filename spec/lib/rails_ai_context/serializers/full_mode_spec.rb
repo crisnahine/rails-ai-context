@@ -95,13 +95,15 @@ RSpec.describe "full mode's root files" do
     end
 
     # The tools leave framework routes out, and the count merges each
-    # PATCH/PUT pair; the listing did neither.
+    # PATCH/PUT pair; the listing did neither. The health check is a route
+    # the app's own routes.rb declares, so it is the app's.
     it "lists the app's routes as the count has them, and counts the framework's" do
       routes = output[/^## Routes.*?(?=^## )/m]
 
-      expect(routes).to include("2 app routes across 1 routed controller (6 total incl. framework).",
-                                "- `PATCH|PUT /posts/:id` → update", "_Plus 2 framework routes (active_storage, rails), not listed._")
-      expect(routes).not_to include("/up", "active_storage/disk")
+      expect(routes).to include("3 app routes across 2 routed controllers (6 total incl. framework).",
+                                "- `PATCH|PUT /posts/:id` → update", "### rails/health\n- `GET /up` → show",
+                                "_Plus 1 framework route (active_storage), not listed._")
+      expect(routes).not_to include("active_storage/disk")
     end
 
     it "leaves out a heading with nothing under it" do
