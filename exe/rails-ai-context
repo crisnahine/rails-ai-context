@@ -367,7 +367,9 @@ class RailsAiContextCLI < Thor
       boot_rails!(command: "facts", allow_static: true)
 
       context = ::RailsAiContext.introspect
-      puts ::RailsAiContext::FactsFormatter.render(context, inspect_hint: "rails-ai-context inspect")
+      puts ::RailsAiContext::FactsFormatter.render(
+        context, full_json: "Run `rails-ai-context inspect` for the full introspection as JSON."
+      )
     end
 
     desc "version", "Print version"

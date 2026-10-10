@@ -2,9 +2,11 @@
 
 # Built from Install::AiTool rather than typed out: the hand-written copy had
 # already drifted, printing a Copilot row that omitted .github/instructions/.
+# A row names what its command writes, so Codex's MCP config, which only the
+# install writes, is not in it.
 ASSISTANT_TABLE = begin
   rows = RailsAiContext::Install::AiTool.all.map { |tool|
-    [ tool.name, tool.files, "rails ai:context:#{tool.key}" ]
+    [ tool.name, tool.context_files, "rails ai:context:#{tool.key}" ]
   }
   rows << [ "JSON (generic)", ".ai-context.json", "rails ai:context:json" ]
 
@@ -313,10 +315,7 @@ namespace :ai do
   end
 
   namespace :context do
-    # The MCP config a tool's file list names is the installer's to write, not this task's.
-    per_tool = RailsAiContext::Install::AiTool.all.to_h { |tool|
-      [ tool.key, tool.files.split(" + ").reject { |file| file == tool.mcp_config[:path] }.join(" + ") ]
-    }
+    per_tool = RailsAiContext::Install::AiTool.all.to_h { |tool| [ tool.key, tool.context_files ] }
     per_tool.merge(json: ".ai-context.json").each do |fmt, file|
       desc "Generate #{file} context file"
       task fmt => :environment do
@@ -434,7 +433,10 @@ namespace :ai do
     require "rails_ai_context"
 
     context = RailsAiContext.introspect
-    puts RailsAiContext::FactsFormatter.render(context, inspect_hint: "rails ai:inspect")
+    # ai:inspect is a text summary; the whole payload as JSON is ai:context:json's file.
+    puts RailsAiContext::FactsFormatter.render(
+      context, full_json: "Run `rails ai:context:json` for the full introspection as JSON, in .ai-context.json."
+    )
   end
 
   desc "Run diagnostic checks and report AI readiness score"
