@@ -84,6 +84,19 @@ module RailsAiContext
       end
     end
 
+    # The built-in tools skip_tools turned off.
+    def self.skipped_tools(config = RailsAiContext.configuration)
+      config.skip_tools & builtin_tools.map(&:tool_name)
+    end
+
+    # One answer, on every surface, for a call naming a tool skip_tools
+    # turned off: it is out of every list, and "Unknown tool" sent the
+    # reader looking for a tool the gem has.
+    def self.skipped_tool_message(tool_name)
+      "#{tool_name} is turned off in this app: skip_tools lists it " \
+        "(.rails-ai-context.yml or config/initializers/rails_ai_context.rb). Take it out of skip_tools to use it."
+    end
+
     # The name the server gives the client: config.server_name, and when
     # that is the default, RAILS_AI_CONTEXT_SERVER_NAME in its place. A
     # workspace's entries set the variable so each server announces its app
@@ -120,7 +133,8 @@ module RailsAiContext
         instrumentation_callback: Instrumentation.callback
       )
 
-      server = MCP::Server.new(
+      server = SdkServer.new(
+        skipped_tools: self.class.skipped_tools(config),
         name: self.class.announced_name(config),
         version: config.server_version,
         instructions: "Ground truth engine for Rails apps. Live Prism AST introspection. Zero stale data.",
@@ -198,6 +212,26 @@ module RailsAiContext
     def tool_banner(server)
       names = server.tools.values.map { |t| tool_label(t) }.sort
       "[rails-ai-context] Tools (#{names.size}): #{names.join(', ')}"
+    end
+
+    # The SDK's server, told which tools skip_tools turned off. They are out
+    # of tools/list, but a client can still name one - a context file written
+    # before the skip, a model's guess - and the SDK answered "Tool not
+    # found", a protocol error most clients never show the model.
+    class SdkServer < MCP::Server
+      def initialize(skipped_tools: [], **options)
+        @skipped_tools = skipped_tools
+        super(**options)
+      end
+
+      private
+
+      def call_tool(request, ...)
+        name = request[:name]
+        return super unless @skipped_tools.include?(name) && !tools.key?(name)
+
+        MCP::Tool::Response.new([ { type: "text", text: Server.skipped_tool_message(name) } ], error: true).to_h
+      end
     end
 
     # Writes to the saved channel, since the session points $stdout and fd 1

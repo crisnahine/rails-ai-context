@@ -228,6 +228,28 @@ RSpec.describe RailsAiContext::Server do
           expect(mcp_server.tools.values).to include(tool)
         end
       end
+
+      # The SDK answered "Tool not found", a protocol error most clients
+      # never show the model, for a tool the gem has and the app turned off.
+      it "answers a call naming a skipped tool with why it is off, as a tool error" do
+        RailsAiContext.configuration.skip_tools = [ "rails_get_schema" ]
+        response = server.build.handle(
+          { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rails_get_schema", arguments: {} } }
+        )
+
+        expect(response[:result][:isError]).to be true
+        expect(response[:result][:content].first[:text]).to start_with("rails_get_schema is turned off in this app: skip_tools lists it")
+      ensure
+        RailsAiContext.configuration.skip_tools = []
+      end
+
+      it "still answers a name no tool has as the SDK does" do
+        response = server.build.handle(
+          { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rails_no_such_tool", arguments: {} } }
+        )
+
+        expect(response[:error][:message]).to match(/not found|Invalid params/i)
+      end
     end
   end
 

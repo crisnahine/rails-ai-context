@@ -223,7 +223,7 @@ its exact name blocks it; see [SECURITY.md](SECURITY.md).
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
 | `custom_tools` | Array | `[]` | Additional MCP::Tool classes to register (initializer only - a class reference cannot be written in YAML) |
-| `skip_tools` | Array | `[]` | Built-in tool names to exclude (e.g., `%w[rails_security_scan]`) |
+| `skip_tools` | Array | `[]` | Built-in tool names to exclude (e.g., `%w[rails_security_scan]`). A skipped tool is left out of every list, and a call that names it anyway - from the CLI, rake or an MCP client - says it is turned off here |
 
 ### Output
 

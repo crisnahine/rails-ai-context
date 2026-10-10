@@ -33,6 +33,8 @@ module RailsAiContext
         @missing_required = false
         @invalid_required = []
         @out_of_type = {}
+        # How each param was typed, so a suggestion uses the same form.
+        @flag_spellings = {}
       end
 
       # The answer is what the caller prints to stdout, so whatever the app's
@@ -175,6 +177,9 @@ module RailsAiContext
         found = tools.find { |t| self.class.short_name(t.tool_name) == name }
         return found if found
 
+        skipped = [ name, "rails_#{name}", "rails_get_#{name}" ].find { |candidate| Server.skipped_tools.include?(candidate) }
+        raise ToolNotFoundError, Server.skipped_tool_message(skipped) if skipped
+
         # Fuzzy suggestion
         short_names = tools.map { |t| self.class.short_name(t.tool_name) }
         suggestion = Tools::BaseTool.find_closest_match(name, short_names)
@@ -235,12 +240,14 @@ module RailsAiContext
 
           if arg.start_with?("--no-")
             key = arg.sub("--no-", "").tr("-", "_").to_sym
+            @flag_spellings[key] = arg
             result[key] = false
             i += 1
           elsif arg.start_with?("--")
             if arg.include?("=")
               key, value = arg.sub("--", "").split("=", 2)
               key = key.tr("-", "_").to_sym
+              @flag_spellings[key] = arg.split("=", 2).first
               prop = properties[key] || {}
               if prop[:type] == "array"
                 # `--files=a.rb b.rb` is the same call as `--files a.rb b.rb`;
@@ -254,6 +261,7 @@ module RailsAiContext
               result[key] = coerce_value(value, prop, key)
             else
               key = arg.sub("--", "").tr("-", "_").to_sym
+              @flag_spellings[key] = arg
               prop = properties[key] || {}
 
               if prop[:type] == "boolean"
@@ -340,6 +348,12 @@ module RailsAiContext
         "--#{name.to_s.tr('_', '-')}"
       end
 
+      # A suggested param in the form the unknown one was typed: `--table`
+      # after `--tabel`, `table=` after `tabel=` (the rake form).
+      def spelled_like(typed, suggestion)
+        typed.start_with?("--") ? "--#{suggestion.tr('_', '-')}" : "#{suggestion}="
+      end
+
       def valid_params_line
         keys = (tool_schema[:properties] || {}).keys.map(&:to_s)
         keys.any? ? "Valid params: #{keys.join(', ')}" : "This tool takes no params."
@@ -413,7 +427,8 @@ module RailsAiContext
         if unknown.any?
           msgs = unknown.map do |k|
             suggestion = Tools::BaseTool.find_closest_match(k, known_keys)
-            suggestion ? "  '#{k}' - did you mean '#{suggestion}='?" : "  '#{k}'"
+            typed = @flag_spellings.fetch(k.to_sym, k.to_s)
+            suggestion ? "  '#{typed}' - did you mean '#{spelled_like(typed, suggestion)}'?" : "  '#{typed}'"
           end
           raise InvalidArgumentError, "Unknown param#{unknown.size > 1 ? 's' : ''}:\n#{msgs.join("\n")}\n#{valid_params_line}"
         end
