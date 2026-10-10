@@ -47,7 +47,7 @@ Yes. The gem gracefully degrades - it parses `db/schema.rb` as text when no data
 
 ### Can I switch between Gemfile and standalone?
 
-Yes, freely. Both generate identical context files and provide the same 45 tools. Just re-run the install/init to update MCP config files.
+Yes, freely. Both write the same context files and serve the same 45 tools; only the commands those files name follow the install (`rails ai:context` and `rails 'ai:tool[...]'` in the Gemfile, `rails-ai-context context` and `rails-ai-context tool ...` standalone). Re-run the install or `init` after switching: it updates the MCP config files and regenerates the context files with the new commands.
 
 ### My editor opens a folder that holds several apps. Does that work?
 
