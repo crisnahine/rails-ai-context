@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **`rails_review_changes` hands git a commit, never the caller's ref.**
+  The ref went to `git diff` and `git log` as an argument, and one that
+  starts with a dash is read as an option: `ref: "--output=<path>"` made
+  the read-only tool write the diff to any path the caller named. A ref now
+  has to name a commit, and git sees that commit's SHA. A ref that starts
+  with a dash is refused, and one that names no commit says so, where it
+  answered "No changes found".
+
 ### Added
 
 - **`rails-ai-context init` sets up a folder of apps.** Run in a folder that
@@ -41,6 +51,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An in-Gemfile install from a copy outside git has its executable.** The
+  gemspec listed its files with `git ls-files`, which lists nothing outside a
+  checkout, so a `path:` entry pointing at a vendored or unpacked copy left
+  the gem without `rails-ai-context` and every MCP config's
+  `bundle exec rails-ai-context serve` failed to start. Outside a checkout
+  the files on disk are the list.
+- **The install summary names a preset that exists:** it suggested
+  `rails 'ai:preset[arch]'`, which answers "Unknown preset". It is
+  `ai:preset[architecture]`.
 - **Commands run from a subdirectory of an app find the app** (#427), the way
   `bin/rails` and Bundler do: the nearest directory above with
   `config/application.rb`, `config/environment.rb` or a `bin/rails` that
