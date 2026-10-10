@@ -85,6 +85,66 @@ module RailsAiContext
       # Checked before SELECT_INTO, which also matches, so the refusal names the disk write.
       BLOCKED_OUTPUT = /\bINTO\s+(OUTFILE|DUMPFILE)\b/i
 
+      # Session-effecting / administrative PostgreSQL functions. A query is a
+      # read from the engine's point of view, so SET TRANSACTION READ ONLY lets
+      # these run and keep their effect on the pooled connection: a backend is
+      # terminated, a config rotated, a stat reset, a WAL/restore/replication
+      # control fired, a logical message emitted, a session advisory lock left
+      # held. This is the FIRST layer, a fast name blocklist; the PostgreSQL
+      # plan's VOLATILE-function check (pg_proc.provolatile) is the robust layer
+      # that closes the rest of the family without an ever-growing list.
+      BLOCKED_PG_ADMIN = /\b(
+        pg_terminate_backend | pg_cancel_backend |
+        pg_reload_conf | pg_rotate_logfile[a-z_]* |
+        pg_stat_reset[a-z_]* |
+        pg_switch_wal | pg_switch_xlog | pg_create_restore_point |
+        pg_create_(?:physical|logical)_replication_slot | pg_drop_replication_slot |
+        pg_replication_origin_[a-z_]* | pg_logical_emit_message |
+        pg_advisory_lock[a-z_]* | pg_advisory_unlock[a-z_]* |
+        pg_advisory_xact_lock[a-z_]* | pg_try_advisory_lock[a-z_]* |
+        pg_promote | pg_wal_replay_pause | pg_wal_replay_resume |
+        pg_xlog_replay_pause | pg_xlog_replay_resume |
+        pg_notify | set_config | txid_current[a-z_]* | pg_current_xact_id[a-z_]* |
+        pg_import_system_collations
+      )\s*\(/ix
+
+      # Session-effecting MySQL/MariaDB functions. GET_LOCK leaves a named lock
+      # held on the pooled connection after the query returns, which a later
+      # caller inherits; RELEASE_* and the IS_* probes drive the same session
+      # lock table. source/master_pos_wait block on replication. MySQL has no
+      # cheap volatility catalogue like pg_proc, so these are a name blocklist.
+      BLOCKED_MYSQL_SESSION = /\b(
+        get_lock | release_lock | release_all_locks | is_free_lock | is_used_lock |
+        master_pos_wait | source_pos_wait
+      )\s*\(/ix
+
+      # VOLATILE functions that are harmless to allow: the statement timeout
+      # bounds pg_sleep, and the rest only produce a value. Everything else the
+      # plan reports as VOLATILE (pg_proc.provolatile = 'v') is refused.
+      PG_VOLATILE_ALLOWLIST = %w[
+        random clock_timestamp gen_random_uuid timeofday pg_sleep
+        pg_sleep_for pg_sleep_until uuid_generate_v4
+      ].freeze
+
+      # A column-alias list renames the columns a wildcard produced, so the
+      # names redaction reads no longer name the sensitive columns underneath.
+      # These refuse one on a CTE or a FROM item (derived table or table alias).
+      # The list is BARE identifiers only: a type modifier (numeric(10,2),
+      # varchar(255)) carries digits, and a record-returning function's list
+      # (json_to_recordset(...) AS t(a int, b text)) carries types, so neither
+      # matches; a single-column alias (generate_series(...) AS g(n)) is not a
+      # rename of several columns and is left alone.
+      ALIAS_IDENT     = /[A-Za-z_]\w*/
+      ALIAS_IDENT_LIST = /#{ALIAS_IDENT}(?:\s*,\s*#{ALIAS_IDENT})+/
+      COLUMN_ALIAS_LIST = Regexp.union(
+        # CTE column list: name(a, b, ...) AS (
+        /#{ALIAS_IDENT}\s*\(\s*#{ALIAS_IDENT_LIST}\s*\)\s*AS\s*\(/i,
+        # Derived-table / explicit alias: ... AS alias(a, b, ...)
+        /\bAS\s+#{ALIAS_IDENT}\s*\(\s*#{ALIAS_IDENT_LIST}\s*\)/i,
+        # Table alias without AS: FROM/JOIN table alias(a, b, ...)
+        /\b(?:FROM|JOIN)\s+#{ALIAS_IDENT}(?:\.#{ALIAS_IDENT})?\s+#{ALIAS_IDENT}\s*\(\s*#{ALIAS_IDENT_LIST}\s*\)/i
+      )
+
       # Defense against the column-aliasing redaction bypass:
       #
       #   SELECT password_digest AS x FROM users       -- bypasses result.columns redaction
@@ -317,6 +377,32 @@ module RailsAiContext
           return [ false, "Blocked: dangerous function #{m[0]} (filesystem/network primitive)" ]
         end
 
+        # Session-effecting admin / lock functions run under READ ONLY and keep
+        # their effect on the pooled connection. The name blocklist is the first
+        # layer; PostgreSQL's plan VOLATILE-function check is the robust one.
+        if (m = cleaned.match(BLOCKED_PG_ADMIN))
+          fn = m[0].sub(/\s*\(\z/, "")
+          return [ false,
+            "Blocked: administrative function #{fn} has a session or server-wide " \
+            "effect that a read-only transaction does not prevent. rails_query runs " \
+            "read-only queries for inspection; it will not run server-control functions." ]
+        end
+        if (m = cleaned.match(BLOCKED_MYSQL_SESSION))
+          fn = m[0].sub(/\s*\(\z/, "")
+          return [ false,
+            "Blocked: session function #{fn} leaves state (a named lock) on the pooled " \
+            "connection after the query returns. rails_query will not run it." ]
+        end
+
+        # A CTE or FROM-item column-alias list renames a wildcard's columns,
+        # which would carry the sensitive values out under harmless names.
+        if cleaned.match?(COLUMN_ALIAS_LIST)
+          return [ false,
+            "Blocked: a column-alias list (e.g. `t(a, b, c)`) renames the columns a " \
+            "wildcard returns, so sensitive columns would leave under harmless names. " \
+            "Name the columns you want in the SELECT list instead." ]
+        end
+
         # Check for SQL injection tautology patterns (OR 1=1, UNION SELECT, etc.)
         tautology = TAUTOLOGY_PATTERNS.find { |p| cleaned.match?(p) }
         return [ false, "Blocked: SQL injection pattern detected (#{cleaned[tautology]})" ] if tautology
@@ -331,36 +417,128 @@ module RailsAiContext
         return [ false, "Only SELECT, WITH, SHOW, EXPLAIN, DESCRIBE allowed" ] unless cleaned.match?(ALLOWED_PREFIX)
 
         # Column-aliasing redaction bypass defense: reject any query that
-        # textually references a sensitive column name. See the comment on
-        # SENSITIVE_COLUMN_SUFFIXES above - post-execution redaction cannot
-        # survive `SELECT password_digest AS x`.
+        # textually references a sensitive column name. Post-execution redaction
+        # reads the output column names, which an alias or an expression renames,
+        # so it cannot survive `SELECT password_digest AS x` or `upper(api_token)`.
         if (offending = references_sensitive_column?(cleaned))
           return [ false,
             "Blocked: query references sensitive column `#{offending}`. " \
-            "Post-execution redaction cannot survive aliases / expressions, so " \
-            "the entire query is rejected. Remove the reference, or add " \
-            "\"#{offending}\" to config.query_allowed_columns in an initializer " \
-            "if this column is not actually sensitive in your app." ]
+            "Name the columns you need; `#{offending}` is sensitive and never " \
+            "returned, and an alias or expression over it cannot be redacted after " \
+            "the query runs, so the whole query is refused. If `#{offending}` is not " \
+            "sensitive in your app, add \"#{offending}\" to config.query_allowed_columns " \
+            "in an initializer." ]
         end
 
         [ true, nil ]
       end
 
-      # Returns the first sensitive column name referenced by the SQL, or nil.
-      # Checks both the user's configured redacted columns (config.query_redacted_columns)
-      # AND the hard-coded suffix list (SENSITIVE_COLUMN_SUFFIXES). The match is
-      # case-insensitive and word-bounded so unrelated identifiers containing
-      # a sensitive substring are not false-positives.
+      # Returns the first sensitive column name the SQL names, or nil. Two rules,
+      # one predicate (sensitive_column?):
+      #   * a fixed name list - config.query_redacted_columns and
+      #     SENSITIVE_COLUMN_SUFFIXES - matched on every adapter whether or not
+      #     the name is a real column, so the oracle holds with no connection;
+      #   * every REAL column of the app's schema that the predicate flags
+      #     (an `api_token` the heuristic catches, an `encrypts` column), so an
+      #     app-specific sensitive column is caught through an alias or an
+      #     expression too.
+      # The match is case-insensitive and word-bounded, so a table or alias that
+      # merely contains "token" does not trip it - only a real column name does.
       def self.references_sensitive_column?(cleaned_sql)
         down = cleaned_sql.downcase
-        # Build the combined list ONCE per call and dedupe.
-        configured = Array(config.query_redacted_columns).map { |c| c.to_s.downcase }
-        suffixed   = SENSITIVE_COLUMN_SUFFIXES.map(&:downcase)
-        ((configured + suffixed).uniq - allowed_columns.to_a).each do |col|
+        blocked_column_names.each do |col|
           next if col.empty?
           return col if down.match?(/\b#{Regexp.escape(col)}\b/)
         end
         nil
+      end
+
+      # The names the textual pre-check refuses: the fixed list, plus the real
+      # sensitive columns of the schema, minus the app's allowed columns.
+      private_class_method def self.blocked_column_names
+        fixed = Array(config.query_redacted_columns).map { |c| c.to_s.downcase } +
+                SENSITIVE_COLUMN_SUFFIXES.map(&:downcase)
+        (fixed + schema_sensitive_columns.to_a).uniq - allowed_columns.to_a
+      end
+
+      # The real columns of the live schema the sensitivity rule flags. Read from
+      # the connection (cached per run), falling back to the cached context, so a
+      # column caught only by the result heuristic (`api_token`, `auth_token`) is
+      # refused through any alias or expression before the query runs.
+      private_class_method def self.schema_sensitive_columns
+        real_column_names.select { |name| sensitive_column?(name) }
+      end
+
+      # Every real column name of the app's schema, downcased. The live
+      # connection first (its own schema cache), the cached introspection as a
+      # fallback. Memoised for the run; nothing here raising fails the query.
+      private_class_method def self.real_column_names
+        RailsAiContext::RunCache.fetch([ :query_real_columns ]) do
+          columns_from_connection || columns_from_context || Set.new
+        end
+      end
+
+      private_class_method def self.columns_from_connection
+        conn = ActiveRecord::Base.connection
+        names = Set.new
+        conn.tables.each { |t| conn.columns(t).each { |c| names << c.name.to_s.downcase } }
+        names
+      rescue StandardError
+        nil
+      end
+
+      private_class_method def self.columns_from_context
+        tables = cached_context&.dig(:schema, :tables)
+        return nil unless tables.is_a?(Hash)
+
+        names = Set.new
+        tables.each_value do |data|
+          Array(data.is_a?(Hash) && data[:columns]).each do |col|
+            name = col.is_a?(Hash) ? col[:name] : col
+            names << name.to_s.downcase if name
+          end
+        end
+        names
+      rescue StandardError
+        nil
+      end
+
+      # One sensitivity rule, read by the textual pre-check, the PostgreSQL plan
+      # check and result redaction alike: a column is sensitive when it is a
+      # configured or built-in redacted name, an `encrypts` column, or matches
+      # the result heuristic - unless the app allows it by name.
+      def self.sensitive_column?(name)
+        down = name.to_s.downcase
+        return false if down.empty? || allowed_columns.include?(down)
+
+        redacted_name_set.include?(down) ||
+          encrypted_column_set.include?(down) ||
+          sensitive_by_heuristic?(down)
+      end
+
+      # Ends with a secret-ish suffix, or carries one of the broad secret words.
+      # The same heuristic result redaction has always used on output names.
+      SENSITIVE_SUFFIXES = %w[password secret token key digest hash].freeze
+      private_class_method def self.sensitive_by_heuristic?(down)
+        down.end_with?(*SENSITIVE_SUFFIXES) || down.match?(/password|secret|token/)
+      end
+
+      private_class_method def self.redacted_name_set
+        (Array(config.query_redacted_columns).map { |c| c.to_s.downcase } +
+          SENSITIVE_COLUMN_SUFFIXES.map(&:downcase)).to_set
+      end
+
+      # Columns an `encrypts` declaration covers, from the cached introspection.
+      private_class_method def self.encrypted_column_set
+        set = Set.new
+        models = cached_context&.dig(:models)
+        if models.is_a?(Hash)
+          models.each_value do |data|
+            next unless data.is_a?(Hash)
+            Array(data[:encrypts]).each { |col| set << col.to_s.downcase }
+          end
+        end
+        set
       end
 
       # An app whose own column merely looks sensitive (oauth_applications.secret)
