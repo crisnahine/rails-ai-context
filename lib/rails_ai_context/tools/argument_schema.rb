@@ -17,13 +17,23 @@ module RailsAiContext
         super
       rescue ValidationError
         raise
-      rescue StandardError
-        raise unless words_without_i18n!
+      rescue StandardError => e
+        raise unless locale_failure?(e) && words_without_i18n!
 
         super
       end
 
       private
+
+      # Only an error out of I18n loading the app's locale files: the answer
+      # is process-wide, so any other failure leaves json_schemer as it is.
+      # A YAML locale that does not parse raises I18n::InvalidLocaleData; a
+      # Ruby one raises its own error from inside I18n's loader.
+      def locale_failure?(error)
+        return true if defined?(::I18n::ArgumentError) && error.is_a?(::I18n::ArgumentError)
+
+        Array(error.backtrace).any? { |line| line.match?(%r{/i18n-[^/]+/lib/i18n/}) }
+      end
 
       # Once: a check that fails the same way again has another cause. The
       # answer is kept on the JSONSchemer module, where Result#i18n? reads it.

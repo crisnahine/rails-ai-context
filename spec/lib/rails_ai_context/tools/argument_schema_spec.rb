@@ -30,6 +30,13 @@ RSpec.describe RailsAiContext::Tools::ArgumentSchema do
       .to raise_error(MCP::Tool::InputSchema::ValidationError, /\AInvalid arguments: .*summary/)
   end
 
+  it "leaves json_schemer's translations on for an error that is not a locale's" do
+    allow_any_instance_of(JSONSchemer::Schema).to receive(:validate).and_raise(Encoding::UndefinedConversionError, "\xFF")
+
+    expect { schema.validate_arguments(detail: "bogus") }.to raise_error(Encoding::UndefinedConversionError)
+    expect(memo.class_variable_defined?(:@@i18n)).to be(false)
+  end
+
   it "passes a valid argument" do
     expect { schema.validate_arguments(detail: "full") }.not_to raise_error
   end
