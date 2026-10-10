@@ -2,6 +2,7 @@
 
 require "open3"
 require "erb"
+require "json"
 require "set"
 require "prism"
 
@@ -93,10 +94,17 @@ module RailsAiContext
             validate_ruby(real_path)
           elsif file.end_with?(".html.erb") || file.end_with?(".erb")
             validate_erb(real_path)
-          elsif file.end_with?(".js")
+          elsif file.end_with?(*JAVASCRIPT_EXTENSIONS)
             validate_javascript(real_path)
           else
             results << "- #{file} - skipped (unsupported file type)"
+            total -= 1
+            next
+          end
+
+          # A check that could not judge the file says why rather than passing it.
+          if ok == :skipped
+            results << "- #{file} - skipped (#{msg})"
             total -= 1
             next
           end
@@ -232,21 +240,101 @@ module RailsAiContext
 
       # ── JavaScript validation ────────────────────────────────────────
 
+      JAVASCRIPT_EXTENSIONS = %w[.js .mjs .cjs].freeze
+
+      # What CommonJS rejects only because the source is an ES module. Node
+      # retries a .js file whose package declares no type as a module on
+      # exactly these, so none of them is the file's own error.
+      ESM_ONLY_SYNTAX = Regexp.union(
+        "Cannot use import statement outside a module",
+        "Unexpected token 'export'",
+        "Cannot use 'import.meta' outside a module",
+        "await is only valid in async functions and the top level bodies of modules",
+        /Identifier '(?:module|exports|require|__filename|__dirname)' has already been declared/
+      )
+
+      # A tag opening where an expression should start is JSX, which node
+      # does not parse, rather than a broken script.
+      JSX_TAG = %r{<(?:/?[A-Za-z]|>)}
+
+      # `node -c file.js` leaves the module system to Node, and for a .js file
+      # whose package declares no type Node 22 decides it by retrying as a
+      # module - a retry the check skips, so every Stimulus controller passed,
+      # broken or not. The source goes to node on stdin with its type spelled
+      # out, which parses it for real and writes nothing next to the app.
       private_class_method def self.validate_javascript(full_path)
         @node_available = system("which", "node", out: File::NULL, err: File::NULL) if @node_available.nil?
+        return javascript_without_node(full_path) unless @node_available
 
-        if @node_available
-          result, status = Open3.capture2e("node", "-c", full_path.to_s)
-          if status.success?
-            [ true, nil, [] ]
-          else
-            error_lines = result.lines.reject { |l| l.strip.empty? }.first(3)
-              .map { |l| l.strip.sub(full_path.to_s, File.basename(full_path.to_s)) }
-            [ false, error_lines.any? ? error_lines.join("\n") : "syntax error", [] ]
-          end
-        else
-          validate_javascript_fallback(full_path)
+        source = RailsAiContext::SafeFile.read(full_path)
+        return [ false, "could not read file", [] ] unless source
+
+        type = javascript_module_type(full_path)
+        ok, output = node_check(source, type || "commonjs")
+        ok, output = node_check(source, "module") if !ok && type.nil? && node_message(output).to_s.match?(ESM_ONLY_SYNTAX)
+        return [ true, nil, [] ] if ok
+
+        line = output[/^\[stdin\]:(\d+)$/, 1]&.to_i
+        if node_message(output) == "SyntaxError: Unexpected token '<'" && line && source.lines[line - 1].to_s.match?(JSX_TAG)
+          return [ :skipped, "line #{line} is JSX, which node does not parse" ]
         end
+
+        [ false, node_error(output, line, File.basename(full_path.to_s)), [] ]
+      end
+
+      private_class_method def self.node_check(source, type)
+        output, status = Open3.capture2e("node", "--check", "--input-type=#{type}", stdin_data: source)
+        [ status.success?, output ]
+      end
+
+      # How Node itself decides: the extension, else the "type" of the nearest
+      # package.json, looked for no higher than the app root. nil when that
+      # package declares none, which is when Node tries both.
+      private_class_method def self.javascript_module_type(full_path)
+        case File.extname(full_path.to_s)
+        when ".mjs" then return "module"
+        when ".cjs" then return "commonjs"
+        end
+
+        root = File.realpath(rails_app.root.to_s)
+        dir = File.dirname(full_path.to_s)
+        while dir == root || dir.start_with?("#{root}/")
+          manifest = File.join(dir, "package.json")
+          if File.file?(manifest)
+            type = (JSON.parse(RailsAiContext::SafeFile.read(manifest).to_s)["type"] rescue nil)
+            return %w[module commonjs].include?(type) ? type : nil
+          end
+          dir = File.dirname(dir)
+        end
+        nil
+      end
+
+      # Node prints "[stdin]:LINE", the source line, a caret under the fault
+      # and then "SyntaxError: message".
+      private_class_method def self.node_message(output)
+        output.lines.map(&:strip).find { |l| l.match?(/\A[A-Z]\w*Error: /) }
+      end
+
+      # Shaped like the Ruby check's answer: file:line:column: message.
+      private_class_method def self.node_error(output, line, basename)
+        message = node_message(output)
+        unless line && message
+          lines = output.lines.map(&:strip).reject(&:empty?).first(3).map { |l| l.gsub("[stdin]", basename) }
+          return lines.any? ? lines.join("\n") : "syntax error"
+        end
+
+        caret = output.lines.map(&:chomp).find { |l| l.match?(/\A\s*\^+\s*\z/) }
+        column = caret&.index("^")
+        "#{basename}:#{line}#{":#{column}" if column}: #{message}"
+      end
+
+      # Without node, balanced brackets are all that is known, which is no
+      # verdict on the syntax; an unmatched one still is.
+      private_class_method def self.javascript_without_node(full_path)
+        ok, message, = validate_javascript_fallback(full_path)
+        return [ :skipped, "node is not installed, so only bracket balance was checked" ] if ok
+
+        [ false, "#{message} (node is not installed; this is a bracket check only)", [] ]
       end
 
       private_class_method def self.validate_javascript_fallback(full_path)
@@ -283,7 +371,7 @@ module RailsAiContext
           prev_char = char
         end
 
-        stack.empty? ? [ true, nil, [] ] : [ false, "unmatched '#{stack.last}' (node not available, basic check only)", [] ]
+        stack.empty? ? [ true, nil, [] ] : [ false, "unmatched '#{stack.last}'", [] ]
       end
     end
   end

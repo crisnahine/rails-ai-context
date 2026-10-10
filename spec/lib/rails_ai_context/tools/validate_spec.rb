@@ -287,6 +287,86 @@ RSpec.describe RailsAiContext::Tools::Validate do
     end
   end
 
+  # Every Stimulus controller is an ES module in a package that declares no
+  # type, and `node -c` passed each one of them however broken it was.
+  describe "JavaScript" do
+    let(:dir) { File.join(Rails.root, "tmp", "js_check") }
+
+    before { FileUtils.mkdir_p(dir) }
+    after { FileUtils.rm_rf(dir) }
+
+    def validate_js(name, content)
+      File.write(File.join(dir, name), content)
+      described_class.call(files: [ "tmp/js_check/#{name}" ]).content.first[:text]
+    end
+
+    context "with node installed" do
+      before { skip "node is not installed" unless system("which", "node", out: File::NULL, err: File::NULL) }
+
+      it "reports a broken ES module at its own line" do
+        text = validate_js("broken_controller.js", <<~JS)
+          import { Controller } from "@hotwired/stimulus"
+
+          export default class extends Controller {
+            connect() {
+              console.log("hi"
+            }
+          }
+        JS
+
+        expect(text).to include("broken_controller.js:5:16: SyntaxError: missing ) after argument list")
+        expect(text).to include("0/1 files passed")
+      end
+
+      it "passes a valid ES module, a valid CommonJS file and a sloppy-mode script" do
+        expect(validate_js("hello_controller.js", "import { Controller } from \"@hotwired/stimulus\"\nexport default class extends Controller {}\n"))
+          .to include("1/1 files passed")
+        expect(validate_js("config.js", "module.exports = { sep: require(\"path\").sep }\n")).to include("1/1 files passed")
+        expect(validate_js("legacy.js", "with (Math) { console.log(PI) }\n")).to include("1/1 files passed")
+      end
+
+      it "reports a broken CommonJS file with node's message" do
+        text = validate_js("legacy.js", "function a() {\n  console.log(\"hi\"\n}\n")
+
+        expect(text).to include("legacy.js:2:14: SyntaxError: missing ) after argument list")
+      end
+
+      it "checks an .mjs file as the module its extension makes it" do
+        expect(validate_js("tool.mjs", "export const x = {\n  a: 1\n  b: 2\n}\n")).to include("tool.mjs:3:2: SyntaxError: Unexpected identifier 'b'")
+      end
+
+      it "skips JSX, which node does not parse, rather than failing it" do
+        text = validate_js("app.js", "import React from \"react\"\nexport default () => <div>hi</div>\n")
+
+        expect(text).to include("skipped (line 2 is JSX, which node does not parse)")
+        expect(text).to include("0/0 files passed")
+      end
+    end
+
+    context "without node" do
+      around do |example|
+        previous = described_class.instance_variable_get(:@node_available)
+        described_class.instance_variable_set(:@node_available, false)
+        example.run
+      ensure
+        described_class.instance_variable_set(:@node_available, previous)
+      end
+
+      it "skips a file whose brackets balance instead of calling it valid" do
+        text = validate_js("hello_controller.js", "export const x = {\n  a: 1\n  b: 2\n}\n")
+
+        expect(text).to include("skipped (node is not installed, so only bracket balance was checked)")
+        expect(text).not_to include("syntax OK")
+      end
+
+      it "still fails an unmatched bracket, saying how little was checked" do
+        text = validate_js("broken.js", "function a() {\n")
+
+        expect(text).to include("unmatched '{' (node is not installed; this is a bracket check only)")
+      end
+    end
+  end
+
   describe "JavaScript fallback validator" do
     let(:tmp_dir) { File.join(Rails.root, "tmp") }
 

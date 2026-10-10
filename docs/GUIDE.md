@@ -681,7 +681,7 @@ rails_get_edit_context(file: "app/controllers/posts_controller.rb", near: "def i
 
 ### rails_validate
 
-Validates syntax of multiple files at once (Ruby, ERB, JavaScript). Optionally runs Rails-aware semantic checks.
+Validates syntax of multiple files at once (Ruby, ERB, JavaScript). Optionally runs Rails-aware semantic checks. JavaScript needs `node` on the PATH; without it a file whose brackets balance is listed as skipped, not as OK.
 
 **Parameters:**
 
