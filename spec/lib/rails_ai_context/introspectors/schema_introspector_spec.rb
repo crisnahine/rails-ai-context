@@ -84,6 +84,30 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
           expect(blog.static_call[:pending_migrations]).to eq([])
         end
       end
+
+      # Connecting to a SQLite file that is not there creates it.
+      it "says a SQLite database whose file is not there does not exist yet, and leaves it uncreated" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+            ActiveRecord::Schema[8.1].define(version: 2026_09_01_000000) do
+              create_table "posts" do |t|
+                t.string "title"
+              end
+            end
+          RUBY
+          path = File.join(dir, "storage", "development.sqlite3")
+          config = ActiveRecord::DatabaseConfigurations::HashConfig.new("test", "primary", { adapter: "sqlite3", database: path })
+          allow(ActiveRecord::Base).to receive(:connected?).and_return(false)
+          allow(ActiveRecord::Base).to receive(:connection_db_config).and_return(config)
+          expect(ActiveRecord::Base).not_to receive(:connection)
+
+          result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+          expect(result[:pending_unknown]).to eq("the database does not exist yet (`bin/rails db:create`, then `bin/rails db:migrate`)")
+          expect(File.exist?(path)).to be(false)
+        end
+      end
     end
 
     # MySQL keeps a boolean default as 1; schema.rb and the static tier write true.

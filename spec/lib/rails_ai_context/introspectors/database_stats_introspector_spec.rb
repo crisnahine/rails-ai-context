@@ -6,6 +6,18 @@ RSpec.describe RailsAiContext::Introspectors::DatabaseStatsIntrospector do
   let(:introspector) { described_class.new(Rails.application) }
 
   describe "#call" do
+    # Connecting to a SQLite file that is not there creates it.
+    it "says a SQLite database whose file is not there does not exist, without creating it" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "development.sqlite3")
+        config = ActiveRecord::DatabaseConfigurations::HashConfig.new("test", "primary", { adapter: "sqlite3", database: path })
+        allow(ActiveRecord::Base).to receive(:connection_db_config).and_return(config)
+
+        expect { introspector.call }.to raise_error(ActiveRecord::NoDatabaseError, /#{Regexp.escape(path)}/)
+        expect(File.exist?(path)).to be(false)
+      end
+    end
+
     it "returns table stats for SQLite adapter" do
       result = introspector.call
       # Test suite uses SQLite - should return stats

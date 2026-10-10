@@ -1,14 +1,19 @@
 # frozen_string_literal: true
 
 module RailsAiContext
-  # Resolves pending-migration status the same way Rails itself does for the
-  # "Migrations are pending" dev error page (ActiveRecord::Migration.check_pending!
-  # walks pool.migration_context.open.pending_migrations). MigrationContext moved
-  # from the connection object to the connection pool between Rails 7.0 and 7.1,
-  # and ActiveRecord::Migrator.new's signature changed to require a schema_migration
-  # + internal_metadata pair it can no longer build on its own - so a single
-  # hardcoded construction path breaks on part of the range this gem supports.
-  # The respond_to? cascade below picks whichever construction the loaded
+  # Resolves pending-migration status the way Rails' own
+  # MigrationContext#needs_migration? reads it, and without writing: the
+  # migration files Rails loads, minus the versions schema_migrations holds
+  # (none when the table is not there). MigrationContext#open, which the
+  # "Migrations are pending" page walks, builds a Migrator, and building one
+  # creates schema_migrations and ar_internal_metadata in a database that
+  # lacks them.
+  #
+  # The MigrationContext itself moved from the connection object to the
+  # connection pool between Rails 7.0 and 7.1, and from 7.1 on it takes a
+  # schema_migration + internal_metadata pair - so a single hardcoded
+  # construction path breaks on part of the range this gem supports. The
+  # respond_to? cascade below picks whichever construction the loaded
   # ActiveRecord version actually exposes instead of guessing from a version
   # number.
   module MigrationStatus
@@ -19,6 +24,8 @@ module RailsAiContext
     def self.pending(migrate_dir)
       dirs = Array(migrate_dir).select { |dir| Dir.exist?(dir) }
       return nil if dirs.empty? || !defined?(ActiveRecord::Base)
+      # A database that is not there yet, said without creating its file.
+      return nil if DatabaseFile.missing(ActiveRecord::Base.connection_db_config)
 
       pending_in(migration_context(dirs), dirs)
     rescue => e
@@ -30,11 +37,16 @@ module RailsAiContext
     # own that is removed after, so the app's connections are left as they
     # are. The primary is asked through the app's own pool. The connection is
     # made first, so a database that does not exist, or a server that does
-    # not answer, says so rather than reading as nothing pending.
+    # not answer, says so rather than reading as nothing pending; a SQLite
+    # file that is not there is said to be missing without connecting, which
+    # would create it.
     #
     # @param db_config [ActiveRecord::DatabaseConfigurations::DatabaseConfig]
     # @return [Hash] { pending: [{ version:, name: }, ...] }, or { error: exception }
     def self.of_database(db_config, migrate_dir, primary: false)
+      missing = DatabaseFile.missing(db_config)
+      return { error: missing } if missing
+
       dirs = Array(migrate_dir).select { |dir| Dir.exist?(dir) }
       with_pool(db_config, primary: primary) do |pool|
         pool.with_connection(&:verify!)
@@ -45,9 +57,11 @@ module RailsAiContext
     end
 
     def self.pending_in(context, dirs)
-      context.open.pending_migrations.map { |m| { version: m.version.to_s, name: m.name } }
+      applied = context.get_all_versions
+      context.migrations.reject { |m| applied.include?(m.version) }.map { |m| { version: m.version.to_s, name: m.name } }
     rescue ActiveRecord::MigrationError
-      # A future or duplicate version stops Rails loading the directory; the applied set still answers.
+      # A version Rails will not load (one past tomorrow, a name it cannot
+      # read) stops it reading the directory; the applied set still answers.
       PendingMigrations.for(migrate_dir: dirs, applied: context.get_all_versions)
     end
 

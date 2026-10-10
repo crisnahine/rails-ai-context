@@ -1637,7 +1637,7 @@ RSpec.describe RailsAiContext::Doctor do
       ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, name, { adapter: "sqlite3", database: database })
     end
 
-    it "reads a pending migration in a secondary database" do
+    def with_analytics_database
       write("config/database.yml", "#{Rails.env}:\n  primary:\n    adapter: sqlite3\n  analytics:\n    adapter: sqlite3\n    " \
                                    "database: db/analytics.sqlite3\n    migrations_paths: db/analytics_migrate\n")
       write("db/analytics_migrate/20240101000000_create_events.rb", "class CreateEvents < ActiveRecord::Migration[7.1]\nend\n")
@@ -1645,11 +1645,34 @@ RSpec.describe RailsAiContext::Doctor do
       allow(ActiveRecord::Base.configurations).to receive(:configs_for).and_call_original
       allow(ActiveRecord::Base.configurations).to receive(:configs_for).with(env_name: Rails.env)
         .and_return([ ActiveRecord::Base.connection_db_config, analytics ])
+    end
+
+    it "reads a pending migration in a secondary database, and writes nothing to it" do
+      with_analytics_database
+      # Created, never migrated: an empty SQLite file.
+      write("db/analytics.sqlite3", "")
 
       check = app_doctor.send(:check_pending_migrations)
 
       expect(check.status).to eq(:fail)
       expect(check.message).to eq("1 pending migration in analytics - schema data will be stale")
+      database = SQLite3::Database.new(File.join(@root, "db/analytics.sqlite3"), readonly: true)
+      expect(database.execute("SELECT name FROM sqlite_master WHERE type = 'table'")).to eq([])
+    ensure
+      database&.close
+    end
+
+    # Connecting would create the file, and the next run would read an empty
+    # database with every migration pending.
+    it "says a SQLite database whose file is not there does not exist, and leaves it uncreated" do
+      with_analytics_database
+
+      check = app_doctor.send(:check_pending_migrations)
+
+      expect(check).to have_attributes(name: "Database", status: :fail,
+                                       message: "the #{Rails.env} database analytics (#{File.join(@root, "db/analytics.sqlite3")}) does not exist",
+                                       fix: "Run `RAILS_ENV=#{Rails.env} bin/rails db:prepare`")
+      expect(File.exist?(File.join(@root, "db/analytics.sqlite3"))).to be(false)
     end
 
     def unreachable(error)
