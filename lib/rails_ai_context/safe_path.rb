@@ -106,13 +106,21 @@ module RailsAiContext
     # paths: the real path, or for a path not there yet its nearest existing
     # ancestor's real path with the rest appended. Stdlib only, so it serves
     # before the gem entry loads too.
+    #
+    # Worked in bytes: a name that is not UTF-8 arrives as a broken UTF-8
+    # string, which Ruby 3.1's delete_prefix leaves whole, and realpath
+    # answers it as bytes, which File.join will not mix with a UTF-8 rest.
     def canonical(path)
       path = File.expand_path(path.to_s)
       existing = path
       existing = File.dirname(existing) until File.exist?(existing) || File.dirname(existing) == existing
-      rest = path.delete_prefix(existing)
+      rest = path.b.delete_prefix(existing.b)
       real = File.realpath(existing)
-      rest.empty? ? real : File.join(real, rest)
+      return real if rest.empty?
+
+      joined = File.join(real.b, rest)
+      text = joined.dup.force_encoding(Encoding::UTF_8)
+      text.valid_encoding? ? text : joined
     rescue SystemCallError
       path
     end
