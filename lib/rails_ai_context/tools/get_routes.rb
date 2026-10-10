@@ -25,7 +25,9 @@ module RailsAiContext
           },
           app_only: {
             type: "boolean",
-            description: "Filter out internal Rails routes (Active Storage, Action Mailbox, Conductor, etc.). Default: true."
+            description: "Leave out the routes Rails' engines and gems draw on their own (Active Storage, Action Mailbox and its conductor, " \
+                         "Turbo Native navigation, Rails' info and mailer-preview pages). Routes the app's route files declare stay, " \
+                         "devise_for's and the health check's included. A controller filter searches every route. Default: true."
           }
         }
       )
@@ -143,8 +145,10 @@ module RailsAiContext
 
           # Filter out internal Rails routes by default, remembering how many
           # were dropped so headers can say the count is app-only, not the total.
+          # A controller filter names the routes it wants, so it searches the
+          # whole table: `controller:"active_storage/blobs"` is asked for by name.
           excluded_framework_count = 0
-          if app_only
+          if app_only && controller.nil?
             framework_ctrls = by_controller.select { |k, _| framework_controller?(k) }
             excluded_framework_count = framework_ctrls.values.sum { |actions| RailsAiContext::RouteCoverage.dedupe_put_patch_routes(actions).size }
             by_controller = by_controller.reject { |k, _| framework_controller?(k) }
@@ -164,7 +168,7 @@ module RailsAiContext
             filtered = filtered.merge(engine_controller_groups(routes[:engine_routes], needles))
             if filtered.empty?
               # The whole controller list would bury the sentence saying the name matched none.
-              known = by_controller.keys.sort
+              known = by_controller.keys.reject { |k| framework_controller?(k) }.sort
               return empty_response("No routes for '#{controller}'. Controllers: " \
                                     "#{known.first(20).join(', ')}#{" ... and #{known.size - 20} more" if known.size > 20}")
             end

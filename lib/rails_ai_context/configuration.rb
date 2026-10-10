@@ -435,7 +435,10 @@ module RailsAiContext
       @max_search_results       = 200
       @max_validate_files       = 50
       @excluded_controllers     = %w[DeviseController Devise::OmniauthCallbacksController]
-      @excluded_route_prefixes  = %w[action_mailbox/ active_storage/ rails/ conductor/ devise/ turbo/]
+      # The routes Rails' engines and gems draw on their own. A route the app's
+      # own files declare is the app's, framework controller or not: `devise_for`
+      # and the `get "up" => "rails/health#show"` every new app writes.
+      @excluded_route_prefixes  = %w[action_mailbox/ active_storage/ rails/conductor/ rails/info rails/mailers rails/welcome turbo/]
       @excluded_concerns        = DEFAULT_EXCLUDED_CONCERNS.dup
       @excluded_filters         = DEFAULT_EXCLUDED_FILTERS.dup
       @excluded_middleware      = DEFAULT_EXCLUDED_MIDDLEWARE.dup

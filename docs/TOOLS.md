@@ -266,13 +266,22 @@ spells one out. A mounted Grape API lists its endpoints under the mount (verb,
 full path, declared params), read from its classes in `app/api` and `lib/api`;
 the summary counts them.
 
+`app_only` leaves out the routes Rails' engines and gems draw on their own:
+Active Storage, Action Mailbox's ingresses and its conductor, Turbo Native's
+navigation routes, and Rails' development pages (`rails/info`, `rails/mailers`,
+`rails/welcome`), as `config.excluded_route_prefixes` lists them. A route the
+app's own route files declare is an app route, so `devise_for :users` and the
+`get "up" => "rails/health#show"` health check are listed. A `controller` filter
+searches every route, so `controller:"devise/sessions"` or
+`controller:"active_storage/blobs"` answers whatever `app_only` says.
+
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `controller` | string | - | Filter by controller |
+| `controller` | string | - | Filter by controller; searches every route, framework ones included |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 | `limit` | integer | auto | Max routes to return; the default depends on `detail` |
 | `offset` | integer | `0` | Skip this many routes |
-| `app_only` | boolean | `true` | Leave out internal Rails routes (Active Storage, Action Mailbox, Conductor) |
+| `app_only` | boolean | `true` | Leave out the routes Rails' engines and gems draw on their own (see above) |
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
 
