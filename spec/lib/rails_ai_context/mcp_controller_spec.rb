@@ -107,8 +107,9 @@ RSpec.describe RailsAiContext::McpController do
       described_class.reset_transport!
       described_class.instance_variable_set(:@mcp_transport, transport)
 
-      # Set up a minimal request/response for the controller
-      request = ActionDispatch::TestRequest.create
+      # Set up a minimal request/response for the controller. A POST: a GET
+      # asks for the server-push stream, which the engine does not open.
+      request = ActionDispatch::TestRequest.create("REQUEST_METHOD" => "POST")
       response = ActionDispatch::TestResponse.new
       controller.instance_variable_set(:@_request, request)
       controller.instance_variable_set(:@_response, response)
@@ -296,46 +297,29 @@ RSpec.describe RailsAiContext::McpController do
     end
   end
 
-  describe "#wait_for_stream_close" do
+  # Nothing in the engine sends a server-initiated message, and a held GET
+  # cost a thread per client and kept `rails server` from stopping while a
+  # client stayed connected. The spec's answer for a server without the
+  # channel is 405.
+  describe "a GET for the server-push stream" do
+    let(:transport) { instance_double(MCP::Server::Transports::StreamableHTTPTransport, handle_request: nil) }
     let(:controller) { described_class.new }
 
-    def with_stream(stream)
-      response = ActionDispatch::TestResponse.new
-      allow(response).to receive(:stream).and_return(stream)
-      controller.instance_variable_set(:@_response, response)
-      controller
+    before do
+      described_class.instance_variable_set(:@mcp_transport, transport)
+      request = ActionDispatch::TestRequest.create("REQUEST_METHOD" => "GET")
+      controller.instance_variable_set(:@_request, request)
+      controller.instance_variable_set(:@_response, ActionDispatch::TestResponse.new)
+      controller.instance_variable_set(:@_action_name, "handle")
     end
 
-    it "returns once the stream is closed" do
-      stream = instance_double("Buffer", closed?: true)
-      expect { Timeout.timeout(2) { with_stream(stream).send(:wait_for_stream_close) } }.not_to raise_error
-    end
+    it "answers 405 with a JSON-RPC error and opens no stream" do
+      controller.handle
 
-    # The case the poll used to miss: a client hangup calls Live::Buffer#abort,
-    # which flips connected? but leaves closed? false.
-    it "returns when the client hung up without the stream being closed" do
-      stream = instance_double("Live::Buffer", closed?: false, connected?: false)
-      expect { Timeout.timeout(2) { with_stream(stream).send(:wait_for_stream_close) } }.not_to raise_error
-    end
-
-    it "keeps waiting while the client is still connected" do
-      stream = instance_double("Live::Buffer", closed?: false, connected?: true)
-      expect { Timeout.timeout(1) { with_stream(stream).send(:wait_for_stream_close) } }
-        .to raise_error(Timeout::Error)
-    end
-
-    # The plain buffer off the streaming path answers closed? only; asking it
-    # for connected? would raise rather than end the wait.
-    it "keeps waiting on a buffer that does not report connectedness" do
-      stream = instance_double("Buffer", closed?: false)
-      expect { Timeout.timeout(1) { with_stream(stream).send(:wait_for_stream_close) } }
-        .to raise_error(Timeout::Error)
-    end
-
-    it "swallows an IOError from a torn-down stream" do
-      stream = instance_double("Buffer")
-      allow(stream).to receive(:closed?).and_raise(IOError, "closed stream")
-      expect { Timeout.timeout(2) { with_stream(stream).send(:wait_for_stream_close) } }.not_to raise_error
+      expect(controller.response.status).to eq(405)
+      expect(controller.response.headers["Allow"]).to eq("POST, DELETE")
+      expect(JSON.parse(controller.response.body).dig("error", "message")).to include("no server-push stream")
+      expect(transport).not_to have_received(:handle_request)
     end
   end
 
