@@ -909,6 +909,24 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       end
     end
 
+    # Typed outside the app, `init --app-path ../b` reported `.mcp.json` and
+    # `.rails-ai-context.yml`, which read as files in the folder the user
+    # stood in.
+    it "names the files it wrote the way --app-path was typed" do
+      Dir.mktmpdir do |dir|
+        %w[a b].each do |name|
+          FileUtils.mkdir_p(File.join(dir, name, "app", "models"))
+          File.write(File.join(dir, name, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+        end
+
+        out = `cd #{dir}/a && printf '1\n3\n' | ruby -I #{lib} #{exe} init --app-path ../b --no-boot 2>&1`
+
+        expect($?.exitstatus).to eq(0), out
+        expect(out).to include("Created ../b/.rails-ai-context.yml", "Created/Updated ../b/.mcp.json",
+                               "Config: ../b/.rails-ai-context.yml")
+      end
+    end
+
     # The commands it prints are run from where init was: without the
     # --app-path they would read that folder instead.
     it "names the app in the commands it prints when --app-path set up another" do

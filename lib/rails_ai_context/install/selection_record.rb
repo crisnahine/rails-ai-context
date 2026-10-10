@@ -130,9 +130,12 @@ module RailsAiContext
       # keeping that judgement here means a new outcome lands in one place
       # rather than three.
       #
+      # @param place [String, nil] the app root as the person running the
+      #   entry names it from where they stand, when that is outside the app
+      #   (Install::Surface#place); the files are named from there
       # @return [Array<Array(Symbol, String)>] level is :ok, :muted or :warn
-      def messages(result)
-        [ yaml_message(result[:yaml]), initializer_message(result[:initializer]) ].compact
+      def messages(result, place: nil)
+        [ yaml_message(result[:yaml], place), initializer_message(result[:initializer], place) ].compact
       end
 
       # Adds one tool to whatever is already recorded, for the per-tool
@@ -151,10 +154,10 @@ module RailsAiContext
       end
 
       # What to say when a single-value key came back :conflict, nil otherwise.
-      def conflict_message(key, status)
+      def conflict_message(key, status, place: nil)
         return unless status == :conflict
 
-        [ :warn, "#{INITIALIZER} sets config.#{key} in a form this installer does not " \
+        [ :warn, "#{named(INITIALIZER, place)} sets config.#{key} in a form this installer does not " \
                  "rewrite, and it takes precedence - edit it by hand to change it" ]
       end
 
@@ -202,23 +205,29 @@ module RailsAiContext
         end
       end
 
-      private_class_method def self.yaml_message(status)
+      private_class_method def self.yaml_message(status, place = nil)
+        file = named(YAML_FILE, place)
         case status
-        when :unchanged then [ :muted, "#{YAML_FILE} (unchanged)" ]
-        when :created   then [ :ok, "Created #{YAML_FILE}" ]
-        when :updated   then [ :ok, "Updated #{YAML_FILE}" ]
-        when :replaced  then [ :warn, "#{YAML_FILE} could not be read, so it was replaced" ]
-        when :failed    then [ :warn, "Could not write #{YAML_FILE} - your selection was not saved" ]
+        when :unchanged then [ :muted, "#{file} (unchanged)" ]
+        when :created   then [ :ok, "Created #{file}" ]
+        when :updated   then [ :ok, "Updated #{file}" ]
+        when :replaced  then [ :warn, "#{file} could not be read, so it was replaced" ]
+        when :failed    then [ :warn, "Could not write #{file} - your selection was not saved" ]
         end
       end
 
-      private_class_method def self.initializer_message(status)
+      private_class_method def self.initializer_message(status, place = nil)
+        file = named(INITIALIZER, place)
         case status
-        when :updated, :inserted then [ :ok, "Updated #{INITIALIZER}" ]
+        when :updated, :inserted then [ :ok, "Updated #{file}" ]
         when :conflict
-          [ :warn, "#{INITIALIZER} sets config.ai_tools in a form this installer does not " \
+          [ :warn, "#{file} sets config.ai_tools in a form this installer does not " \
                    "rewrite, and it takes precedence - edit it by hand to change your selection" ]
         end
+      end
+
+      private_class_method def self.named(file, place)
+        place ? File.join(place, file) : file
       end
 
       # Everything below is how the record is stored, not what callers ask of

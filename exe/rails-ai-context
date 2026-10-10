@@ -471,8 +471,26 @@ class RailsAiContextCLI < Thor
         lambda { |prompt|
           $stderr.print "#{prompt} "
           $stdin.gets&.strip
-        }
+        },
+        display_place
       )
+    end
+
+    # The root this run works in as the person who typed the command names
+    # it, when they typed it outside that root (`init --app-path X` in X's
+    # parent, a workspace named from elsewhere): the files it reports are
+    # named from there, `X/.mcp.json`, since a bare `.mcp.json` reads as one
+    # in the directory they are in. A typed --app-path is used as typed, the
+    # way the commands it prints repeat it. Nil when they stand in the root
+    # or below.
+    def display_place
+      result = @app_root_result or return nil
+      root = result.root || result.base
+      cwd = result.cwd
+      return nil if root.nil? || cwd.nil? || cwd == root || cwd.start_with?("#{root}/")
+
+      typed = @app_path_override || options[:app_path]
+      result.explicit && typed ? typed.delete_suffix("/") : app_root.display(root, cwd)
     end
 
     def prompt_ai_tools(current: nil)
@@ -518,12 +536,14 @@ class RailsAiContextCLI < Thor
         extra_yaml: { "tool_mode" => tool_mode.to_s, "context_files" => context_files }
       )
       record = ::RailsAiContext::Install::SelectionRecord
+      # A workspace's apps are named from the workspace, where the run started.
+      place = root == Dir.pwd ? program_surface.place : app_root.display(root, Dir.pwd)
       conflicts = [
-        record.conflict_message(:context_files, record.write_context_files(context_files, root: root)),
-        record.conflict_message(:tool_mode, record.write_tool_mode(tool_mode, root: root))
+        record.conflict_message(:context_files, record.write_context_files(context_files, root: root), place: place),
+        record.conflict_message(:tool_mode, record.write_tool_mode(tool_mode, root: root), place: place)
       ].compact
 
-      (record.messages(result) + conflicts).each do |level, text|
+      (record.messages(result, place: place) + conflicts).each do |level, text|
         $stderr.puts(level == :warn ? "Warning: #{text}" : text)
       end
     end
@@ -765,7 +785,8 @@ class RailsAiContextCLI < Thor
         $stderr.puts "  AI agents can run `rails-ai-context tool schema table=users` directly."
       end
       $stderr.puts ""
-      $stderr.puts "Config: .rails-ai-context.yml (edit anytime, no restart needed)"
+      config = display_place ? File.join(display_place, ".rails-ai-context.yml") : ".rails-ai-context.yml"
+      $stderr.puts "Config: #{config} (edit anytime, no restart needed)"
       $stderr.puts ""
     end
 
@@ -784,7 +805,7 @@ class RailsAiContextCLI < Thor
 
     def print_context_result(result)
       style = ::RailsAiContext::ContextFileReport.style(:plain)
-      ::RailsAiContext::ContextFileReport.each_line(result, style, root: Dir.pwd) do |_bucket, text|
+      ::RailsAiContext::ContextFileReport.each_line(result, style, root: Dir.pwd, place: display_place) do |_bucket, text|
         $stderr.puts "  #{text}"
       end
     end

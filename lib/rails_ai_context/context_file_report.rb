@@ -55,19 +55,26 @@ module RailsAiContext
     # @param root [String, Pathname, nil] the app root. A path under it is
     #   named from it, as the docs show the files; one outside it - an
     #   output_dir elsewhere - stays whole.
+    # @param place [String, nil] the root as the person running the command
+    #   names it from where they stand, when that is outside the app
+    #   (`--app-path X` typed in X's parent): paths under the root are named
+    #   from there, as X/CLAUDE.md
     # @yieldparam bucket [Symbol]
     # @yieldparam text [String]
-    def each_line(result, style, root: nil)
+    def each_line(result, style, root: nil, place: nil)
       entries(result).each do |bucket, path, reason|
-        yield bucket, format(style.fetch(bucket), *[ shown(path, root), reason ].compact)
+        yield bucket, format(style.fetch(bucket), *[ shown(path, root, place), reason ].compact)
       end
     end
 
-    def shown(path, root)
+    def shown(path, root, place = nil)
       return path if root.nil?
 
       inside = "#{root.to_s.delete_suffix('/')}/"
-      path.to_s.start_with?(inside) ? path.to_s.delete_prefix(inside) : path
+      return path unless path.to_s.start_with?(inside)
+
+      relative = path.to_s.delete_prefix(inside)
+      place ? File.join(place, relative) : relative
     end
   end
 end
