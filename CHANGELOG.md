@@ -48,9 +48,168 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after the announced name and keeps 13 characters of it, so every app's
   tools would otherwise start `rails-ai-cont`. An app whose bundle pins an
   older gem ignores the variable and starts.
+- **CONFIGURATION.md lists the environment variables the gem reads**, among
+  them `RAILS_AI_CONTEXT_BOOT_TIMEOUT`, which appeared only in error
+  messages.
 
 ### Fixed
 
+- **A stdio server whose app hangs while booting answers its client within
+  about 21 seconds, from the static tier.** A stdio client waits about 30
+  seconds for `initialize` (Claude Code, the MCP Inspector) and `serve` gave
+  the boot 60, so an initializer blocked on a service that was down never
+  reached the static tier for a real client. `serve` over stdio and
+  `rails ai:serve` now give the boot 20 seconds unless
+  `RAILS_AI_CONTEXT_BOOT_TIMEOUT` says otherwise; `rails ai:serve`, which
+  has no static tier, exits with the boot's error while the client still
+  listens. Other commands keep 60.
+- **A server without live reload answers for the app as it is after an
+  edit.** Inside `cache_ttl` the cache was served without asking whether
+  files had moved, relying on live reload, which needs the `listen` gem a
+  new Rails 8 app does not bundle: answers came from before a migration or a
+  model edit for up to a minute, and an association added to a model never
+  appeared until a restart. A server with no live reload running, the
+  endpoints mounted in the app included, now checks the app's fingerprint
+  at each tool call and resource read and, when it moved, reloads the app's
+  code and resets the caches. That costs a few milliseconds per call on a
+  typical app and about 100 ms at 10,000 files, where calls close together
+  share one check.
+- **`tool --json` and `JSON=1 rails 'ai:tool[...]'` print the envelope and
+  nothing else.** Sidekiq's "connecting to Redis" line, and on the rake task
+  an initializer's `puts`, landed on stdout ahead of it. What the app prints
+  while it boots or a tool runs now goes to stderr, as under `serve`.
+- **An invalid tool argument is reported as one when the app's locale files
+  do not load.** With a locale file that did not parse, every invalid
+  argument came back as a JSON-RPC internal error with an I18n backtrace on
+  stderr, over stdio and HTTP. An exception that still escapes a tool is
+  named in one stderr line, its backtrace under `DEBUG`.
+- **A preset prints each tool's header above that tool's answer, on
+  stdout**, from the binary and the rake task; the headers went to stderr,
+  so a redirect of both streams put them out of order.
+- **A tool `skip_tools` turned off says so** on the CLI, the rake task and
+  the MCP server, which answered "Unknown tool" and "Tool not found".
+- **Every command answers `--help` and `-h`**, exit 0, where each failed with
+  Thor's "was called with arguments" (`inspect`'s naming `inspect_app`) and
+  `tool`/`preset` read the flag as a name. `doctor --no-boot` and
+  `serve --transport bogus` are refused in words, the transport before the
+  boot. `tool --list` in an app whose boot fails says so in one line. An
+  unknown param's suggestion keeps the form it was typed in.
+- **An unknown format is refused before any work, with every valid one named,
+  `all` included**: `rails 'ai:context_for[bogus]'` printed "Writing bogus
+  context file..." and then a raw `ArgumentError`.
+- **An unknown `context_mode` or `tool_mode` is refused** from
+  `CONTEXT_MODE`, the YAML and the initializer, where it was kept and read
+  as the default.
+- **The `ai:facts` footer names a command that gives the full JSON**,
+  `rails ai:context:json`, since `ai:inspect` prints a text summary, and the
+  `ai:inspect` table no longer pairs `.codex/config.toml` with
+  `rails ai:context:codex`.
+- **`ruby -W` prints no warning from the gem's own files.**
+- **`doctor` checks that each MCP config's command can start the server.** A
+  config passed when it parsed, so after `bundle remove rails-ai-context`
+  every `bundle exec rails-ai-context serve` entry still read as valid, an
+  in-Gemfile app whose `.mcp.json` ran the bare binary was told it
+  "activates via bundler", and a `path:` copy without the executable passed
+  while `bundle exec` could not find it. Each entry is now checked without
+  starting it: `bundle exec` needs `bundle` on the PATH the client gives the
+  server, a lockfile (the one the entry's `BUNDLE_GEMFILE` names, if set)
+  that carries the gem, and a copy that lists its executable; a bare
+  `rails-ai-context` must be on that PATH, and in an app whose bundle
+  carries the gem it is a warning. The fix names the command to rerun, a
+  config that holds no rails-ai-context server says so, and a JSON config
+  that does not parse is named in the install's words.
+- **`doctor` checks the PATH a Codex env snapshot saved.** Codex starts the
+  server with only the env its config sets, and an rbenv or asdf snapshot
+  saves `PATH` alone, so checking `GEM_HOME` passed a snapshot whose Ruby
+  had been removed. Each snapshot's `PATH` now has to reach the command its
+  entry runs, in the app's config and in a folder-of-apps config above it,
+  and a failure names the directory that is gone and where to rerun
+  `rails-ai-context init`.
+- **A context file is out of date when a context run would rewrite it.**
+  `doctor` compared file times, so touching a model raised "CLAUDE.md may be
+  stale" and `rails ai:context`, which leaves unchanged files alone, could
+  not clear it; it ignored `output_dir`; and after an upgrade it called
+  files stamped with the old version up to date. It now runs the context
+  generation into a scratch copy, names the files it would write and why
+  (the version that wrote them, or the folders changed since), and the fix
+  it names clears it. The app's files are not touched.
+- **`doctor` reads pending migrations in every database.** Only the primary
+  was asked, so a pending migration for a second database passed. Each
+  database the environment configures is asked through its own connection,
+  as `db:migrate:status` does, the message names the database, and the
+  Migrations row counts every database's files.
+- **A development database that does not exist fails `doctor`.** It scored
+  93 and `--strict` exited 0. A Database row now fails, naming a database
+  that does not exist (fix: `bin/rails db:prepare`) or one that does not
+  answer, with the error.
+- **`doctor` reads the bundle, suite and code the tools read.** It reported
+  "Gemfile.lock not found" for an app whose `config/boot.rb` names a shared
+  Gemfile above it, and in an engine's `test/dummy` it counted only the
+  dummy's models, controllers, views and tests and found no migrations. It
+  now finds the lockfile as the tools do, counts the engine's code, suite
+  and migrations with the dummy's, and names the engine's root as the place
+  to run the db task it suggests.
+- **`doctor`'s secrets check is about the files that hold secrets.** Every
+  stock app was warned about committing `config/credentials.yml.enc`,
+  `config/database.yml`, `config/cable.yml` and `config/storage.yml`. A
+  committed key or env file (`config/master.key`,
+  `config/credentials/*.key`, `.env*` and the like) still fails; a config
+  such as `config/database.yml` warns only when it holds a literal password,
+  token or URL with a password, naming the key and line; encrypted
+  credentials are not reported.
+- **`doctor` agrees with the boot about a pinned dependency.** With
+  `prism 1.3.0` locked, the boot warned that the gem needs `>= 1.4` while the
+  Prism parser row passed, and the same held for `mcp` and the MCP server
+  row. Both rows now warn with the locked and needed versions and name
+  `bundle update <gem>` as the fix.
+- **`rails_validate` checks a Stimulus controller as the ES module it is.**
+  On Node 22, `node -c` exits 0 for any `.js` file that imports when its
+  package declares no type, broken or not, so every Stimulus controller
+  passed. The source now goes to node on stdin with its module type spelled
+  out, decided as Node decides it, and nothing is written next to the app.
+  A failure names the line, the column and node's message, where it printed
+  the first lines of node's output and cut the message off. Without node, a
+  file whose brackets balance is listed as skipped rather than passed, and
+  JSX is skipped rather than failed. `.mjs` and `.cjs` files are checked too.
+- **`rails_get_callbacks` lists the callbacks turbo-rails' broadcast macros
+  declare.** A model with `broadcasts_refreshes`, `broadcasts_to`,
+  `broadcasts` or `broadcasts_refreshes_to` read as having none of the commit
+  callbacks they add. Each is listed under its event as
+  `broadcasts_refreshes (turbo-rails)`, with the method turbo-rails runs at
+  `detail:"full"`, and `broadcasts_refreshes` is a macro on
+  `rails_get_model_details` too. `detail:"full"` also prints a block or
+  lambda callback's declaration, where it printed `[inline_block]` alone.
+- **A scope declared in a loop over a literal list is a scope.**
+  `KINDS.each { |k| scope k, -> { ... } }` gave no scope statically, and
+  booted the scopes read as class methods. Each element is now a scope,
+  tagged `[INFERRED]`.
+- **`rails_diagnose` calls a `NoMethodError` a nil reference only when the
+  receiver is nil.** On any other receiver it is an undefined method, and
+  booted, the answer names the receiver's closest method; a private method
+  is said to be private.
+- **`rails_diagnose` reads an error as a Rails log writes it.**
+  `Pundit::AuthorizationNotPerformedError (ProductsController)` came back as
+  `Error: Unknown`. Authorization not performed and authorization denied are
+  classified, and an error with no rule names the gem or app file that
+  defines its class.
+- **`rails_diagnose`'s log correlation finds the request.** It searched the
+  log's last 15 lines and printed the matching line alone. It now reads the
+  log's last megabyte and shows the latest entry: path, action, parameters,
+  status, request id, the error and the first frames, all redacted. It says
+  so when there is no entry.
+- **`rails_dependency_graph` counts only an `as:` declaration as implementing
+  a polymorphic interface, and lists foreign-key cycles only.** An
+  association and its inverse were listed as a cycle, sixteen of them on an
+  app with none; when there are none the answer now says so.
+- **`rails_get_concern` lists private methods and `helper_method`, and says
+  when an include is conditional.** On a booted app, a conditionally
+  included module that is not defined is said never to have been mixed in.
+- **`rails_get_env` skips YAML comment lines and reads a block's literal
+  default.** A default in a `sensitive_patterns` file is said to be present
+  and unread, where a lone site read as having none.
+- **`rails_runtime_info` says its pool and cache are the MCP server
+  process's own.** It also names the shared store another environment keeps
+  the app's cache in.
 - **An in-Gemfile install from a copy outside git has its executable.** The
   gemspec listed its files with `git ls-files`, which lists nothing outside a
   checkout, so a `path:` entry pointing at a vendored or unpacked copy left
