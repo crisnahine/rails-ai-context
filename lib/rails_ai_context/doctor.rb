@@ -130,7 +130,7 @@ module RailsAiContext
       else
         Check.new(name: "Pending migrations", status: :fail,
           message: "#{pending_phrase(pending, databases)} - schema data will be stale",
-          fix: "Run `rails db:migrate`")
+          fix: "Run `#{database_task("db:migrate")}`#{where_tasks_run}")
       end
     end
 
@@ -176,19 +176,41 @@ module RailsAiContext
       said << pending_phrase(pending, databases) if pending.any?
 
       fixes = []
-      fixes << "Run `#{"RAILS_ENV=#{env} " unless env == "development"}bin/rails db:prepare`" if missing.any? || pending.any?
+      fixes << "Run `#{database_task("db:prepare")}`#{where_tasks_run}" if missing.any? || pending.any?
       fixes << "Start the database server, or fix its settings in config/database.yml" if failing.any?
       Check.new(name: "Database", status: :fail, message: said.join("; "), fix: fixes.join("; "))
     end
 
+    # A database task as typed where it runs: in an engine's test/dummy, at
+    # the engine's root, whose db tasks add the engine's own migrations
+    # (from the dummy itself, Rails lists them as NO FILE). The engine
+    # forwards db:migrate to its dummy, and db:prepare only as app:db:prepare.
+    def database_task(task)
+      env = RailsAiContext.environment_name
+      task = "app:#{task}" if task == "db:prepare" && engine_roots_shown.any?
+      "#{"RAILS_ENV=#{env} " unless env == "development"}bin/rails #{task}"
+    end
+
+    def where_tasks_run
+      engine_roots_shown.empty? ? "" : " in the engine at #{engine_roots_shown.join(', ')}"
+    end
+
+    # The engines an engine's test/dummy runs in, as the app root reaches them (../..).
+    def engine_roots_shown
+      @engine_roots_shown ||= PathResolver.enclosing_engine_roots(app.root.to_s).map { |engine| Install::Program.relative_to(engine, app.root) }
+    end
+
+    # The primary's migrations directories, and in an engine's test/dummy
+    # the engine's db/migrate too, which the engine's db:migrate runs against
+    # the dummy's database.
     def primary_migrate_dirs
-      PendingMigrations.migrate_dirs_for(app.root)
+      PendingMigrations.migrate_dirs_for(app.root) + PathResolver.enclosing_engine_roots(app.root.to_s).map { |engine| File.join(engine, "db/migrate") }
     end
 
     def check_models
-      count = Introspectors::SourceScan.paths(app.root, kind: "app/models", skip_concerns: false).count
+      count, in_engine = source_file_counts("app/models")
       if count > 0
-        Check.new(name: "Models", status: :pass, message: "#{count_phrase(count, "model file")} found", fix: nil)
+        Check.new(name: "Models", status: :pass, message: "#{count_phrase(count, "model file")} found#{engine_share(in_engine)}", fix: nil)
       else
         Check.new(name: "Models", status: :warn, message: "No model files", fix: "Generate models with `rails generate model`")
       end
@@ -203,42 +225,69 @@ module RailsAiContext
       end
     end
 
+    # The bundle the tools read: the app's own lockfile, or with none, the
+    # one its config/boot.rb names (a monorepo's shared Gemfile, an engine's
+    # for its test/dummy), read inside the app's git repository only.
     def check_gems
-      lockfile = GemLock.lockfile_name(app.root)
-      if File.exist?(File.join(app.root, lockfile))
-        Check.new(name: "Gems", status: :pass, message: "#{lockfile} found", fix: nil)
+      bundle = GemLock.bundle(app.root)
+      if bundle.lockfile && File.file?(bundle.lockfile)
+        Check.new(name: "Gems", status: :pass, message: "#{bundle.lock_label} found", fix: nil)
+      elsif bundle.outside
+        Check.new(name: "Gems", status: :warn, message: GemLock.for(app.root).reason, fix: nil)
       else
-        Check.new(name: "Gems", status: :warn, message: "#{lockfile} not found", fix: "Run `bundle install`")
+        Check.new(name: "Gems", status: :warn, message: "#{bundle.lock_label} not found", fix: "Run `bundle install`")
       end
     end
 
     def check_controllers
-      count = Introspectors::SourceScan.paths(app.root, kind: "app/controllers", skip_concerns: false).count
+      count, in_engine = source_file_counts("app/controllers")
       if count > 0
-        Check.new(name: "Controllers", status: :pass, message: "#{count_phrase(count, "controller file")} found", fix: nil)
+        Check.new(name: "Controllers", status: :pass, message: "#{count_phrase(count, "controller file")} found#{engine_share(in_engine)}", fix: nil)
       else
         Check.new(name: "Controllers", status: :warn, message: "No controller files", fix: nil)
       end
     end
 
+    # Every directory the tools read views from: app/views, a pack's, and in
+    # an engine's test/dummy the engine's.
     def check_views
-      dir = File.join(app.root, "app/views")
-      if Dir.exist?(dir)
-        count = Dir.glob(File.join(dir, "**/*")).reject { |f| File.directory?(f) }.size
-        Check.new(name: "Views", status: :pass, message: "#{count_phrase(count, "file")} under app/views", fix: nil)
+      dirs = PathResolver.view_dirs(app.root)
+      if dirs.any?
+        count = dirs.sum { |dir| Dir.glob(File.join(dir, "**/*")).count { |f| File.file?(f) } }
+        shown = dirs.map { |dir| dir.delete_prefix(SafePath.dir_prefix(app.root.to_s)) }
+        shown = dirs.map { |dir| Install::Program.relative_to(dir, app.root) } if shown.any? { |dir| dir.start_with?("/") }
+        Check.new(name: "Views", status: :pass, message: "#{count_phrase(count, "file")} under #{shown.join(', ')}", fix: nil)
       else
         Check.new(name: "Views", status: :warn, message: "No view files", fix: nil)
       end
     end
 
+    # The suite the tools read: the app's own, or the engine's its test/dummy runs in.
     def check_tests
-      suites = RailsAiContext::TestFramework.suites(app.root)
+      suite_root = PathResolver.test_root(app.root.to_s)
+      suites = RailsAiContext::TestFramework.suites(suite_root)
       if suites.any?
-        Check.new(name: "Tests", status: :pass, message: "#{suites.join(", ")} test suite found", fix: nil)
+        where = suite_root == app.root.to_s ? "" : " (the engine's, at #{PathResolver.suite_relative(app.root.to_s, ".")})"
+        Check.new(name: "Tests", status: :pass, message: "#{suites.join(", ")} test suite found#{where}", fix: nil)
+      elsif (unread = GemLock.for(app.root).unread_bundle) && TestFramework.unread_gemfile(app.root)
+        Check.new(name: "Tests", status: :warn, message: "No test suite in the app, and #{unread}, so the suite there is not read", fix: nil)
       else
         Check.new(name: "Tests", status: :warn, message: "No test suite found",
           fix: "Run `rails generate rspec:install` or use default Minitest")
       end
+    end
+
+    # A kind of app code where the tools read it: SourceScan's directories,
+    # and in an engine's test/dummy the engine's own, which the booted tools
+    # load. [every file, the engine's]
+    def source_file_counts(kind)
+      own = Introspectors::SourceScan.paths(app.root, kind: kind, skip_concerns: false).count
+      in_engine = PathResolver.enclosing_engine_roots(app.root.to_s).sum { |engine| Dir.glob(File.join(engine, kind, "**", "*.rb")).size }
+      [ own + in_engine, in_engine ]
+    end
+
+    def engine_share(count)
+      count.positive? ? " (#{count} in the engine at #{engine_roots_shown.join(', ')})" : ""
     end
 
     # Every database's migrations, a file two of them share counted once.
@@ -250,13 +299,22 @@ module RailsAiContext
       end
 
       where = files.select { |_, paths| paths.any? }.map { |name, paths| "#{paths.size} in #{name}" }
+      app_dir = SafePath.dir_prefix(app.root.to_s)
       message = count_phrase(total, "migration file")
       message += " (#{where.join(', ')})" if files.size > 1
+      message += engine_share(files.values.flatten.uniq.count { |path| !path.start_with?(app_dir) })
       Check.new(name: "Migrations", status: :pass, message: message, fix: nil)
     end
 
+    # The migration files under dirs, each read inside the tree it belongs
+    # to: the app's, or that of the engine its test/dummy runs in.
     def migration_files_in(dirs)
-      PendingMigrations.migration_files(dirs, root: app.root).map { |file| file[:path] }
+      app_dir = SafePath.dir_prefix(app.root.to_s)
+      engines = PathResolver.enclosing_engine_roots(app.root.to_s)
+      dirs.flat_map do |dir|
+        tree = dir.start_with?(app_dir) ? app.root : engines.find { |engine| dir.start_with?(SafePath.dir_prefix(engine)) } || app.root
+        PendingMigrations.migration_files(dir, root: tree).map { |file| file[:path] }
+      end
     end
 
     # Each database's migrations directories, by the name database.yml gives it.

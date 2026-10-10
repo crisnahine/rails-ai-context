@@ -1416,6 +1416,85 @@ RSpec.describe RailsAiContext::Doctor do
     end
   end
 
+  # The rows read what the tools read: an engine's test/dummy runs in its
+  # engine, and an app with no lockfile has the bundle its config/boot.rb names.
+  describe "an app whose bundle and code live above it" do
+    around do |example|
+      Dir.mktmpdir do |dir|
+        @top = File.realpath(dir)
+        example.run
+      end
+    end
+
+    def write(path, content = "")
+      FileUtils.mkdir_p(File.dirname(File.join(@top, path)))
+      File.write(File.join(@top, path), content)
+    end
+
+    def check_named(root, name)
+      described_class.new(RailsAiContext::StaticApp.new(File.join(@top, root))).send(:"check_#{name}")
+    end
+
+    it "finds a monorepo's shared lockfile through config/boot.rb" do
+      FileUtils.mkdir_p(File.join(@top, ".git"))
+      write("Gemfile", %(gem "rails"\n))
+      write("Gemfile.lock", lockfile("rails"))
+      write("web/config/boot.rb", %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../Gemfile", __dir__)\n))
+
+      expect(check_named("web", "gems")).to have_attributes(status: :pass, message: "../Gemfile.lock found", fix: nil)
+    end
+
+    # Outside a git repository the tools leave that bundle unread, and
+    # `bundle install` would not change it.
+    it "says why a shared lockfile is not read, without sending the reader to bundle install" do
+      write("Gemfile.lock", lockfile("rails"))
+      write("web/config/boot.rb", %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../Gemfile", __dir__)\n))
+
+      check = check_named("web", "gems")
+      expect(check.status).to eq(:warn)
+      expect(check.message).to include("config/boot.rb points Bundler at `../Gemfile`")
+      expect(check.fix).to be_nil
+    end
+
+    context "in an engine's test/dummy" do
+      let(:engine) { @top }
+      let(:dummy) { File.join(@top, "test/dummy") }
+
+      before do
+        FileUtils.mkdir_p(File.join(@top, ".git"))
+        write("Gemfile", %(gemspec\n))
+        write("Gemfile.lock", lockfile("rails"))
+        write("blorgh.gemspec")
+        write("app/models/blorgh/article.rb", "module Blorgh; class Article < ApplicationRecord; end; end\n")
+        write("app/controllers/blorgh/articles_controller.rb", "module Blorgh; class ArticlesController < ApplicationController; end; end\n")
+        write("db/migrate/20240101000000_create_blorgh_articles.rb", "class CreateBlorghArticles < ActiveRecord::Migration[7.1]; end\n")
+        write("test/test_helper.rb")
+        write("test/models/article_test.rb")
+        write("test/dummy/config/boot.rb", %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../../Gemfile", __dir__)\n))
+        write("test/dummy/app/models/application_record.rb", "class ApplicationRecord < ActiveRecord::Base; end\n")
+        allow(RailsAiContext::PathResolver).to receive(:enclosing_engine_roots).and_call_original
+        allow(RailsAiContext::PathResolver).to receive(:enclosing_engine_roots).with(dummy).and_return([ engine ])
+      end
+
+      it "reads the engine's lockfile, suite, models and migrations, as the tools do" do
+        expect(check_named("test/dummy", "gems").message).to eq("../../Gemfile.lock found")
+        expect(check_named("test/dummy", "tests").message).to eq("minitest test suite found (the engine's, at ../..)")
+        expect(check_named("test/dummy", "models").message).to eq("2 model files found (1 in the engine at ../..)")
+        expect(check_named("test/dummy", "controllers").message).to eq("1 controller file found (1 in the engine at ../..)")
+        expect(check_named("test/dummy", "migrations").message).to eq("1 migration file (1 in the engine at ../..)")
+      end
+
+      # From the dummy, Rails lists the engine's migrations as NO FILE; the
+      # engine's own db:migrate is the one that runs them.
+      it "names the engine's root as where a pending migration is run" do
+        doctor = described_class.new(RailsAiContext::StaticApp.new(dummy))
+        allow(doctor).to receive(:database_states).and_return([ { name: "primary", config: nil, pending: [ { version: "1", name: "X" } ] } ])
+
+        expect(doctor.send(:check_pending_migrations).fix).to eq("Run `RAILS_ENV=#{Rails.env} bin/rails db:migrate` in the engine at ../..")
+      end
+    end
+  end
+
   # Every database the app migrates is asked through its own connection, as
   # `db:migrate:status` asks it; one that cannot be asked is named.
   describe "#check_pending_migrations" do
