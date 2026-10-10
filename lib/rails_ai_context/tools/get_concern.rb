@@ -110,6 +110,8 @@ module RailsAiContext
         # glob returns every app/*/concerns - so every match is kept and the
         # ones below the first are named against the file that is read.
         matches = []
+        # A file the name reaches that links out of the app is refused, unless the name finds its concern elsewhere.
+        refused = nil
 
         concern_dirs.each do |dir|
           located = RailsAiContext::SafePath.locate(relative, under: dir, root: root, max_size: max_size)
@@ -120,7 +122,10 @@ module RailsAiContext
           when :sensitive
             next if matches.any?
             return error_response("Path not allowed: #{name} (sensitive file)")
-          when :missing, :outside then next
+          when :outside
+            refused = "Path not allowed: #{name}"
+            next
+          when :missing then next
           end
 
           matches << [ located.realpath, located.relative, ConcernPaths.type_for(dir), dir ]
@@ -146,6 +151,8 @@ module RailsAiContext
         file_path, relative_path, concern_type, concern_dir = matches.first
 
         unless file_path
+          return error_response(refused) if refused
+
           # Build available list for fuzzy match
           available = collect_concern_names(concern_dirs, real_root, outside)
           return not_found_response("Concern", name, available,

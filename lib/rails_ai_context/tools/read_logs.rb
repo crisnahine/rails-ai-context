@@ -79,8 +79,15 @@ module RailsAiContext
         end
         level = level == "ALL" ? "all" : level
 
-        # Resolve log file
-        path = resolve_log_file(file)
+        # Resolve log file. A log refused on policy (a link out of the app, a
+        # sensitive name) is said as a refusal, not as a log that is not there.
+        relative = log_relative(file)
+        located = locate_log(relative)
+        case located.refusal
+        when :traversal, :outside then return error_response("Path not allowed: #{relative}")
+        when :sensitive then return error_response("Path not allowed: #{relative} (sensitive file)")
+        end
+        path = located.ok? ? located.realpath : nil
         available = available_log_files
         unless path
           msg = if available.any?
@@ -143,14 +150,17 @@ module RailsAiContext
 
       ROTATED_LOG = /\.log\.\d+\z/
 
-      private_class_method def self.resolve_log_file(file_name)
+      # log/<name>.log for the name a caller gives, the running environment's when none.
+      private_class_method def self.log_relative(file_name)
         base = file_name ? File.basename(file_name.to_s.strip.delete("\0")) : rails_env_name.to_s
         # Logger rotates by size to development.log.0, .1 and so on.
         base = "#{base.delete_suffix(".log")}.log" unless base.match?(ROTATED_LOG)
+        File.join("log", base)
+      end
 
-        # A log is tailed, never read whole, so the per-file cap does not apply.
-        located = RailsAiContext::SafePath.locate(File.join("log", base), under: rails_app.root.to_s, max_size: Float::INFINITY)
-        located.ok? ? located.realpath : nil
+      # A log is tailed, never read whole, so the per-file cap does not apply.
+      private_class_method def self.locate_log(relative, listed: false)
+        RailsAiContext::SafePath.locate(relative, under: rails_app.root.to_s, max_size: Float::INFINITY, listed: listed)
       end
 
       # ── Reverse tail ────────────────────────────────────────────────
@@ -264,12 +274,14 @@ module RailsAiContext
 
       # ── Available log files ─────────────────────────────────────────
 
+      # Only the logs a caller can then read: one refused on policy is not offered.
       private_class_method def self.available_log_files
         log_dir = File.join(rails_app.root.to_s, "log")
         return [] unless Dir.exist?(log_dir)
         Dir.glob(File.join(log_dir, "*.log{,.*}"))
           .map { |f| File.basename(f) }
           .select { |f| f.match?(/\A[\w.\-]+\.log(?:\.\d+)?\z/) } # Only clean filenames (alphanumeric, dots, hyphens, underscores)
+          .select { |f| locate_log(File.join("log", f), listed: true).refusal.nil? }
           .sort
       end
     end

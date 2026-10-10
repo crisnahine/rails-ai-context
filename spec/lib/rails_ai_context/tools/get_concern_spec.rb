@@ -389,6 +389,22 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
         FileUtils.rm_f([ link, secret ].compact)
       end
 
+      # Found by its name and refused on policy: an error, as a traversal is,
+      # and never in the list of concerns.
+      it "refuses a concern file linked from outside the app as an error, and does not list it" do
+        Dir.mktmpdir do |outside|
+          File.write(File.join(outside, "leaky.rb"), "module Leaky\n  extend ActiveSupport::Concern\n  def outside_secret_method; end\nend\n")
+          link = File.join(model_concerns_dir, "leaky.rb")
+          File.symlink(File.join(outside, "leaky.rb"), link)
+
+          result = described_class.call(name: "Leaky")
+          expect(result.error?).to be(true)
+          expect(result.content.first[:text]).to start_with("Path not allowed: Leaky")
+          expect(result.content.first[:text]).not_to include("outside_secret_method")
+          expect(described_class.call.content.first[:text]).not_to include("Leaky")
+        end
+      end
+
       it "rejects null bytes in the name parameter" do
         result = described_class.call(name: "searchable\0.rb")
         text = result.content.first[:text]

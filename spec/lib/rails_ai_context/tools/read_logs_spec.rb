@@ -253,6 +253,27 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
       expect(result.error?).to be(true)
     end
 
+    # A log linked from outside the app is refused on policy, said as such
+    # rather than as a log that is not there, and never offered by name.
+    it "refuses a log linked from outside the app, and leaves it out of the list" do
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "secret.log"), "outside-secret-line\n")
+        link = File.join(log_dir, "linked.log")
+        File.symlink(File.join(outside, "secret.log"), link)
+
+        result = described_class.call(file: "linked")
+        expect(result.error?).to be(true)
+        expect(result.content.first[:text]).to start_with("Path not allowed: log/linked.log")
+        expect(result.content.first[:text]).not_to include("outside-secret-line")
+
+        listing = described_class.call(file: "nope").content.first[:text]
+        expect(listing).to include("test.log")
+        expect(listing).not_to include("linked.log")
+      ensure
+        FileUtils.rm_f(link) if link
+      end
+    end
+
     it "detects JSON/Lograge format" do
       File.write(File.join(log_dir, "json.log"), <<~LOG)
         {"level":"INFO","message":"Started GET /users","timestamp":"2026-03-29T10:00:00"}

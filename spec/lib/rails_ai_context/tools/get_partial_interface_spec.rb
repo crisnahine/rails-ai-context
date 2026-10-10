@@ -256,6 +256,22 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       expect(text).to include("_The views of the engine this app runs in are read only with the app booted._")
     end
 
+    it "refuses a partial linked from outside the app as an error, and never offers it" do
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "leak.html.erb"), "<%= outside_secret_local %>\n")
+        File.symlink(File.join(outside, "leak.html.erb"), File.join(@root, "app/views/pdfs/_leak.html.erb"))
+
+        result = described_class.call(partial: "pdfs/leak")
+        expect(result.error?).to be(true)
+        expect(result.content.first[:text]).to start_with("Path not allowed: pdfs/leak")
+        expect(result.content.first[:text]).not_to include("outside_secret_local")
+
+        missing = described_class.call(partial: "pdfs/nope").content.first[:text]
+        expect(missing).to include("pdfs/summary_fields")
+        expect(missing).not_to include("pdfs/leak")
+      end
+    end
+
     it "offers only templates as available partials" do
       File.write(File.join(@root, "app/views/pdfs/_banner.png"), "not a template")
       FileUtils.mkdir_p(File.join(@root, "app/views/pdfs/_bits"))
