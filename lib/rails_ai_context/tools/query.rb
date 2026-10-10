@@ -16,7 +16,7 @@ module RailsAiContext
         properties: {
           sql: {
             type: "string",
-            description: "SQL query to execute. Only SELECT, WITH, SHOW, EXPLAIN, DESCRIBE allowed."
+            description: "SQL query to execute. Only SELECT, WITH, SHOW, EXPLAIN, DESCRIBE allowed, and no UNION."
           },
           limit: {
             type: "integer",
