@@ -123,16 +123,35 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(error).to include("SQL injection pattern")
     end
 
-    it "blocks UNION SELECT injection" do
-      valid, error = described_class.validate_sql("SELECT name FROM users UNION SELECT password FROM users")
-      expect(valid).to be false
-      expect(error).to include("SQL injection pattern")
+    # A UNION's rows of another table come out under its first SELECT's
+    # column names, past redaction by name. MySQL and MariaDB also take
+    # `UNION DISTINCT` and a parenthesised branch, which the old pattern missed.
+    [
+      "SELECT name FROM users UNION SELECT password FROM users",
+      "SELECT 1 UNION ALL SELECT 2",
+      "SELECT *, 1, 2 FROM posts UNION DISTINCT SELECT * FROM users",
+      "SELECT *, 1, 2 FROM posts UNION (SELECT * FROM users)",
+      "SELECT *, 1, 2 FROM posts\nunion\n\tall (SELECT * FROM users)",
+      "WITH RECURSIVE r AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM r WHERE n < 3) SELECT n FROM r"
+    ].each do |sql|
+      it "refuses a UNION in every spelling: #{sql.lines.first.strip[0, 60]}" do
+        [ { mysql: true }, {}, { postgres: true } ].each do |dialect|
+          valid, error = described_class.validate_sql(sql, **dialect)
+          expect(valid).to be(false), "#{dialect}: #{error}"
+          expect(error).to start_with("Blocked: UNION is not run.")
+        end
+      end
     end
 
-    it "blocks UNION ALL SELECT injection" do
-      valid, error = described_class.validate_sql("SELECT 1 UNION ALL SELECT 2")
-      expect(valid).to be false
-      expect(error).to include("SQL injection pattern")
+    it "reads a union inside a string literal as data on PostgreSQL alone" do
+      sql = "SELECT id FROM posts WHERE title = 'European Union'"
+      expect(described_class.validate_sql(sql, postgres: true)).to eq([ true, nil ])
+      expect(described_class.validate_sql(sql, mysql: true).first).to be(false)
+    end
+
+    it "keeps INTERSECT and EXCEPT, which return only their first SELECT's rows" do
+      expect(described_class.validate_sql("SELECT id FROM posts INTERSECT SELECT id FROM posts").first).to be(true)
+      expect(described_class.validate_sql("SELECT id FROM posts EXCEPT SELECT id FROM posts").first).to be(true)
     end
 
     it "blocks OR with string tautology" do
@@ -1723,6 +1742,17 @@ it "still explains a database that does not exist" do
 
       it "leaves a double-quoted identifier alone" do
         expect(described_class.mask_sql_literals('SELECT "api_token"')).to include("api_token")
+      end
+
+      # A quote inside an identifier opened a "literal" that ran to the next
+      # quote and hid the column between them.
+      it "does not open a literal at a quote inside a double-quoted identifier" do
+        masked = described_class.mask_sql_literals(%(SELECT 1 AS "a'b", upper(api_token), 'x' FROM users))
+        expect(masked).to eq(%(SELECT 1 AS "a'b", upper(api_token), '' FROM users))
+      end
+
+      it "takes no dollar quote from a positional parameter" do
+        expect(described_class.mask_sql_literals("WHERE id = $1 AND api_token = $1")).to include("api_token")
       end
     end
 
