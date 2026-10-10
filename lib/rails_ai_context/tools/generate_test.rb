@@ -138,8 +138,14 @@ module RailsAiContext
           RailsAiContext.debug_fail(e, [ "#{fallback_dir}/#{stem}#{fallback_suffix}", nil, fallback_dir ], label: "test_path")
         end
 
-        def existing_test_response(path)
-          text_response("#{path} already exists. Add to it rather than writing a second test file for the same subject.")
+        # The subject's test is often there already (`rails g model` writes
+        # one), and "it exists, add to it" alone gave nothing to add. The
+        # cases come anyway, addressed to that file, which holds tests of its own.
+        def existing_test_lines(existing)
+          return [] unless existing
+
+          [ "#{existing} already exists. Add the cases below that it lacks to it, " \
+            "rather than replacing it or writing a second test file for the same subject.", "" ]
         end
 
         # Namespaced names join with an underscore: Admin::User is admin_user, and
@@ -172,10 +178,9 @@ module RailsAiContext
           # The spec mirrors the model's own path, and underscoring the name
           # does not reproduce it: OAuthClientConfig is oauth_client_config.rb.
           file_path, existing = test_path("spec", :model, model_path_stem(name), "spec/models", "_spec.rb")
-          return existing_test_response(existing) if existing
           factory = find_factory_name(name, tests_data)
           shoulda = shoulda?
-          lines = [ "# #{file_path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"rails_helper\"", "" ]
+          lines = [ *existing_test_lines(existing), "# #{existing || file_path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"rails_helper\"", "" ]
           lines << "RSpec.describe #{name}, type: :model do"
 
           # Factory/fixture setup
@@ -332,10 +337,9 @@ module RailsAiContext
 
         def generate_minitest_model(name, data, tests_data)
           file_path, existing = test_path("test", :model, model_path_stem(name), "test/models", "_test.rb")
-          return existing_test_response(existing) if existing
           factory = find_factory_name(name, tests_data)
           table = data[:table_name] || model_path_stem(name).split("/").last.pluralize
-          lines = [ "# #{file_path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"test_helper\"", "" ]
+          lines = [ *existing_test_lines(existing), "# #{existing || file_path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"test_helper\"", "" ]
           lines << "class #{name}Test < ActiveSupport::TestCase"
 
           setup_var = record_name(name)
@@ -643,14 +647,13 @@ module RailsAiContext
 
         def generate_minitest_controller(ctrl_class, snake, routes, tests_data, res)
           file_path, existing, dir = test_path("test", :controller, snake, "test/controllers", "_controller_test.rb")
-          return existing_test_response(existing) if existing
 
           style = RailsAiContext::TestFramework.test_style(RailsAiContext::PathResolver.test_root(rails_app.root.to_s), dir)
           res = res.merge(test_case: style[:test_case] == true)
           res[:factory] = find_factory_name(res[:model], tests_data) if style[:factories] && res[:model]
           res[:parents] = route_parents(routes, res, tests_data, ref: "@") if res[:factory]
 
-          lines = [ "# #{file_path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"test_helper\"", "" ]
+          lines = [ *existing_test_lines(existing), "# #{existing || file_path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"test_helper\"", "" ]
           lines.concat(unimplemented_lines(ctrl_class, res))
           lines << "class #{ctrl_class}Test < #{res[:test_case] ? "ActionController::TestCase" : "ActionDispatch::IntegrationTest"}"
 
@@ -995,14 +998,13 @@ module RailsAiContext
 
         def generate_rspec_request(ctrl_class, snake, routes, tests_data, res)
           file_path, existing = test_path("spec", :controller, snake, "spec/requests", "_spec.rb")
-          return existing_test_response(existing) if existing
           factory = find_factory_name(snake.singularize.camelize, tests_data)
           res = res.merge(factory: factory, parents: factory ? route_parents(routes, res, tests_data, ref: "") : {})
           # Among the app's controller specs a new one is a controller spec
           # too, naming the action; elsewhere it is a request spec.
           res[:controller_spec] = file_path.end_with?("_controller_spec.rb")
 
-          lines = [ "# #{file_path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"rails_helper\"", "" ]
+          lines = [ *existing_test_lines(existing), "# #{existing || file_path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"rails_helper\"", "" ]
           lines.concat(unimplemented_lines(ctrl_class, res))
           lines << (res[:controller_spec] ? "RSpec.describe #{ctrl_class}, type: :controller do" : "RSpec.describe \"#{ctrl_class}\", type: :request do")
 
@@ -1429,9 +1431,12 @@ module RailsAiContext
           when %r{app/controllers/(.+)_controller\.rb}
             path_name = "#{$1.split('/').map(&:camelize).join('::')}Controller"
             generate_controller_test(declared_name(file, path_name), framework, tests_data)
-          when %r{app/services/(.+)\.rb}, %r{app/jobs/(.+)\.rb}
+          when %r{app/services/(.+)\.rb}
             path_name = $1.split("/").map(&:camelize).join("::")
             generate_service_test(declared_name(file, path_name), file, framework)
+          when %r{app/jobs/(.+)\.rb}
+            path_name = $1.split("/").map(&:camelize).join("::")
+            generate_job_test(declared_name(file, path_name), framework)
           else
             text_response("Cannot auto-detect test type for `#{file}`. Use `model:` or `controller:` parameter instead.")
           end
@@ -1452,10 +1457,12 @@ module RailsAiContext
 
         def generate_service_test(class_name, file, framework)
           entry = service_entry_point(file)
+          rspec = framework.to_s.include?("rspec")
+          path, existing = conventional_test_path(rspec, "services", class_name)
+          header = [ *existing_test_lines(existing), "# #{existing || path}", "", "```ruby", "# frozen_string_literal: true", "" ]
 
-          if framework.to_s.include?("rspec")
-            path = "spec/services/#{class_name.underscore}_spec.rb"
-            lines = [ "# #{path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"rails_helper\"", "" ]
+          if rspec
+            lines = header + [ "require \"rails_helper\"", "" ]
             lines << "RSpec.describe #{class_name} do"
             lines << "  describe \".#{entry[:method]}\" do"
             lines << "    it \"performs the expected action\" do"
@@ -1467,8 +1474,7 @@ module RailsAiContext
             lines << "end"
             lines << "```"
           else
-            path = "test/services/#{class_name.underscore}_test.rb"
-            lines = [ "# #{path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"test_helper\"", "" ]
+            lines = header + [ "require \"test_helper\"", "" ]
             lines << "class #{class_name}Test < ActiveSupport::TestCase"
             lines << "  test \"performs the expected action\" do"
             lines << "    # TODO: set up input and verify output"
@@ -1477,6 +1483,43 @@ module RailsAiContext
             lines << "```"
           end
           text_response(lines.join("\n"))
+        end
+
+        # A job's test is filed with jobs and runs the job: test/jobs with
+        # ActiveJob::TestCase, or a `type: :job` spec. Under the service
+        # template it went to test/services as an ActiveSupport::TestCase. A
+        # Sidekiq job has no perform_now, so its test calls perform itself.
+        def generate_job_test(class_name, framework)
+          rspec = framework.to_s.include?("rspec")
+          path, existing = conventional_test_path(rspec, "jobs", class_name)
+          worker = RailsAiContext::Payload.workers(cached_context).find { |w| w.is_a?(Hash) && w[:name] == class_name }
+          job = worker || RailsAiContext::Payload.jobs(cached_context).find { |j| j.is_a?(Hash) && j[:name] == class_name } || {}
+          signature = job[:perform_signature].to_s
+          args = signature.empty? ? "" : "(#{signature})"
+          call = worker ? "new.#{worker[:entry_point] || "perform"}#{args}" : "perform_now#{args}"
+
+          lines = [ *existing_test_lines(existing), "# #{existing || path}", "", "```ruby", "# frozen_string_literal: true", "" ]
+          if rspec
+            lines.push("require \"rails_helper\"", "", "RSpec.describe #{class_name}#{", type: :job" unless worker} do")
+            lines << "  it \"performs the expected work\" do"
+            lines << "    # TODO: call described_class.#{call} with real arguments, then expect what it changed"
+          else
+            lines.push("require \"test_helper\"", "", "class #{class_name}Test < #{worker ? "ActiveSupport::TestCase" : "ActiveJob::TestCase"}")
+            lines << "  test \"performs the expected work\" do"
+            lines << "    # TODO: call #{class_name}.#{call} with real arguments, then assert what it changed"
+          end
+          lines.push("  end", "end", "```")
+          text_response(lines.join("\n"))
+        end
+
+        # Where Rails files a test of this kind, and the file when the app has
+        # it already: a second test beside it splits one subject's cases.
+        def conventional_test_path(rspec, dir, class_name)
+          path = rspec ? "spec/#{dir}/#{class_name.underscore}_spec.rb" : "test/#{dir}/#{class_name.underscore}_test.rb"
+          test_root = RailsAiContext::PathResolver.test_root(rails_app.root.to_s)
+          full = File.expand_path(path, test_root)
+          relative = RailsAiContext::PathResolver.suite_relative(rails_app.root.to_s, path)
+          [ relative, (relative if RailsAiContext::SafePath.contained?(full, test_root) && File.file?(full)) ]
         end
 
         # ── Helpers ──────────────────────────────────────────────────────

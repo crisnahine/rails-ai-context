@@ -182,7 +182,9 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
         end
       end
 
-      it "says a model's test already exists rather than writing a second one" do
+      # `rails g model` writes the test file, so for most models it exists, and
+      # "it exists" alone gave nothing to add to it.
+      it "addresses the cases to a model's existing test rather than a second file" do
         Dir.mktmpdir do |root|
           app_with_tests(root, %w[spec/models/invoice_model_spec.rb spec/models/order_model_spec.rb])
           allow(described_class).to receive(:cached_context).and_return({
@@ -192,8 +194,9 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
 
           text = described_class.call(model: "Invoice").content.first[:text]
 
-          expect(text).to include("spec/models/invoice_model_spec.rb already exists")
-          expect(text).not_to include("RSpec.describe")
+          expect(text).to start_with("spec/models/invoice_model_spec.rb already exists. Add the cases below that it lacks to it")
+          expect(text).to include("# spec/models/invoice_model_spec.rb\n")
+          expect(text).to include("RSpec.describe Invoice, type: :model do")
         end
       end
 
@@ -2200,6 +2203,64 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
         expect(text).to include("be_truthy")
         expect(text).not_to include("be_valid")
       end
+    end
+
+    # bazaar's price_calculator_test.rb was written again as a new file, where
+    # a model's existing test is addressed instead.
+    it "addresses the cases to a service's existing test" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p([ File.join(dir, "app", "services"), File.join(dir, "test", "services") ])
+        File.write(File.join(dir, "app", "services", "price_calculator.rb"), "class PriceCalculator\n  def call; end\nend\n")
+        File.write(File.join(dir, "test", "services", "price_calculator_test.rb"), "class PriceCalculatorTest < ActiveSupport::TestCase\nend\n")
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(dir))
+        allow(described_class).to receive(:cached_context).and_return({ tests: { framework: "minitest" } })
+
+        text = described_class.call(file: "app/services/price_calculator.rb").content.first[:text]
+
+        expect(text).to start_with("test/services/price_calculator_test.rb already exists. Add the cases below that it lacks to it")
+      end
+    end
+  end
+
+  # A job went through the service template: test/services with
+  # ActiveSupport::TestCase, where Rails files it under test/jobs as an
+  # ActiveJob::TestCase.
+  describe "a job file" do
+    def job_test(framework, context = {})
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "jobs"))
+        File.write(File.join(dir, "app", "jobs", "process_payment_job.rb"),
+                   "class ProcessPaymentJob < ApplicationJob\n  def perform(payment_id); end\nend\n")
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(dir))
+        allow(described_class).to receive(:cached_context).and_return({ tests: { framework: framework } }.merge(context))
+
+        described_class.call(file: "app/jobs/process_payment_job.rb").content.first[:text]
+      end
+    end
+
+    let(:jobs) { { jobs: { jobs: [ { name: "ProcessPaymentJob", perform_signature: "payment_id" } ] } } }
+
+    it "files a minitest job test under test/jobs as an ActiveJob::TestCase" do
+      text = job_test("minitest", jobs)
+
+      expect(text).to include("# test/jobs/process_payment_job_test.rb")
+      expect(text).to include("class ProcessPaymentJobTest < ActiveJob::TestCase")
+      expect(text).to include("ProcessPaymentJob.perform_now(payment_id)")
+      expect(text).not_to include("test/services")
+    end
+
+    it "writes a job spec for rspec" do
+      text = job_test("rspec", jobs)
+
+      expect(text).to include("# spec/jobs/process_payment_job_spec.rb")
+      expect(text).to include("RSpec.describe ProcessPaymentJob, type: :job do")
+    end
+
+    it "calls perform on a Sidekiq job, which has no perform_now" do
+      text = job_test("minitest", jobs: { jobs: [], workers: [ { name: "ProcessPaymentJob", perform_signature: "payment_id" } ] })
+
+      expect(text).to include("class ProcessPaymentJobTest < ActiveSupport::TestCase")
+      expect(text).to include("ProcessPaymentJob.new.perform(payment_id)")
     end
   end
 
