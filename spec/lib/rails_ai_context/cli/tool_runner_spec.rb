@@ -41,10 +41,13 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       expect(described_class).not_to have_received(:available_tools)
     end
 
-    it "still refuses a skipped tool" do
+    # "Unknown tool" sent the reader looking for a tool the gem has.
+    it "still refuses a skipped tool, saying skip_tools turned it off" do
       allow(RailsAiContext.configuration).to receive(:skip_tools).and_return([ "rails_get_schema" ])
 
-      expect { described_class.new("schema", []) }.to raise_error(/Unknown tool 'schema'/)
+      expect { described_class.new("schema", []) }.to raise_error(
+        described_class::ToolNotFoundError, /\Arails_get_schema is turned off in this app: skip_tools lists it/
+      )
     end
 
     it "suggests the closest name for a miss" do
@@ -544,10 +547,23 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       expect { runner.run }
         .to raise_error(described_class::InvalidArgumentError) { |e|
           expect(e.message).to eq(
-            "Unknown param:\n  'tabl' - did you mean 'table='?\n" \
+            "Unknown param:\n  '--tabl' - did you mean '--table'?\n" \
             "Valid params: table, detail, limit, offset, format"
           )
         }
+    end
+
+    # The suggestion came in the rake spelling whatever was typed.
+    it "suggests the param in the form the unknown one was typed" do
+      suggestion = lambda do |args|
+        described_class.new("schema", args).run
+      rescue described_class::InvalidArgumentError => e
+        e.message.lines[1].strip
+      end
+
+      expect(suggestion.call([ "--tabel=users" ])).to eq("'--tabel' - did you mean '--table'?")
+      expect(suggestion.call([ "tabel=users" ])).to eq("'tabel' - did you mean 'table='?")
+      expect(suggestion.call(tabel: "users")).to eq("'tabel' - did you mean 'table='?")
     end
   end
 
