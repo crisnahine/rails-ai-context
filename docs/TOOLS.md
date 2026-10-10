@@ -597,10 +597,12 @@ Model association graph in Mermaid or text format.
 | `model` | string | - | Center the graph on this model |
 | `depth` | integer | `2` | Hops from the centre model (1-3) |
 | `format` | enum | `mermaid` | `mermaid`, `text` |
-| `show_cycles` | boolean | `false` | Detect and list circular dependencies |
+| `show_cycles` | boolean | `false` | List circular dependencies: chains of foreign keys that lead back to the model they start from, through another |
 | `show_sti` | boolean | `false` | Show Single Table Inheritance hierarchies |
 
 The graph is capped at 50 nodes, with or without `model`, and says so when it cuts.
+
+A polymorphic `belongs_to` lists the models that implement it, the ones that declare `as:` for it. A cycle follows foreign keys, one edge per key from the table that holds it: a `belongs_to` and the `has_many` or `has_one` at its other end are one key, so two models joined both ways are not a cycle, and neither is a key to the model's own table. With `show_cycles` and no cycle, the answer says none.
 
 ### `rails_migration_advisor`
 

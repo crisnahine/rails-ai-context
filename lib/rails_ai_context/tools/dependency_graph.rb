@@ -83,8 +83,8 @@ module RailsAiContext
         unresolved = unresolved.select { |name, _| subgraph.key?(name) }
         subgraph = subgraph.first(MAX_NODES).to_h if subgraph.size > MAX_NODES
 
-        # Optional analyses
-        cycles = show_cycles ? detect_cycles(graph) : []
+        # Optional analyses. nil when not asked, so a search that found none can say so.
+        cycles = show_cycles ? detect_cycles(graph) : nil
         sti_groups = show_sti ? extract_sti_groups(models_data) : []
         skipped = models_data.select { |_, data| data.is_a?(Hash) && data[:error] }.keys.map(&:to_s)
 
@@ -116,19 +116,19 @@ module RailsAiContext
             end
           end
 
-          # Second pass: find concrete types for each polymorphic interface
+          # Second pass: a model implements an interface by declaring `as:` on
+          # it. The key's name says nothing: Tag's `has_many :products,
+          # through: :taggings, source: :taggable` reads the key taggable_id
+          # and implements nothing.
           models_data.each do |model_name, data|
             next unless data.is_a?(Hash) && !data[:error]
             (data[:associations] || []).each do |assoc|
               type = (assoc[:macro] || assoc[:type]).to_s
               next unless type == "has_many" || type == "has_one"
-              # has_many :comments, as: :commentable → options[:as] stored as foreign_key pattern
-              # The association's foreign_key will be "commentable_id" for `as: :commentable`
-              fk = assoc[:foreign_key].to_s
-              interface = fk.sub(/_id\z/, "")
-              if polymorphic_interfaces.key?(interface)
-                polymorphic_interfaces[interface] << model_name.to_s
-              end
+              next if assoc[:through]
+
+              interface = polymorphic_as(assoc)
+              polymorphic_interfaces[interface] |= [ model_name.to_s ] if polymorphic_interfaces.key?(interface)
             end
           end
 
@@ -193,6 +193,15 @@ module RailsAiContext
           end
 
           [ graph, unresolved ]
+        end
+
+        # `as: :commentable` as each tier records it: the option itself
+        # statically, and its display text (":commentable") wherever the
+        # declaration was read.
+        def polymorphic_as(assoc)
+          options, declared = assoc.values_at(:options, :declared_options)
+          value = (options[:as] if options.is_a?(Hash)) || (declared["as"] if declared.is_a?(Hash))
+          value&.to_s&.delete_prefix(":")
         end
 
         # How many of them the note spells out before it counts the rest.
@@ -291,8 +300,33 @@ module RailsAiContext
           subgraph
         end
 
-        # DFS-based cycle detection. Returns array of cycle paths.
+        # A cycle is drawn over foreign keys, one edge per key, from the model
+        # whose table holds it to the model it points at. A belongs_to and the
+        # has_many on its other end are one key, so a pair of models joined
+        # both ways is not a cycle; a key to its own model is a tree, not one
+        # either. A through association and a join table hold no key of
+        # their own.
+        def foreign_key_edges(graph)
+          edges = Hash.new { |hash, key| hash[key] = Set.new }
+          graph.each do |model, model_edges|
+            model_edges.each do |edge|
+              next if edge[:through]
+
+              case edge[:type].to_s
+              when "belongs_to"
+                targets = edge[:polymorphic] ? Array(edge[:polymorphic_targets]) : [ edge[:target] ]
+                targets.each { |target| edges[model] << target unless target == model }
+              when "has_many", "has_one"
+                edges[edge[:target]] << model unless edge[:target] == model
+              end
+            end
+          end
+          edges
+        end
+
+        # DFS-based cycle detection over the foreign keys. Returns array of cycle paths.
         def detect_cycles(graph)
+          keys = foreign_key_edges(graph)
           cycles = []
           visited = Set.new
           in_stack = Set.new
@@ -304,8 +338,7 @@ module RailsAiContext
             in_stack.add(node)
             path.push(node)
 
-            (graph[node] || []).each do |edge|
-              target = edge[:target]
+            keys[node].sort.each do |target|
               if in_stack.include?(target)
                 # Found cycle: extract from target's position in path
                 cycle_start = path.index(target)
@@ -346,7 +379,18 @@ module RailsAiContext
           groups
         end
 
-        def render_mermaid(graph, center, cycles: [], sti_groups: [], total_nodes: nil, total_edges: nil, skipped: [], unresolved: {})
+        CYCLES_NOTE = "_Chains of foreign keys that lead back to the model they start from, through another: a belongs_to, or the " \
+                      "has_many or has_one at its other end. An association and its inverse are one key, and a key to the model's own " \
+                      "table is a tree, so neither is a cycle._"
+
+        def cycle_lines(cycles)
+          return [] if cycles.nil?
+          return [ "## Circular Dependencies", "None. #{CYCLES_NOTE}" ] if cycles.empty?
+
+          [ "## Circular Dependencies", CYCLES_NOTE, *cycles.map { |c| "- #{c.join(" → ")} → #{c.first}" } ]
+        end
+
+        def render_mermaid(graph, center, cycles: nil, sti_groups: [], total_nodes: nil, total_edges: nil, skipped: [], unresolved: {})
           lines = [ "# Dependency Graph", "" ]
           lines << "```mermaid"
           lines << "graph LR"
@@ -423,18 +467,13 @@ module RailsAiContext
 
           stats = [ "**Models:** #{total_nodes || graph.keys.size}",
                     "**Associations:** #{total_edges || graph.values.sum(&:size)}" ]
-          stats << "**Cycles:** #{cycles.size}" if cycles.any?
+          stats << "**Cycles:** #{cycles.size}" if cycles
           stats << "**STI hierarchies:** #{sti_groups.size}" if sti_groups.any?
           lines << stats.join(" | ")
           lines.concat(truncation_notes(graph, total_nodes, skipped, total_edges, unresolved, drawn: arrows, focused: !center.nil?))
 
           # Cycles section
-          if cycles.any?
-            lines << ""
-            lines << "## Circular Dependencies"
-            cycles.each { |c| lines << "- #{c.join(" → ")} → #{c.first}" }
-          end
-
+          lines.push("", *cycle_lines(cycles)) if cycles
           lines.join("\n")
         end
 
@@ -444,7 +483,7 @@ module RailsAiContext
                .group_by { |e| [ e[:type].to_s, e[:target] ] }.select { |_, list| list.size > 1 }.keys
         end
 
-        def render_text(graph, center, cycles: [], sti_groups: [], total_nodes: nil, total_edges: nil, skipped: [], unresolved: {})
+        def render_text(graph, center, cycles: nil, sti_groups: [], total_nodes: nil, total_edges: nil, skipped: [], unresolved: {})
           lines = [ "# Dependency Graph", "" ]
           rows = 0
 
@@ -489,15 +528,11 @@ module RailsAiContext
           end
 
           # Cycles section
-          if cycles.any?
-            lines << "## Circular Dependencies"
-            cycles.each { |c| lines << "- #{c.join(" → ")} → #{c.first}" }
-            lines << ""
-          end
+          lines.concat(cycle_lines(cycles)) << "" if cycles
 
           stats = [ "**Models:** #{total_nodes || graph.keys.size}",
                     "**Associations:** #{total_edges || graph.values.sum(&:size)}" ]
-          stats << "**Cycles:** #{cycles.size}" if cycles.any?
+          stats << "**Cycles:** #{cycles.size}" if cycles
           stats << "**STI hierarchies:** #{sti_groups.size}" if sti_groups.any?
           lines << stats.join(" | ")
           lines.concat(truncation_notes(graph, total_nodes, skipped, total_edges, unresolved, drawn: rows, focused: !center.nil?))
