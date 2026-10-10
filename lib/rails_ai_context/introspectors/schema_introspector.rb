@@ -355,6 +355,8 @@ module RailsAiContext
       # tier and PostgreSQL all spell true or false: Active Model's boolean
       # type reads it, as the column's own cast type does on every adapter.
       def boolean_default(col)
+        # Rails 8.1's SQLite adapter already hands back true or false.
+        return col.default.to_s if col.default == true || col.default == false
         return col.default unless col.default.is_a?(String)
 
         value = ActiveModel::Type::Boolean.new.cast(col.default)
