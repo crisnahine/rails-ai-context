@@ -166,6 +166,49 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
     end
   end
 
+  # Under tool_mode :cli no MCP server is set up, and the hints still named
+  # MCP calls an agent there cannot make.
+  describe "a tool call named in an answer" do
+    let(:text) do
+      "_Next: `rails_get_schema(table:\"posts\")` | `rails_search_code(pattern:\"publish?\", match_type:\"trace\")`_\n" \
+        "_Use `detail:\"summary\"` for less, or `rails_not_a_tool(x:\"y\")`._"
+    end
+
+    around do |example|
+      saved = RailsAiContext.configuration.tool_mode
+      example.run
+    ensure
+      RailsAiContext.configuration.tool_mode = saved
+    end
+
+    it "is written as the command under tool_mode :cli" do
+      RailsAiContext.configuration.tool_mode = :cli
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+
+      answer = RailsAiContext::Tools::GetSchema.text_response(text).content.first[:text]
+
+      expect(answer).to include("`rails-ai-context tool schema table=posts`")
+      expect(answer).to include(%(`rails-ai-context tool search_code pattern="publish?" match_type=trace`))
+      expect(answer).to include("`detail=summary`")
+      expect(answer).to include("`rails_not_a_tool(x:\"y\")`")
+    end
+
+    it "names the rake task when the app's bundle carries the gem" do
+      RailsAiContext.configuration.tool_mode = :cli
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
+
+      answer = RailsAiContext::Tools::GetSchema.text_response(text).content.first[:text]
+
+      expect(answer).to include("`rails 'ai:tool[schema]' table=posts`")
+    end
+
+    it "stays an MCP call under tool_mode :mcp" do
+      RailsAiContext.configuration.tool_mode = :mcp
+
+      expect(RailsAiContext::Tools::GetSchema.text_response(text).content.first[:text]).to eq(text)
+    end
+  end
+
   describe ".empty_response and .empty?" do
     it "marks an answer that found nothing without changing what the reader sees" do
       response = described_class.empty_response("No views found for posts.")
