@@ -2418,15 +2418,15 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
   # back a 302 to /session/new with nothing to say why. Its create reads the
   # session cart, yet the test posted every orders column as `order:` params.
   describe "a controller behind a login filter that is not Devise's" do
-    def orders_test(root)
+    def orders_test(root, filter: "require_login", api: false)
       allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
       allow(described_class).to receive(:cached_context).and_return({
         tests: { framework: "minitest", test_helper_setup: [], fixture_names: { "users" => %w[one], "orders" => %w[first] } },
-        models: { "Order" => { table_name: "orders" } },
+        models: { "Order" => { table_name: "orders" }, "User" => { table_name: "users" } },
         schema: { tables: { "orders" => { columns: [ { name: "id", type: "integer" }, { name: "number", type: "string" } ] } } },
         controllers: { controllers: { "OrdersController" => {
-          actions: %w[index create], strong_params: [],
-          filters: [ { kind: "before", name: "require_login", from_concern: "Authentication" } ]
+          actions: %w[index create], strong_params: [], api_controller: api,
+          filters: [ { kind: "before", name: filter, from_concern: "Authentication" } ]
         } } },
         routes: { by_controller: { "orders" => [ { verb: "GET", path: "/orders", action: "index", name: "orders" },
                                                  { verb: "POST", path: "/orders", action: "create" } ] } }
@@ -2445,17 +2445,45 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       end
     end
 
-    it "signs in with the app's own helper and a users fixture" do
-      Dir.mktmpdir do |root|
-        FileUtils.mkdir_p(File.join(root, "test", "test_helpers"))
-        File.write(File.join(root, "test", "test_helpers", "session_test_helper.rb"),
-                   "module SessionTestHelper\n  def sign_in_as(user)\n  end\nend\n")
+    def write_helper(root, helper)
+      FileUtils.mkdir_p(File.join(root, "test", "test_helpers"))
+      File.write(File.join(root, "test", "test_helpers", "session_test_helper.rb"),
+                 "module SessionTestHelper\n  def #{helper}(user)\n  end\nend\n")
+    end
 
-        text = orders_test(root)
+    it "signs in with the app's own helper and a users fixture where it answers the filter" do
+      Dir.mktmpdir do |root|
+        write_helper(root, "sign_in_as")
+
+        text = orders_test(root, filter: "require_authentication")
 
         expect(text).to include("  setup do\n    sign_in_as users(:one)\n")
-        expect(text).not_to include("# TODO: OrdersController runs require_login")
+        expect(text).not_to include("# TODO: OrdersController runs require_authentication")
         expect(text).to include("the setup signs in with sign_in_as._")
+      end
+    end
+
+    it "pairs Devise's sign_in with the authenticate_<scope>! of a model the app has" do
+      Dir.mktmpdir do |root|
+        write_helper(root, "sign_in")
+
+        expect(orders_test(root, filter: "authenticate_user!")).to include("  setup do\n    sign_in users(:one)\n")
+        expect(orders_test(root, filter: "authenticate_token!")).not_to include("sign_in users(:one)")
+      end
+    end
+
+    # The blog's token-checked Api::V1::BaseController got `sign_in_as
+    # users(:one)`, and all three generated tests failed with a 401.
+    it "names the helper in a TODO, and signs nothing in, where the filter is not its own or the controller is an API one" do
+      Dir.mktmpdir do |root|
+        write_helper(root, "sign_in_as")
+
+        hand_written = orders_test(root)
+        api = orders_test(root, filter: "require_authentication", api: true)
+
+        expect(hand_written).to include("this app's sign_in_as is not known to get a request past require_login, so send what require_login checks.")
+        expect(api).to include("this app's sign_in_as is not known to get a request past require_authentication")
+        expect([ hand_written, api ]).to all(satisfy { |text| !text.include?("sign_in_as users(:one)") })
       end
     end
 

@@ -390,7 +390,7 @@ Test scaffolding that matches your project's patterns (fixtures vs factories, RS
 | `file` | string | - | File to generate tests for, relative to Rails root; the type is detected (a job gets a job test under test/jobs or spec/jobs) |
 | `type` | enum | `unit` | `unit`, `request`, `system`. With `model` or `controller`, `system` writes a system test that visits the subject's index and show pages |
 
-When the subject's test file exists already, the cases come anyway, addressed to that file, to add the ones it lacks. A controller behind a login filter gets a test that signs in with the app's own sign-in helper (Rails 8's `sign_in_as`, or one its suite defines) and a users fixture or factory; without one, a TODO says the requests are redirected or refused until the test signs in. Devise and Doorkeeper keep their own sign-in lines.
+When the subject's test file exists already, the cases come anyway, addressed to that file, to add the ones it lacks. A controller behind a login filter gets a test that signs in with the app's own sign-in helper and a users fixture or factory where that helper answers the filter: Rails 8's `sign_in_as` for its `require_authentication`, or a `sign_in` for Devise's `authenticate_<scope>!`. Any other filter (a token check, a hand-written one) and any `ActionController::API` controller gets a TODO instead, naming the filter and saying the requests are redirected or refused until the test signs in. Devise and Doorkeeper keep their own sign-in lines.
 
 ### `rails_validate`
 
