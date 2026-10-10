@@ -305,10 +305,18 @@ namespace :ai do
     apply_context_mode_override
 
     format = (args[:format] || ENV["FORMAT"] || "claude").to_sym
+    # Before the cleanup prompt and the introspection, both of which a format
+    # nothing can write would waste, and in the binary's --format words.
+    begin
+      RailsAiContext::Serializers::ContextFileSerializer.validate_format!(format)
+    rescue ArgumentError => e
+      $stderr.puts "Error: #{e.message}"
+      exit 1
+    end
     RailsAiContext::LegacyCleanup.prompt_legacy_files([ format ], root: Rails.root)
     puts "🔍 Introspecting #{Rails.application.class.module_parent_name}..."
 
-    puts "📝 Writing #{format} context file..."
+    puts format == :all ? "📝 Writing all context files..." : "📝 Writing #{format} context file..."
     result = RailsAiContext.generate_context(format: format)
 
     print_result(result)

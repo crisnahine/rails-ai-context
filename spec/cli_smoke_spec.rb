@@ -774,7 +774,7 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       out = `cd #{dir} && ruby -I #{lib} #{exe} context --format bogus --no-boot 2>&1`
 
       expect($?.exitstatus).to eq(1), out
-      expect(out).to include("Unknown format: bogus")
+      expect(out).to include("Unknown format: bogus. Valid formats: claude, cursor, copilot, opencode, codex, json, all")
       expect(out).not_to include("Introspecting Rails app")
     end
   end
