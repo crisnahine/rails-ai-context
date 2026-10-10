@@ -199,7 +199,7 @@ module RailsAiContext
       # often as an initializer does.
       def middleware_config_files
         PathResolver.initializer_paths(root) +
-          Dir.glob(File.join(root, "config/environments/*.rb")).sort +
+          Dir.glob(File.join(root, "config/environments/*.rb")).sort.reject { |path| PathResolver.linked_out?(path, root) } +
           [ File.join(root, "config/application.rb") ].select { |path| File.file?(path) }
       end
 

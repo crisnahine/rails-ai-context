@@ -5075,6 +5075,28 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # Rails loads a model file the app links in from outside it, so reflection
+    # still answers for the class; only the file is not read.
+    it "reads nothing from a model file linked from outside the app" do
+      Dir.mktmpdir do |dir|
+        Dir.mktmpdir do |outside|
+          File.write(File.join(outside, "secret.rb"), <<~RUBY)
+            class Widget < ApplicationRecord
+              scope :outside_secret, -> { where(token: "outside") }
+            end
+          RUBY
+          FileUtils.mkdir_p(File.join(dir, "app", "models"))
+          link = File.join(dir, "app", "models", "widget.rb")
+          File.symlink(File.join(outside, "secret.rb"), link)
+
+          details = details_for(dir, "Widget", [ link, 1 ])
+
+          expect(details).not_to have_key(:file)
+          expect(details[:scopes]).to be_blank
+        end
+      end
+    end
+
     # A model whose file raised partway through leaves Ruby recording the
     # autoload registration site instead of the file. The fallback used to
     # know app/models alone, so the same model one directory over kept

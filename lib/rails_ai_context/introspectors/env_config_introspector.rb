@@ -27,7 +27,7 @@ module RailsAiContext
 
       # @return [Hash] per-environment config summary
       def call
-        files = Dir.glob(File.join(root, "config", "environments", "*.rb")).sort.filter_map do |path|
+        files = Dir.glob(File.join(root, "config", "environments", "*.rb")).sort.reject { |path| PathResolver.linked_out?(path, root) }.filter_map do |path|
           summarize(path)
         end
 

@@ -46,7 +46,7 @@ module RailsAiContext
       def extract_concerns
         result = {}
         lookup = SuperclassChain.lookup_for(root)
-        sources = ConcernPaths.resolve(root).map { |dir| [ dir, Dir.glob(File.join(dir, "**/*.rb")).sort ] } +
+        sources = ConcernPaths.resolve(root).map { |dir| [ dir, ConcernPaths.files(dir, root) ] } +
                   ConcernPaths.outside(root).group_by(&:root_dir).map { |dir, entries| [ dir, entries.map(&:path) ] }
         sources.each do |dir, paths|
           rel_dir = dir.sub("#{root}/", "")
@@ -143,7 +143,7 @@ module RailsAiContext
       def source_paths
         paths = %w[lib app].flat_map do |rel|
           dir = File.join(root, rel)
-          Dir.exist?(dir) ? Dir.glob(File.join(dir, "**/*.rb")).sort : []
+          Dir.exist?(dir) ? Dir.glob(File.join(dir, "**/*.rb")).sort.reject { |path| PathResolver.linked_out?(path, root) } : []
         end
         paths + PathResolver.initializer_paths(root)
       end

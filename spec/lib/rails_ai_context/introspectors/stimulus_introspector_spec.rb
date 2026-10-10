@@ -267,6 +267,27 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
       end
     end
 
+    it "neither lists nor reads a controller linked from outside the app" do
+      Dir.mktmpdir do |root|
+        Dir.mktmpdir do |outside|
+          File.write(File.join(outside, "leak_controller.js"),
+                     %(import { Controller } from "@hotwired/stimulus";\nexport default class extends Controller { static targets = ["outsideSecret"] }\n))
+          FileUtils.mkdir_p(File.join(root, "app/javascript/controllers"))
+          File.write(File.join(root, "app/javascript/controllers/own_controller.js"),
+                     %(import { Controller } from "@hotwired/stimulus";\nexport default class extends Controller {}\n))
+          File.symlink(File.join(outside, "leak_controller.js"), File.join(root, "app/javascript/controllers/leak_controller.js"))
+          read = []
+          allow(RailsAiContext::SafeFile).to receive(:read).and_wrap_original do |original, path, **options|
+            read << path.to_s
+            original.call(path, **options)
+          end
+
+          expect(introspect(root)[:controllers].map { |c| c[:name] }).to eq([ "own" ])
+          expect(read.grep(/leak/)).to be_empty
+        end
+      end
+    end
+
     it "never walks into node_modules" do
       Dir.mktmpdir do |root|
         FileUtils.mkdir_p(File.join(root, "frontend/node_modules/pkg/controllers"))

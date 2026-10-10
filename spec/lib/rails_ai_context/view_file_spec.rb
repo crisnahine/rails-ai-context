@@ -50,6 +50,19 @@ RSpec.describe RailsAiContext::ViewFile do
     end
   end
 
+  describe ".each with a template linked from outside the app" do
+    it "lists the app's own templates and not the linked one" do
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "leak.html.erb"), "<%= @outside_secret %>\n")
+        File.symlink(File.join(outside, "leak.html.erb"), File.join(@root, "app/views/posts/leak.html.erb"))
+
+        expect(described_class.each(@root).map(&:last)).to contain_exactly(
+          "posts/index.html.erb", "posts/index.json.jbuilder", "posts/show.turbo_stream.erb", "master.key"
+        )
+      end
+    end
+  end
+
   describe ".fence" do
     it "labels a template by the handler that renders it" do
       fences = %w[

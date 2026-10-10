@@ -285,10 +285,11 @@ module RailsAiContext
         return nil unless method_name?(method_name)
 
         # A carried path can name a gem rather than the app, and joining that
-        # to the app root opens nothing.
-        path = RailsAiContext::PortablePath.resolve(
-          RailsAiContext::Payload.model_file(ctx, model_name), rails_app.root.to_s
-        )
+        # to the app root opens nothing. A file a symlink carries out of the
+        # app is not read.
+        root = rails_app.root.to_s
+        path = RailsAiContext::PortablePath.resolve(RailsAiContext::Payload.model_file(ctx, model_name), root)
+        path = nil if path && RailsAiContext::PathResolver.linked_out?(path, root)
         extract_method_source_from_file(path, method_name) ||
           concern_callback_source(data, method_name, model_name)
       end

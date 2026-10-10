@@ -40,6 +40,12 @@ A path the payload already holds because the gem's own walk found it - a control
 
 Not an exception to the **safe path** rule, the other side of it: a caller-supplied path is untrusted and goes through `SafePath`; a carried path was produced by this gem and only needs the cap.
 
+## Linked out
+
+A file the app spells inside its root, or inside the engine its test/dummy runs in, that a symlink takes somewhere neither of those holds: the file is a link, or sits under one. `PathResolver.linked_out?` answers it. A walk that reads what it finds drops such a file before listing it (`FileWalk`, `ViewFile.glob` and the introspectors' own globs), and so does a read of the file Ruby says a loaded class came from, so a **carried path** is never one. A directory the app links in from elsewhere, a pack symlinked into `packs/`, is not linked out and neither are its files, because Zeitwerk follows it; a link from inside it to anywhere else is. `SourceScan` keeps the same line its own way: a file inside the walked directory or the root.
+
+Not the **safe path** check, which refuses a path a caller supplied: this one decides which of the files the gem found itself are the app's. Booted, a class Rails loaded through such a link is still described by reflection; only its file goes unread.
+
 ## Source scan
 
 The one walk over a kind of app source, across every directory `PathResolver` resolves for it: conventional layout, packs, in-repo engines. `SourceScan.paths` stats only, `each` reads the source on top of it, and `classes` names each file by its declared constant. An introspector that globs `app/<kind>` itself is the mistake this entry exists to name: it misses every pack and engine, and it names files by their path rather than by what they declare.

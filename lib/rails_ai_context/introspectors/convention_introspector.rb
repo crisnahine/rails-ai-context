@@ -284,7 +284,7 @@ module RailsAiContext
       # only a .keep file), and some apps keep only validator classes there
       # (one app keeps 37), so the claim needs one file that declares no class: a module.
       def concern_files_exist?(relative_path)
-        Dir.glob(File.join(root, relative_path, "**", "*.rb")).any? do |path|
+        ConcernPaths.files(File.join(root, relative_path), root).any? do |path|
           source = SafeFile.read(path)
           source && !DeclaredConstant.declares_class?(source, path_name: File.basename(path, ".rb").camelize)
         end

@@ -140,7 +140,7 @@ module RailsAiContext
         # says nothing about this one. The rest are read only when the running
         # one is absent, where reading nothing would be the worse answer.
         env = ENV["RAILS_ENV"] || "development"
-        all_environments = Dir.glob(File.join(root, "config", "environments", "*.rb")).sort
+        all_environments = Dir.glob(File.join(root, "config", "environments", "*.rb")).sort.reject { |path| PathResolver.linked_out?(path, root) }
         running = all_environments.select { |path| File.basename(path, ".rb") == env }
         environments = running.any? ? running.map { |path| [ path, false ] }
                                     : all_environments.map { |path| [ path, true ] }
@@ -357,7 +357,7 @@ module RailsAiContext
       # The files Rails loads: config/locales by its glob, then what config.i18n.load_path adds.
       def locale_file_paths
         @locale_file_paths ||= begin
-          defaults = locales_dir ? Dir.glob(File.join(locales_dir, RAILS_LOCALE_GLOB)) : []
+          defaults = locales_dir ? Dir.glob(File.join(locales_dir, RAILS_LOCALE_GLOB)).reject { |path| PathResolver.linked_out?(path, root) } : []
           (defaults + load_path_files).uniq.sort
         end
       end

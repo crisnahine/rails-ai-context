@@ -15,7 +15,7 @@ module RailsAiContext
         names = Set.new
         included = []
         PathResolver.dirs_for(root, "app/helpers").each do |dir|
-          FileWalk.each_file(dir).select { |path| path.end_with?(".rb") }.each do |path|
+          FileWalk.each_file(dir, root: root).select { |path| path.end_with?(".rb") }.each do |path|
             source = RailsAiContext::SafeFile.read(path)
             next if source && !view_helper?(source, path, dir)
 

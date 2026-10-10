@@ -16,7 +16,7 @@ module RailsAiContext
       def call(root)
         root = root.to_s
         DIRS.flat_map do |dir|
-          FileWalk.each_file(File.join(root, dir)).select { |path| path.end_with?(".rb") }.sort.flat_map do |path|
+          FileWalk.each_file(File.join(root, dir), root: root).select { |path| path.end_with?(".rb") }.sort.flat_map do |path|
             relative = path.delete_prefix("#{root}/")
             source, = SafePath.read(relative, under: root)
             source ? resources(dir, relative, source) : []
