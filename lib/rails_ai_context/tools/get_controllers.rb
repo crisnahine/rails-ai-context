@@ -394,31 +394,12 @@ module RailsAiContext
 
       # Extract render map from action source: redirects, renders, and side effects
       private_class_method def self.extract_render_map(code)
-        redirects = []
-        renders = []
+        redirects, renders = render_and_redirect_calls(code)
         side_effects = []
         enqueues = Introspectors::SourceCalls.enqueue_calls(code, enqueue_helpers).group_by { |hit| hit[:line] }
 
         code.each_line.with_index(1) do |line, number|
           stripped = line.strip
-
-          # Detect redirect_to calls
-          if (m = stripped.match(/redirect_to\s+(.+)/))
-            target = m[1].sub(/\s*,\s*(status|notice|alert|flash):.*/, "")
-            desc = "redirect_to #{target.strip}"
-            flash_parts = []
-            flash_parts << "notice: #{Regexp.last_match(1)}" if stripped.match(/notice:\s*("[^"]*"|'[^']*'|[^,)]+)/)
-            flash_parts << "alert: #{Regexp.last_match(1)}" if stripped.match(/alert:\s*("[^"]*"|'[^']*'|[^,)]+)/)
-            desc += " (#{flash_parts.join(', ')})" if flash_parts.any?
-            redirects << desc
-          end
-
-          # Detect render calls
-          if (m = stripped.match(/render\s+(.+)/))
-            render_args = m[1]
-            desc = "render #{render_args.sub(/\s*\}?\s*$/, "").strip}"
-            renders << desc
-          end
 
           # Detect side effects
           if stripped.match?(/\.save[!]?(\s|\(|$)/)
@@ -445,6 +426,37 @@ module RailsAiContext
         { redirects: redirects.uniq, renders: renders.uniq, side_effects: side_effects.uniq }
       rescue => e
         RailsAiContext.debug_fail(e, { redirects: [], renders: [], side_effects: [] }, label: "extract_render_map")
+      end
+
+      # Each render and redirect_to call as the source writes its arguments.
+      # Lines were matched one at a time and their ends trimmed, which cut the
+      # brace closing a block in `render json: accounts.map { ... }` and the
+      # parenthesis closing `t(".created")` in a redirect's notice.
+      private_class_method def self.render_and_redirect_calls(code)
+        redirects = []
+        renders = []
+        visit = lambda do |node|
+          if node.is_a?(Prism::CallNode) && node.receiver.nil? && node.arguments
+            case node.name
+            when :redirect_to then redirects << redirect_text(node.arguments.arguments)
+            when :render then renders << "render #{node.arguments.slice.squish}"
+            end
+          end
+          node.compact_child_nodes.each(&visit)
+        end
+        visit.call(RailsAiContext::AstCache.parse_string(code).value)
+        [ redirects, renders ]
+      end
+
+      # `redirect_to target (notice: ..., alert: ...)`: the flash it sets, and
+      # none of the status or other options beside it.
+      private_class_method def self.redirect_text(arguments)
+        options, target = arguments.partition { |arg| arg.is_a?(Prism::KeywordHashNode) }
+        flash = options.flat_map(&:elements).filter_map do |pair|
+          key = pair.is_a?(Prism::AssocNode) && pair.key.is_a?(Prism::SymbolNode) ? pair.key.unescaped : nil
+          "#{key}: #{pair.value.slice.squish}" if %w[notice alert].include?(key)
+        end
+        "redirect_to #{target.map { |arg| arg.slice.squish }.join(", ")}#{" (#{flash.join(', ')})" if flash.any?}"
       end
 
       private_class_method def self.extract_method_with_lines(file_path, method_name, source: nil, owner: nil)
