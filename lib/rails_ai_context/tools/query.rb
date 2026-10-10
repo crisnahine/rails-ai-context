@@ -342,6 +342,33 @@ module RailsAiContext
         out.strip
       end
 
+      # Comment-free text with every quoted and dollar-quoted span blanked to
+      # spaces of the same length, so a check reads structure only. A `;` or a
+      # keyword inside a string literal or a `$$ ... $$` body is data, not a
+      # second statement: it is the `;` in a `DO $$ ... ; ... $$` block that
+      # made the multi-statement check refuse one for the wrong reason.
+      def self.mask_quoted(text, mysql: false)
+        scanner = StringScanner.new(text, fixed_anchor: true)
+        out = +""
+
+        until scanner.eos?
+          quoted = if mysql then MYSQL_QUOTED
+          elsif out.match?(/(?<![\p{Word}$])[eE]\z/) && scanner.check(/'/) then ESCAPED_STRING
+          else QUOTED
+          end
+
+          if (span = scanner.scan(quoted) || (!mysql && scanner.scan(DOLLAR_QUOTED)))
+            out << (" " * span.length)
+          elsif (span = scanner.scan(UNQUOTED))
+            out << span
+          else
+            out << scanner.getch
+          end
+        end
+
+        out
+      end
+
       private_class_method def self.mysql_dialect?
         ActiveRecord::Base.connection_db_config.adapter.to_s.match?(MYSQL_ADAPTER)
       rescue ActiveRecord::ActiveRecordError
@@ -363,8 +390,10 @@ module RailsAiContext
         cleaned = strip_sql_comments(sql, mysql: mysql)
 
         # Check multi-statement and clause patterns first - they provide more
-        # specific error messages than the generic keyword blocker.
-        return [ false, "Blocked: multiple statements (no semicolons)" ] if cleaned.match?(MULTI_STATEMENT)
+        # specific error messages than the generic keyword blocker. The
+        # semicolon is read on quote-masked text, so one inside a string literal
+        # or a `$$ ... $$` block body is not mistaken for a second statement.
+        return [ false, "Blocked: multiple statements (no semicolons)" ] if mask_quoted(cleaned, mysql: mysql).match?(MULTI_STATEMENT)
         return [ false, "Blocked: FOR UPDATE/SHARE clause" ] if cleaned.match?(BLOCKED_CLAUSES)
         return [ false, "Blocked: sensitive SHOW command" ] if cleaned.match?(BLOCKED_SHOWS)
         return [ false, "Blocked: SELECT INTO OUTFILE / DUMPFILE writes to disk" ] if cleaned.match?(BLOCKED_OUTPUT)
