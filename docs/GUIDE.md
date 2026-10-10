@@ -1678,8 +1678,8 @@ Runs the checks below and reports an AI readiness score (0-100). A check that do
 | Check | What it verifies |
 |-------|------------------|
 | Schema | A schema dump file exists |
-| Pending migrations | No migration is pending in any database the app migrates, each read through its own connection as `db:migrate:status` reads it (fails when one is) |
-| Database | Shown in place of Pending migrations when a database the app migrates does not exist (fix: `bin/rails db:prepare`) or its server does not answer (fails) |
+| Pending migrations | No migration is pending in any database the app migrates, each read through its own connection as `db:migrate:status` reads it, and nothing written to it: a database never migrated gets no `schema_migrations` table from doctor (fails when one is pending) |
+| Database | Shown in place of Pending migrations when a database the app migrates does not exist (fix: `bin/rails db:prepare`) or its server does not answer (fails). A SQLite database whose file is not there is named without connecting to it, since connecting would create an empty one |
 | Models | Model files detected where the tools read them: `app/models`, packs and in-repo engines, and in an engine's `test/dummy` the engine's own |
 | Routes | `config/routes.rb` exists |
 | Gems | The app's lockfile exists, or the one its `config/boot.rb` names (a monorepo's shared bundle, an engine's for its `test/dummy`) |

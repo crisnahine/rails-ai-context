@@ -108,6 +108,10 @@ module RailsAiContext
         # undercutting the gem's "live, zero stale data" promise.
         return true if ActiveRecord::Base.connected?
 
+        # Connecting would create a SQLite file that is not there yet.
+        missing = DatabaseFile.missing(ActiveRecord::Base.connection_db_config)
+        raise missing if missing
+
         # Force a real connection. In Rails 8 a lazily checked-out connection
         # reports active? => nil until it actually materializes, so a trivial
         # query is the reliable reachability probe. The rescue below falls back

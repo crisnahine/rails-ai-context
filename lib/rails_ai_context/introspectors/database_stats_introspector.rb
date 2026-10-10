@@ -19,6 +19,10 @@ module RailsAiContext
       def call
         return { skipped: true, reason: "ActiveRecord not available" } unless defined?(ActiveRecord::Base)
 
+        # Connecting would create a SQLite file that is not there yet.
+        missing = DatabaseFile.missing(ActiveRecord::Base.connection_db_config)
+        raise missing if missing
+
         adapter = ActiveRecord::Base.connection.adapter_name.downcase
         case adapter
         when POSTGRES_ADAPTER

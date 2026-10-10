@@ -55,6 +55,20 @@ RSpec.describe RailsAiContext::MigrationStatus do
       FileUtils.mkdir_p(migrate_dir)
       expect(described_class.pending(migrate_dir)).to be_nil
     end
+
+    # Connecting would create the file: an empty database with every
+    # migration pending.
+    it "returns nil without creating a SQLite database whose file is not there" do
+      FileUtils.mkdir_p(migrate_dir)
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "development.sqlite3")
+        config = ActiveRecord::DatabaseConfigurations::HashConfig.new("test", "primary", { adapter: "sqlite3", database: path })
+        allow(ActiveRecord::Base).to receive(:connection_db_config).and_return(config)
+
+        expect(described_class.pending(migrate_dir)).to be_nil
+        expect(File.exist?(path)).to be(false)
+      end
+    end
   end
 
   describe ".migration_context" do
@@ -78,21 +92,59 @@ RSpec.describe RailsAiContext::MigrationStatus do
       ActiveRecord::DatabaseConfigurations::HashConfig.new("test", "analytics", { adapter: "sqlite3", database: path })
     end
 
-    it "reads a database of the app's other than the primary through a pool of its own, removed after" do
+    # An empty file is an empty SQLite database: created, never migrated.
+    def created_database
+      path = File.join(@dir, "analytics.sqlite3")
+      FileUtils.touch(path)
+      path
+    end
+
+    def tables_in(path)
+      db = SQLite3::Database.new(path, readonly: true)
+      db.execute("SELECT name FROM sqlite_master WHERE type = 'table'").flatten
+    ensure
+      db&.close
+    end
+
+    def migrations_dir
       dir = File.join(@dir, "analytics_migrate")
       FileUtils.mkdir_p(dir)
       File.write(File.join(dir, "20240101000000_create_events.rb"), "class CreateEvents < ActiveRecord::Migration[7.1]\nend\n")
+      dir
+    end
+
+    it "reads a database of the app's other than the primary through a pool of its own, removed after" do
+      dir = migrations_dir
       app_pool = ActiveRecord::Base.connection_pool
 
-      state = described_class.of_database(database(File.join(@dir, "analytics.sqlite3")), dir)
+      state = described_class.of_database(database(created_database), dir)
 
       expect(state).to eq(pending: [ { version: "20240101000000", name: "CreateEvents" } ])
       expect(ActiveRecord::Base.connection_pool).to equal(app_pool)
       expect(ActiveRecord::Base.connection_handler.connection_pool_list.map { |pool| pool.db_config.name }).not_to include("analytics")
     end
 
+    # Building a Migrator creates schema_migrations and ar_internal_metadata
+    # in a database that lacks them; reading what is pending writes nothing.
+    it "reads a database that was never migrated without writing to it" do
+      path = created_database
+
+      expect(described_class.of_database(database(path), migrations_dir)).to eq(pending: [ { version: "20240101000000", name: "CreateEvents" } ])
+      expect(tables_in(path)).to eq([])
+    end
+
     it "answers nothing pending for a database with no migrations, once it has connected" do
-      expect(described_class.of_database(database(File.join(@dir, "analytics.sqlite3")), File.join(@dir, "none"))).to eq(pending: [])
+      expect(described_class.of_database(database(created_database), File.join(@dir, "none"))).to eq(pending: [])
+    end
+
+    it "says a SQLite database whose file is not there does not exist, without creating it" do
+      path = File.join(@dir, "analytics.sqlite3")
+
+      state = described_class.of_database(database(path), migrations_dir)
+
+      expect(state[:error]).to be_a(ActiveRecord::NoDatabaseError)
+      expect(state[:error].message).to include(path)
+      expect(File.exist?(path)).to be(false)
     end
 
     # Rails 7.1+ wraps the driver's error; Rails 7.0's sqlite3 adapter hands
