@@ -529,10 +529,14 @@ module RailsAiContext
                                                                    route_key: snake, outcomes: {}, chain: chain,
                                                                    route_names: RouteCoverage.by_controller(routes).values.flatten.filter_map { |r| r[:name] })
           # Devise and Doorkeeper have their own sign-in lines; any other login
-          # filter is named, with the app's own sign-in helper when it has one.
+          # filter is named, and signed past with the app's own sign-in helper
+          # only where that helper is known to get a request past it.
           unless devise_app?(tests_data) || doorkeeper_controller?(ctrl_class)
             res[:login] = login_filters(ctrl_class, ctrl_routes)
-            res[:sign_in] = app_sign_in_helper if res[:login].any?
+            if res[:login].any?
+              res[:helper] = app_sign_in_helper
+              res[:sign_in] = res[:helper] if signs_past?(res[:helper], res)
+            end
           end
 
           if framework.to_s.include?("rspec")
@@ -601,6 +605,7 @@ module RailsAiContext
             attrs: attrs.sort,
             record_attrs: ((no_strong_params ? columns : attrs) - non_columns).sort,
             non_column_attrs: non_columns.sort,
+            api: info[:api_controller] == true,
             json_api: info[:api_controller] == true || info[:respond_to_formats] == [ "json" ],
             unique_attrs: unique_attrs,
             no_strong_params: no_strong_params
@@ -747,6 +752,28 @@ module RailsAiContext
           RailsAiContext.debug_fail(e, nil, label: "app_sign_in_helper")
         end
 
+        # Whether the helper gets a request past every login filter it meets.
+        # Each auth system's helper answers its own filter: the Rails 8
+        # generator's sign_in_as sets the session cookie its
+        # require_authentication reads, and Devise's sign_in the scope its
+        # authenticate_<scope>! checks. A token check or a hand-written filter
+        # it is not known to satisfy, and an ActionController::API reads no
+        # session cookie at all: those get the TODO instead of a sign-in
+        # every request would ignore.
+        def signs_past?(helper, res)
+          return false if helper.nil? || res[:api]
+
+          models = RailsAiContext::Payload.models(cached_context)
+          res[:login].all? do |login|
+            name = login[:filter][:name].to_s
+            case helper
+            when "sign_in_as" then name == "require_authentication"
+            when "sign_in" then (scope = name[/\Aauthenticate_(\w+)!\z/, 1]) && models.key?(scope.camelize)
+            else false
+            end
+          end
+        end
+
         def login_phrase(ctrl_class, res)
           filters = res[:login].map do |login|
             origin = login[:filter][:from_concern] || login[:filter][:from]
@@ -764,6 +791,9 @@ module RailsAiContext
 
           how = if res[:sign_in]
             "sign in with #{res[:sign_in]} and a user from this app's own test data"
+          elsif res[:helper]
+            names = res[:login].map { |login| login[:filter][:name] }.join(" and ")
+            "this app's #{res[:helper]} is not known to get a request past #{names}, so send what #{names} checks"
           else
             "this app's tests define no sign-in helper, so sign a user in first the way the app's login does"
           end
