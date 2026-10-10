@@ -123,5 +123,15 @@ RSpec.describe RailsAiContext::Install::AiTool do
     it "feeds the legacy cleanup list" do
       expect(RailsAiContext::LegacyCleanup::LEGACY_FILES).to eq(described_class.legacy_files)
     end
+
+    # A CLI-mode summary listed `.codex/config.toml` for Codex CLI although
+    # CLI mode writes no MCP config.
+    it "labels a tool's files without its MCP config where none is written" do
+      codex = described_class.find(:codex)
+
+      expect(codex.files_label).to eq("AGENTS.md + .codex/config.toml")
+      expect(codex.files_label(mcp: false)).to eq("AGENTS.md")
+      expect(described_class.find(:claude).files_label(mcp: false)).to eq("CLAUDE.md + .claude/rules/")
+    end
   end
 end

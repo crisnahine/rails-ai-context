@@ -182,6 +182,36 @@ module RailsAiContext
         true
       end
 
+      # CLI mode starts no MCP server, yet a config still holding the gem's
+      # entry goes on starting one. Offered for removal the way a dropped
+      # tool's files are, asked before anything is written.
+      #
+      # @return [Array<Symbol>] the tools whose configs are to lose the entry
+      def ask_mcp_removal(surface, root:)
+        held = AiTool.all.select do |tool|
+          path = File.join(root.to_s, tool.mcp_config[:path])
+          File.file?(path) && File.binread(path).include?(RailsAiContext::McpConfigGenerator::SERVER_NAME)
+        end
+        return [] if held.empty?
+
+        surface.say ""
+        surface.say "CLI mode starts no MCP server, but these configs still start rails-ai-context:", :emph
+        held.each { |tool| surface.say "  #{tool.mcp_config[:path]}" }
+        surface.say ""
+        input = surface.ask("Remove rails-ai-context from them? (y/N)").to_s.strip.downcase
+        %w[y yes].include?(input) ? held.map(&:key) : []
+      end
+
+      def remove_mcp_entries(surface, tools, root:)
+        return if tools.empty?
+
+        paths = RailsAiContext::McpConfigGenerator.remove(
+          tools: tools, output_dir: root.to_s,
+          warn: ->(path, reason) { surface.say "Could not update #{relative_to(path, root)}: #{reason}", :warn }
+        )
+        say_mcp_removed(surface, paths, base: root, root: root)
+      end
+
       # A config the removal emptied is deleted whole, and is named as gone:
       # "removed the entry" over a file that no longer exists read like a
       # bug. The tool's directory goes with it when nothing else is in it.

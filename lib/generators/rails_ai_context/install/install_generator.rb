@@ -74,6 +74,11 @@ module RailsAiContext
           program_surface,
           tools: @selected_formats, tool_mode: @tool_mode, root: Rails.root
         )
+        return unless @tool_mode == :cli
+
+        program = RailsAiContext::Install::Program
+        program.remove_mcp_entries(program_surface, program.ask_mcp_removal(program_surface, root: Rails.root),
+                                   root: Rails.root)
       end
 
       # The :standard preset's comment, its introspectors named from the
@@ -675,7 +680,7 @@ module RailsAiContext
         say "Your setup:", :yellow
         RailsAiContext::Install::AiTool.all.each do |tool|
           next unless @selected_formats.include?(tool.key)
-          files = context_files? ? tool.files : "MCP config only"
+          files = context_files? ? tool.files_label(mcp: tool_mode == :mcp) : "MCP config only"
           say "  ✅ #{tool.name.ljust(16)} -> #{files}"
         end
         unless context_files?

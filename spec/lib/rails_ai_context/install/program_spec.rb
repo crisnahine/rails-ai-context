@@ -281,6 +281,46 @@ RSpec.describe RailsAiContext::Install::Program do
     end
   end
 
+  # CLI mode starts no server, so a config the gem left behind would go on
+  # starting one; it is offered for removal like a dropped tool's files.
+  describe ".ask_mcp_removal and .remove_mcp_entries" do
+    it "offers the configs that start the gem's server, and removes only its entries on yes" do
+      Dir.mktmpdir do |root|
+        File.write(File.join(root, ".mcp.json"), JSON.generate("mcpServers" => {
+          "rails-ai-context" => { "command" => "rails-ai-context", "args" => [ "serve" ] }, "mine" => { "command" => "x" }
+        }))
+        FileUtils.mkdir_p(File.join(root, ".cursor"))
+        File.write(File.join(root, ".cursor/mcp.json"),
+                   JSON.generate("mcpServers" => { "rails-ai-context" => { "command" => "rails-ai-context", "args" => [ "serve" ] } }))
+
+        surface = surface_class.new("y")
+        tools = described_class.ask_mcp_removal(surface, root: root)
+        described_class.remove_mcp_entries(surface, tools, root: root)
+
+        expect(tools).to eq(%i[claude cursor])
+        expect(surface.text).to include("CLI mode starts no MCP server", "  .mcp.json", "  .cursor/mcp.json")
+        expect(surface.text).to include("Removed rails-ai-context from .mcp.json",
+                                        "Removed .cursor/mcp.json (rails-ai-context was its only server)", "Removed .cursor/")
+        expect(JSON.parse(File.read(File.join(root, ".mcp.json")))["mcpServers"].keys).to eq(%w[mine])
+      end
+    end
+
+    it "keeps them on the default answer, and asks nothing when none is left" do
+      Dir.mktmpdir do |root|
+        File.write(File.join(root, ".mcp.json"),
+                   JSON.generate("mcpServers" => { "rails-ai-context" => { "command" => "rails-ai-context", "args" => [ "serve" ] } }))
+
+        expect(described_class.ask_mcp_removal(surface_class.new(""), root: root)).to eq([])
+        expect(File.exist?(File.join(root, ".mcp.json"))).to be(true)
+
+        File.delete(File.join(root, ".mcp.json"))
+        quiet = surface_class.new
+        expect(described_class.ask_mcp_removal(quiet, root: root)).to eq([])
+        expect(quiet.lines).to be_empty
+      end
+    end
+  end
+
   describe ".mark_gitignore" do
     it "appends the two entries once and says nothing the second time" do
       Dir.mktmpdir do |root|
