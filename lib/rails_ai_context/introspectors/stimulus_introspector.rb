@@ -405,6 +405,9 @@ module RailsAiContext
           targets: static_array(content, "targets", /["'](\w+)["']/),
           values: extract_values(content),
           actions: extract_actions(content),
+          # The methods the controller calls on itself (`this.render()`): one
+          # no markup names is a helper the copy-paste markup leaves out.
+          self_calls: content.scan(/\bthis\.(\w+)\s*\(/).flatten.uniq.presence,
           outlets: static_array(content, "outlets", /["']([^"']+)["']/),
           classes: static_array(content, "classes", /["']([^"']+)["']/),
           lifecycle: extract_lifecycle(content),
@@ -452,9 +455,14 @@ module RailsAiContext
         end
       end
 
+      # Stimulus calls these itself when a value, a target or an outlet
+      # changes, so no markup names them: `quantityValueChanged` was listed as
+      # an action and pasted as `click->cart#quantityValueChanged`.
+      CHANGE_CALLBACK = /\A\w+(?:ValueChanged|TargetConnected|TargetDisconnected|OutletConnected|OutletDisconnected)\z/
+
       def extract_actions(content)
         content.scan(/^\s+(?:async\s+)?(\w+)\s*\([^)]*\)\s*\{/).flatten
-               .reject { |m| %w[constructor connect disconnect initialize if else for while switch catch function].include?(m) }
+               .reject { |m| %w[constructor connect disconnect initialize if else for while switch catch function].include?(m) || m.match?(CHANGE_CALLBACK) }
       end
 
       def extract_import_graph(content)
@@ -491,6 +499,7 @@ module RailsAiContext
 
       def extract_lifecycle(content)
         hooks = content.scan(/\b(connect|disconnect|initialize)\s*\(\s*\)/).flatten.uniq
+        hooks += content.scan(/^\s+(?:async\s+)?(\w+)\s*\([^)]*\)\s*\{/).flatten.grep(CHANGE_CALLBACK).uniq
         hooks.any? ? hooks : nil
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "extract_lifecycle")

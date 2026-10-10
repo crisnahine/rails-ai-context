@@ -258,11 +258,47 @@ module RailsAiContext
           attrs << "data-#{html_name}-#{kebab}-value=\"...\""
         end
 
+        # A class or an outlet the controller reads throws "Missing attribute"
+        # without its attribute, so the markup carries one for each.
+        (ctrl[:classes] || []).each do |name|
+          attrs << "data-#{html_name}-#{name.to_s.gsub(/([a-z\d])([A-Z])/, '\1-\2').downcase}-class=\"...\""
+        end
+        (ctrl[:outlets] || []).each do |name|
+          attrs << "data-#{html_name}-#{name}-outlet=\"...\""
+        end
+
+        used = view_action_events(html_name)
+        own_calls = Array(ctrl[:self_calls])
         (ctrl[:actions] || []).each do |a|
-          attrs << "data-action=\"click->#{html_name}##{a}\""
+          events = used[a]
+          if events
+            # The event the app's own markup wires the action to: a text field's
+            # `input->`, not the `click->` every action used to get.
+            events.each { |event| attrs << "data-action=\"#{"#{event}->" if event}#{html_name}##{a}\"" }
+          elsif !own_calls.include?(a)
+            # No event names the element's default one: click for a button,
+            # input for a text field, submit for a form.
+            attrs << "data-action=\"#{html_name}##{a}\""
+          end
+          # A method no markup names and the controller calls itself is a helper, not an action.
         end
 
         attrs
+      end
+
+      # {action => the events the app's templates wire it to, nil for the
+      # element's default}, for one controller.
+      private_class_method def self.view_action_events(html_name)
+        root = rails_app.root.to_s
+        descriptor = /(?:([\w:.@+-]+)->)?(?<![\w-])#{Regexp.escape(html_name)}#(\w+)/
+        Introspectors::StimulusIntrospector.template_files(root).each_with_object({}) do |path, found|
+          raw = RailsAiContext::SafeFile.read(path) or next
+          next unless raw.include?("#{html_name}#")
+
+          raw.scan(descriptor) { |event, action| (found[action] ||= []) << event unless Array(found[action]).include?(event) }
+        end
+      rescue => e
+        RailsAiContext.debug_fail(e, {}, label: "view_action_events")
       end
 
       # Views are named by their path under their views root, anything else from the app root.

@@ -320,6 +320,15 @@ the naming rule of its directory when one is known: a loader that imports the
 directory by a derived path (`import(`./dynamic/${path}.controller.ts`)`), or
 two or more confirmed neighbours that all drop the directory's segment.
 
+The change callbacks Stimulus runs itself (`countValueChanged`,
+`itemTargetConnected`, `resultsOutletDisconnected`) are listed with the
+lifecycle hooks, not as actions. The copy-paste markup at `full` detail wires
+each action to the events the app's own templates use (`input->search#queue`),
+and to no named event, so the element's default, when no template wires it; it
+leaves out a method no template names that the controller calls itself, and
+carries a `data-*-class` and `data-*-outlet` attribute for each class and
+outlet the controller reads.
+
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `controller` | string | - | Stimulus controller name |
