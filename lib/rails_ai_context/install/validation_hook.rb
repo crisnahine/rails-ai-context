@@ -109,6 +109,11 @@ module RailsAiContext
       # the committer exported cannot send it elsewhere. An app that is gone
       # is passed over.
       #
+      # Names come NUL-separated: git quotes one holding a character outside
+      # ASCII, a quote or a backslash in its line format, which no extension
+      # test matched, so the file went unchecked. validate takes its list
+      # comma-separated, so a name holding a comma is named and left out.
+      #
       # @param apps [Array<String>] app paths from the top of the work tree,
       #   "." for the top itself
       # @param standalone [Boolean] validate with the gem's binary rather
@@ -122,28 +127,37 @@ module RailsAiContext
           validate_command = %(rails 'ai:tool[validate]' files="$files")
         end
         listed = apps.shelljoin
+        # With several apps, each one's lines are headed by its name.
+        heading = apps.size > 1 ? %(\n    echo "rails-ai-context: $app") : ""
 
         <<~HOOK
           #!/bin/bash
-          # rails-ai-context: validate Rails references before commit
-          # Catches hallucinated columns, missing models, and schema drift.
+          # rails-ai-context: check the staged Ruby and ERB files before a commit.
+          # A commit whose staged .rb or .erb files do not parse is stopped.
           # Remove this file or the rails-ai-context section to disable.
           # rails-ai-context apps: #{listed}
 
           status=0
           for app in #{listed}; do
             [ -d "$app" ] || continue
-            if [ "$app" = "." ]; then
-              changed_files=$(git diff --cached --name-only --diff-filter=d | grep -E '\\.(rb|erb)$' || true)
-            else
-              changed_files=$(git diff --cached --name-only --diff-filter=d --relative="$app/" | grep -E '\\.(rb|erb)$' || true)
-            fi
-            if [ -z "$changed_files" ]; then
+            relative=()
+            [ "$app" = "." ] || relative=(--relative="$app/")
+            files=""
+            while IFS= read -r -d '' name; do
+              case "$name" in
+                *.rb|*.erb) ;;
+                *) continue ;;
+              esac
+              case "$name" in
+                *,*) echo "rails-ai-context: $name is not checked: validate cannot take a comma in a file name" ;;
+                *) files="${files:+$files,}$name" ;;
+              esac
+            done < <(git diff --cached --name-only -z --diff-filter=d "${relative[@]}")
+            if [ -z "$files" ]; then
               continue
             fi
 
-            if command -v #{hook_binary} &> /dev/null; then
-              files=$(printf '%s\\n' "$changed_files" | tr '\\n' ',')
+            if command -v #{hook_binary} &> /dev/null; then#{heading}
               (cd "./$app" && #{validate_command} 2>/dev/null)
               exit_code=$?
               if [ $exit_code -ne 0 ]; then

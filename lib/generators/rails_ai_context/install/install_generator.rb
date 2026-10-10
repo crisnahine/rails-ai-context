@@ -594,7 +594,12 @@ module RailsAiContext
         end
 
         where = app == "." ? "" : " in #{repo[:toplevel]}"
-        answer = ask_safe("Install a pre-commit hook#{where} that validates Rails references? (y/N)").strip.downcase
+        question = if apps.one?
+          "Install a pre-commit hook#{where} that checks staged Ruby and ERB files for syntax errors? (y/N)"
+        else
+          "Add #{app} to the pre-commit hook#{where} that checks staged Ruby and ERB files for syntax errors? (y/N)"
+        end
+        answer = ask_safe(question).strip.downcase
         return unless answer == "y"
 
         write_validation_hook(hook_path, repo[:hooks], hook.script(apps, standalone: standalone))

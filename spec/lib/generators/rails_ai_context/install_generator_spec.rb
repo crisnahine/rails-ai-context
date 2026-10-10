@@ -214,7 +214,8 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
         content = File.read(File.join(mono, ".git/hooks/pre-commit"))
         expect(content).to include("# rails-ai-context apps: apps/web\n")
         expect(content).to include("for app in apps/web; do\n")
-        expect(content).to include('git diff --cached --name-only --diff-filter=d --relative="$app/"')
+        expect(content).to include('relative=(--relative="$app/")')
+        expect(content).to include('git diff --cached --name-only -z --diff-filter=d "${relative[@]}"')
         expect(File.exist?(File.join(app, ".git"))).to be(false)
       end
     end
@@ -379,8 +380,8 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
 
           out, status = commit(mono, bin)
 
-          expect(File.read(log).lines).to eq([ "web ai:tool[validate] files=app/models/post.rb,\n",
-                                               "admin ai:tool[validate] files=app/models/user.rb,\n" ])
+          expect(File.read(log).lines).to eq([ "web ai:tool[validate] files=app/models/post.rb\n",
+                                               "admin ai:tool[validate] files=app/models/user.rb\n" ])
           expect(status.success?).to be(false), out
           expect(out).to include("rails-ai-context validation found issues.")
         end
@@ -403,7 +404,28 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
           out, status = commit(worktree, bin)
 
           expect(status.success?).to be(true), out
-          expect(File.read(log).lines).to eq([ "web ai:tool[validate] files=app/models/post.rb,\n" ])
+          expect(File.read(log).lines).to eq([ "web ai:tool[validate] files=app/models/post.rb\n" ])
+        end
+      end
+
+      # git quotes a name holding a character outside ASCII in its line
+      # format, which no extension test matched, so the file went unchecked.
+      # validate takes its list comma-separated, so a name with a comma is
+      # named rather than passed in two halves.
+      it "validates a staged file whose name git quotes, and names one with a comma it cannot pass" do
+        install_for("apps/web")
+        Dir.mktmpdir do |bin|
+          log = File.join(bin, "calls.log")
+          fake_rails(bin, log)
+          File.write(File.join(mono, "apps/web/app/models/caf\u00e9.rb"), "class Cafe; end\n")
+          File.write(File.join(mono, "apps/web/app/models/a,b.rb"), "x\n")
+          git("-C", mono, "add", "-A")
+
+          out, status = commit(mono, bin)
+
+          expect(status.success?).to be(true), out
+          expect(File.read(log, encoding: "UTF-8").lines).to eq([ "web ai:tool[validate] files=app/models/caf\u00e9.rb\n" ])
+          expect(out).to include("app/models/a,b.rb is not checked")
         end
       end
 
@@ -543,12 +565,13 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       expect(generator).not_to have_received(:ask)
     end
 
-    it "passes staged files to validation without collapsing newlines into spaces" do
+    it "reads the staged names NUL-separated and passes them to validation as one list" do
       generator.install_validation_hook
 
       content = File.read(hook_path)
 
-      expect(content).to include("files=$(printf '%s\\n' \"$changed_files\" | tr '\\n' ',')")
+      expect(content).to include("git diff --cached --name-only -z --diff-filter=d")
+      expect(content).to include(%(files="${files:+$files,}$name"))
       expect(content).to include("rails 'ai:tool[validate]' files=\"$files\"")
       expect(content).not_to include("echo $changed_files")
     end

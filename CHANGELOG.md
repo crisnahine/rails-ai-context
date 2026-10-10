@@ -57,6 +57,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the gem without `rails-ai-context` and every MCP config's
   `bundle exec rails-ai-context serve` failed to start. Outside a checkout
   the files on disk are the list.
+- **The pre-commit hook checks a staged file whatever its name.** git
+  quotes a name holding a character outside ASCII, a quote or a backslash
+  in the list the hook read, so no `.rb` test matched it and the file went
+  unchecked: a broken `db/seeds/brokén.rb` committed. Names are now read
+  NUL-separated. validate takes its files comma-separated, so a name
+  holding a comma is named and left unchecked rather than passed in two
+  halves. With several apps in one hook each app's lines are headed by its
+  name, and the second app's question asks to add it. The question and the
+  hook say what it checks - that the staged Ruby and ERB files parse - where
+  they promised hallucinated columns and missing models, which a commit
+  never checked.
 - **The binary runs an app's own copy of the gem when its bundle has one.**
   In an app whose Gemfile carries rails-ai-context at another version or
   from a `path:` copy, the global binary loaded its own files before the
