@@ -101,28 +101,41 @@ RSpec.describe RailsAiContext::Server do
         reporter.call(error, {})
       end
 
-      it "logs genuine internal errors with the full backtrace" do
-        error = begin
-          raise "boom"
-        rescue => e
-          e
-        end
-        expect($stderr).to receive(:puts).with(/unhandled exception: RuntimeError: boom/)
-        expect($stderr).to receive(:puts).at_least(:once)
-        reporter.call(error, {})
+      def raised(error)
+        raise error
+      rescue => e
+        e
       end
 
-      it "logs a RequestHandlerError whose error_type is :internal_error with the full backtrace" do
-        error = begin
-          raise MCP::Server::RequestHandlerError.new(
-            "Internal error handling tools/call request", {}, error_type: :internal_error
-          )
-        rescue => e
-          e
-        end
-        expect($stderr).to receive(:puts).with(/unhandled exception: MCP::Server::RequestHandlerError/)
+      def with_debug(value)
+        previous = ENV["DEBUG"]
+        value.nil? ? ENV.delete("DEBUG") : ENV["DEBUG"] = value
+        yield
+      ensure
+        previous.nil? ? ENV.delete("DEBUG") : ENV["DEBUG"] = previous
+      end
+
+      # A stack trace on every bad call buried the one line that said what
+      # failed; DEBUG is where every other backtrace this gem prints lives.
+      it "names a genuine internal error in one line, pointing at DEBUG for the backtrace" do
+        expect($stderr).to receive(:puts).once.with(
+          "[rails-ai-context] unhandled exception: RuntimeError: boom (DEBUG=1 prints the backtrace)"
+        )
+        with_debug(nil) { reporter.call(raised(RuntimeError.new("boom\nsecond line")), {}) }
+      end
+
+      it "logs genuine internal errors with the backtrace under DEBUG" do
+        expect($stderr).to receive(:puts).with(/unhandled exception: RuntimeError: boom/)
         expect($stderr).to receive(:puts).with(/^    /).at_least(:once)
-        reporter.call(error, {})
+        with_debug("1") { reporter.call(raised(RuntimeError.new("boom")), {}) }
+      end
+
+      it "logs a RequestHandlerError whose error_type is :internal_error as an internal error" do
+        error = raised(MCP::Server::RequestHandlerError.new(
+          "Internal error handling tools/call request", {}, error_type: :internal_error
+        ))
+        expect($stderr).to receive(:puts).once.with(/unhandled exception: MCP::Server::RequestHandlerError/)
+        with_debug(nil) { reporter.call(error, {}) }
       end
     end
 
