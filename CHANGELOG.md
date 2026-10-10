@@ -374,6 +374,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   listing ~27 Active Storage, Action Mailbox and Turbo routes; a helper with
   no methods no longer ends in a bare colon, and the Overview and Puma
   headings appear only with something under them.
+- **A full-mode file names the command that regenerates it in full mode.**
+  Its last line said to run `rails ai:context`, which writes compact files
+  again unless `config.context_mode` is `:full`. It now says
+  `CONTEXT_MODE=full rails ai:context`, which keeps the AI tool selection
+  as `rails ai:context:full` does not; a standalone install, whose only
+  way into full mode is `context_mode: full` in `.rails-ai-context.yml`,
+  keeps `rails-ai-context context`. Copilot's full file shares the line.
 - **Every generated file states the route count the same way.** CLAUDE.md
   said "12 app routes across 3 routed controllers (39 total incl.
   framework)" while `.claude/rules/rails-context.md`,
