@@ -1398,7 +1398,7 @@ end
 | `excluded_models` | Array | internal Rails models | Models to skip |
 | `excluded_paths` | Array | `node_modules tmp log vendor .git doc docs` | Paths excluded from code search |
 | `sensitive_patterns` | Array | `.env`, `.key`, `.pem`, credentials | File patterns blocked from search and read tools |
-| `output_dir` | String | `nil` (Rails.root) | Where to write context files |
+| `output_dir` | String | `nil` (Rails.root) | Where to write context files. OpenCode's `app/models/AGENTS.md` and `app/controllers/AGENTS.md` are written only where that directory exists under it |
 | `auto_mount` | Boolean | `false` | Auto-mount HTTP MCP endpoint |
 | `http_path` | String | `"/mcp"` | HTTP endpoint path |
 | `http_bind` | String | `"127.0.0.1"` | HTTP bind address |
