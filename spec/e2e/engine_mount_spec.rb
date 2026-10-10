@@ -3,8 +3,9 @@
 require_relative "e2e_helper"
 
 # HTTP transport via the mounted engine - the README's documented
-# `mount RailsAiContext::Engine, at: "/mcp"` path, served by the host app's
-# own `rails server` process rather than the gem's standalone HTTP server.
+# `mount RailsAiContext::Engine, at: "/mcp" if defined?(RailsAiContext::Engine)`
+# path, served by the host app's own `rails server` process rather than the
+# gem's standalone HTTP server.
 # This route resolves the controller through the engine's route set, which
 # the middleware/auto_mount path never exercises: v5.15.0 shipped with the
 # mount 500ing on `uninitialized constant McpController` because only the
@@ -23,7 +24,7 @@ RSpec.describe "E2E: MCP over mounted engine", type: :e2e do
     routes = File.read(routes_path)
     File.write(routes_path, routes.sub(
       "Rails.application.routes.draw do",
-      "Rails.application.routes.draw do\n  mount RailsAiContext::Engine, at: \"/mcp\"\n"
+      "Rails.application.routes.draw do\n  mount RailsAiContext::Engine, at: \"/mcp\" if defined?(RailsAiContext::Engine)\n"
     ))
 
     @http = E2E::HttpServerHarness.new(

@@ -137,8 +137,10 @@ Mount the server inside your app. It inherits your routing, auth and middleware,
 
 ```ruby
 # config/routes.rb
-mount RailsAiContext::Engine, at: "/mcp"
+mount RailsAiContext::Engine, at: "/mcp" if defined?(RailsAiContext::Engine)
 ```
+
+The `if` keeps the routes file loading wherever the gem is not: in production, where Bundler skips the `:development` group, and after the gem is removed. An unguarded mount raises `uninitialized constant RailsAiContext::Engine` there, and the app does not boot.
 
 Point the client at `http://localhost:3000/mcp`. There is also a standalone HTTP process: `rails-ai-context serve --transport http --port 6029`.
 

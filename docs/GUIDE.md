@@ -1264,8 +1264,10 @@ For tighter Rails integration (authentication, routing, middleware stack), mount
 
 ```ruby
 # config/routes.rb
-mount RailsAiContext::Engine, at: "/mcp"
+mount RailsAiContext::Engine, at: "/mcp" if defined?(RailsAiContext::Engine)
 ```
+
+The `if` keeps the routes file loading wherever the gem is not: in production, where Bundler skips the `:development` group, and after the gem is removed. An unguarded mount raises `uninitialized constant RailsAiContext::Engine` there, and the app does not boot.
 
 This provides a native Rails controller (`RailsAiContext::McpController`) that delegates to the Streamable HTTP transport.
 
