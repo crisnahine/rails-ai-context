@@ -628,7 +628,7 @@ module RailsAiContext
 
         relationships
       rescue => e
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "extract_fixture_relationships")
       end
     end
   end

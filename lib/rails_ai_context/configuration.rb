@@ -9,6 +9,9 @@ module RailsAiContext
 
     # Keys that require symbol conversion (string → symbol or array of symbols)
     SYMBOL_KEYS = %i[tool_mode preset context_mode live_reload].freeze
+
+    CONTEXT_MODES = %i[compact full].freeze
+    TOOL_MODES = %i[mcp cli].freeze
     SYMBOL_ARRAY_KEYS = %i[ai_tools introspectors].freeze
 
     # All YAML-supported keys (explicit allowlist for safety)
@@ -205,8 +208,9 @@ module RailsAiContext
     # Whether to auto-mount the MCP HTTP endpoint
     attr_accessor :auto_mount
 
-    # HTTP transport settings
-    attr_accessor :http_path, :http_bind, :http_port
+    # HTTP transport settings. http_port's writer validates, below.
+    attr_accessor :http_path, :http_bind
+    attr_reader :http_port
 
     # Output directory for generated context files
     attr_accessor :output_dir
@@ -221,18 +225,18 @@ module RailsAiContext
     attr_accessor :excluded_models
 
     # TTL in seconds for cached introspection (default: 60)
-    attr_accessor :cache_ttl
+    attr_reader :cache_ttl
 
     # Context file generation mode
     # :compact - ≤150 lines CLAUDE.md, references MCP tools for details (default)
     # :full    - current behavior, dumps everything into context files
-    attr_accessor :context_mode
+    attr_reader :context_mode
 
     # Max non-blank lines per compact context file (only applies in :compact mode)
     attr_reader :claude_max_lines
 
     # Max characters for any single MCP tool response (safety net)
-    attr_accessor :max_tool_response_chars
+    attr_reader :max_tool_response_chars
 
     # Live reload: auto-invalidate MCP tool caches on file changes
     # :auto (default) - enable if `listen` gem is available, say so on stderr otherwise
@@ -301,7 +305,7 @@ module RailsAiContext
     end
 
     # Tool invocation mode: :mcp (MCP primary + CLI fallback) or :cli (CLI only)
-    attr_accessor :tool_mode
+    attr_reader :tool_mode
 
     def selection_root
       app_root || (defined?(Rails) && Rails.respond_to?(:root) && Rails.root ? Rails.root.to_s : Dir.pwd)
@@ -371,7 +375,7 @@ module RailsAiContext
 
     # Database query tool settings (rails_query)
     attr_accessor :query_timeout              # Statement timeout in seconds (default: 5)
-    attr_accessor :query_row_limit            # Max rows returned (default: 100, hard cap: 1000)
+    attr_reader :query_row_limit              # Max rows returned (default: 100, hard cap: 1000)
     attr_accessor :query_redacted_columns     # Column names a query may not reference, redacted in output
     attr_accessor :query_allowed_columns      # Column names to exempt from the built-in sensitive list
     attr_accessor :allow_query_in_production  # Allow rails_query in production (default: false)
@@ -521,5 +525,24 @@ module RailsAiContext
       raise ArgumentError, "query_row_limit must be between 1 and 1000 (got #{value})" unless value.between?(1, 1000)
       @query_row_limit = value
     end
+
+    # Every reader asks for :full or :cli by name, so any other value was
+    # kept and read as the default: a typo gave compact files, or MCP-mode
+    # files, with nothing said.
+    def context_mode=(value)
+      @context_mode = one_of(:context_mode, value, CONTEXT_MODES)
+    end
+
+    def tool_mode=(value)
+      @tool_mode = one_of(:tool_mode, value, TOOL_MODES)
+    end
+
+    def one_of(key, value, allowed)
+      symbol = value.respond_to?(:to_sym) ? value.to_sym : value
+      return symbol if allowed.include?(symbol)
+
+      raise ArgumentError, "#{key} must be #{allowed.join(' or ')} (got #{value})"
+    end
+    private :one_of
   end
 end

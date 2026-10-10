@@ -664,7 +664,7 @@ module RailsAiContext
         models = Payload.models(context)
         return warnings if models.empty?
 
-        model_name, model_data = RailsAiContext::Payload.model_for_file(context, file)
+        _model_name, model_data = RailsAiContext::Payload.model_for_file(context, file)
         return warnings unless model_data
 
         declared = Introspectors::SourceIntrospector

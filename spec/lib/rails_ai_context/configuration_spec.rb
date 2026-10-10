@@ -79,6 +79,30 @@ RSpec.describe RailsAiContext::Configuration do
     end
   end
 
+  # Every reader asks for :full or :cli by name, so an unknown value was kept
+  # and read as the default without a word.
+  describe "#context_mode= and #tool_mode=" do
+    it "accepts each mode by symbol or by string" do
+      config.context_mode = "full"
+      config.tool_mode = "cli"
+      expect([ config.context_mode, config.tool_mode ]).to eq(%i[full cli])
+    end
+
+    it "refuses an unknown mode and names the valid ones" do
+      expect { config.context_mode = :huge }.to raise_error(ArgumentError, "context_mode must be compact or full (got huge)")
+      expect { config.tool_mode = :both }.to raise_error(ArgumentError, "tool_mode must be mcp or cli (got both)")
+      expect([ config.context_mode, config.tool_mode ]).to eq(%i[compact mcp])
+    end
+  end
+
+  # A validating writer under an attr_accessor redefines the accessor's
+  # writer, which `ruby -W` reports in every process that loads the gem.
+  it "loads without redefining a method" do
+    path = File.expand_path("../../../lib/rails_ai_context/configuration.rb", __dir__)
+    _out, err, = Open3.capture3(RbConfig.ruby, "-W", "-e", "load ARGV[0]", path)
+    expect(err).not_to include("method redefined")
+  end
+
   describe "#claude_max_lines=" do
     # A budget of zero or less has no reading that produces a file, and the
     # renderer answered it with the whole file under a "trimmed" note.

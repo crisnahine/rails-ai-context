@@ -50,7 +50,7 @@ preset: full
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
 | `ai_tools` | Array of symbols | `nil` (all five) | Which AI tools to generate context for. Options: `:claude`, `:cursor`, `:copilot`, `:opencode`, `:codex`. Unset, it reads the selection the installer recorded, and all five when there is none |
-| `tool_mode` | Symbol | `:mcp` | `:mcp` (MCP server primary, CLI fallback) or `:cli` (CLI only, no MCP server) |
+| `tool_mode` | Symbol | `:mcp` | `:mcp` (MCP server primary, CLI fallback) or `:cli` (CLI only, no MCP server). Any other value is refused |
 | `context_files` | Boolean | `true` | Set `false` for MCP-only: the server and the CLI still answer, and no context file is written or touched |
 
 #### MCP only
@@ -86,7 +86,7 @@ empty list wrote every tool's files.
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
 | `preset` | Symbol | `:full` | `:full` (40 introspectors) or `:standard` (17 introspectors) |
-| `context_mode` | Symbol | `:compact` | `:compact` (context files capped at ~150 lines) or `:full` (no line cap) |
+| `context_mode` | Symbol | `:compact` | `:compact` (context files capped at ~150 lines) or `:full` (no line cap). Any other value is refused, and so is any other `CONTEXT_MODE` on a rake task |
 | `introspectors` | Array of symbols | (from preset) | Override the introspector list directly |
 | `generate_root_files` | Boolean | `true` | Set `false` to generate split rules only: no CLAUDE.md, AGENTS.md, .cursorrules or copilot-instructions.md (`.ai-context.json` is still written) |
 | `anti_hallucination_rules` | Boolean | `true` | Embed 6-rule verification protocol in generated context files |

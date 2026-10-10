@@ -46,12 +46,18 @@ def boot_and_serve(transport)
   RailsAiContext.start_mcp_server(transport: transport)
 end unless defined?(boot_and_serve)
 
+# Called before the task does any work, so an unknown mode stops it with the
+# valid ones named rather than writing files nobody asked for.
 def apply_context_mode_override
-  if ENV["CONTEXT_MODE"]
-    mode = ENV["CONTEXT_MODE"].to_sym
-    RailsAiContext.configuration.context_mode = mode
-    puts "📐 Context mode: #{mode}"
-  end
+  return unless ENV["CONTEXT_MODE"]
+
+  mode = ENV["CONTEXT_MODE"].to_sym
+  RailsAiContext.configuration.context_mode = mode
+  puts "📐 Context mode: #{mode}"
+rescue ArgumentError
+  $stderr.puts "Error: CONTEXT_MODE=#{ENV['CONTEXT_MODE']} is not a context mode. " \
+               "Valid: #{RailsAiContext::Configuration::CONTEXT_MODES.join(', ')}"
+  exit 1
 end unless defined?(apply_context_mode_override)
 
 # The install program's voice on this entry: plain puts, an emoji on the

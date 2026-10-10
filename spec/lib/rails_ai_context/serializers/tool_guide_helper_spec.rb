@@ -33,8 +33,10 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
       expect(result).not_to include("MCP:")
     end
 
+    # The configuration refuses an unknown mode, so this is a stand-in for a
+    # caller that hands the helper one anyway.
     it "renders only MCP for unknown mode" do
-      RailsAiContext.configuration.tool_mode = :unknown
+      allow(helper).to receive(:tool_mode).and_return(:unknown)
       result = helper.tool_call("rails_get_schema(table:\"users\")", "rails 'ai:tool[schema]' table=users")
       expect(result).to include("rails_get_schema")
       expect(result).not_to include("CLI:")
