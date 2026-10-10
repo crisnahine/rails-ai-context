@@ -402,7 +402,17 @@ module RailsAiContext
           lines << ""
           lines << "RSpec.describe ModelName, type: :model do"
           lines << "  describe \"validations\" do"
-          lines << "    it { is_expected.to validate_presence_of(:field) }"
+          # validate_presence_of is shoulda-matchers', a NoMethodError in an
+          # app that does not bundle it; rails_generate_test asks the same.
+          if RailsAiContext::GemLock.for(rails_app.root.to_s).present?("shoulda-matchers")
+            lines << "    it { is_expected.to validate_presence_of(:field) }"
+          else
+            lines << "    it \"requires field\" do"
+            lines << "      record = ModelName.new"
+            lines << "      expect(record).not_to be_valid"
+            lines << "      expect(record.errors[:field]).to include(\"can't be blank\")"
+            lines << "    end"
+          end
           lines << "  end"
           lines << ""
           lines << "  describe \"#method_name\" do"

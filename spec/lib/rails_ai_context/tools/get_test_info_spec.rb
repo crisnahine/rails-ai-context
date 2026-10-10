@@ -114,6 +114,22 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       expect(text).not_to include("create(:model_name)")
       expect(text).to include("record = ModelName.new")
     end
+
+    # ledger runs rspec without shoulda-matchers, where a pasted
+    # validate_presence_of is a NoMethodError.
+    it "writes a validation example with the matchers the app bundles" do
+      lock = ->(present) { RailsAiContext::GemLock::Spec.new(present ? { "shoulda-matchers" => "6.4.0" } : {}) }
+
+      allow(RailsAiContext::GemLock).to receive(:for).and_return(lock.call(false))
+      without = described_class.call.content.first[:text]
+      described_class.reset_cache!
+      allow(RailsAiContext::GemLock).to receive(:for).and_return(lock.call(true))
+      with = described_class.call.content.first[:text]
+
+      expect(without).not_to include("validate_presence_of")
+      expect(without).to include("expect(record.errors[:field]).to include(\"can't be blank\")")
+      expect(with).to include("it { is_expected.to validate_presence_of(:field) }")
+    end
   end
 
   # The minitest half of the template reads the app's own test directory, so
