@@ -109,11 +109,12 @@ module RailsAiContext
             else
               return json_response(table_data.except(:unread_calls).merge({ database: database }.compact)) if format == "json"
 
-              output = format_table_markdown(table_key, table_data, models_data, schema[:enum_types], schema[:search_path], listed_as: listed_as)
+              output = format_table_markdown(table_key, table_data, models_data, schema[:enum_types], schema[:search_path],
+                                             listed_as: listed_as, schema: schema, database: (databases.first if databases.size == 1))
               output = output.sub("\n\n", "\n\n**Database:** #{database}\n") if database
             end
             # Cross-reference hint for AI: suggest next tool call
-            model_refs = models_for_table([ table_key, listed_as ], models_data)
+            model_refs = models_for_table([ table_key, listed_as ], models_data, schema: schema, database: (databases.first if databases.size == 1))
             if model_refs.any?
               output += "\n\n_Next: `rails_get_model_details(model:\"#{model_refs.first}\")` for associations, validations, scopes._"
             end
@@ -139,7 +140,7 @@ module RailsAiContext
               idx_count = data[:indexes]&.size || 0
               lines << "- **#{name}**#{relation_suffix(data)} - #{count_phrase(col_count, "column")}, #{count_phrase(idx_count, "index", plural: "indexes")}"
             end
-            coverage = model_coverage_lines(tables, models_data)
+            coverage = model_coverage_lines(tables, models_data, schema)
             lines.concat([ "" ] + coverage) if coverage.any?
             lines.concat(secondary_databases_lines(schema))
             if page[:offset] + page[:limit] < total
@@ -195,7 +196,7 @@ module RailsAiContext
 
               # Detect encrypted columns from model data
               encrypted_cols = Set.new
-              model_refs = models_for_table(name, models_data)
+              model_refs = models_for_table(name, models_data, schema: schema, database: "primary")
               model_refs.each do |model_name|
                 (models_data.dig(model_name, :encrypts) || []).each { |f| encrypted_cols.add(f) }
               end
@@ -215,13 +216,17 @@ module RailsAiContext
                     trailing.fetch(c[:name], []).uniq.each { |before| hints << "in index after #{before.join(', ')}" }
                   end
                   hints << "encrypted" if encrypted_cols.include?(c[:name])
+                  # The database computes a generated column, so a write to it fails.
+                  hints << (c[:stored] ? "generated, stored" : "generated") if c.key?(:generated)
                   # Show default value if present
                   if c.key?(:default) && !c[:default].nil? && c[:default] != ""
                     hints << "default: #{c[:default]}"
                   end
                   # A clause can hold a column list, so clauses part with a semicolon.
                   hint_str = hints.any? ? " [#{hints.join('; ')}]" : ""
-                  "#{[ c[:name], c[:type] ].compact.join(':')}#{hint_str}"
+                  # An array column reads `string[]`, as the table view writes it.
+                  type = c[:type] && c[:array] ? "#{c[:type]}[]" : c[:type]
+                  "#{[ c[:name], type ].compact.join(':')}#{hint_str}"
                 end.join(", ")
               # Inline model info so AI doesn't need a separate get_model_details call
               # Every model on the table, richest first: an STI child or a
@@ -247,9 +252,12 @@ module RailsAiContext
               lines << ""
             end
 
-            coverage = model_coverage_lines(tables, models_data)
+            coverage = model_coverage_lines(tables, models_data, schema)
             lines.concat(coverage + [ "" ]) if coverage.any?
             lines.concat(secondary_databases_lines(schema))
+            if page[:offset] + page[:limit] < total
+              lines << "_Showing #{paginated.size} of #{total}. Use `offset:#{page[:offset] + page[:limit]}` for more._"
+            end
             lines << "_Use `detail:\"summary\"` for all #{Introspectors::SchemaConventions.relations_phrase(tables)}, `detail:\"full\"` for indexes/FKs, or `table:\"name\"` for one table._" if total > page[:limit]
             text_response(lines.join("\n"))
 
@@ -265,10 +273,10 @@ module RailsAiContext
             lines = [ "# Schema Full Detail (#{paginated.size} of #{Introspectors::SchemaConventions.relations_phrase(tables)})", "" ]
             lines.concat(note_lines(schema))
             paginated.each do |name|
-              lines << format_table_markdown(name, tables[name], models_data, schema[:enum_types], schema[:search_path])
+              lines << format_table_markdown(name, tables[name], models_data, schema[:enum_types], schema[:search_path], schema: schema, database: "primary")
               lines << ""
             end
-            coverage = model_coverage_lines(tables, models_data)
+            coverage = model_coverage_lines(tables, models_data, schema)
             lines.concat(coverage + [ "" ]) if coverage.any?
             lines.concat(secondary_databases_lines(schema))
             if page[:offset] + page[:limit] < total
@@ -343,8 +351,14 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, Set.new, label: "declared_join_tables")
       end
 
-      private_class_method def self.models_for_table(table_names, models)
-        models.select { |_, d| d.is_a?(Hash) && Array(table_names).compact.include?(d[:table_name]) }.keys
+      # A table name is not a table: in a multi-database app the primary's
+      # `settings` and analytics' `settings` are two, and a model reads the one
+      # its database holds. `database` keeps the models that read that one.
+      private_class_method def self.models_for_table(table_names, models, schema: nil, database: nil)
+        models.select do |_, d|
+          d.is_a?(Hash) && Array(table_names).compact.include?(d[:table_name]) &&
+            (database.nil? || Payload.model_databases(schema, d).include?(database))
+        end.keys
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "models_for_table")
       end
@@ -449,7 +463,7 @@ module RailsAiContext
       private_class_method def self.json_page_response(schema, tables, names, models = {})
         # unread_calls is the static reader's note to validate; the booted tier has none.
         page = names.to_h { |name| [ name, tables[name].is_a?(Hash) ? tables[name].except(:unread_calls) : tables[name] ] }
-        coverage = model_coverage(tables, models)
+        coverage = model_coverage(tables, models, schema)
         json_response(schema.merge(tables: page, gem_owned_tables: coverage[:gems], tables_without_model_file: coverage[:unclaimed]))
       end
 
@@ -457,9 +471,11 @@ module RailsAiContext
 
       # Over every table, not the page: which ones no model file claims, and
       # of those, which a gem the app bundles owns.
-      private_class_method def self.model_coverage(tables, models)
+      private_class_method def self.model_coverage(tables, models, schema = nil)
         # A view or virtual table often has no model and is still read, so only tables count.
-        unclaimed = tables.keys.sort.select { |name| !tables[name][:kind] && models_for_table(name, models).empty? } - habtm_join_tables(models).to_a
+        database = ("primary" if schema)
+        unclaimed = tables.keys.sort.select { |name| !tables[name][:kind] && models_for_table(name, models, schema: schema, database: database).empty? } -
+                    habtm_join_tables(models).to_a
         unclaimed -= declared_join_tables(models).to_a if unclaimed.any?
         # A file the walk could not read claims no table, but it is still a model file.
         unclaimed -= models.filter_map { |_, d| d[:table_name] || Introspectors::TableName.stem(d[:file]) if d.is_a?(Hash) && d[:error] && d[:file] }
@@ -467,8 +483,8 @@ module RailsAiContext
         { gems: gems, unclaimed: unclaimed - gems.values.flatten }
       end
 
-      private_class_method def self.model_coverage_lines(tables, models)
-        coverage = model_coverage(tables, models)
+      private_class_method def self.model_coverage_lines(tables, models, schema = nil)
+        coverage = model_coverage(tables, models, schema)
         lines = coverage[:gems].map { |gem, owned| "Tables the #{gem} gem owns: #{capped(owned)}" }
         unclaimed = coverage[:unclaimed]
         if unclaimed.any?
@@ -538,14 +554,19 @@ module RailsAiContext
       end
 
       # listed_as: the listing's name for a table asked for by its qualified name.
-      private_class_method def self.format_table_markdown(name, data, models, enum_types = nil, search_path = nil, listed_as: nil)
+      private_class_method def self.format_table_markdown(name, data, models, enum_types = nil, search_path = nil, listed_as: nil, schema: nil, database: nil)
         columns = data[:columns] || []
         # Always show Nullable and Default - agents need these for migrations and validations
         has_defaults = columns.any? { |c| c.key?(:default) && !c[:default].nil? }
 
-        model_refs = models_for_table([ name, listed_as ], models)
+        model_refs = models_for_table([ name, listed_as ], models, schema: schema, database: database)
         lines = [ "## #{RELATION_KINDS.fetch(data[:kind].to_s, "Table")}: #{name}", "" ]
         lines << "**Models:** #{model_refs.join(', ')}" if model_refs.any?
+        # The listing marks these [encrypted]; a column the database holds as
+        # ciphertext reads differently from what the model hands back.
+        column_names = columns.map { |c| c[:name].to_s }
+        encrypted = model_refs.flat_map { |m| Array(models.dig(m, :encrypts)).map(&:to_s) }.uniq & column_names
+        lines << "**Encrypted:** #{encrypted.map { |c| "`#{c}`" }.join(', ')} (`encrypts`: ciphertext in the database)" if encrypted.any?
         lines << "**Module:** #{data[:module]}" if data[:module]
         lines << "**Primary key:** #{RailsAiContext::Introspectors::SchemaConventions.primary_key_label(data[:primary_key])}" if data[:primary_key]
         lines << "**Comment:** #{data[:comment]}" if data[:comment]
