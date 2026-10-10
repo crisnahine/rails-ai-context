@@ -27,9 +27,9 @@ RSpec.describe "AI tool identity ownership" do
       "Files pairing an AI tool with its paths instead of reading Install::AiTool: #{offenders.join(', ')}"
   end
 
-  it "derives doctor's context-file sentinels from the table" do
-    expect(RailsAiContext::Doctor::CONTEXT_FILES)
-      .to eq(RailsAiContext::Install::AiTool.all.to_h { |t| [ t.key, t.context_paths.first ] })
+  it "derives doctor's context files from the table" do
+    expect(RailsAiContext::Doctor::CONTEXT_PATHS)
+      .to eq(RailsAiContext::Install::AiTool.all.to_h { |t| [ t.key, t.context_paths ] })
   end
 
   it "derives doctor's MCP config paths from the table" do

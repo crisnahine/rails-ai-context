@@ -1665,7 +1665,7 @@ Runs up to 25 checks and reports an AI readiness score (0-100). A check that doe
 | Views | Files exist under `app/views` |
 | Tests | A test suite is found |
 | Migrations | Migration files exist |
-| Context files | Generated context files exist and are newer than the code they describe. No row on an MCP-only install |
+| Context files | Generated context files exist where `config.output_dir` puts them, and a context run would leave them as they are. A file a run would rewrite, because an older version of the gem wrote it or the app changed under it, is named; a file that is only older than the code is not. No row on an MCP-only install |
 | Initializer guard | Shown only when `config/initializers/rails_ai_context.rb` has no guard, or guards on `defined?(RailsAiContext)` alone |
 | MCP configs | Each selected tool's MCP config file exists, parses, and holds a rails-ai-context server whose command can start: `bundle exec` only where the app's lockfile carries the gem and the bundle's copy has its executable, the `rails-ai-context` binary only where it is on PATH, and a warning when that binary runs beside a copy the bundle carries. The command is looked up, never run. Skipped in CLI-only mode |
 | Codex env snapshot | The `PATH` saved in `.codex/config.toml` (the app's, or a folder of apps' above it) still reaches each server's command, and a saved `GEM_HOME` still exists. Only when Codex is selected |
