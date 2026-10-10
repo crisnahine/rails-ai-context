@@ -16,6 +16,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has to name a commit, and git sees that commit's SHA. A ref that starts
   with a dash is refused, and one that names no commit says so, where it
   answered "No changes found".
+- **`rails_query` never serialises a whole row.** On PostgreSQL,
+  `row_to_json(users.*)`, `to_json(u)`, `u::text`, `array_agg(u)`,
+  `json_agg(u)`, `hstore(u)`, `ROW(u.*)`, `format('%s', u)` and a bare
+  `SELECT u FROM users u` returned every column, password digests and
+  tokens included, since no column name appeared for the checks to catch.
+  A query is now planned first with `EXPLAIN (VERBOSE, FORMAT JSON)` in the
+  same read-only transaction - planning only, nothing runs - and refused
+  when the plan reads a whole row of a table that has a sensitive column,
+  or uses a sensitive column other than as a plain output column. A
+  whole-row read of a table with no sensitive column still works.
+- **A sensitive column cannot leave through an alias, an expression or a
+  view.** `SELECT api_token AS c`, `upper(api_token)`,
+  `json_build_object('t', api_token)` and `(SELECT api_token FROM users
+  LIMIT 1) AS leaked` reached the result under a name the redaction did not
+  recognise. One rule now decides what is sensitive - a configured or
+  built-in redacted name, an `encrypts` column, or the result heuristic,
+  minus `query_allowed_columns` - and a query naming any real sensitive
+  column of the schema is refused before it runs, on every adapter, as is
+  a column-alias list (`t(a, b, c)`) that would rename a wildcard's
+  columns. On PostgreSQL the result is also redacted by where each column
+  comes from, so a view that renames `api_token` to `t` returns
+  `[FILTERED]`, and a sensitive column passed through a materialized CTE, a
+  subquery or a set operation, where its origin cannot be pinned, is
+  refused.
+- **Session- and server-affecting functions no longer run under the
+  read-only transaction.** `pg_terminate_backend`, `pg_reload_conf`,
+  `pg_stat_reset*`, `pg_advisory_lock*`, `set_config`, `pg_notify`,
+  `txid_current`, the replication and WAL-control functions, and MySQL's
+  `GET_LOCK` / `RELEASE_LOCK` / `IS_FREE_LOCK` passed `SET TRANSACTION READ
+  ONLY` and left their effect - a terminated backend, a held advisory lock -
+  on the pooled connection. A name list refuses the known ones on every
+  adapter, and on PostgreSQL any VOLATILE function outside a short harmless
+  list (`random`, `clock_timestamp`, `gen_random_uuid`, `pg_sleep` and its
+  variants) is refused from the plan, closing the family without a list
+  that has to grow.
 
 ### Added
 
@@ -477,6 +512,140 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that file and names it `unpaired rails-ai-context marker, left as it is`.
   A regenerated section keeps a double backslash, where it was written as
   one.
+- **`rails_query` refuses a `DO $$ … $$` block as a statement it does not
+  run**, not as "multiple statements": a semicolon inside a string or a
+  block body is data now, and one between two statements is still caught.
+- **`rails_query` says when the row limit held rows back.** A capped result
+  gave no sign the query had more; every format now ends with a note naming
+  the limit, in CSV after a blank line so a parser still reads clean rows.
+- **`rails_query` bounds a MariaDB query with `max_statement_time`.**
+  MariaDB ignores MySQL's `MAX_EXECUTION_TIME` hint, so `query_timeout` did
+  nothing there and `SELECT SLEEP(8)` ran to the end, holding the
+  connection. The statement is now wrapped in MariaDB's own `SET STATEMENT
+  max_statement_time = <seconds> FOR …`, which leaves nothing on the pooled
+  connection, and a cut query says "Query exceeded N second timeout".
+- **The selection record changes only what moved.** `init`, `rails
+  ai:context` and the generator rewrote `.rails-ai-context.yml` through
+  `to_yaml`, dropping every comment, and re-indented `config.ai_tools` in
+  the initializer. They now edit `ai_tools`, `tool_mode` and
+  `context_files` in place, keep comments, and write nothing when no value
+  changed.
+- **The generated initializer passes a new Rails app's Rubocop**, and its
+  comments say what the code does.
+- **The installer writes the context files in the mode it was just given.**
+  A first install in CLI mode wrote files describing MCP tools via `rails
+  ai:serve`.
+- **Install and context summaries name files from the app root, or from
+  where the command was typed** (`init --app-path ../b` prints
+  `../b/.mcp.json`), never as absolute paths. The `rm -f` line for the
+  v5.0.0 leftover rule files does the same, so pasting it removes them.
+- **`init` asks every question before it boots the app, and writes nothing
+  until the app's bundle is set up**; an MCP-only setup boots nothing. With
+  an app that pins an older `json`, `init` printed four "already
+  initialized constant" warnings; it prints none.
+- **`init` and `context` write Codex's environment as the binary was
+  started**, not with the `GEM_HOME` and bundle `bin` directory the app's
+  boot put into the process.
+- **Dropping an AI tool says what was kept and what was deleted** ("Kept
+  AGENTS.md - Codex CLI uses it too", "Removed opencode.json
+  (rails-ai-context was its only server)"), and a dot-directory the cleanup
+  emptied is removed.
+- **Switching to CLI mode offers to take the gem out of the MCP configs**,
+  and the CLI-mode summary no longer lists `.codex/config.toml`. The
+  initializer is named whenever one of its lines moved, in `init` and on
+  the first `rails ai:context`, which also records an MCP-only answer where
+  it used to ask again on every run.
+- **Install summaries say only what applies**: re-runs show the current
+  selection, only tools not yet picked are offered, there is no standalone
+  pitch inside a bundle, the Codex gitignore hint appears only when it
+  applies, an MCP-only install lists no `rails ai:context`, and
+  `--defaults` no longer says "No tools selected". The setup answer is
+  confirmed in the words the question offered it, and an unchanged file
+  reads `(unchanged)` in every line.
+- **`rails ai:context:<tool>` writes that tool's MCP config in MCP mode**,
+  and the binary's `context` keeps the MCP configs current as `rails
+  ai:context` does: after `bundle remove rails-ai-context`, configs that
+  started `bundle exec` are rewritten to the binary.
+- **The installer run at a mountable engine's root installs into that
+  root.** It writes no initializer the host apps would run, no context
+  files under `test/dummy`, and no hook calling a task the engine lacks,
+  and it reports its MCP config once. The context files and the tools'
+  hints there name `bundle exec rails-ai-context`, since `rails ai:serve`
+  and `rails 'ai:tool[...]'` exist only in the dummy app.
+- **The standalone binary uses a `listen` installed beside it** for
+  `watch` and for `serve`'s live reload, behind a `listen` the app's bundle
+  locks, and `doctor` checks the same one. Where there is none, a
+  standalone install is told `gem install listen`, and `serve` says each
+  tool call still checks for changed files.
+- **Routes the app's own route files declare are app routes.**
+  `devise_for` and the `rails/health` check were hidden as framework
+  routes, so `rails_get_routes(controller: "devise/sessions")` answered "No
+  routes"; a controller filter now finds its routes. The static tier draws
+  no `new` or `edit` route for an API-only app, and the routes heading
+  names the actions that skip a filter.
+- **Model details name the `devise` modules**, and Mongoid model details
+  name the collection and the fields Mongoid adds.
+- **Next-step hints name only controllers the app has**, and under
+  `tool_mode: :cli` they name the command, not an MCP call.
+- **N+1 risks follow a loaded collection into the loops and partials that
+  walk it**, instead of matching an association name anywhere in any view,
+  and each risk names its view.
+- **`rails_get_config` no longer calls a hand-written Authentication
+  concern the Rails 8 generator.**
+- **The migration advisor warns about what the app's migrations already
+  hold**: a pending migration that adds the column, a colliding migration
+  name, `create_table` on an existing table, `null: false` with no default
+  on a table with rows, and an unknown type ("Did you mean string?").
+  Self-references use `to_table:`, and dropping a column lists the code
+  that names it.
+- **`rails_get_schema` reads pending migrations from the connection**
+  (an unmigrated database no longer reads "Pending migrations: none"),
+  keeps each model on its own database's table, and marks encrypted, array
+  and generated columns. A MySQL boolean default reads `true` or `false` on
+  Rails 8.0 and 8.1, and SQLite row counts stop at a cap instead of
+  reading every table whole.
+- **`rails_get_context` counts the instance variables a `before_action`
+  sets.**
+- **`rails_validate level:"rails"` keeps its Brakeman findings when an app
+  file does not parse**, and `DEBUG=1` no longer floods stderr from
+  Brakeman, in validate and security_scan alike.
+- **`rails_search_code` shows the first match under a low
+  `max_search_results`**; `definition` and `class` searches read a regex,
+  and `definition` finds a name anywhere in a method name.
+- **`rails_analyze_feature`** lists Sidekiq workers, a service's own public
+  methods and the files that call it, finds a model's test anywhere in the
+  suite, and writes `after_commit (on: :create)`.
+- **`rails_get_test_info`'s RSpec template uses shoulda-matchers only when
+  the app bundles it.**
+- **`rails_generate_test`** gives an existing test file the cases to add,
+  gives a job a job test, signs a controller test in with the app's helper
+  behind a login filter (or says it must), invents no params for a
+  controller with no strong params, and writes a real system test for
+  `type: "system"`.
+- **`rails_get_partial_interface` finds Turbo Stream, broadcast and
+  jbuilder render sites** and jbuilder locals, and lists no helper as a
+  local; `rails_get_view` lists those partials.
+- **Render maps and frame sources keep their closing brackets.**
+- **`rails_get_turbo_map` wires a stream by the records and names it is
+  built from**, says "can't tell" for what it cannot resolve, and says when
+  a stream filter matches nothing.
+- **`rails_get_stimulus`'s markup** wires actions to the events the app's
+  views use, leaves out change callbacks and the controller's own helpers,
+  and adds class and outlet attributes.
+- **`rails_get_controllers`** says when an action needs a controller and
+  which controller a bare name resolved to, answers for
+  ApplicationController, counts template formats, and lists the implicit
+  `format.turbo_stream` render.
+- **A 100 KB argument is answered at once and echoed shortened**, where
+  `rails_analyze_feature` took 14 seconds and echoed it whole.
+- **`rails_onboard` counts every database the app declares**, naming the
+  framework's own databases in one line; it and
+  `rails_get_frontend_stack` count every broadcast, and onboard includes
+  STI payment subclasses.
+- **`rails_get_conventions`' create skeleton checks permission the app's
+  way** and keeps controller namespaces.
+- **`rails_get_edit_context`'s not-found answer no longer offers the same
+  path back.**
 
 ## [5.32.2] - 2026-10-07
 
