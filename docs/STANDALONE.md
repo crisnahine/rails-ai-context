@@ -27,7 +27,7 @@ Interactive setup asks:
 1. Which AI tools? (Claude, Cursor, Copilot, OpenCode, Codex, or all; an empty answer selects all five)
 2. What should it write? (MCP config + context files, context files only for CLI mode, or MCP config only)
 
-On a re-run that drops a tool, it also asks whether to remove that tool's files. Unlike the install generator, `init` has no pre-commit hook prompt and no `--defaults` flag. The steps are listed in [What the install generator does](GUIDE.md#what-the-install-generator-does).
+On a re-run it shows the tools selected last time. A re-run that drops a tool also asks whether to remove that tool's files, and one that switches to CLI mode whether to take the gem's entries out of the MCP configs, since CLI mode starts no MCP server. Every question comes before the app boots and anything is written; an MCP-only setup does not boot the app at all. Unlike the install generator, `init` has no pre-commit hook prompt and no `--defaults` flag. The steps are listed in [What the install generator does](GUIDE.md#what-the-install-generator-does).
 
 Creates:
 - `.rails-ai-context.yml` - YAML configuration
@@ -98,6 +98,8 @@ excluded_paths:
 skip_tools:
   - rails_security_scan
 ```
+
+`init`, `rails ai:context` and the install generator own three keys of this file - `ai_tools`, `tool_mode` and `context_files` - and rewrite one only when its value changes, where it stands. Your comments and every other key stay as you wrote them.
 
 ### YAML limitations
 
