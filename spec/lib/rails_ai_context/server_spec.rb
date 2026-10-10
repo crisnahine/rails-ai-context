@@ -497,11 +497,17 @@ RSpec.describe RailsAiContext::Server do
   describe "the warning for a bind beyond loopback" do
     let(:s) { described_class.new(app, transport: :http) }
 
-    it "knows the SDK in this bundle checks the Host header" do
-      expect(s.send(:host_checked?)).to be true
+    # mcp 1.x's transport takes allowed_hosts and refuses a foreign Host; the
+    # 0.13 floor the gemspec allows has no such check.
+    it "knows whether the SDK in this bundle checks the Host header" do
+      takes_hosts = MCP::Server::Transports::StreamableHTTPTransport.instance_method(:initialize)
+        .parameters.any? { |_, name| name == :allowed_hosts }
+      expect(s.send(:host_checked?)).to be(takes_hosts)
+      expect(s.send(:host_checked?)).to be(true) if Gem::Version.new(MCP::VERSION) >= Gem::Version.new("1.7")
     end
 
     it "says who the SDK refuses and who it serves" do
+      allow(s).to receive(:host_checked?).and_return(true)
       warning = s.send(:bind_warning, "0.0.0.0")
 
       expect(warning).to include("0.0.0.0", %(403 "Invalid Host header"), "Host: localhost", "no authentication")
