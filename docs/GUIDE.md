@@ -400,7 +400,7 @@ end
 - **`:mcp`** - context files show MCP tool syntax (e.g. `rails_get_schema(table: "users")`). CLI tools still available as fallback.
 - **`:cli`** - context files show CLI syntax (e.g. `rails 'ai:tool[schema]' table=users`). No MCP server required. Every file follows it: the root files, the split rule files and OpenCode's per-directory `AGENTS.md`, whose tools rule files then describe the CLI tools.
 
-Every tool count and list in the generated files is the set the server serves: the built-in tools `skip_tools` leaves, plus `custom_tools`. A custom tool gets a row in the tools table with the first sentence of its description.
+Every tool count and list in the generated files is the set the server serves: the built-in tools `skip_tools` leaves, plus `custom_tools`. A custom tool gets a row in the tools table with the first sentence of its description. A workflow step, rule or pointer whose tool is skipped is left out, or said without the tool (with `rails_get_context` skipped, the model workflow starts from `rails_get_model_details`), so no file sends the AI to a tool the server does not serve.
 
 The workflow examples name the app's own most connected model, one of its controllers, a template and a partial it renders. An app with none of one gets an obvious placeholder (`YourModel`, `shared/your_partial`) rather than a name that reads like the app's.
 

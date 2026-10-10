@@ -120,4 +120,56 @@ RSpec.describe "the tools every generated file names" do
       expect(table).to include("| `rails_get_widgets` | `rails 'ai:tool[widgets]'` | Lists the app's widgets with their owners. |")
     end
   end
+
+  # The workflows, rules, protocol and pointers named the guide's own tools
+  # whatever skip_tools said: with rails_get_context skipped, every file
+  # still sent the AI to it first.
+  describe "with the guide's own tools skipped" do
+    let(:skipped) { %w[rails_search_code rails_validate rails_get_context rails_analyze_feature] }
+
+    # Every way a file can name the tool: its MCP name and either command form.
+    def mentions(content, name)
+      short = Regexp.escape(RailsAiContext::CLI::ToolRunner.short_name(name))
+      content.scan(/\b#{Regexp.escape(name)}\b|ai:tool\[#{short}\]|rails-ai-context tool #{short}\b/)
+    end
+
+    # Each run of numbered lines, as the numbers it carries.
+    def numbered_runs(content)
+      content.lines.map { |line| line[/\A(\d+)\. /, 1]&.to_i }.chunk_while { |a, b| a && b }.select(&:first)
+    end
+
+    %i[mcp cli].each do |mode|
+      it "names none of them in any file in :#{mode} mode, and numbers what is left" do
+        RailsAiContext.configuration.tool_mode = mode
+        RailsAiContext.configuration.skip_tools = skipped
+
+        generated_files.each do |path, content|
+          skipped.each { |name| expect(mentions(content, name)).to eq([]), "#{path} names #{name}" }
+          numbered_runs(content).each { |run| expect(run).to eq((1..run.size).to_a), "#{path} numbers #{run.inspect}" }
+        end
+      end
+    end
+
+    it "keeps each workflow and rule that has a served tool" do
+      RailsAiContext.configuration.tool_mode = :mcp
+      RailsAiContext.configuration.skip_tools = skipped
+
+      claude = generated_files["CLAUDE.md"]
+
+      expect(claude).to include("### Start here\n", "**Modify a model**", "1. `rails_get_model_details(model:",
+                                "**Fix a controller bug:**\n1. `rails_get_controllers(", "### Rules\n\n1. **NEVER read reference files**")
+      expect(claude).not_to include("**Trace a method:**", "composite tools", "Validate EVERY edit")
+    end
+
+    # The next guard against a reference added without one: any built-in skipped alone
+    # leaves no file that names it.
+    it "names no skipped built-in anywhere, whichever it is" do
+      RailsAiContext.configuration.tool_mode = :mcp
+
+      RailsAiContext::Server.builtin_tools.map(&:tool_name).each do |name|
+        RailsAiContext.configuration.skip_tools = [ name ]
+        generated_files.each { |path, content| expect(mentions(content, name)).to eq([]), "#{path} names skipped #{name}" }
+      end
+    end
+  end
 end

@@ -110,8 +110,10 @@ module RailsAiContext
         end
 
         lines << "- ...#{models.size - 30} more" if models.size > 30
-        lines << ""
-        lines << "Use #{tool_named("rails_get_model_details", "model", "Name")} for full detail."
+        if served?("rails_get_model_details")
+          lines << ""
+          lines << "Use #{tool_named("rails_get_model_details", "model", "Name")} for full detail."
+        end
 
         lines.join("\n")
       end
@@ -135,8 +137,10 @@ module RailsAiContext
 
         lines.concat(render_compact_controllers_list(controllers))
 
-        lines << ""
-        lines << "Use #{tool_named("rails_get_controllers", "controller", "Name")} for full detail."
+        if served?("rails_get_controllers")
+          lines << ""
+          lines << "Use #{tool_named("rails_get_controllers", "controller", "Name")} for full detail."
+        end
 
         lines.join("\n")
       end

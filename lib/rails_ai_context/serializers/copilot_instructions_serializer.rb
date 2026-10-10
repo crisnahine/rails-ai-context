@@ -94,8 +94,7 @@ module RailsAiContext
           ""
         ]
         lines.concat(SectionFacts.static_notice_lines(context))
-        lines << "Use #{tool_named("rails_get_controllers")} for full details."
-        lines << ""
+        lines << "Use #{tool_named("rails_get_controllers")} for full details." << "" if served?("rails_get_controllers")
 
         lines.concat(render_compact_controllers_list(controllers))
 
