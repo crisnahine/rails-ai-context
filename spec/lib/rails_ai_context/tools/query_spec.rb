@@ -1662,6 +1662,88 @@ it "still explains a database that does not exist" do
     end
   end
 
+  describe "renamed sensitive column (view / CTE / subquery)" do
+    # A view that renames a sensitive column defeats name redaction; EXPLAIN
+    # VERBOSE expands the view, so the base column is visible in the plan. The
+    # live PostgreSQL behaviour (real views via psql) is in the F2a report.
+    let(:aliases) { { "users" => "users", "u" => "users", "p" => "posts" } }
+
+    before do
+      allow(described_class).to receive(:relation_sensitive_columns)
+        .and_return("users" => %w[api_token password_digest])
+    end
+
+    describe ".base_var" do
+      it "resolves a qualified Var to its base relation and column" do
+        expect(described_class.send(:base_var, "users.api_token", aliases)).to eq([ "users", "api_token" ])
+      end
+
+      it "ignores a set-operation's quoted, spaced alias" do
+        expect(described_class.send(:base_var, '"*SELECT* 1".t', aliases)).to be_nil
+      end
+
+      it "ignores a bare column (handled by name redaction) and an expression" do
+        expect(described_class.send(:base_var, "api_token", aliases)).to be_nil
+        expect(described_class.send(:base_var, "upper(users.api_token)", aliases)).to be_nil
+      end
+    end
+
+    describe ".plan_output_sensitive_indices" do
+      before do
+        allow(described_class).to receive(:postgres_adapter?).and_return(true)
+        allow(described_class).to receive(:plan_alias_map)
+          .and_return("users" => "users", "u" => "users", "p" => "posts", "posts" => "posts")
+      end
+
+      def indices(output, columns)
+        allow(described_class).to receive(:pg_plan).and_return("Output" => output)
+        result = ActiveRecord::Result.new(columns, [])
+        described_class.send(:plan_output_sensitive_indices, "SELECT ...", result)
+      end
+
+      it "redacts the result column whose top Output position is a sensitive base Var" do
+        expect(indices([ "users.id", "users.api_token" ], %w[id t])).to eq([ 1 ])
+      end
+
+      it "maps a join's renamed column by position" do
+        expect(indices([ "p.title", "users.api_token" ], %w[title t])).to eq([ 1 ])
+      end
+
+      it "ignores trailing sort keys past the result width" do
+        expect(indices([ "users.api_token", "users.id" ], %w[t])).to eq([ 0 ])
+      end
+
+      it "does not redact a non-sensitive relation's view column" do
+        expect(indices([ "posts.id", "posts.title" ], %w[id heading])).to eq([])
+      end
+    end
+
+    describe ".laundered_sensitive_column" do
+      it "flags a sensitive base Var in a child that the top node does not expose" do
+        plan = {
+          "Node Type" => "CTE Scan", "Output" => [ "c.id", "c.t" ],
+          "Plans" => [ { "Node Type" => "Seq Scan", "Relation Name" => "users",
+                        "Alias" => "users", "Output" => [ "users.id", "users.api_token" ] } ]
+        }
+        nodes = []
+        described_class.send(:collect_plan_nodes, plan, nodes)
+        a = described_class.send(:plan_alias_map, nodes)
+        expect(described_class.send(:laundered_sensitive_column, plan, nodes, a)).to eq("api_token")
+      end
+
+      it "does not flag a sensitive base Var the top node exposes (redacted instead)" do
+        plan = {
+          "Node Type" => "Seq Scan", "Relation Name" => "users", "Alias" => "users",
+          "Output" => [ "users.id", "users.api_token" ]
+        }
+        nodes = []
+        described_class.send(:collect_plan_nodes, plan, nodes)
+        a = described_class.send(:plan_alias_map, nodes)
+        expect(described_class.send(:laundered_sensitive_column, plan, nodes, a)).to be_nil
+      end
+    end
+  end
+
   describe "silent-truncation note" do
     def answer(sql, **opts)
       described_class.call(sql: sql, **opts).content.first[:text]
