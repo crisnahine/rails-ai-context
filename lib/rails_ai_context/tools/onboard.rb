@@ -536,7 +536,13 @@ module RailsAiContext
 
           payment_gems = %w[stripe pay braintree paddle_pay]
           found = Payload.notable_gems(ctx).select { |g| payment_gems.include?(g[:name]) }
-          payment_models = models.keys.select { |m| m.downcase.match?(/payment|subscription|charge|invoice|plan|billing/) }
+          named = ->(name) { name.to_s.downcase.match?(/payment|subscription|charge|invoice|plan|billing/) }
+          # An STI subclass is a payment model by its parent: BankTransfer < Payment.
+          payment_models = models.keys.select do |m|
+            chain = [ m ]
+            chain << models.dig(chain.last, :parent_model) while models.dig(chain.last, :parent_model) && chain.size < 10
+            chain.compact.any?(&named)
+          end
           return [] if found.empty? && payment_models.empty?
 
           lines = [ "## Payments", "" ]
@@ -557,9 +563,13 @@ module RailsAiContext
             has_content = true
           end
 
-          broadcasts = Payload.model_broadcasts(ctx)
-          if broadcasts.any?
-            lines << "Turbo Stream broadcasts: #{count_phrase(broadcasts.size, "broadcast point")}."
+          # The broadcast_*_to calls as well as the model macros: bazaar's
+          # three explicit broadcasts went uncounted beside its one macro.
+          macros = Payload.model_broadcasts(ctx).size
+          calls = Payload.explicit_broadcasts(ctx).size
+          if macros + calls > 0
+            kinds = [ (count_phrase(macros, "model macro") if macros > 0), (count_phrase(calls, "broadcast call") if calls > 0) ].compact
+            lines << "Turbo Stream broadcasts: #{count_phrase(macros + calls, "broadcast point")} (#{kinds.join(', ')})."
             has_content = true
           end
           streams = Payload.turbo_streams(ctx)
