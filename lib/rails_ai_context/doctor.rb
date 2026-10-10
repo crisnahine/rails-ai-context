@@ -64,12 +64,16 @@ module RailsAiContext
       @app = app || Rails.application
     end
 
+    # One run, as introspection has: the introspector health check and the
+    # context files' dry run read the same file lists and stats.
     def run
-      results = CHECKS.filter_map do |check|
-        send(check)
-      rescue StandardError, ScriptError => e
-        $stderr.puts "[rails-ai-context] Doctor check #{check} failed: #{e.class}: #{e.message}"
-        nil
+      results = RunCache.around do
+        CHECKS.filter_map do |check|
+          send(check)
+        rescue StandardError, ScriptError => e
+          $stderr.puts "[rails-ai-context] Doctor check #{check} failed: #{e.class}: #{e.message}"
+          nil
+        end
       end
       score = compute_score(results)
       { checks: results, score: score }
