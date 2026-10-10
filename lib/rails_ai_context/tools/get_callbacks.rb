@@ -111,14 +111,11 @@ module RailsAiContext
 
           ordered.each do |type, methods|
             lines << "## #{callback_type_label(type)}"
-            methods.each do |method_name|
-              source = extract_callback_source(name, method_name, data, ctx)
+            methods.each_with_index do |method_name, index|
+              source = callback_source(name, method_name, data, ctx, type, index)
               if source
                 lines << "### #{callback_target(method_name)} (#{source_location(source)})"
-                lines << "```ruby"
-                lines << source[:code]
-                lines << "```"
-                lines << ""
+                lines.concat(source_block(source)) << ""
               else
                 lines << "- `#{callback_target(method_name)}`"
               end
@@ -231,11 +228,11 @@ module RailsAiContext
             ordered = order_callbacks(data[:callbacks])
             lines << "## #{name}"
             ordered.each do |type, methods|
-              methods.each do |method_name|
-                source = extract_callback_source(name, method_name, data, ctx)
+              methods.each_with_index do |method_name, index|
+                source = callback_source(name, method_name, data, ctx, type, index)
                 if source
                   lines << "### #{callback_type_label(type)} #{callback_target(method_name)} (#{source_location(source)})"
-                  lines << "```ruby" << source[:code] << "```" << ""
+                  lines.concat(source_block(source)) << ""
                 else
                   lines << "- **#{callback_type_label(type)}** → `#{callback_target(method_name)}`"
                 end
@@ -269,6 +266,19 @@ module RailsAiContext
         end
 
         ordered
+      end
+
+      # A block, a lambda and a broadcast macro have no method to read, so the
+      # payload carries their declaration in step with the names.
+      private_class_method def self.callback_source(model_name, method_name, data, ctx, type, index)
+        declared = Array((data[:callback_sources] || {})[type.to_s])[index]
+        declared || extract_callback_source(model_name, method_name, data, ctx)
+      end
+
+      private_class_method def self.source_block(source)
+        block = [ "```ruby", source[:code], "```" ]
+        block << "_turbo-rails runs `#{source[:runs]}` on this event._" if source[:runs]
+        block
       end
 
       private_class_method def self.extract_callback_source(model_name, method_name, data, ctx)

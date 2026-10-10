@@ -1464,7 +1464,7 @@ Core Rails structure only. Use `config.preset = :standard` for a lighter footpri
 | Introspector | What it discovers |
 |-------------|-------------------|
 | `schema` | Tables, columns, types, indexes, foreign keys, primary keys. Falls back to `db/schema.rb` parsing when no DB connected. |
-| `models` | Associations, validations, scopes, enums, callbacks, concerns, instance methods, class methods. Source-level macros via Prism AST (single-pass, 8 listeners): `has_secure_password`, `encrypts`, `normalizes`, `delegate`, `serialize`, `store`, `generates_token_for`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `broadcasts_to`. Every result tagged `[VERIFIED]` or `[INFERRED]`. |
+| `models` | Associations, validations, scopes, enums, callbacks, concerns, instance methods, class methods. Source-level macros via Prism AST (single-pass, 8 listeners): `has_secure_password`, `encrypts`, `normalizes`, `delegate`, `serialize`, `store`, `generates_token_for`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `broadcasts`, `broadcasts_to`, `broadcasts_refreshes`, `broadcasts_refreshes_to`. Every result tagged `[VERIFIED]` or `[INFERRED]`. |
 | `routes` | All routes with HTTP verbs, paths, controller actions, route names, API namespaces, mounted engines. |
 | `jobs` | ActiveJob classes with queue names. Mailers with action methods. Action Cable channels. |
 | `gems` | 127 notable gems categorized: auth, jobs, frontend, api, database, files, testing, deploy, monitoring, admin, pagination, search, forms, server, notifications, validation, utilities, services, payments. |

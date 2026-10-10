@@ -23,6 +23,19 @@ module RailsAiContext
 
         INLINE_BLOCK = "[inline_block]"
 
+        # turbo-rails' broadcast macros are callbacks too: each declares a
+        # commit callback per event, a lambda running the method named here
+        # (Turbo::Broadcastable::ClassMethods).
+        BROADCASTS = {
+          broadcasts: { "after_create_commit" => "broadcast_action_later_to", "after_update_commit" => "broadcast_replace_later",
+                        "after_destroy_commit" => "broadcast_remove" },
+          broadcasts_to: { "after_create_commit" => "broadcast_action_later_to", "after_update_commit" => "broadcast_replace_later_to",
+                           "after_destroy_commit" => "broadcast_remove_to" },
+          broadcasts_refreshes: { "after_create_commit" => "broadcast_refresh_later_to", "after_update_commit" => "broadcast_refresh_later",
+                                  "after_destroy_commit" => "broadcast_refresh" },
+          broadcasts_refreshes_to: { "after_commit" => "broadcast_refresh_later_to" }
+        }.freeze
+
         # Macros that call args.extract_options!, so a trailing braced hash is options, not a filter.
         EXTRACTS_OPTIONS = %i[
           before_validation after_validation after_commit after_rollback
@@ -31,6 +44,7 @@ module RailsAiContext
 
         def on_call_node_enter(node)
           return record_skip(node) if node.name == :skip_callback && in_scope?(node)
+          return record_broadcasts(node) if BROADCASTS.key?(node.name) && in_scope?(node)
           return unless CALLBACK_METHODS.include?(node.name) && in_scope?(node)
 
           # Sources, not literals: a lambda condition reads as the line the
@@ -58,6 +72,13 @@ module RailsAiContext
         # `after_commit on: :create` resolves to a type that names its event.
         def self.names_event?(type)
           type.to_s.start_with?(ON_EVENT)
+        end
+
+        # What a broadcast macro's callbacks are listed as. Not a bare name:
+        # the model has no method of it, and Rails keeps each of its lambdas
+        # where it merges two callbacks of one method name.
+        def self.broadcast_target(macro)
+          "#{macro} (turbo-rails)"
         end
 
         # The event such a type names, `"create"`, or nil.
@@ -120,7 +141,7 @@ module RailsAiContext
         def emit(node, callback_types, targets, options)
           targets.each do |method_name, confidence|
             callback_types.each do |callback_type|
-              @results << {
+              record = {
                 # The declared macro, so a renderer can print what the file
                 # says instead of the resolved type.
                 name:       node.name.to_s,
@@ -131,8 +152,32 @@ module RailsAiContext
                 location:   node.location.start_line,
                 confidence: confidence
               }
+              # A block has no method whose body could be read; its declaration is its source.
+              record.merge!(declaration(node)) if method_name == INLINE_BLOCK
+              @results << record
             end
           end
+        end
+
+        def record_broadcasts(node)
+          BROADCASTS[node.name].each do |type, runs|
+            @results << {
+              name:       node.name.to_s,
+              type:       type,
+              method:     self.class.broadcast_target(node.name),
+              # Its options are the broadcast's rendering, never a callback condition.
+              options:    {},
+              runs:       runs,
+              owner:      @owner_stack.dup,
+              location:   node.location.start_line,
+              confidence: confidence_for(node)
+            }.merge(declaration(node))
+          end
+        end
+
+        # The call as the file writes it, at the file's indentation.
+        def declaration(node)
+          { source: (" " * node.location.start_column) + NodeSource.text(node), end_location: node.location.end_line }
         end
 
         # `after_commit on: :create` is the after_commit_on_create type. One

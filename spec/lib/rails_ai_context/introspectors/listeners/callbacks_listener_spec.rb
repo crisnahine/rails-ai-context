@@ -153,4 +153,41 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::CallbacksListener do
 
     expect(results.first[:options]).to eq(if: %(-> { category == "vomit" }))
   end
+
+  # A block has no method whose body could be shown, so detail:"full" printed
+  # the marker alone.
+  it "keeps an inline block's declaration, at the file's indentation, as its source" do
+    results = parse_and_dispatch(<<~RUBY)
+      class Review
+        after_create_commit -> { broadcast_prepend_to [product, :reviews], target: "reviews" }
+        before_save do
+          self.slug ||= title.parameterize
+        end
+        after_save :notify
+      end
+    RUBY
+
+    lambda_cb, block_cb, named = results
+    expect(lambda_cb).to include(source: %(  after_create_commit -> { broadcast_prepend_to [product, :reviews], target: "reviews" }),
+                                 location: 2, end_location: 2)
+    expect(block_cb).to include(source: "  before_save do\n    self.slug ||= title.parameterize\n  end", location: 3, end_location: 5)
+    expect(named).not_to include(:source)
+  end
+
+  # turbo-rails declares the commit callbacks itself, so the model's file
+  # names none of them.
+  it "lists each commit callback a turbo-rails broadcast macro declares" do
+    results = parse_and_dispatch("broadcasts_refreshes\nbroadcasts_to :room, inserts_by: :prepend\nbroadcasts_refreshes_to :board\n")
+
+    expect(results.map { |r| [ r[:type], r[:method], r[:runs] ] }).to eq([
+      [ "after_create_commit", "broadcasts_refreshes (turbo-rails)", "broadcast_refresh_later_to" ],
+      [ "after_update_commit", "broadcasts_refreshes (turbo-rails)", "broadcast_refresh_later" ],
+      [ "after_destroy_commit", "broadcasts_refreshes (turbo-rails)", "broadcast_refresh" ],
+      [ "after_create_commit", "broadcasts_to (turbo-rails)", "broadcast_action_later_to" ],
+      [ "after_update_commit", "broadcasts_to (turbo-rails)", "broadcast_replace_later_to" ],
+      [ "after_destroy_commit", "broadcasts_to (turbo-rails)", "broadcast_remove_to" ],
+      [ "after_commit", "broadcasts_refreshes_to (turbo-rails)", "broadcast_refresh_later_to" ]
+    ])
+    expect(results[3]).to include(name: "broadcasts_to", options: {}, source: "broadcasts_to :room, inserts_by: :prepend", location: 2)
+  end
 end

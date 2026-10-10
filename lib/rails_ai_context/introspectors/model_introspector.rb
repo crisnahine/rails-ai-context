@@ -602,6 +602,7 @@ module RailsAiContext
           # hold no block callbacks, so both tiers read the model's source.
           callbacks:        group_callbacks_by_type(source_data[:callbacks]),
           callback_conditions: callback_conditions(source_data[:callbacks]),
+          callback_sources: callback_sources(source_data[:callbacks]),
           concerns:         concerns,
           concern_sources:  concern_sources(concerns, source_data[:mixins], booted: true),
           concerns_hidden:  (hidden.size if hidden.any?),
@@ -1138,6 +1139,19 @@ module RailsAiContext
         end.reject { |_, list| list.none? }
       end
 
+      # The declaration of a callback no method body can show - a block, a
+      # lambda, a turbo-rails broadcast macro - in step with the name list,
+      # nil for a method. Its line is the declaring file's.
+      def callback_sources(callbacks)
+        Array(callbacks).each_with_object({}) do |cb, hash|
+          next unless cb.is_a?(Hash) && cb[:type]
+
+          source = cb[:source] && { code: cb[:source], start_line: cb[:location], end_line: cb[:end_location],
+                                    from_concern: cb[:from_concern], runs: cb[:runs] }.compact
+          (hash[cb[:type].to_s] ||= []) << source
+        end.reject { |_, list| list.none? }
+      end
+
       # One shape for both tiers: { "before_validation" => ["normalize"] }.
       def group_callbacks_by_type(callbacks)
         Array(callbacks).each_with_object({}) do |cb, hash|
@@ -1637,6 +1651,7 @@ module RailsAiContext
           # against an Array.
           callbacks: group_callbacks_by_type(data[:callbacks]),
           callback_conditions: callback_conditions(data[:callbacks]),
+          callback_sources: callback_sources(data[:callbacks]),
           concerns: static_concerns(data[:mixins], path),
           concern_sources: concern_sources(static_concerns(data[:mixins], path), data[:mixins], booted: false),
           concerns_hidden: (hidden.size if hidden.any?),
@@ -2233,6 +2248,7 @@ module RailsAiContext
           # against an Array.
           callbacks: group_callbacks_by_type(callbacks),
           callback_conditions: callback_conditions(callbacks),
+          callback_sources: callback_sources(callbacks),
           methods: data[:methods],
           settled_callbacks: settled
         }

@@ -746,6 +746,9 @@ module RailsAiContext
             return "skip_callback :#{event}, :#{kind}, #{callback_target(callback[:method])}#{callback_options_tail(callback[:options])}"
           end
 
+          # A broadcast macro is its own declaration: the call is the line the file holds.
+          return callback[:source].to_s.strip.gsub(/\s+/, " ") if callback[:runs]
+
           name = callback[:name] || callback[:type]
           method = callback[:method].to_s
           target = inline_block_callback?(method) ? "do" : callback_target(method)
