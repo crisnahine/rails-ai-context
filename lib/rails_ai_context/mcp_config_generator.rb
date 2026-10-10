@@ -324,7 +324,15 @@ module RailsAiContext
       text, _, problem = json_text(path)
       raise JSON::ParserError, problem if problem
 
-      JSON.parse(text)
+      parse_json_text(text)
+    end
+
+    # A config's JSON, its comments passed over. json 2 did that unasked
+    # (2.10 on with a deprecation warning); json 3 refuses a comment unless
+    # told, so without saying so the same file read differently by which
+    # json the process had.
+    def self.parse_json_text(text)
+      JSON.parse(text, allow_comments: true)
     end
 
     COMMENTS_PROBLEM = "it holds comments, which writing it back as JSON would drop"
@@ -439,7 +447,7 @@ module RailsAiContext
     # configs take trailing commas, and a fresh file would drop everything
     # somebody wrote there.
     def parse_json(text)
-      JSON.parse(text)
+      self.class.parse_json_text(text)
     rescue JSON::ParserError => e
       raise ShapeError, self.class.parse_problem(e, text)
     end
@@ -697,7 +705,7 @@ module RailsAiContext
       return unreadable.call(problem) if problem
 
       data = begin
-        JSON.parse(text)
+        parse_json_text(text)
       rescue JSON::ParserError => e
         return unreadable.call(parse_problem(e, text))
       end

@@ -711,6 +711,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A resource read for a name the app does not have fails with JSON-RPC
   -32602**, naming the URI and the names that exist, where it came back as
   a successful read holding an `error` key.
+- **A commented MCP config reads the same under json 3.** json 3 refuses
+  the comments json 2 passed over, so with it - what a new Rails 8.1 app
+  resolves - a `.vscode/mcp.json` holding a comment was reported on every
+  run as a file that does not parse, and doctor flagged it, even when its
+  entries were current. Configs are now read with comments allowed on every
+  json, so a current one is left alone as unchanged, and one that needs
+  new entries is still left as it is, since writing it back would drop the
+  comments.
 
 ## [5.32.2] - 2026-10-07
 

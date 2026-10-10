@@ -546,7 +546,7 @@ module RailsAiContext
     # install uses: it does not parse (or holds comments), or it holds no
     # object to merge into, at the top or under the tool's servers key.
     def json_config_problem(text, tool)
-      data = JSON.parse(text)
+      data = McpConfigGenerator.parse_json_text(text)
       root_key = McpConfigGenerator::TOOL_CONFIGS.fetch(tool)[:root_key]
       if !data.is_a?(Hash) then "it is JSON but not an object"
       elsif !data[root_key].nil? && !data[root_key].is_a?(Hash) then %("#{root_key}" is not an object)
