@@ -66,6 +66,28 @@ RSpec.describe RailsAiContext::Tools::SessionContext do
       expect(text).to include("No queries recorded")
     end
 
+    it "records a mark under the name the server gives the tool" do
+      described_class.call(mark: "schema:users")
+
+      expect(RailsAiContext::Tools::BaseTool.session_queries.map { |q| q[:tool] }).to eq([ "rails_get_schema" ])
+    end
+
+    it "refuses a mark that names no tool" do
+      result = described_class.call(mark: "")
+
+      expect(result.error?).to be(true)
+      expect(result.content.first[:text]).to include("names no tool")
+      expect(RailsAiContext::Tools::BaseTool.session_queries).to be_empty
+    end
+
+    it "refuses a mark that names a tool the server does not have" do
+      result = described_class.call(mark: "not_a_tool:x")
+
+      expect(result.error?).to be(true)
+      expect(result.content.first[:text]).to include("Unknown tool 'not_a_tool'")
+      expect(RailsAiContext::Tools::BaseTool.session_queries).to be_empty
+    end
+
     it "has read-only annotations" do
       annotations = described_class.annotations_value
       expect(annotations.read_only_hint).to eq(true)
