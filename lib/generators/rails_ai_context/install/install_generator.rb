@@ -652,16 +652,16 @@ module RailsAiContext
         end
         say ""
         say "Commands:", :yellow
-        say "  rails ai:context         # Regenerate context files"
+        say "  rails ai:context                 # Regenerate context files"
         tool_count = RailsAiContext::Server.builtin_tools.size
-        say "  rails 'ai:tool[schema]'    # Run any of the #{CountPhrase.call(tool_count, "tool")} from CLI"
+        say "  rails 'ai:tool[schema]'          # Run any of the #{CountPhrase.call(tool_count, "tool")} from CLI"
         if @tool_mode == :mcp
-          say "  rails ai:serve           # Start MCP server (#{CountPhrase.call(tool_count, "live tool")})"
+          say "  rails ai:serve                   # Start MCP server (#{CountPhrase.call(tool_count, "live tool")})"
         end
-        say "  rails ai:facts           # Print concise schema facts summary"
-        say "  rails 'ai:preset[arch]'   # Run multi-tool presets (architecture, debugging, migration)"
-        say "  rails ai:doctor          # Check AI readiness"
-        say "  rails ai:inspect         # Print introspection summary"
+        say "  rails ai:facts                   # Print concise schema facts summary"
+        say "  rails 'ai:preset[architecture]'  # Run a multi-tool preset (architecture, debugging, migration)"
+        say "  rails ai:doctor                  # Check AI readiness"
+        say "  rails ai:inspect                 # Print introspection summary"
         say ""
         if @tool_mode == :mcp
           say "MCP auto-discovery:", :yellow
