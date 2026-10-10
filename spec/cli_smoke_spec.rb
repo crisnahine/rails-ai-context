@@ -517,7 +517,7 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
 
         expect(servers(dir).keys).to eq(%w[mine rails-ai-context-a rails-ai-context-b])
         expect(File.read(File.join(dir, ".mcp.json"))).to eq(first)
-        expect(err).to include(".mcp.json unchanged - skipped")
+        expect(err).to include(".mcp.json (unchanged)")
       end
     end
 

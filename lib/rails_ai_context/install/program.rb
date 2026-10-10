@@ -317,7 +317,7 @@ module RailsAiContext
         )
         result = generator.call
         result[:written].each { |f| surface.say "Created/Updated #{shown(surface, f, root)}", :ok }
-        result[:skipped].each { |f| surface.say "#{shown(surface, f, root)} unchanged - skipped", :muted }
+        result[:skipped].each { |f| surface.say "#{shown(surface, f, root)} (unchanged)", :muted }
         result[:notes]&.each { |f, note| surface.say "  #{shown(surface, f, root)}: #{note}", :muted }
         result[:failed].each do |f|
           surface.say "Could not write #{shown(surface, f, root)} - that tool will not auto-discover the MCP server", :warn

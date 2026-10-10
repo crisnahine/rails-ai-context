@@ -58,7 +58,7 @@ RSpec.describe RailsAiContext::Install::Program do
 
         described_class.write_mcp_configs(surface, tools: %i[claude], tool_mode: :mcp, root: root, standalone: true)
 
-        expect(surface.lines).to include([ :muted, ".mcp.json unchanged - skipped" ],
+        expect(surface.lines).to include([ :muted, ".mcp.json (unchanged)" ],
                                          [ :muted, a_string_including(".mcp.json: kept rails-ai-context") ])
       end
     end

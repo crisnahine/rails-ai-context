@@ -292,6 +292,9 @@ class RailsAiContextCLI < Thor
     desc "context", "Generate AI context files"
     option :format, type: :string, default: nil, desc: "Format: claude, cursor, copilot, opencode, codex, json, all (default: from config)"
     option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
+    # For the installer, which writes the MCP configs itself just before it
+    # runs this at an engine's root.
+    option :mcp_refresh, type: :boolean, default: true, hide: true
     def context
       # A repo you have just cloned is the case an agent most needs these files
       # for, and it is the case least likely to boot. Every command that reads
@@ -308,7 +311,7 @@ class RailsAiContextCLI < Thor
       else
         cleanup_tools = ::RailsAiContext.configuration.ai_tools
       end
-      ::RailsAiContext::LegacyCleanup.prompt_legacy_files(cleanup_tools, root: Dir.pwd)
+      ::RailsAiContext::LegacyCleanup.prompt_legacy_files(cleanup_tools, root: Dir.pwd, place: display_place)
 
       # An explicit --format names a file, so it is written either way. With
       # no format and an MCP-only install there is nothing to write, and the
@@ -324,7 +327,7 @@ class RailsAiContextCLI < Thor
       # on every run, in the form the install takes now. So does this, or an
       # app taken out of its bundle got context files naming the binary
       # beside configs that still start `bundle exec`.
-      refresh_mcp_configs if options[:format].nil?
+      refresh_mcp_configs if options[:format].nil? && options[:mcp_refresh]
 
       $stderr.puts "Introspecting Rails app..."
 
@@ -354,7 +357,7 @@ class RailsAiContextCLI < Thor
     def watch
       reach_installed_gem("listen")
       boot_rails!(command: "watch", allow_static: true)
-      ::RailsAiContext::Watcher.new.start
+      ::RailsAiContext::Watcher.new(place: display_place).start
     end
 
     desc "doctor", "Run diagnostic checks and report AI readiness score"
@@ -410,7 +413,7 @@ class RailsAiContextCLI < Thor
       dropped = program.ask_removed_tools(program_surface, previous: previous_tools, selected: ai_tools)
       unwired = tool_mode == :cli ? program.ask_mcp_removal(program_surface, root: Dir.pwd) : []
       # One-time v5.0.0 legacy UI-pattern files cleanup prompt
-      ::RailsAiContext::LegacyCleanup.prompt_legacy_files(ai_tools, root: Dir.pwd) if context_files
+      ::RailsAiContext::LegacyCleanup.prompt_legacy_files(ai_tools, root: Dir.pwd, place: display_place) if context_files
 
       # --- Boot, then write ---
       # Nothing is written before the app's bundle is set up: the MCP configs

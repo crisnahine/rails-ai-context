@@ -299,7 +299,8 @@ module RailsAiContext
       def generate_engine_context
         env = { "BUNDLE_GEMFILE" => install_root.join("Gemfile").to_s }
         command = %w[bundle exec rails-ai-context context]
-        run = -> { system(env, *command, chdir: install_root.to_s) }
+        # The MCP configs were written a step ago.
+        run = -> { system(env, *command, "--no-mcp-refresh", chdir: install_root.to_s) }
         ok = defined?(::Bundler) && ::Bundler.respond_to?(:with_original_env) ? ::Bundler.with_original_env(&run) : run.call
         return if ok
 
