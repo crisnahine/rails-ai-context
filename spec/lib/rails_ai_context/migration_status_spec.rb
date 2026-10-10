@@ -95,11 +95,15 @@ RSpec.describe RailsAiContext::MigrationStatus do
       expect(described_class.of_database(database(File.join(@dir, "analytics.sqlite3")), File.join(@dir, "none"))).to eq(pending: [])
     end
 
+    # Rails 7.1+ wraps the driver's error; Rails 7.0's sqlite3 adapter hands
+    # back SQLite3::CantOpenException itself. Either way it is what stopped
+    # the connection, and doctor reads it as a database it cannot reach.
     it "hands back what stopped the connection" do
       # A directory where the database file should be: SQLite cannot open it.
       state = described_class.of_database(database(@dir), @dir)
 
-      expect(state[:error]).to be_a(ActiveRecord::ActiveRecordError)
+      expect(state.keys).to eq([ :error ])
+      expect(state[:error].message).to match(/unable to open database file/i)
     end
   end
 end
