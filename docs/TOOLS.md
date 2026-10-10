@@ -74,9 +74,9 @@ Search your codebase with regex, ripgrep acceleration, and sensitive file blocki
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `pattern` | string | *required* | Regex pattern to search for |
+| `pattern` | string | *required* | Regex pattern to search for. With `definition` or `class`, a plain method or constant name matches literally (`valid?`), anything else as a regex (`generate_.*`) |
 | `path` | string | - | Subdirectory or file to search (relative to Rails root); a file is searched whatever its type or ignore files say, as ripgrep does, unless it is sensitive |
-| `match_type` | enum | `any` | `any`, `definition`, `class`, `call`, `trace` |
+| `match_type` | enum | `any` | `any`, `definition` (def lines whose method name contains the pattern), `class` (class/module lines whose name contains it), `call`, `trace` |
 | `file_type` | string | - | Filter by extension (`rb`, `erb`, `js`, etc.) |
 | `exact_match` | boolean | `false` | Literal, whole-word match. `def reblog?` does not match `def reblog` |
 | `exclude_tests` | boolean | `false` | Skip test/spec directories |

@@ -727,10 +727,10 @@ Ripgrep-powered regex search across the codebase.
 
 | Param | Type | Description |
 |-------|------|-------------|
-| `pattern` | string | **Required.** Regex pattern or method name to search for. |
+| `pattern` | string | **Required.** Regex pattern or method name to search for. With `definition` or `class`, a plain method or constant name matches literally (`valid?`), anything else as a regex (`generate_.*`). |
 | `path` | string | Subdirectory to search in (e.g. `app/models`, `config`). Default: entire app. |
 | `file_type` | string | Filter by file extension (e.g. `rb`, `erb`, `js`). Alphanumeric only. |
-| `match_type` | string | `any` (default), `definition` (def lines), `class` (class/module lines), `call` (call sites only), `trace` (**full picture** - definition with class context + source code + internal calls + sibling methods + callers with route chain + test coverage separated). |
+| `match_type` | string | `any` (default), `definition` (def lines whose method name contains the pattern), `class` (class/module lines whose name contains it), `call` (call sites only), `trace` (**full picture** - definition with class context + source code + internal calls + sibling methods + callers with route chain + test coverage separated). |
 | `exact_match` | boolean | Match the pattern literally, whole-word where its edges are word characters. `def reblog?` does not match `def reblog`. Default: false. |
 | `exclude_tests` | boolean | Exclude test/spec/features directories. Default: false. |
 | `group_by_file` | boolean | Group results by file with match counts. Default: false. |
@@ -748,7 +748,8 @@ rails_search_code(pattern: "publishable?", match_type: "trace")
     + sibling methods + app callers with route chain + test coverage (separated)
 
 rails_search_code(pattern: "create", match_type: "definition")
-  → Only `def create` / `def self.create` lines
+  → Only def lines whose name contains `create`: `def create`, `def self.create`,
+    `def recreate`; add exact_match: true for `def create` alone
 
 rails_search_code(pattern: "publishable", match_type: "call")
   → Only call sites (excludes the definition)
@@ -762,11 +763,11 @@ rails_search_code(pattern: "has_many", group_by_file: true)
 rails_search_code(pattern: "post", exclude_tests: true)
   → Skip test/spec directories
 
-rails_search_code(pattern: "activate", match_type: "definition")
-  → Only `def activate` / `def self.activate` lines (skips method calls)
+rails_search_code(pattern: "generate_.*", match_type: "definition")
+  → Only def lines whose name matches the regex (skips method calls)
 
-rails_search_code(pattern: "User", match_type: "class")
-  → Only `class User` / `module User` definitions
+rails_search_code(pattern: "\\w+Job", match_type: "class")
+  → Only class/module definitions whose name matches the regex
 ```
 
 **Security:** Uses `Open3.capture3` with array arguments (no shell injection). Validates file_type. Blocks path traversal. Respects `excluded_paths` and `sensitive_patterns` config on both backends, and the Ruby fallback reads the ignore files ripgrep reads and ranks them the way ripgrep does: `.rgignore` over `.ignore` over `.gitignore` (each scoped to its own directory) over `.git/info/exclude` over the global excludes file, the file type deciding before depth, which breaks ties only within one type; `.ignore` and `.rgignore` apply outside a git repository too, and a directory the rules ignore is never entered. As ripgrep does, the fallback also reads the ignore files of every directory above the app, the git ones only as far up as the nearest `.git` (a file for a worktree or submodule), so an app nested in a larger repository gets that repository's rules and a repository nested in the app stops the app's `.gitignore`. Patterns match case-sensitively, symlinks are not followed, and a file with a NUL byte in its first 64 KiB is skipped unread, all as in ripgrep, so the two return the same set.

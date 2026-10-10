@@ -34,6 +34,9 @@ module RailsAiContext
       # one on a receiver (`def self.x`, `def Widget.x`) are definitions too.
       DEF_HEAD = "^\\s*(?:[a-z_]\\w*\\s+)*def\\s+(?:(?:self|[A-Z]\\w*(?:::[A-Z]\\w*)*)\\.)?"
       DEF_LINE = /\A\s*(?:[a-z_]\w*\s+)*def\s/
+      # A method or constant name, receiver or namespace and all, or one of
+      # Ruby's operator method names.
+      PLAIN_NAME = %r{\A(?:(?:self|[A-Z]\w*(?:::[A-Z]\w*)*)\.)?(?:(?:::)?[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*[?!=]?|\[\]=?|[-+]@|\*\*|<=>|===?|[=!]~|!=|<<|>>|[<>]=|[-+*/%<>&|^~!`])\z}
       # Constant forms that define a class without the keyword.
       CLASS_BUILDERS = "(?:::)?(?:Data\\.define|Struct\\.new|Class\\.new|Module\\.new)\\b"
       NOT_A_CALL_LINE = {
@@ -58,7 +61,7 @@ module RailsAiContext
         properties: {
           pattern: {
             type: "string",
-            description: "Search pattern (regex supported)."
+            description: "Search pattern (regex supported). For definition and class, a plain method or constant name matches literally (`valid?`), anything else as a regex (`generate_.*`)."
           },
           path: {
             type: "string",
@@ -71,7 +74,7 @@ module RailsAiContext
           match_type: {
             type: "string",
             enum: %w[any definition class call trace],
-            description: "any: all matches (default). definition: `def` lines only. class: `class/module` lines. call: call sites only (excludes definitions). trace: FULL PICTURE - shows definition + source code + all callers + what it calls internally."
+            description: "any: all matches (default). definition: `def` lines whose method name contains the pattern. class: `class/module` lines whose name contains it. call: call sites only (excludes definitions). trace: FULL PICTURE - shows definition + source code + all callers + what it calls internally."
           },
           exact_match: {
             type: "boolean",
@@ -134,12 +137,17 @@ module RailsAiContext
         search_pattern = case match_type
         when "definition"
           cleaned = pattern.sub(/\A\s*def\s+/, "")
-          escaped = literal(cleaned)
-          # `def\s+` already anchors the left edge, so only a trailing boundary.
-          exact_match ? "#{DEF_HEAD}#{escaped}#{RailsAiContext::MethodName.definition_end(cleaned)}" : "#{DEF_HEAD}#{escaped}"
+          if exact_match
+            # `def\s+` already anchors the left edge, so only a trailing boundary.
+            "#{DEF_HEAD}#{literal(cleaned)}#{RailsAiContext::MethodName.definition_end(cleaned)}"
+          else
+            # Anywhere in the name, as `class` takes a prefix: `slug` finds
+            # `def generate_slug` as well as `def slug_source`.
+            "#{DEF_HEAD}\\w*#{name_source(cleaned)}"
+          end
         when "class"
           cleaned = pattern.sub(/\A\s*(class|module)\s+/, "")
-          name = "(?:\\w+::)*\\w*#{literal(cleaned)}"
+          name = "(?:\\w+::)*\\w*#{exact_match ? literal(cleaned) : name_source(cleaned)}"
           # `\w*` stays unbounded so a CamelCase prefix still resolves.
           tail = exact_match ? trailing_boundary(cleaned) : "\\w*"
           "^\\s*(?:(?:class|module)\\s+(?:::)?#{name}#{exact_match ? tail : ""}|#{name}#{tail}\\s*=\\s*#{CLASS_BUILDERS})"
@@ -289,6 +297,13 @@ module RailsAiContext
       # unknown escape; a bare space means the same to both engines.
       private_class_method def self.literal(text)
         Regexp.escape(text).gsub("\\ ", " ")
+      end
+
+      # A definition or class search reads a plain name literally, so `valid?`
+      # is not `vali` and an optional `d`, and any other pattern as the regex
+      # the schema promises: `\w+Job`, `generate_.*`.
+      private_class_method def self.name_source(text)
+        text.match?(PLAIN_NAME) ? literal(text) : "(?:#{text})"
       end
 
       # "> " for match lines, "  " for context lines; empty when the result
