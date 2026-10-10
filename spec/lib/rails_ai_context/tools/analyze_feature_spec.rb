@@ -714,6 +714,27 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
     end
   end
 
+  # The auth rule matches User for `authentication`, and the gap check looked
+  # only at the tests that word names, so test/models/user_test.rb went
+  # unseen and User read as untested.
+  describe "a model the feature word does not name" do
+    it "finds the model's test anywhere in the suite" do
+      Dir.mktmpdir("rac_auth_gap") do |tmp|
+        FileUtils.mkdir_p(File.join(tmp, "test", "models"))
+        File.write(File.join(tmp, "test", "models", "user_test.rb"), "class UserTest < ActiveSupport::TestCase\nend\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return(
+          models: { "User" => { table_name: "users", associations: [], validations: [], scopes: [] } }
+        )
+
+        text = described_class.call(feature: "authentication").content.first[:text]
+
+        expect(text).to include("### User")
+        expect(text).not_to include("Model `User` - no test file found")
+      end
+    end
+  end
+
   # The glob tier read queue_as out of the job's own file, so a queue
   # inherited from ApplicationJob printed as "default".
   describe "jobs, mailers and channels read from the payload" do

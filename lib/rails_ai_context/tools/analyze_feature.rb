@@ -66,14 +66,14 @@ module RailsAiContext
         discover_jobs(ctx, pattern, lines)
         discover_views(ctx, root, pattern, lines)
         discover_stimulus(ctx, pattern, lines)
-        test_files, tests_truncated = discover_tests(root, pattern, lines)
+        _feature_tests, all_tests, tests_truncated = discover_tests(root, pattern, lines)
         discover_related_models(ctx, matched_models, lines)
         discover_concerns(ctx, matched_models, lines)
         discover_callbacks(ctx, matched_models, lines)
         discover_channels(ctx, pattern, lines)
         discover_mailers(ctx, pattern, lines)
         discover_env_dependencies(root, pattern, matched_models, lines)
-        discover_test_gaps(root, pattern, matched_models, ctx, test_files || [], lines, truncated: tests_truncated)
+        discover_test_gaps(root, pattern, matched_models, ctx, all_tests || [], lines, truncated: tests_truncated)
         discover_components(ctx, pattern, lines)
 
         # For auth-related keywords, also discover auth gems
@@ -427,9 +427,13 @@ module RailsAiContext
           relative.sub(%r{(\A|/)(?:spec|test)_}, "\\1")
         end
 
+        # @return [Array(Array<String>, Array<String>, Boolean)] the tests the
+        #   feature word names, every test read (relative to the suite's root),
+        #   and whether a glob stopped at MAX_SCAN_FILES
         def discover_tests(root, pattern, lines)
           real_root = File.realpath(root).to_s
           found = []
+          all = []
           truncated = false
 
           base = RailsAiContext::PathResolver.test_root(root)
@@ -450,9 +454,11 @@ module RailsAiContext
             prefix_glob.each do |path|
               found << path if feature_word_match?(relative_test_name(path, real_base), pattern)
             end
+            all.concat(suffix_glob, prefix_glob)
           end
           found.uniq!
-          return [ found, truncated ] if found.empty?
+          all = all.uniq.map { |path| path.delete_prefix("#{real_base}/") }
+          return [ found, all, truncated ] if found.empty?
 
           header = "## Tests (#{found.size}#{truncated ? " - first #{MAX_SCAN_FILES} per glob scanned" : ""})"
           lines << header
@@ -465,9 +471,9 @@ module RailsAiContext
             lines << "- `#{relative}` (#{count_phrase(test_count, "test")})"
           end
           lines << ""
-          [ found, truncated ]
+          [ found, all, truncated ]
         rescue => e
-          RailsAiContext.debug_fail(e, [ [], false ], label: "discover_tests")
+          RailsAiContext.debug_fail(e, [ [], [], false ], label: "discover_tests")
         end
 
         # --- Test coverage gaps ---
@@ -482,8 +488,10 @@ module RailsAiContext
           # Paths, not basenames: a namespaced name underscores to admin/badges,
           # which no basename can contain, so every namespaced controller was
           # reported as having no test - Discourse's Admin::BadgesController
-          # against spec/requests/admin/badges_controller_spec.rb.
-          test_basenames = test_files.map { |f| f.to_s.sub(/\.rb\z/, "").sub("#{root}/", "") }
+          # against spec/requests/admin/badges_controller_spec.rb. Every test
+          # in the suite, not only those the feature word names: the auth rule
+          # matches User for `authentication`, a word its user_test.rb lacks.
+          test_basenames = test_files.map { |f| f.to_s.sub(/\.rb\z/, "") }
 
           # Check models
           matched_models&.each do |name, _data|
