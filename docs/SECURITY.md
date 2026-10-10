@@ -71,7 +71,7 @@ The textual layer cannot see a whole-row serialisation (`SELECT row_to_json(u.*)
 - **launders a sensitive column** through an intermediate the plan's top node does not name - a `MATERIALIZED` CTE, a subquery scan, or a set operation (`INTERSECT` / `EXCEPT`) - so its value would reach a result column that the output-provenance redaction (Layer 4) cannot pin. These are refused rather than redacted;
 - names any **VOLATILE function** (`pg_proc.provolatile = 'v'`) outside a short harmless allowlist (`random`, `clock_timestamp`, `gen_random_uuid`, `timeofday`, `pg_sleep`). This is how the admin-function family is closed robustly, rather than by an ever-growing name list.
 
-A whole-row read of a relation with no sensitive column (`row_to_json(posts.*)`) is allowed.
+A whole-row read of a relation with no sensitive column (`row_to_json(posts.*)`) is allowed. Before these checks scan a plan expression, its string constants are masked (PostgreSQL's deparser always doubles quotes and never emits an `E''` string, so a constant is matched exactly), so a sensitive word inside a `'%key%'::text` filter or a literal argument is not mistaken for a column or a function.
 
 ### Layer 2 - Database-level read-only
 
@@ -122,9 +122,11 @@ minus anything in `config.query_allowed_columns`.
 The pre-execution refusal matches on two things, case-insensitive and word-bounded:
 
 - **the fixed names above**, on every adapter whether or not they are real columns, so the check holds even with no connection;
-- **every real column of your schema that the rule flags** - read from the live connection, falling back to the cached schema. This catches an app-specific column the heuristic flags (`api_token`, `auth_token`) through any alias or expression, not only an exact configured name.
+- **every real column of your schema that the rule flags** - read from the live connection, falling back to the cached schema. This catches an app-specific column the heuristic flags (`api_token`, `auth_token`) through any alias or expression, not only an exact configured name. Rails' own bookkeeping tables (`ar_internal_metadata`, `schema_migrations`) are left out: their columns are never secrets, and `ar_internal_metadata.key` ends in "key", so counting it refused every query whose text held the word "key".
 
 So `SELECT password_digest AS pd FROM users`, `SELECT upper(api_token) FROM users` and `SELECT (SELECT api_token FROM users LIMIT 1) AS leaked` are all refused: post-execution redaction reads the output column names, which the caller controls through aliases and expressions, so it cannot be relied on. A table or alias that merely contains a sensitive word (a `tokens` table) does not trip the check - only a real column name does. `SELECT *` stays allowed, and its sensitive columns are redacted in the result.
+
+A sensitive word inside a **string literal** - a `LIKE '%secret%'` pattern, a JSON key `->>'token'` - is data, not a column reference. On PostgreSQL the check runs on literal-masked text, and the plan layer (Layer 1b) then has to vouch: a query that passed only because a name sat inside a literal runs only when its plan was obtained and cleared every check, so a masker fooled by a quote trick (`standard_conforming_strings` off, an `E''` string) can never be the only gate - if planning fails, the raw-text refusal stands. On MySQL, MariaDB and SQLite the match stays on raw text with no masking, because a quote's meaning there depends on server modes (`NO_BACKSLASH_ESCAPES`, `ANSI_QUOTES`) or a dotted single-quoted name is an identifier (`t.'col'`).
 
 If one of your own columns merely looks sensitive (an `oauth_applications.secret`, say), exempt it by name:
 
