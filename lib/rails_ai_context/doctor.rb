@@ -542,34 +542,51 @@ module RailsAiContext
       toml_path = McpConfigGenerator.serving_config(app.root, :codex)
       return nil unless toml_path && File.exist?(toml_path)
 
-      # Check if snapshotted GEM_HOME directory still exists on disk.
-      # This is version-manager agnostic and OS agnostic - no string format
-      # assumptions. If the directory was removed (e.g. Ruby upgrade), the
-      # env snapshot is definitely stale.
-      gem_homes = codex_gem_homes(toml_path)
-      return nil if gem_homes.empty?
-
-      snapshot_gem_home = gem_homes.find { |dir| !Dir.exist?(dir) }
-
-      if snapshot_gem_home.nil?
-        Check.new(name: "Codex env snapshot", status: :pass,
-          message: "Codex GEM_HOME (#{gem_homes.first}) exists - env snapshot is current",
-          fix: nil)
-      else
-        Check.new(name: "Codex env snapshot", status: :warn,
-          message: "Codex MCP env snapshot is stale - GEM_HOME #{snapshot_gem_home} no longer exists. Re-run the install generator to update.",
-          fix: "Run `#{command(:install)}`")
+      # Every server the gem wrote carries a snapshot: the app's own, and each
+      # app's in a workspace. Read the way the generator reads the file, so a
+      # section is the gem's by the same rule and any byte reads in any locale.
+      snapshots = McpConfigGenerator.named_entries(toml_path, :codex).select do |entry|
+        entry[:own] && (entry[:env]["PATH"] || entry[:env]["GEM_HOME"])
       end
+      return nil if snapshots.empty?
+
+      shown = Install::Program.relative_to(toml_path, app.root)
+      fix = "Run #{install_command(shown)}"
+      unreached = snapshots.filter_map { |entry| unreached_command(entry, mcp_config_folder(:codex, toml_path)) }
+      if unreached.any?
+        said = unreached.group_by { |_, command, gone| [ command, gone ] }.map do |(command, gone), group|
+          "the PATH saved for #{group.map(&:first).join(' and ')} no longer reaches `#{command}`#{" (#{gone} is gone)" if gone}"
+        end
+        return Check.new(name: "Codex env snapshot", status: :fail,
+          message: "Codex MCP env snapshot in #{shown} is stale - #{said.join('; ')}", fix: fix)
+      end
+
+      # A GEM_HOME the snapshot names that is gone (e.g. Ruby upgraded) is stale
+      # whatever the version manager: no string format assumptions.
+      gem_homes = snapshots.filter_map { |entry| entry[:env]["GEM_HOME"] }.uniq
+      if (gone = gem_homes.find { |dir| !Dir.exist?(dir) })
+        return Check.new(name: "Codex env snapshot", status: :warn,
+          message: "Codex MCP env snapshot is stale - GEM_HOME #{gone} no longer exists", fix: fix)
+      end
+
+      reached = snapshots.filter_map { |entry| entry[:argv].first if entry[:env]["PATH"] }.uniq
+      found = []
+      found << "its PATH reaches #{reached.map { |command| "`#{command}`" }.join(', ')}" if reached.any?
+      found << "GEM_HOME (#{gem_homes.first}) exists" if gem_homes.any?
+      Check.new(name: "Codex env snapshot", status: :pass,
+        message: "Codex env snapshot in #{shown} is current: #{found.join(', and ')}", fix: nil)
     end
 
-    # Every server the gem wrote carries a snapshot: the app's own, and each
-    # app's in a workspace. Read the way the generator reads the file, so a
-    # section is the gem's by the same rule and any byte reads in any locale.
-    def codex_gem_homes(path)
-      lines = McpConfigGenerator.split_bom(SafeFile.read_text(path)).first.lines
-      McpConfigGenerator::Toml.own_sections(lines).filter_map do |range, name|
-        McpConfigGenerator::Toml.sub_table(lines, range, name, "env")["GEM_HOME"]
-      end.uniq
+    # Codex starts a server with the PATH its snapshot saved in place of its
+    # own, and rbenv or asdf save nothing else, so a Ruby that has moved shows
+    # as a command that PATH no longer reaches. The first gone directory on it
+    # is usually that Ruby's. [server name, command, gone directory] or nil.
+    def unreached_command(entry, folder)
+      path = entry[:env]["PATH"] or return nil
+      command = entry[:argv].first.to_s
+      return nil if executable_on?(command, path, folder)
+
+      [ entry[:name], command, path.split(File::PATH_SEPARATOR).find { |dir| !dir.empty? && !Dir.exist?(File.expand_path(dir, folder)) } ]
     end
 
     def check_mcp_buildable

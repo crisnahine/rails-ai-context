@@ -293,27 +293,46 @@ RSpec.describe RailsAiContext::Doctor do
         end
       end
 
-      context "when env section exists but has no GEM_HOME" do
-        before do
+      # rbenv and asdf save a PATH and nothing else, so the PATH is what
+      # says whether the snapshot still starts the server.
+      context "when the snapshot holds a PATH only" do
+        let(:bin) { bin_dir_with("rails-ai-context") }
+
+        after { FileUtils.rm_rf(bin) }
+
+        def write_snapshot(path)
           write_toml(<<~TOML)
             [mcp_servers.rails-ai-context]
-            command = "bundle"
-            args = ["exec", "rails", "ai:serve"]
+            command = "rails-ai-context"
+            args = ["serve"]
 
             [mcp_servers.rails-ai-context.env]
-            PATH = "/usr/local/bin:/usr/bin"
+            PATH = "#{path}"
           TOML
         end
 
-        it "returns nil (skipped)" do
-          expect(check).to be_nil
+        it "passes while that PATH reaches the command" do
+          write_snapshot("/nonexistent/ruby/9.9.9/bin:#{bin}")
+
+          expect(check.status).to eq(:pass)
+          expect(check.message).to eq("Codex env snapshot in .codex/config.toml is current: its PATH reaches `rails-ai-context`")
+        end
+
+        it "fails when it no longer does, naming the directory that is gone" do
+          write_snapshot("/nonexistent/ruby/9.9.9/bin:#{bin_dir_with}")
+
+          expect(check.status).to eq(:fail)
+          expect(check.message).to eq("Codex MCP env snapshot in .codex/config.toml is stale - the PATH saved for rails-ai-context " \
+                                      "no longer reaches `rails-ai-context` (/nonexistent/ruby/9.9.9/bin is gone)")
+          expect(check.fix).to eq("Run `#{RailsAiContext::InstallMode.command(:install)}`")
         end
       end
 
       context "when GEM_HOME directory exists on disk" do
         let(:gem_home) { Dir.mktmpdir("gem_home_test") }
+        let(:bin) { bin_dir_with("bundle") }
 
-        after { FileUtils.rm_rf(gem_home) }
+        after { FileUtils.rm_rf([ gem_home, bin ]) }
 
         before do
           write_toml(<<~TOML)
@@ -323,7 +342,7 @@ RSpec.describe RailsAiContext::Doctor do
 
             [mcp_servers.rails-ai-context.env]
             GEM_HOME = "#{gem_home}"
-            PATH = "/usr/local/bin:/usr/bin"
+            PATH = "#{bin}"
           TOML
         end
 
@@ -336,6 +355,9 @@ RSpec.describe RailsAiContext::Doctor do
 
       context "when GEM_HOME directory no longer exists" do
         let(:stale_gem_home) { "/nonexistent/path/to/gems/3.3.0" }
+        let(:bin) { bin_dir_with("bundle") }
+
+        after { FileUtils.rm_rf(bin) }
 
         before do
           write_toml(<<~TOML)
@@ -345,7 +367,7 @@ RSpec.describe RailsAiContext::Doctor do
 
             [mcp_servers.rails-ai-context.env]
             GEM_HOME = "#{stale_gem_home}"
-            PATH = "/usr/local/bin:/usr/bin"
+            PATH = "#{bin}"
           TOML
         end
 
@@ -1025,6 +1047,24 @@ RSpec.describe RailsAiContext::Doctor do
         expect(check.status).to eq(:warn)
         expect(check.message).to include("/nonexistent/gems/3.3.0")
       end
+    end
+
+    # The workspace's snapshot is what Codex starts this app's server with.
+    it "fails when the PATH a workspace entry saved no longer reaches its command" do
+      write(".codex/config.toml", <<~TOML)
+        [mcp_servers.rails-ai-context-a]
+        command = "rails-ai-context"
+        args = ["serve", "--app-path", "a"]
+
+        [mcp_servers.rails-ai-context-a.env]
+        PATH = "/nonexistent/ruby/9.9.9/bin"
+      TOML
+
+      check = workspace_doctor.send(:check_codex_env_staleness)
+
+      expect(check.status).to eq(:fail)
+      expect(check.message).to include("the PATH saved for rails-ai-context-a no longer reaches `rails-ai-context`")
+      expect(check.fix).to eq("Run `rails-ai-context init` in the folder that holds ../.codex/config.toml")
     end
   end
 
