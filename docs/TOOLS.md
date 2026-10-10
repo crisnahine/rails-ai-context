@@ -329,7 +329,7 @@ two or more confirmed neighbours that all drop the directory's segment.
 
 ### `rails_get_partial_interface`
 
-What locals to pass to a partial and what methods are called on them.
+What locals to pass to a partial and what methods are called on them. Render sites are `render` calls, a `partial:` passed to a Turbo Stream action (`turbo_stream.prepend`) or a broadcast (`broadcast_prepend_to` in a model, controller, job or channel), and jbuilder's `json.partial!` and `json.array! ..., partial:`. A jbuilder partial's locals are the bare names it reads; a helper, a route helper or a call with parentheses is not a local.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|

@@ -363,15 +363,21 @@ module RailsAiContext
       # A partial or template name: a path, never text with spaces or quotes in it.
       PARTIAL_NAME = %r{\A[\w./-]+\z}
       RENDER_NAMED = /(?:\b(?:partial|template)\s*:|:(?:partial|template)\s*=>)\s*["']([^"']+)["']/
+      # A partial named outside a render call: turbo_stream.prepend and the
+      # broadcast_* methods take `partial:`, and jbuilder renders one with
+      # `json.partial!` or `json.array! ..., partial:`.
+      PARTIAL_ARG = /(?:\bjson\.partial!\s*\(?\s*|\bpartial:\s*|:partial\s*=>\s*)(["'])([^"']+)\1/
       # `render @posts`, `render(post)`, `render @posts, cached: true`: a bare record or collection, or a
       # chain on one (`@post.comments.recent`), matched against "render <args>"; RenderedRecord reads the chain.
       IMPLICIT_RENDER = /\Arender\s*\(?\s*@?((?:[a-z_]\w*\.)*[a-z_]\w*)\s*(?:[,)]|\s(?:if|unless)\b|-?\s*\z)/
 
       def extract_partial_refs(content)
         refs = []
+        spans = []
         # The partial or template a render call names, positionally or as a
         # keyword anywhere in its arguments, with or without parentheses.
-        self.class.render_calls(content).each do |_, args|
+        self.class.render_calls(content).each do |at, args|
+          spans << (at...(at + args.length))
           named = [ args[RENDER_POSITIONAL, 2], *top_level(args).scan(RENDER_NAMED).flatten ].compact
           # An interpolated name is decided at runtime, not a partial on disk.
           refs.concat(named.select { |name| name.match?(PARTIAL_NAME) })
@@ -379,6 +385,14 @@ module RailsAiContext
           model, collection = chain && !RENDER_KEYWORD_ARGS.include?(chain) && RenderedRecord.resolve(chain, root, @rendered_models ||= {})
           # The records' model names the partial; `replies` with class_name "Comment" renders comments/_comment.
           refs << (collection ? model.pluralize : model) if model
+        end
+        # A render call's own arguments were read above, where a `partial:`
+        # key nested in its locals is no partial of its own.
+        content.to_enum(:scan, PARTIAL_ARG).each do
+          match = Regexp.last_match
+          next if spans.any? { |span| span.cover?(match.begin(0)) }
+
+          refs << match[2] if match[2].match?(PARTIAL_NAME)
         end
         # Phlex: render ComponentName.new(...) or render(ComponentName.new(...))
         content.scan(/render[\s(]+([A-Z]\w+(?:::\w+)*)\.new/).each { |m| refs << m[0] }

@@ -354,6 +354,74 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
     end
   end
 
+  # bazaar's notification partial listed dom_id and mark_read_notification_path
+  # as locals and missed the model that broadcasts it; reviews/review missed
+  # its create.turbo_stream.erb; ledger's jbuilder partial found no local and
+  # no render call at all.
+  describe "a partial rendered outside a render call" do
+    around do |example|
+      Dir.mktmpdir("partial-sites") do |dir|
+        @root = dir
+        views = File.join(dir, "app/views")
+        %w[notifications reviews api/v1/invoices].each { |d| FileUtils.mkdir_p(File.join(views, d)) }
+        FileUtils.mkdir_p(File.join(dir, "app/models"))
+        File.write(File.join(views, "notifications/_notification.html.erb"),
+                   %(<div id="<%= dom_id(notification) %>" data-url="<%= mark_read_notification_path(notification) %>">\n) +
+                   %(  <%= notification.message %> <%= root_path %>\n</div>\n))
+        File.write(File.join(dir, "app/models/notification.rb"), <<~RUBY)
+          class Notification < ApplicationRecord
+            after_create_commit do
+              broadcast_prepend_to [user, :notifications], target: "notifications",
+                partial: "notifications/notification", locals: { notification: self }
+            end
+          end
+        RUBY
+        File.write(File.join(views, "reviews/_review.html.erb"), "<%= review.body %>\n")
+        File.write(File.join(views, "reviews/create.turbo_stream.erb"),
+                   %(<%= turbo_stream.prepend "reviews", partial: "reviews/review", locals: { review: @review } %>\n))
+        File.write(File.join(views, "api/v1/invoices/_invoice.json.jbuilder"),
+                   "json.extract! invoice, :id, :number\njson.lines invoice.invoice_lines do |line|\n  json.extract! line, :id\nend\n")
+        File.write(File.join(views, "api/v1/invoices/index.json.jbuilder"),
+                   %(json.array! @invoices, partial: "api/v1/invoices/invoice", as: :invoice\n))
+        File.write(File.join(views, "api/v1/invoices/show.json.jbuilder"),
+                   %(json.partial! "api/v1/invoices/invoice", invoice: @invoice\n))
+        example.run
+      end
+    end
+
+    before do
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    def text_for(name)
+      described_class.call(partial: name).content.first[:text]
+    end
+
+    it "reads no helper, route helper or method call as a local" do
+      locals = text_for("notifications/notification")[/## Local Variables\n(.*?)\n\n/m, 1]
+
+      expect(locals).to eq("- **notification** - calls: message")
+    end
+
+    it "finds the model that broadcasts the partial" do
+      expect(text_for("notifications/notification")).to include("- `app/models/notification.rb:3` - locals: notification")
+    end
+
+    it "finds a turbo_stream action that renders the partial" do
+      expect(text_for("reviews/review")).to include("- `app/views/reviews/create.turbo_stream.erb:1` - locals: review")
+    end
+
+    it "reads a jbuilder partial's locals and the jbuilder calls that render it" do
+      text = text_for("api/v1/invoices/invoice")
+
+      expect(text).to include("- **invoice** - calls: invoice_lines")
+      expect(text).not_to include("**line**")
+      expect(text).to include("- `app/views/api/v1/invoices/index.json.jbuilder:1` - locals: invoice")
+      expect(text).to include("- `app/views/api/v1/invoices/show.json.jbuilder:1` - locals: invoice")
+    end
+  end
+
   describe "the standard and full renderings" do
     around do |example|
       Dir.mktmpdir("partial-render") do |dir|
