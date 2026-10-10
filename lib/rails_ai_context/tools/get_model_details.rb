@@ -568,8 +568,10 @@ module RailsAiContext
         # Cross-reference hints - guide AI to related tools
         hints = []
         hints << "`rails_get_schema(table:\"#{data[:table_name]}\")` for columns/indexes" if data[:table_name]
-        controller_name = "#{name.pluralize}Controller"
-        hints << "`rails_get_controllers(controller:\"#{controller_name}\")` for actions" if name.match?(/\A[A-Z][a-z]/)
+        # Only a controller the app has: the conventional name is a guess, and
+        # a hint naming a class that does not exist sends the reader nowhere.
+        controller_name = Payload.controller_for_route_key(cached_context, name.underscore.pluralize)&.first
+        hints << "`rails_get_controllers(controller:\"#{controller_name}\")` for actions" if controller_name
         hints << "`rails_analyze_feature(feature:\"#{name}\")` for full-stack view"
         lines << "" << "_Next: #{hints.join(' | ')}_"
 

@@ -186,6 +186,13 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
       expect(text).to include("app/helpers/application_helper.rb")
     end
 
+    # ApplicationHelper sent the reader to an ApplicationController no
+    # listing answers for.
+    it "points only at a controller the app has" do
+      text = described_class.call(helper: "ApplicationHelper").content.first[:text]
+      expect(text).not_to include("ApplicationController")
+    end
+
     it "shows specific helper by short name" do
       result = described_class.call(helper: "PostsHelper")
       text = result.content.first[:text]
