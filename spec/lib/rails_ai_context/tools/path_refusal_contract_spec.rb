@@ -28,7 +28,8 @@ RSpec.describe "path refusal contract" do
 
   # One tool takes a path that is not the question. `rails_diagnose` answers
   # `error:`, and `file:` only points at code to quote, so a refused path costs
-  # that section and not the diagnosis. The refusal is still said out loud.
+  # that section and not the diagnosis. The refusal is still said out loud, and
+  # the result is an error like every other refusal.
   composed = {
     RailsAiContext::Tools::Diagnose => lambda {
       call(error: "NoMethodError: undefined method `x` for nil", file: "../../etc/passwd", line: 1)
@@ -77,13 +78,13 @@ RSpec.describe "path refusal contract" do
   end
 
   composed.each do |tool, refuse|
-    it "#{tool.tool_name} says the path was refused and still answers" do
+    it "#{tool.tool_name} says the path was refused, still answers, and is an error" do
       tool.reset_cache!
       response = tool.instance_exec(&refuse)
 
       expect(text_of(response)).to match(/not allowed|denied|sensitive/)
       expect(text_of(response)).to include("Error Diagnosis")
-      expect(response.error?).to be(false)
+      expect(response.error?).to be(true)
     end
   end
 

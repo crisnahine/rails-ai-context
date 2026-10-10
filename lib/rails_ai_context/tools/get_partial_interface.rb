@@ -70,6 +70,12 @@ module RailsAiContext
 
         located = view_dirs.lazy.filter_map { |dir| resolve_partial_path(dir, partial) }.first
 
+        # The file the name resolves to, refused on policy: a link out of the app.
+        case located&.refusal
+        when :traversal, :outside then return error_response("Path not allowed: #{partial}")
+        when :sensitive then return error_response("Path not allowed: #{partial} (sensitive file)")
+        end
+
         unless located
           available = view_dirs.flat_map { |dir| find_available_partials(dir, root) }.uniq.sort.first(30)
           return not_found_response("Partial", partial, available,
@@ -229,8 +235,9 @@ module RailsAiContext
 
         return nil unless found
 
+        # A refused file comes back with its refusal, so the caller says so rather than call it missing.
         located = RailsAiContext::SafePath.locate(found.delete_prefix(views_dir + File::SEPARATOR), under: views_dir, root: rails_app.root.to_s)
-        located.ok? || located.refusal == :too_large ? located : nil
+        located.refusal == :missing ? nil : located
       end
 
       # A view file's name as the app renders it: its path under the innermost

@@ -255,8 +255,16 @@ and contains the app root.
 ### How a refusal is reported
 
 A path refused on policy - outside the app, a traversal, a sensitive file - comes back as an
-error result: `isError: true` over MCP, exit 1 from the CLI. A path that is simply not there
-is an ordinary answer and exits 0, so a script can tell the two apart.
+error result: `isError: true` over MCP, exit 1 from the CLI, and the text starts with
+`Path not allowed`. A path that is simply not there is an ordinary answer and exits 0, so a
+script can tell the two apart.
+
+The same holds for a name a tool turns into a file: a log (`rails_read_logs file:`), a partial
+(`rails_get_partial_interface partial:`) or a concern (`rails_get_concern name:`) whose file
+links out of the app is refused, not reported missing. A list of what a tool can read, such
+as the available logs or partials, leaves out every entry it would refuse. `rails_diagnose`
+still diagnoses the error it is given when the `file:` it is pointed at is refused, says so,
+and returns the whole answer as an error result.
 
 ---
 

@@ -190,7 +190,8 @@ module RailsAiContext
           output = output[0, MAX_TOTAL_OUTPUT] + "\n\n_... output truncated (#{output.length} chars exceeded #{MAX_TOTAL_OUTPUT} limit)._"
         end
 
-        text_response(output)
+        # The diagnosis still answers the error, and the result is an error as every refusal is.
+        refusal ? error_response(output) : text_response(output)
       rescue => e
         text_response("Diagnosis error: #{e.message}")
       end

@@ -704,7 +704,7 @@ Reverse file tail with level filtering and sensitive data redaction.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `file` | string | current environment's log | Log file name in `log/` (e.g., `production`, `sidekiq`); the `.log` suffix is optional |
+| `file` | string | current environment's log | Log file name in `log/` (e.g., `production`, `sidekiq`); the `.log` suffix is optional. A log that links out of the app is refused and not listed |
 | `lines` | integer | `50` | Number of lines, max 500. With `search`, the number of matching lines to show |
 | `level` | enum | `all` | Minimum level: `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`, `all` |
 | `search` | string | - | Keep lines matching this term, searched for in the last 4 MB of the file (about 50,000 lines of a typical Rails log); the answer says how many lines that was, and whether older ones were left unsearched. The match runs on the redacted line, so a redacted value cannot be searched for |
@@ -720,7 +720,7 @@ Log correlation reads the last megabyte of the current environment's log, the wi
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `error` | string | *required* | Error message or class |
-| `file` | string | - | File where error occurred |
+| `file` | string | - | File where error occurred. A path refused on policy is named in the answer, which still diagnoses the error and comes back as an error result ([how a refusal is reported](SECURITY.md#how-a-refusal-is-reported)) |
 | `line` | integer | - | Line number |
 | `action` | string | - | `controller#action` (e.g., `posts#create`); adds that action's context |
 
