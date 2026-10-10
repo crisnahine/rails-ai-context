@@ -202,9 +202,48 @@ RSpec.describe RailsAiContext::Install::Program do
                                                        app_roots: [ File.join(root, "a"), File.join(root, "b") ])
 
         expect(surface.text).to include("Removed a/.cursorrules", "Removed b/.cursorrules")
-        expect(surface.text).to include("Removed MCP entry from .cursor/mcp.json", "Removed MCP entry from a/.cursor/mcp.json")
+        expect(surface.text).to include("Removed rails-ai-context from .cursor/mcp.json",
+                                        "Removed a/.cursor/mcp.json (rails-ai-context was its only server)",
+                                        "Removed a/.cursor/")
         expect(JSON.parse(File.read(File.join(root, ".cursor/mcp.json")))["mcpServers"].keys).to eq(%w[mine])
-        expect(File.exist?(File.join(root, "a/.cursor/mcp.json"))).to be(false)
+        expect(File.exist?(File.join(root, "a/.cursor"))).to be(false)
+      end
+    end
+
+    # "Removed MCP entry" over a file that was deleted whole read like a bug.
+    it "names a config it deleted whole as removed, and keeps a directory that holds anything else" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, ".codex"))
+        File.write(File.join(root, ".codex/config.toml"), %([mcp_servers.rails-ai-context]\ncommand = "rails-ai-context"\nargs = ["serve"]\n))
+        FileUtils.mkdir_p(File.join(root, ".vscode"))
+        File.write(File.join(root, ".vscode/mcp.json"),
+                   JSON.generate("servers" => { "rails-ai-context" => { "command" => "rails-ai-context", "args" => [ "serve" ] } }))
+        File.write(File.join(root, ".vscode/settings.json"), "{}\n")
+
+        surface = surface_class.new("y")
+        described_class.cleanup_removed_tools(surface, previous: %i[claude copilot codex], selected: %i[claude], root: root)
+
+        expect(surface.text).to include("Removed .codex/config.toml (rails-ai-context was its only server)", "Removed .codex/",
+                                        "Removed .vscode/mcp.json (rails-ai-context was its only server)")
+        expect(surface.text).not_to include("Removed .vscode/\n")
+        expect(Dir.exist?(File.join(root, ".codex"))).to be(false)
+        expect(File.exist?(File.join(root, ".vscode/settings.json"))).to be(true)
+      end
+    end
+
+    # OpenCode's AGENTS.md is Codex CLI's too, so it stays when only one of
+    # them is dropped - and saying nothing read as a cleanup that skipped
+    # the tool.
+    it "says which shared file it kept, and for which tool" do
+      Dir.mktmpdir do |root|
+        File.write(File.join(root, "AGENTS.md"), "<!-- BEGIN rails-ai-context -->\nx\n<!-- END rails-ai-context -->\n")
+
+        surface = surface_class.new("y")
+        described_class.cleanup_removed_tools(surface, previous: %i[opencode codex], selected: %i[codex], root: root)
+
+        expect(surface.text).to include("Kept AGENTS.md - Codex CLI uses it too")
+        expect(surface.text).not_to include("OpenCode files removed")
+        expect(File.exist?(File.join(root, "AGENTS.md"))).to be(true)
       end
     end
 
