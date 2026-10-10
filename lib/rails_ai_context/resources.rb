@@ -100,6 +100,8 @@ module RailsAiContext
       mime_type: "application/json"
     ).freeze
 
+    INVALID_PARAMS = -32602
+
     class << self
       def static_resources
         STATIC_RESOURCES.map do |uri, meta|
@@ -124,22 +126,43 @@ module RailsAiContext
         server.resources_read_handler do |params|
           handle_read(params)
         rescue RailsAiContext::Error => e
-          # handle_read / VFS raise RailsAiContext::Error for unknown URIs and
-          # blocked paths (traversal, sensitive files). Left unhandled, the MCP
-          # SDK collapses them into a generic "-32603 Internal error" that hides
-          # the URI. On mcp >= 0.20 re-raise as the SDK's ResourceNotFoundError
-          # so the client gets a proper "-32602 Resource not found: <uri>" with
-          # the URI in error data (the uniform message also avoids leaking why a
-          # blocked path was rejected). That class doesn't exist on older but
-          # still-supported mcp (gemspec allows >= 0.13), so fall back to the
-          # original error there - same behavior as before this wrapper.
-          raise e unless defined?(MCP::Server::ResourceNotFoundError)
-
-          raise MCP::Server::ResourceNotFoundError.new(params[:uri])
+          raise read_error(params, e)
         end
       end
 
       private
+
+      # handle_read / VFS raise RailsAiContext::Error for unknown URIs and
+      # blocked paths (traversal, sensitive files). Left unhandled, the MCP
+      # SDK collapses them into a generic "-32603 Internal error" that hides
+      # the URI. On mcp >= 0.20 they become the SDK's ResourceNotFoundError,
+      # so the client gets a proper "-32602 Resource not found: <uri>" with
+      # the URI in error data (the uniform message also avoids leaking why a
+      # blocked path was rejected). That class doesn't exist on older but
+      # still-supported mcp (gemspec allows >= 0.13), so the original error
+      # goes through there - same behavior as before this wrapper.
+      #
+      # A name the app does not have, or a file over the cap, is no secret: it
+      # fails with its own reason and the names the client can use instead,
+      # where it used to succeed with an `{"error": ...}` body a client could
+      # not tell from data.
+      def read_error(params, error)
+        if error.is_a?(RailsAiContext::ResourceUnavailable) && handler_error_data?
+          return MCP::Server::RequestHandlerError.new(
+            error.message, params,
+            error_type: :invalid_params, error_code: INVALID_PARAMS, error_data: { uri: params[:uri] }.merge(error.data)
+          )
+        end
+        return error unless defined?(MCP::Server::ResourceNotFoundError)
+
+        MCP::Server::ResourceNotFoundError.new(params[:uri])
+      end
+
+      # error_code and error_data arrived together with ResourceNotFoundError,
+      # which is built on them.
+      def handler_error_data?
+        MCP::Server::RequestHandlerError.instance_method(:initialize).parameters.any? { |_, name| name == :error_data }
+      end
 
       # Content hashes use MCP-spec camelCase keys (mimeType): the SDK places
       # the handler's return value into the JSON-RPC response without renaming

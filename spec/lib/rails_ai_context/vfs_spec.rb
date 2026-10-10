@@ -108,11 +108,13 @@ RSpec.describe RailsAiContext::VFS do
         expect(data["schema"]["columns"]).to be_an(Array)
       end
 
-      it "returns error for unknown model" do
-        result = described_class.resolve("rails-ai-context://models/Widget")
-        data = JSON.parse(result.first[:text])
-        expect(data["error"]).to include("not found")
-        expect(data["available"]).to include("Post", "User")
+      # A successful read whose body was an error document could not be told
+      # from data; the read fails now, naming what is there instead.
+      it "fails the read for an unknown model and names the models there are" do
+        expect { described_class.resolve("rails-ai-context://models/Widget") }
+          .to raise_error(RailsAiContext::ResourceUnavailable, "Model 'Widget' not found") { |error|
+            expect(error.data[:available]).to include("Post", "User")
+          }
       end
 
       it "caps an oversized model payload without breaking the JSON contract" do
@@ -139,10 +141,9 @@ RSpec.describe RailsAiContext::VFS do
         expect(data["actions"]).to include("index")
       end
 
-      it "returns error for unknown controller" do
-        result = described_class.resolve("rails-ai-context://controllers/WidgetsController")
-        data = JSON.parse(result.first[:text])
-        expect(data["error"]).to include("not found")
+      it "fails the read for an unknown controller" do
+        expect { described_class.resolve("rails-ai-context://controllers/WidgetsController") }
+          .to raise_error(RailsAiContext::ResourceUnavailable, /not found/)
       end
 
       it "resolves a namespaced controller by its route key" do
@@ -183,10 +184,11 @@ RSpec.describe RailsAiContext::VFS do
         expect(data["action"]).to eq("show")
       end
 
-      it "returns error for unknown action" do
-        result = described_class.resolve("rails-ai-context://controllers/posts/destroy")
-        data = JSON.parse(result.first[:text])
-        expect(data["error"]).to include("not found")
+      it "fails the read for an unknown action and names the actions there are" do
+        expect { described_class.resolve("rails-ai-context://controllers/posts/destroy") }
+          .to raise_error(RailsAiContext::ResourceUnavailable, /Action 'destroy' not found/) { |error|
+            expect(error.data[:available]).not_to be_empty
+          }
       end
 
       it "includes applicable filters" do
@@ -275,12 +277,10 @@ RSpec.describe RailsAiContext::VFS do
       # cannot be told apart from one for a name that does not exist, and the
       # sibling controllers resource already answers that case with an error.
       it "says so when the name resolves to no controller at all" do
-        result = described_class.resolve("rails-ai-context://routes/TotallyMadeUpThing")
-        data = JSON.parse(result.first[:text])
-
-        expect(data["error"]).to include("TotallyMadeUpThing")
-        expect(data["available"]).to include("posts", "users")
-        expect(data).not_to have_key("total_routes")
+        expect { described_class.resolve("rails-ai-context://routes/TotallyMadeUpThing") }
+          .to raise_error(RailsAiContext::ResourceUnavailable, /TotallyMadeUpThing/) { |error|
+            expect(error.data[:available]).to include("posts", "users")
+          }
       end
 
       # The tool answers this exact string with the routes; the resource
@@ -322,10 +322,8 @@ RSpec.describe RailsAiContext::VFS do
       # A name that is all suffix leaves nothing to match, and an empty
       # needle is a substring of every route key.
       it "answers not found for a name that is only the controller suffix" do
-        data = JSON.parse(described_class.resolve("rails-ai-context://routes/_controller").first[:text])
-
-        expect(data["error"]).to include("not found")
-        expect(data).not_to have_key("routes")
+        expect { described_class.resolve("rails-ai-context://routes/_controller") }
+          .to raise_error(RailsAiContext::ResourceUnavailable, /not found/)
       end
 
       it "raises for bare routes URI without controller" do
@@ -421,10 +419,9 @@ RSpec.describe RailsAiContext::VFS do
         end
       end
 
-      it "returns error for missing view" do
-        result = described_class.resolve("rails-ai-context://views/vfs_nonexistent_#{Process.pid}/file.erb")
-        data = JSON.parse(result.first[:text])
-        expect(data["error"]).to include("not found")
+      it "fails the read for a missing view" do
+        expect { described_class.resolve("rails-ai-context://views/vfs_nonexistent_#{Process.pid}/file.erb") }
+          .to raise_error(RailsAiContext::ResourceUnavailable, /View not found/)
       end
     end
 
