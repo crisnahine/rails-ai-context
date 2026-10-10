@@ -178,21 +178,11 @@ module RailsAiContext
           lines
         end
 
-        # The tables Rails 8 gives Solid Queue, Solid Cache and Solid Cable,
-        # each gem's in a database of its own: framework infrastructure, not
-        # the app's data.
-        SOLID_TABLES = { /\Asolid_queue_/ => "Solid Queue", /\Asolid_cache_/ => "Solid Cache", /\Asolid_cable_/ => "Solid Cable" }.freeze
-
-        # {database name => the Solid gem whose tables are all it holds}.
+        # {database name => the framework whose tables are all it holds}: the
+        # queue, cache and cable databases Rails 8 gives Solid Queue, Solid
+        # Cache and Solid Cable are infrastructure, not the app's data.
         def solid_databases(schema)
-          secondary = schema[:secondary_databases]
-          return {} unless secondary.is_a?(Hash)
-
-          secondary.each_with_object({}) do |(name, db), found|
-            tables = db.is_a?(Hash) && db[:tables].is_a?(Hash) ? db[:tables].keys.map(&:to_s) : []
-            gems = tables.map { |table| SOLID_TABLES.find { |pattern, _| table.match?(pattern) }&.last }
-            found[name.to_s] = gems.first if gems.any? && gems.uniq.one? && gems.first
-          end
+          Payload.framework_databases(schema).to_h { |name, info| [ name.to_s, Payload.database_framework(info) ] }
         end
 
         # The app's own databases besides the primary, as its schema dumps
@@ -200,16 +190,10 @@ module RailsAiContext
         # uncounted beside its PostgreSQL primary. Each is
         # { name:, adapter:, tables: }, the adapter nil when database.yml does not say.
         def own_secondary_databases(ctx, schema)
-          secondary = schema[:secondary_databases]
-          return [] unless secondary.is_a?(Hash)
-
-          solid = solid_databases(schema)
           configured = Array(Payload.section(ctx, :multi_database)&.dig(:databases)).grep(Hash).to_h { |d| [ d[:name].to_s, d ] }
-          secondary.filter_map do |name, db|
-            next if solid.key?(name.to_s) || !db.is_a?(Hash)
-
+          Payload.app_databases(schema).map do |name, db|
             { name: name.to_s, adapter: RailsAiContext::SchemaAdapter.database_label(configured[name.to_s]),
-              tables: (db[:total_tables] || Array(db[:tables]).size).to_i }
+              tables: (db[:total_tables] || db[:tables].size).to_i }
           end
         end
 
