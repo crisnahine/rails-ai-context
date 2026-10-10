@@ -23,8 +23,12 @@ RSpec.describe RailsAiContext::McpEdge do
     # Rails 8.0 under json 3 raises from ActiveSupport's to_json. The frame
     # that names a failure must not fail the same way, or the client gets the
     # web server's plain-text 500 instead.
+    # A direct to_json call goes through ActiveSupport::JSON.encode on every
+    # Rails from 7.0, where Hash#to_json sits in a prepended module that
+    # any_instance cannot stub.
     it "does not depend on the app's to_json" do
-      allow_any_instance_of(Hash).to receive(:to_json).and_raise(ArgumentError, "unknown keyword: quirks_mode")
+      allow(ActiveSupport::JSON).to receive(:encode).and_raise(ArgumentError, "unknown keyword: quirks_mode")
+      expect { {}.to_json }.to raise_error(ArgumentError, /quirks_mode/)
 
       frame = described_class.internal_error_frame(ArgumentError.new("unknown keyword: quirks_mode"))
 
