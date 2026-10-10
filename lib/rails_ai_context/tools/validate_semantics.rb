@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require "erb"
 require "set"
 require "prism"
 
@@ -280,10 +279,7 @@ module RailsAiContext
 
       private_class_method def self.parse_and_visit(file, content)
         source = if file.end_with?(".html.erb", ".erb")
-          processed = content.gsub("<%=", "<%")
-          erb_src = +ERB.new(processed).src
-          erb_src.force_encoding("UTF-8")
-          "# encoding: utf-8\n#{erb_src}"
+          "# encoding: utf-8\n#{RailsAiContext::ErbSource.compiled(content)}"
         else
           content
         end
