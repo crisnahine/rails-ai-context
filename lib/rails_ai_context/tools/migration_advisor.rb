@@ -23,11 +23,12 @@ module RailsAiContext
           },
           column: {
             type: "string",
-            description: "Column name (e.g., 'email', 'status')"
+            description: "Column name (e.g., 'email', 'status'). For add_association, the reference (e.g., 'user', 'parent')."
           },
           type: {
             type: "string",
-            description: "Column type (e.g., 'string', 'integer', 'boolean', 'references')"
+            description: "Column type (e.g., 'string', 'integer', 'boolean', 'references'). " \
+                         "For add_association with column, the table the reference points at (e.g., 'users')."
           },
           new_name: {
             type: "string",
@@ -103,27 +104,35 @@ module RailsAiContext
         database_lines, target = database_option(table, databases)
         lines.concat(database_lines)
 
-        case action
-        when "add_column"
-          lines.concat(generate_add_column(table, column, type, options, table_exists, target))
-        when "remove_column"
-          lines.concat(generate_remove_column(table, column, type, schema, models, target))
-        when "rename_column"
-          rename_to = new_name&.to_s&.strip
-          rename_to = type if rename_to.nil? || rename_to.empty?
-          lines.concat(generate_rename_column(table, column, rename_to))
-        when "add_index"
-          lines.concat(generate_add_index(table, column, options))
-        when "add_association"
-          lines.concat(generate_add_association(table, column, type, options, schema))
-        when "change_type"
-          lines.concat(generate_change_type(table, column, type, options))
-        when "create_table"
-          lines.concat(generate_create_table(table, column, options))
+        rename_to = new_name.to_s.strip.presence || type.to_s.strip.presence if action == "rename_column"
+        if (unknown = unknown_type(action, column, type))
+          return text_response((lines + [ unknown ]).join("\n"))
         end
+        # What the app's migrations already hold: a file the generator's name
+        # collides with, and a pending one that makes the same change.
+        prior = prior_migration_lines(action, table, column, rename_to, type, migration_files_for(target), pending_versions(schema, databases))
+        lines.concat(prior)
+        # The generator refuses a name another migration has, so its command is not offered.
+        target = false if prior.any? { |line| line.start_with?("**Warning:** Another migration is already named") }
+
+        generated = case action
+        when "add_column" then generate_add_column(table, column, type, options, table_exists, target)
+        when "remove_column" then generate_remove_column(table, column, type, schema, models, target)
+        when "rename_column" then generate_rename_column(table, column, rename_to)
+        when "add_index" then generate_add_index(table, column, options)
+        when "add_association" then generate_add_association(table, column, type, options, schema)
+        when "change_type" then generate_change_type(table, column, type, options)
+        when "create_table" then generate_create_table(table, column, options, table_exists)
+        end
+        lines.concat(generated)
+        # A missing param writes no migration, so nothing below applies to one.
+        return text_response(lines.join("\n")) if generated.first.to_s.start_with?("**Error:**")
 
         # Show affected models
-        lines.concat(show_affected_models(table, models))
+        lines.concat(show_affected_models(table, models, action: action, column: column))
+        # A column change breaks the code that reads the column, which no
+        # association names: that code is what the reader has to update.
+        lines.concat(column_mention_lines(column)) if %w[remove_column rename_column change_type].include?(action) && column
 
         # Strong Migrations warnings (only when the gem is present in the project).
         # add_association accepts the associated table via either `column` or
@@ -143,6 +152,151 @@ module RailsAiContext
           parts.join
         end
 
+        # The class each action's migration is named, which the generator
+        # turns into its file name; nil when a needed param is missing.
+        def migration_name(action, table, column, rename_to, type)
+          case action
+          when "add_column" then column && migration_class_name("add", table, column)
+          when "remove_column" then column && migration_class_name("remove", table, column)
+          when "rename_column" then column && rename_to && "Rename#{column.camelize}To#{rename_to.camelize}In#{table.camelize}"
+          when "add_index" then column && "AddIndexTo#{table.camelize}On#{column.camelize}"
+          when "add_association" then (reference = column || type) && "Add#{reference.camelize}To#{table.camelize}"
+          when "change_type" then column && "Change#{column.camelize}TypeIn#{table.camelize}"
+          when "create_table" then "Create#{table.camelize}"
+          end
+        end
+
+        # The migration files of the database the migration goes to; none when
+        # there is no app root to read them from.
+        def migration_files_for(target)
+          root = rails_app.root.to_s
+          dirs = target.is_a?(Hash) && target[:dirs] ? target[:dirs] : RailsAiContext::PendingMigrations.migrate_dirs_for(root)
+          RailsAiContext::PendingMigrations.migration_files(dirs, root: root)
+        rescue StandardError => e
+          RailsAiContext.debug_fail(e, [], label: "migration_files_for")
+        end
+
+        # The versions not yet run on that database; nil when unknown.
+        def pending_versions(schema, databases)
+          pending = if databases.empty? || databases.include?("primary")
+            schema&.dig(:pending_migrations)
+          else
+            schema&.dig(:secondary_databases, databases.first, :pending_migrations)
+          end
+          pending.is_a?(Array) ? pending.map { |m| m[:version].to_s } : nil
+        end
+
+        # A file already named what the generator would name this one, and a
+        # pending migration that already makes this change. Rails' generator
+        # stops with "Another migration is already named ..." on the first;
+        # the second means the change is written and only waits to run.
+        def prior_migration_lines(action, table, column, rename_to, type, files, pending)
+          lines = []
+          name = migration_name(action, table, column, rename_to, type)
+          if name && (clash = files.find { |m| migration_file_name(m[:path]) == name.underscore })
+            waiting = pending&.include?(clash[:version].to_s)
+            lines << "**Warning:** Another migration is already named `#{name.underscore}` " \
+                     "(`#{RailsAiContext::PortablePath.relativize(clash[:path], rails_app.root.to_s)}`#{", not yet run" if waiting}), " \
+                     "so `bin/rails generate migration #{name}` stops with \"Another migration is already named #{name.underscore}\". " \
+                     "#{waiting ? "Edit that migration before it runs, or give this one another name." : "Give this one another name."}"
+            lines << ""
+          end
+
+          changes = pending_changes(files, pending)
+          wanted = case action
+          when "add_column" then [ table, column ]
+          when "add_association" then [ table, "#{(column || type).to_s.singularize}_id" ]
+          when "create_table" then [ table, nil ]
+          end
+          if wanted && (found = changes.find { |c| c[:table] == wanted.first && c[:column] == wanted.last })
+            what = wanted.last ? "adds `#{wanted.last}`#{" (#{found[:type]})" if found[:type]} to `#{table}`" : "creates `#{table}`"
+            lines << "**Warning:** Pending migration `#{found[:version]} #{found[:name]}` already #{what}: " \
+                     "run `bin/rails db:migrate` rather than generating another, or change that migration before it runs."
+            lines << ""
+          end
+          lines
+        end
+
+        def migration_file_name(path)
+          File.basename(path, ".rb").sub(/\A\d+_/, "").split(".", 2).first
+        end
+
+        # [{ table:, column:, type:, version:, name: }] for each column a pending
+        # migration adds, and each table it creates (column nil).
+        def pending_changes(files, pending)
+          return [] unless pending
+
+          files.select { |m| pending.include?(m[:version].to_s) }.flat_map do |m|
+            source = RailsAiContext::SafeFile.read(m[:path]) or next []
+            changes = []
+            collect_changes(RailsAiContext::AstCache.parse_string(source).value, nil, changes)
+            changes.map { |change| change.merge(version: m[:version], name: m[:name]) }
+          end
+        rescue => e
+          RailsAiContext.debug_fail(e, [], label: "pending_changes")
+        end
+
+        TABLE_BLOCKS = %i[create_table change_table].freeze
+
+        def collect_changes(node, block_table, changes)
+          return unless node.is_a?(Prism::Node)
+
+          if node.is_a?(Prism::CallNode)
+            args = Array(node.arguments&.arguments)
+            literal = ->(arg) { arg.unescaped.to_s if arg.is_a?(Prism::SymbolNode) || arg.is_a?(Prism::StringNode) }
+            if node.receiver.nil? && %i[add_column add_reference add_belongs_to].include?(node.name) && literal.(args[0]) && literal.(args[1])
+              column = node.name == :add_column ? literal.(args[1]) : "#{literal.(args[1])}_id"
+              changes << { table: literal.(args[0]), column: column, type: (literal.(args[2]) if node.name == :add_column) }
+            elsif node.receiver.nil? && TABLE_BLOCKS.include?(node.name) && literal.(args[0])
+              changes << { table: literal.(args[0]), column: nil } if node.name == :create_table
+              return collect_changes(node.block, literal.(args[0]), changes)
+            elsif block_table && node.receiver.is_a?(Prism::LocalVariableReadNode) && literal.(args[0])
+              case node.name
+              when :references, :belongs_to then changes << { table: block_table, column: "#{literal.(args[0])}_id" }
+              when :column then changes << { table: block_table, column: literal.(args[0]), type: literal.(args[1]) }
+              when :index, :remove, :rename, :change, :change_default, :change_null, :remove_references, :remove_belongs_to, :timestamps then nil
+              else changes << { table: block_table, column: literal.(args[0]), type: node.name.to_s }
+              end
+            end
+          end
+          node.compact_child_nodes.each { |child| collect_changes(child, block_table, changes) }
+        end
+
+        # Migration column types: Rails' own, the adapters', and the
+        # connection's when the app is booted.
+        COLUMN_TYPES = %w[
+          string text integer bigint float decimal numeric datetime timestamp time date binary blob boolean
+          json virtual primary_key references belongs_to
+          jsonb uuid inet cidr macaddr hstore citext ltree tsvector tsquery money point line lseg box path polygon
+          circle bit bit_varying xml interval oid enum timestamptz int4range int8range numrange tsrange tstzrange daterange
+          tinytext mediumtext longtext tinyblob mediumblob longblob unsigned_integer unsigned_bigint
+          unsigned_float unsigned_decimal set year
+        ].freeze
+
+        def column_types
+          types = COLUMN_TYPES.dup
+          if defined?(ActiveRecord::Base) && !RailsAiContext.static_tier?
+            types |= ActiveRecord::Base.connection.native_database_types.keys.map(&:to_s)
+          end
+          types
+        rescue StandardError
+          COLUMN_TYPES
+        end
+
+        # A type no adapter knows writes a migration that fails when it runs.
+        def unknown_type(action, column, type)
+          written = case action
+          when "add_column", "change_type" then [ type ]
+          when "create_table" then column.to_s.split(",").map { |definition| definition.split(":")[1]&.strip }
+          end
+          bad = Array(written).compact.reject(&:empty?).find { |t| !column_types.include?(t) }
+          return nil unless bad
+
+          suggestion = find_closest_match(bad, column_types)
+          "**Error:** Unknown column type `#{bad}`.#{" Did you mean `#{suggestion}`?" if suggestion} " \
+            "Migration types include string, text, integer, bigint, decimal, boolean, date, datetime, json and references."
+        end
+
         # A table only a secondary database holds needs its migration in that database's migrations_paths.
         # [lines, target]: target is nil for the primary, false when no environment configures the
         # database, else the generator's --database flag and the RAILS_ENV that configures it.
@@ -160,8 +314,10 @@ module RailsAiContext
 
           names = found.keys
           env_name = found.values.first.first
-          target = { flag: " --database #{names.first}", env: env_name }
-          paths = Array(found.values.first.last["migrations_paths"]).join(", ")
+          configured = Array(found.values.first.last["migrations_paths"])
+          dirs = configured.any? ? configured.map { |path| File.expand_path(path, root.to_s) } : [ File.join(root.to_s, "db", "#{names.first}_migrate") ]
+          target = { flag: " --database #{names.first}", env: env_name, dirs: dirs }
+          paths = configured.join(", ")
           note = "**Database:** `#{table}` is in #{[ names[0..-2].join(", "), names.last ].reject(&:empty?).join(" and ")}," \
                  "#{" which #{env_name} configures and this environment does not," if env_name} not the primary database: generate with #{"`RAILS_ENV=#{env_name}` and " if env_name}`#{target[:flag].strip}` " \
                  "so the migration lands in #{env_name && !paths.empty? ? paths : "that database's migrations_paths"} and " \
@@ -193,6 +349,11 @@ module RailsAiContext
             lines << ""
           end
 
+          if table_exists && options.to_s.match?(/\bnull:\s*false\b/) && !options.to_s.match?(/\bdefault:/)
+            lines << not_null_warning(table, column)
+            lines << ""
+          end
+
           opts = options ? ", #{options}" : ""
           class_name = migration_class_name("add", table, column)
 
@@ -210,6 +371,18 @@ module RailsAiContext
           lines << "**Reversible:** Yes"
           lines << "**Index needed?** #{column.end_with?("_id") ? "Yes - add `add_index :#{table}, :#{column}`" : "Depends on query patterns"}"
           lines
+        end
+
+        # NOT NULL with no default has no value for the rows already there, so
+        # the migration fails on a table that holds any. The row count is the
+        # database's own estimate when the app is booted.
+        def not_null_warning(table, column)
+          rows = Array(Payload.section(cached_context, :database_stats)&.dig(:tables)).find { |t| t[:table].to_s == table }&.dig(:approximate_rows)
+          held = rows.nil? ? "if `#{table}` holds any rows" : "as `#{table}` holds about #{count_phrase(rows, "row")}"
+          return "**Note:** `#{table}` is empty by the database's estimate, so `null: false` without a default runs; on a table with rows it fails." if rows&.zero?
+
+          "**Warning:** `null: false` without a default fails #{held}: add a `default:`, or add `#{column}` nullable, " \
+            "backfill it, then `change_column_null :#{table}, :#{column}, false`."
         end
 
         def generate_remove_column(table, column, type, schema, models, target = nil)
@@ -255,7 +428,7 @@ module RailsAiContext
         end
 
         def generate_rename_column(table, column, new_name)
-          return [ "**Error:** column (old name) and type (new name) are required" ] unless column && new_name
+          return [ "**Error:** `column` (the old name) and `new_name` are required for rename_column" ] unless column && new_name
 
           lines = []
 
@@ -312,20 +485,42 @@ module RailsAiContext
           lines
         end
 
+        # `column` names the reference and `type`, when given with it, the
+        # table it points at; otherwise that table is the reference pluralized.
+        # A name with no table of its own is a role: `parent` on `comments` is
+        # a self-reference, which needs `to_table:`, and any other role needs
+        # the table named before a foreign key can be written.
         def generate_add_association(table, column, type, options, schema = nil)
-          foreign_table = column || type
-          return [ "**Error:** Specify the associated table in column param (e.g., column: 'users')" ] unless foreign_table
+          written = column || type
+          return [ "**Error:** Specify the associated table in column param (e.g., column: 'users')" ] unless written
 
+          reference = written.to_s.singularize
           lines = []
-          fk_column = "#{foreign_table.singularize}_id"
+          fk_column = "#{reference}_id"
           if column_exists?(table, fk_column)
             lines << "**Warning:** Column `#{fk_column}` already exists on `#{table}`. This migration will fail. Use `add_index` if you only need an index."
             lines << ""
           end
 
-          to_table = foreign_table.singularize.pluralize
+          to_table = column && type ? type.to_s : reference.pluralize
+          if schema_known?(schema) && !table_in_schema?(schema, to_table)
+            if column && type
+              lines << "**Warning:** No `#{to_table}` table in the schema, so a foreign key to it fails; the reference below has none."
+              to_table = nil
+            elsif reference == "parent"
+              lines << "**Note:** No `#{to_table}` table: `parent` on `#{table}` reads as a reference to `#{table}` itself, " \
+                       "written with `to_table:`. Pass the table it points at as `type` to point it elsewhere."
+              to_table = table
+            else
+              lines << "**Warning:** No `#{to_table}` table: `#{reference}` reads as a role. Pass the table it points at as `type` " \
+                       "(e.g. `type:\"users\"`); the reference below has no foreign key until then."
+              to_table = nil
+            end
+            lines << ""
+          end
+
           own = RailsAiContext::Payload.schema_databases(schema, table)
-          theirs = RailsAiContext::Payload.schema_databases(schema, to_table)
+          theirs = to_table ? RailsAiContext::Payload.schema_databases(schema, to_table) : []
           across = own.any? && theirs.any? && !own.intersect?(theirs)
           if across
             lines << "**Foreign key:** `#{to_table}` is in #{theirs.join(' and ')} and `#{table}` in #{own.join(' and ')}; " \
@@ -333,24 +528,58 @@ module RailsAiContext
             lines << ""
           end
 
+          foreign_key = if across || to_table.nil? then ""
+          elsif to_table == reference.pluralize then ", foreign_key: true"
+          else ", foreign_key: { to_table: :#{to_table} }"
+          end
           lines << "```ruby"
-          lines << "class Add#{foreign_table.camelize}To#{table.camelize} < ActiveRecord::Migration[#{rails_version}]"
+          lines << "class Add#{written.camelize}To#{table.camelize} < ActiveRecord::Migration[#{rails_version}]"
           lines << "  def change"
-          lines << "    add_reference :#{table}, :#{foreign_table.singularize}#{", foreign_key: true" unless across}"
+          lines << "    add_reference :#{table}, :#{reference}#{foreign_key}"
           lines << "  end"
           lines << "end"
           lines << "```"
           lines << ""
           lines << "**Reversible:** Yes"
-          lines << "**Also add to models:**"
-          lines << "```ruby"
-          lines << "# app/models/#{table.singularize}.rb"
-          lines << "belongs_to :#{foreign_table.singularize}"
-          lines << ""
-          lines << "# app/models/#{foreign_table.singularize}.rb"
-          lines << "has_many :#{table}, dependent: :destroy"
+          lines.concat(association_model_lines(table, reference, to_table))
+        end
+
+        # The belongs_to and has_many the reference wants, in the models that
+        # read each table: a role names its class, and a self-reference is
+        # optional (a root has no parent) and names its children.
+        def association_model_lines(table, reference, to_table)
+          models = Payload.models(cached_context)
+          owner = models_for_table(table, models).first || table.singularize.camelize
+          lines = [ "**Also add to models:**", "```ruby", "# #{model_path(owner)}" ]
+          unless to_table
+            lines << "belongs_to :#{reference}, class_name: \"...\" # the model of the table it points at"
+            return lines << "```"
+          end
+
+          target = models_for_table(to_table, models).first || to_table.singularize.camelize
+          class_option = reference.camelize == target ? "" : ", class_name: \"#{target}\""
+          if to_table == table
+            lines << "belongs_to :#{reference}#{class_option}, optional: true"
+            lines << "has_many :children, class_name: \"#{target}\", foreign_key: :#{reference}_id, inverse_of: :#{reference}, dependent: :destroy"
+          else
+            lines << "belongs_to :#{reference}#{class_option}"
+            lines << "" << "# #{model_path(target)}"
+            inverse = class_option.empty? ? "" : ", foreign_key: :#{reference}_id, inverse_of: :#{reference}"
+            lines << "has_many :#{table}#{inverse}, dependent: :destroy"
+          end
           lines << "```"
-          lines
+        end
+
+        def model_path(model)
+          Payload.model_file(cached_context, model) || "app/models/#{model.underscore}.rb"
+        end
+
+        def schema_known?(schema)
+          schema.is_a?(Hash) && Payload.schema_tables(schema).any?
+        end
+
+        def table_in_schema?(schema, name)
+          Payload.schema_tables(schema).any? { |_, table, _| table.to_s == name.to_s }
         end
 
         def generate_change_type(table, column, type, options)
@@ -366,7 +595,8 @@ module RailsAiContext
           opts = options ? ", #{options}" : ""
 
           # Detect original column type from schema for a reversible down method
-          original_type = find_column_type(table, column, cached_context[:schema]) || "string"
+          known_type = find_column_type(table, column, cached_context[:schema])
+          original_type = known_type || "string"
 
           lines << "**Warning:** Changing column type may cause data loss if types are incompatible."
           lines << ""
@@ -382,12 +612,23 @@ module RailsAiContext
           lines << "end"
           lines << "```"
           lines << ""
-          lines << "**Reversible:** No (requires explicit `down` method with original type)"
+          # change_column has no inverse of its own; the `down` above is what
+          # rolls it back, and it is only right when the schema knew the type.
+          lines << if known_type
+            "**Reversible:** Yes, through the `down` above, which restores `#{known_type}` (`change_column` alone cannot be reversed)"
+          else
+            "**Reversible:** Only if `#{column}` was a `string`: the schema does not list its type, so the `down` above guesses"
+          end
           lines
         end
 
-        def generate_create_table(table, columns_str, options)
+        def generate_create_table(table, columns_str, options, table_exists = false)
           lines = []
+          if table_exists
+            lines << "**Warning:** Table `#{table}` already exists. `create_table` fails on it unless it passes `if_not_exists: true`, " \
+                     "or `force: :cascade`, which drops the table and every row in it first. Use `add_column` to change it."
+            lines << ""
+          end
           lines << "```ruby"
           lines << "class Create#{table.camelize} < ActiveRecord::Migration[#{rails_version}]"
           lines << "  def change"
@@ -499,18 +740,56 @@ module RailsAiContext
           Payload.model_file(cached_context, name)
         end
 
-        def show_affected_models(table, models)
-          rows = affected_model_rows(table, models)
+        # The models on the table, and, when the change can touch a relation,
+        # the associations that read it. Renaming or dropping a plain column
+        # moves no association, so those list the models alone.
+        def show_affected_models(table, models, action: nil, column: nil)
+          relations = !%w[remove_column rename_column change_type].include?(action) || column.to_s.end_with?("_id")
+          rows = affected_model_rows(table, models, relations: relations)
           return [] if rows.empty?
 
           [ "", "## Affected Models", "" ] + rows
         end
 
-        def affected_model_rows(table, models)
+        MENTION_CAP = 15
+
+        # Every line in the app's Ruby and views that names the column, word
+        # for word: the code a rename or a drop breaks. A name the code also
+        # uses for something else shows up too, which is why each is listed
+        # rather than counted.
+        def column_mention_lines(column)
+          root = rails_app.root.to_s
+          pattern = /\b#{Regexp.escape(column)}\b/
+          found = []
+          %w[app lib config].each do |dir|
+            base = File.join(root, dir)
+            next unless Dir.exist?(base)
+
+            safe_glob(base, "**/*.{rb,erb,haml,slim,jbuilder}", File.realpath(root)).sort.each do |path|
+              next if sensitive_file?(path.delete_prefix("#{File.realpath(root)}/"))
+
+              source = RailsAiContext::SafeFile.read(path) or next
+              next unless source.match?(pattern)
+
+              source.each_line.with_index(1) do |line, number|
+                found << "- `#{path.delete_prefix("#{File.realpath(root)}/")}:#{number}` #{line.strip.truncate(100)}" if line.match?(pattern)
+              end
+            end
+          end
+          return [ "", "## Code that names `#{column}`", "", "_No line in app/, lib/ or config/ names it._" ] if found.empty?
+
+          more = found.size > MENTION_CAP ? [ "- _...and #{found.size - MENTION_CAP} more; `rails_search_code(pattern:\"#{column}\", exact_match:true)` lists them all_" ] : []
+          [ "", "## Code that names `#{column}` (#{count_phrase(found.size, "line")})", "" ] + found.first(MENTION_CAP) + more
+        rescue => e
+          RailsAiContext.debug_fail(e, [], label: "column_mention_lines")
+        end
+
+        def affected_model_rows(table, models, relations: true)
           return [] if models.empty?
 
           owners = models_for_table(table, models)
           rows = owners.map { |name| "- **#{name}** - directly affected (table: #{table})" }
+          return rows unless relations
 
           models.each do |name, data|
             next unless data.is_a?(Hash)
