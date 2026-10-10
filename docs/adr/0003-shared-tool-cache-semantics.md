@@ -16,6 +16,8 @@ Status: accepted
 
 **The record grew without bound, keyed by a client-controlled header.** Bucketing per conversation introduced a hash whose keys come from `Mcp-Session-Id`, in a process that stays up. Three things were wrong at once: the hash had a default block, so merely *reading* a session's history created a bucket; nothing capped the id's length; and nothing evicted. Reading no longer writes, ids are truncated to `MAX_SESSION_ID_LENGTH`, and the number of remembered conversations is capped at `MAX_SESSIONS`.
 
+**A composite tool's inner calls were recorded as the client's.** `rails_get_context`, `rails_diagnose` and `rails_review_changes` answer by calling other tools, and every call recorded itself, so one `rails_get_context` read as four calls the client never made, and the first inner call took the outer call's params with it. SafeCall now marks the outermost call on the thread, and only that call is recorded, once, with its own params.
+
 Eviction is least-recently-used, not oldest-created. Recording re-inserts the session so hash order tracks use. Ordering by creation instead would evict the conversation that has run for hours ahead of a hundred idle newcomers - backwards, and worst on exactly the long-lived transports that made bucketing necessary.
 
 ## Intended semantics, not defects
