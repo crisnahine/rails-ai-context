@@ -30,7 +30,11 @@ document is aspirational.
   quirks_mode` inside Rails itself. Rails 8.1 dropped the keyword and resolves
   json 3 cleanly. The test bundle pins `json < 3` below 8.1 for that reason; an
   app on those lines has the same choice to make, and it is between its own
-  Rails and json rather than anything here.
+  Rails and json rather than anything here. In such an app the stdio server
+  still works, because the gem writes its stdio replies with `JSON.generate`.
+  Over HTTP the MCP SDK serializes each reply with `to_json`, so every request
+  answers with a JSON-RPC error naming `unknown keyword: quirks_mode` until
+  the pair is fixed.
 
 The gemspec's `railties` bound is wider than the CI matrix: point releases inside
 7.0-8.1 and any future 8.x minor satisfy Bundler's constraint without a gem

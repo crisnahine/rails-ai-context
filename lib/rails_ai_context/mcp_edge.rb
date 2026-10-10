@@ -17,11 +17,15 @@ module RailsAiContext
       # into a JSON-RPC reply, so each has to answer in JSON-RPC shape itself
       # or leave the client's request loop hanging on a non-JSON body.
       def internal_error_frame(error)
-        {
-          jsonrpc: "2.0",
-          error: { code: INTERNAL_ERROR, message: "Internal error: #{error.message}" },
-          id: nil
-        }.to_json
+        error_frame(INTERNAL_ERROR, "Internal error: #{error.message}")
+      end
+
+      # JSON.generate rather than to_json: ActiveSupport replaces to_json,
+      # and in an app whose encoder raises (Rails 8.0 under json 3: "unknown
+      # keyword: quirks_mode") the frame that should name the failure failed
+      # with it, so the client got the web server's plain-text 500.
+      def error_frame(code, message)
+        JSON.generate({ jsonrpc: "2.0", error: { code: code, message: message }, id: nil })
       end
 
       # The Rack-shaped answer, for the two entry points that return triples.

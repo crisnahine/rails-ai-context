@@ -19,6 +19,17 @@ RSpec.describe RailsAiContext::McpEdge do
 
       expect(JSON.parse(frame).dig("error", "message")).to eq(%(Internal error: bad "input" here))
     end
+
+    # Rails 8.0 under json 3 raises from ActiveSupport's to_json. The frame
+    # that names a failure must not fail the same way, or the client gets the
+    # web server's plain-text 500 instead.
+    it "does not depend on the app's to_json" do
+      allow_any_instance_of(Hash).to receive(:to_json).and_raise(ArgumentError, "unknown keyword: quirks_mode")
+
+      frame = described_class.internal_error_frame(ArgumentError.new("unknown keyword: quirks_mode"))
+
+      expect(JSON.parse(frame).dig("error", "message")).to eq("Internal error: unknown keyword: quirks_mode")
+    end
   end
 
   describe ".internal_error_response" do
