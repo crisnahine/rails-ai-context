@@ -111,7 +111,7 @@ Method-aware code extraction with surrounding class context. Every line returned
 
 ### `rails_analyze_feature`
 
-Full-stack feature analysis: models + controllers + routes + services + admin resources + jobs + views + tests in one call.
+Full-stack feature analysis: models + controllers + routes + services (with the files that call them) + admin resources + jobs and Sidekiq workers + views + tests in one call.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|

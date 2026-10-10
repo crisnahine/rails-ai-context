@@ -800,7 +800,7 @@ rails_analyze_feature(feature: "orders")
   → Everything related to orders across all layers
 ```
 
-**Returns:** Markdown with sections for Models (with columns, associations, validations, scopes, enums), Controllers (with actions and filters), Routes, Services (with methods), Jobs (with queue/retry), Views (with partials and Stimulus refs), Stimulus controllers (with targets/values/actions), Tests (with counts), Related models, Concerns, Callbacks, Channels, Mailers, and Environment dependencies. Each section shows match counts.
+**Returns:** Markdown with sections for Models (with columns, associations, validations, scopes, enums), Controllers (with actions and filters), Routes, Services (with their public methods and the files that call them), Jobs and Sidekiq workers (with queue/retry), Views (with partials and Stimulus refs), Stimulus controllers (with targets/values/actions), Tests (with counts), Related models, Concerns, Callbacks, Channels, Mailers, and Environment dependencies. Each section shows match counts.
 
 ### rails_security_scan
 
