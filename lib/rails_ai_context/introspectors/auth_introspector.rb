@@ -22,6 +22,13 @@ module RailsAiContext
         end
       end
 
+      # The generator's Session and Current models, the one rule every surface
+      # reads for "this app uses Rails 8 authentication": an Authentication
+      # concern alone is as often hand-written.
+      def self.rails_auth?(root)
+        %w[app/models/session.rb app/models/current.rb].all? { |path| File.exist?(File.join(root.to_s, path)) }
+      end
+
       def call
         {
           authentication: detect_authentication,
@@ -99,7 +106,7 @@ module RailsAiContext
       #   2. which controllers opt out via `allow_unauthenticated_access`
       #   3. where the Authentication concern lives so they can find before_actions
       def detect_rails_auth
-        return nil unless file_exists?("app/models/session.rb") && file_exists?("app/models/current.rb")
+        return nil unless self.class.rails_auth?(root)
 
         result = { detected: true }
 

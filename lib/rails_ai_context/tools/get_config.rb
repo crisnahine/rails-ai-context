@@ -201,12 +201,16 @@ module RailsAiContext
         env["adapter"] || (env["primary"] || env.values.find { |v| v.is_a?(Hash) })&.dig("adapter")
       end
 
+      # The auth section's rule, read from the files when the section did not
+      # run: an Authentication concern alone is as often hand-written as
+      # generated, so it does not make an app a Rails 8 authentication one.
       private_class_method def self.detect_auth_framework
         auth = Payload.section(cached_context, :auth)
+        rails_auth = auth ? auth.dig(:authentication, :rails_auth) : Introspectors::AuthIntrospector.rails_auth?(rails_app.root)
 
         if auth&.dig(:authentication, :devise)&.any? || Payload.gem?(cached_context, "devise")
           "Devise"
-        elsif auth&.dig(:authentication, :rails_auth)
+        elsif rails_auth
           "Rails 8 authentication (built-in)"
         elsif Payload.gem?(cached_context, "rodauth-rails")
           "Rodauth"
@@ -214,9 +218,14 @@ module RailsAiContext
           "Sorcery"
         elsif Payload.gem?(cached_context, "clearance")
           "Clearance"
-        elsif File.exist?(rails_app.root.join("app/models/concerns/authentication.rb")) ||
-              File.exist?(rails_app.root.join("app/controllers/concerns/authentication.rb"))
-          "Rails 8 authentication (built-in)"
+        else
+          parts = []
+          models = Array(auth&.dig(:authentication, :has_secure_password))
+          parts << "has_secure_password on #{models.join(', ')}" if models.any?
+          concern = %w[app/controllers/concerns/authentication.rb app/models/concerns/authentication.rb]
+            .find { |path| File.exist?(rails_app.root.join(path)) }
+          parts << "the app's own Authentication concern (`#{concern}`)" if concern
+          "#{parts.join(', ')}; no authentication gem or generator" if parts.any?
         end
       end
 

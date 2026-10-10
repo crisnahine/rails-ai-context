@@ -288,6 +288,31 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
       expect(text).to include("**Auth:** Devise")
       expect(text).not_to include("Rails 8 authentication")
     end
+
+    # An Authentication concern alone named every hand-written session login
+    # "Rails 8 authentication", while the auth section, which wants the
+    # generator's Session and Current models, said otherwise.
+    it "reads an Authentication concern without Session and Current as the app's own" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/controllers/concerns"))
+        File.write(File.join(dir, "app/controllers/concerns/authentication.rb"), "module Authentication\nend\n")
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(dir))
+        context = { config: config_data, gems: { notable_gems: [] }, auth: { authentication: { has_secure_password: [ "User" ] } } }
+        allow(described_class).to receive(:cached_context).and_return(context)
+
+        text = described_class.call.content.first[:text]
+        expect(text).to include("**Auth:** has_secure_password on User, the app's own Authentication concern " \
+                                "(`app/controllers/concerns/authentication.rb`); no authentication gem or generator")
+
+        # Without the auth section, the same rule is read from the files.
+        allow(described_class).to receive(:cached_context).and_return(context.except(:auth))
+        expect(described_class.call.content.first[:text]).not_to include("Rails 8 authentication")
+        FileUtils.mkdir_p(File.join(dir, "app/models"))
+        File.write(File.join(dir, "app/models/session.rb"), "class Session; end\n")
+        File.write(File.join(dir, "app/models/current.rb"), "class Current; end\n")
+        expect(described_class.call.content.first[:text]).to include("**Auth:** Rails 8 authentication (built-in)")
+      end
+    end
   end
 
   describe "assets stack from frontend introspector" do
