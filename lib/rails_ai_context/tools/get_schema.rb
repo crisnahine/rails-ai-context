@@ -383,6 +383,11 @@ module RailsAiContext
         lines
       end
 
+      # The dump a static parse read, from its own note when nothing else names it.
+      private_class_method def self.dump_name(schema)
+        schema[:declared_in] || schema[:note].to_s[/\AParsed from (\S+)/, 1] || "db/schema.rb"
+      end
+
       private_class_method def self.static_source_lines(schema)
         lines = note_lines(schema)
         lines << "**Dialect:** #{schema[:dialect]}" if schema[:dialect] && schema[:dialect] != "unknown"
@@ -398,7 +403,14 @@ module RailsAiContext
                    "#{connected_total}. Missing: #{missing.sort.first(5).join(', ')}" \
                    "#{missing.size > 5 ? " (+#{missing.size - 5} more)" : ""}. Run `rails db:migrate`._"
         end
-        if schema[:pending_migrations].is_a?(Array)
+        # A database that holds none of the tables the dump lists is created
+        # but not migrated, and the listing above is the dump's.
+        if schema[:connected_tables]&.zero? && (declared_total = Introspectors::SchemaConventions.table_count(schema[:tables] || {})).positive?
+          lines << "_#{dump_name(schema)} declares #{count_phrase(declared_total, "table")}; the connected database has none of them. Run `rails db:migrate`._"
+        end
+        if schema[:pending_unknown]
+          lines << "**Pending migrations:** not known: #{schema[:pending_unknown]}"
+        elsif schema[:pending_migrations].is_a?(Array)
           pending = schema[:pending_migrations]
           if pending.any?
             lines << "**Pending migrations:** #{pending_phrase(pending)}"

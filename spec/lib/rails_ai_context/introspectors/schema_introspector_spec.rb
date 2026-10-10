@@ -35,6 +35,55 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
           expect(note).not_to include("no DB connection")
         end
       end
+
+      # The dump's version marked every file applied, so a database created and
+      # never migrated read "Pending migrations: none" beside runtime_info's 3.
+      it "takes the connection's pending list over the dump's version" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db", "migrate"))
+          File.write(File.join(dir, "db", "migrate", "20260901000000_create_posts.rb"), "class CreatePosts < ActiveRecord::Migration[8.1]\nend\n")
+          File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+            ActiveRecord::Schema[8.1].define(version: 2026_09_01_000000) do
+              create_table "posts" do |t|
+                t.string "title"
+              end
+            end
+          RUBY
+          blog = described_class.new(RailsAiContext::StaticApp.new(dir))
+          allow(blog).to receive(:active_record_connected?).and_return(true)
+          allow(blog).to receive(:table_names).and_return([])
+          live = [ { version: "20260901000000", name: "CreatePosts" } ]
+          allow(RailsAiContext::PendingMigrations).to receive(:live).and_return(live)
+
+          result = blog.call
+          expect(result).to include(pending_migrations: live, connected_tables: 0)
+        end
+      end
+    end
+
+    # With no database to ask, the dump's version says nothing about what ran.
+    context "when the app booted and the database does not answer" do
+      it "says pending is not known, not none" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+            ActiveRecord::Schema[8.1].define(version: 2026_09_01_000000) do
+              create_table "posts" do |t|
+                t.string "title"
+              end
+            end
+          RUBY
+          blog = described_class.new(RailsAiContext::StaticApp.new(dir))
+          blog.instance_variable_set(:@connection_error, ActiveRecord::NoDatabaseError.new("database \"blog_dev\" does not exist"))
+          allow(blog).to receive(:active_record_connected?).and_return(false)
+
+          result = blog.call
+          expect(result).not_to have_key(:pending_migrations)
+          expect(result[:pending_unknown]).to eq("the database does not exist yet (`bin/rails db:create`, then `bin/rails db:migrate`)")
+          # The static tier keeps the dump's answer, which is all it ever has.
+          expect(blog.static_call[:pending_migrations]).to eq([])
+        end
+      end
     end
 
     context "when ActiveRecord is not connected and no schema file" do

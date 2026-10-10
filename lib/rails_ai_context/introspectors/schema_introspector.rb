@@ -14,13 +14,27 @@ module RailsAiContext
 
       # @return [Hash] database schema context
       def call
-        return attach_secondary_databases(static_schema_parse) unless active_record_connected?
+        unless active_record_connected?
+          # The dump's version says which files are newer than it, which is a
+          # claim about a database; with none to ask, nothing is known pending.
+          result = static_schema_parse
+          if result.key?(:pending_migrations)
+            result.delete(:pending_migrations)
+            result[:pending_unknown] = unreachable_reason
+          end
+          return attach_secondary_databases(result)
+        end
 
         @partitions = PgPartitions.names(connection)
         if table_names.empty?
           # Connected but not migrated: the files answer, and the notes say so.
+          # The connection knows what has run, so its pending list stands.
           @connection_state = "connected, no tables yet"
-          return attach_secondary_databases(static_schema_parse)
+          result = static_schema_parse
+          live = RailsAiContext::PendingMigrations.live(RailsAiContext::PendingMigrations.migrate_dirs_for(app.root))
+          result[:pending_migrations] = live if live
+          result[:connected_tables] = 0 unless result.key?(:error) || result.key?(:unavailable)
+          return attach_secondary_databases(result)
         end
 
         tables = extract_tables
@@ -103,7 +117,20 @@ module RailsAiContext
         ActiveRecord::Base.connection.select_value("SELECT 1")
         true
       rescue => e
+        @connection_error = e
         RailsAiContext.debug_fail(e, false, label: "active_record_connected?")
+      end
+
+      # Why the connection did not answer, in the words a reader acts on.
+      def unreachable_reason
+        error = @connection_error
+        if defined?(ActiveRecord::NoDatabaseError) && error.is_a?(ActiveRecord::NoDatabaseError)
+          "the database does not exist yet (`bin/rails db:create`, then `bin/rails db:migrate`)"
+        elsif error
+          "the database did not answer (#{error.class.name})"
+        else
+          "there is no database connection"
+        end
       end
 
       def adapter_name
