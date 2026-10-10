@@ -6,11 +6,9 @@ module RailsAiContext
     # N+1 query risks, missing counter_cache, Model.all in controllers,
     # missing foreign key indexes.
     #
-    # Model and class structure is read from the AST. The N+1 detection below
-    # deliberately stays on text: a risk is a correlation between a controller
-    # action, a query chain and an association touched in an ERB view, and ERB
-    # has no Ruby AST to walk. Matching both sides as text keeps them
-    # comparable, and every finding here is a heuristic, not a fact.
+    # Model and class structure is read from the AST. N+1 risks come from
+    # NPlusOneScan, which follows a loaded collection into the loops and
+    # partials that walk it. Every finding here is a heuristic, not a fact.
     class PerformanceIntrospector < Base
       extend StaticTier
       static_tier :files_only
@@ -24,7 +22,7 @@ module RailsAiContext
         model_data = load_model_data
 
         {
-          n_plus_one_risks: detect_n_plus_one(model_data),
+          n_plus_one_risks: detect_n_plus_one,
           missing_counter_cache: detect_missing_counter_cache(model_data, schema_data),
           missing_fk_indexes: detect_missing_fk_indexes(schema_data, model_data, load_foreign_keys),
           model_all_in_controllers: detect_model_all_in_controllers(model_data),
@@ -79,7 +77,6 @@ module RailsAiContext
           ast = SourceIntrospector.walk_source(record.source, {
             classes: Listeners::ClassDefinitionListener,
             associations: Listeners::AssociationsListener,
-            includes: -> { Listeners::ChainedCallListener.new(:includes) },
             tree: TREE_LISTENER,
             mixins: Listeners::MixinsListener,
             counter_culture: -> { Listeners::GenericMacroListener.new(:counter_culture) }
@@ -100,8 +97,6 @@ module RailsAiContext
             { name: a[:name].to_s, options: a[:options] || {} }
           end
 
-          includes_calls = ast[:includes].map { |h| h[:args].map(&:to_s).join(", ") }
-
           {
             name: class_name,
             # The name of the class node whose superclass is ApplicationRecord,
@@ -112,8 +107,7 @@ module RailsAiContext
             has_many: has_many,
             belongs_to: belongs_to,
             tree_parent_keys: tree_parent_keys(ast, class_name),
-            counter_cultures: ast[:counter_culture].map { |c| counter_culture_record(c) },
-            includes_calls: includes_calls
+            counter_cultures: ast[:counter_culture].map { |c| counter_culture_record(c) }
           }
         rescue => e
           RailsAiContext.debug_fail(e, nil, label: "load_model_data")
@@ -138,169 +132,12 @@ module RailsAiContext
         end
       end
 
-      LOOP_METHODS = %w[each map flat_map find_each each_with_object collect select reject
-                        sort_by group_by each_slice each_with_index each_cons].freeze
-      PRELOAD_METHODS = %w[includes eager_load preload].freeze
-      QUERY_METHODS = %w[all where order limit find_each find_by_sql select joins left_joins].freeze
-
-      def detect_n_plus_one(model_data)
-        risks = []
-        view_contents = preload_view_contents
-        # The scan captures a single word, and a controller inside the model's
-        # own namespace writes the bare name, so the lookup is keyed on it.
-        model_lookup = model_data.group_by { |m| m[:name].demodulize }
-
-        SourceScan.each(root, kind: "app/controllers").each do |record|
-          analyze_controller_n_plus_one(record.source, record.file, model_lookup, view_contents, risks)
-        rescue StandardError
-          next
-        end
-
-        risks.uniq { |r| [ r[:model], r[:association], r[:controller], r[:action] ] }
-      end
-
-      def preload_view_contents
-        views_dir = File.join(root, "app/views")
-        return [] unless Dir.exist?(views_dir)
-
-        Dir.glob(File.join(views_dir, RailsAiContext::ViewFile::MARKUP_GLOB)).filter_map do |path|
-          RailsAiContext::SafeFile.read(path)
-        end
-      end
-
-      # Analyze a single controller file for N+1 risks with risk classification.
-      def analyze_controller_n_plus_one(content, controller_path, model_lookup, view_contents, risks)
-        actions = extract_controller_actions(content)
-
-        actions.each do |action_name, action_body|
-          # Match @ivar = Model.chain where chain contains a query method anywhere
-          # Handles Post.all, Post.includes(:user).all, Post.where(...).order(...), etc.
-          action_body.scan(/@(\w+)\s*=\s*(\w+)\.[^\n]+/) do |ivar, model_name|
-            chain = Regexp.last_match[0]
-            query_re = /\.(#{QUERY_METHODS.map { |m| Regexp.escape(m) }.join("|")})\b/
-            next unless chain.match?(query_re)
-            model = resolve_bare_model(model_lookup[model_name], controller_path)
-            next unless model
-
-            full_chain = extract_query_chain(action_body, ivar)
-
-            all_assocs = (model[:has_many] || []) + (model[:belongs_to] || [])
-            all_assocs.each do |assoc|
-              assoc_name = assoc[:name]
-              # Skip polymorphic belongs_to - can't preload generically
-              next if assoc[:options].key?(:polymorphic)
-              next unless association_accessed?(ivar, assoc_name, action_body, view_contents)
-
-              risk = classify_n_plus_one_risk(full_chain, action_body, assoc_name)
-
-              risks << {
-                model: model[:name],
-                association: assoc_name,
-                controller: controller_path,
-                action: action_name,
-                risk: risk.to_s,
-                suggestion: n_plus_one_suggestion(risk, model_name, assoc_name)
-              }
-            end
-          end
-        end
-      end
-
-      # The scan captures a bare word, and two models can demodulize to it.
-      # Rails would resolve it against the controller's own lexical scope,
-      # outermost module last, so the file's directory breaks the tie. When
-      # nothing there picks one, the row would name a model at random, so it
-      # is not written at all.
-      def resolve_bare_model(candidates, controller_path)
-        candidates = Array(candidates)
-        return candidates.first if candidates.size <= 1
-
-        controller_scopes(controller_path).each do |scope|
-          match = candidates.find { |m| m[:name].deconstantize == scope }
-          return match if match
-        end
-        nil
-      end
-
-      # "app/controllers/admin/billing/invoices_controller.rb" reads as
-      # ["Admin::Billing", "Admin", ""], the lexical scopes of the class in it.
-      def controller_scopes(controller_path)
-        parts = File.dirname(controller_path.to_s).split(File::SEPARATOR)
-        parts = parts.drop(2) if parts.first(2) == %w[app controllers]
-        parts.length.downto(0).map { |n| parts.first(n).join("/").camelize }
-      end
-
-      # Returns Hash { "index" => "body...", "show" => "body..." }
-      def extract_controller_actions(source)
-        ActionResolver.own_methods_in(source, nil)
-          .select { |m| m[:scope] == :instance && m[:visibility] == :public }
-          .to_h { |m| [ m[:name], ActionResolver.body_of(source, m)&.dig(:code).to_s ] }
-      end
-
-      # Extract the full query chain for an instance variable assignment.
-      # Captures multi-line chains like:
-      #   @posts = Post.where(published: true)
-      #                .includes(:comments)
-      #                .order(:created_at)
-      def extract_query_chain(source, ivar)
-        lines = source.lines
-        result = +""
-        capturing = false
-
-        lines.each do |line|
-          if line.match?(/@#{Regexp.escape(ivar)}\s*=/)
-            capturing = true
-            result << line
-          elsif capturing
-            # Continue capturing chained method calls (lines starting with .)
-            if line.match?(/^\s*\./)
-              result << line
-            else
-              break
-            end
-          end
-        end
-
-        result
-      end
-
-      # Check if an association is likely accessed in iteration context.
-      def association_accessed?(ivar, assoc_name, action_body, view_contents)
-        assoc_re = /\.#{Regexp.escape(assoc_name)}\b/
-
-        # Controller: loop over collection + association access in the loop
-        loop_re = /@#{Regexp.escape(ivar)}\.(#{LOOP_METHODS.join("|")})\b/
-        return true if action_body.match?(loop_re) && action_body.match?(assoc_re)
-
-        # Views: association accessed (render @collection implies iteration)
-        view_contents.any? { |vc| vc.match?(assoc_re) }
-      end
-
-      # Classify risk based on preloading status in the query chain and action body.
-      def classify_n_plus_one_risk(query_chain, action_body, assoc_name)
-        combined = "#{query_chain}\n#{action_body}"
-        preload_re = /\.(#{PRELOAD_METHODS.join("|")})\(/
-        # Match both :assoc_name (symbol) and assoc_name: (hash key for nested includes)
-        specific_re = /\.(#{PRELOAD_METHODS.join("|")})\(.*(:#{Regexp.escape(assoc_name)}\b|#{Regexp.escape(assoc_name)}:)/m
-
-        if combined.match?(specific_re)
-          :low
-        elsif combined.match?(preload_re)
-          :medium
-        else
-          :high
-        end
-      end
-
-      def n_plus_one_suggestion(risk, model_name, assoc_name)
-        case risk
-        when :high
-          "Add .includes(:#{assoc_name}) to the #{model_name} query to avoid N+1 queries"
-        when :medium
-          "#{model_name} query has preloading but missing :#{assoc_name} - add it to the includes list"
-        when :low
-          "#{assoc_name} is preloaded - no action needed"
-        end
+      # The scan reads the run models section, so an association a concern or a
+      # base declares is one it can follow.
+      def detect_n_plus_one
+        NPlusOneScan.new(root, resolved_models).call
+      rescue StandardError => e
+        RailsAiContext.debug_fail(e, [], label: "detect_n_plus_one")
       end
 
       # A counter the app maintains itself is not a missing counter_cache:

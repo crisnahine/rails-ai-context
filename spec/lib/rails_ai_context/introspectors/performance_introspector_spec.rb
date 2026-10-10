@@ -917,7 +917,7 @@ end
         RUBY
         File.write(fixture_view, <<~ERB)
           <% @users.each do |user| %>
-            <p><%= user.comments.count %></p>
+            <p><%= user.comments.size %></p>
           <% end %>
         ERB
       end
@@ -946,7 +946,7 @@ end
         RUBY
         File.write(fixture_view, <<~ERB)
           <% @posts.each do |post| %>
-            <p><%= post.comments.count %></p>
+            <p><%= post.comments.size %></p>
           <% end %>
         ERB
       end
@@ -1075,9 +1075,104 @@ end
         expect(n1_risks).to be_empty
       end
     end
+
+    # An association counted as read when `.comments` appeared anywhere in any
+    # view, an i18n key included, so a page that never touched one reported it.
+    context "an association name in text the loop does not call" do
+      before do
+        File.write(fixture_ctrl, "class N1TestController < ApplicationController\n  def index\n    @posts = Post.all\n  end\nend\n")
+        File.write(fixture_view, <<~ERB)
+          <%= t("nav.comments") %>
+          <% @posts.each do |post| %>
+            <p><%= post.title %> <%= link_to "x", post_comments_path(post) %></p>
+          <% end %>
+        ERB
+      end
+
+      it "reports nothing" do
+        expect(n1_risks).to be_empty
+      end
+    end
+
+    context "a collection read through a record a before_action loads" do
+      before do
+        File.write(fixture_ctrl, <<~RUBY)
+          class N1TestController < ApplicationController
+            before_action :set_post, only: :show
+
+            def show
+              @comments = @post.comments.order(:id)
+            end
+
+            private
+
+            def set_post
+              @post = Post.find(params[:id])
+            end
+          end
+        RUBY
+        File.write(File.join(views_dir, "show.html.erb"), "<%= render partial: \"n1_test/comment\", collection: @comments %>\n")
+        File.write(File.join(views_dir, "_comment.html.erb"), "<%= comment.user.name %> on <%= comment.post.title %>\n")
+      end
+
+      # comment.post is the inverse Rails sets on each record of @post.comments, so it runs no query.
+      it "follows it into the partial, and leaves out the inverse of the association it came through" do
+        expect(n1_risks.map { |r| r.values_at(:model, :association, :action, :view, :risk) })
+          .to eq([ [ "Comment", "user", "show", "n1_test/_comment.html.erb", "high" ] ])
+      end
+    end
+
+    context "a loop record handed to a partial as a local" do
+      before do
+        File.write(fixture_ctrl, "class N1TestController < ApplicationController\n  def index\n    @posts = Post.order(:id)\n  end\nend\n")
+        File.write(fixture_view, "<% @posts.each do |post| %>\n  <%= render \"n1_test/row\", post: post %>\n<% end %>\n")
+        File.write(File.join(views_dir, "_row.html.erb"), "<%= post.user.name %>\n")
+      end
+
+      it "is read in the partial" do
+        expect(n1_risks).to contain_exactly(a_hash_including(model: "Post", association: "user", view: "n1_test/_row.html.erb"))
+      end
+    end
+
+    context "a branch a literal local turns off" do
+      before do
+        File.write(fixture_ctrl, "class N1TestController < ApplicationController\n  def index\n    @posts = Post.all\n  end\nend\n")
+        File.write(fixture_view, "<%= render partial: \"n1_test/card\", collection: @posts, as: :post, locals: { show_author: false } %>\n")
+        File.write(File.join(views_dir, "_card.html.erb"), "<% if show_author %><%= post.user.name %><% end %>\n")
+      end
+
+      it "is not read" do
+        expect(n1_risks).to be_empty
+      end
+    end
+
+    context "an association counted in the loop" do
+      before do
+        File.write(fixture_ctrl, "class N1TestController < ApplicationController\n  def index\n    @posts = Post.includes(:comments)\n  end\nend\n")
+        File.write(fixture_view, "<% @posts.each do |post| %><%= post.comments.count %><% end %>\n")
+      end
+
+      # `count` on an association always runs COUNT; `size` reads the preloaded records.
+      it "is a query per record however it was preloaded" do
+        risk = n1_risks.find { |r| r[:association] == "comments" }
+        expect(risk).to include(risk: "high")
+        expect(risk[:suggestion]).to include(".size")
+      end
+    end
+
+    context "a jbuilder loop" do
+      before do
+        File.write(fixture_ctrl, "class N1TestController < ApplicationController\n  def index\n    @posts = Post.all\n  end\nend\n")
+        File.write(File.join(views_dir, "index.json.jbuilder"), "json.array! @posts do |post|\n  json.author post.user.name\nend\n")
+      end
+
+      it "is read as Ruby" do
+        expect(n1_risks).to contain_exactly(a_hash_including(model: "Post", association: "user", view: "n1_test/index.json.jbuilder"))
+      end
+    end
   end
 
-  describe "extract_controller_actions" do
+  describe "NPlusOneScan.controller_actions" do
     it "extracts public actions only" do
       source = <<~RUBY
         class FooController < ApplicationController
@@ -1096,7 +1191,7 @@ end
           end
         end
       RUBY
-      actions = introspector.send(:extract_controller_actions, source)
+      actions = RailsAiContext::Introspectors::NPlusOneScan.controller_actions(source)
       expect(actions.keys).to contain_exactly("index", "show")
       expect(actions).not_to have_key("set_item")
     end
@@ -1112,7 +1207,7 @@ end
           end
         end
       RUBY
-      actions = introspector.send(:extract_controller_actions, source)
+      actions = RailsAiContext::Introspectors::NPlusOneScan.controller_actions(source)
       expect(actions["index"]).to include("Post.all")
       expect(actions["index"]).to include("respond_to")
     end
@@ -1131,7 +1226,7 @@ end
           end
         end
       RUBY
-      actions = introspector.send(:extract_controller_actions, source)
+      actions = RailsAiContext::Introspectors::NPlusOneScan.controller_actions(source)
       expect(actions.keys).to contain_exactly("index")
     end
 
@@ -1149,7 +1244,7 @@ end
           end
         end
       RUBY
-      actions = introspector.send(:extract_controller_actions, source)
+      actions = RailsAiContext::Introspectors::NPlusOneScan.controller_actions(source)
       expect(actions["index"]).to include("Post.all")
       expect(actions["index"]).not_to include("@nothing")
     end
@@ -1164,7 +1259,7 @@ end
           private def set_post = @post = Post.where(id: params[:id])
         end
       RUBY
-      actions = introspector.send(:extract_controller_actions, source)
+      actions = RailsAiContext::Introspectors::NPlusOneScan.controller_actions(source)
       expect(actions.keys).to contain_exactly("index")
       expect(actions["index"]).not_to include("Post.where")
     end
