@@ -62,6 +62,48 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       expect(indents.uniq).to eq([ 4 ])
     end
 
+    # A new Rails app runs these rules in `bin/rubocop`, `bin/ci` and its
+    # GitHub lint job, so a generated file that breaks them fails the app's
+    # CI right after install.
+    context "under the omakase Rubocop a new Rails app runs" do
+      def rubocop_offenses
+        config = File.join(tmpdir, ".rubocop.yml")
+        File.write(config, "inherit_gem:\n  rubocop-rails-omakase: rubocop.yml\n")
+        out, status = Open3.capture2e("bundle", "exec", "rubocop", "--config", config, "--format", "simple", initializer_path)
+        status.success? ? nil : out
+      end
+
+      it "writes a fresh initializer it passes" do
+        generator.create_initializer
+
+        expect(rubocop_offenses).to be_nil
+      end
+
+      it "brings an older initializer up to date in a form it passes" do
+        File.write(initializer_path, <<~RUBY)
+          # frozen_string_literal: true
+
+          RailsAiContext.configure do |config|
+            config.ai_tools = %i[claude]
+            config.preset = :standard
+          end
+        RUBY
+
+        generator.create_initializer
+
+        expect(File.read(initializer_path)).to include("    config.preset = :standard\n\n    # ── AI Tools")
+        expect(rubocop_offenses).to be_nil
+      end
+    end
+
+    it "names the :standard preset's introspectors from the preset" do
+      generator.create_initializer
+
+      comment = File.read(initializer_path)[/#   :standard.*?\)/m]
+      named = comment.scan(/\b[a-z][a-z0-9_]*\b/) - %w[standard core introspectors]
+      expect(named).to eq(RailsAiContext::Configuration::PRESETS[:standard].map(&:to_s))
+    end
+
     it "adds the guard when updating an existing unguarded initializer" do
       File.write(initializer_path, <<~RUBY)
         # frozen_string_literal: true
