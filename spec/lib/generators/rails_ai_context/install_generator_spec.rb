@@ -213,6 +213,69 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
     end
   end
 
+  # An engine's bin/rails boots test/dummy, so Rails.root is the dummy app
+  # while the generator runs from the engine's root. The initializer went to
+  # the engine's root, which every host app loads and the gemspec ships, and
+  # everything else into test/dummy.
+  context "run from a mountable engine's root" do
+    let(:dummy) { File.join(tmpdir, "test", "dummy") }
+
+    before do
+      FileUtils.mkdir_p(File.join(dummy, "config"))
+      File.write(File.join(tmpdir, "Gemfile"), "source \"https://rubygems.org\"\ngemspec\ngem \"rails-ai-context\"\n")
+      File.write(File.join(tmpdir, ".gitignore"), "/log\n")
+      allow(Rails).to receive(:root).and_return(Pathname.new(dummy))
+      stub_const("ENGINE_ROOT", tmpdir)
+    end
+
+    it "writes no initializer, at the engine's root or the dummy app's, and says why" do
+      FileUtils.rm_rf(File.dirname(initializer_path))
+      said = []
+      allow(generator).to receive(:say) { |text, *| said << text }
+
+      generator.create_initializer
+
+      expect(File.exist?(initializer_path)).to be(false)
+      expect(File.exist?(File.join(dummy, "config/initializers/rails_ai_context.rb"))).to be(false)
+      expect(said.join).to include("Rails would run it in every app that mounts the engine")
+    end
+
+    it "warns about an initializer an earlier install left in the engine, and leaves it alone" do
+      File.write(initializer_path, "RailsAiContext.configure { |config| config.ai_tools = %i[claude] }\n")
+      said = []
+      allow(generator).to receive(:say) { |text, *| said << text }
+
+      generator.create_initializer
+
+      expect(File.read(initializer_path)).to eq("RailsAiContext.configure { |config| config.ai_tools = %i[claude] }\n")
+      expect(said.join).to include("is inside the engine", "delete it")
+    end
+
+    it "writes the MCP configs, the record and the .gitignore lines at the engine's root" do
+      allow(generator).to receive(:say)
+      generator.instance_variable_set(:@context_files, true)
+
+      generator.create_mcp_config
+      generator.create_yaml_config
+      generator.add_to_gitignore
+
+      expect(File.exist?(File.join(tmpdir, ".mcp.json"))).to be(true)
+      expect(File.exist?(File.join(tmpdir, ".rails-ai-context.yml"))).to be(true)
+      expect(File.read(File.join(tmpdir, ".gitignore"))).to include(".ai-context.json")
+      expect(Dir.children(dummy)).to eq([ "config" ])
+    end
+
+    it "offers commands that run at the engine's root, where the rake tasks are app:ai:*" do
+      said = []
+      allow(generator).to receive(:say) { |text = "", *| said << text }
+
+      generator.show_instructions
+
+      expect(said.join("\n")).to include("bundle exec rails-ai-context context", "bundle exec rails-ai-context serve")
+      expect(said.join("\n")).not_to include("rails ai:", "rails 'ai:")
+    end
+  end
+
   describe "#install_validation_hook" do
     let(:hook_path) { File.join(tmpdir, ".git/hooks/pre-commit") }
 
