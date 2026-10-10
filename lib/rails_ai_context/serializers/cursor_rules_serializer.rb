@@ -93,7 +93,7 @@ module RailsAiContext
         ]
         lines.concat(SectionFacts.static_notice_lines(context))
 
-        lines << "Check here first for scopes, constants, associations. Read model files for business logic/methods."
+        lines << MODELS_READING
         lines << ""
 
         models.keys.sort.first(30).each do |name|

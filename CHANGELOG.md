@@ -368,6 +368,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   root file leaves out, the detail levels and the table of every tool, and
   point to it for the rest; with `generate_root_files` off they still carry
   the whole guide. Cursor's agent-requested rule is unchanged.
+- **The models rule files no longer contradict the tools guide.** They said
+  "Read model files for business logic/methods" beside the guide's "NEVER
+  read reference files - ... model files"; they now say to read a model
+  file only when you edit it, the guide's own rule.
 - **A small `claude_max_lines` no longer cuts the tools guide.** Below
   about 110 lines the budget was a hard cap that trimmed the file from the
   end, so at 60 the four compact files kept the data and lost the
