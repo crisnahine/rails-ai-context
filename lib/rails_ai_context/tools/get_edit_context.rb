@@ -57,7 +57,9 @@ module RailsAiContext
             suggestions = candidates.map { |c| c.sub("#{rails_app.root}/", "") }
             " Did you mean: #{suggestions.join(', ')}? Use the full path relative to Rails root."
           else
-            " Use the full path relative to Rails root (e.g., 'app/models/#{basename}')."
+            # An example built from the name the caller gave was that same
+            # path back for `app/models/nope.rb`, read as a file to retry.
+            " No file named #{basename} is under app/."
           end
           return empty_response("File not found: #{file}.#{hint}")
         end
