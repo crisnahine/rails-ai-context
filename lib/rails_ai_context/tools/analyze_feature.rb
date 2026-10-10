@@ -40,6 +40,8 @@ module RailsAiContext
       # the filesystem. Tool output notes when the cap is hit so the AI agent knows
       # to narrow its feature keyword. v5.8.1 hardening; all glob sites in r2.
       MAX_SCAN_FILES = 500
+      # The callers named under each service; rails_get_service_pattern(service:) lists more.
+      CALLERS_SHOWN = 5
 
       # The directories rspec-rails and minitest file tests under by kind.
       SUITE_TYPE_DIRS = %w[
@@ -254,6 +256,7 @@ module RailsAiContext
           return unless Dir.exist?(dir)
 
           real_root = File.realpath(root).to_s
+          real_dir = File.realpath(dir).to_s
           candidates = safe_glob(dir, "**/*.rb", real_root).first(MAX_SCAN_FILES)
           # Prefer basename match (fast, no file read) and only fall back to
           # a content scan for files whose basename doesn't match. This
@@ -264,18 +267,44 @@ module RailsAiContext
           end
           return if found.empty?
 
-          lines << "## Services (#{found.size}#{candidates.size == MAX_SCAN_FILES ? " - first #{MAX_SCAN_FILES} scanned" : ""})"
-          found.each do |path|
-            relative = path.sub("#{real_root}/", "")
+          services = found.filter_map do |path|
             source = RailsAiContext::SafeFile.read(path) or next
-            line_count = source.lines.size
-            methods = source.scan(/^\s*def (?:self\.)?(\w+)/m).flatten.reject { |m| m == "initialize" }
-            lines << "- `#{relative}` (#{count_phrase(line_count, "line")})"
+            # The path carries the namespace Zeitwerk expects, as rails_get_service_pattern reads it.
+            constant = path.delete_prefix("#{real_dir}/").delete_suffix(".rb").camelize
+            { path: path, source: source, name: Introspectors::ServiceClasses.declaration(source, constant).first }
+          end
+          # A feature's services are usually run from controllers its name does
+          # not match: CheckoutService from two OrdersControllers.
+          named = services.select { |s| s[:name] }
+          callers, callers_truncated = GetServicePattern.callers_of(named.to_h { |s| [ s[:name], s[:path] ] }, real_root)
+
+          lines << "## Services (#{found.size}#{candidates.size == MAX_SCAN_FILES ? " - first #{MAX_SCAN_FILES} scanned" : ""})"
+          services.each do |service|
+            relative = service[:path].sub("#{real_root}/", "")
+            methods = service[:name] ? service_methods(service[:source], service[:name]) : []
+            lines << "- `#{relative}` (#{count_phrase(service[:source].lines.size, "line")})"
             lines << "  Methods: #{methods.first(20).join(', ')}" if methods.any?
+            called_by = callers.fetch(service[:name], [])
+            next if called_by.empty?
+
+            more = called_by.size > CALLERS_SHOWN ? " and #{called_by.size - CALLERS_SHOWN} more" : ""
+            lines << "  Called by: #{called_by.first(CALLERS_SHOWN).map { |c| "`#{c}`" }.join(', ')}#{more}"
+          end
+          if callers_truncated
+            lines << "_The caller scan stopped after #{count_phrase(GetServicePattern::MAX_CALLER_SCAN_FILES, "file")}._"
           end
           lines << ""
         rescue => e
           RailsAiContext.debug_fail(e, nil, label: "discover_services")
+        end
+
+        # The service class's own public methods, by the names Ruby calls
+        # them: a line scan listed `success` for CheckoutService, read off the
+        # `success?` of the Result struct nested in it.
+        def service_methods(source, name)
+          Introspectors::ActionResolver.own_methods_in(source, name)
+            .select { |m| m[:visibility] == :public }
+            .map { |m| m[:scope] == :class ? "self.#{m[:name]}" : m[:name].to_s }
         end
 
         # --- AF2: Jobs ---

@@ -669,6 +669,51 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
     end
   end
 
+  # shopapp's CheckoutService nests a Result struct whose `success?` the line
+  # scan listed as the service's `success`, and the two controllers that run
+  # the checkout were nowhere in the answer.
+  describe "a feature's service" do
+    it "lists the service's own public methods and the files that call it" do
+      Dir.mktmpdir("rac_service") do |tmp|
+        FileUtils.mkdir_p([ File.join(tmp, "app", "services"), File.join(tmp, "app", "controllers", "api") ])
+        File.write(File.join(tmp, "app", "services", "checkout_service.rb"), <<~RUBY)
+          class CheckoutService
+            Result = Struct.new(:order, :error) do
+              def success?
+                error.nil?
+              end
+            end
+
+            def self.call(**args) = new(**args).call
+
+            def initialize(cart:)
+              @cart = cart
+            end
+
+            def call
+              Result.new(order: build)
+            end
+
+            private
+
+            def build; end
+          end
+        RUBY
+        File.write(File.join(tmp, "app", "controllers", "orders_controller.rb"),
+                   "class OrdersController < ApplicationController\n  def create\n    CheckoutService.new(cart: {}).call\n  end\nend\n")
+        File.write(File.join(tmp, "app", "controllers", "api", "orders_controller.rb"),
+                   "module Api\n  class OrdersController\n    def create = ::CheckoutService.call(cart: {})\n  end\nend\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        text = described_class.call(feature: "checkout").content.first[:text]
+
+        expect(text).to include("  Methods: self.call, call\n")
+        expect(text).to include("  Called by: `app/controllers/api/orders_controller.rb`, `app/controllers/orders_controller.rb`")
+      end
+    end
+  end
+
   # The glob tier read queue_as out of the job's own file, so a queue
   # inherited from ApplicationJob printed as "default".
   describe "jobs, mailers and channels read from the payload" do
