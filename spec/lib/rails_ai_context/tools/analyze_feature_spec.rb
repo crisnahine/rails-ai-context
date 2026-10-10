@@ -626,6 +626,19 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       expect(text).to include("Status: before_validation :set_slug")
       expect(text).not_to include(":Mastodon")
     end
+
+    # after_commit_on_create is the key this gem files `after_create_commit`
+    # under; Rails has no macro by that name.
+    it "writes a commit callback's event the way Rails declares it" do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Status" => { table_name: "statuses", callbacks: { "after_commit_on_create" => %w[notify] } } }
+      )
+
+      text = described_class.call(feature: "status").content.first[:text]
+
+      expect(text).to include("Status: after_commit (on: :create) :notify")
+      expect(text).not_to include("after_commit_on_create")
+    end
   end
 
   # The glob tier read queue_as out of the job's own file, so a queue
