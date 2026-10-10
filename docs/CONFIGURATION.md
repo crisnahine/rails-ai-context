@@ -119,7 +119,7 @@ empty list wrote every tool's files.
 |:-------|:-----|:--------|:------------|
 | `excluded_models` | Array | 8 framework models | Models to skip during introspection |
 | `excluded_controllers` | Array | 2 framework controllers | Controllers to skip |
-| `excluded_route_prefixes` | Array | 6 framework prefixes | Route prefixes to skip |
+| `excluded_route_prefixes` | Array | 7 framework prefixes | Route controller prefixes `rails_get_routes` hides with `app_only`: the routes Rails' engines and gems draw on their own. A route the app's route files declare (`devise_for`, the health check) is not one |
 | `excluded_filters` | Array | 5 framework filters | Controller filters to skip |
 | `excluded_middleware` | Array | 25 framework middleware | Middleware to skip in listing |
 | `excluded_paths` | Array | `["node_modules", "tmp", "log", "vendor", ".git", "doc", "docs"]` | Paths excluded from search |

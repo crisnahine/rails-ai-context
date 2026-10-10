@@ -335,6 +335,33 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
     end
   end
 
+  describe "routes the app's own route files declare" do
+    before do
+      by_controller["devise/sessions"] = [
+        { verb: "GET", path: "/users/sign_in", action: "new", name: "new_user_session" },
+        { verb: "POST", path: "/users/sign_in", action: "create", name: "user_session" }
+      ]
+      by_controller["rails/health"] = [ { verb: "GET", path: "/up", action: "show", name: "rails_health_check" } ]
+    end
+
+    # devise_for and the health check every new app writes are declared in
+    # config/routes.rb; hiding them as framework routes left an app's sign-in
+    # routes named nowhere by default.
+    it "lists them with the app's routes" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("## devise/sessions", "`new_user_session_path`", "## rails/health")
+      expect(text).to include("excluding 1 framework route")
+    end
+
+    it "finds a framework controller asked for by name, app_only or not" do
+      text = described_class.call(controller: "active_storage/blobs").content.first[:text]
+
+      expect(text).to include("## active_storage/blobs")
+      expect(text).not_to include("No routes")
+    end
+  end
+
   describe ".call with app_only:true" do
     it "says how to see the routes it hid" do
       result = described_class.call(app_only: true)
@@ -355,7 +382,7 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
     let(:static_routes) do
       { total_routes: 2, confidence: RailsAiContext::Confidence::STATIC, api_namespaces: [],
         by_controller: { "posts" => [ { verb: "GET", path: "/posts", action: "index", name: "posts" } ],
-                         "rails/health" => [ { verb: "GET", path: "/up", action: "show", name: "rails_health_check" } ] } }
+                         "rails/info" => [ { verb: "GET", path: "/rails/info/routes", action: "routes", name: "rails_info_routes" } ] } }
     end
 
     before { allow(described_class).to receive(:cached_context).and_return({ routes: static_routes }) }
@@ -377,7 +404,7 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
     end
 
     it "says so even when the app's files draw no framework route" do
-      static_routes[:by_controller].delete("rails/health")
+      static_routes[:by_controller].delete("rails/info")
 
       expect(described_class.call.content.first[:text]).to include(described_class::GEM_DRAWN_NOTE)
     end

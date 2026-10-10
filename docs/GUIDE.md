@@ -495,7 +495,7 @@ Returns all routes: HTTP verbs, paths, controller actions, route names.
 | `detail` | string | `summary` / `standard` (default) / `full` |
 | `limit` | integer | Max routes to return. Default: 150 (standard), 200 (full). |
 | `offset` | integer | Skip routes for pagination. Default: 0. |
-| `app_only` | boolean | Filter out internal Rails routes (Active Storage, Action Mailbox, Conductor, etc.). Default: true. |
+| `app_only` | boolean | Leave out the routes Rails' engines and gems draw on their own (Active Storage, Action Mailbox and its conductor, Turbo Native navigation, `rails/info`, `rails/mailers`, `rails/welcome`). The app's own declarations stay, `devise_for` and the health check included. A `controller` filter searches every route. Default: true. |
 
 **Examples:**
 
@@ -1432,7 +1432,7 @@ end
 | `max_search_results` | Integer | `200` | Max lines a search may emit per call, matches and context together |
 | `max_validate_files` | Integer | `50` | Max files per validate call |
 | `excluded_controllers` | Array | `DeviseController`, etc. | Controller classes hidden from listings |
-| `excluded_route_prefixes` | Array | `action_mailbox/`, `active_storage/`, etc. | Route controller prefixes hidden with `app_only` |
+| `excluded_route_prefixes` | Array | `action_mailbox/`, `active_storage/`, `rails/conductor/`, `rails/info`, `rails/mailers`, `rails/welcome`, `turbo/` | Route controller prefixes hidden with `app_only`: the routes Rails' engines and gems draw on their own |
 | `excluded_association_names` | Array | 7 framework associations | Framework association names hidden from model output |
 | `excluded_concerns` | Array of Regex or String | framework regex patterns | Patterns for concerns to hide. A YAML list replaces the framework defaults; the initializer's `+=` adds to them |
 | `excluded_filters` | Array | `verify_authenticity_token`, etc. | Framework filter names hidden from controller output |
