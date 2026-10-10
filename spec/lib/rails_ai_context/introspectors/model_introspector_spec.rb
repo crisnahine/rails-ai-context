@@ -1836,7 +1836,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
         introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
         [ introspector.static_call, introspector.call ].each do |result|
-          expect(result["Book"][:fields].map { |f| f[:name] }).to eq(%i[tags title])
+          expect(result["Book"][:fields].map { |f| f[:name] }).to eq(%i[_id tags title])
           expect(result["Book"][:indexes]).to eq([ "index tags: 1", "index title: 1" ])
         end
       end
@@ -1948,7 +1948,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         order = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Order"]
 
         expect(order[:collection]).to eq("legacy_orders")
-        expect(order[:fields]).to eq([ { name: :total, type: "BigDecimal" }, { name: :tags },
+        expect(order[:fields]).to eq([ { name: :_id, type: "BSON::ObjectId", implicit: "every document" }, { name: :total, type: "BigDecimal" }, { name: :tags },
                                        { name: :age, type: "Integer", default: "0" }, { name: :labels, type: "Array", default: "[]" } ])
         expect(order[:embeds]).to eq([
           { type: :embeds_many, name: :line_items },
@@ -1972,8 +1972,51 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(models["Address"]).to include(embedded_in: "Author")
         expect(models["Address"]).not_to have_key(:collection)
         expect(models["Ebook"]).to include(mongoid: true, collection: "books", parent_model: "Book")
-        expect(models["Ebook"][:fields].map { |f| f[:name] }).to eq(%i[title url])
+        expect(models["Ebook"][:fields].map { |f| f[:name] }).to eq(%i[_id title _type url])
         expect(models["Ebook"]).not_to have_key(:table_name)
+      end
+    end
+
+    # `Post.fields.keys` lists what no `field` line declares; a document that
+    # showed only its declared fields hid the key every relation reads.
+    it "lists the fields Mongoid adds, in the order Model.fields gives them" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+          class Post
+            include Mongoid::Document
+            include Mongoid::Timestamps
+            field :title, type: String
+            belongs_to :author
+            belongs_to :owner, polymorphic: true
+            has_and_belongs_to_many :tags
+            embeds_many :comments
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "note.rb"), <<~RUBY)
+          class Note
+            include Mongoid::Document
+            include Mongoid::Timestamps::Short
+            field :_id, type: String
+          end
+        RUBY
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["Post"][:fields].map { |f| [ f[:name], f[:type], f[:implicit] ] }).to eq([
+          [ :_id, "BSON::ObjectId", "every document" ],
+          [ :created_at, "Time", "Mongoid::Timestamps" ], [ :updated_at, "Time", "Mongoid::Timestamps" ],
+          [ :title, "String", nil ],
+          [ :author_id, "Object", "belongs_to :author" ],
+          [ :owner_type, "String", "belongs_to :owner, polymorphic: true" ], [ :owner_id, "Object", "belongs_to :owner" ],
+          [ :tag_ids, "Array", "has_and_belongs_to_many :tags" ]
+        ])
+        # A declared _id is the document's own, where Mongoid keeps it.
+        expect(models["Note"][:fields].map { |f| [ f[:name], f[:implicit] ] }).to eq([
+          [ :_id, nil ], [ :c_at, "Mongoid::Timestamps::Short" ], [ :u_at, "Mongoid::Timestamps::Short" ]
+        ])
       end
     end
 
