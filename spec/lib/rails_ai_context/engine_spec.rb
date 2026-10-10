@@ -33,6 +33,32 @@ RSpec.describe RailsAiContext::Engine do
       expect(initializer).not_to be_nil
       expect(initializer.after).to eq(:load_config_initializers)
     end
+
+    # At the end of the stack, auto_mount sat behind Active Record's
+    # pending-migration check, so with a migration pending every MCP request
+    # got the HTML error page. Replayed the way Rails builds the stack: the
+    # frameworks' operations first, then the app's own.
+    it "places auto_mount in front of the pending-migration check" do
+      allow(RailsAiContext.configuration).to receive(:auto_mount).and_return(true)
+      pending_check = Class.new
+      frameworks = Rails::Configuration::MiddlewareStackProxy.new
+      frameworks.insert_after ActionDispatch::Callbacks, pending_check
+      app_operations = Rails::Configuration::MiddlewareStackProxy.new
+
+      described_class.instance.initializers.find { |i| i.name == "rails_ai_context.middleware" }
+        .run(double("app", middleware: app_operations))
+
+      stack = ActionDispatch::MiddlewareStack.new do |middleware|
+        middleware.use ActionDispatch::Executor, Rails.application.executor
+        middleware.use ActionDispatch::Callbacks
+        middleware.use ActionDispatch::Cookies
+      end
+      (frameworks + app_operations).merge_into(stack)
+
+      expect(stack.middlewares.map(&:klass)).to eq([
+        ActionDispatch::Executor, ActionDispatch::Callbacks, RailsAiContext::Middleware, pending_check, ActionDispatch::Cookies
+      ])
+    end
   end
 
   describe "configuration integration" do

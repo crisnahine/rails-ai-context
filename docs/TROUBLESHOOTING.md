@@ -161,6 +161,10 @@ directory. Fixes:
 - Large schema files (>10MB) slow down schema introspection
 - Run `rails ai:doctor` - it checks schema size and view count
 
+### HTTP answers an HTML error page while a migration is pending
+
+In development Rails answers every request with its pending-migration page, and the mounted engine is a route like any other. Run the migration, or use `auto_mount`, stdio or the standalone server, which all answer ahead of that check; `rails_runtime_info` lists the pending migrations.
+
 ### HTTP answers 403 "Forbidden: Invalid Host header"
 
 The MCP SDK answers only requests whose `Host` header is `127.0.0.1`, `::1` or `localhost`, to stop DNS rebinding. A client that reaches the server by the machine's IP or hostname is refused, whatever `http_bind` says. Connect to `localhost`: through a published container port, or an SSH tunnel (`ssh -L 6029:localhost:6029 your-host`).
