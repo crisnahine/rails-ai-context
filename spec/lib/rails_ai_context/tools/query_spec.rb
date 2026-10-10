@@ -15,6 +15,9 @@ RSpec.describe RailsAiContext::Tools::Query do
       otp_secret session_data secret_key
       api_key api_secret access_token refresh_token jti
     ]
+    # Reset the allow-list too, so an example that exempts a name cannot leak
+    # that exemption into a later example under a random run order.
+    RailsAiContext.configuration.query_allowed_columns = []
   end
 
   describe ".validate_sql" do
@@ -1674,6 +1677,106 @@ it "still explains a database that does not exist" do
       expect(described_class.sensitive_column?("api_token")).to be false
     ensure
       RailsAiContext.configuration.query_allowed_columns = []
+    end
+  end
+
+  describe "Rails bookkeeping tables are never sensitive" do
+    # ar_internal_metadata.key ends in "key"; leaving it in the sensitive set
+    # refused every query whose text held the word "key" (a column, a JSON key,
+    # a LIKE pattern). These tables are excluded on every adapter.
+    before do
+      allow(described_class).to receive(:columns_from_connection).and_return(nil)
+      allow(described_class).to receive(:cached_context).and_return(
+        schema: { tables: {
+          "ar_internal_metadata" => { columns: [ { name: "key" }, { name: "value" } ] },
+          "schema_migrations" => { columns: [ { name: "version" } ] },
+          "widgets" => { columns: [ { name: "id" }, { name: "api_token" } ] }
+        } }
+      )
+    end
+
+    it "leaves their columns out of the real column set" do
+      cols = described_class.send(:real_column_names)
+      expect(cols).to include("api_token")
+      expect(cols).not_to include("key")
+      expect(cols).not_to include("version")
+    end
+
+    it "does not refuse a query naming a bookkeeping column" do
+      valid, = described_class.validate_sql("SELECT key, value FROM ar_internal_metadata")
+      expect(valid).to be true
+    end
+
+    it "leaves them out of the per-relation map the plan check reads" do
+      expect(described_class.send(:relation_sensitive_columns)).not_to have_key("ar_internal_metadata")
+    end
+  end
+
+  describe "a sensitive name inside a string literal" do
+    describe ".mask_sql_literals (textual, PostgreSQL)" do
+      it "blanks single-quoted, E, U& and dollar-quoted literals" do
+        expect(described_class.mask_sql_literals("WHERE b LIKE '%secret%'")).not_to include("secret")
+        expect(described_class.mask_sql_literals("x = E'\\'api_token'")).not_to include("api_token")
+        expect(described_class.mask_sql_literals("$$ api_token $$")).not_to include("api_token")
+        expect(described_class.mask_sql_literals("$t$ api_token $t$")).not_to include("api_token")
+      end
+
+      it "leaves a double-quoted identifier alone" do
+        expect(described_class.mask_sql_literals('SELECT "api_token"')).to include("api_token")
+      end
+    end
+
+    describe ".mask_plan_literals (plan expressions)" do
+      it "blanks a quote-doubled constant and keeps identifiers" do
+        expect(described_class.send(:mask_plan_literals, "(body ~~ '%api_token%'::text)")).not_to include("api_token")
+        expect(described_class.send(:mask_plan_literals, "x ~~ 'it''s a secret'::text")).not_to include("secret")
+        expect(described_class.send(:mask_plan_literals, "users.api_token")).to include("api_token")
+      end
+    end
+
+    it "validate_sql(postgres: true) passes a sensitive name that is only inside a literal" do
+      valid, = described_class.validate_sql("SELECT id FROM posts WHERE body LIKE '%secret%'", postgres: true)
+      expect(valid).to be true
+    end
+
+    it "validate_sql (default, non-postgres) still refuses the same literal" do
+      valid, error = described_class.validate_sql("SELECT id FROM posts WHERE body LIKE '%secret%'")
+      expect(valid).to be false
+      expect(error).to include("secret")
+    end
+
+    it "validate_sql(postgres: true) still refuses a real identifier beside a literal" do
+      valid, error = described_class.validate_sql("SELECT 'x' || api_secret AS y FROM t", postgres: true)
+      expect(valid).to be false
+      expect(error).to include("api_secret")
+    end
+
+    it "the plan check ignores a sensitive word inside a plan literal" do
+      allow(described_class).to receive(:schema_sensitive_columns).and_return(%w[api_token])
+      exprs = described_class.send(:plan_expressions, [ { "Filter" => [ "(body ~~ '%api_token%'::text)" ] } ])
+      expect(described_class.send(:sensitive_column_in_plan, exprs)).to be_nil
+    end
+  end
+
+  describe ".unvouched_literal_refusal (plan vouch)" do
+    let(:sql) { "SELECT id FROM posts WHERE body LIKE '%secret%'" }
+
+    it "allows a literal-only sensitive name when the plan was obtained" do
+      allow(described_class).to receive(:pg_plan).and_return("Node Type" => "Result")
+      expect(described_class.send(:unvouched_literal_refusal, sql, true)).to be_nil
+    end
+
+    it "refuses a literal-only sensitive name when the plan could not be obtained" do
+      allow(described_class).to receive(:pg_plan).and_return(nil)
+      expect(described_class.send(:unvouched_literal_refusal, sql, true)).to include("secret")
+    end
+
+    it "is a no-op on a non-postgres adapter" do
+      expect(described_class.send(:unvouched_literal_refusal, "SELECT 'x' AS a WHERE b LIKE '%secret%'", false)).to be_nil
+    end
+
+    it "is a no-op when no sensitive name is present at all" do
+      expect(described_class.send(:unvouched_literal_refusal, "SELECT id FROM posts", true)).to be_nil
     end
   end
 

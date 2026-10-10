@@ -236,7 +236,8 @@ module RailsAiContext
 
         # ── Layer 1: SQL validation ─────────────────────────────────
         mysql = mysql_dialect?
-        valid, error = validate_sql(sql, mysql: mysql)
+        postgres = postgres_adapter?
+        valid, error = validate_sql(sql, mysql: mysql, postgres: postgres)
         return error_response(error) unless valid
 
         # Run the text the validator read, never the raw input: whatever the
@@ -249,6 +250,14 @@ module RailsAiContext
         # sensitive column and a VOLATILE admin function are caught before any
         # execution - the normal path and the EXPLAIN path alike.
         if (refusal = postgresql_plan_refusal(sql, config.query_timeout))
+          return error_response(refusal)
+        end
+
+        # A sensitive name that survived validation only because it sat inside a
+        # literal (masked on PostgreSQL) is allowed only if the plan was obtained
+        # and passed every check above - so a masker fooled by a quote trick can
+        # never be the only gate. No plan (planning failed) keeps the raw refusal.
+        if (refusal = unvouched_literal_refusal(sql, postgres))
           return error_response(refusal)
         end
 
@@ -392,7 +401,14 @@ module RailsAiContext
       end
 
       # ── SQL validation (Layer 1) ────────────────────────────────────
-      def self.validate_sql(sql, mysql: false)
+      # `postgres:` relaxes the sensitive-column check so a name inside a string
+      # literal ('%secret%', a JSON key) is read as data, not a column - safe on
+      # PostgreSQL because its plan layer (Layer 1b) re-checks and must vouch.
+      # MySQL, SQLite and unknown adapters keep raw-text matching, with no
+      # masking: MySQL's NO_BACKSLASH_ESCAPES and ANSI_QUOTES modes change what a
+      # quote means, and SQLite reads a single-quoted name after a dot (t.'col')
+      # as an identifier, so a masker there could be fooled into hiding one.
+      def self.validate_sql(sql, mysql: false, postgres: false)
         return [ false, "SQL query is required." ] if sql.nil? || sql.strip.empty?
 
         # Belt-and-suspenders: run BLOCKED_FUNCTIONS against the RAW sql before
@@ -465,7 +481,9 @@ module RailsAiContext
         # textually references a sensitive column name. Post-execution redaction
         # reads the output column names, which an alias or an expression renames,
         # so it cannot survive `SELECT password_digest AS x` or `upper(api_token)`.
-        if (offending = references_sensitive_column?(cleaned))
+        # On PostgreSQL the match runs on literal-masked text; `.call` then makes
+        # the plan vouch for anything that passed only because of that masking.
+        if (offending = references_sensitive_column?(postgres ? mask_sql_literals(cleaned) : cleaned))
           return [ false,
             "Blocked: query references sensitive column `#{offending}`. " \
             "Name the columns you need; `#{offending}` is sensitive and never " \
@@ -476,6 +494,22 @@ module RailsAiContext
         end
 
         [ true, nil ]
+      end
+
+      # PostgreSQL string literals masked to an empty pair, so a sensitive word
+      # inside one (a `'%secret%'` pattern, a JSON key `->>'token'`) is read as
+      # data, not a column name. Dollar quotes first, then single quotes with any
+      # PG prefix (`E` escapes a backslash; `U&`, `B`, `X`). A double-quoted
+      # identifier is never touched. This is good enough for the textual layer;
+      # the plan layer, whose deparser output does not depend on
+      # standard_conforming_strings, is the final authority (see .call).
+      PG_TEXT_LITERAL = /
+        \$(\w*)\$.*?\$\1\$
+        | [eE]'(?:\\.|''|[^'])*'
+        | (?:[uU]&|[bBxX])?'(?:''|[^'])*'
+      /mx
+      def self.mask_sql_literals(text)
+        text.gsub(PG_TEXT_LITERAL, "''")
       end
 
       # Returns the first sensitive column name the SQL names, or nil. Two rules,
@@ -514,6 +548,18 @@ module RailsAiContext
         real_column_names.select { |name| sensitive_column?(name) }
       end
 
+      # Rails' own bookkeeping tables, on every adapter. Their columns
+      # (schema_migrations.version, ar_internal_metadata.key/value) are never
+      # secrets, and ar_internal_metadata.key ends in "key", so leaving them in
+      # the sensitive-column set refused every query whose text held the word
+      # "key" - a column, a JSON key, a `LIKE '%key%'`. A `SELECT *` from one
+      # still goes through output-name redaction, as before.
+      BOOKKEEPING_TABLES = %w[ar_internal_metadata schema_migrations].freeze
+
+      private_class_method def self.bookkeeping_table?(name)
+        BOOKKEEPING_TABLES.include?(name.to_s.downcase)
+      end
+
       # Every real column name of the app's schema, downcased. The live
       # connection first (its own schema cache), the cached introspection as a
       # fallback. Memoised for the run; nothing here raising fails the query.
@@ -526,7 +572,10 @@ module RailsAiContext
       private_class_method def self.columns_from_connection
         conn = ActiveRecord::Base.connection
         names = Set.new
-        conn.tables.each { |t| conn.columns(t).each { |c| names << c.name.to_s.downcase } }
+        conn.tables.each do |t|
+          next if bookkeeping_table?(t)
+          conn.columns(t).each { |c| names << c.name.to_s.downcase }
+        end
         names
       rescue StandardError
         nil
@@ -537,7 +586,8 @@ module RailsAiContext
         return nil unless tables.is_a?(Hash)
 
         names = Set.new
-        tables.each_value do |data|
+        tables.each do |table, data|
+          next if bookkeeping_table?(table)
           Array(data.is_a?(Hash) && data[:columns]).each do |col|
             name = col.is_a?(Hash) ? col[:name] : col
             names << name.to_s.downcase if name
@@ -843,6 +893,27 @@ module RailsAiContext
         nil
       end
 
+      # The plan-vouch. On PostgreSQL a sensitive name that appears only inside a
+      # string literal passed the textual check (masked), so the query may run
+      # only if the plan was actually obtained - which means the plan layer above
+      # read the query and raised nothing. If planning did not happen, the
+      # literal masker is the only thing that let the name through, and it can be
+      # fooled by a quote trick (standard_conforming_strings off, an E-string),
+      # so the raw-text refusal stands.
+      private_class_method def self.unvouched_literal_refusal(sql, postgres)
+        return nil unless postgres
+
+        offending = references_sensitive_column?(sql) or return nil
+        # A real identifier (still there after masking) is validate_sql's to
+        # refuse; reaching here with one would mean masking let it slip - refuse.
+        return nil if references_sensitive_column?(mask_sql_literals(sql)).nil? &&
+                      pg_plan(sql, config.query_timeout)
+
+        "Blocked: query references sensitive column `#{offending}`. It is read as data " \
+          "only when the query plan confirms it, and the plan could not be obtained, so the " \
+          "query is refused. Name the columns you need; `#{offending}` is never returned."
+      end
+
       # The query's JSON plan from EXPLAIN (VERBOSE) - run once per tool call,
       # shared by the refusal checks and the output-provenance redaction.
       private_class_method def self.pg_plan(sql, timeout)
@@ -967,10 +1038,22 @@ module RailsAiContext
         outputs = []
         conds = []
         nodes.each do |node|
-          outputs.concat(Array(node["Output"]))
-          PLAN_COND_KEYS.each { |k| conds.concat(Array(node[k])) }
+          outputs.concat(Array(node["Output"]).map { |e| mask_plan_literals(e) })
+          PLAN_COND_KEYS.each { |k| conds.concat(Array(node[k]).map { |e| mask_plan_literals(e) }) }
         end
         { outputs: outputs, conds: conds, all: outputs + conds }
+      end
+
+      # A constant in a plan expression masked to an empty pair, so a sensitive
+      # word inside one (`'%key%'::text` in a Filter, a `'...'` argument) is not
+      # read as a column or a function name. PostgreSQL's deparser always doubles
+      # quotes and never emits an E'' string, so this pattern matches a literal
+      # exactly whatever standard_conforming_strings is; a double-quoted
+      # identifier is never touched. The scanners (whole_row_leak,
+      # sensitive_column_in_plan, volatile_function_in_plan) read the masked text.
+      PLAN_LITERAL = /'(?:''|[^'])*'/
+      private_class_method def self.mask_plan_literals(expr)
+        expr.to_s.gsub(PLAN_LITERAL, "''")
       end
 
       # A whole-row `alias.*` reference to a relation that holds a sensitive
@@ -1060,6 +1143,7 @@ module RailsAiContext
       private_class_method def self.from_connection_relation_columns
         conn = ActiveRecord::Base.connection
         conn.tables.each_with_object({}) do |t, acc|
+          next if bookkeeping_table?(t)
           acc[t.to_s.downcase] = conn.columns(t).map { |c| c.name.to_s.downcase }
         end
       rescue StandardError
@@ -1071,6 +1155,7 @@ module RailsAiContext
         return nil unless tables.is_a?(Hash)
 
         tables.each_with_object({}) do |(name, data), acc|
+          next if bookkeeping_table?(name)
           cols = Array(data.is_a?(Hash) && data[:columns]).map do |col|
             (col.is_a?(Hash) ? col[:name] : col).to_s.downcase
           end
