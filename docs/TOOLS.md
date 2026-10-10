@@ -360,6 +360,8 @@ Test scaffolding that matches your project's patterns (fixtures vs factories, RS
 
 Syntax + semantic + Brakeman security validation in one call.
 
+JavaScript (`.js`, `.mjs`, `.cjs`) is parsed by `node --check` as the module system Node would load it with: the extension, else the nearest `package.json`'s `type`, else a module when CommonJS rejects only its `import`/`export` (a Stimulus controller). A failure names the line and column node reports. A file node cannot judge is listed as skipped with the reason, not as passed: JSX, or no `node` on the PATH, where only an unmatched bracket still fails.
+
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `files` | array | required | File paths to validate |
