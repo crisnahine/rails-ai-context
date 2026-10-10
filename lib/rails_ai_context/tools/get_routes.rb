@@ -43,15 +43,24 @@ module RailsAiContext
 
       # The filters this controller actually runs, read the way every other
       # surface reads them, so a skipped one is never named here. The cut is
-      # stated rather than silent.
+      # stated rather than silent. A filter that runs on some actions only says
+      # which, so a route whose action skips it is not read as guarded by it.
       def self.filter_hint(ctrl_class, ctx)
         chain = RailsAiContext::ActionFilters.for_controller(ctx, ctrl_class, root: rails_app&.root&.to_s)
-        names = chain[:chain].map { |f| f[:name] }
+        names = chain[:chain].map { |f| "#{f[:name]}#{filter_scope(f)}" }
         return nil if names.empty?
 
         rest = names.size - HINTED_FILTERS
         "#{names.first(HINTED_FILTERS).join(', ')}#{rest.positive? ? " (+#{rest} more)" : ''}"
       end
+
+      def self.filter_scope(filter)
+        scope = +""
+        scope << " (only: #{Array(filter[:only]).join(', ')})" if Array(filter[:only]).any?
+        scope << " (except: #{Array(filter[:except]).join(', ')})" if Array(filter[:except]).any?
+        scope + RailsAiContext::Serializers::SectionFacts.skip_condition_tail(filter)
+      end
+      private_class_method :filter_scope
 
       guide_row(
         order: 8,
