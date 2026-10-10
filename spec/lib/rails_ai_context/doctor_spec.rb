@@ -763,7 +763,7 @@ RSpec.describe RailsAiContext::Doctor do
 
       it "warns and names the install that writes bundle exec" do
         expect(check.status).to eq(:warn)
-        expect(check.message).to include("`rails-ai-context serve` starts the gem installed outside the app's bundle, " \
+        expect(check.message).to include("`rails-ai-context serve` needs the gem installed outside the app's bundle, " \
                                          "while Gemfile.lock carries rails-ai-context 1.0.0")
         expect(check.fix).to eq("Run `rails generate rails_ai_context:install` to fix")
       end
@@ -827,7 +827,16 @@ RSpec.describe RailsAiContext::Doctor do
       it "returns fail status with tool label" do
         expect(check.status).to eq(:fail)
         expect(check.message).to include("1 of 1")
-        expect(check.message).to include(".mcp.json")
+        expect(check.message).to include(".mcp.json (Claude Code): it does not parse as JSON")
+      end
+
+      # The install refuses a file holding comments whichever json version
+      # reads it, and doctor names the same problem.
+      it "names comments as the problem, as the install does" do
+        write(".mcp.json", %({\n  // the gem's\n  "mcpServers": {"rails-ai-context": {"command": "bundle"},}\n}))
+
+        expect(check.message).to eq("1 of 1 MCP config needs attention: .mcp.json (Claude Code): " \
+                                    "#{RailsAiContext::McpConfigGenerator::COMMENTS_PROBLEM}")
       end
 
       # Install leaves a file it cannot parse as it is, so running it alone

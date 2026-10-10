@@ -381,17 +381,14 @@ module RailsAiContext
       # ../.mcp.json for a workspace's.
       shown = Install::Program.relative_to(full_path, app.root)
       unless cfg[:path].end_with?(".toml")
+        text, _, problem = McpConfigGenerator.json_text(full_path)
         # An empty file is one install fills.
-        text, = McpConfigGenerator.json_text(full_path)
-        return ConfigVerdict.new(label: label, status: :warn, problem: nil, fix: install_fix, unparseable: nil) if text.strip.empty?
-
-        data = McpConfigGenerator.read_json(full_path)
-        # The install merges only into an object, with an object under
-        # the tool's servers key, and leaves anything else as it is.
-        root_key = McpConfigGenerator::TOOL_CONFIGS.fetch(tool)[:root_key]
-        if !data.is_a?(Hash) || (!data[root_key].nil? && !data[root_key].is_a?(Hash))
-          return ConfigVerdict.new(label: label, status: :fail, problem: nil, fix: nil, unparseable: shown)
+        if problem.nil? && text.strip.empty?
+          return ConfigVerdict.new(label: label, status: :warn, problem: nil, fix: install_fix, unparseable: nil)
         end
+
+        problem ||= json_config_problem(text, tool)
+        return ConfigVerdict.new(label: label, status: :fail, problem: problem, fix: nil, unparseable: shown) if problem
       end
 
       entries = serving_entries(tool, full_path)
@@ -405,10 +402,21 @@ module RailsAiContext
       status, problem, fix = entries.select { |entry| entry[:own] }.filter_map { |entry| entry_trouble(entry, tool, full_path, shown) }
                                     .min_by { |trouble| trouble.first == :fail ? 0 : 1 }
       ConfigVerdict.new(label: label, status: status || :pass, problem: problem, fix: fix, unparseable: nil)
-    rescue JSON::ParserError
-      ConfigVerdict.new(label: label, status: :fail, problem: nil, fix: nil, unparseable: shown)
     rescue SystemCallError, IOError => e
       ConfigVerdict.new(label: label, status: :warn, problem: "cannot be read: #{e.message}", fix: install_fix, unparseable: nil)
+    end
+
+    # Why the install would leave a JSON config as it is, in the words the
+    # install uses: it does not parse (or holds comments), or it holds no
+    # object to merge into, at the top or under the tool's servers key.
+    def json_config_problem(text, tool)
+      data = JSON.parse(text)
+      root_key = McpConfigGenerator::TOOL_CONFIGS.fetch(tool)[:root_key]
+      if !data.is_a?(Hash) then "it is JSON but not an object"
+      elsif !data[root_key].nil? && !data[root_key].is_a?(Hash) then %("#{root_key}" is not an object)
+      end
+    rescue JSON::ParserError => e
+      McpConfigGenerator.parse_problem(e, text)
     end
 
     def mcp_config_path(tool)
@@ -465,7 +473,7 @@ module RailsAiContext
           bundled = "#{GemLock.bundle(app.root).lock_label} carries rails-ai-context #{lock.version("rails-ai-context")}"
           return [ :fail, "#{missing}, while #{bundled}", rerun ] unless found
 
-          return [ :warn, "#{line} starts the gem installed outside the app's bundle, while #{bundled}", rerun ]
+          return [ :warn, "#{line} needs the gem installed outside the app's bundle, while #{bundled}", rerun ]
         end
         return [ :fail, missing, "Run `gem install rails-ai-context` for the Ruby on #{where}" ] unless found
       elsif !found
