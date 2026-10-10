@@ -45,6 +45,22 @@ RSpec.describe RailsAiContext::ContextFileReport do
       )
     end
 
+    # Every surface printed the whole absolute path of each file, where the
+    # docs show them named from the app root.
+    it "names a file under the root from the root, and one outside it whole" do
+      lines = []
+      outside = result.merge(skipped: [ "/elsewhere/CLAUDE.md" ])
+      described_class.each_line(outside, style, root: "/app") { |_bucket, text| lines << text }
+
+      expect(lines).to eq(
+        [
+          "Written: CLAUDE.md",
+          "Skipped: /elsewhere/CLAUDE.md (unchanged)",
+          "Not applicable: .claude/rules/rails-models.md (no models)"
+        ]
+      )
+    end
+
     # A surface that forgets a bucket used to print nothing for it. Adding a
     # fourth bucket should stop the surfaces that have no wording for it.
     it "raises rather than dropping a bucket the style has no wording for" do

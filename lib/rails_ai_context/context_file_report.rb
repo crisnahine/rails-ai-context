@@ -52,12 +52,22 @@ module RailsAiContext
     # @param style [Hash] bucket => a format string taking the path and, for
     #   :not_applicable, the reason. Fetched, so a surface with no wording
     #   for a bucket raises instead of printing nothing.
+    # @param root [String, Pathname, nil] the app root. A path under it is
+    #   named from it, as the docs show the files; one outside it - an
+    #   output_dir elsewhere - stays whole.
     # @yieldparam bucket [Symbol]
     # @yieldparam text [String]
-    def each_line(result, style)
+    def each_line(result, style, root: nil)
       entries(result).each do |bucket, path, reason|
-        yield bucket, format(style.fetch(bucket), *[ path, reason ].compact)
+        yield bucket, format(style.fetch(bucket), *[ shown(path, root), reason ].compact)
       end
+    end
+
+    def shown(path, root)
+      return path if root.nil?
+
+      inside = "#{root.to_s.delete_suffix('/')}/"
+      path.to_s.start_with?(inside) ? path.to_s.delete_prefix(inside) : path
     end
   end
 end

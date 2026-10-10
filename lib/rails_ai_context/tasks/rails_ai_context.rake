@@ -23,7 +23,7 @@ end unless defined?(ASSISTANT_TABLE)
 
 def print_result(result)
   style = RailsAiContext::ContextFileReport.style(:emoji)
-  RailsAiContext::ContextFileReport.each_line(result, style) { |_bucket, text| puts "  #{text}" }
+  RailsAiContext::ContextFileReport.each_line(result, style, root: Rails.root) { |_bucket, text| puts "  #{text}" }
 end unless defined?(print_result)
 
 def abort_boot_failure(result, timeout)

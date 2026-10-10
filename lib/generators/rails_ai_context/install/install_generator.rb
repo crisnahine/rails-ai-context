@@ -650,7 +650,7 @@ module RailsAiContext
         begin
           result = RailsAiContext.generate_context(format: @selected_formats)
           style = RailsAiContext::ContextFileReport.style(:emoji)
-          RailsAiContext::ContextFileReport.each_line(result, style) do |bucket, text|
+          RailsAiContext::ContextFileReport.each_line(result, style, root: Rails.root) do |bucket, text|
             say "  #{text}", RailsAiContext::ContextFileReport.color(bucket)
           end
         rescue => e

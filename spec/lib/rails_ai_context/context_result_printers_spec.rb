@@ -58,7 +58,7 @@ RSpec.describe "not-applicable context files on every surface" do
       out = `ruby -I #{lib} #{exe} context --app-path #{dir} --no-boot 2>&1`
 
       expect($?.exitstatus).to eq(0), out
-      expect(out).to include("Not applicable: #{File.join(dir, '.claude', 'rules', 'rails-models.md')} (no models)")
+      expect(out).to include("  Not applicable: .claude/rules/rails-models.md (no models)")
       expect(File.exist?(File.join(dir, ".claude", "rules", "rails-models.md"))).to be false
     end
   end
@@ -87,6 +87,30 @@ RSpec.describe "not-applicable context files on every surface" do
       out = invoke_rake_task("ai:context")
 
       expect(out).to include("  \u2796  /app/.claude/rules/rails-models.md (no models)")
+    end
+  end
+
+  # The docs show the files named from the app root; the absolute path made
+  # every line of the summary run across the terminal.
+  it "names a file from the app root on the rake and install surfaces" do
+    Dir.mktmpdir do |tmp|
+      root = Pathname.new(File.realpath(tmp))
+      File.write(root.join(".rails-ai-context.yml"), "ai_tools:\n  - claude\ntool_mode: mcp\n")
+      allow(Rails).to receive(:root).and_return(root)
+      allow(RailsAiContext).to receive(:generate_context).and_return(
+        written: [], skipped: [], not_applicable: { root.join(".claude/rules/rails-models.md").to_s => "no models" }
+      )
+      allow(RailsAiContext::LegacyCleanup).to receive(:prompt_legacy_files)
+
+      expect(invoke_rake_task("ai:context")).to include("  ➖  .claude/rules/rails-models.md (no models)")
+
+      generator = RailsAiContext::Generators::InstallGenerator.new
+      generator.instance_variable_set(:@selected_formats, [ :claude ])
+      said = []
+      allow(generator).to receive(:say) { |text, *| said << text }
+      generator.send(:generate_context_files)
+
+      expect(said).to include("  ➖  .claude/rules/rails-models.md (no models)")
     end
   end
 
