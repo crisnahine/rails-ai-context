@@ -39,6 +39,14 @@ module RailsAiContext
       CountPhrase.call(app_controllers(routes).size, "routed controller")
     end
 
+    # The count as every generated file states it, so CLAUDE.md and the rule
+    # files beside it cannot give one app two numbers: "12 app routes
+    # across 3 routed controllers (39 total incl. framework)".
+    def summary(routes)
+      "#{CountPhrase.call(app_route_count(routes), 'app route')} across #{controller_phrase(routes)} " \
+        "(#{routes[:total_routes]} total incl. framework#{suffix(routes)})"
+    end
+
     def framework_route_count(routes)
       by_controller(routes)
         .select { |name, _| framework_controller?(name) }

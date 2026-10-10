@@ -240,14 +240,14 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
       text = test_class.new(context).overview_lines.join("\n")
       expect(text).to include("- Database: PostgreSQL - 5 tables")
       expect(text).to include("- Models: 1")
-      expect(text).to include("- Routes: 30")
+      expect(text).to include("- Routes: 0 app routes across 0 routed controllers (30 total incl. framework)")
       expect(text).to include("- auth: devise")
       expect(text).to include("- Service objects pattern (app/services/)")
     end
 
     it "drops the facts the root file already states when the caller says so" do
       text = test_class.new(context).overview_lines(gems: false, architecture: false, app_dirs: false).join("\n")
-      expect(text).to include("- Routes: 30")
+      expect(text).to include("- Routes: 0 app routes across 0 routed controllers (30 total incl. framework)")
       expect(text).not_to include("- auth: devise")
       expect(text).not_to include("app/services/")
       expect(text).not_to include("- Services:")
