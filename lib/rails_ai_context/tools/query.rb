@@ -268,7 +268,8 @@ module RailsAiContext
         # ── Layer 4: Redact sensitive columns ───────────────────────
         # Skip for SHOW/DESCRIBE/EXPLAIN - see SCHEMA_METADATA_PREFIX.
         schema_metadata = sql.match?(SCHEMA_METADATA_PREFIX)
-        redacted = schema_metadata ? result : redact_results(result, provenance_sensitive_indices(sql))
+        provenance = schema_metadata ? [] : provenance_sensitive_indices(sql) | plan_output_sensitive_indices(sql, result)
+        redacted = schema_metadata ? result : redact_results(result, provenance)
 
         # ── Format output ───────────────────────────────────────────
         # The truncation note rides every format (for CSV, after a blank line so
@@ -787,10 +788,7 @@ module RailsAiContext
       private_class_method def self.postgresql_plan_refusal(sql, timeout)
         return nil unless postgres_adapter?
 
-        target = strip_leading_explain(sql)
-        return nil unless target.match?(/\A\s*(SELECT|WITH)\b/i)
-
-        plan = explain_plan(target, timeout)
+        plan = pg_plan(sql, timeout)
         return nil unless plan
 
         nodes = []
@@ -807,6 +805,15 @@ module RailsAiContext
             "wildcard or a row reference). Name the non-sensitive columns you need; `#{col}` is " \
             "never returned."
         end
+        # A sensitive column the plan reads as a plain pass-through but hides
+        # behind an intermediate (a MATERIALIZED CTE, a subquery scan, a set
+        # operation), so its value reaches a result column the top node does
+        # not name. The top-Output redaction below cannot pin it, so refuse.
+        if (col = laundered_sensitive_column(plan, nodes, aliases))
+          return "Blocked: the query passes the sensitive column `#{col}` through a CTE, subquery " \
+            "or set operation whose output the tool cannot map to a column, so it could leave " \
+            "unredacted. Name the non-sensitive columns you need; `#{col}` is never returned."
+        end
         if (fn = volatile_function_in_plan(exprs))
           return "Blocked: function #{fn} is VOLATILE - it can change server or session state, " \
             "which a read-only transaction does not prevent. rails_query runs inspection reads only."
@@ -817,6 +824,15 @@ module RailsAiContext
         # error): let normal execution raise the real error. The name blocklist
         # in validate_sql already stopped the known admin functions.
         nil
+      end
+
+      # The query's JSON plan from EXPLAIN (VERBOSE) - run once per tool call,
+      # shared by the refusal checks and the output-provenance redaction.
+      private_class_method def self.pg_plan(sql, timeout)
+        target = strip_leading_explain(sql)
+        return nil unless target.match?(/\A\s*(SELECT|WITH)\b/i)
+
+        RailsAiContext::RunCache.fetch([ :pg_plan, target ]) { explain_plan(target, timeout) }
       end
 
       # Run EXPLAIN in its own read-only transaction and parse the JSON plan.
@@ -832,6 +848,68 @@ module RailsAiContext
         end
         data = JSON.parse(json.to_s)
         data.is_a?(Array) ? data.first&.dig("Plan") : nil
+      rescue ActiveRecord::StatementInvalid
+        nil
+      end
+
+      # Result-column indices whose top-node Output expression is a plain Var of
+      # a sensitive base column - a view/CTE/subquery that renamed the column, so
+      # redaction by output name would miss it. The top Output is positional: its
+      # i-th expression is result column i, with any trailing sort/group key past
+      # the result width. PostgreSQL only; nothing here raising fails the query.
+      private_class_method def self.plan_output_sensitive_indices(sql, result)
+        return [] unless postgres_adapter?
+
+        plan = pg_plan(sql, config.query_timeout)
+        output = plan && plan["Output"]
+        return [] unless output.is_a?(Array)
+
+        nodes = []
+        collect_plan_nodes(plan, nodes)
+        aliases = plan_alias_map(nodes)
+        width = result.columns.length
+        (0...[ width, output.length ].min).select do |i|
+          rel, col = base_var(output[i], aliases)
+          rel && relation_has_sensitive_column?(rel, col)
+        end
+      rescue StandardError
+        []
+      end
+
+      # A plain, qualified Var `rel.col` resolved to its base relation, or nil.
+      # A quoted or spaced alias (a set-operation's "*SELECT* 1") never matches,
+      # so only a real relation's column is read as a base Var.
+      BASE_VAR = /\A"?([A-Za-z_]\w*)"?\.([A-Za-z_]\w*)\z/
+      private_class_method def self.base_var(expr, aliases)
+        m = expr.to_s.strip.match(BASE_VAR) or return nil
+        rel = aliases[m[1].downcase]
+        rel ? [ rel, m[2].downcase ] : nil
+      end
+
+      private_class_method def self.relation_has_sensitive_column?(relation, column)
+        Array(relation_sensitive_columns[relation]).include?(column)
+      end
+
+      # The sensitive base column (if any) the plan reads as a plain pass-through
+      # Var in some node but NOT in the top node's Output, so the top-Output
+      # redaction cannot reach it. Returns the bare column name, or nil.
+      private_class_method def self.laundered_sensitive_column(plan, nodes, aliases)
+        top = sensitive_base_vars(Array(plan["Output"]), aliases)
+        nodes.each do |node|
+          sensitive_base_vars(Array(node["Output"]), aliases).each do |var|
+            return var.split(".").last unless top.include?(var)
+          end
+        end
+        nil
+      end
+
+      # The "rel.col" of each Output entry that is a plain Var of a sensitive
+      # base column.
+      private_class_method def self.sensitive_base_vars(output, aliases)
+        output.filter_map do |expr|
+          rel, col = base_var(expr, aliases)
+          "#{rel}.#{col}" if rel && relation_has_sensitive_column?(rel, col)
+        end.to_set
       end
 
       # Strip a leading EXPLAIN [ (opts) | ANALYZE | VERBOSE ... ] so the
