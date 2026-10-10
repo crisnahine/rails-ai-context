@@ -55,9 +55,22 @@ Before any query reaches the database:
 - **Blocks dangerous SHOW**: GRANTS, PROCESSLIST, BINLOG, SLAVE, MASTER, REPLICAS
 - **Blocks SELECT INTO**: prevents table creation via SELECT, and `INTO OUTFILE` / `INTO DUMPFILE` writes to disk
 - **Blocks file and network functions**: `pg_read_file`, `pg_read_binary_file`, `pg_ls_dir`, `pg_stat_file`, `lo_import`, `lo_export`, `dblink*`, `LOAD DATA`, `LOAD_FILE`, `load_extension` and their relatives, checked before and after comment stripping
-- **Blocks multi-statements**: multiple semicolons
+- **Blocks session-effecting / administrative functions**: a read-only transaction does not stop these, and their effect lingers on the pooled connection. PostgreSQL: `pg_terminate_backend`, `pg_cancel_backend`, `pg_reload_conf`, `pg_stat_reset*`, `pg_switch_wal`, `pg_create_restore_point`, replication-slot and -origin functions, `pg_logical_emit_message`, `pg_advisory_lock*`, `set_config`, `pg_notify`, `txid_current` and their relatives; MySQL: `GET_LOCK`, `RELEASE_LOCK`, `RELEASE_ALL_LOCKS`, `IS_FREE_LOCK`, `IS_USED_LOCK`. This name list is the first layer; on PostgreSQL the plan's VOLATILE-function check (below) closes the rest of the family
+- **Blocks column-alias lists**: a CTE or FROM-item list such as `t(a, b, c)` renames the columns a wildcard returns, which would carry sensitive columns out under harmless names. A type modifier (`numeric(10,2)`, `varchar(255)`), a record-function list (`AS t(a int, b text)`) and a single-column alias are left alone
+- **Blocks multi-statements**: multiple semicolons, read on quote-masked text so a `;` inside a string literal or a `DO $$ … ; … $$` block body is not mistaken for a second statement (a `DO` block is then refused plainly as a disallowed statement, not for the wrong reason)
 - **Blocks injection patterns**: OR 1=1, OR true, OR ''='', UNION SELECT
+- **Blocks sensitive column references**: see Layer 4 - a query whose text names a sensitive column, directly or through an alias or expression, is refused before execution
 - **Allows only**: SELECT, WITH, SHOW, EXPLAIN, DESCRIBE, DESC
+
+### Layer 1b - PostgreSQL semantic analysis (planning only)
+
+The textual layer cannot see a whole-row serialisation (`SELECT row_to_json(u.*) FROM users u`) or an admin function introduced through a view, because no sensitive column name appears in the query. On PostgreSQL, before the query runs, the tool plans it with `EXPLAIN (VERBOSE, FORMAT JSON)` inside the same read-only transaction - planning only, nothing executes, not even a VOLATILE function (the planner does not fold one). The plan is refused when it:
+
+- holds a **whole-row reference** (`alias.*`) to a relation that has a sensitive column - this closes `row_to_json(u)`, `to_json(u)`, `u::text`, `array_agg(u)`, `json_agg(u)`, `hstore(u)`, `concat(u.*)`, `string_agg(u::text, …)`, a bare `SELECT u`, and the same through a view, subquery or CTE;
+- **uses a sensitive column** anywhere but as a plain pass-through output - a `ROW(u.*)` the planner expanded into named columns, or a `WHERE` / `ORDER BY` oracle;
+- names any **VOLATILE function** (`pg_proc.provolatile = 'v'`) outside a short harmless allowlist (`random`, `clock_timestamp`, `gen_random_uuid`, `timeofday`, `pg_sleep`). This is how the admin-function family is closed robustly, rather than by an ever-growing name list.
+
+A whole-row read of a relation with no sensitive column (`row_to_json(posts.*)`) is allowed.
 
 ### Layer 2 - Database-level read-only
 
@@ -90,14 +103,26 @@ lock in WAL mode does not block it.
 - Configurable: `config.query_row_limit` (hard cap: 1000)
 - Applied as a `LIMIT` clause appended to the query. A `LIMIT` or `FETCH FIRST` that ends the query is lowered to the cap, and one inside a subquery is left as written
 - The rows that come back are cut to the cap too, so the answer holds it whatever the database made of the text
+- When the cap holds rows back, the answer says so in every format - a note such as `100 rows shown; the query returned at least this many (the row limit of 100; pass limit: up to 1000 to see more)`, so a partial result is never mistaken for the whole one. In CSV output the note sits after a blank line, outside the comma block, so a parser still reads clean rows
 
 ### Layer 4 - Sensitive column rejection
 
-A query that names a sensitive column is **rejected before execution**, not redacted after it:
+A query that names a sensitive column is **rejected before execution**, not redacted after it. One rule decides what is sensitive, used by the pre-execution refusal, the PostgreSQL plan check and result redaction alike. A column is sensitive when it is:
 
-**Default redacted patterns:** `password_digest`, `encrypted_password`, `password_hash`, `reset_password_token`, `confirmation_token`, `unlock_token`, `otp_secret`, `session_data`, `secret_key`, `api_key`, `api_secret`, `access_token`, `refresh_token`, `jti`
+- in `config.query_redacted_columns`, or the fixed built-in list;
+- an `encrypts` column of one of your models;
+- a name the heuristic catches: it ends in `password`, `secret`, `token`, `key`, `digest` or `hash`, or contains `password`, `secret` or `token`
 
-Those are the defaults of `config.query_redacted_columns`. A fixed built-in list is checked as well, which adds `password_reset_token`, `remember_token`, `secret` and `private_key`. Matching is by name, case-insensitive and word-bounded, against both lists. `SELECT password_digest AS pd FROM users` is blocked outright: post-execution redaction reads the column names the database returns, which the caller controls through aliases and expressions, so it cannot be relied on.
+minus anything in `config.query_allowed_columns`.
+
+**Default redacted patterns:** `password_digest`, `encrypted_password`, `password_hash`, `reset_password_token`, `confirmation_token`, `unlock_token`, `otp_secret`, `session_data`, `secret_key`, `api_key`, `api_secret`, `access_token`, `refresh_token`, `jti`. Those are the defaults of `config.query_redacted_columns`. The fixed built-in list adds `password_reset_token`, `remember_token`, `secret` and `private_key`.
+
+The pre-execution refusal matches on two things, case-insensitive and word-bounded:
+
+- **the fixed names above**, on every adapter whether or not they are real columns, so the check holds even with no connection;
+- **every real column of your schema that the rule flags** - read from the live connection, falling back to the cached schema. This catches an app-specific column the heuristic flags (`api_token`, `auth_token`) through any alias or expression, not only an exact configured name.
+
+So `SELECT password_digest AS pd FROM users`, `SELECT upper(api_token) FROM users` and `SELECT (SELECT api_token FROM users LIMIT 1) AS leaked` are all refused: post-execution redaction reads the output column names, which the caller controls through aliases and expressions, so it cannot be relied on. A table or alias that merely contains a sensitive word (a `tokens` table) does not trip the check - only a real column name does. `SELECT *` stays allowed, and its sensitive columns are redacted in the result.
 
 If one of your own columns merely looks sensitive (an `oauth_applications.secret`, say), exempt it by name:
 
@@ -105,13 +130,11 @@ If one of your own columns merely looks sensitive (an `oauth_applications.secret
 config.query_allowed_columns = %w[secret]
 ```
 
-Results are redacted as well: a returned column comes back as `[FILTERED]` when
-its name is in `config.query_redacted_columns`, contains `password`, `secret` or
-`token`, or ends in `key`, `digest` or `hash`. `SHOW`, `DESCRIBE` and `EXPLAIN`
-output is not redacted.
+Results are redacted as well: a returned column comes back as `[FILTERED]` when the sensitivity rule flags its **output name**, and on PostgreSQL when its **provenance** (`PG::Result#ftable` / `#ftablecol`, mapped to the base column) is sensitive - so a column that reached the result under a different name is still filtered. `SHOW`, `DESCRIBE` and `EXPLAIN` output is not redacted.
 
 The exemption covers the results too: an allowed name comes back unredacted. A
-column declared with `encrypts` stays `[FILTERED]` either way.
+column declared with `encrypts` stays `[FILTERED]` either way - an encrypted-at-rest
+attribute is never meant to be read back raw.
 
 ### Environment guard
 
