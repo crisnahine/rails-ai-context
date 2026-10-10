@@ -72,7 +72,7 @@ module RailsAiContext
       # rewrites every tool's files for a user who picked one, and writes
       # nothing at all under an MCP-only install.
       result = RailsAiContext.generate_context
-      ContextFileReport.each_line(result, RESULT_LINES) { |_bucket, text| $stderr.puts "  #{text}" }
+      ContextFileReport.each_line(result, RESULT_LINES, root: app.root) { |_bucket, text| $stderr.puts "  #{text}" }
     rescue => e
       $stderr.puts "[rails-ai-context] Error regenerating: #{e.message}"
     end
