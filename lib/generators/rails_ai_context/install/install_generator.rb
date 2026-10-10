@@ -53,7 +53,7 @@ module RailsAiContext
 
         RailsAiContext::Install::Program.cleanup_removed_tools(
           program_surface,
-          previous: @previous_formats, selected: @selected_formats, root: Rails.root
+          previous: @previous_formats, selected: @selected_formats, root: install_root
         )
       end
 
@@ -69,16 +69,20 @@ module RailsAiContext
         @context_files = setup.context_files
       end
 
+      # The install mode is read from the install root's bundle: left to
+      # itself the generator reads Rails.root's, which is an engine's dummy
+      # app.
       def create_mcp_config
         RailsAiContext::Install::Program.write_mcp_configs(
           program_surface,
-          tools: @selected_formats, tool_mode: @tool_mode, root: Rails.root
+          tools: @selected_formats, tool_mode: @tool_mode, root: install_root,
+          standalone: RailsAiContext::InstallMode.standalone?(root: install_root)
         )
         return unless @tool_mode == :cli
 
         program = RailsAiContext::Install::Program
-        program.remove_mcp_entries(program_surface, program.ask_mcp_removal(program_surface, root: Rails.root),
-                                   root: Rails.root)
+        program.remove_mcp_entries(program_surface, program.ask_mcp_removal(program_surface, root: install_root),
+                                   root: install_root)
       end
 
       # The :standard preset's comment, its introspectors named from the
@@ -262,16 +266,62 @@ module RailsAiContext
 
       def create_initializer
         initializer_path = "config/initializers/rails_ai_context.rb"
-        full_path = Rails.root.join(initializer_path)
+        full_path = install_root.join(initializer_path)
+        return engine_initializer_note(full_path) if engine_root
 
         if File.exist?(full_path)
           update_existing_initializer(full_path)
         else
-          create_new_initializer(initializer_path)
+          create_new_initializer(full_path.to_s)
         end
       end
 
       no_tasks do
+      # Where every file of this install goes. An engine's bin/rails boots its
+      # dummy app, so there Rails.root is test/dummy, while the generator was
+      # run from the engine's root: the folder an editor is opened at, the
+      # one every rails-ai-context command run there reads as the app
+      # (CLI::AppRoot), and the one Rails' own generators write to. Writing
+      # half the install to each root left neither working.
+      def install_root
+        engine_root || Rails.root
+      end
+
+      # The engine's root when the generator runs from one, nil in an app.
+      def engine_root
+        Pathname.new(ENGINE_ROOT) if defined?(ENGINE_ROOT)
+      end
+
+      # This process booted the dummy app, which describes the dummy app. The
+      # engine's root is read the way its MCP server reads it, from the
+      # engine's own source, by the binary run there in the engine's bundle:
+      # the files then say what the server answers.
+      def generate_engine_context
+        env = { "BUNDLE_GEMFILE" => install_root.join("Gemfile").to_s }
+        command = %w[bundle exec rails-ai-context context]
+        run = -> { system(env, *command, chdir: install_root.to_s) }
+        ok = defined?(::Bundler) && ::Bundler.respond_to?(:with_original_env) ? ::Bundler.with_original_env(&run) : run.call
+        return if ok
+
+        say "  Could not write the context files - run `#{command.join(' ')}` in #{install_root}", :red
+      end
+
+      # An engine gets no initializer. Rails runs an engine's
+      # config/initializers in every app that mounts it, and the gemspec
+      # packages them, so this one would configure rails-ai-context inside
+      # each host app. The settings live in .rails-ai-context.yml, which
+      # nothing outside the engine's repository reads.
+      def engine_initializer_note(path)
+        relative = path.relative_path_from(install_root)
+        if File.exist?(path)
+          say "#{relative} is inside the engine, where Rails runs it in every app that mounts the engine " \
+              "and the gemspec ships it - delete it; .rails-ai-context.yml holds the settings", :red
+        else
+          say "No #{relative} in an engine: Rails would run it in every app that mounts the engine. " \
+              "The settings go in .rails-ai-context.yml", :yellow
+        end
+      end
+
       # Thor's `ask` returns nil when stdin hits EOF (e.g. piping fewer answers
       # than prompts, or `< /dev/null`), which crashes the very next `.strip`
       # call. Every prompt in this generator treats an empty answer as "use
@@ -330,7 +380,8 @@ module RailsAiContext
         content, = ensure_initializer_guard(content)
 
         create_file path, content
-        say "Created #{path} with all #{CountPhrase.call(CONFIG_SECTIONS.size, "config section")}", :green
+        say "Created #{Pathname.new(path).relative_path_from(install_root)} with all " \
+            "#{CountPhrase.call(CONFIG_SECTIONS.size, "config section")}", :green
       end
 
       def update_existing_initializer(full_path)
@@ -370,9 +421,9 @@ module RailsAiContext
 
         if changes.any?
           File.write(full_path, existing)
-          say "Updated #{full_path.relative_path_from(Rails.root)}: #{changes.join(', ')}", :green
+          say "Updated #{full_path.relative_path_from(install_root)}: #{changes.join(', ')}", :green
         else
-          say "#{full_path.relative_path_from(Rails.root)} is up to date - no changes needed", :green
+          say "#{full_path.relative_path_from(install_root)} is up to date - no changes needed", :green
         end
       end
 
@@ -476,10 +527,10 @@ module RailsAiContext
       end
 
       def read_previous_ai_tools
-        RailsAiContext::Install::SelectionRecord.read(root: Rails.root)
+        RailsAiContext::Install::SelectionRecord.read(root: install_root)
       end
 
-      # Git's own answer, not a `.git` directory in Rails.root: a submodule
+      # Git's own answer, not a `.git` directory in the install root: a submodule
       # has a `.git` file, a monorepo app has its `.git` above it, and
       # core.hooksPath moves the hooks elsewhere, where a hook written to
       # .git/hooks would never run. `--git-path` and `--git-common-dir` answer
@@ -487,7 +538,7 @@ module RailsAiContext
       # sits in the work tree; git runs a hook at the top of it.
       def git_repository
         out, status = Open3.capture2("git", "rev-parse", "--git-path", "hooks", "--show-prefix", "--show-toplevel",
-                                     "--git-common-dir", chdir: Rails.root.to_s, err: File::NULL)
+                                     "--git-common-dir", chdir: install_root.to_s, err: File::NULL)
         # Paths that are no UTF-8 cannot be named in the hook as text.
         out = out.dup.force_encoding(Encoding::UTF_8)
         return nil unless status.success? && out.valid_encoding?
@@ -495,7 +546,7 @@ module RailsAiContext
         hooks, prefix, toplevel, common_dir = out.lines.map(&:chomp)
         return nil if toplevel.to_s.empty?
 
-        root = Rails.root.to_s
+        root = install_root.to_s
         { hooks: Pathname.new(File.expand_path(hooks, root)), prefix: prefix.to_s.delete_suffix("/"),
           toplevel: File.expand_path(toplevel, root), common_dir: File.expand_path(common_dir.to_s, root) }
       rescue SystemCallError
@@ -511,7 +562,7 @@ module RailsAiContext
 
       # Whether git tracks any file of the app, asked from inside it.
       def app_tracked?
-        out, status = Open3.capture2("git", "ls-files", "-z", "--", ".", chdir: Rails.root.to_s, err: File::NULL)
+        out, status = Open3.capture2("git", "ls-files", "-z", "--", ".", chdir: install_root.to_s, err: File::NULL)
         status.success? && !out.empty?
       rescue SystemCallError
         false
@@ -545,7 +596,7 @@ module RailsAiContext
         # default in place, where the module would insert a line and leave the
         # comment behind. One writer per file, and it is not this call.
         result = RailsAiContext::Install::SelectionRecord.write(
-          @selected_formats, root: Rails.root,
+          @selected_formats, root: install_root,
           extra_yaml: { "tool_mode" => @tool_mode.to_s, "context_files" => context_files? },
           initializer: false
         )
@@ -556,12 +607,20 @@ module RailsAiContext
       end
 
       def add_to_gitignore
-        RailsAiContext::Install::Program.mark_gitignore(program_surface, root: Rails.root,
+        RailsAiContext::Install::Program.mark_gitignore(program_surface, root: install_root,
                                                         context_files: context_files?)
       end
 
       def install_validation_hook
         repo = git_repository or return
+        # The hook validates with `rails 'ai:tool[validate]'`, which an
+        # engine's root does not have: there its rake tasks are app:ai:* and
+        # run in the dummy app, so the hook would fail every commit.
+        if engine_root
+          say "  Skipped pre-commit hook (an engine's root has no `rails 'ai:tool[validate]'` - " \
+              "its tasks run in the dummy app as app:ai:*)", :yellow
+          return
+        end
 
         # A core.hooksPath outside the repository is shared by every
         # repository that uses it, so this app's hook does not belong there.
@@ -576,7 +635,7 @@ module RailsAiContext
         # under a dotfiles repository at $HOME - is not that repository's to
         # validate.
         unless app == "." || app_tracked?
-          say "  Skipped pre-commit hook (#{Rails.root} is not tracked in the git repository at #{repo[:toplevel]} - " \
+          say "  Skipped pre-commit hook (#{install_root} is not tracked in the git repository at #{repo[:toplevel]} - " \
               "commit it there, then run this again)", :yellow
           return
         end
@@ -639,6 +698,7 @@ module RailsAiContext
 
         say ""
         say "Generating AI context files...", :yellow
+        return generate_engine_context if engine_root
 
         unless Rails.application
           say "  Skipped (Rails app not fully loaded). Run `rails ai:context` after install.", :yellow
@@ -649,7 +709,7 @@ module RailsAiContext
 
         # One-time v5.0.0 legacy UI-pattern files cleanup prompt
         RailsAiContext::LegacyCleanup.prompt_legacy_files(
-          @selected_formats, root: Rails.root, warn_only: options[:defaults]
+          @selected_formats, root: install_root, warn_only: options[:defaults]
         )
 
         # The configuration was loaded at boot, before the questions above:
@@ -663,7 +723,7 @@ module RailsAiContext
         begin
           result = RailsAiContext.generate_context(format: @selected_formats)
           style = RailsAiContext::ContextFileReport.style(:emoji)
-          RailsAiContext::ContextFileReport.each_line(result, style, root: Rails.root) do |bucket, text|
+          RailsAiContext::ContextFileReport.each_line(result, style, root: install_root) do |bucket, text|
             say "  #{text}", RailsAiContext::ContextFileReport.color(bucket)
           end
         rescue => e
@@ -688,19 +748,11 @@ module RailsAiContext
           say "  Left alone on purpose: CLAUDE.md, AGENTS.md, the rules directories and .ai-context.json.", :yellow
         end
         say ""
-        say "Commands:", :yellow
-        # An MCP-only install writes no context files, so there are none to regenerate.
-        say "  rails ai:context                 # Regenerate context files" if context_files?
+        say engine_root ? "Commands, at the engine's root:" : "Commands:", :yellow
         # What the server serves, skip_tools and custom_tools applied.
-        tool_count = RailsAiContext::Server.exposed_tools.size
-        say "  rails 'ai:tool[schema]'          # Run any of the #{CountPhrase.call(tool_count, "tool")} from CLI"
-        if @tool_mode == :mcp
-          say "  rails ai:serve                   # Start MCP server (#{CountPhrase.call(tool_count, "live tool")})"
-        end
-        say "  rails ai:facts                   # Print concise schema facts summary"
-        say "  rails 'ai:preset[architecture]'  # Run a multi-tool preset (architecture, debugging, migration)"
-        say "  rails ai:doctor                  # Check AI readiness"
-        say "  rails ai:inspect                 # Print introspection summary"
+        commands = summary_commands(RailsAiContext::Server.exposed_tools.size)
+        width = commands.map { |command, _| command.size }.max
+        commands.each { |command, note| say "  #{command.ljust(width)}  # #{note}" }
         say ""
         if @tool_mode == :mcp
           say "MCP auto-discovery:", :yellow
@@ -708,7 +760,8 @@ module RailsAiContext
           say "  No manual config needed."
         else
           say "CLI tools:", :yellow
-          say "  AI agents can run `rails 'ai:tool[schema]' table=users` directly."
+          example = engine_root ? "bundle exec rails-ai-context tool schema --table users" : "rails 'ai:tool[schema]' table=users"
+          say "  AI agents can run `#{example}` directly."
           say "  No MCP server needed - tools work from the terminal."
         end
         say ""
@@ -718,21 +771,53 @@ module RailsAiContext
         # Only where a Codex config was written, and only while a commit
         # would still take it along.
         if tool_mode == :mcp && @selected_formats.include?(:codex) &&
-           !RailsAiContext::Install::Program.codex_config_ignored?(Rails.root)
+           !RailsAiContext::Install::Program.codex_config_ignored?(install_root)
           say "(.codex/config.toml stays local - it embeds machine-specific paths; add it to .gitignore)", :green
         end
       end
 
       no_tasks do
+      # The commands the summary offers, each as [command, note], in the form
+      # that works where the generator was run: the rake tasks in an app, and
+      # the binary in the engine's bundle at an engine's root, where the rake
+      # tasks are app:ai:* and run in the dummy app. An MCP-only install
+      # writes no context files, so there are none to regenerate; doctor
+      # needs a bootable app, which an engine's root is not.
+      def summary_commands(tool_count)
+        tools = CountPhrase.call(tool_count, "tool")
+        if engine_root
+          cli = "bundle exec rails-ai-context"
+          [
+            ([ "#{cli} context", "Regenerate context files" ] if context_files?),
+            [ "#{cli} tool schema", "Run any of the #{tools} from CLI" ],
+            ([ "#{cli} serve", "Start MCP server (#{CountPhrase.call(tool_count, 'live tool')})" ] if tool_mode == :mcp),
+            [ "#{cli} facts", "Print concise schema facts summary" ],
+            [ "#{cli} preset architecture", "Run a multi-tool preset (architecture, debugging, migration)" ],
+            [ "#{cli} inspect", "Print the introspection as JSON" ]
+          ].compact
+        else
+          [
+            ([ "rails ai:context", "Regenerate context files" ] if context_files?),
+            [ "rails 'ai:tool[schema]'", "Run any of the #{tools} from CLI" ],
+            ([ "rails ai:serve", "Start MCP server (#{CountPhrase.call(tool_count, 'live tool')})" ] if tool_mode == :mcp),
+            [ "rails ai:facts", "Print concise schema facts summary" ],
+            [ "rails 'ai:preset[architecture]'", "Run a multi-tool preset (architecture, debugging, migration)" ],
+            [ "rails ai:doctor", "Check AI readiness" ],
+            [ "rails ai:inspect", "Print introspection summary" ]
+          ].compact
+        end
+      end
+
       # The tools this install did not pick, each with the task that adds it.
       # None when every tool is picked; and an MCP-only install, which writes
-      # no context files, only gets the re-run that picks them.
+      # no context files, only gets the re-run that picks them, as does an
+      # engine, whose root has no ai:context:<tool> tasks.
       def show_more_tools
         unselected = RailsAiContext::Install::AiTool.all.reject { |tool| @selected_formats.include?(tool.key) }
         return if unselected.empty?
 
         say "To add more AI tools later:", :yellow
-        if context_files?
+        if context_files? && !engine_root
           tasks = unselected.to_h { |tool| [ "rails ai:context:#{tool.key}", tool.name ] }
           width = tasks.keys.map(&:size).max
           tasks.each { |task, name| say "  #{task.ljust(width)}  # Generate for #{name}" }
