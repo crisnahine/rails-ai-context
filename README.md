@@ -67,7 +67,7 @@ You catch it, fix it, re-prompt, and something next to it breaks. The tokens are
 - **Three ways in**: MCP over stdio, MCP mounted inside your Rails app over HTTP, or plain CLI in any terminal.
 - **Generated context files** for Claude Code, Cursor, GitHub Copilot, OpenCode and Codex CLI, with the MCP config each tool auto-detects on project open.
 - **Live resources**: `rails://` and `rails-ai-context://` URIs that introspect fresh on every read.
-- **Anti-hallucination rules** shipped in every generated context file, on by default.
+- **Anti-hallucination rules** shipped in each AI tool's main context file, in compact and full mode, on by default.
 - **Static tier**: when the app can't boot, tools answer from `config/routes.rb`, `db/schema.rb`, migrations and source files, and say so.
 - **Works with real app shapes**: packwerk packs, in-repo engines, multi-database schema dumps, Mongoid, API-only apps.
 - **Custom tools**: register your own `MCP::Tool` classes next to the built-in ones and test them with the bundled `TestHelper`.
@@ -87,7 +87,7 @@ bundle add rails-ai-context --group development
 rails generate rails_ai_context:install
 ```
 
-The generator asks which AI tools you use and what to write, then creates the context files, the MCP config for each tool, `config/initializers/rails_ai_context.rb` and `.rails-ai-context.yml`. In a git repo with no pre-commit hook it also offers to install one. An empty answer to the tools question selects all five, and `--defaults` takes the default for each question. Re-running it is safe; it keeps what you have and adds what is missing. Every step is in [What the install generator does](docs/GUIDE.md#what-the-install-generator-does).
+The generator asks which AI tools you use and what to write, then creates the context files, the MCP config for each tool, `config/initializers/rails_ai_context.rb` and `.rails-ai-context.yml`. In a git repo with no pre-commit hook it also offers to install one. An empty answer to the tools question selects all five, and `--defaults` takes the default for each question. Re-running it is safe; it keeps what you have and adds what is missing, and in a context file you wrote yourself, such as `CLAUDE.md` or `app/models/AGENTS.md`, it rewrites only the section between its `<!-- BEGIN/END rails-ai-context -->` markers. Every step is in [What the install generator does](docs/GUIDE.md#what-the-install-generator-does).
 
 Keeping your own `CLAUDE.md` and `AGENTS.md`? `rails generate rails_ai_context:install --mcp-only` writes the MCP config and leaves every context file alone.
 
@@ -213,7 +213,7 @@ Plus 9 static resources: `rails://schema`, `routes`, `conventions`, `gems`, `con
 
 ## Anti-hallucination rules
 
-Every generated context file (`CLAUDE.md`, `.cursor/rules/`, `.github/instructions/`, `AGENTS.md`) ships with six rules the assistant reads before writing code:
+Each AI tool's main context file (`CLAUDE.md`, `AGENTS.md` for OpenCode and Codex, `.cursorrules` and `.cursor/rules/rails-mcp-tools.mdc` for Cursor, `.github/copilot-instructions.md`) ships with six rules the assistant reads before writing code, in compact and full mode alike. With `generate_root_files` off, `.claude/rules/rails-mcp-tools.md` and `.github/instructions/rails-mcp-tools.instructions.md` carry them instead:
 
 1. Verify before you write. Never reference a column, association, route, helper, method, class, partial or gem that a tool call in this turn did not confirm.
 2. Mark every assumption with `[ASSUMPTION]`. "I'd need to check X first" is a good answer.
