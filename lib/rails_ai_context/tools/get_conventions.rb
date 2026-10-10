@@ -192,6 +192,15 @@ module RailsAiContext
         stack
       end
 
+      # How a create action checks permission: the app's own `can_x?`,
+      # CanCanCan's `authorize!`, or Pundit's `authorize record`.
+      private_class_method def self.permission_style(block)
+        if block.match?(/\bcan_\w+\??/) then :can_method
+        elsif block.match?(/\bauthorize!/) then :cancan
+        elsif block.match?(/\bauthorize\b/) then :pundit
+        end
+      end
+
       # Scan controllers for app-specific authorization, flash, and error-handling patterns
       private_class_method def self.detect_app_patterns
         controllers_dir = rails_app.root.join("app", "controllers").to_s
@@ -210,10 +219,14 @@ module RailsAiContext
         html_response_count = 0
         show_only_controllers = []
         has_services = Dir.exist?(rails_app.root.join("app", "services"))
+        permission_styles = []
+        real_controllers_dir = File.realpath(controllers_dir).to_s
 
         safe_glob(controllers_dir, "**/*.rb", real_root).each do |path|
           content = RailsAiContext::SafeFile.read(path) or next
-          controller_name = File.basename(path, ".rb")
+          # The path under app/controllers, so Api::V1::ProductsController is
+          # not a second ProductsController.
+          controller_name = path.delete_prefix("#{real_controllers_dir}/").delete_suffix(".rb")
 
           auth_checks.concat(content.scan(/\b(can_\w+\??)/).flatten)
           auth_denials.concat(content.scan(/redirect_to\s+.+?,\s*alert:\s*"([^"]*)"/).flatten
@@ -235,7 +248,10 @@ module RailsAiContext
             create_block = content[/def\s+create#{RailsAiContext::MethodName.definition_end("create")}.*?(?=\n\s{2}def\s|\n\s{2}private|\z)/m]
             if create_block
               flow_parts = []
-              flow_parts << "permission check" if create_block.match?(/can_\w+\??|authorize|authorize!/)
+              if (style = permission_style(create_block))
+                flow_parts << "permission check"
+                permission_styles << style
+              end
               flow_parts << "build" if create_block.match?(/\.new\(|\.build\(|\.create\(/)
               # `create!` raises instead of returning false - it is not the
               # save-then-branch flow this skeleton describes.
@@ -305,9 +321,13 @@ module RailsAiContext
           # whichever the app's own create actions use most.
           failure_status = create_error_statuses.tally.max_by { |_, count| count }&.first || "unprocessable_entity"
 
+          # The check the app's own create actions make: a Pundit app
+          # authorizes the record, where the skeleton used to call a
+          # `can_[permission]?` method no Pundit app defines.
+          style = permission_styles.tally.max_by { |_, count| count }&.first
           sections << "```ruby"
           sections << "def create"
-          if has_permission_check
+          if has_permission_check && style == :can_method
             sections << "  unless current_user.can_[permission]?"
             sections << '    redirect_to [path], alert: "[limit message]"'
             sections << "    return"
@@ -316,6 +336,8 @@ module RailsAiContext
             sections << "  @record = current_user.[association].build([params_method])"
           else
             sections << "  @record = [Model].new([params_method])"
+            sections << "  authorize @record" if has_permission_check && style == :pundit
+            sections << "  authorize! :create, @record" if has_permission_check && style == :cancan
           end
           if has_save
             sections << ""
@@ -340,7 +362,7 @@ module RailsAiContext
           sections << "end"
           sections << "```"
           sections << ""
-          sections << "Detected in: #{create_flows.map { |f| f.split(':').first }.join(', ')}"
+          sections << "Detected in: #{create_flows.map { |f| f.split(': ').first }.join(', ')}"
         end
 
         if show_only_controllers.any?
