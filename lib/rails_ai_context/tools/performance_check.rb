@@ -153,12 +153,14 @@ module RailsAiContext
 
         # One association can be at risk in several actions, and those are
         # different findings. Without the call site on the row they read as
-        # one line printed twice, and the section count stops adding up.
+        # one line printed twice, and the section count stops adding up. The
+        # view is where the loop reads the association.
         def call_site(item)
           return "" unless item[:controller]
 
           action = item[:action] ? "##{item[:action]}" : ""
-          " (#{item[:controller]}#{action})"
+          view = item[:view] ? ", in #{item[:view]}" : ""
+          " (#{item[:controller]}#{action}#{view})"
         end
 
         def render_section(title, items, model_filter, detail)
