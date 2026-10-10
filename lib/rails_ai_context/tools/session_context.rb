@@ -39,8 +39,11 @@ module RailsAiContext
 
         if mark
           tool, params = parse_mark(mark)
-          session_record(tool, params)
-          return text_response("Marked `#{tool}` with params `#{params}` as queried.")
+          known = known_tool_name(tool)
+          return error_response(unknown_mark_message(tool)) unless known
+
+          session_record(known, params)
+          return text_response("Marked `#{known}` with params `#{params}` as queried.")
         end
 
         case action
@@ -66,6 +69,26 @@ module RailsAiContext
           tool = parts[0]&.strip
           params = parts[1]&.strip || ""
           [ tool, params ]
+        end
+
+        # The tool a mark names, spelled the way the server names it, so a
+        # mark and the call it stands for are one entry. Takes the short forms
+        # the CLI takes (`schema`, `get_schema`). An empty or unknown name
+        # recorded a query nothing could ever have answered.
+        def known_tool_name(name)
+          return nil if name.to_s.empty?
+
+          tools = RailsAiContext::CLI::ToolRunner.available_tools.map(&:tool_name)
+          [ name, "rails_#{name}", "rails_get_#{name}" ].find { |candidate| tools.include?(candidate) }
+        end
+
+        def unknown_mark_message(name)
+          usage = "Pass `tool:params`, e.g. `get_schema:users`."
+          return "`mark` names no tool. #{usage}" if name.to_s.empty?
+
+          short_names = RailsAiContext::CLI::ToolRunner.available_tools.map { |t| RailsAiContext::CLI::ToolRunner.short_name(t.tool_name) }
+          suggestion = find_closest_match(name, short_names)
+          "Unknown tool '#{name}' in `mark`.#{" Did you mean '#{suggestion}'?" if suggestion} #{usage}"
         end
 
         def cli_note
