@@ -87,7 +87,7 @@ Start with `rails_onboard` for an app overview, `rails_analyze_feature` for feat
 
 ### Can I add my own tools?
 
-Yes. See [Custom Tools](CUSTOM_TOOLS.md). Create an `MCP::Tool` subclass, register it via `config.custom_tools`, and it appears alongside the 45 built-in tools.
+Yes. See [Custom Tools](CUSTOM_TOOLS.md). Create an `MCP::Tool` subclass, register it via `config.custom_tools`, and it appears alongside the 45 built-in tools, in the generated context files' tool counts and lists too.
 
 ### Can I remove built-in tools?
 
@@ -96,6 +96,8 @@ Yes. Use `config.skip_tools`:
 ```ruby
 config.skip_tools = %w[rails_security_scan rails_query]
 ```
+
+The server, the CLI and the generated context files then leave them out alike, so no context file tells the AI to call a tool that answers "Unknown tool".
 
 ### What's the `detail` parameter?
 

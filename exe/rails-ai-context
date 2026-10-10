@@ -721,7 +721,7 @@ class RailsAiContextCLI < Thor
       $stderr.puts ""
       $stderr.puts "Commands:"
       $stderr.puts "  #{binary} context    # Regenerate context files" if context_files
-      $stderr.puts "  #{binary} tool NAME  # Run any of the #{RailsAiContext::CountPhrase.call(builtin_tool_count, "tool")}"
+      $stderr.puts "  #{binary} tool NAME  # Run any of the #{RailsAiContext::CountPhrase.call(served_tool_count, "tool")}"
       if tool_mode == :mcp
         $stderr.puts "  #{binary} serve      # Start MCP server"
       end
@@ -740,8 +740,9 @@ class RailsAiContextCLI < Thor
       $stderr.puts ""
     end
 
-    def builtin_tool_count
-      ::RailsAiContext::Server.builtin_tools.size
+    # What the server serves, skip_tools and custom_tools applied.
+    def served_tool_count
+      ::RailsAiContext::Server.exposed_tools.size
     end
 
     def print_context_result(result)
