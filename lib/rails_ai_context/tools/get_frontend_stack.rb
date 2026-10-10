@@ -329,7 +329,9 @@ module RailsAiContext
           end
 
           if turbo
-            broadcasts = turbo[:model_broadcasts]&.size || 0
+            # The broadcast_*_to calls as well as the model macros: bazaar's
+            # three explicit broadcasts went uncounted beside its one macro.
+            broadcasts = Array(turbo[:model_broadcasts]).size + Array(turbo[:explicit_broadcasts]).size
             frames = turbo[:turbo_frames]&.size || 0
             parts = []
             parts << count_phrase(broadcasts, "broadcast") if broadcasts > 0

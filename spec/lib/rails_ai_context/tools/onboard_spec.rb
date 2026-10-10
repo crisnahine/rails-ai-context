@@ -596,8 +596,25 @@ RSpec.describe RailsAiContext::Tools::Onboard do
         }
       })
       text = described_class.call(detail: "full").content.first[:text]
-      expect(text).to include("Turbo Stream broadcasts: 1 broadcast point.")
+      expect(text).to include("Turbo Stream broadcasts: 1 broadcast point (1 model macro).")
       expect(text).to include("Turbo Stream templates: 1.")
+    end
+
+    # bazaar has one broadcasts_refreshes and three broadcast_*_to calls, and
+    # read as one broadcast point; its BankTransfer, a Payment subclass,
+    # was left out of the payment models.
+    it "counts every broadcast point and names a payment model's subclasses" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "Bazaar", gems: { notable_gems: [] },
+        models: { "Payment" => {}, "CardPayment" => { parent_model: "Payment" }, "BankTransfer" => { parent_model: "Payment" }, "User" => {} },
+        turbo: { model_broadcasts: [ { model: "Product" } ],
+                 explicit_broadcasts: [ { method: "broadcast_prepend_to" }, { method: "broadcast_prepend_to" }, { method: "broadcast_remove_to" } ] }
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("Turbo Stream broadcasts: 4 broadcast points (1 model macro, 3 broadcast calls).")
+      expect(text).to include("Payment-related models: Payment, CardPayment, BankTransfer.")
     end
 
     context "quick mode" do

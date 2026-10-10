@@ -49,6 +49,17 @@ RSpec.describe RailsAiContext::Tools::GetFrontendStack do
     allow(described_class).to receive(:cached_context).and_return({ frontend_frameworks: frontend_data })
   end
 
+  # bazaar's one broadcasts_refreshes counted, its three broadcast_*_to calls not.
+  it "counts the explicit broadcasts beside the model macros" do
+    allow(described_class).to receive(:cached_context).and_return({
+      frontend_frameworks: {}, gems: { notable_gems: [ { name: "turbo-rails" } ] },
+      turbo: { model_broadcasts: [ { model: "Product" } ], explicit_broadcasts: Array.new(3) { { method: "broadcast_prepend_to" } },
+               turbo_frames: [ { id: "a" }, { id: "b" } ] }
+    })
+
+    expect(described_class.call(detail: "standard").content.first[:text]).to include("- **Turbo wiring:** 4 broadcasts, 2 frames")
+  end
+
   it "names the second framework instead of dropping it" do
     frontend_data[:frameworks] = { angular: "^22.0.7", react: "^19.2.6" }
     text = described_class.call(detail: "standard").content.first[:text]
