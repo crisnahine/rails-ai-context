@@ -95,22 +95,28 @@ module RailsAiContext
         lines.concat(view_section_lines(snake))
 
         # Cross-reference: controller ivars vs view ivars. The action's own
-        # source is the origin for both sides of the controller's half; a
-        # body this app cannot read skips the cross-check.
+        # source, the methods it calls and the before filters that run for it
+        # (a scaffold's `show` is empty and set_post sets @post) are the
+        # controller's half; a body this app cannot read skips the cross-check.
         action_body = action_source(controller_name, action_name)
         resolver = RailsAiContext::Introspectors::ActionResolver
         ctrl_ivars = Set.new(action_body ? resolver.assigned_ivars(action_body) : [])
+        origins = action_body ? ivar_origins(controller_name, action_name, action_body) : {}
+        ctrl_ivars.merge(origins.keys)
         view_ivars = Payload.view_ivars(cached_context, "#{snake}/#{action_name}")
-        rendered = action_body ? resolver.rendered_templates(action_body) : []
-        other_templates = rendered.reject { |t| t == action_name }
-        other_templates.each do |tmpl|
-          view_ivars.merge(Payload.view_ivars(cached_context, "#{snake}/#{tmpl}"))
+        rendered = action_body ? rendered_with_formats(action_body) : []
+        other_templates = rendered.map(&:first).uniq.reject { |t| t == action_name }
+        rendered.each do |tmpl, format|
+          next if tmpl == action_name
+
+          view_ivars.merge(Payload.view_ivars(cached_context, "#{snake}/#{tmpl}", format: format))
         end
         view_ivars.merge(action_body ? resolver.rendered_ivars(action_body) : [])
         # Without the view side's section every controller ivar reads as
         # unused, so no cross-check is the honest answer.
         if Payload.section(cached_context, :view_templates)
-          ivar_check = cross_reference_ivars(ctrl_ivars, view_ivars, rendered_templates: other_templates, api_only: api_only_app?)
+          ivar_check = cross_reference_ivars(ctrl_ivars, view_ivars, rendered_templates: other_templates, api_only: api_only_app?,
+                                                                     origins: origins.except(*(action_body ? resolver.assigned_ivars(action_body) : [])))
           lines << "" << ivar_check if ivar_check
         end
 
@@ -172,7 +178,7 @@ module RailsAiContext
           &.dig(:code)
       end
 
-      private_class_method def self.cross_reference_ivars(ctrl_ivars, view_ivars, rendered_templates: [], api_only: false)
+      private_class_method def self.cross_reference_ivars(ctrl_ivars, view_ivars, rendered_templates: [], api_only: false, origins: {})
         return nil if ctrl_ivars.empty? && view_ivars.empty?
 
         lines = [ "## Instance Variable Cross-Check" ]
@@ -180,31 +186,81 @@ module RailsAiContext
 
         used_label = api_only ? "used in response" : "used in view"
         missing_label = api_only ? "referenced in response but NOT set in controller" : "used in view but NOT set in controller"
-        unused_label = api_only ? "set in controller but not rendered in response" : "set in controller but not used in view"
+        unused_label = api_only ? "not rendered in response" : "not used in view"
 
         missing_ivars = []
         all.each do |ivar|
           in_ctrl = ctrl_ivars.include?(ivar)
           in_view = view_ivars.include?(ivar)
+          set_by = origins[ivar] ? "set by `#{origins[ivar]}`" : "set in controller"
           if in_ctrl && in_view
-            lines << "- \u2713 @#{ivar} - set in controller, #{used_label}"
+            lines << "- \u2713 @#{ivar} - #{set_by}, #{used_label}"
           elsif in_view && !in_ctrl
             lines << "- \u2717 @#{ivar} - #{missing_label}"
             missing_ivars << ivar
           elsif in_ctrl && !in_view
-            lines << "- \u26A0 @#{ivar} - #{unused_label}"
+            lines << "- \u26A0 @#{ivar} - #{set_by} but #{unused_label}"
           end
         end
 
-        # If there are missing ivars AND this action renders another template,
-        # add a note explaining why - the other action likely sets them
+        # The other template runs in this request, so its ivars are this
+        # action's to set, whether it renders it on success (`render :show`)
+        # or on failure (`render :new`).
         if missing_ivars.any? && rendered_templates.any?
           templates = rendered_templates.map { |t| "`#{t}`" }.join(", ")
           lines << ""
-          lines << "_Note: This action renders #{templates} on failure - those ivars are likely set in the corresponding action(s)._"
+          lines << "_Note: This action also renders #{templates}, so that template's instance variables are counted here: " \
+                   "this action or a filter it runs has to set them._"
         end
 
         (missing_ivars.any? || all.any?) ? lines.join("\n") : nil
+      end
+
+      KEYWORDS = %w[end else begin rescue ensure return super nil true false self yield next break redo retry].freeze
+
+      # [template, format] for each `render :name` in the action: a render
+      # inside a one-line `format.json { ... }` renders that format's template
+      # only, any other every format's.
+      private_class_method def self.rendered_with_formats(action_body)
+        action_body.each_line.flat_map do |line|
+          format = line[/\bformat\.(\w+)\s*(?:\{|do\b)/, 1]
+          line.scan(/render\s+:(\w+)/).flatten.map { |tmpl| [ tmpl, format ] }
+        end.uniq
+      end
+
+      # { ivar => the method that sets it } for the before and around
+      # filters that run on the action, and the methods its body calls by
+      # bare name, read from the controller's file, the ancestor or concern a
+      # filter comes from.
+      private_class_method def self.ivar_origins(controller_name, action_name, action_body)
+        ctx = cached_context
+        resolver = RailsAiContext::Introspectors::ActionResolver
+        root = rails_app.root.to_s
+        own = controller_source(ctx, controller_name)
+        chain = RailsAiContext::ActionFilters.for(ctx, controller_name, action_name, root: root)[:chain]
+        named = chain.select { |f| %w[before around].include?(f[:kind].to_s) }.map { |f| [ f[:name].to_s, f ] }
+        called = action_body.scan(/^\s*(?:[a-z_]\w*\s*=\s*)?([a-z_]\w*[?!]?)\s*(?:\(|$)/).flatten.uniq
+                            .reject { |name| name == action_name || KEYWORDS.include?(name) }.map { |name| [ name, {} ] }
+
+        (named + called).each_with_object({}) do |(name, filter), found|
+          sources = [ own, controller_source(ctx, filter[:from]), concern_source(root, filter[:from_concern]) ].compact
+          body = sources.lazy.filter_map { |source| resolver.method_body(source, name)&.dig(:code) }.first
+          next unless body&.match?(/\A\s*def\s+#{Regexp.escape(name)}\b/)
+
+          resolver.assigned_ivars(body).each { |ivar| found[ivar] ||= name }
+        end
+      rescue => e
+        RailsAiContext.debug_fail(e, {}, label: "ivar_origins")
+      end
+
+      private_class_method def self.controller_source(ctx, controller_name)
+        carried = controller_name && Payload.controller_file(ctx, controller_name)
+        carried && safe_read(File.join(rails_app.root.to_s, carried))
+      end
+
+      private_class_method def self.concern_source(root, concern)
+        path = concern && RailsAiContext::ConcernPaths.find_file(root, concern)
+        path && safe_read(path)
       end
 
       private_class_method def self.controller_context(controller_name)

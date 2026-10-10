@@ -284,13 +284,16 @@ module RailsAiContext
     # action. Scraping them back out of GetView's rendered "ivars:" line made
     # the cross-check hostage to that line's wording, and it re-read files the
     # payload had already parsed.
-    def view_ivars(ctx, template)
+    # `format:` keeps the template of one format: `format.json { render :show }`
+    # renders show.json.jbuilder, not show.html.erb.
+    def view_ivars(ctx, template, format: nil)
       templates = section(ctx, :view_templates)&.dig(:templates)
       return Set.new unless templates.is_a?(Hash)
 
       wanted = template.to_s
       templates.each_with_object(Set.new) do |(path, entry), found|
         next unless entry.is_a?(Hash) && template_key(path) == wanted
+        next if format && File.basename(path.to_s).split(".")[1] != format.to_s
 
         found.merge(Array(entry[:ivars]).map(&:to_s))
       end

@@ -210,6 +210,57 @@ RSpec.describe RailsAiContext::Tools::GetContext do
       expect(text).to include("@order")
     end
 
+    # A scaffold's `show` is empty and set_post sets @post, so reading the
+    # action body alone marked every scaffold view "NOT set in controller".
+    it "counts what the before filters that run on the action set" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/controllers"))
+        File.write(File.join(dir, "app/controllers/posts_controller.rb"), <<~RUBY)
+          class PostsController < ApplicationController
+            before_action :set_post, only: %i[show publish]
+
+            def show
+            end
+
+            def publish
+              if @post.publish
+                render :show
+              else
+                render :edit
+              end
+            end
+
+            private
+
+            def set_post
+              @post = Post.find(params[:id])
+            end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(dir))
+        allow(described_class).to receive(:cached_context).and_return(
+          controllers: { controllers: { "PostsController" => {
+            actions: %w[show publish], file: "app/controllers/posts_controller.rb",
+            filters: [ { kind: "before", name: "set_post", only: %w[show publish] } ]
+          } } },
+          view_templates: { templates: { "posts/show.html.erb" => { ivars: %w[post] }, "posts/edit.html.erb" => { ivars: %w[post categories] } } }
+        )
+        base = RailsAiContext::Tools::BaseTool
+        allow(RailsAiContext::Tools::GetControllers).to receive(:call).and_return(base.text_response("# PostsController"))
+        allow(RailsAiContext::Tools::GetRoutes).to receive(:call).and_return(base.empty_response("No routes."))
+        allow(RailsAiContext::Tools::GetView).to receive(:call).and_return(base.empty_response("No views."))
+
+        expect(described_class.send(:controller_action_context, "PostsController", "show"))
+          .to include("- ✓ @post - set by `set_post`, used in view")
+
+        # publish renders show on success, edit on failure; both run in this request.
+        text = described_class.send(:controller_action_context, "PostsController", "publish")
+        expect(text).to include("- ✗ @categories - used in view but NOT set in controller")
+        expect(text).to include("_Note: This action also renders `show`, `edit`, so that template's instance variables are counted here")
+        expect(text).not_to include("on failure")
+      end
+    end
+
     it "skips the cross-check when the context carries no view templates" do
       allow(described_class).to receive(:cached_context).and_return(
         controllers: { controllers: { "PostsController" => {
