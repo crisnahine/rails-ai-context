@@ -76,6 +76,25 @@ module RailsAiContext
         )
       end
 
+      # The :standard preset's comment, its introspectors named from the
+      # preset itself and wrapped under the line, so the list cannot fall
+      # behind the code the way a typed copy did.
+      def self.standard_preset_comment
+        names = RailsAiContext::Configuration::PRESETS[:standard].map(&:to_s)
+        lines = [ "#   :standard - #{CountPhrase.call(names.size, 'core introspector')} (" ]
+        names.each_with_index do |name, index|
+          word = "#{name}#{index == names.size - 1 ? ')' : ','}"
+          if lines.last.end_with?("(")
+            lines[-1] += word
+          elsif lines.last.length + word.length + 1 > 74
+            lines << "#               #{word}"
+          else
+            lines[-1] += " #{word}"
+          end
+        end
+        lines.join("\n")
+      end
+
       # All config sections with their marker comment and content.
       # Each section is identified by its marker (e.g., "── AI Tools ──").
       # On re-install, only sections NOT already present are appended.
@@ -100,9 +119,7 @@ module RailsAiContext
             # ── Introspection ─────────────────────────────────────────────────
             # Introspector preset:
             #   :full     - all #{CountPhrase.call(RailsAiContext::Configuration::PRESETS[:full].size, 'introspector')} (default)
-            #   :standard - #{CountPhrase.call(RailsAiContext::Configuration::PRESETS[:standard].size, 'core introspector')} (schema, models, routes, jobs, gems,
-            #               conventions, controllers, tests, migrations, stimulus,
-            #               view_templates, config, components)
+            #{standard_preset_comment}
             # config.preset = :full
 
             # Context mode: :compact (default, ≤150 lines) or :full (dumps everything)
@@ -191,9 +208,11 @@ module RailsAiContext
             # AI's context. Default: 100.
             # config.query_row_limit = 100
 
-            # Additional column names whose values are redacted in tool
-            # output. Defaults already cover password_digest,
-            # encrypted_password, *_token, *_secret, *_key, etc.
+            # Column names a query may not touch: one that names any of them
+            # is rejected before it runs, and a returned column of that name
+            # comes back [FILTERED]. The defaults already list password_digest,
+            # encrypted_password, api_key, access_token and the like, and a
+            # built-in list is checked on top of them.
             # config.query_redacted_columns += %w[my_app_specific_secret]
 
             # rails_query is DISABLED in production by default. Setting
@@ -297,11 +316,10 @@ module RailsAiContext
         # the same reindent the update path uses: the AI Tools section above
         # carries the configure body's indent and these are written flush, so
         # appending them raw left the file with two indents, and the guard wrap
-        # preserved the gap by indenting both equally.
-        CONFIG_SECTIONS.each do |name, section_content|
-          next if name == "AI Tools" # already added with dynamic values
-          content += reindent_section_content(section_content, content) + "\n"
-        end
+        # preserved the gap by indenting both equally. One blank line between
+        # sections and none before `end`, as the app's Rubocop wants it.
+        sections = CONFIG_SECTIONS.except("AI Tools") # already added with dynamic values
+        content += sections.values.map { |section_content| reindent_section_content(section_content, content) }.join("\n")
 
         content += "end\n"
         content, = ensure_initializer_guard(content)
@@ -333,7 +351,11 @@ module RailsAiContext
 
           insert_point = configure_block_end_index(existing)
           if insert_point
-            existing = existing.insert(insert_point, "\n#{reindent_section_content(section_content, existing)}\n")
+            # A blank line above the section unless one is there, or the block
+            # is empty, and none below it: the line before `end` stays code.
+            above = existing[0...insert_point]
+            gap = above.end_with?("\n\n") || above.match?(/do \|config\|\n\z/) ? "" : "\n"
+            existing = existing.insert(insert_point, "#{gap}#{reindent_section_content(section_content, existing)}")
             changes << "section: #{name}"
           end
         end
