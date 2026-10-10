@@ -180,6 +180,8 @@ rails-ai-context context --format claude # Specific format
 |:-------|:--------|:------------|
 | `--format` | all configured | `claude`, `cursor`, `copilot`, `opencode`, `codex`, `json`, `all` |
 
+Without `--format`, `rails ai:context` and `rails-ai-context context` also bring the selected tools' MCP configs up to date, in the command form the install takes now - after `bundle remove rails-ai-context` that is the bare binary. A tool whose config a [workspace](#init-standalone-only) above already serves is left to it. `rails ai:context:<tool>` writes that tool's config along with its files.
+
 The rake tasks `ai:context`, `ai:context:<format>` and `ai:context_for` also read
 `CONTEXT_MODE`: `CONTEXT_MODE=full rails ai:context` overrides `config.context_mode`
 for that run. The standalone binary does not read it.
@@ -217,7 +219,7 @@ rails-ai-context init
 rails-ai-context init --mcp-only   # MCP config only, no context files
 ```
 
-Asks which AI tools to configure and what to write: MCP config and context files, context files only (CLI mode), or MCP config only. Creates `.rails-ai-context.yml`, the MCP config files (except in CLI mode) and the context files (except with MCP config only). `--mcp-only` skips the second question.
+Asks which AI tools to configure and what to write: MCP config and context files, context files only (CLI mode), or MCP config only. Creates `.rails-ai-context.yml`, the MCP config files (except in CLI mode) and the context files (except with MCP config only). `--mcp-only` skips the second question. Every question - including a re-run's cleanup of dropped tools, and in CLI mode whether to take the gem's entries out of existing MCP configs - is asked before the app boots and anything is written; with MCP config only, the app is not booted at all.
 
 Run inside an app, `init` sets up that app (found the way every command finds it: the [app root](#tool) above a subdirectory, or the one `--app-path` names).
 
