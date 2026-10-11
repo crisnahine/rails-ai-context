@@ -264,7 +264,9 @@ module RailsAiContext
           end
           warnings.concat(check_stimulus_controllers(content, context))
           warnings.concat(check_instance_variable_usage(file, content, context))
-          warnings.concat(check_respond_to_template_existence(file, content))
+          # No check pairs `turbo_stream_from` with a .turbo_stream.erb: the
+          # tag subscribes to a channel that broadcasts render their own
+          # partials into, and nothing renders a template for it.
         elsif file.end_with?(".rb")
           if visitor
             warnings.concat(check_route_helpers_ast(file, visitor, context))
@@ -971,31 +973,6 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "check_turbo_stream_channels")
       end
 
-      # ── CHECK 12: respond_to template existence ────────────────────
-
-      private_class_method def self.check_respond_to_template_existence(file, content)
-        warnings = []
-        return warnings unless file.start_with?("app/views/") && file.end_with?(".html.erb")
-
-        # Check if there's a turbo_stream version when turbo_stream_from is used
-        # (This checks from the view side - controller respond_to check is separate)
-        return warnings unless content.include?("turbo_stream_from") || content.include?("turbo_frame_tag")
-
-        # If view has turbo_stream_from, check the controller action has respond_to :turbo_stream
-        # and that a .turbo_stream.erb template exists
-        base = file.sub(/\.html\.erb$/, "")
-        turbo_template = "#{base}.turbo_stream.erb"
-        turbo_path = rails_app.root.join(turbo_template)
-
-        if content.include?("turbo_stream_from") && !File.exist?(turbo_path)
-          # Only warn if the controller likely needs it
-          warnings << "#{file} uses turbo_stream_from but #{turbo_template} doesn't exist (Turbo Stream updates may need this)"
-        end
-        warnings
-      rescue => e
-        RailsAiContext.debug_fail(e, [], label: "check_respond_to_template_existence")
-      end
-
       # ── CHECK: Memory-loading anti-pattern ───────────────────────────
       MEMORY_LOAD_METHODS = %w[map filter_map flat_map select reject collect reduce inject each_with_object].freeze
 
@@ -1021,7 +998,7 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "check_memory_loading")
       end
 
-      # ── CHECK 13: Performance warnings from introspector ───────────
+      # ── CHECK 12: Performance warnings from introspector ───────────
 
       private_class_method def self.check_performance_warnings(file, context)
         warnings = []
