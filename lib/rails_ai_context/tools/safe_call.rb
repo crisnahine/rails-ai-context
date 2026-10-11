@@ -62,7 +62,10 @@ module RailsAiContext
           begin
             # One call is one run: what it reads per controller or per route is read once.
             append_note(RailsAiContext::RunCache.around { yield }, invalid_detail_note(discarded))
-          rescue StandardError => e
+          # ScriptError too: a SyntaxError or LoadError out of an app file the
+          # tool reached must cost that call, not the stdio server and every
+          # tool with it.
+          rescue StandardError, ScriptError => e
             failure_response(e)
           end
         end

@@ -378,6 +378,22 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
       expect(response.content.first[:text]).to include("rails_spec_probe failed")
     end
 
+    # A SyntaxError out of an app file a tool reached is a ScriptError, which
+    # the rescue let through: past the MCP SDK too, it ended the stdio
+    # server, and every tool with it.
+    it "turns a ScriptError into an error response, as it does any other failure" do
+      tool = build_tool do
+        input_schema(properties: {})
+        def self.call(server_context: nil)
+          raise SyntaxError, "app/models/post.rb:7: syntax errors found"
+        end
+      end
+
+      response = tool.call
+      expect(response.error?).to be(true)
+      expect(response.content.first[:text]).to start_with("Tool rails_spec_probe failed: SyntaxError: app/models/post.rb:7: syntax errors found")
+    end
+
     # The frame names a file inside the gem, which on an installed gem is an
     # absolute path under the machine's GEM_HOME.
     it "keeps the install path out of the frame it names" do

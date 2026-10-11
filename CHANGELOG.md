@@ -330,6 +330,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   actions and filters its source read as, with no word that Rails cannot
   load it. Its entry now gives the error, in every listing and in its own
   answer, as `rails_get_model_details` does for a model.
+- **A tool call that raises a `SyntaxError` or a `LoadError` answers with an
+  error and leaves the server running.** The rescue that turns a tool's
+  failure into an error result caught `StandardError` only, so a
+  `ScriptError` out of an app file a tool reached went past it and past
+  the MCP SDK, and ended a stdio server with every tool in it. It is now
+  that call's `Tool ... failed: SyntaxError: ...` answer.
 - **Live reload loads no app code on the watching thread.** Listen's
   callback only marks a reload as pending; the next tool call reloads on its
   own thread. `watch` reloads and regenerates on its main thread and keeps
