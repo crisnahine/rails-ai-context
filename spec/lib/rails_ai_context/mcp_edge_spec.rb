@@ -82,6 +82,70 @@ RSpec.describe RailsAiContext::McpEdge do
     end
   end
 
+  # The SDK answered only a loopback Host, so an app reached by its own name
+  # got 403 "Invalid Host header" with allow_http_in_production on, and
+  # `myapp.localhost` was refused in development though Rails allows it.
+  describe ".host_refusal" do
+    def env(host, origin: nil, forwarded: nil)
+      Rack::MockRequest.env_for("http://#{host}/mcp", method: "POST", input: "{}", "HTTP_HOST" => host,
+                                **({ "HTTP_ORIGIN" => origin } if origin).to_h, **({ "HTTP_X_FORWARDED_HOST" => forwarded } if forwarded).to_h)
+    end
+
+    def app_with(hosts, exclude: nil)
+      config = double("config", hosts: hosts, host_authorization: exclude ? { exclude: exclude } : {})
+      double("app", config: config)
+    end
+
+    it "answers every host the app's config.hosts allows, in each form Rails reads" do
+      app = app_with([ ".localhost", "myapp.example.com", /\A.*\.internal\z/, IPAddr.new("10.0.0.0/8") ])
+
+      %w[myapp.localhost localhost:3000 myapp.example.com api.internal 10.1.2.3:8080].each do |host|
+        expect(described_class.host_refusal(env(host), app)).to be_nil, host
+      end
+    end
+
+    it "refuses a host config.hosts does not allow, a forwarded one included, as the SDK did" do
+      app = app_with([ ".localhost" ])
+
+      [ env("evil.example.com"), env("myapp.localhost", forwarded: "evil.example.com") ].each do |request|
+        status, headers, body = described_class.host_refusal(request, app)
+        expect(status).to eq(403)
+        expect(headers["Content-Type"]).to eq("application/json")
+        expect(JSON.parse(body.join).dig("error", "message")).to eq("Forbidden: Invalid Host header")
+      end
+    end
+
+    it "answers any host when config.hosts is empty, as Rails does, and one its exclusion lets through" do
+      expect(described_class.host_refusal(env("anything.example.com"), app_with([]))).to be_nil
+
+      excluded = app_with([ ".localhost" ], exclude: ->(request) { request.path == "/mcp" })
+      expect(described_class.host_refusal(env("anything.example.com"), excluded)).to be_nil
+    end
+
+    it "refuses a browser's request from another origin and answers one from the app's own" do
+      app = app_with([])
+
+      status, _headers, body = described_class.host_refusal(env("myapp.example.com", origin: "https://evil.example.com"), app)
+      expect(status).to eq(403)
+      expect(JSON.parse(body.join).dig("error", "message")).to eq("Forbidden: Invalid Origin header")
+      expect(described_class.host_refusal(env("myapp.example.com", origin: "http://myapp.example.com"), app)).to be_nil
+      expect(described_class.host_refusal(env("myapp.example.com:443", origin: "https://myapp.example.com"), app)).to be_nil
+    end
+
+    it "turns the SDK's loopback-only check off in the transports it builds" do
+      transport = described_class.build_transport(Rails.application)
+      request = Rack::Request.new(Rack::MockRequest.env_for("http://myapp.example.com/mcp", method: "POST",
+        "HTTP_HOST" => "myapp.example.com", "CONTENT_TYPE" => "application/json", "HTTP_ACCEPT" => "application/json, text/event-stream",
+        input: JSON.generate(jsonrpc: "2.0", id: 1, method: "initialize",
+                             params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "spec", version: "1" } })))
+
+      status, = transport.handle_request(request)
+      expect(status).to eq(200)
+    ensure
+      transport&.close if transport.respond_to?(:close)
+    end
+  end
+
   # The middleware and the engine ride the app's own web server, so in
   # production every tool would answer whoever reaches the app.
   describe ".production_refusal" do

@@ -112,13 +112,59 @@ module RailsAiContext
       # calls check the app's files themselves, as every server's do.
       def build_transport(app = nil)
         app ||= Rails.application
-        transport = MCP::Server::Transports::StreamableHTTPTransport.new(Server.new(app, transport: :http).build)
+        transport = MCP::Server::Transports::StreamableHTTPTransport.new(Server.new(app, transport: :http).build, **host_check_options)
         CodeReloader.track_loaded_code!
         Tools::BaseTool.check_files_per_call!(app)
         transport
       end
 
+      # The SDK answers only the Host 127.0.0.1, ::1 or localhost, and its
+      # allowed_hosts takes exact names only: none of config.hosts' domain,
+      # pattern and address forms. These transports ride the app's own server,
+      # so its config.hosts decides instead (host_refusal), and the SDK's
+      # check is turned off where the SDK lets it be.
+      def host_check_options
+        return {} unless defined?(ActionDispatch::HostAuthorization)
+
+        parameters = MCP::Server::Transports::StreamableHTTPTransport.instance_method(:initialize).parameters
+        parameters.any? { |_, name| name == :dns_rebinding_protection } ? { dns_rebinding_protection: false } : {}
+      end
+
+      # The Host and Origin checks the SDK made, made by the app's rules: the
+      # Host as Rails' HostAuthorization judges it against config.hosts, its
+      # exclusions included, so the endpoint answers every name the app does
+      # (`myapp.localhost` in development, the app's own domain in
+      # production) and refuses the rest, a rebinding attacker's domain
+      # among them. A browser's request from another origin is refused, as
+      # the SDK refuses it.
+      def host_refusal(env, app = Rails.application)
+        message = if !host_allowed?(env, app) then "Forbidden: Invalid Host header"
+        elsif env["HTTP_ORIGIN"] && !same_origin?(env["HTTP_ORIGIN"], env["HTTP_HOST"]) then "Forbidden: Invalid Origin header"
+        end
+        message && [ 403, { "Content-Type" => "application/json" }, [ error_frame(INVALID_REQUEST, message) ] ]
+      end
+
       private
+
+      def host_allowed?(env, app)
+        config = app.config
+        exclude = config.respond_to?(:host_authorization) && config.host_authorization.is_a?(Hash) ? config.host_authorization[:exclude] : nil
+        judge = ActionDispatch::HostAuthorization.new(->(_env) { :allowed }, config.hosts, exclude: exclude, response_app: ->(_env) { :blocked })
+        judge.call(env.dup) == :allowed
+      rescue StandardError
+        # Rails' own rules unreadable: the SDK's, a loopback name only.
+        LOOPBACK_HOSTS.include?(env["HTTP_HOST"].to_s.downcase.sub(/:\d+\z/, "").delete_prefix("[").delete_suffix("]"))
+      end
+
+      # The SDK's test: the Origin's host and port are the request's own, a
+      # scheme's default port dropped from both.
+      def same_origin?(origin, host)
+        return false if host.nil?
+
+        origin = origin.downcase
+        default_port = origin.start_with?("https://") ? ":443" : ":80"
+        origin.sub(%r{\Ahttps?://}, "").delete_suffix(default_port) == host.downcase.delete_suffix(default_port)
+      end
 
       # Once per process: a client that keeps retrying would otherwise fill
       # the production log with the same line.
@@ -132,6 +178,7 @@ module RailsAiContext
 
     # The environments the endpoint answers in without allow_http_in_production.
     LOCAL_ENVIRONMENTS = %w[development test].freeze
+    LOOPBACK_HOSTS = %w[127.0.0.1 ::1 localhost].freeze
     ENGINE_TRANSPORT_LOCK = Mutex.new
   end
 end

@@ -29,7 +29,7 @@ module RailsAiContext
     end
 
     def handle
-      if (refused = McpEdge.production_refusal)
+      if (refused = McpEdge.production_refusal || McpEdge.host_refusal(request.env))
         return answer_rack(refused)
       end
       return refuse_server_push if request.get?
