@@ -155,15 +155,20 @@ module RailsAiContext
       private_class_method def self.format_model(name, data)
         # Static-tier entries already carry [STATIC]; a runtime entry with a
         # resolved table is reflection-confirmed, hence [VERIFIED].
+        missing_table = Payload.missing_table?(Payload.section(cached_context, :schema), data)
         header_tag = if data[:confidence]
           " #{data[:confidence]}"
-        elsif data[:table_name] && !RailsAiContext.static_tier?
+        elsif data[:table_name] && !missing_table && !RailsAiContext.static_tier?
           " #{Confidence::VERIFIED}"
         else
           ""
         end
         lines = [ "# #{name}#{header_tag}", "" ]
-        lines << "**Table:** `#{data[:table_name]}`" if data[:table_name]
+        if missing_table
+          lines << "Table '#{data[:table_name]}' not found."
+        elsif data[:table_name]
+          lines << "**Table:** `#{data[:table_name]}`"
+        end
         if (database = data[:database])
           lines << "**Database:** `#{database[:connects_to]}`#{" (only #{database[:condition]})" if database[:condition]}" \
                    "#{", inherited from `#{database[:declared_in]}`" if database[:declared_in]}"

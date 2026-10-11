@@ -47,6 +47,24 @@ RSpec.describe RailsAiContext::Tools::Onboard do
     end
   end
 
+  describe "a model whose table the database does not have" do
+    it "does not name the table as the model's" do
+      Dir.mktmpdir do |dir|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+        allow(described_class).to receive(:cached_context).and_return({
+          app_name: "Blog",
+          models: { "Tag" => { table_name: "tags", associations: [ { type: "has_many", name: "posts" } ] } },
+          schema: { adapter: "sqlite3", total_tables: 1, tables: { "posts" => { columns: [] } } }
+        })
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("**Tag** (table `tags` not found)")
+        expect(text).not_to include("(table: `tags`)")
+      end
+    end
+  end
+
   describe "an app with no tables yet" do
     it "names the adapter database.yml declares" do
       Dir.mktmpdir do |dir|

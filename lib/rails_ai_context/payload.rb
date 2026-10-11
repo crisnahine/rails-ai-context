@@ -179,6 +179,18 @@ module RailsAiContext
       end
     end
 
+    # True only when a live connection's listing was read for the model's database and lacks its table:
+    # a dump can leave out a view, and a database the schema section did not read says nothing.
+    def missing_table?(schema, model)
+      return false unless model.is_a?(Hash) && model[:table_name] && schema.is_a?(Hash) && schema[:tables].is_a?(Hash)
+      return false if parsed_schema?(schema)
+
+      writing = model.dig(:database, :writing)&.to_s
+      return false if writing && writing != "primary" && !secondary_databases(schema).keys.map(&:to_s).include?(writing)
+
+      model_tables(schema, model).empty?
+    end
+
     # Why the primary's dump leaves out a schema-qualified table, or nil.
     def missing_qualified_table(schema, name)
       return unless schema.is_a?(Hash) && parsed_schema?(schema) && name.to_s.include?(".")

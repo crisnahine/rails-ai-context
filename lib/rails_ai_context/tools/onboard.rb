@@ -213,7 +213,11 @@ module RailsAiContext
             assocs = Serializers::SectionFacts.associations_list(data)
             validations = data[:validations] || []
             desc = "**#{name}**"
-            desc += " (table: `#{data[:table_name]}`)" if data[:table_name]
+            if Payload.missing_table?(Payload.section(ctx, :schema), data)
+              desc += " (table `#{data[:table_name]}` not found)"
+            elsif data[:table_name]
+              desc += " (table: `#{data[:table_name]}`)"
+            end
             desc += " - #{assocs.first(4).join(', ')}" if assocs.any?
             desc += ", +#{assocs.size - 4} more" if assocs.size > 4
             if validations.any?

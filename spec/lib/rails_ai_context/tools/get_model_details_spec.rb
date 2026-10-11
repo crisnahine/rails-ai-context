@@ -177,6 +177,20 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  describe "a model whose table the database does not have" do
+    it "says the table is not found and does not mark the model verified" do
+      allow(described_class).to receive(:cached_context).and_return({
+        models: { "Tag" => { table_name: "tags", associations: [ { type: "has_many", name: "posts" } ] } },
+        schema: { adapter: "sqlite3", tables: { "posts" => { columns: [ { name: "title", type: "string" } ] } } }
+      })
+
+      text = described_class.call(model: "Tag").content.first[:text]
+
+      expect(text).to include("Table 'tags' not found.")
+      expect(text).not_to include("[VERIFIED]", "**Table:** `tags`")
+    end
+  end
+
   describe "a model on a secondary database" do
     it "lists the columns its database's dump declares" do
       allow(described_class).to receive(:cached_context).and_return({
