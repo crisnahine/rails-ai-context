@@ -434,6 +434,32 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
         expect(File.read(mono_hook)).to eq(RailsAiContext::Install::ValidationHook.script(%w[. apps/web], standalone: false))
       end
 
+      # The form for several apps that ran the rake task, which has to boot
+      # the app, with its errors thrown away.
+      it "brings the earlier hook for an app below the root up to date without asking" do
+        FileUtils.mkdir_p(File.dirname(mono_hook))
+        File.write(mono_hook, RailsAiContext::Install::ValidationHook.earlier_script(%w[apps/web], standalone: false))
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
+        allow(generator).to receive(:say)
+
+        install_for("apps/web")
+
+        expect(generator).not_to have_received(:ask)
+        expect(File.read(mono_hook)).to eq(RailsAiContext::Install::ValidationHook.script(%w[apps/web], standalone: false))
+        expect(generator).to have_received(:say).with(a_string_including("Updated the pre-commit validation hook"), :green)
+      end
+
+      it "keeps an earlier hook's apps and install form when it brings it up to date" do
+        FileUtils.mkdir_p(File.dirname(mono_hook))
+        File.write(mono_hook, RailsAiContext::Install::ValidationHook.earlier_script(%w[apps/web apps/admin], standalone: true))
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
+
+        install_for("apps/admin")
+
+        expect(generator).not_to have_received(:ask)
+        expect(File.read(mono_hook)).to eq(RailsAiContext::Install::ValidationHook.script(%w[apps/web apps/admin], standalone: true))
+      end
+
       it "asks nothing for an app the hook already covers" do
         install_for("apps/web")
         install_for("apps/web")
@@ -453,16 +479,16 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
         expect(generator).to have_received(:say).with(a_string_including("was changed by hand - add apps/admin"), :yellow)
       end
 
-      # A stand-in validator on PATH logs what it was given and where, and
-      # fails in the app named by `fail_in`, as a real one does on a bad
-      # reference.
-      def fake_rails(bin, log, fail_in: nil)
-        File.write(File.join(bin, "rails"), <<~SH)
+      # A stand-in `bundle` on PATH logs what it was given and where, and
+      # fails in the app named by `fail_in`, as validate does on a file that
+      # does not parse.
+      def fake_bundle(bin, log, fail_in: nil)
+        File.write(File.join(bin, "bundle"), <<~SH)
           #!/bin/sh
           echo "$(basename "$PWD") $*" >> #{log.shellescape}
           [ "$(basename "$PWD")" != "#{fail_in}" ]
         SH
-        File.chmod(0o755, File.join(bin, "rails"))
+        File.chmod(0o755, File.join(bin, "bundle"))
       end
 
       def commit(repo, bin)
@@ -478,7 +504,7 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
         install_for("apps/admin")
         Dir.mktmpdir do |bin|
           log = File.join(bin, "calls.log")
-          fake_rails(bin, log, fail_in: "admin")
+          fake_bundle(bin, log, fail_in: "admin")
           File.write(File.join(mono, "apps/web/app/models/post.rb"), "class Post; end\n")
           File.write(File.join(mono, "apps/admin/app/models/user.rb"), "class User; end\n")
           File.write(File.join(mono, "README.md"), "x\n")
@@ -486,8 +512,8 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
 
           out, status = commit(mono, bin)
 
-          expect(File.read(log).lines).to eq([ "web ai:tool[validate] files=app/models/post.rb\n",
-                                               "admin ai:tool[validate] files=app/models/user.rb\n" ])
+          expect(File.read(log).lines).to eq([ "web exec rails-ai-context tool validate --files app/models/post.rb\n",
+                                               "admin exec rails-ai-context tool validate --files app/models/user.rb\n" ])
           expect(status.success?).to be(false), out
           expect(out).to include("rails-ai-context validation found issues.")
         end
@@ -501,7 +527,7 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
           worktree = File.join(bin, "wt")
           git("-C", mono, "worktree", "add", "-q", worktree)
           log = File.join(bin, "calls.log")
-          fake_rails(bin, log)
+          fake_bundle(bin, log)
           FileUtils.mkdir_p(File.join(worktree, "apps/web/app/models"))
           File.write(File.join(worktree, "apps/web/app/models/post.rb"), "class Post; end\n")
           File.write(File.join(worktree, "top.rb"), "x\n")
@@ -510,7 +536,7 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
           out, status = commit(worktree, bin)
 
           expect(status.success?).to be(true), out
-          expect(File.read(log).lines).to eq([ "web ai:tool[validate] files=app/models/post.rb\n" ])
+          expect(File.read(log).lines).to eq([ "web exec rails-ai-context tool validate --files app/models/post.rb\n" ])
         end
       end
 
@@ -522,7 +548,7 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
         install_for("apps/web")
         Dir.mktmpdir do |bin|
           log = File.join(bin, "calls.log")
-          fake_rails(bin, log)
+          fake_bundle(bin, log)
           File.write(File.join(mono, "apps/web/app/models/caf\u00e9.rb"), "class Cafe; end\n")
           File.write(File.join(mono, "apps/web/app/models/a,b.rb"), "x\n")
           git("-C", mono, "add", "-A")
@@ -530,7 +556,7 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
           out, status = commit(mono, bin)
 
           expect(status.success?).to be(true), out
-          expect(File.read(log, encoding: "UTF-8").lines).to eq([ "web ai:tool[validate] files=app/models/caf\u00e9.rb\n" ])
+          expect(File.read(log, encoding: "UTF-8").lines).to eq([ "web exec rails-ai-context tool validate --files app/models/caf\u00e9.rb\n" ])
           expect(out).to include("app/models/a,b.rb is not checked")
         end
       end
@@ -541,8 +567,8 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
         install_for("apps/web")
         Dir.mktmpdir do |bin|
           FileUtils.mkdir_p(File.join(bin, "elsewhere/apps/web"))
-          File.write(File.join(bin, "rails"), "#!/bin/sh\necho \"$PWD\" >> #{File.join(bin, 'pwd.log').shellescape}\n")
-          File.chmod(0o755, File.join(bin, "rails"))
+          File.write(File.join(bin, "bundle"), "#!/bin/sh\necho \"$PWD\" >> #{File.join(bin, 'pwd.log').shellescape}\n")
+          File.chmod(0o755, File.join(bin, "bundle"))
           File.write(File.join(mono, "apps/web/app/models/post.rb"), "class Post; end\n")
           git("-C", mono, "add", "-A")
           env = { "PATH" => "#{bin}:#{ENV.fetch('PATH')}", "CDPATH" => File.join(bin, "elsewhere"),
@@ -564,7 +590,7 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
         install_for("apps/admin")
         Dir.mktmpdir do |bin|
           log = File.join(bin, "calls.log")
-          fake_rails(bin, log)
+          fake_bundle(bin, log)
           git("-C", mono, "rm", "-q", "apps/web/app/models/post.rb")
           git("-C", mono, "rm", "-q", "-r", "apps/admin")
 
@@ -678,18 +704,40 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
 
       expect(content).to include("git diff --cached --name-only -z --diff-filter=d")
       expect(content).to include(%(files="${files:+$files,}$name"))
-      expect(content).to include("rails 'ai:tool[validate]' files=\"$files\"")
+      expect(content).to include("rails-ai-context tool validate --files \"$files\"")
       expect(content).not_to include("echo $changed_files")
     end
 
-    it "uses the rake form on in-Gemfile installs" do
+    it "uses the CLI in the app's bundle on in-Gemfile installs" do
       allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
 
       generator.install_validation_hook
 
       content = File.read(hook_path)
-      expect(content).to include("if command -v rails &> /dev/null")
-      expect(content).to include("rails 'ai:tool[validate]' files=\"$files\"")
+      expect(content).to include("if command -v bundle &> /dev/null")
+      expect(content).to include("bundle exec rails-ai-context tool validate --files \"$files\"")
+      expect(content).not_to include("ai:tool")
+    end
+
+    # validate's errors were sent to /dev/null, so a commit it stopped said
+    # only that validation found issues.
+    it "shows what validation printed to stderr when it stops a commit" do
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
+      generator.install_validation_hook
+      Dir.mktmpdir do |bin|
+        File.write(File.join(bin, "bundle"), "#!/bin/sh\necho 'Could not find gem rails-ai-context' >&2\nexit 7\n")
+        File.chmod(0o755, File.join(bin, "bundle"))
+        FileUtils.mkdir_p(File.join(tmpdir, "app/models"))
+        File.write(File.join(tmpdir, "app/models/post.rb"), "class Post; end\n")
+        git("-C", tmpdir, "add", "-A")
+        env = { "PATH" => "#{bin}:#{ENV.fetch('PATH')}", "GIT_AUTHOR_NAME" => "t", "GIT_AUTHOR_EMAIL" => "t@t",
+                "GIT_COMMITTER_NAME" => "t", "GIT_COMMITTER_EMAIL" => "t@t" }
+
+        out, status = Open3.capture2e(env, "git", "-C", tmpdir, "commit", "-q", "-m", "x")
+
+        expect(status.success?).to be(false)
+        expect(out).to include("Could not find gem rails-ai-context").and include("rails-ai-context validation found issues.")
+      end
     end
 
     it "uses the CLI binary on standalone installs (no rake tasks exist)" do

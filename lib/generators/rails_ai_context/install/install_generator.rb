@@ -614,12 +614,12 @@ module RailsAiContext
 
       def install_validation_hook
         repo = git_repository or return
-        # The hook validates with `rails 'ai:tool[validate]'`, which an
-        # engine's root does not have: there its rake tasks are app:ai:* and
-        # run in the dummy app, so the hook would fail every commit.
+        # No hook at an engine's root, whose rake tasks are app:ai:* and run
+        # in the dummy app. The hook ran `rails 'ai:tool[validate]'` when this
+        # was written; it now runs the gem's CLI, which reads an engine from
+        # source, but has not been offered at an engine's root yet.
         if engine_root
-          say "  Skipped pre-commit hook (an engine's root has no `rails 'ai:tool[validate]'` - " \
-              "its tasks run in the dummy app as app:ai:*)", :yellow
+          say "  Skipped pre-commit hook (not offered at an engine's root, whose tasks run in the dummy app as app:ai:*)", :yellow
           return
         end
 
@@ -662,18 +662,22 @@ module RailsAiContext
           end
 
           # An earlier version's hook, unchanged: rewritten in the current form,
-          # which leaves deleted files out, without asking again for the app
-          # that took it.
-          if coverage.legacy && app == "."
-            write_validation_hook(hook_path, repo[:hooks], hook.script(apps, standalone: standalone))
+          # which leaves deleted files out and checks an app that cannot boot,
+          # without asking again for the apps that took it. A hook for this
+          # app alone takes this install's form; one for several keeps its own.
+          if coverage.legacy && coverage.apps.include?(app)
+            form = coverage.apps.one? ? standalone : coverage.standalone
+            write_validation_hook(hook_path, repo[:hooks], hook.script(coverage.apps, standalone: form))
             say "  Updated the pre-commit validation hook from an earlier version", :green
             return
           end
           return if coverage.apps.include?(app)
 
           # Another app in the same repository: the hook is rewritten to cover
-          # this one too, in the form it was written in.
-          standalone = coverage.standalone unless coverage.legacy
+          # this one too, in the form it was written in. An earlier hook for
+          # one app takes this install's form, as above: before v5.14 either
+          # install wrote the rake form, so that form says nothing.
+          standalone = coverage.standalone unless coverage.legacy && coverage.apps.one?
           apps = coverage.apps + [ app ]
         end
 
