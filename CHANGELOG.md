@@ -142,6 +142,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bare entry whose command PATH finds only as a `.bat` or `.cmd`; running
   the install again rewrites either for the machine it runs on. A team on
   both keeps the MCP configs out of git, or runs the install on each machine.
+- **The pre-commit hook is written with plain newlines on Windows**, where
+  the generator wrote it in text mode, so each line ended in CRLF and the sh
+  that Git for Windows runs a hook with read the CR as part of every
+  command. The stdio server ends each JSON-RPC frame with a plain newline
+  there too, rather than the CRLF a text-mode stdout writes.
 - **`doctor` and `search_code` find ripgrep on Windows**, which has no
   `which` to ask, so ripgrep read as missing there and every search took the
   slower Ruby path. PATH is searched in Ruby now, with Windows' `PATHEXT`

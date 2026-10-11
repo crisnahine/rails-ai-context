@@ -321,6 +321,8 @@ module RailsAiContext
         super(server)
         $stdout.set_encoding(*stderr_encoding)
         @channel = channel
+        # A frame ends in a newline alone; Windows writes one as CRLF in text mode.
+        @channel.binmode
         @channel.set_encoding("UTF-8")
       end
 
