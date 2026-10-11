@@ -517,7 +517,7 @@ module RailsAiContext
           if w.code
             lines << "- **Code:**"
             lines << "  ```ruby"
-            lines << "  #{w.format_code}"
+            lines << "  #{RailsAiContext::Redaction.redact_source(w.format_code.to_s, path: w.file.relative)}"
             lines << "  ```"
           end
 

@@ -186,7 +186,7 @@ module RailsAiContext
             next unless full && site[:snippet]
 
             lines << "  ```erb"
-            lines << "  #{site[:snippet].strip}"
+            lines << "  #{RailsAiContext::Redaction.redact_source(site[:snippet].strip, path: site[:file])}"
             lines << "  ```"
           end
           if render_sites.size > cap
@@ -199,7 +199,7 @@ module RailsAiContext
         if full
           lines << "" << "## Source"
           lines << "```erb"
-          lines << source
+          lines << RailsAiContext::Redaction.redact_source(source, path: relative_path)
           lines << "```"
         else
           lines << ""

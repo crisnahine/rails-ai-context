@@ -310,7 +310,8 @@ module RailsAiContext
           real = located.realpath
           if RailsAiContext::DetailLevel.full?(detail)
             content = RailsAiContext::SafeFile.read(real) || "(error reading)"
-            lines << "## #{relative}" << "```#{RailsAiContext::ViewFile.fence(relative)}" << strip_svg(content) << "```" << ""
+            shown = RailsAiContext::Redaction.redact_source(strip_svg(content), path: relative)
+            lines << "## #{relative}" << "```#{RailsAiContext::ViewFile.fence(relative)}" << shown << "```" << ""
           else
             content = RailsAiContext::SafeFile.read(real) || ""
             lines << "- #{relative} (#{count_phrase(content.lines.size, "line")})"
@@ -338,10 +339,11 @@ module RailsAiContext
         # template is fenced as erb, because fencing a JPEG's bytes as ERB
         # said it was one.
         unless RailsAiContext::ViewFile.template?(result.relative)
-          return text_response("# #{result.relative}\n\n_No template handler renders this file._\n\n```\n#{content}\n```")
+          shown = RailsAiContext::Redaction.redact_source(content, path: result.relative)
+          return text_response("# #{result.relative}\n\n_No template handler renders this file._\n\n```\n#{shown}\n```")
         end
 
-        content = compress_tailwind(strip_svg(content))
+        content = RailsAiContext::Redaction.redact_source(compress_tailwind(strip_svg(content)), path: result.relative)
         text_response("# #{result.relative}\n\n```#{RailsAiContext::ViewFile.fence(result.relative)}\n#{content}\n```")
       end
 

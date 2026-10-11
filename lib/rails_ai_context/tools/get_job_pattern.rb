@@ -549,9 +549,10 @@ module RailsAiContext
         body = perform && Introspectors::ActionResolver.body_of(source, perform)
         return [] unless body
 
-        body[:code].lines.map(&:strip).select { |line|
+        guards = body[:code].lines.map(&:strip).select { |line|
           line.match?(/\Areturn\s+(if|unless)\b/) || (line.match?(/\Areturn\b/) && line.length < 120)
         }.first(10)
+        RailsAiContext::Redaction.redact_source_lines(guards)
       end
 
       private_class_method def self.extract_broadcasts(source)
