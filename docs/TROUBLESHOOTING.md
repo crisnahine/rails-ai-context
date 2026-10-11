@@ -179,7 +179,9 @@ In development Rails answers every request with its pending-migration page, and 
 
 ### HTTP answers 403 "Forbidden: Invalid Host header"
 
-The MCP SDK answers only requests whose `Host` header is `127.0.0.1`, `::1` or `localhost`, to stop DNS rebinding. A client that reaches the server by the machine's IP or hostname is refused, whatever `http_bind` says. Connect to `localhost`: through a published container port, or an SSH tunnel (`ssh -L 6029:localhost:6029 your-host`).
+The standalone server (`serve --transport http`, `rails ai:serve_http`) answers only requests whose `Host` header is `127.0.0.1`, `::1` or `localhost`, as the MCP SDK does, to stop DNS rebinding. A client that reaches it by the machine's IP or hostname is refused, whatever `http_bind` says. Connect to `localhost`: through a published container port, or an SSH tunnel (`ssh -L 6029:localhost:6029 your-host`).
+
+The mounted engine and `auto_mount` answer the hosts the app's `config.hosts` allows, as the rest of the app does. Add the name the client uses to `config.hosts`, the way you would for any other route.
 
 ### HTTP answers 403 "does not serve MCP over HTTP in production"
 
