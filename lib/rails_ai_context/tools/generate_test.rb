@@ -189,7 +189,7 @@ module RailsAiContext
           if factory
             style = rspec_style
             if style[:let]
-              lines << "  let(:#{record_name(name)}) { #{style[:factory]}(:#{factory}) }"
+              lines << "  let(:#{record_name(name)}) { #{factory_bot(style[:factory])}(:#{factory}) }"
             end
           end
 
@@ -349,7 +349,7 @@ module RailsAiContext
           # Determine data setup: factory > fixture > inline
           lines << "  setup do"
           if factory
-            lines << "    @#{setup_var} = create(:#{factory})"
+            lines << "    @#{setup_var} = #{factory_bot(:create)}(:#{factory})"
           elsif fixture_key
             lines << "    @#{setup_var} = #{fixture_accessor(fixture_set)}(:#{fixture_key})"
           else
@@ -830,7 +830,7 @@ module RailsAiContext
             lines << "sign_in @user"
           end
           if res[:model] && res[:factory]
-            (res[:parents] || {}).each_value { |parent| lines << "#{parent[:ref]} = create(:#{parent[:factory]})" }
+            (res[:parents] || {}).each_value { |parent| lines << "#{parent[:ref]} = #{factory_bot(:create)}(:#{parent[:factory]})" }
             lines << "@#{res[:name]} = #{factory_create(res)}"
           elsif res[:model] && res[:fixture_key]
             lines << "@#{res[:name]} = #{fixture_accessor(res[:fixture_set])}(:#{res[:fixture_key]})"
@@ -1135,7 +1135,7 @@ module RailsAiContext
           end
           user_factory = res[:sign_in] && find_factory_name("User", tests_data)
           if user_factory
-            lines.push("  let(:user) { create(:#{user_factory}) }", "  before { #{res[:sign_in]}(user) }", "")
+            lines.push("  let(:user) { #{factory_bot(:create)}(:#{user_factory}) }", "  before { #{res[:sign_in]}(user) }", "")
           elsif (todo = login_todo_lines(ctrl_class, res)).any?
             lines.push(*todo, "")
           end
@@ -1178,7 +1178,7 @@ module RailsAiContext
           elsif devise_app?(tests_data)
             lines = [ "  include #{devise_helpers(controller_spec)}", "" ]
             if (user_factory = find_factory_name("User", tests_data))
-              lines << "  let(:user) { create(:#{user_factory}) }"
+              lines << "  let(:user) { #{factory_bot(:create)}(:#{user_factory}) }"
               lines << "  before { sign_in user }"
             else
               lines << "  # TODO: these examples run unauthenticated; build a user from this app's own test data and sign_in it"
@@ -1219,7 +1219,7 @@ module RailsAiContext
         def rspec_subject_lines(lines, res, factory)
           subject = rspec_let_name(res[:name])
           if factory
-            res[:parents].each_value { |parent| lines << "  let(:#{parent[:ref]}) { create(:#{parent[:factory]}) }" }
+            res[:parents].each_value { |parent| lines << "  let(:#{parent[:ref]}) { #{factory_bot(:create)}(:#{parent[:factory]}) }" }
             lines << "  let(:#{subject}) { #{factory_create(res)} }"
             return subject
           end
@@ -1237,7 +1237,7 @@ module RailsAiContext
 
         def rspec_attributes_lines(lines, res, factory)
           if factory
-            lines << "  let(:valid_attributes) { attributes_for(:#{factory}) }"
+            lines << "  let(:valid_attributes) { #{factory_bot(:attributes_for)}(:#{factory}) }"
             true
           elsif res[:attrs].any?
             lines << "  let(:valid_attributes) { #{placeholder_attrs_literal(res)} }"
@@ -1430,7 +1430,7 @@ module RailsAiContext
               "#{subject_expr}.#{owned}"
             elsif factories
               factory = find_factory_name(parent.camelize, tests_data)
-              factory && "create(:#{factory})"
+              factory && "#{factory_bot(:create)}(:#{factory})"
             else
               key = fixture_key_for(parent.pluralize, tests_data)
               key && "#{parent.pluralize}(:#{key})"
@@ -1475,7 +1475,7 @@ module RailsAiContext
         def factory_create(res)
           attach = (res[:parents] || {}).values.select { |parent| parent[:assoc] }
                                          .map { |parent| ", #{parent[:assoc]}: #{parent[:ref]}" }.join
-          "create(:#{res[:factory]}#{attach})"
+          "#{factory_bot(:create)}(:#{res[:factory]}#{attach})"
         end
 
         # One named for the parent, else the record's only polymorphic owner. A controller that
@@ -1736,7 +1736,7 @@ module RailsAiContext
             return nil unless res[:model]
 
             if res[:factory]
-              lines << "  let(:#{rspec_let_name(res[:name])}) { create(:#{res[:factory]}) }"
+              lines << "  let(:#{rspec_let_name(res[:name])}) { #{factory_bot(:create)}(:#{res[:factory]}) }"
               return rspec_let_name(res[:name])
             end
             lines << "  # TODO: build a #{res[:model]} from this app's own test data for the show page"
@@ -1819,6 +1819,15 @@ module RailsAiContext
 
         def conditional_validation_skip(condition, indent)
           "#{indent}skip \"TODO: this validation runs only #{condition.tr('"', "'")}\""
+        end
+
+        # A FactoryBot method as the suite can call it: bare where rails_helper,
+        # a support file or test_helper includes FactoryBot::Syntax::Methods,
+        # else on FactoryBot, since a bare `create(:post)` without the include
+        # is a NoMethodError.
+        def factory_bot(method)
+          setup = Array((cached_context[:tests] || {})[:test_helper_setup])
+          setup.include?("FactoryBot::Syntax::Methods") ? method.to_s : "FactoryBot.#{method}"
         end
 
         # A string the length validation rejects: one past the maximum, else

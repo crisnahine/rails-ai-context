@@ -3,6 +3,9 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Tools::GenerateTest do
+  # A suite that calls `create(:post)` bare includes FactoryBot's methods.
+  def factory_syntax = [ "FactoryBot::Syntax::Methods" ]
+
   # Every `is_expected.to belong_to(...)` line is a shoulda-matchers matcher,
   # so the generator only writes them for an app that bundles it.
   def bundling_shoulda
@@ -317,7 +320,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
         end
         allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
         allow(described_class).to receive(:cached_context).and_return({
-          tests: { framework: "minitest", factories: { location: "test/factories", count: 3 },
+          tests: { framework: "minitest", test_helper_setup: factory_syntax, factories: { location: "test/factories", count: 3 },
                    factory_names: { "test/factories/editions.rb" => [ "edition" ] } },
           models: { "Edition" => { table_name: "editions" } },
           controllers: { controllers: {
@@ -411,7 +414,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
                    "  setup { #{factories ? "@p = create(:person)" : "@p = people(:one)"} }\nend\n")
         allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
         allow(described_class).to receive(:cached_context).and_return({
-          tests: { framework: "minitest", factories: { location: "test/factories", count: 3 },
+          tests: { framework: "minitest", test_helper_setup: factory_syntax, factories: { location: "test/factories", count: 3 },
                    factory_names: { "test/factories/all.rb" => %w[contact organisation] }, fixture_names: fixture_names },
           models: { "Contact" => { table_name: "contacts" } },
           controllers: { controllers: {
@@ -503,7 +506,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
     # The same holds for a request spec: one parent, the record built under it.
     it "builds a request spec's nested parent once and attaches the record to it" do
       allow(described_class).to receive(:cached_context).and_return({
-        tests: { framework: "rspec", factories: { count: 2 }, factory_names: { "spec/factories/all.rb" => %w[contact organisation] } },
+        tests: { framework: "rspec", test_helper_setup: factory_syntax, factories: { count: 2 }, factory_names: { "spec/factories/all.rb" => %w[contact organisation] } },
         models: { "Contact" => { table_name: "contacts", associations: [ { type: "belongs_to", name: "organisation" } ] } },
         controllers: { controllers: { "ContactsController" => { actions: %w[show] } } },
         routes: { by_controller: { "contacts" => [
@@ -527,7 +530,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
                    "class PeopleControllerTest < ActionDispatch::IntegrationTest\n  setup { @p = create(:person) }\nend\n")
         allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
         allow(described_class).to receive(:cached_context).and_return({
-          tests: { framework: "minitest", factories: { location: "test/factories", count: 3 },
+          tests: { framework: "minitest", test_helper_setup: factory_syntax, factories: { location: "test/factories", count: 3 },
                    factory_names: { "test/factories/all.rb" => %w[contact organisation] } },
           models: { "Contact" => { table_name: "contacts" } },
           controllers: { controllers: { "ContactsController" => { actions: %w[index] }, "PeopleController" => { actions: %w[index] } } },
@@ -595,7 +598,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
         File.write(File.join(root, "spec", "models", "post_spec.rb"), "let(:post) { create(:post) }\nlet(:a) { create(:post) }\n")
         allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
         allow(described_class).to receive(:cached_context).and_return({
-          tests: { framework: "rspec", factories: { count: 1 }, factory_names: { "spec/factories/admin.rb" => %w[admin_user] } },
+          tests: { framework: "rspec", test_helper_setup: factory_syntax, factories: { count: 1 }, factory_names: { "spec/factories/admin.rb" => %w[admin_user] } },
           models: { "Admin::User" => { associations: [], validations: [], scopes: [], enums: {}, callbacks: {}, file: "app/models/admin/user.rb" },
                     "Post" => { associations: [], validations: [], scopes: [], enums: {}, callbacks: {} } }
         })
@@ -1214,7 +1217,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
     # that posts calls the record instead: ArgumentError.
     it "names a record whose name is a request method something else" do
       allow(described_class).to receive(:cached_context).and_return({
-        tests: { framework: "rspec", factories: { count: 1 }, factory_names: { "spec/factories/posts.rb" => %w[post] } },
+        tests: { framework: "rspec", test_helper_setup: factory_syntax, factories: { count: 1 }, factory_names: { "spec/factories/posts.rb" => %w[post] } },
         models: { "Post" => { table_name: "posts" } },
         controllers: { controllers: { "PostsController" => { actions: %w[show update],
                                                              strong_params: [ { name: "post_params", requires: "post", permits: [ "title" ] } ] } } },
@@ -1773,7 +1776,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
     it "keeps the sign_in block when a user factory exists" do
       text = generated(devise_context(
         framework: "rspec",
-        tests: { factories: { location: "spec/factories", count: 1 }, factory_names: { "users.rb" => [ :user ] } }
+        tests: { test_helper_setup: [ "Devise::Test::IntegrationHelpers", *factory_syntax ], factories: { location: "spec/factories", count: 1 }, factory_names: { "users.rb" => [ :user ] } }
       ))
       expect(text).to include("let(:user) { create(:user) }")
       expect(text).to include("before { sign_in user }")
@@ -2291,18 +2294,26 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
   # instance variables gets no let, and the factory call follows whichever of
   # create and build its specs reach for more.
   describe "setup style read from the app's own specs" do
-    def generated_for(existing_spec)
+    def generated_for(existing_spec, setup: factory_syntax)
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "spec", "models"))
         File.write(File.join(dir, "spec", "models", "comment_spec.rb"), existing_spec)
         allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
         allow(described_class).to receive(:cached_context).and_return({
-          tests: { framework: "rspec", factory_names: { "spec/factories/posts.rb" => [ :post ] } },
+          tests: { framework: "rspec", test_helper_setup: setup, factory_names: { "spec/factories/posts.rb" => [ :post ] } },
           models: { "Post" => { associations: [], validations: [], scopes: [], enums: {}, callbacks: {} } }
         })
 
         described_class.call(model: "Post").content.first[:text]
       end
+    end
+
+    # A bare `create(:post)` is a NoMethodError in a suite that does not
+    # include FactoryBot::Syntax::Methods.
+    it "calls FactoryBot's methods on FactoryBot where the suite does not include them" do
+      text = generated_for("let(:a) { create(:post) }\nlet(:b) { create(:post) }\n", setup: [])
+
+      expect(text).to include("let(:post) { FactoryBot.create(:post) }")
     end
 
     it "writes a let when the app's specs use let" do
