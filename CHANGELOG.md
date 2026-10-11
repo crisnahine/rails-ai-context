@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`rails_search_code` in trace mode checks its `path` like every other
+  mode.** `match_type: "trace"` joined the path to the root unchecked, so
+  `path: "../../elsewhere"` searched outside the app and printed the source
+  it found there.
+- **A directory linked in from outside the app's git repository is not
+  read.** A walk or a pack follows a directory link only into the work tree
+  holding the app (into the app root outside a repository); a pack linked
+  from anywhere, a home directory included, used to be read.
 - **`rails_review_changes` hands git a commit, never the caller's ref.**
   The ref went to `git diff` and `git log` as an argument, and one that
   starts with a dash is read as an option: `ref: "--output=<path>"` made
@@ -249,6 +257,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Removing one of two dropped tools keeps the file the other still
   uses.** Removing OpenCode's files while also dropping, but keeping, Codex
   CLI's deleted `AGENTS.md`.
+- **An MCP config is read the way its client reads it.** Claude Code reads
+  `.mcp.json` as plain JSON, so a hand-edited one with a trailing comma or a
+  comment loaded no server while the install called it "(unchanged)" and
+  `doctor` passed it. Such a file is now reported, by the install and by
+  `doctor`, as one Claude Code cannot read; Cursor's `.cursor/mcp.json` is
+  held to plain JSON too. VS Code's `.vscode/mcp.json` and OpenCode's
+  `opencode.json`, which read JSONC, keep taking comments and trailing
+  commas.
+- **A Codex config with a byte that is not UTF-8 in a quoted server name no
+  longer stops `init`, or drops `doctor`'s MCP and Codex rows.** Codex
+  refuses a config that is not UTF-8 at all, so the install says so and
+  `doctor` fails the file.
+- **A directory the app links in from its own repository is read as the
+  app's own.** With `app/javascript/controllers` linked to a monorepo
+  package every Stimulus controller was missing; the code, view and
+  JavaScript walks now follow such a link as Zeitwerk, the view resolver and
+  the bundlers do, and an edit inside one refreshes the cache.
+- **A path through a linked-in pack is accepted by every tool that takes a
+  path.** `rails_get_edit_context`, `rails_validate` and `rails_search_code`
+  refused `packs/billing/app/models/invoice.rb`, which
+  `rails_get_model_details` named, and a search of the app never read the
+  pack.
+- **`rails_get_partial_interface` names a linked-in pack's partial as the
+  app spells it**, finds its render sites, and points at a `rails_get_view`
+  path that resolves.
+- **A link that resolves nowhere is never offered back as the file to try**,
+  nor listed as a Stimulus controller or a view.
+- **Every tool refuses a path in the same words, and echoes a long one
+  shortened.** `Path not allowed: <path>`, with `(sensitive file)` when the
+  name is the reason, where some tools said "Access denied" or "outside
+  Rails root"; a 100 KB path came back as a 100 KB refusal.
+- **The mounted engine keeps its MCP sessions across a code reload.** Every
+  edit in development dropped them (404 "Session not found") and left one
+  more session-reaper thread running.
+- **The engine and `auto_mount` answer the hosts the app's `config.hosts`
+  allows.** The MCP SDK answered only loopback names, so
+  `allow_http_in_production` could not serve an app by its own name, and
+  `myapp.localhost` was refused in development. Rails' host authorization
+  judges the Host now; a cross-origin request is still refused.
+- **A stdio message over 4 MiB is answered, named on stderr, and ends the
+  server with status 1**, where it exited 0 with nothing said.
+- **Email addresses in any script are redacted from log lines**
+  (`jürgen@example.com`, `anna@münchen.de`).
+- **A missing view, an unknown resource URI and an unknown tool are
+  answered with what exists**, in `data.available` and, for a tool, the
+  nearest names in the message.
 - **A generated length test sets a value the validation rejects.** A length
   validation with no maximum was tested with `""`, so
   `length: { minimum: 10 }, allow_blank: true` got the one value it allows
