@@ -168,6 +168,8 @@ module RailsAiContext
             # id: false / id: :uuid / primary_key: ... decide whether the
             # implicit primary-key column exists and what to call it.
             options:  extract_keyword_options(node),
+            # Its default: is the implicit key's, as on a column.
+            default_source: default_source(node),
             location: node.location.start_line
           }
         end

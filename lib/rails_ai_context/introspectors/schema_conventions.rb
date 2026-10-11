@@ -17,7 +17,7 @@ module RailsAiContext
       # tier reports it, so every static source must too. Composite primary
       # keys (primary_key: [...]) dump their columns as explicit t.* lines -
       # synthesizing an id there would invent a column that does not exist.
-      def implicit_primary_key(options, pk_type)
+      def implicit_primary_key(options, pk_type, default: nil)
         pk_opt = options[:primary_key]
         composite_pk = !pk_opt.nil? && !pk_opt.is_a?(String) && !pk_opt.is_a?(Symbol)
         return [] if options[:id] == false || composite_pk
@@ -27,7 +27,7 @@ module RailsAiContext
         id_options = id.is_a?(Hash) ? id.except(:type).reject { |_, value| value == RailsAiContext::Confidence::INFERRED } : {}
         id = id[:type] if id.is_a?(Hash)
         id_type = (id.is_a?(String) || id.is_a?(Symbol)) && id.to_s != "primary_key" ? id.to_s : pk_type
-        [ { name: pk_opt ? pk_opt.to_s : "id", type: id_type, default: nil,
+        [ { name: pk_opt ? pk_opt.to_s : "id", type: id_type, default: default,
             options: { null: false }.merge(id_options), primary_key: true } ]
       end
 

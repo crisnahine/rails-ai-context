@@ -453,6 +453,40 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     end
   end
 
+  describe "a primary key's function default declared on the create_table line" do
+    it "is the id's default in the booted tier" do
+      connection = ActiveRecord::Base.connection
+      connection.create_table(:stamped_keys, id: :string, default: -> { "lower(hex(randomblob(16)))" }, force: true)
+      schema = RailsAiContext::Introspectors::SchemaIntrospector.new(Rails.application).call
+      allow(described_class).to receive(:cached_context).and_return({ schema: schema, models: {} })
+
+      text = described_class.call(table: "stamped_keys", detail: "full").content.first[:text]
+
+      expect(text).to include('| id | string | **NO** | -> { "lower(hex(randomblob(16)))" } |')
+    ensure
+      connection&.drop_table(:stamped_keys, if_exists: true)
+    end
+
+    it "is the id's default in the static tier" do
+      schema = Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db/schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.1].define(version: 1) do
+            create_table "statuses", id: :bigint, default: -> { "timestamp_id('statuses'::text)" }, force: :cascade do |t|
+              t.text "text"
+            end
+          end
+        RUBY
+        RailsAiContext::Introspectors::SchemaIntrospector.new(RailsAiContext::StaticApp.new(dir)).call
+      end
+      allow(described_class).to receive(:cached_context).and_return({ schema: schema, models: {} })
+
+      text = described_class.call(table: "statuses", detail: "full").content.first[:text]
+
+      expect(text).to include(%q(| id | bigint | **NO** | -> { "timestamp_id('statuses'::text)" } |))
+    end
+  end
+
   describe "a table rebuilt from migrations" do
     def replayed_table(table, *migrations)
       replayed = Dir.mktmpdir do |dir|

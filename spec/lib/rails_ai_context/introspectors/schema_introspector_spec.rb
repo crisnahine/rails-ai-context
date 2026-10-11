@@ -379,7 +379,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
 
       it "reads a MySQL text column's size as schema.rb writes it" do
-        column = double(name: "body", type: :text, null: true, default: nil, limit: 16_777_215, precision: nil,
+        column = double(name: "body", type: :text, null: true, default: nil, default_function: nil, limit: 16_777_215, precision: nil,
                         scale: nil, comment: nil, collation: nil, sql_type: "mediumtext", array?: false)
         allow(introspector).to receive(:connection).and_return(double("mysql2", columns: [ column ], native_database_types: {}, mariadb?: false))
 
@@ -388,7 +388,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
       # Collations are matched by exact table name; user_roles and userxroles are different tables.
       it "takes a MySQL table's own collation, read once for every table" do
-        column = double(name: "name", type: :string, null: true, default: nil, limit: nil, precision: nil,
+        column = double(name: "name", type: :string, null: true, default: nil, default_function: nil, limit: nil, precision: nil,
                         scale: nil, comment: nil, collation: "utf8mb4_bin", sql_type: "varchar(255)", array?: false)
         connection = double("mysql2", columns: [ column ], native_database_types: {}, mariadb?: false)
         allow(connection).to receive(:select_rows).once
@@ -401,7 +401,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
       it "names a MySQL enum, set or timestamp column by the type schema.rb writes" do
         columns = { "kind" => [ :string, "enum('a','b')" ], "flags" => [ :string, "set('x','y')" ], "seen_at" => [ :datetime, "timestamp" ] }.map do |name, (type, sql_type)|
-          double(name: name, type: type, null: true, default: nil, limit: nil, precision: nil,
+          double(name: name, type: type, null: true, default: nil, default_function: nil, limit: nil, precision: nil,
                  scale: nil, comment: nil, collation: nil, sql_type: sql_type, array?: false)
         end
         allow(introspector).to receive(:connection).and_return(double("mysql2", columns: columns, native_database_types: {}, mariadb?: false))
