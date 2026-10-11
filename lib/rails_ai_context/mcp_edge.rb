@@ -97,6 +97,7 @@ module RailsAiContext
       def build_transport(app = nil)
         app ||= Rails.application
         transport = MCP::Server::Transports::StreamableHTTPTransport.new(Server.new(app, transport: :http).build)
+        CodeReloader.track_loaded_code!
         Tools::BaseTool.check_files_per_call!(app)
         transport
       end

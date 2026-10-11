@@ -190,6 +190,8 @@ The `listen` gem watches `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, 
 
 Without `listen` (a new Rails 8 app does not bundle it), answers still follow edits: each tool call first checks those files and, when one changed, does the same reload and invalidation. The check costs a few milliseconds on a typical app and about 100 ms at 10,000 files, where calls close together share one check. With `listen` there is no per-call check, and clients are told when files change.
 
+Under `RAILS_ENV=test`, or in production with eager loading, the app does not reload code, so what reflection reads (associations, enums) stays as it was at boot; once app code changes, every answer ends with a note naming the files, and a restart brings it up to date.
+
 ---
 
 ## Security

@@ -75,8 +75,9 @@ module RailsAiContext
       # The mark is nil until such a server starts, so a process that is no
       # server (the CLI, rake) never walks the tree. `reload` is live
       # reload's half: its watch saw the files change and left the code
-      # reload to the next call.
-      FILE_CHECK = { mutex: Mutex.new, app: nil, mark: nil, started: nil, took: 0.0, reload: false }
+      # reload to the next call. `stale_code` is what a server that cannot
+      # reload found changed since it loaded it (CodeReloader.changed_code).
+      FILE_CHECK = { mutex: Mutex.new, app: nil, mark: nil, started: nil, took: 0.0, reload: false, stale_code: nil }
 
       # A call this many walks' durations after the last check began shares
       # that check, so on a busy server the walk takes about a tenth of the
@@ -254,14 +255,23 @@ module RailsAiContext
         #
         # Outside SHARED_CACHE's mutex, unlike the TTL walk: a code reload
         # waits for running calls to finish, and they may be waiting on it.
+        #
+        # An app that cannot reload keeps what reflection read at boot, so
+        # instead the call notes which of its files changed since they were
+        # loaded, for every answer to name (stale_code_note).
         def refresh_if_files_changed!
           return if RunCache.active?
 
           requested = FILE_CHECK[:mutex].synchronize { FILE_CHECK[:reload].tap { FILE_CHECK[:reload] = false } }
           return unless requested || files_moved?
 
-          # A request the app serves already ran Rails' own reloader.
-          CodeReloader.reload! unless CodeReloader.inside_app_executor?
+          if CodeReloader.reloadable?
+            # A request the app serves already ran Rails' own reloader.
+            CodeReloader.reload! unless CodeReloader.inside_app_executor?
+          else
+            changed = CodeReloader.changed_code
+            FILE_CHECK[:mutex].synchronize { FILE_CHECK[:stale_code] = changed }
+          end
           reset_all_caches!
         rescue StandardError => e
           RailsAiContext.debug_fail(e, nil, label: "refresh_if_files_changed!")
@@ -514,8 +524,8 @@ module RailsAiContext
         def response_text(response)
           first = response.content.first
           text = first.is_a?(Hash) ? first[:text].to_s : ""
-          # The composing tool's own response carries the tier banner, once.
-          (banner = static_tier_banner) ? text.gsub(banner, "") : text
+          # The composing tool's own response carries the banners, once.
+          [ static_tier_banner, stale_code_banner ].compact.reduce(text) { |stripped, banner| stripped.gsub(banner, "") }
         end
 
         # One-line banner listing introspectors that failed during context
@@ -612,6 +622,25 @@ module RailsAiContext
           return nil unless note
 
           "\n\n---\n_#{note}_"
+        end
+
+        # The same, once app code changed under a server that cannot reload:
+        # what reflection read is the code as it booted, whatever the file
+        # says now. Validations and callbacks are read off the source, so
+        # they follow the edit; associations and enums do not.
+        def stale_code_banner
+          note = stale_code_note
+          note && "\n\n---\n_#{note}_"
+        end
+
+        def stale_code_note
+          files = FILE_CHECK[:stale_code]
+          return nil if files.nil? || files.empty?
+
+          named = files.size > 3 ? "#{files.first(3).join(", ")} and #{files.size - 3} more" : files.join(", ")
+          "App code changed since this server booted (#{named}); RAILS_ENV=#{RailsAiContext.environment_name} " \
+            "does not reload code, so what reflection reads, such as associations and enums, is as of boot. " \
+            "Restart the server to see the #{files.size == 1 ? "edit" : "edits"}."
         end
 
         # The banner without its markdown wrapper, so a JSON body can carry
@@ -976,9 +1005,10 @@ module RailsAiContext
         # the text itself when untruncated) so callers can attach a short trailing
         # note that must survive truncation instead of being cut off with the tail.
         # In static tier, the tier banner rides along on the same mechanism so
-        # every response - caller-suffixed or not - ends with it.
+        # every response - caller-suffixed or not - ends with it, and so does
+        # the note that app code changed under a server that cannot reload.
         def text_response(text, suffix: nil)
-          suffix = [ suffix, static_tier_banner ].compact.join
+          suffix = [ suffix, static_tier_banner, stale_code_banner ].compact.join
           suffix = nil if suffix.empty?
           text = served_hints(text)
 
@@ -1095,6 +1125,7 @@ module RailsAiContext
         # Key the static-tier note rides under in a JSON body. Underscored the
         # way JsonBudget's own report key is, so a reader tells it from data.
         STATIC_TIER_KEY = "_static_tier"
+        STALE_CODE_KEY = "_stale_code"
 
         # A JSON body has to parse, so it cannot take the markdown banner and
         # cannot be sliced at the response cap: JsonBudget drops whole
@@ -1102,6 +1133,8 @@ module RailsAiContext
         def json_response(data)
           note = static_tier_note
           data = data.merge(STATIC_TIER_KEY => note) if note && data.is_a?(Hash)
+          stale = stale_code_note
+          data = data.merge(STALE_CODE_KEY => stale) if stale && data.is_a?(Hash)
 
           text = JsonBudget.generate(data, RailsAiContext.configuration.max_tool_response_chars)
           record_call(text)
@@ -1116,8 +1149,7 @@ module RailsAiContext
         # would not answer. Guidance and "found nothing" stay informational
         # via text_response and empty_response.
         def error_response(text)
-          banner = static_tier_banner
-          text += banner if banner
+          text += [ static_tier_banner, stale_code_banner ].compact.join
           MCP::Tool::Response.new([ { type: "text", text: cli_form(text) } ], error: true)
         end
 

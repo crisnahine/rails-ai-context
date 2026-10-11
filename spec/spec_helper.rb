@@ -42,10 +42,14 @@ RSpec.configure do |config|
   # A spec that counts parses or walks needs a cold parse cache, whatever ran before it.
   config.before(:each) { RailsAiContext::AstCache.clear }
   # Building a server turns on the per-call file check for the whole process,
-  # and a live reload change asks the next call to reload; each example
-  # starts with neither, so a file one example writes cannot drop the caches
-  # under the next.
-  config.before(:each) { RailsAiContext::Tools::BaseTool::FILE_CHECK.merge!(app: nil, mark: nil, started: nil, took: 0.0, reload: false) }
+  # and a live reload change asks the next call to reload; under this suite's
+  # test environment, which does not reload, it also starts noting the code
+  # it loaded. Each example starts with none of it, so a file one example
+  # writes cannot drop the caches, or put a stale-code note, under the next.
+  config.before(:each) do
+    RailsAiContext::Tools::BaseTool::FILE_CHECK.merge!(app: nil, mark: nil, started: nil, took: 0.0, reload: false, stale_code: nil)
+    RailsAiContext::CodeReloader::LOADED_CODE[:mutex].synchronize { RailsAiContext::CodeReloader::LOADED_CODE[:files] = nil }
+  end
 
   # Skip e2e specs unless explicitly requested via E2E=1.
   # E2E specs spawn fresh Rails apps per install path and take minutes

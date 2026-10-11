@@ -175,6 +175,18 @@ module RailsAiContext
       name
     end
 
+    # What the client is told about freshness. An app that cannot reload
+    # keeps what reflection read at boot, and its answers say so once app
+    # code changed (BaseTool.stale_code_note).
+    def self.instructions
+      intro = "Ground truth engine for Rails apps. Live Prism AST introspection."
+      return "#{intro} Answers follow edits to the app's files." if CodeReloader.reloadable? || RailsAiContext.static_tier?
+
+      "#{intro} Answers follow edits to the app's files, except what reflection reads, such as associations: " \
+        "RAILS_ENV=#{RailsAiContext.environment_name} does not reload code, so that stays as of boot, and every " \
+        "answer says when app code changed since."
+    end
+
     # Build and return the configured MCP::Server instance
     def build
       config = RailsAiContext.configuration
@@ -207,7 +219,7 @@ module RailsAiContext
         skipped_tools: self.class.skipped_tools(config),
         name: self.class.announced_name(config),
         version: config.server_version,
-        instructions: "Ground truth engine for Rails apps. Live Prism AST introspection. Answers follow edits to the app's files.",
+        instructions: self.class.instructions,
         tools: self.class.merge_tools(self.class.active_tools(config), validated_custom_tools),
         resource_templates: Resources.resource_templates,
         configuration: mcp_config
@@ -440,6 +452,7 @@ module RailsAiContext
     # (BaseTool.refresh_if_files_changed!), so answers still follow edits.
     def maybe_start_live_reload(mcp_server)
       mode = RailsAiContext.configuration.live_reload
+      CodeReloader.track_loaded_code!
 
       return Tools::BaseTool.check_files_per_call!(app) if mode == false
 
