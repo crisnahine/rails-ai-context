@@ -90,7 +90,40 @@ module RailsAiContext
     # A standalone install has neither the rake tasks nor the generator, so a
     # fix names the command this install actually has.
     def command(job)
-      InstallMode.command(job, standalone: standalone?)
+      in_app(InstallMode.command(job, standalone: standalone?))
+    end
+
+    # The app as named where doctor was typed outside it (`blog` from its
+    # parent folder, `test/dummy` from an engine's root), ready for a shell;
+    # nil typed inside it.
+    def typed_app
+      return @typed_app if defined?(@typed_app)
+
+      @typed_app = display_base == app.root.to_s ? nil : shell_path(app.root)
+    end
+
+    # A directory as typed where doctor was, ready for a shell.
+    def shell_path(dir)
+      CLI::AppRoot.command_line([ CLI::AppRoot.option_path(typed_path(dir)) ])
+    end
+
+    # One of the app's own commands, as typed where doctor was. Typed outside
+    # the folder it runs in - the app's root, or `dir` - it goes there first:
+    # the binary with --app-path, anything else after a cd. Bare, it ran in
+    # the wrong folder, or in none.
+    def in_app(command, dir: app.root.to_s)
+      if command.start_with?("rails-ai-context ")
+        return typed_app ? command.sub("rails-ai-context ", "rails-ai-context --app-path #{typed_app} ") : command
+      end
+      return command if SafePath.canonical(dir.to_s) == SafePath.canonical(display_base)
+
+      "cd #{shell_path(dir)} && #{command}"
+    end
+
+    # A git command run in the app's repository, from wherever doctor was
+    # typed: outside the app, that place may be in no repository at all.
+    def git_command(args)
+      typed_app ? "git -C #{typed_app} #{args}" : "git #{args}"
     end
 
     def standalone?
@@ -191,7 +224,7 @@ module RailsAiContext
         size = (File.size(path) / 1024.0).round(1)
         Check.new(name: "Schema", status: :pass, message: "#{shown} found (#{size}KB)", fix: nil)
       else
-        Check.new(name: "Schema", status: :warn, message: "No schema file found", fix: "Run `rails db:schema:dump`")
+        Check.new(name: "Schema", status: :warn, message: "No schema file found", fix: "Run `#{in_app("rails db:schema:dump")}`")
       end
     end
 
@@ -260,7 +293,7 @@ module RailsAiContext
 
       fixes = []
       fixes << "Run `#{database_task("db:prepare")}`#{where_tasks_run}" if missing.any? || pending.any?
-      fixes << "Start the database server, or fix its settings in config/database.yml" if failing.any?
+      fixes << "Start the database server, or fix its settings in #{typed_path(File.join(app.root.to_s, "config/database.yml"))}" if failing.any?
       Check.new(name: "Database", status: :fail, message: said.join("; "), fix: fixes.join("; "))
     end
 
@@ -271,7 +304,9 @@ module RailsAiContext
     def database_task(task)
       env = RailsAiContext.environment_name
       task = "app:#{task}" if task == "db:prepare" && engine_roots_shown.any?
-      "#{"RAILS_ENV=#{env} " unless env == "development"}bin/rails #{task}"
+      typed = "#{"RAILS_ENV=#{env} " unless env == "development"}bin/rails #{task}"
+      # The engine's tasks say where they run in words (where_tasks_run).
+      engine_roots_shown.any? ? typed : in_app(typed)
     end
 
     def where_tasks_run
@@ -305,7 +340,7 @@ module RailsAiContext
       if count > 0
         Check.new(name: "Models", status: :pass, message: "#{count_phrase(count, "model file")} found#{engine_share(in_engine)}", fix: nil)
       else
-        Check.new(name: "Models", status: :warn, message: "No model files", fix: "Generate models with `rails generate model`")
+        Check.new(name: "Models", status: :warn, message: "No model files", fix: "Generate models with `#{in_app("rails generate model")}`")
       end
     end
 
@@ -328,7 +363,8 @@ module RailsAiContext
       elsif bundle.outside
         Check.new(name: "Gems", status: :warn, message: GemLock.for(app.root).reason, fix: nil)
       else
-        Check.new(name: "Gems", status: :warn, message: "#{typed_path(lockfile_path(bundle))} not found", fix: "Run `bundle install`")
+        Check.new(name: "Gems", status: :warn, message: "#{typed_path(lockfile_path(bundle))} not found",
+          fix: "Run `#{in_app("bundle install", dir: bundle.dir)}`")
       end
     end
 
@@ -375,7 +411,7 @@ module RailsAiContext
         Check.new(name: "Tests", status: :warn, message: "No test suite in the app, and #{unread}, so the suite there is not read", fix: nil)
       else
         Check.new(name: "Tests", status: :warn, message: "No test suite found",
-          fix: "Run `rails generate rspec:install` or use default Minitest")
+          fix: "Run `#{in_app("rails generate rspec:install", dir: suite_root)}` or use default Minitest")
       end
     end
 
@@ -808,7 +844,7 @@ module RailsAiContext
         if spec && !spec.executables.include?("rails-ai-context")
           return [ :fail, "#{line} cannot start - the bundle's rails-ai-context at #{spec.full_gem_path} lists no `rails-ai-context` executable",
                    "Point the Gemfile at a rails-ai-context whose gemspec lists `exe/rails-ai-context` (a git checkout, or a release), " \
-                   "then run `bundle install`" ]
+                   "then run `#{in_app("bundle install", dir: File.dirname(gemfile))}`" ]
         end
       elsif File.basename(argv[0].to_s) == "rails-ai-context"
         lock = GemLock.for(install_root)
@@ -996,7 +1032,7 @@ module RailsAiContext
     rescue => e
       Check.new(name: "MCP server", status: :fail,
         message: "MCP server failed: #{e.message}",
-        fix: "Check mcp gem: `bundle info mcp`")
+        fix: "Check mcp gem: `#{in_app("bundle info mcp")}`")
     end
 
     # RubyGems prints "Resolving dependencies..." to STDOUT when activating
@@ -1192,7 +1228,7 @@ module RailsAiContext
         if (failure = Tools::SecurityScan.unbundled_failure)
           return Check.new(name: "Brakeman", status: :warn,
             message: "Brakeman #{version} is on this machine, outside the app's bundle, but rails_security_scan cannot run it there: #{failure}",
-            fix: locked ? "Run `bundle install`, then `bundle exec brakeman` in the app to see what it says" : "Add: `gem 'brakeman', group: :development` to scan in this process")
+            fix: locked ? "Run `#{in_app("bundle install")}`, then `bundle exec brakeman` in the app to see what it says" : "Add: `gem 'brakeman', group: :development` to scan in this process")
         end
 
         return Check.new(name: "Brakeman", status: :pass, fix: nil,
@@ -1205,7 +1241,7 @@ module RailsAiContext
       else
         return Check.new(name: "Brakeman", status: :warn,
           message: "The app's Gemfile.lock carries brakeman #{locked}, but it is not installed",
-          fix: "Run `bundle install`") if locked
+          fix: "Run `#{in_app("bundle install")}`") if locked
 
         Check.new(name: "Brakeman", status: :warn,
           message: "Brakeman not installed (rails_security_scan tool will return install instructions)",
@@ -1243,7 +1279,9 @@ module RailsAiContext
       never, others = exposed.partition { |file| matches_any?(NEVER_COMMIT, file) }
       configs, others = others.partition { |file| matches_any?(SECRET_HOLDING_CONFIGS, file) }
       literal = configs.filter_map { |file| (where = literal_secret(file)) && [ file, where ] }
-      # Each file named from where doctor was typed, so the command a fix gives runs there.
+      # Each file named from where doctor was typed. A fix keeps the app's own
+      # spelling: a .gitignore pattern is read from the .gitignore it is in,
+      # and git runs in the app's repository.
       see = ->(file) { typed_path(File.join(app.root.to_s, file)) }
       shown_literal = literal.map { |file, where| "#{see.(file)} (#{where})" }.join(", ")
       # Outside git nothing says whether a file is tracked, and the old word stands.
@@ -1260,8 +1298,8 @@ module RailsAiContext
         said << "also committed: #{others_committed.map(&see).join(', ')}" if others_committed.any?
         said << "also not gitignored: #{(others - others_committed).map(&see).join(', ')}" if (others - others_committed).any?
         fixes = []
-        fixes << uncommit_fix(committed.map(&see), (committed - covered).map(&see)) if committed.any?
-        fixes << "#{gitignore ? 'Add to .gitignore' : 'Create .gitignore with'}: #{unignored.map { |file| "`#{see.(file)}`" }.join(', ')}" if unignored.any?
+        fixes << uncommit_fix(committed, committed - covered) if committed.any?
+        fixes << "#{gitignore ? "Add to #{ignore_file}" : "Create #{ignore_file} with"}: #{unignored.map { |file| "`#{file}`" }.join(', ')}" if unignored.any?
         Check.new(name: "Secrets in .gitignore", status: :fail, message: said.join("; "), fix: fixes.join("; "))
       elsif literal.any?
         committed = literal.map(&:first) & tracked
@@ -1272,13 +1310,13 @@ module RailsAiContext
         Check.new(name: "Secrets in .gitignore", status: :warn,
           message: "A literal secret in #{shown_literal}, #{which}",
           fix: "Read it from the environment or credentials (`password: <%= ENV[\"DATABASE_PASSWORD\"] %>`), or gitignore the file" \
-               "#{" and run `git rm --cached #{committed.map(&see).join(' ')}`" if committed.any?}")
+               "#{" and run `#{uncommit_command(committed)}`" if committed.any?}")
       elsif others.any?
         said = []
         said << "Committed, and never read by the tools: #{others_committed.map(&see).join(', ')}" if others_committed.any?
         said << "#{said.empty? ? "Not" : "not"} gitignored, and never read by the tools: #{(others - others_committed).map(&see).join(', ')}" if (others - others_committed).any?
         Check.new(name: "Secrets in .gitignore", status: :warn, message: said.join("; "),
-          fix: "Make sure these hold no secrets, or gitignore them#{" and run `git rm --cached` on the committed ones" if git && others_committed.any?}")
+          fix: "Make sure these hold no secrets, or gitignore them#{" and run `#{git_command("rm --cached")}` on the committed ones" if git && others_committed.any?}")
       else
         secrets = files.select { |file| matches_any?(NEVER_COMMIT, file) }
         Check.new(name: "Secrets in .gitignore", status: :pass,
@@ -1289,8 +1327,20 @@ module RailsAiContext
     # A committed secret stays in the history git keeps, so taking it out of
     # the index is half the fix: whoever can read the repository has it.
     def uncommit_fix(committed, unignored)
-      ignore = unignored.any? ? ", add #{unignored.map { |file| "`#{file}`" }.join(', ')} to .gitignore," : ""
-      "Run `git rm --cached #{committed.join(' ')}`#{ignore} and rotate #{committed.one? ? "it" : "them"}: the history still holds #{committed.one? ? "it" : "them"}"
+      ignore = unignored.any? ? ", add #{unignored.map { |file| "`#{file}`" }.join(', ')} to #{ignore_file}," : ""
+      "Run `#{uncommit_command(committed)}`#{ignore} and rotate #{committed.one? ? "it" : "them"}: " \
+        "the history still holds #{committed.one? ? "it" : "them"}"
+    end
+
+    # `git rm --cached` of files named from the app's root, run in its repository.
+    def uncommit_command(files)
+      git_command("rm --cached #{CLI::AppRoot.command_line(files.map { |file| CLI::AppRoot.option_path(file) })}")
+    end
+
+    # The app's own .gitignore, as named where doctor was typed, which its
+    # patterns, spelled from the app's root, are read from.
+    def ignore_file
+      typed_path(File.join(app.root.to_s, ".gitignore"))
     end
 
     # [tracked, covered by an ignore rule] among files (relative to the app
