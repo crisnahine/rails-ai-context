@@ -16,7 +16,7 @@ module RailsAiContext
           options = entry[:options] || {}
           case entry[:action]
           when :create_table
-            options[:as].is_a?(String) ? create_table_as(tables, table, options[:as]) : seed_table(tables, table, options, pk_type)
+            options[:as].is_a?(String) ? create_table_as(tables, table, options[:as]) : seed_table(tables, table, options, pk_type, default: key_default(entry))
           when :create_table_sql then tables.merge!(StructureSqlReader.parse(entry[:sql])[:tables])
           when :rename_index
             index = tables[table]&.dig(:indexes)&.find { |idx| idx[:name] == entry[:old_name] }
@@ -72,11 +72,11 @@ module RailsAiContext
 
         # A create_table implies its key column the way a dump does. A table
         # the replay cannot name is left out: a nil key breaks every reader.
-        def seed_table(tables, table, options, pk_type)
+        def seed_table(tables, table, options, pk_type, default: nil)
           return if table.nil? || table.to_s.empty?
 
           tables[table] ||= {
-            columns: implicit_pk_columns(options, pk_type),
+            columns: implicit_pk_columns(options, pk_type, default),
             indexes: [],
             foreign_keys: []
           }
@@ -104,10 +104,15 @@ module RailsAiContext
           tables[table] = { columns: picked.map { |c| c.except(:primary_key, :null) }, indexes: [], foreign_keys: [] }
         end
 
-        def implicit_pk_columns(options, pk_type)
-          SchemaConventions.implicit_primary_key(options || {}, pk_type).map do |pk|
-            { name: pk[:name], type: pk[:type], null: false, primary_key: true, **declared_sizes(pk[:options]) }
+        def implicit_pk_columns(options, pk_type, default = nil)
+          SchemaConventions.implicit_primary_key(options || {}, pk_type, default: default).map do |pk|
+            { name: pk[:name], type: pk[:type], null: false, primary_key: true, default: pk[:default], **declared_sizes(pk[:options]) }.compact
           end
+        end
+
+        # A proc's source, never another expression only the running migration knows.
+        def key_default(entry)
+          SchemaConventions.key_default(entry[:options] || {}, (entry[:default_source] if entry[:default_proc]))
         end
 
         # The sizes as declared; the dump writes no adapter default either.

@@ -219,6 +219,18 @@ module RailsAiContext
           arg.name == :new && (receiver.is_a?(Prism::ConstantReadNode) || receiver.is_a?(Prism::ConstantPathNode)) && constant_path_string(receiver) == "Proc"
         end
 
+        # create_table's default: for its implicit key, an id: hash's over its own (set_primary_key, 7.0 to 8.1).
+        def key_default_node(node)
+          id = extract_keyword_nodes(node)[:id]
+          inner = id.elements.find { |e| e.is_a?(Prism::AssocNode) && extract_key(e.key) == :default } if id.is_a?(Prism::HashNode)
+          inner&.value || default_node(node)
+        end
+
+        def key_default_source(node)
+          value = key_default_node(node)
+          value && NodeSource.text(value)
+        end
+
         def default_node(node)
           args = node.arguments&.arguments || []
           assoc = args.grep(Prism::KeywordHashNode)

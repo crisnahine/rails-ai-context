@@ -247,7 +247,7 @@ module RailsAiContext
           elsif entry[:type] == :create_table
             current_table = entry[:table]
             creating = true
-            Statements.seed_table(tables, current_table, entry[:options], pk_type)
+            Statements.seed_table(tables, current_table, entry[:options], pk_type, default: Statements.key_default(entry))
           elsif entry[:type] == :column && current_table
             Statements.apply_schema_column(entry, current_table, tables, pk_type)
           elsif entry[:type] == :index && current_table

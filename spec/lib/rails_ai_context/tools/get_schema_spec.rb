@@ -485,6 +485,28 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
 
       expect(text).to include(%q(| id | bigint | **NO** | -> { "timestamp_id('statuses'::text)" } |))
     end
+
+    it "is the id's default in the migration replay, given on the line or in the id: hash" do
+      replayed = Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "20240101000000_create_keys.rb"), <<~RUBY)
+          class CreateKeys < ActiveRecord::Migration[8.1]
+            def change
+              create_table :listings, id: :uuid, default: -> { "gen_random_uuid()" }
+              create_table :offers, id: { type: :uuid, default: -> { "gen_random_uuid()" } }
+            end
+          end
+        RUBY
+        RailsAiContext::Introspectors::MigrationReplay.tables(dir, pk_type: "bigint")
+      end
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "static_parse", tables: replayed, total_tables: replayed.size }, models: {}
+      })
+
+      %w[listings offers].each do |table|
+        expect(described_class.call(table: table, detail: "full").content.first[:text])
+          .to include('| id | uuid | **NO** | -> { "gen_random_uuid()" } |')
+      end
+    end
   end
 
   describe "a table rebuilt from migrations" do

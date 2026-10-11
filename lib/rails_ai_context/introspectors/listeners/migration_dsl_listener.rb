@@ -74,6 +74,7 @@ module RailsAiContext
           if node.name == :rename_table
             result[:new_name] = literal_string(args[1])
           end
+          result.merge!(default_source: key_default_source(node), default_proc: proc_argument?(key_default_node(node))) if action == :create_table
 
           @results << result
         end
