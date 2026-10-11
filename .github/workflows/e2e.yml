@@ -14,7 +14,7 @@ name: E2E
 
 on:
   push:
-    branches: [main]
+    branches: [main, fix/issues-424-429-app-root-and-workspace-init]
   pull_request:
     branches: [main]
   workflow_dispatch:
