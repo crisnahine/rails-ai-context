@@ -203,6 +203,33 @@ RSpec.describe RailsAiContext::Tools::ReviewChanges do
       end
     end
 
+    # Only `create_table :sym` and `add_column :sym, ...` were read, so a
+    # migration naming its table as a string or in parentheses said nothing.
+    it "reads a migration's table however the call is written" do
+      Dir.mktmpdir do |dir|
+        system("git", "init", "-q", dir, exception: true)
+        system("git", "-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.t", "-c", "commit.gpgsign=false",
+               "commit", "-q", "--allow-empty", "-m", "init", exception: true)
+        FileUtils.mkdir_p(File.join(dir, "db/migrate"))
+        File.write(File.join(dir, "db/migrate/20260101000000_change_orders.rb"), <<~RUBY)
+          class ChangeOrders < ActiveRecord::Migration[8.0]
+            def change
+              change_table "orders" do |t|
+                t.string :status
+              end
+              add_column("orders", :coupon_id, :integer)
+            end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+
+        text = described_class.call(ref: "HEAD").content.first[:text]
+
+        expect(text).to include("**Affects tables:** orders")
+        expect(text).to include("**Missing index**: `db/migrate/20260101000000_change_orders.rb` adds `coupon_id` without an index")
+      end
+    end
+
     it "handles missing git gracefully" do
       allow(Open3).to receive(:capture2).and_return([ "", double(success?: false) ])
       result = described_class.call(ref: "HEAD")

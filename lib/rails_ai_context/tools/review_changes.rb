@@ -36,6 +36,14 @@ module RailsAiContext
 
       MAX_DIFF_LINES_PER_FILE = 30
       VALIDATION_LINE = /\bvalidates?[\s(]/
+      # A schema method whose first argument is the table, however the call
+      # is written: `create_table :orders`, `change_table "orders" do`,
+      # `add_column("orders", :coupon_id, :integer)`.
+      MIGRATION_TABLE = /\b(?:create_table|change_table|drop_table|rename_table|add_column|remove_column|rename_column|
+                          change_column|change_column_default|change_column_null|add_index|remove_index|
+                          add_reference|remove_reference|add_belongs_to|remove_belongs_to|add_timestamps|remove_timestamps|
+                          add_foreign_key|remove_foreign_key|add_check_constraint|remove_check_constraint)
+                          \b\(?\s*[:"'](\w+)/x
 
       def self.call(ref: "HEAD", files: nil, server_context: nil)
         refused = refuse_unsafe_paths(files)
@@ -272,7 +280,7 @@ module RailsAiContext
             if File.exist?(full_path) && !RailsAiContext::PathResolver.linked_out?(full_path, root)
               source = RailsAiContext::SafeFile.read(full_path)
               if source
-                tables = source.scan(/(?:create_table|add_column|remove_column|rename_column|add_index|add_reference)\s+:(\w+)/).flatten.uniq
+                tables = source.scan(MIGRATION_TABLE).flatten.uniq
                 if tables.any?
                   lines << "" << "**Affects tables:** #{tables.join(', ')}"
                   # The table as the schema has it now: its columns, or none
@@ -331,14 +339,14 @@ module RailsAiContext
             source = RailsAiContext::SafeFile.read(full_path) or next
 
             # New columns ending in _id without add_index
-            source.scan(/add_column\s+:\w+,\s+:(\w+_id)/).flatten.each do |col|
+            source.scan(/\badd_column\b\(?\s*[:"']\w+["']?\s*,\s*[:"'](\w+_id)\b/).flatten.each do |col|
               unless source.include?("add_index") && source.include?(col)
                 warnings << "**Missing index**: `#{entry[:file]}` adds `#{col}` without an index"
               end
             end
 
             # add_reference without index: false check
-            source.scan(/add_reference\s+:(\w+),\s+:(\w+)/).each do |_table, ref_name|
+            source.scan(/\badd_(?:reference|belongs_to)\b\(?\s*[:"'](\w+)["']?\s*,\s*[:"'](\w+)/).each do |_table, ref_name|
               if source.include?("index: false")
                 warnings << "**Disabled index**: `#{entry[:file]}` adds reference `#{ref_name}` with `index: false`"
               end
