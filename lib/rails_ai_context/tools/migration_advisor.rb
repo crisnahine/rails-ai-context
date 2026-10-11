@@ -58,10 +58,23 @@ module RailsAiContext
       # mode, so the tool says so in its output when it falls back here.
       SUPPORTED_RAILS_FLOOR = "7.0"
 
+      # Room for every option a column takes, a long `comment:` included.
+      MAX_OPTIONS_LENGTH = 1_024
+
       def self.call(action: nil, table: nil, column: nil, type: nil, new_name: nil, options: nil, server_context: nil)
         action = action.to_s.strip
         table = table.to_s.strip
         column = column.to_s.strip.presence if column
+
+        # No database takes a name this long (PostgreSQL stops at 63 bytes,
+        # MySQL at 64), and the generated code would carry it whole.
+        names = { "table" => table, "type" => type, "new_name" => new_name }
+        names["column"] = column unless action == "create_table"
+        long_name = names.find { |_, value| name_too_long?(value) }
+        if long_name || options.to_s.length > MAX_OPTIONS_LENGTH
+          param, value = long_name || [ "options", options ]
+          return text_response("**Error:** `#{param}` #{echo_input(value)} is longer than any migration takes.")
+        end
 
         # Normalize model names to table names: "Post" → "posts", and
         # "Admin::ActionLog" → the table its model recorded, not the
@@ -75,17 +88,17 @@ module RailsAiContext
 
         # Validate identifier characters to produce valid migration code
         unless table.match?(/\A[a-z_][a-z0-9_]*\z/)
-          return text_response("**Error:** Invalid table name `#{table}`. Use lowercase letters, digits, and underscores only.")
+          return text_response("**Error:** Invalid table name `#{echo_input(table)}`. Use lowercase letters, digits, and underscores only.")
         end
         # create_table uses column param as a comma-separated column:type definition string
         if action != "create_table" && column && !column.empty? && !column.match?(/\A[a-z_][a-z0-9_]*\z/)
-          return text_response("**Error:** Invalid column name `#{column}`. Use lowercase letters, digits, and underscores only.")
+          return text_response("**Error:** Invalid column name `#{echo_input(column)}`. Use lowercase letters, digits, and underscores only.")
         end
 
         unless VALID_ACTIONS.include?(action)
           suggestion = VALID_ACTIONS.find { |a| a.start_with?(action) || a.include?(action) }
           hint = suggestion ? " Did you mean `#{suggestion}`?" : ""
-          return text_response("**Error:** Unknown action `#{action}`.#{hint} Valid actions: #{VALID_ACTIONS.join(', ')}")
+          return text_response("**Error:** Unknown action `#{echo_input(action)}`.#{hint} Valid actions: #{VALID_ACTIONS.join(', ')}")
         end
 
         schema = Payload.section(cached_context, :schema)
@@ -304,7 +317,7 @@ module RailsAiContext
           return nil unless bad
 
           suggestion = find_closest_match(bad, column_types)
-          "**Error:** Unknown column type `#{bad}`.#{" Did you mean `#{suggestion}`?" if suggestion} " \
+          "**Error:** Unknown column type `#{echo_input(bad)}`.#{" Did you mean `#{suggestion}`?" if suggestion} " \
             "Migration types include string, text, integer, bigint, decimal, boolean, date, datetime, json and references."
         end
 

@@ -44,6 +44,9 @@ module RailsAiContext
 
         # The heading prints the type camelized, so either spelling is taken.
         type = type.to_s.underscore unless type.nil?
+        # No directory is named this long, and the searched paths would carry it whole.
+        return text_response("No concerns of type `#{echo_input(type)}`.") if name_too_long?(type)
+
         concern_dirs = resolve_concern_dirs(root, type)
         outside = ConcernPaths.outside(root).select { |o| type.nil? || type == "all" || o.type == type }
 
@@ -56,7 +59,7 @@ module RailsAiContext
         if concern_dirs.empty? && outside.empty?
           types = ConcernPaths.types(root)
           if types.any? && !(type.nil? || type == "all")
-            return text_response("No concerns of type `#{type}`. Types this app has: #{types.map { |t| "`#{t}`" }.join(', ')}.")
+            return text_response("No concerns of type `#{echo_input(type)}`. Types this app has: #{types.map { |t| "`#{t}`" }.join(', ')}.")
           end
 
           return text_response("No concern directories found. Searched: #{searched_dirs(type).join(', ')}")

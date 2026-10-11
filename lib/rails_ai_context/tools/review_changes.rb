@@ -68,10 +68,10 @@ module RailsAiContext
         target = "HEAD"
         base = "HEAD"
         unless ref == "HEAD"
-          return error_response("Ref not allowed: #{ref} (git would read it as an option)") if ref.start_with?("-")
+          return error_response("Ref not allowed: #{echo_input(ref)} (git would read it as an option)") if ref.start_with?("-")
 
           target = resolve_commit(ref, root) or
-            return error_response("Unknown ref: #{ref} names no commit in this repository. Pass a branch, a tag, `HEAD~3` or a commit SHA.")
+            return error_response("Unknown ref: #{echo_input(ref)} names no commit in this repository. Pass a branch, a tag, `HEAD~3` or a commit SHA.")
           # What the branch changed since it left the ref, as a pull request
           # shows it: the file list and every diff are taken from the commit
           # the two last shared, so a change made on the ref since then does
@@ -83,7 +83,7 @@ module RailsAiContext
         changed = changed.select { |f| files.any? { |filter| f.include?(filter) } } if files&.any?
 
         if changed.empty?
-          return text_response("No changes found for ref '#{ref}'.#{files ? " Filter: #{files.join(', ')}" : ""}")
+          return text_response("No changes found for ref '#{echo_input(ref)}'.#{files ? " Filter: #{echo_input(files.join(', '))}" : ""}")
         end
 
         # Classify files

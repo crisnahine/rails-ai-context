@@ -1578,7 +1578,7 @@ module RailsAiContext
             path_name = $1.split("/").map(&:camelize).join("::")
             generate_job_test(declared_name(file, path_name), framework)
           else
-            text_response("Cannot auto-detect test type for `#{file}`. Use `model:` or `controller:` parameter instead.")
+            text_response("Cannot auto-detect test type for `#{echo_input(file)}`. Use `model:` or `controller:` parameter instead.")
           end
         end
 

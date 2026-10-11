@@ -276,12 +276,27 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
         "search_code path" => -> { tools::SearchCode.call(pattern: "x", path: huge) },
         "view controller" => -> { tools::GetView.call(controller: huge) },
         "view path" => -> { tools::GetView.call(path: huge) },
-        "session_context mark" => -> { tools::SessionContext.call(mark: huge) }
+        "session_context mark" => -> { tools::SessionContext.call(mark: huge) },
+        "search_docs query" => -> { tools::SearchDocs.call(query: huge) },
+        "search_docs source" => -> { tools::SearchDocs.call(query: "routing", source: huge) },
+        "component_catalog component" => -> { tools::GetComponentCatalog.call(component: huge) },
+        "concern type" => -> { tools::GetConcern.call(type: huge) },
+        "review_changes ref" => -> { tools::ReviewChanges.call(ref: huge) },
+        "generate_test file" => -> { tools::GenerateTest.call(file: huge) },
+        "controllers action" => -> { tools::GetControllers.call(controller: "PostsController", action: huge) },
+        "context action" => -> { tools::GetContext.call(controller: "PostsController", action: huge) },
+        "migration_advisor column" => -> { tools::MigrationAdvisor.call(action: "add_column", table: "posts", column: huge, type: "string") },
+        "migration_advisor table" => -> { tools::MigrationAdvisor.call(action: "add_column", table: huge, column: "rating", type: "string") },
+        "migration_advisor type" => -> { tools::MigrationAdvisor.call(action: "add_column", table: "posts", column: "rating", type: huge) },
+        "migration_advisor action" => -> { tools::MigrationAdvisor.call(action: huge, table: "posts") },
+        "mailers mailer" => -> { tools::GetMailers.call(mailer: huge) },
+        "search_code match_type" => -> { tools::SearchCode.call(pattern: "x", match_type: huge) },
+        "validate level" => -> { tools::Validate.call(files: [ "app/models/post.rb" ], level: huge) }
       }
 
       replies = calls.transform_values { |call| call.call.content.first[:text] }
 
-      expect(replies.transform_values(&:length)).to all(satisfy { |_, length| length < 2_000 })
+      expect(replies.select { |_, text| text.include?("a" * 1_000) }.keys).to eq([])
       expect(replies.reject { |_, text| text.include?("#{"a" * 80}... (100000 characters)") }.keys).to eq([])
     end
   end

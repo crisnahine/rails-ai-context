@@ -50,7 +50,7 @@ module RailsAiContext
               note = api_only_note("app/components", dir: "app/components")
               return text_response(note) if note
 
-              return text_response("Component '#{component}' not found - no components exist in app/components/. Create ViewComponent or Phlex components first.")
+              return text_response("Component '#{echo_input(component)}' not found - no components exist in app/components/. Create ViewComponent or Phlex components first.")
             end
 
             found = matching_components(components + Array(data[:bases]), component)

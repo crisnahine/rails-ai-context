@@ -59,7 +59,7 @@ module RailsAiContext
           )
         end
         return text_response("Too many files (#{files.size}). Maximum is #{max_files} per call.") if files.size > max_files
-        return text_response("Unknown level: '#{level}'. Valid values: #{VALID_LEVELS.join(', ')}") unless VALID_LEVELS.include?(level)
+        return text_response("Unknown level: '#{echo_input(level)}'. Valid values: #{VALID_LEVELS.join(', ')}") unless VALID_LEVELS.include?(level)
 
         results = []
         passed = 0

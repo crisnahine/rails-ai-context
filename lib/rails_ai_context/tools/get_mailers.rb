@@ -76,7 +76,7 @@ module RailsAiContext
           elsif page[:total].zero?
             # An empty page past the end is not an app without mailers, and the
             # hint below already says where the end is.
-            lines << "_No mailers found#{" matching '#{mailer}'" if mailer}._"
+            lines << "_No mailers found#{" matching '#{echo_input(mailer)}'" if mailer}._"
           end
 
           lines.concat(mailbox_lines(Payload.section(cached_context, :action_mailbox))) if mailer.nil? && page[:offset].zero?
