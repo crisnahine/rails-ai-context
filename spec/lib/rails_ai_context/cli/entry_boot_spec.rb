@@ -64,6 +64,21 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
         expect(described_class.app_present?(pattern, allow_source_only: true)).to be true
       end
     end
+
+    # Windows' lstat answers for a link itself even when its name ends in a
+    # separator, where POSIX's follows it: the walk into app/ must not lean
+    # on the separator. lstat is made to answer that way here, on any platform.
+    it "reads a linked app/ where lstat stops at the link" do
+      Dir.mktmpdir do |tmp|
+        linked = File.join(tmp, "linked")
+        FileUtils.mkdir_p([ File.join(tmp, "source/models"), linked ])
+        File.write(File.join(tmp, "source/models/widget.rb"), "")
+        File.symlink(File.join(tmp, "source"), File.join(linked, "app"))
+        allow(File).to receive(:lstat).and_wrap_original { |lstat, path| lstat.call(path.to_s.chomp("/")) }
+
+        expect(described_class.app_present?(linked, allow_source_only: true)).to be true
+      end
+    end
   end
 
   # Sinatra MVC trees keep config/environment.rb and app/ too.

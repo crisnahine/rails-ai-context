@@ -214,6 +214,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A `search_code` pattern longer than Windows takes on a command line (about
   32,000 characters) is searched in Ruby, where the error answered with the
   whole command line, pattern and all.
+- **On Windows an app whose `app/` is a directory link holds source.** The
+  check for Ruby files under `app/`, which decides that a tree with no
+  `config/` is an app to read from source (an engine's root, a command run
+  with `--no-boot`), walked in through a trailing separator. That follows a
+  link on macOS and Linux; Windows' `lstat` answers for the link itself, so
+  the walk found nothing there and the command said no Rails app was found.
 - **"No Rails app found in" names an `--app-path` as it was typed**, as the
   hint under it does, where it named the folder through any symlink on the
   way (`/private/var/...` for `/var/...` on macOS). The warning that an app

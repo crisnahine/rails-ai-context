@@ -57,8 +57,14 @@ module RailsAiContext
       def self.source_file?(dir)
         return false unless File.directory?(dir)
 
-        # The trailing separator walks into app/ when it is a link.
-        start = File.join(dir, "")
+        # Walked from where app/ leads, so a linked app/ is read through. A
+        # trailing separator does that on POSIX only: Windows' lstat answers
+        # for the link itself, which Find then never enters.
+        start = begin
+          File.realpath(dir)
+        rescue SystemCallError
+          File.join(dir, "")
+        end
         Find.find(start) do |path|
           next if path == start
 
