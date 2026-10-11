@@ -76,13 +76,34 @@ RSpec.describe RailsAiContext::McpController do
   end
 
   describe "inherited subclasses" do
-    it "get their own mutex (not shared with parent)" do
+    it "serve the one transport the engine keeps" do
       subclass = Class.new(described_class)
-      parent_mutex = described_class.instance_variable_get(:@transport_mutex)
-      child_mutex = subclass.instance_variable_get(:@transport_mutex)
 
-      expect(child_mutex).to be_a(Mutex)
-      expect(child_mutex).not_to equal(parent_mutex)
+      expect(subclass.mcp_transport).to equal(described_class.mcp_transport)
+    end
+  end
+
+  # The engine's app/controllers is reloaded with the app's code, and the
+  # transport memoized on the class went with every edit: each session's next
+  # call answered 404 "Session not found", and the old transport's session
+  # reaper ran on.
+  describe "a reload of the controller class" do
+    it "keeps the transport, and with it every session" do
+      transport = described_class.mcp_transport
+      file = described_class.instance_method(:handle).source_location.first
+      RailsAiContext.send(:remove_const, :McpController)
+      load file
+
+      expect(RailsAiContext::McpController).not_to equal(described_class)
+      expect(RailsAiContext::McpController.mcp_transport).to equal(transport)
+    end
+
+    it "is not what a reset is: that closes the transport it drops, stopping its session reaper" do
+      transport = described_class.mcp_transport
+      expect(transport).to receive(:close).and_call_original
+
+      described_class.reset_transport!
+      expect(described_class.mcp_transport).not_to equal(transport)
     end
   end
 
@@ -96,7 +117,7 @@ RSpec.describe RailsAiContext::McpController do
     end
 
     let(:transport) do
-      instance_double(MCP::Server::Transports::StreamableHTTPTransport).tap do |t|
+      instance_double(MCP::Server::Transports::StreamableHTTPTransport, close: nil).tap do |t|
         allow(t).to receive(:handle_request).and_return(rack_response)
       end
     end
@@ -105,7 +126,7 @@ RSpec.describe RailsAiContext::McpController do
 
     before do
       described_class.reset_transport!
-      described_class.instance_variable_set(:@mcp_transport, transport)
+      RailsAiContext::McpEdge.instance_variable_set(:@engine_transport, transport)
 
       # Set up a minimal request/response for the controller. A POST: a GET
       # asks for the server-push stream, which the engine does not open.
@@ -302,11 +323,11 @@ RSpec.describe RailsAiContext::McpController do
   # client stayed connected. The spec's answer for a server without the
   # channel is 405.
   describe "a GET for the server-push stream" do
-    let(:transport) { instance_double(MCP::Server::Transports::StreamableHTTPTransport, handle_request: nil) }
+    let(:transport) { instance_double(MCP::Server::Transports::StreamableHTTPTransport, handle_request: nil, close: nil) }
     let(:controller) { described_class.new }
 
     before do
-      described_class.instance_variable_set(:@mcp_transport, transport)
+      RailsAiContext::McpEdge.instance_variable_set(:@engine_transport, transport)
       request = ActionDispatch::TestRequest.create("REQUEST_METHOD" => "GET")
       controller.instance_variable_set(:@_request, request)
       controller.instance_variable_set(:@_response, ActionDispatch::TestResponse.new)
@@ -324,14 +345,14 @@ RSpec.describe RailsAiContext::McpController do
   end
 
   describe "in production" do
-    let(:transport) { instance_double(MCP::Server::Transports::StreamableHTTPTransport, handle_request: nil) }
+    let(:transport) { instance_double(MCP::Server::Transports::StreamableHTTPTransport, handle_request: nil, close: nil) }
     let(:controller) { described_class.new }
 
     before do
       RailsAiContext::McpEdge.instance_variable_set(:@production_refusal_logged, nil)
       allow(RailsAiContext).to receive(:environment_name).and_return("production")
       allow(RailsAiContext).to receive(:log_warn)
-      described_class.instance_variable_set(:@mcp_transport, transport)
+      RailsAiContext::McpEdge.instance_variable_set(:@engine_transport, transport)
       controller.instance_variable_set(:@_request, ActionDispatch::TestRequest.create("REQUEST_METHOD" => "POST"))
       controller.instance_variable_set(:@_response, ActionDispatch::TestResponse.new)
       controller.instance_variable_set(:@_action_name, "handle")

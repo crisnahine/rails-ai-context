@@ -60,7 +60,7 @@ module RailsAiContext
     private
 
     def serve_transport
-      status_code, rack_headers, body = self.class.mcp_transport.handle_request(request)
+      status_code, rack_headers, body = McpEdge.engine_transport.handle_request(request)
       self.status = status_code
       apply_transport_headers(rack_headers)
       if body.respond_to?(:each)
@@ -125,24 +125,15 @@ module RailsAiContext
     end
 
     class << self
-      # Class-level memoization - transport persists across requests.
-      # Thread-safe: MCP::Server and transport are stateless for reads.
+      # The transport outlives this class, which the app's reloader replaces
+      # on every edit in development (McpEdge.engine_transport).
       def mcp_transport
-        @transport_mutex.synchronize { @mcp_transport ||= McpEdge.build_transport }
+        McpEdge.engine_transport
       end
 
       def reset_transport!
-        @transport_mutex.synchronize { @mcp_transport = nil }
-      end
-
-      private
-
-      def inherited(subclass)
-        super
-        subclass.instance_variable_set(:@transport_mutex, Mutex.new)
+        McpEdge.reset_engine_transport!
       end
     end
-
-    @transport_mutex = Mutex.new
   end
 end

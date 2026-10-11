@@ -87,10 +87,26 @@ module RailsAiContext
           "authentication and set config.allow_http_in_production = true."
       end
 
-      # Memoization is the caller's: the middleware holds one per instance
-      # and the controller one per class. The standalone server builds its
-      # own transport because start_http also needs the underlying server
-      # for the banner and live reload.
+      # The engine's transport, one per process. Not the controller's to keep:
+      # the engine's app/controllers is reloaded with the app's code, and a
+      # transport memoized on the controller class went with every edit in
+      # development, so the next call in each session answered 404 "Session
+      # not found", and the old transport's session reaper ran on.
+      def engine_transport
+        ENGINE_TRANSPORT_LOCK.synchronize { @engine_transport ||= build_transport }
+      end
+
+      # Drops the engine's transport and closes it, which ends its sessions
+      # and stops its reaper; the next request builds a fresh one.
+      def reset_engine_transport!
+        transport = ENGINE_TRANSPORT_LOCK.synchronize { @engine_transport.tap { @engine_transport = nil } }
+        transport.close if transport.respond_to?(:close)
+      end
+
+      # Memoization is the caller's: the middleware holds one per instance,
+      # and the engine one per process (engine_transport). The standalone
+      # server builds its own transport because start_http also needs the
+      # underlying server for the banner and live reload.
       #
       # The middleware and the engine never start live reload; their tool
       # calls check the app's files themselves, as every server's do.
@@ -116,5 +132,6 @@ module RailsAiContext
 
     # The environments the endpoint answers in without allow_http_in_production.
     LOCAL_ENVIRONMENTS = %w[development test].freeze
+    ENGINE_TRANSPORT_LOCK = Mutex.new
   end
 end
