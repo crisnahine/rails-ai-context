@@ -82,6 +82,10 @@ On Windows:
 - `rails_query` on SQLite runs without its time limit: the limit runs the
   query in a forked child, and Windows has no `fork`. The answer says so.
 - The pre-commit hook runs under the sh that Git for Windows runs hooks with.
+- A checkout whose lines end in CRLF, Git for Windows' default, is read and
+  written in them: `rails_search_code` ends a line before its CRLF, so `$`
+  anchors as it does on LF, and the context files' managed block and the
+  initializer's `config.ai_tools` line keep the file's own line endings.
 - ripgrep installs with `winget install BurntSushi.ripgrep.MSVC`; without it
   `rails_search_code` takes the slower Ruby path.
 
