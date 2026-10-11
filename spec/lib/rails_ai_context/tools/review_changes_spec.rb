@@ -93,6 +93,62 @@ RSpec.describe RailsAiContext::Tools::ReviewChanges do
       expect(result.content.first[:text]).to include("Unknown ref")
     end
 
+    # The file list came from where the branch left main and each diff from
+    # main's tip, so a validation main added later read as one the branch
+    # removed; and an edited validates line read as a removed one.
+    describe "a review of a branch's validations" do
+      def git(*args)
+        out, status = Open3.capture2e("git", "-c", "user.name=t", "-c", "user.email=t@t.t", "-c", "commit.gpgsign=false",
+                                      *args, chdir: @dir)
+        raise out unless status.success?
+
+        out
+      end
+
+      def write_model(*validations)
+        FileUtils.mkdir_p(File.join(@dir, "app/models"))
+        body = validations.map { |v| "  validates #{v}\n" }.join
+        File.write(File.join(@dir, "app/models/product.rb"), "class Product < ApplicationRecord\n#{body}end\n")
+      end
+
+      around do |example|
+        Dir.mktmpdir do |dir|
+          @dir = dir
+          git("init", "-q")
+          git("checkout", "-q", "-b", "main")
+          write_model(":name, presence: true", ":sku, presence: true")
+          git("add", "-A")
+          git("commit", "-q", "-m", "init")
+          git("checkout", "-q", "-b", "feature")
+          write_model(":name, presence: true, length: { maximum: 120 }")
+          git("commit", "-q", "-am", "edit name, drop sku")
+          git("checkout", "-q", "main")
+          write_model(":name, presence: true", ":sku, presence: true", ":price, presence: true")
+          git("commit", "-q", "-am", "main requires price")
+          git("checkout", "-q", "feature")
+          example.run
+        end
+      end
+
+      before { allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(@dir))) }
+
+      it "reports what the branch removed since it left the ref, and neither main's later lines nor an edit" do
+        text = described_class.call(ref: "main").content.first[:text]
+
+        expect(text).to include("**Removed validation**: `app/models/product.rb` - `validates :sku, presence: true`")
+        expect(text).not_to include("validates :price")
+        expect(text).not_to include("`app/models/product.rb` - `validates :name")
+      end
+
+      it "reads an edited validation in the working tree as an edit" do
+        write_model(":name, presence: true, length: { maximum: 80 }", ":nickname, presence: true")
+
+        text = described_class.call(ref: "HEAD").content.first[:text]
+
+        expect(text).not_to include("Removed validation")
+      end
+    end
+
     it "handles missing git gracefully" do
       allow(Open3).to receive(:capture2).and_return([ "", double(success?: false) ])
       result = described_class.call(ref: "HEAD")
