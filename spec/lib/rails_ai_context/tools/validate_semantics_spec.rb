@@ -346,6 +346,14 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
       end
     end
 
+    # `turbo_stream_from` subscribes to a channel; broadcasts render their own
+    # partials into it, and no action renders a .turbo_stream.erb for it.
+    it "asks for no .turbo_stream.erb template beside a view that subscribes with turbo_stream_from" do
+      with_app_file("app/views/widgets/show.html.erb", "<%= turbo_stream_from @widget %>\n<h1>Widget</h1>\n") do |file, path|
+        expect(described_class.check_rails_semantics(file, path).join).not_to include("turbo_stream")
+      end
+    end
+
     # Read without Erubi's trim mode, `<%- if @widget -%>` was a unary minus
     # and the parse lost the render inside it.
     it "reads a template written with trim tags" do
