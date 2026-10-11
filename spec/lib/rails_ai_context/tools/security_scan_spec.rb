@@ -228,7 +228,7 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
           printf '%s' '{"scan_info":{"checks_performed":["SQL"]},"warnings":[]}' > "$out"
         SH
         File.chmod(0o755, script)
-        allow(described_class).to receive(:brakeman_executable).and_return(script)
+        allow(described_class).to receive(:brakeman_command).and_return([ script ])
 
         report, failure = described_class.send(:run_brakeman_unbundled, 2, nil)
 
@@ -250,7 +250,7 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
           exit 1
         SH
         File.chmod(0o755, script)
-        allow(described_class).to receive(:brakeman_executable).and_return(script)
+        allow(described_class).to receive(:brakeman_command).and_return([ script ])
 
         _report, failure = described_class.send(:run_brakeman_unbundled, 2, nil)
 
@@ -266,7 +266,7 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
           exit 1
         SH
         File.chmod(0o755, script)
-        allow(described_class).to receive(:brakeman_executable).and_return(script)
+        allow(described_class).to receive(:brakeman_command).and_return([ script ])
 
         _report, failure = described_class.send(:run_brakeman_unbundled, 2, nil)
 
@@ -289,7 +289,7 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         described_class.instance_variable_set(:@brakeman_available, nil)
         allow(described_class).to receive(:load_brakeman).and_return(false)
         allow(described_class).to receive(:brakeman_on_machine).and_return("8.0.6")
-        allow(described_class).to receive(:brakeman_executable).and_return(script)
+        allow(described_class).to receive(:brakeman_command).and_return([ script ])
       end
 
       it "passes the CLI's confidence level and the resolved checks" do
@@ -321,6 +321,62 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         expect(text).to include("installed on this machine but not in this app's bundle")
         expect(text).to include("invalid argument: --confidence-level 0")
         expect(text).not_to include("noise")
+      end
+    end
+
+    # RubyGems writes a gem's binstub to its bindir, outside every gem
+    # directory, so the run looked for <gem dir>/bin/brakeman, found nothing
+    # on a normal install, and answered "produced no report" while doctor
+    # said it scanned. The gem's own script is run instead, by this Ruby.
+    describe "the brakeman installed outside the bundle" do
+      let(:gem_dir) { Dir.mktmpdir }
+
+      after { FileUtils.remove_entry(gem_dir) }
+
+      # An installed brakeman as RubyGems lays one out: its spec, and its
+      # files under gems/, the script in bin/. No binstub anywhere.
+      def install_brakeman(version, script)
+        FileUtils.mkdir_p(File.join(gem_dir, "specifications"))
+        File.write(File.join(gem_dir, "specifications", "brakeman-#{version}.gemspec"), <<~RUBY)
+          Gem::Specification.new do |s|
+            s.name = "brakeman"
+            s.version = "#{version}"
+            s.bindir = "bin"
+            s.executables = [ "brakeman" ]
+          end
+        RUBY
+        bin = File.join(gem_dir, "gems", "brakeman-#{version}", "bin")
+        FileUtils.mkdir_p(bin)
+        File.write(File.join(bin, "brakeman"), script)
+        allow(Gem).to receive(:path).and_return([ gem_dir ])
+        File.join(bin, "brakeman")
+      end
+
+      it "runs the newest installed gem's own script with this Ruby" do
+        install_brakeman("8.0.6", "")
+        script = install_brakeman("8.1.0", "")
+
+        expect(described_class.send(:brakeman_command)).to eq([ RbConfig.ruby, script ])
+      end
+
+      it "reads the report the script writes" do
+        install_brakeman("8.1.0", <<~RUBY)
+          out = ARGV[ARGV.index("--output") + 1]
+          File.write(out, '{"scan_info":{"checks_performed":["SQL"],"brakeman_version":"8.1.0"},"warnings":[]}')
+        RUBY
+
+        report, failure = described_class.send(:run_brakeman_unbundled, 2, nil)
+
+        expect(failure).to be_nil
+        expect(report.dig("scan_info", "checks_performed")).to eq([ "SQL" ])
+      end
+
+      it "answers to doctor whether the script runs, as the scan runs it" do
+        install_brakeman("8.1.0", %(puts "brakeman 8.1.0"\n))
+        expect(described_class.unbundled_failure).to be_nil
+
+        install_brakeman("8.1.0", %(raise LoadError, "cannot load such file -- ruby_parser"\n))
+        expect(described_class.unbundled_failure).to eq("cannot load such file -- ruby_parser (LoadError)")
       end
     end
 

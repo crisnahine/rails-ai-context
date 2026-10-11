@@ -1696,7 +1696,7 @@ Runs the checks below and reports an AI readiness score (0-100). A check that do
 | Preset coverage | The preset covers the features the app has |
 | ripgrep | `rg` binary installed (optional, falls back to Ruby) |
 | Prism parser | Prism is available for AST-based validation, at a version this gem supports (warns, as the boot does, when the app's bundle pins one below it) |
-| Brakeman | Brakeman is available for `rails_security_scan` (optional) |
+| Brakeman | Brakeman is available for `rails_security_scan` (optional): in the app's bundle, or installed on the machine, where the scan runs the gem's own script as a process of its own. Doctor runs that script's `--version` the way the scan runs it, and warns, with what it printed, when it does not answer |
 | Live reload | `listen` gem installed (optional, enables MCP live reload) |
 | MCP stdio hygiene | On a standalone install, or where a config starts the `rails-ai-context` binary itself, gem activation prints nothing on stdout |
 | Secrets in .gitignore | Secret files that exist are gitignored and not committed: `config/master.key`, `config/credentials/*.key`, every `.env` file, `config/application.yml`, the Codex config and SSH and cloud credentials (fails when one is not ignored, or is committed: the fix is `git rm --cached` and rotating it). `config/database.yml`, `cable.yml`, `storage.yml` and the like warn only when they hold a password, token or key as a literal value. The encrypted `credentials.yml.enc` is committed by design and never reported. Inside a git repository git answers, so a rule in a `.gitignore` above the app (a monorepo's), in `.git/info/exclude` or in the global excludes counts; outside one the app's `.gitignore` is read |

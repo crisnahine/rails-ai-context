@@ -416,8 +416,10 @@ Brakeman static analysis: SQL injection, XSS, mass assignment, command injection
 
 > Requires the `brakeman` gem. When the app's bundle does not carry it but the
 > machine has it, the scan runs brakeman as its own process from outside the
-> bundle and says so. When no scan can run, the answer says which case it is:
-> brakeman is nowhere on the machine, or it is installed and produced no report.
+> bundle and says so: the installed gem's own `bin/brakeman`, run by the app's
+> Ruby, not whatever `brakeman` is on PATH. When no scan can run, the answer
+> says which case it is: brakeman is nowhere on the machine, or it is
+> installed and produced no report.
 
 ### `rails_performance_check`
 

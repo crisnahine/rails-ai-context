@@ -961,7 +961,8 @@ module RailsAiContext
       "Run `bundle update #{name}` in the app, after relaxing any pin its Gemfile puts on #{name}"
     end
 
-    # Asked of the scanner rather than `require`: brakeman outside the app's bundle still scans.
+    # Asked of the scanner rather than `require`: brakeman outside the app's
+    # bundle still scans, run the way the scan runs it, which is asked too.
     def check_brakeman
       where, version = Tools::SecurityScan.brakeman_location
       locked = GemLock.for(@app.root.to_s).version("brakeman")
@@ -969,6 +970,12 @@ module RailsAiContext
       when :bundle
         Check.new(name: "Brakeman", status: :pass, message: "Brakeman #{version} available for security scanning", fix: nil)
       when :machine
+        if (failure = Tools::SecurityScan.unbundled_failure)
+          return Check.new(name: "Brakeman", status: :warn,
+            message: "Brakeman #{version} is on this machine, outside the app's bundle, but rails_security_scan cannot run it there: #{failure}",
+            fix: locked ? "Run `bundle install`, then `bundle exec brakeman` in the app to see what it says" : "Add: `gem 'brakeman', group: :development` to scan in this process")
+        end
+
         return Check.new(name: "Brakeman", status: :pass, fix: nil,
           message: "Brakeman #{version} on this machine, and the app's Gemfile.lock carries brakeman #{locked} " \
                    "(rails_security_scan runs it as its own process)") if locked
