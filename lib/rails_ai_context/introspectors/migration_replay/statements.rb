@@ -35,16 +35,9 @@ module RailsAiContext
           when :remove_columns then remove_columns_from(tables[table], entry[:columns])
           when :remove_reference, :remove_belongs_to then remove_reference_from(tables[table], entry[:ref], options)
           when :rename_column then rename_column_in(tables, table, entry[:column], entry[:new_name])
-          when :change_column
-            col = column_in(tables, entry)
-            col[:type] = entry[:column_type] if col && entry[:column_type]
+          when :change_column then change_column(column_in(tables, entry), entry)
           when :change_column_default then change_column_default(column_in(tables, entry), entry)
-          when :change_column_null
-            col = column_in(tables, entry)
-            unless col.nil? || entry[:null].nil?
-              # Only null: false is stored, so allowing NULL again removes the mark.
-              entry[:null] ? col.delete(:null) : col[:null] = false
-            end
+          when :change_column_null then change_column_null(column_in(tables, entry), entry[:null])
           when :add_index then apply_schema_index(entry, table, tables)
           when :remove_index then remove_index_from(tables[table], entry[:columns], options)
           when :add_reference, :add_belongs_to
@@ -155,6 +148,23 @@ module RailsAiContext
           return if col.nil? || new_default.equal?(NOT_GIVEN) || new_default == RailsAiContext::Confidence::INFERRED
 
           col[:default] = SchemaConventions.format_default(new_default)
+        end
+
+        # change_column sets the type, and the default and null only when given (7.0 to 8.1).
+        def change_column(col, entry)
+          return unless col
+
+          opts = entry[:options] || {}
+          col[:type] = entry[:column_type] if entry[:column_type]
+          change_column_null(col, opts[:null]) if opts.key?(:null)
+          change_column_default(col, { options: { to: declared_default(opts, entry) } }) if opts.key?(:default)
+        end
+
+        # Only null: false is stored, so allowing NULL again removes the mark.
+        def change_column_null(col, null)
+          return if col.nil? || null.nil?
+
+          null ? col.delete(:null) : col[:null] = false
         end
 
         def column_in(tables, entry)

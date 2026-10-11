@@ -99,7 +99,8 @@ module RailsAiContext
           when :remove_index then result[:columns] = literal_strings(positional.first)
           when :rename_column then result.merge!(column: names[0], new_name: names[1])
           when :rename_index then result.merge!(old_name: names[0], new_name: names[1])
-          when :change_column then result.merge!(column: names[0], column_type: names[1])
+          when :change_column
+            result.merge!(column: names[0], column_type: names[1], default_source: default_source(node), default_proc: proc_default?(node))
           when :change_column_null then result.merge!(column: names[0], null: boolean_value(positional[1]))
           when :change_column_default
             result[:column] = names[0]

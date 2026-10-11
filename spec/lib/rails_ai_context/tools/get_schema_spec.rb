@@ -480,6 +480,32 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(text).to include("`index_work_packages_on_schedule_manually` on (schedule_manually) where schedule_manually")
     end
 
+    it "applies change_column's null: and default: with its type" do
+      text = replayed_table("widgets", <<~CREATE, <<~RELAX)
+        class CreateWidgets < ActiveRecord::Migration[8.1]
+          def change
+            create_table :widgets do |t|
+              t.string :token, null: false
+              t.string :name
+              t.string :slug, default: "x", null: false
+            end
+          end
+        end
+      CREATE
+        class RelaxWidgets < ActiveRecord::Migration[8.1]
+          def up
+            change_column :widgets, :token, :string, null: true
+            change_column :widgets, :name, :string, default: "unnamed"
+            change_column :widgets, :slug, :text
+          end
+        end
+      RELAX
+
+      expect(text).to include("| token | string | yes |  |")
+      expect(text).to include("| name | string | yes | unnamed |")
+      expect(text).to include("| slug | text | **NO** | x |")
+    end
+
     it "keeps where: on the index a t.references declares" do
       text = replayed_table("assignments", <<~RUBY)
         class CreateAssignments < ActiveRecord::Migration[8.0]
