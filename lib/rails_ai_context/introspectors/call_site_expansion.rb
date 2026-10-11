@@ -141,6 +141,37 @@ module RailsAiContext
         end.sort_by { |entry| entry[:location].to_i }
       end
 
+      # A class body's walk with what its blocks evaluated on another receiver declare moved
+      # to `:foreign`, named as `foreign_entries` names them. A method body runs only when called.
+      def class_body_foreign(tree, walked)
+        blocks = foreign_blocks(tree)
+        return walked if blocks.empty?
+
+        foreign = []
+        kept = walked.to_h do |key, found|
+          next [ key, found ] unless found.is_a?(Array) && key != :methods
+
+          [ key, found.reject do |entry|
+            line = entry.is_a?(Hash) && entry[:location]
+            eval = line && blocks.select { |node| node.block.location.start_line <= line && line <= node.block.location.end_line }
+                                 .min_by { |node| node.location.length }
+            next false unless eval
+
+            call = AstWalk.each(eval.block).find { |node| node.is_a?(Prism::CallNode) && node.location.start_line == line }
+            foreign << { declaration: call ? call_source(call) : entry[:text].to_s, receiver: eval.receiver.slice, location: line }
+          end ]
+        end
+        kept.merge(foreign: foreign.sort_by { |entry| entry[:location] })
+      end
+
+      def foreign_blocks(node, found = [])
+        return found if node.nil? || node.is_a?(Prism::DefNode)
+
+        found << node if foreign_eval?(node)
+        node.compact_child_nodes.each { |child| foreign_blocks(child, found) }
+        found
+      end
+
       # The branch whose condition holds the entry back; nil when every way
       # through the undecided condition around it declares it alike, and
       # :repeated for the copy of such an entry a later way declares.

@@ -1174,6 +1174,32 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     expect(text).to include("- `validates :description, presence: true` on `translation_class` if `options.many?`")
   end
 
+  # Consul's Budget::Investment audits its translation class from its own body.
+  it "names a macro the model body declares in another class's class_eval, apart from its own" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "app", "models", "budget"))
+      File.write(File.join(dir, "app", "models", "budget", "investment.rb"), <<~RUBY)
+        class Budget::Investment < ApplicationRecord
+          audited on: [:update, :destroy]
+          translation_class.class_eval do
+            audited associated_with: :globalized_model,
+                    only: Budget::Investment.translated_attribute_names
+          end
+        end
+      RUBY
+      models = RailsAiContext::Introspectors::ModelIntrospector.new(RailsAiContext::StaticApp.new(dir)).static_call
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(models: models)
+
+      text = described_class.call(model: "Budget::Investment", detail: "full").content.first[:text]
+      own, foreign = text.split("## Declared on another class")
+
+      expect(own).to include("- `audited on: [:update, :destroy]`")
+      expect(own).not_to include("associated_with")
+      expect(foreign).to include("- `audited associated_with: :globalized_model, only: Budget::Investment.translated_attribute_names` on `translation_class`")
+    end
+  end
+
   it "names a declaration a condition holds back, apart from the counted ones" do
     described_class.reset_cache!
     allow(described_class).to receive(:cached_context).and_return(

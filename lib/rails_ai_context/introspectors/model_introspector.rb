@@ -2178,7 +2178,9 @@ module RailsAiContext
 
       def source_walk(path)
         source = model_source(path)
-        source ? SourceIntrospector.walk_source(source) : SourceIntrospector.call(path)
+        walked = source ? SourceIntrospector.walk_source(source) : SourceIntrospector.call(path)
+        # The walk's own parse, cached.
+        CallSiteExpansion.class_body_foreign((source ? AstCache.parse_string(source) : AstCache.parse(path)).value, walked)
       end
 
       # The class files' side of the lookup, read only when a concern asks: their class-body
