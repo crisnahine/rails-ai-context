@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "open3"
 
 RSpec.describe RailsAiContext::TestHelper do
   include described_class
@@ -78,7 +79,9 @@ RSpec.describe RailsAiContext::TestHelper do
   # and a custom tool's class body names MCP::Tool before anything runs.
   it "loads the MCP SDK on its own" do
     lib = File.expand_path("../../../lib", __dir__)
-    out = `ruby -I #{lib} -e 'require "rails_ai_context/test_helper"; print defined?(MCP::Tool).inspect' 2>&1`
+    # An argument list, not a shell string: cmd.exe reads no POSIX quoting,
+    # and a path with a space in it is one argument either way.
+    out, = Open3.capture2e(RbConfig.ruby, "-I", lib, "-e", 'require "rails_ai_context/test_helper"; print defined?(MCP::Tool).inspect')
 
     expect(out).to eq('"constant"')
   end

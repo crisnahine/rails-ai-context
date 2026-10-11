@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
-require "shellwords"
+require "open3"
 
 # `rails-ai-context init` reads a selection, prompts, and writes config files
 # before it boots the app. Everything it needs in that window has to load on
@@ -72,9 +72,7 @@ RSpec.describe "Standalone pre-boot load" do
     script << 'leaked = $LOADED_FEATURES.grep(%r{/(zeitwerk|active_support)/})'
     script << 'puts leaked.empty? ? "CLEAN" : "LEAKED: #{leaked.first(5).join(", ")}"'
 
-    output = Bundler.with_unbundled_env do
-      `ruby -e #{script.join("\n").shellescape} 2>&1`
-    end
+    output = unbundled_ruby(script.join("\n"))
 
     expect(output).to include("CLEAN"),
       "init's pre-boot files pull in a framework, which breaks the app's autoloader once it boots:\n#{output}"
@@ -87,12 +85,17 @@ RSpec.describe "Standalone pre-boot load" do
     script << 'leaked = $LOADED_FEATURES.grep(%r{/(zeitwerk|active_support)/})'
     script << 'puts leaked.empty? ? "CLEAN" : "LEAKED: #{leaked.first(5).join(", ")}"'
 
-    output = Bundler.with_unbundled_env do
-      `ruby -e #{script.join("\n").shellescape} 2>&1`
-    end
+    output = unbundled_ruby(script.join("\n"))
 
     expect(output).to include("CLEAN"),
       "entry_boot.rb pulls in a framework before the app boots:\n#{output}"
+  end
+
+  # A Ruby outside the bundle, as the installed binary starts, given the
+  # script as an argument rather than through a shell: cmd.exe, Windows'
+  # shell, reads none of the quoting a POSIX one does.
+  def unbundled_ruby(script)
+    Bundler.with_unbundled_env { Open3.capture2e(RbConfig.ruby, "-e", script).first }
   end
 
   def constant_reads(node, names = [])

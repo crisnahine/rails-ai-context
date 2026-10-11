@@ -10,6 +10,19 @@ require "json"
 # return error-shaped responses (that's a normal outcome for e.g. missing
 # params) - but they must not crash.
 RSpec.describe "CLI smoke: every tool executes", type: :smoke do
+  # The binary runs in a child here, which spec_helper's stub of
+  # McpConfigGenerator.windows_shell? does not reach: on Windows the configs
+  # it writes start the server through `cmd /c`, as its clients need there.
+  def served(*argv)
+    Gem.win_platform? ? [ "cmd", "/c", *argv ] : argv
+  end
+
+  # An MCP config entry for that command line, as the child writes it.
+  def config_entry(*argv, env: nil)
+    command, *args = served(*argv)
+    { "command" => command, "args" => args, "env" => env }.compact
+  end
+
   RailsAiContext::Server.builtin_tools.each do |tool_class|
     short = RailsAiContext::CLI::ToolRunner.short_name(tool_class.tool_name)
 
@@ -87,10 +100,12 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       end
     end
 
+    # Set through the child's environment, not a `VAR=value` prefix, which
+    # cmd.exe, the shell backticks run on Windows, reads as a command.
     it "still reads RAILS_ENV from the environment variable" do
       Dir.mktmpdir do |dir|
         env_app(dir)
-        out = `cd #{dir} && RAILS_ENV=prod ruby -I #{lib} #{exe} tool env_config --no-boot 2>&1`
+        out, = Open3.capture2e({ "RAILS_ENV" => "prod" }, "ruby", "-I", lib, exe, "tool", "env_config", "--no-boot", chdir: dir)
 
         expect(out).to include("_Current: **prod**"), out
       end
@@ -182,33 +197,36 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       # Bare `preset` lists and returns before the boot path, so the loop
       # runs a real one. Only serve and watch are left out: both run until
       # interrupted.
-      # No command may wait on the runner's own stdin: init prompts.
+      # No command may wait on the runner's own stdin: init prompts. An
+      # empty one is given rather than `< /dev/null`, a file Windows lacks:
+      # there cmd.exe refused the redirect and ran nothing at all.
       [ "inspect", "facts", "context", "preset architecture", "init", "tool", "doctor" ].each do |command|
-        out = `cd #{dir} && ruby -I #{lib} #{exe} #{command} < /dev/null 2>&1`
+        out, = Open3.capture2e("ruby", "-I", lib, exe, *command.split, chdir: dir, stdin_data: "")
         expect(out).not_to include("ArgumentError"), "#{command}: #{out}"
         # preset rescues StandardError, so only the message reaches stderr.
         expect(out).not_to include("missing keyword"), "#{command}: #{out}"
       end
 
-      doctor = `cd #{dir} && ruby -I #{lib} #{exe} doctor 2>&1`
-      expect($?.exitstatus).to eq(1), doctor
+      doctor, status = Open3.capture2e("ruby", "-I", lib, exe, "doctor", chdir: dir)
+      expect(status.exitstatus).to eq(1), doctor
       expect(doctor).to include("doctor needs a bootable app: no config/environment.rb")
     end
   end
 
   # A listing the user asked for belongs on stdout; only the error framing and
-  # the listing that follows a rejected name go to stderr.
+  # the listing that follows a rejected name go to stderr. Each stream is read
+  # apart rather than one sent to /dev/null, which Windows does not have.
   it "puts the bare preset listing on stdout and a rejected name on stderr" do
     exe = File.expand_path("../exe/rails-ai-context", __dir__)
     lib = File.expand_path("../lib", __dir__)
 
     Dir.mktmpdir do |dir|
-      listing = `cd #{dir} && ruby -I #{lib} #{exe} preset 2>/dev/null`
-      expect($?.exitstatus).to eq(0), listing
+      listing, err, status = Open3.capture3("ruby", "-I", lib, exe, "preset", chdir: dir)
+      expect(status.exitstatus).to eq(0), err
       expect(listing).to include("Available presets:")
 
-      rejected = `cd #{dir} && ruby -I #{lib} #{exe} preset bogus 2>&1 1>/dev/null`
-      expect($?.exitstatus).to eq(1), rejected
+      _out, rejected, status = Open3.capture3("ruby", "-I", lib, exe, "preset", "bogus", chdir: dir)
+      expect(status.exitstatus).to eq(1), rejected
       expect(rejected).to include("Unknown preset: bogus")
       expect(rejected).to include("Available presets:")
     end
@@ -495,10 +513,10 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
 
         expect(status.exitstatus).to eq(0), err
         expect(servers(dir)).to eq(
-          "rails-ai-context-a" => { "command" => "rails-ai-context", "args" => %w[serve --app-path a],
-                                    "env" => { "RAILS_AI_CONTEXT_SERVER_NAME" => "a-rails-ai-context" } },
-          "rails-ai-context-b" => { "command" => "rails-ai-context", "args" => %w[serve --app-path group/b],
-                                    "env" => { "RAILS_AI_CONTEXT_SERVER_NAME" => "b-rails-ai-context" } }
+          "rails-ai-context-a" => config_entry(*%w[rails-ai-context serve --app-path a],
+                                               env: { "RAILS_AI_CONTEXT_SERVER_NAME" => "a-rails-ai-context" }),
+          "rails-ai-context-b" => config_entry(*%w[rails-ai-context serve --app-path group/b],
+                                               env: { "RAILS_AI_CONTEXT_SERVER_NAME" => "b-rails-ai-context" })
         )
         %w[a group/b].each do |app|
           expect(File.exist?(File.join(dir, app, ".rails-ai-context.yml"))).to be(true), app
@@ -551,8 +569,8 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         _out, err, status = init(dir, "1\n1\n")
 
         expect(servers(dir)["rails-ai-context-b"]).to eq(
-          "command" => "bundle", "args" => %w[exec rails-ai-context serve --app-path b],
-          "env" => { "BUNDLE_GEMFILE" => "b/Gemfile", "RAILS_AI_CONTEXT_SERVER_NAME" => "b-rails-ai-context" }
+          config_entry(*%w[bundle exec rails-ai-context serve --app-path b],
+                       env: { "BUNDLE_GEMFILE" => "b/Gemfile", "RAILS_AI_CONTEXT_SERVER_NAME" => "b-rails-ai-context" })
         )
         expect(File.exist?(File.join(dir, "a", "CLAUDE.md"))).to be(true)
         expect(status.exitstatus).to eq(1)
@@ -561,7 +579,9 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
     end
 
     # What a client sees: the entry it was given starts a server, from the
-    # folder the client was opened at, for the app the entry names.
+    # folder the client was opened at, for the app the entry names. It is
+    # started as the entry says - through `cmd /c` on Windows - with this
+    # checkout's binary where the entry names the installed one.
     it "writes entries that serve their app from the folder" do
       Dir.mktmpdir do |dir|
         rails_app(File.join(dir, "a"))
@@ -575,8 +595,9 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
           { jsonrpc: "2.0", method: "notifications/initialized" },
           { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "rails_get_model_details", arguments: {} } }
         ].map { |message| "#{JSON.generate(message)}\n" }.join
+        command_line = [ entry["command"], *entry["args"] ].flat_map { |word| word == "rails-ai-context" ? [ "ruby", "-I", lib, exe ] : [ word ] }
 
-        out, err, = Open3.capture3(entry["env"], "ruby", "-I", lib, exe, *entry["args"], "--no-boot", chdir: dir, stdin_data: requests)
+        out, err, = Open3.capture3(entry["env"], *command_line, "--no-boot", chdir: dir, stdin_data: requests)
         responses = out.lines.filter_map { |line| JSON.parse(line) rescue nil }.to_h { |msg| [ msg["id"], msg ] }
 
         expect(responses.dig(1, "result", "serverInfo", "name")).to eq("b-rails-ai-context"), err
@@ -708,6 +729,10 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
     # JSON and TOML hold UTF-8 alone; the app named in Latin-1 used to fail
     # every config, the other apps' entries with it.
     it "leaves an app whose folder name is not UTF-8 out of the folder's MCP configs" do
+      # NTFS stores a name as UTF-16: the bytes below are taken in the ANSI
+      # code page and come back as a valid name.
+      skip "Windows names files in UTF-16, so no folder name on disk is bytes that are not UTF-8" if Gem.win_platform?
+
       Dir.mktmpdir do |dir|
         begin
           rails_app(File.join(dir, "caf\xE9".b))
@@ -733,7 +758,7 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         _out, err, status = init(dir, "1\n3\n")
 
         expect(status.exitstatus).to eq(0), err
-        expect(servers(dir)["rails-ai-context-api"]["args"]).to eq(%w[serve --app-path ./-api])
+        expect(servers(dir)["rails-ai-context-api"]).to include(config_entry(*%w[rails-ai-context serve --app-path ./-api]))
       end
     end
 
@@ -747,7 +772,7 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         _out, err, status = init(dir, "1\n1\n")
 
         expect(status.exitstatus).to eq(0), err
-        expect(servers(dir)["rails-ai-context-b"]["command"]).to eq("rails-ai-context")
+        expect(servers(dir)["rails-ai-context-b"]).to include(config_entry(*%w[rails-ai-context serve --app-path b]))
         expect(File.exist?(File.join(dir, "b", "CLAUDE.md"))).to be(true)
       end
     end
@@ -934,10 +959,17 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       expect(out).to include("rails-ai-context v")
     end
 
+    # init given its answers and its directory rather than a shell line: on
+    # Windows, backticks run cmd.exe, which has no /dev/null and ends a
+    # command at its first newline. Its output and errors, as one.
+    def init_in(dir, *args, answers: "")
+      Open3.capture2e("ruby", "-I", lib, exe, "init", *args, chdir: dir, stdin_data: answers)
+    end
+
     it "refuses init outside a Rails app in its own words" do
       Dir.mktmpdir do |dir|
-        out = `cd #{dir} && ruby -I #{lib} #{exe} init < /dev/null 2>&1`
-        expect($?.exitstatus).to eq(1), out
+        out, status = init_in(dir)
+        expect(status.exitstatus).to eq(1), out
         expect(out).to include("No Rails app found in")
         expect(out).to include("Run this command inside a Rails app or a folder holding one (or pass --app-path).")
       end
@@ -954,9 +986,9 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
           File.write(File.join(dir, name, ".gitignore"), "*.log\n")
         end
 
-        out = `cd #{dir}/a && printf '1\n3\n' | ruby -I #{lib} #{exe} init --app-path ../b --no-boot 2>&1`
+        out, status = init_in(File.join(dir, "a"), "--app-path", "../b", "--no-boot", answers: "1\n3\n")
 
-        expect($?.exitstatus).to eq(0), out
+        expect(status.exitstatus).to eq(0), out
         expect(Dir.children(File.join(dir, "a")).sort).to eq(%w[.gitignore app])
         expect(File.read(File.join(dir, "a", ".gitignore"))).to eq("*.log\n")
         expect(Dir.children(File.join(dir, "b"))).to include(".rails-ai-context.yml", ".mcp.json")
@@ -969,9 +1001,9 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         FileUtils.mkdir_p(File.join(dir, "b", "app", "models"))
         File.write(File.join(dir, "b", "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
 
-        out = `cd #{dir}/empty && printf '1\n3\n' | ruby -I #{lib} #{exe} init --app-path ../b --no-boot 2>&1`
+        out, status = init_in(File.join(dir, "empty"), "--app-path", "../b", "--no-boot", answers: "1\n3\n")
 
-        expect($?.exitstatus).to eq(0), out
+        expect(status.exitstatus).to eq(0), out
         expect(Dir.children(File.join(dir, "empty"))).to be_empty
         expect(File.exist?(File.join(dir, "b", ".rails-ai-context.yml"))).to be(true)
       end
@@ -987,9 +1019,9 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
           File.write(File.join(dir, name, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
         end
 
-        out = `cd #{dir}/a && printf '1\n3\n' | ruby -I #{lib} #{exe} init --app-path ../b --no-boot 2>&1`
+        out, status = init_in(File.join(dir, "a"), "--app-path", "../b", "--no-boot", answers: "1\n3\n")
 
-        expect($?.exitstatus).to eq(0), out
+        expect(status.exitstatus).to eq(0), out
         expect(out).to include("Created ../b/.rails-ai-context.yml", "Created/Updated ../b/.mcp.json",
                                "Config: ../b/.rails-ai-context.yml")
       end
@@ -1004,9 +1036,9 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
           File.write(File.join(dir, name, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
         end
 
-        out = `cd #{dir}/a && printf '1\n3\n' | ruby -I #{lib} #{exe} init --app-path ../b --no-boot 2>&1`
+        out, status = init_in(File.join(dir, "a"), "--app-path", "../b", "--no-boot", answers: "1\n3\n")
 
-        expect($?.exitstatus).to eq(0), out
+        expect(status.exitstatus).to eq(0), out
         expect(out).to include("rails-ai-context --app-path ../b doctor")
         expect(out).not_to match(/^  rails-ai-context doctor/)
       end
@@ -1192,7 +1224,7 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
 
         expect(status.exitstatus).to eq(0), err
         expect(JSON.parse(File.read(File.join(dir, ".mcp.json")))["mcpServers"]["rails-ai-context"])
-          .to eq("command" => "rails-ai-context", "args" => [ "serve" ])
+          .to eq(config_entry("rails-ai-context", "serve"))
         expect(err).to include("Created/Updated .mcp.json")
       end
     end
@@ -1219,9 +1251,9 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
         FileUtils.mkdir_p(File.join(dir, "CLAUDE.md"))
 
-        err = `cd #{dir} && ruby -I #{lib} #{exe} init < /dev/null 2>&1 >/dev/null`
+        _out, err, status = Open3.capture3("ruby", "-I", lib, exe, "init", chdir: dir, stdin_data: "")
 
-        expect($?.exitstatus).to eq(1), err
+        expect(status.exitstatus).to eq(1), err
         expect(err.lines.last).to start_with("Error: Is a directory")
         expect(err).not_to match(/^\s+from /)
         expect(err).not_to include("(Errno::EISDIR)")
@@ -1236,9 +1268,9 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
         FileUtils.mkdir_p(File.join(dir, "CLAUDE.md"))
 
-        err = `cd #{dir} && DEBUG=1 ruby -I #{lib} #{exe} init < /dev/null 2>&1 >/dev/null`
+        _out, err, status = Open3.capture3({ "DEBUG" => "1" }, "ruby", "-I", lib, exe, "init", chdir: dir, stdin_data: "")
 
-        expect($?.exitstatus).to eq(1), err
+        expect(status.exitstatus).to eq(1), err
         expect(err).to include("Error: Is a directory")
         expect(err).to match(%r{^\s+\S+/lib/rails_ai_context/\S+\.rb:\d+}), err
       end

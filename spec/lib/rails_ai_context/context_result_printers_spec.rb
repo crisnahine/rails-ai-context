@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "open3"
 require "rails/generators"
 require "generators/rails_ai_context/install/install_generator"
 require "rake"
@@ -78,9 +79,11 @@ RSpec.describe "not-applicable context files on every surface" do
       File.write(File.join(dir, "config", "application.rb"), "module Bare; class Application; end; end\n")
       File.write(File.join(dir, "config", "environment.rb"), "\n")
 
-      out = `ruby -I #{lib} #{exe} context --app-path #{dir} --no-boot 2>&1`
+      # An argument list, not a shell string: a temp dir with a space in it,
+      # as a Windows profile's often has, stays one argument.
+      out, status = Open3.capture2e("ruby", "-I", lib, exe, "context", "--app-path", dir, "--no-boot")
 
-      expect($?.exitstatus).to eq(0), out
+      expect(status.exitstatus).to eq(0), out
       expect(out).to include("Not applicable: #{File.join(dir, '.claude', 'rules', 'rails-models.md')} (no models)")
       expect(File.exist?(File.join(dir, ".claude", "rules", "rails-models.md"))).to be false
     end

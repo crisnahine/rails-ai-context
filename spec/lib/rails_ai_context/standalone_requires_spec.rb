@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "open3"
 
 # `require_install_files!` in exe/rails-ai-context loads a short list of files
 # without the entry file, on purpose: the install path runs before Rails and
@@ -19,6 +20,13 @@ RSpec.describe "the files the install path loads on their own" do
   let(:lib) { File.expand_path("../../../lib", __dir__) }
   let(:exe) { File.expand_path("../../../exe/rails-ai-context", __dir__) }
 
+  # A fresh Ruby given its arguments as a list: no shell reads them, so a
+  # script passes whole on Windows too, where cmd.exe knows none of the
+  # quoting a POSIX shell does.
+  def ruby(*args)
+    Open3.capture2e(RbConfig.ruby, *args)
+  end
+
   # Runs the exe's own require_install_files! rather than a copy of it, so the
   # shims it installs are the ones under test.
   def install_files_preamble
@@ -33,9 +41,9 @@ RSpec.describe "the files the install path loads on their own" do
   # contract: the list loads as a unit, with no Rails and no entry file.
   it "loads as a unit, in the order the exe requires them" do
     script = STANDALONE_FILES.map { |f| "require #{File.join("rails_ai_context", f).inspect}" }.join("\n")
-    out = `ruby -I #{lib.shellescape} -e #{script.shellescape} 2>&1`
+    out, status = ruby("-I", lib, "-e", script)
 
-    expect($?.exitstatus).to eq(0), out
+    expect(status.exitstatus).to eq(0), out
   end
 
   # Every one of these is a gem an app's bundle pins (a Rails 8 lockfile names
@@ -54,9 +62,9 @@ RSpec.describe "the files the install path loads on their own" do
       p spec.gemfile_gems, spec.ruby_versions, RailsAiContext::GemLock.boot_gemfile(root) == File.join(dir, "Gemfile")
       p $LOADED_FEATURES.grep(%r{/(prism|json|strscan|securerandom)(\\.rb|\\.so|\\.bundle)\\z})
     RUBY
-    out = `ruby -rtmpdir -rfileutils -I #{lib.shellescape} -e #{script.shellescape} 2>&1`
+    out, status = ruby("-rtmpdir", "-rfileutils", "-I", lib, "-e", script)
 
-    expect($?.exitstatus).to eq(0), out
+    expect(status.exitstatus).to eq(0), out
     expect(out.lines.map(&:strip)).to eq([ %(["rails", "pg", "rails-ai-context"]), { "Gemfile" => "3.3.6" }.inspect, "true", "[]" ])
   end
 
@@ -68,9 +76,9 @@ RSpec.describe "the files the install path loads on their own" do
       RailsAiContext.define_singleton_method(:log_warn) { |m| }
       RailsAiContext::LegacyCleanup.prompt_legacy_files([ :claude, :cursor ], root: Dir.mktmpdir)
     RUBY
-    out = `ruby -rtmpdir -I #{lib.shellescape} -e #{script.shellescape} 2>&1`
+    out, status = ruby("-rtmpdir", "-I", lib, "-e", script)
 
-    expect($?.exitstatus).to eq(0), out
+    expect(status.exitstatus).to eq(0), out
   end
 
   # A rescue body that calls a helper the install path never loads turns the
@@ -90,9 +98,9 @@ RSpec.describe "the files the install path loads on their own" do
       end
       puts RailsAiContext::InstallMode.standalone?.inspect
     RUBY
-    out = `ruby -e #{script.shellescape} 2>&1`
+    out, status = ruby("-e", script)
 
-    expect($?.exitstatus).to eq(0), out
+    expect(status.exitstatus).to eq(0), out
     expect(out.strip).to eq("false")
   end
 

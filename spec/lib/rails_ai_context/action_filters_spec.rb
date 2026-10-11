@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
-require "shellwords"
+require "open3"
 
 RSpec.describe RailsAiContext::ActionFilters do
   # The gem is required on its own by the standalone binary and by any
@@ -15,11 +15,12 @@ RSpec.describe RailsAiContext::ActionFilters do
       'puts RailsAiContext::ActionFilters.for({}, "Nope", :show).inspect'
     ].join("\n")
 
-    output = `ruby -e #{script.shellescape} 2>&1`
+    # An argument list, not a shell string: cmd.exe reads no POSIX quoting.
+    output, status = Open3.capture2e(RbConfig.ruby, "-e", script)
 
     expect(output).to include("{own: [], inherited: [], chain: [], skipped: []}")
       .or include("{:own=>[], :inherited=>[], :chain=>[], :skipped=>[]}")
-    expect($?.exitstatus).to eq(0)
+    expect(status.exitstatus).to eq(0)
   end
 
   let(:context) do
