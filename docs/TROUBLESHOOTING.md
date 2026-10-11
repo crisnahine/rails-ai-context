@@ -95,6 +95,10 @@ Codex refuses a `config.toml` that declares a server twice. An earlier install c
 
 The install now finds the server however its name is quoted and replaces its table where it stands. An entry of the gem's written as an inline table or with dotted keys is left as it is, with a warning, as is a file whose `mcp_servers` is one inline table: write it as a `[mcp_servers.rails-ai-context]` table, or delete it, and the next run keeps it current.
 
+### Codex: "stream did not contain valid UTF-8"
+
+Codex reads `config.toml` as TOML, which is UTF-8, and loads nothing from a file holding a byte that is not - one in a comment included. The install still writes its table into such a file, keeping every byte around it, and says `Codex CLI cannot read it: it is not UTF-8, which TOML is`; `doctor` fails it in the same words. Save the file as UTF-8.
+
 ### "MCP server fails to start"
 
 `rails ai:doctor` (or `rails-ai-context doctor`) checks the command each config holds and says which one cannot start and why. The usual causes:

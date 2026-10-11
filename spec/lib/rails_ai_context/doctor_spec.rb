@@ -884,6 +884,23 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
 
+    # A Latin-1 byte in a quoted server name raised inside the check, which
+    # dropped the MCP row; Codex refuses such a file outright.
+    context "when the Codex config is not UTF-8" do
+      before do
+        allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[codex])
+        write(".codex/config.toml", "[mcp_servers.\"caf\xE9\"]\ncommand = \"x\"\n\n[mcp_servers.rails-ai-context]\n" \
+                                    "command = \"rails-ai-context\"\nargs = [\"serve\"]\n".b)
+      end
+
+      it "fails it as a file Codex cannot read" do
+        expect(check.status).to eq(:fail)
+        expect(check.message).to end_with(".codex/config.toml (Codex CLI): Codex CLI cannot read it: it is not UTF-8, which TOML is")
+        expect(check.fix).to eq("Save it as UTF-8")
+      end
+    end
+
     # After `bundle remove rails-ai-context` every config still runs bundle
     # exec, which Bundler refuses: the gem is not in the bundle.
     context "when an entry runs bundle exec and the app's bundle has no rails-ai-context" do

@@ -732,6 +732,8 @@ module RailsAiContext
     # fails, since Codex refuses to read the file at all; an entry the
     # install does not rewrite works, but stays as it is.
     def toml_config_trouble(path)
+      return [ :fail, McpConfigGenerator::TOML_NOT_UTF8, "Save it as UTF-8" ] if SafeFile.read_text(path).encoding == Encoding::BINARY
+
       servers, closed = McpConfigGenerator.toml_servers(path)
       if closed && servers.any? { |server| server.sections.any? }
         return [ :fail, "#{closed}, yet it holds one, which Codex refuses to read", "Delete one of them by hand" ]
