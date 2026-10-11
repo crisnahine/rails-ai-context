@@ -273,11 +273,21 @@ module RailsAiContext
         found = erb_errors_within(nested, ERB_BLOCK, header, template_lines)
         return found.first(5) if found.any?
 
-        # What both wrappers report is the template's; the rest names a wrapper.
+        # What both wrappers report is the template's; the rest names a
+        # wrapper. An older Prism (1.4) words the two apart and places both
+        # past the template, so there what names no wrapper is the template's:
+        # an `if` left open, not the `def` it was wrapped in.
         messages = result.errors.map(&:message).uniq
-        shared = messages & nested.errors.map(&:message)
-        (shared.any? ? shared : messages).first(5).map { |message| "end of template: #{message}" }
+        nested_messages = nested.errors.map(&:message).uniq
+        shared = messages & nested_messages
+        own = (messages + nested_messages).uniq.grep_v(WRAPPER_MESSAGE)
+        picked = if shared.any? then shared elsif own.any? then own else messages end
+        picked.first(5).map { |message| "end of template: #{message}" }
       end
+
+      # What a parse says about the wrapper itself: its `def`, its braces, the
+      # input running out before them.
+      WRAPPER_MESSAGE = /`def` statement|'\{'\.\.'\}'|unexpected '\}'|end-of-input|top level context/
 
       # ERB writes its magic comments above the template's first line, and the
       # wrapper's opening lines come before those.
