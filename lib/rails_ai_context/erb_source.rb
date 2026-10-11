@@ -26,6 +26,13 @@ module RailsAiContext
       src.force_encoding("UTF-8")
     end
 
+    # How many lines `compiled` writes above the template's first: its
+    # `#coding:` comment, and `#frozen-string-literal:` when the template
+    # opens with that magic comment.
+    def compiled_header_lines(src)
+      src[/\A(?:#[^\n]*\n)*/].count("\n")
+    end
+
     # The code tag bodies, joined. Order is kept; line numbers are not.
     def tag_bodies(source)
       source.to_s.scan(TAG).flatten.reject { |body| comment?(body) }.join("\n")
