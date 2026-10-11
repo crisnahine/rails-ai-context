@@ -87,6 +87,12 @@ ls -la .mcp.json .cursor/ .vscode/ .github/
 
 The install never replaces a config it cannot write back faithfully: one that does not parse as JSON, one holding comments that writing it back would drop, or one that is not UTF-8. Trailing commas, which VS Code and OpenCode accept, are read the way they read them under json 2.9 or later; an older json refuses them, as JSON does. The line after the warning says which, and ends with the exact entry to add, as `Add {"servers":{...}} to it by hand`. Add that entry yourself, or remove the comments (and, under an older json, the trailing commas) and run the install again. `doctor` reports one that does not parse, or holds no object to merge into, a workspace's above the app included. Dropping an AI tool leaves such a file alone the same way and names the entries to remove.
 
+### Codex: "TOML parse error ... duplicate key"
+
+Codex refuses a `config.toml` that declares a server twice. An earlier install could write a second `[mcp_servers.rails-ai-context]` table beside the server spelled another way: a quoted name (`[mcp_servers."rails-ai-context"]`), an inline table under `[mcp_servers]`, or dotted keys. `doctor` names such a file. Two tables are merged into one when the install runs again; for an inline table or dotted keys, delete one of the two by hand.
+
+The install now finds the server however its name is quoted and replaces its table where it stands. An entry of the gem's written as an inline table or with dotted keys is left as it is, with a warning, as is a file whose `mcp_servers` is one inline table: write it as a `[mcp_servers.rails-ai-context]` table, or delete it, and the next run keeps it current.
+
 ### "MCP server fails to start"
 
 `rails ai:doctor` (or `rails-ai-context doctor`) checks the command each config holds and says which one cannot start and why. The usual causes:
