@@ -123,7 +123,7 @@ module RailsAiContext
       def required_db_files(content, path, run)
         literal_requires(content, File.dirname(path), run.root).flat_map do |spec, relative_to_file|
           base = relative_to_file ? File.dirname(path) : run.root
-          pattern = spec.start_with?("/") ? spec : File.join(base, spec)
+          pattern = SafePath.absolute?(spec) ? spec : File.join(base, spec)
           pattern += ".rb" unless File.extname(pattern) == ".rb"
           Dir.glob(pattern)
         end.filter_map do |candidate|
@@ -174,7 +174,7 @@ module RailsAiContext
 
           if node.name == :join && rails_root?(node.receiver) then File.join(*parts)
           elsif file_call?(node, :join) then File.join(*parts)
-          elsif file_call?(node, :expand_path) && parts.size == 2 && parts[1].start_with?("/") then File.expand_path(*parts)
+          elsif file_call?(node, :expand_path) && parts.size == 2 && SafePath.absolute?(parts[1]) then File.expand_path(*parts)
           end
         end
       end

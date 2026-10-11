@@ -755,11 +755,13 @@ RSpec.describe RailsAiContext::Doctor do
   end
 
   # A directory holding an executable of each name, to stand for a client's PATH.
+  # Windows runs a file by its extension, and PATH finds a bare name as one.
   def bin_dir_with(*names)
     dir = Dir.mktmpdir("bin")
     names.each do |name|
-      File.write(File.join(dir, name), "#!/bin/sh\n")
-      File.chmod(0o755, File.join(dir, name))
+      file = File.join(dir, Gem.win_platform? ? "#{name}.exe" : name)
+      File.write(file, "#!/bin/sh\n")
+      File.chmod(0o755, file)
     end
     dir
   end
@@ -1018,6 +1020,69 @@ RSpec.describe RailsAiContext::Doctor do
         expect(check.message).to include(".vscode/mcp.json (GitHub Copilot): `bundle exec rails-ai-context serve` cannot start - " \
                                          "`bundle` is not on the PATH its env sets")
         expect(check.fix).to include("Run `gem install rails-ai-context` for the Ruby on PATH")
+      end
+    end
+
+    # On Windows the install starts the server through `cmd /c`: a gem's
+    # executable there is a .bat file, which a client starting its server
+    # without a shell may not run. `bundle` sits beside its .bat so the
+    # lookup finds it on every platform these examples run on.
+    context "on Windows, where a gem's executables are batch files" do
+      let(:batch_bin) do
+        Dir.mktmpdir("bin").tap do |dir|
+          File.write(File.join(dir, "bundle"), "#!/bin/sh\n")
+          File.chmod(0o755, File.join(dir, "bundle"))
+          File.write(File.join(dir, "bundle.bat"), "@echo off\r\n")
+        end
+      end
+
+      before do
+        allow(RailsAiContext::McpConfigGenerator).to receive(:windows_shell?).and_return(true)
+        allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude])
+        allow(app_doctor).to receive(:client_path).and_return(batch_bin)
+      end
+
+      after { FileUtils.rm_rf(batch_bin) }
+
+      it "passes an entry that starts the command through cmd /c" do
+        write(".mcp.json", server(%w[cmd /c] + bundled))
+
+        expect(check.status).to eq(:pass)
+      end
+
+      it "warns about one that starts the batch file bare, and names the install that wraps it" do
+        write(".mcp.json", server(bundled))
+
+        expect(check.status).to eq(:warn)
+        expect(check.message).to include("`bundle exec rails-ai-context serve` may not start - `bundle` is a batch file, " \
+                                         "which a client that starts its server without a shell does not run")
+        expect(check.fix).to eq("Run `#{RailsAiContext::InstallMode.command(:install)}` to fix")
+      end
+
+      it "reads a Codex entry's command on the PATH its snapshot sets" do
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[codex])
+        write(".codex/config.toml", %([mcp_servers.rails-ai-context]\ncommand = "bundle"\nargs = ["exec", "rails-ai-context", "serve"]\n\n) +
+                                    %([mcp_servers.rails-ai-context.env]\nPATH = #{JSON.generate(batch_bin)}\n))
+
+        expect(check.status).to eq(:warn)
+        expect(check.message).to include("`bundle` is a batch file")
+      end
+
+      it "passes a bare command PATH finds as an .exe" do
+        File.write(File.join(batch_bin, "bundle.exe"), "")
+        write(".mcp.json", server(bundled))
+
+        expect(check.status).to eq(:pass)
+      end
+
+      it "fails an entry wrapped in cmd /c on any other platform, where there is no cmd" do
+        allow(RailsAiContext::McpConfigGenerator).to receive(:windows_shell?).and_return(false)
+        write(".mcp.json", server(%w[cmd /c] + bundled))
+
+        expect(check.status).to eq(:fail)
+        expect(check.message).to include("`bundle exec rails-ai-context serve` cannot start - it runs through `cmd /c`, " \
+                                         "Windows' shell, which is not here")
       end
     end
 

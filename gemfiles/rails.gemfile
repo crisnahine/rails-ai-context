@@ -39,4 +39,9 @@ group :development, :test do
   # have. This binds the test bundle only - what an app resolves is between its
   # own Rails and json.
   gem "json", "< 3" if Gem::Version.new(rails_version) < Gem::Version.new("8.1")
+
+  # Windows has no zoneinfo directory for TZInfo to read, so the test app
+  # cannot boot there without the data gem, which is why a Rails app
+  # generated on Windows carries it too.
+  gem "tzinfo-data" if Gem.win_platform?
 end

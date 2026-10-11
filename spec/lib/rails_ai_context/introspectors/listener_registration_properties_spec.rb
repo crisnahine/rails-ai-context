@@ -215,7 +215,8 @@ RSpec.describe "Listener registration properties" do
   # A listener defined outside that directory is one the properties above
   # never see. Failing here is the signal to widen the glob.
   it "finds every listener in the gem" do
-    handler = /^\s*def on_[a-z0-9_]+\b/
+    # Prism::Dispatcher calls on_<node>_enter and on_<node>_leave, nothing else.
+    handler = /^\s*def on_[a-z0-9_]+_(?:enter|leave)\b/
 
     strays = Dir.glob(File.join(lib_root, "**", "*.rb"))
       .reject { |path| path.start_with?(listeners_dir) }

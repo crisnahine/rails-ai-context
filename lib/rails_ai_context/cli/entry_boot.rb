@@ -82,23 +82,25 @@ module RailsAiContext
       end
 
       # `doctor` is the command that diagnoses this app as it was typed: with
-      # its --app-path, under bundle exec when that is how it ran.
+      # its --app-path, under bundle exec when that is how it ran. `shown` is
+      # the root as the messages name it: a typed --app-path as typed, where
+      # the cwd spells it through any symlink (/private/var on macOS).
       def self.call(root:, allow_static:, no_boot: false, allow_source_only: false, command: nil,
-                    doctor: "rails-ai-context doctor")
+                    doctor: "rails-ai-context doctor", shown: root)
         messages = []
 
         if allow_static && no_boot
-          return absent(root, messages, command: command) unless app_present?(root, allow_source_only: true)
+          return absent(root, messages, command: command, shown: shown) unless app_present?(root, allow_source_only: true)
 
           return enter_static("static mode requested with --no-boot", :requested, root, messages, doctor)
         end
 
-        return absent(root, messages, command: command) unless app_present?(root, allow_source_only: allow_source_only)
+        return absent(root, messages, command: command, shown: shown) unless app_present?(root, allow_source_only: allow_source_only)
 
         # No boot can succeed without config/environment.rb, so a source-only
         # tree answers now rather than printing a failure that was certain.
         unless app_present?(root)
-          return absent(root, messages, command: command) unless allow_static
+          return absent(root, messages, command: command, shown: shown) unless allow_static
 
           return enter_static("no config/environment.rb in the app root", :source_only, root, messages, doctor)
         end
@@ -118,7 +120,7 @@ module RailsAiContext
         end
 
         unless result.booted?
-          return boot_failed(result, root, timeout, messages) unless allow_static
+          return boot_failed(result, shown, timeout, messages) unless allow_static
 
           messages << "[rails-ai-context] App boot failed: #{result.failure_summary}"
           if result.error.is_a?(BootManager::BootTimeoutError)
@@ -156,11 +158,11 @@ module RailsAiContext
       # A tree with app source but no config/environment.rb is an app that
       # cannot boot, not a wrong directory: sending its owner to the app root
       # they are already standing in is the wrong diagnosis.
-      def self.absent(root, messages, command: nil)
+      def self.absent(root, messages, command: nil, shown: root)
         if app_present?(root, allow_source_only: true)
-          messages << "Error: #{command || 'this command'} needs a bootable app: no config/environment.rb in #{root}"
+          messages << "Error: #{command || 'this command'} needs a bootable app: no config/environment.rb in #{shown}"
         else
-          messages << "Error: No Rails app found in #{root}"
+          messages << "Error: No Rails app found in #{shown}"
           messages << NO_APP_HINT
         end
         Outcome.new(tier: :absent, reason: nil, messages: messages)

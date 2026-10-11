@@ -2,6 +2,7 @@
 
 require "concurrent"
 require "pathname"
+require_relative "safe_path"
 
 module RailsAiContext
   # Rewrites a path so it means the same thing on another machine. What is
@@ -53,7 +54,7 @@ module RailsAiContext
     def resolve(carried, root)
       carried = carried.to_s
       return nil if carried.empty?
-      return carried if carried.start_with?(File::SEPARATOR)
+      return carried if SafePath.absolute?(carried)
 
       unless carried.start_with?(GEM_MARKER)
         return root.to_s.empty? ? carried : File.join(root.to_s, carried)
@@ -84,7 +85,7 @@ module RailsAiContext
     # context is committed, so an absolute path is never carried.
     def portable(path, root)
       relative = relativize(path, root)
-      relative unless relative.start_with?(File::SEPARATOR)
+      relative unless SafePath.absolute?(relative)
     end
 
     # For free text such as an exception message, which names a file by its

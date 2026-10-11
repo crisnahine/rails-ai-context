@@ -193,6 +193,27 @@ RSpec.describe RailsAiContext::SafePath do
     end
   end
 
+  # Windows names a place from outside the folder it is joined to with a
+  # drive or a leading backslash; anywhere else those are file names.
+  describe ".absolute?" do
+    let(:windows) { !File::ALT_SEPARATOR.nil? }
+
+    it "knows a path that names its place whatever folder it is joined to" do
+      expect(described_class.absolute?("/etc/passwd")).to be(true)
+      expect(described_class.absolute?("app/models/user.rb")).to be(false)
+      expect(described_class.absolute?("")).to be(false)
+      [ "C:/Windows/win.ini", "C:\\Windows\\win.ini", "\\\\server\\share\\x", "\\x", "C:x" ].each do |path|
+        expect(described_class.absolute?(path)).to be(windows), path
+      end
+    end
+
+    it "refuses one as a traversal, before any stat, and reads it as missing where Windows refuses the name" do
+      expect(described_class.traversal?("/etc/passwd")).to be(true)
+      expect(described_class.traversal?("C:/Windows/win.ini")).to be(windows)
+      expect(locate("C:/Windows/win.ini").refusal).to eq(windows ? :traversal : :missing)
+    end
+  end
+
   describe ".sensitive?" do
     it "matches the configured patterns on the whole path and on the basename, case-insensitively" do
       expect(described_class.sensitive?("config/master.key")).to be true
@@ -349,9 +370,15 @@ RSpec.describe RailsAiContext::SafePath do
     # UTF-8 name below, and on 3.1 for any path, whose delete_prefix left a
     # broken string whole.
     it "spells a place under a folder whose name is not UTF-8, there yet or not" do
+      skip "Windows names files in UTF-16, so no name on disk is bytes that are not UTF-8" if Gem.win_platform?
+
       Dir.mktmpdir do |dir|
         latin = File.join(File.realpath(dir).b, "caf\xE9".b)
-        Dir.mkdir(latin)
+        begin
+          Dir.mkdir(latin)
+        rescue Errno::EILSEQ
+          skip "this filesystem refuses a name that is not UTF-8 (APFS)"
+        end
         broken = latin.dup.force_encoding(Encoding::UTF_8)
 
         expect(described_class.canonical(broken).b).to eq(latin)

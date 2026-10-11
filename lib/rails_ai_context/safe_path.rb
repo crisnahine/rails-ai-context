@@ -55,7 +55,8 @@ module RailsAiContext
       return refuse(:too_large, realpath: real, relative: root_relative) if File.size(real) > limit
 
       Resolution.new(realpath: real, relative: root_relative, refusal: nil)
-    rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP, Errno::ENAMETOOLONG, Errno::ENOTDIR
+    # EINVAL: Windows refuses a name holding `:`, `<`, `|` and the like.
+    rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP, Errno::ENAMETOOLONG, Errno::ENOTDIR, Errno::EINVAL
       refuse(:missing)
     end
 
@@ -134,7 +135,21 @@ module RailsAiContext
     # that resolve a directory rather than a file and so cannot use `locate`.
     def traversal?(relative)
       relative = relative.to_s
-      relative.include?("..") || relative.start_with?("/") || relative.include?("\0")
+      relative.include?("\0") || relative.include?("..") || absolute?(relative)
+    end
+
+    # Whether a path names its place whatever directory it is joined to:
+    # `/x` everywhere, and on Windows `C:/x`, `C:\x` and `\\server\share`,
+    # which File.absolute_path? answers there, as well as `\x` (the current
+    # drive's root) and `C:x` (that drive's current directory). A NUL byte
+    # names no file at all, and File.absolute_path? raises on one.
+    def absolute?(path)
+      path = path.to_s
+      return true if path.start_with?("/")
+      return false if path.include?("\0")
+      return true if File.absolute_path?(path)
+
+      !File::ALT_SEPARATOR.nil? && path.match?(/\A(?:\\|[A-Za-z]:)/)
     end
 
     PLACEHOLDER_SUFFIXES = %w[.example .sample .template .dist].freeze

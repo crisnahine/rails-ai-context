@@ -129,6 +129,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **On Windows the MCP configs start the server through `cmd /c`, and
+  `doctor` reads a config for the platform it runs on.** A gem's executables
+  on Windows are batch files (`bundle.bat`, `rails-ai-context.bat`), which
+  Claude Code, Codex and the other clients that start their server without a
+  shell do not run, so no entry the install wrote started there. Each entry
+  is now `cmd /c bundle exec rails-ai-context serve` (`cmd /c
+  rails-ai-context serve` standalone) on Windows, the way Claude Code's own
+  documentation starts such a server, and stays as it was on macOS and
+  Linux. A config may be committed, so `doctor` fails a `cmd /c` entry on
+  macOS and Linux, where there is no `cmd`, and on Windows warns about a
+  bare entry whose command PATH finds only as a `.bat` or `.cmd`; running
+  the install again rewrites either for the machine it runs on. A team on
+  both keeps the MCP configs out of git, or runs the install on each machine.
+- **`doctor` and `search_code` find ripgrep on Windows**, which has no
+  `which` to ask, so ripgrep read as missing there and every search took the
+  slower Ruby path. PATH is searched in Ruby now, with Windows' `PATHEXT`
+  extensions, and `doctor`'s fix names `winget install
+  BurntSushi.ripgrep.MSVC`. ripgrep is told to separate paths with `/`, since
+  on Windows it joins the files it finds with backslashes, which neither the
+  app root nor the sensitive patterns that keep a file out of the answer
+  (`config/database.yml`) would match.
+- **A Windows path that starts with a drive is read as absolute.** Every
+  check for an absolute path looked for a leading `/`, so on Windows
+  `C:/...` passed as relative: the context the app commits could carry a
+  path under the developer's home directory, an engine or code root outside
+  the app was looked for inside it, and a tool handed `C:/Windows/win.ini`
+  did not refuse it as the absolute path it is.
+- **"No Rails app found in" names an `--app-path` as it was typed**, as the
+  hint under it does, where it named the folder through any symlink on the
+  way (`/private/var/...` for `/var/...` on macOS). The warning that an app
+  boots against another bundle under `bundle exec` is printed only where
+  there is an app to boot.
 - **A stdio server whose app hangs while booting answers its client within
   about 21 seconds, from the static tier.** A stdio client waits about 30
   seconds for `initialize` (Claude Code, the MCP Inspector) and `serve` gave

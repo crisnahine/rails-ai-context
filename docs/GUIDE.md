@@ -1156,6 +1156,8 @@ The install generator (or `rails-ai-context init`) creates per-tool MCP config f
 
 Each file is merge-safe - only the `rails-ai-context` entries are managed, other servers are preserved. When the gem is not in the app's `Gemfile.lock` (standalone install) the entry runs `rails-ai-context serve` with no `bundle exec`.
 
+On Windows every entry starts the server through `cmd /c`: `"command": "cmd", "args": ["/c", "bundle", "exec", "rails-ai-context", "serve"]` (OpenCode: `"command": ["cmd", "/c", ...]`; Codex: `command = "cmd"`). A gem's executables there are batch files (`bundle.bat`, `rails-ai-context.bat`), which Claude Code, Codex and the other clients that start a server without a shell do not run. An entry written on Windows does not start on macOS or Linux, and one written there may not start on Windows: `doctor` names either, and running the install again rewrites it for the machine it runs on. A team on both keeps the MCP configs out of git, or runs the install on each machine.
+
 A folder of apps gets one entry per app instead, `rails-ai-context-<app folder>`, each pointed at its app with `--app-path` and announcing its app first through `RAILS_AI_CONTEXT_SERVER_NAME`; see [`init`](CLI.md#init-standalone-only) for the shape each AI tool gets.
 
 **Example: `.mcp.json` (Claude Code)**
@@ -1195,6 +1197,9 @@ claude mcp add rails-ai-context -- bundle exec rails ai:serve
 
 # Standalone
 claude mcp add rails-ai-context -- rails-ai-context serve
+
+# On Windows, through cmd /c
+claude mcp add rails-ai-context -- cmd /c bundle exec rails-ai-context serve
 ```
 
 ### Claude Desktop
@@ -1213,7 +1218,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
-Or for standalone: replace `"command": "bundle"` / `"args": ["exec", "rails-ai-context", "serve"]` with `"command": "rails-ai-context"` / `"args": ["serve"]`.
+Or for standalone: replace `"command": "bundle"` / `"args": ["exec", "rails-ai-context", "serve"]` with `"command": "rails-ai-context"` / `"args": ["serve"]`. On Windows, start either through `cmd /c`: `"command": "cmd"`, with `"/c"` ahead of the rest of the args.
 
 ### Cursor
 

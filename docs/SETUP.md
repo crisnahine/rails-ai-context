@@ -83,6 +83,8 @@ If you need to configure manually, create `.mcp.json`:
 
 This is what the generator writes for an in-Gemfile install. A standalone install has no `bundle exec`: the command is `rails-ai-context` and the args are `["serve"]`. The same goes for the other tools below.
 
+On Windows the command is `cmd` and `"/c"` goes ahead of the args (`["/c", "bundle", "exec", "rails-ai-context", "serve"]`): a gem's executables there are batch files, which a client that starts its server without a shell does not run. The generator writes that form on Windows, and `doctor` names an entry written for the other platform; see [GUIDE.md](GUIDE.md#mcp-server-setup) for teams on both.
+
 ### Split rules with `paths:` frontmatter
 
 Claude Code loads `.claude/rules/` files conditionally based on YAML frontmatter:

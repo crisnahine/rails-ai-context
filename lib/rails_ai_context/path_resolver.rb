@@ -247,7 +247,7 @@ module RailsAiContext
         relative = RunCache.fetch([ :dirs_for, root_key(root), kind, extra ]) do
           resolve_dirs(root, kind).map { |dir| dir.start_with?("#{root}/") ? dir.delete_prefix("#{root}/") : dir }
         end
-        relative.map { |dir| dir.start_with?(File::SEPARATOR) ? dir : File.join(root, dir) }.freeze
+        relative.map { |dir| SafePath.absolute?(dir) ? dir : File.join(root, dir) }.freeze
       end
     end
 

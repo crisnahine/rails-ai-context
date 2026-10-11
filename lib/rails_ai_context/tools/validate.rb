@@ -152,7 +152,7 @@ module RailsAiContext
       # the wrong mistake.
       private_class_method def self.traversal_reason(file)
         if file.include?("\0") then "it contains a NUL byte"
-        elsif file.start_with?("/") then "an absolute path; name it relative to the Rails root"
+        elsif RailsAiContext::SafePath.absolute?(file) then "an absolute path; name it relative to the Rails root"
         else "it contains '..'; name it relative to the Rails root without '..'"
         end
       end

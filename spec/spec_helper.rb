@@ -8,6 +8,14 @@ end
 
 require "rails_ai_context"
 
+# A commit starts git's auto maintenance, which runs in the background from
+# git 2.47 on and writes under .git while the spec that committed removes the
+# repository (ENOENT on .git/objects/maintenance.lock). Every git the suite
+# starts inherits this.
+ENV["GIT_CONFIG_COUNT"] = "1"
+ENV["GIT_CONFIG_KEY_0"] = "maintenance.auto"
+ENV["GIT_CONFIG_VALUE_0"] = "false"
+
 Dir[File.join(__dir__, "support", "**", "*.rb")].sort.each { |f| require f }
 
 RSpec.configure do |config|
@@ -50,6 +58,12 @@ RSpec.configure do |config|
     RailsAiContext::Tools::BaseTool::FILE_CHECK.merge!(snapshot: nil, running: nil, finished: nil, stale_code: nil)
     RailsAiContext::CodeReloader::LOADED_CODE[:mutex].synchronize { RailsAiContext::CodeReloader::LOADED_CODE[:files] = nil }
   end
+
+  # On Windows the MCP configs start the server through `cmd /c`. The specs
+  # that write and read configs expect the command line every other platform
+  # writes, wherever they run; the Windows form has examples of its own
+  # (mcp_config_generator_windows_spec.rb), which turn this back on.
+  config.before(:each) { allow(RailsAiContext::McpConfigGenerator).to receive(:windows_shell?).and_return(false) }
 
   # Skip e2e specs unless explicitly requested via E2E=1.
   # E2E specs spawn fresh Rails apps per install path and take minutes

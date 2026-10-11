@@ -106,6 +106,8 @@ Codex reads `config.toml` as TOML, which is UTF-8, and loads nothing from a file
 - `rails-ai-context is not currently included in the bundle`: the config runs `bundle exec rails-ai-context serve`, but the gem left the app's Gemfile. A standalone install runs `rails-ai-context serve`: run `rails-ai-context init` to rewrite the configs.
 - The config runs `rails-ai-context serve` while the app's Gemfile.lock carries the gem: it needs a copy installed outside the bundle as well, which hands the run to the bundle's. Run `rails generate rails_ai_context:install` to write `bundle exec rails-ai-context serve`.
 - `can't find executable rails-ai-context for gem rails-ai-context`: the bundle's copy of the gem lists no executable, as a `path:` copy of 5.32.2 or earlier outside a git checkout does. Point the Gemfile at a git checkout or a release.
+- On Windows, a config that runs `bundle` or `rails-ai-context` itself rather than through `cmd /c`: those are batch files there, which Claude Code, Codex and the other clients that start a server without a shell do not run (`doctor` warns about it). Run the install again; on Windows it writes `cmd /c bundle exec rails-ai-context serve`.
+- On macOS or Linux, a config that runs `cmd /c ...`: it was written on Windows, and there is no `cmd` here (`doctor` fails it). Run the install again on this machine, and keep the MCP configs out of git if the team works on both.
 
 Check for Bundler/Ruby path issues:
 
@@ -289,6 +291,9 @@ brew install ripgrep
 
 # Ubuntu
 apt install ripgrep
+
+# Windows
+winget install BurntSushi.ripgrep.MSVC
 ```
 
 The gem falls back to Ruby regex if ripgrep isn't available. Search still works, just slower on large codebases.

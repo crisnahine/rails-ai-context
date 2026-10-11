@@ -394,10 +394,11 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
         expect(File.read(mono_hook)).to include("for app in apps/web apps/admin; do\n")
       end
 
+      # As git names its top level: through any symlink in the temp dir (macOS).
       it "names the repository the hook goes into" do
         install_for("apps/web")
 
-        expect(generator).to have_received(:ask).with(a_string_including("in #{mono}"))
+        expect(generator).to have_received(:ask).with(a_string_including("in #{File.realpath(mono)}"))
       end
 
       # An untouched hook in the other install form is still the gem's.
