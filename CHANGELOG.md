@@ -157,6 +157,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bundle.** It runs the gem's own `bin/brakeman` with the app's Ruby, where
   the scan produced no report while `doctor` passed it. `doctor` runs that
   script's `--version` the same way and warns when it does not answer.
+- **`rails_query` runs a read-only query that names a write keyword only
+  inside a string.** `WHERE title LIKE '%update%'`, `= 'put into box'` and
+  the `replace()` string function were refused as writes; a keyword or
+  `INTO` is now judged outside string literals, and `SELECT ... INTO`,
+  `REPLACE INTO`, `INTO OUTFILE` and writes inside a CTE are still refused.
+- **`rails_query` runs `SHOW CREATE TABLE` and `SHOW CREATE VIEW`** on
+  MySQL and MariaDB, with credentials in the definition redacted.
+  `SHOW CREATE USER`, `SHOW CREATE DATABASE` and `SHOW GRANTS` stay refused.
 - **The install finds a Codex server however its name is spelled, and never
   declares it twice.** A quoted table (`[mcp_servers."rails-ai-context"]`),
   an inline table or dotted keys went unseen: a second table was appended,
