@@ -64,6 +64,27 @@ Source: `.github/workflows/unit-matrix.yml`, which both `ci.yml` and
   a second run inside the matrix (Ruby 3.3 / Rails 8.0), since `release.yml`
   has no `lint` job of its own.
 
+### Operating systems
+
+Linux, macOS and Windows. CI runs the unit suite on Linux for every cell
+above, and on macOS (Ruby 3.4 / Rails 8.1 and Ruby 3.1 / Rails 7.0) and
+Windows (Ruby 3.4 / Rails 8.1). The E2E harness, which builds real apps and
+drives the CLI, the rake tasks and both transports, runs on Linux for six
+Ruby / Rails pairs and on macOS and Windows for Ruby 3.4 / Rails 8.1. A
+release waits for all of them.
+
+On Windows:
+
+- The MCP configs start the server through `cmd /c`, since a gem's
+  executables there are batch files that a client starting its server
+  without a shell does not run. See [GUIDE.md](GUIDE.md#mcp-server-setup)
+  for teams on both Windows and macOS or Linux.
+- `rails_query` on SQLite runs without its time limit: the limit runs the
+  query in a forked child, and Windows has no `fork`. The answer says so.
+- The pre-commit hook runs under the sh that Git for Windows runs hooks with.
+- ripgrep installs with `winget install BurntSushi.ripgrep.MSVC`; without it
+  `rails_search_code` takes the slower Ruby path.
+
 ### Rails 9
 
 Not supported, and the two install paths fail differently:

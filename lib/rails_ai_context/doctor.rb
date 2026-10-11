@@ -885,8 +885,17 @@ module RailsAiContext
     # The PATH a client hands the server it starts: the shell's, before
     # Bundler put its own directories ahead of it.
     def client_path
+      original_variable("PATH").to_s
+    end
+
+    # A variable as this process had it before Bundler changed any. The copy
+    # is a plain Hash, and Windows keeps its names in any case: PATH is
+    # `Path` there.
+    def original_variable(name)
       env = defined?(Bundler) && Bundler.respond_to?(:original_env) ? Bundler.original_env : ENV.to_h
-      env["PATH"].to_s
+      return env[name] if env.key?(name) || !Gem.win_platform?
+
+      env.find { |key, _| key.casecmp?(name) }&.last
     end
 
     # Whether, on Windows, an entry runs a batch file without the `cmd /c`
@@ -1049,8 +1058,7 @@ module RailsAiContext
     # The GEM_PATH this environment has, before Bundler changed it: what init
     # would save in a snapshot now.
     def current_gem_path
-      env = defined?(Bundler) && Bundler.respond_to?(:original_env) ? Bundler.original_env : ENV.to_h
-      env["GEM_PATH"].to_s.split(File::PATH_SEPARATOR).reject(&:empty?)
+      original_variable("GEM_PATH").to_s.split(File::PATH_SEPARATOR).reject(&:empty?)
     end
 
     # Codex starts a server with the PATH its snapshot saved in place of its
