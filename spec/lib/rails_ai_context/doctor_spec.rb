@@ -499,11 +499,36 @@ RSpec.describe RailsAiContext::Doctor do
           TOML
         end
 
+        # The GEM_PATH init would save now: this shell's, before Bundler.
+        def shell_gem_path(value)
+          allow(Bundler).to receive(:original_env).and_return(Bundler.original_env.merge("GEM_PATH" => value).compact)
+        end
+
         it "warns when a directory on it no longer exists" do
+          shell_gem_path(gems)
           write_gem_path("/nonexistent/ruby/3.3.5/gems:#{gems}")
 
           expect(check).to have_attributes(status: :warn,
                                            message: "Codex MCP env snapshot is stale - GEM_PATH names /nonexistent/ruby/3.3.5/gems, which no longer exists")
+        end
+
+        # RubyGems passes over a GEM_PATH directory that is not there, and init
+        # saves this shell's GEM_PATH again: a warning on it was one the fix
+        # could never clear.
+        it "passes over a missing directory this shell's GEM_PATH names too" do
+          shell_gem_path("/nonexistent/.gem/ruby/3.3.0:#{gems}")
+          write_gem_path("/nonexistent/.gem/ruby/3.3.0:#{gems}")
+
+          expect(check).to have_attributes(status: :pass,
+                                           message: "Codex env snapshot in .codex/config.toml is current: its PATH reaches `rails-ai-context`")
+        end
+
+        it "still warns about a missing directory this shell no longer names" do
+          shell_gem_path(nil)
+          write_gem_path("/nonexistent/.gem/ruby/3.3.0:#{gems}")
+
+          expect(check).to have_attributes(status: :warn,
+                                           message: "Codex MCP env snapshot is stale - GEM_PATH names /nonexistent/.gem/ruby/3.3.0, which no longer exists")
         end
 
         it "passes when every directory on it exists" do

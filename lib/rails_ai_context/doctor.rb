@@ -993,9 +993,12 @@ module RailsAiContext
           message: "Codex MCP env snapshot is stale - GEM_HOME #{gone} no longer exists", fix: fix)
       end
 
-      # So is each directory its GEM_PATH lists, which the generator saves too.
+      # So is a directory its GEM_PATH lists, which the generator saves too -
+      # unless this environment's GEM_PATH lists it as well: RubyGems passes
+      # over a directory that is not there, and init would save it again.
       gem_path = snapshots.flat_map { |entry| entry[:env]["GEM_PATH"].to_s.split(File::PATH_SEPARATOR) }.reject(&:empty?).uniq
-      if (gone = gem_path.find { |dir| !Dir.exist?(dir) })
+      missing = gem_path.reject { |dir| Dir.exist?(dir) }
+      if (gone = (missing - current_gem_path).first)
         return Check.new(name: "Codex env snapshot", status: :warn,
           message: "Codex MCP env snapshot is stale - GEM_PATH names #{gone}, which no longer exists", fix: fix)
       end
@@ -1004,10 +1007,17 @@ module RailsAiContext
       found = []
       found << "its PATH reaches #{reached.map { |command| "`#{command}`" }.join(', ')}" if reached.any?
       found << "GEM_HOME (#{gem_homes.first}) exists" if gem_homes.any?
-      found << "every directory on its GEM_PATH exists" if gem_path.any?
+      found << "every directory on its GEM_PATH exists" if gem_path.any? && missing.empty?
       sentence = found.size > 2 ? "#{found[0..-2].join(', ')}, and #{found.last}" : found.join(", and ")
       Check.new(name: "Codex env snapshot", status: :pass,
-        message: "Codex env snapshot in #{shown} is current: #{sentence}", fix: nil)
+        message: "Codex env snapshot in #{shown} is current#{": #{sentence}" if found.any?}", fix: nil)
+    end
+
+    # The GEM_PATH this environment has, before Bundler changed it: what init
+    # would save in a snapshot now.
+    def current_gem_path
+      env = defined?(Bundler) && Bundler.respond_to?(:original_env) ? Bundler.original_env : ENV.to_h
+      env["GEM_PATH"].to_s.split(File::PATH_SEPARATOR).reject(&:empty?)
     end
 
     # Codex starts a server with the PATH its snapshot saved in place of its
