@@ -497,6 +497,64 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
       end
     end
 
+    # Every other tool repeats an argument shortened; these came back whole,
+    # a 100,000-character answer for a 100,000-character name.
+    describe "a long argument the answer repeats" do
+      let(:long) { "Q" * 100_000 }
+      let(:shortened) { "#{'Q' * 80}... (100000 characters)" }
+
+      def scan_outside
+        allow(described_class).to receive(:load_brakeman).and_return(false)
+        allow(described_class).to receive(:brakeman_on_machine).and_return("8.1.0")
+        allow(described_class).to receive(:run_brakeman_unbundled)
+          .and_return([ { "scan_info" => { "checks_performed" => %w[SQL] }, "warnings" => [] }, nil ])
+      end
+
+      it "shortens a file it did not find" do
+        scan_outside
+        text = described_class.call(files: [ long ]).content.first[:text]
+
+        expect(text).to eq("File(s) not found: #{shortened}. Provide paths relative to Rails root.")
+      end
+
+      it "shortens a file it names in a clean answer" do
+        scan_outside
+        text = described_class.call(files: [ "app/models/user.rb", long ]).content.first[:text]
+
+        expect(text).to start_with("No security warnings found in app/models/user.rb, #{shortened}. (1 check run: SQL)")
+        expect(text.length).to be < 400
+      end
+
+      it "shortens a check brakeman says it cannot find" do
+        allow(described_class).to receive(:load_brakeman).and_return(true)
+        stub_const("Brakeman", Module.new { def self.run(_options = {}); end })
+        allow(Brakeman).to receive(:run) do |options|
+          raise "Could not find specified check: #{options[:run_checks].map { |check| "`#{check}`" }.join(', ')}"
+        end
+
+        text = described_class.call(checks: [ long ]).content.first[:text]
+
+        expect(text).to eq("Brakeman scan failed: Could not find specified check: `#{shortened}`")
+      end
+
+      # The command line reads a list at its commas and prefixes `Check`, so
+      # brakeman names each part of a name that holds one.
+      it "shortens the checks the outside run says it cannot find" do
+        allow(described_class).to receive(:load_brakeman).and_return(false)
+        allow(described_class).to receive(:brakeman_on_machine).and_return("8.1.0")
+        allow(described_class).to receive(:run_brakeman_unbundled) do |_confidence, checks|
+          parts = checks.join(",").split(",").map { |part| "`Check#{part}`" }
+          [ nil, "Could not find specified checks: #{parts.join(', ')}" ]
+        end
+
+        text = described_class.call(checks: [ "#{'R' * 50_000},#{'S' * 50_000}" ]).content.first[:text]
+
+        expect(text).to include("It said: `Could not find specified checks: " \
+                                "`Check#{'R' * 80}... (50000 characters)`, `Check#{'S' * 80}... (50000 characters)``")
+        expect(text.length).to be < 1_000
+      end
+    end
+
     context "when brakeman is nowhere on the machine" do
       before do
         described_class.instance_variable_set(:@brakeman_available, nil)

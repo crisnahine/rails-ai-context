@@ -145,6 +145,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`rails_security_scan` echoes a long file or check name shortened.** A
+  100,000-character `files` entry came back whole in "File(s) not found"
+  and in the scope of a clean answer, and a long `checks` entry came back
+  whole in brakeman's "Could not find specified check", from the scan in
+  this process and the one outside the bundle alike. Each now shows its
+  first 80 characters and its length.
 - **On Windows the MCP configs start the server through `cmd /c`, and
   `doctor` reads a config for the platform it runs on.** A gem's executables
   on Windows are batch files (`bundle.bat`, `rails-ai-context.bat`), which
