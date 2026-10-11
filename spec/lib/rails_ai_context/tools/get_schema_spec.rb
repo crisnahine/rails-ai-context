@@ -479,6 +479,20 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
 
       expect(text).to include("`index_work_packages_on_schedule_manually` on (schedule_manually) where schedule_manually")
     end
+
+    it "keeps where: on the index a t.references declares" do
+      text = replayed_table("assignments", <<~RUBY)
+        class CreateAssignments < ActiveRecord::Migration[8.0]
+          def change
+            create_table :assignments do |t|
+              t.references :cloned_item, index: { where: "cloned_item_id IS NOT NULL" }
+            end
+          end
+        end
+      RUBY
+
+      expect(text).to include("`index_assignments_on_cloned_item_id` on (cloned_item_id) where cloned_item_id IS NOT NULL")
+    end
   end
 
   describe ".call with no params" do

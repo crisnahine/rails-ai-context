@@ -155,7 +155,7 @@ module RailsAiContext
         polymorphic_name = options[:polymorphic] && !(version && (version <=> [ 6, 0 ]) <= 0)
         index_name = index_opts[:name]&.to_s ||
                      (polymorphic_name ? "index_#{table}_on_#{name}" : default_index_name(table, names))
-        { columns: columns, index: { name: index_name, columns: names, unique: index_opts[:unique] == true } }
+        { columns: columns, index: index_entry(index_name, names, index_opts) }
       end
 
       # A reference declares the foreign key column, not a column of its own name.
