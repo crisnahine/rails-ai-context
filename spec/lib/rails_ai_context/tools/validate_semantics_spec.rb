@@ -61,6 +61,76 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
     end
   end
 
+  # A view calls its helpers bare, and three kinds read as missing routes: a
+  # helper the app writes itself, a `direct` route, and the routes Rails'
+  # own engines draw (Active Storage's rails_blob_url).
+  describe "a *_path or *_url call that is no route of the app's table" do
+    let(:view) do
+      <<~ERB
+        <%= image_tag avatar_url(@user) %>
+        <%= link_to "Back", back_path %>
+        <%= link_to "Section", current_section_path %>
+        <%= link_to "Docs", docs_url %>
+        <%= link_to "Blob", rails_blob_url(@post.photo) %>
+        <%= link_to "Bogus", bogus_things_path %>
+      ERB
+    end
+
+    def warnings_for(app: nil)
+      Dir.mktmpdir do |root|
+        {
+          "app/helpers/application_helper.rb" => "module ApplicationHelper\n  def avatar_url(user) = user.to_s\n  private def back_path = \"/\"\nend\n",
+          "app/controllers/application_controller.rb" => "class ApplicationController < ActionController::Base\n  helper_method :current_section_path, :signed_in?\nend\n",
+          "config/routes.rb" => "Rails.application.routes.draw do\n  resources :posts\n  direct(:docs) { \"https://docs.example.com\" }\nend\n",
+          "app/views/posts/show.html.erb" => view
+        }.each do |relative, body|
+          FileUtils.mkdir_p(File.dirname(File.join(root, relative)))
+          File.write(File.join(root, relative), body)
+        end
+        allow(described_class).to receive(:rails_app).and_return(app || double(root: Pathname.new(root)))
+        allow(app).to receive(:root).and_return(Pathname.new(root)) if app
+        allow(described_class).to receive(:cached_context).and_return({
+          routes: { by_controller: { "posts" => [ { verb: "GET", action: "show", name: "post" } ] } },
+          schema: { tables: {} }, models: {}
+        })
+        file = "app/views/posts/show.html.erb"
+        return described_class.check_rails_semantics(file, File.join(root, file)).join("\n")
+      end
+    end
+
+    it "passes over a helper the app writes, one a controller hands the views, and a direct route" do
+      text = warnings_for
+
+      %w[avatar_url back_path current_section_path docs_url].each { |helper| expect(text).not_to include(helper) }
+      expect(text).to include("bogus_things_path - route helper not found")
+    end
+
+    it "asks the booted app's url_helpers, which hold what Rails' engines draw" do
+      helpers = Module.new { def rails_blob_url(*); end }
+      app = double(routes: double(url_helpers: helpers), reload_routes_unless_loaded: true)
+
+      text = warnings_for(app: app)
+
+      expect(text).not_to include("rails_blob_url")
+      expect(text).to include("bogus_things_path - route helper not found")
+    end
+
+    it "passes over a rails_* helper statically, where Rails' engines' routes are not read" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+
+      text = warnings_for
+
+      expect(text).not_to include("rails_blob_url")
+      expect(text).to include("bogus_things_path - route helper not found")
+    end
+
+    it "still flags a rails_* helper the booted app does not define" do
+      app = double(routes: double(url_helpers: Module.new), reload_routes_unless_loaded: true)
+
+      expect(warnings_for(app: app)).to include("rails_blob_url - route helper not found")
+    end
+  end
+
   # OFN's ApplicationController includes Pagy::Backend, a gem module this
   # check never reads, so it cannot say the gem defines no `show`.
   describe "a routed action no source the app holds defines" do

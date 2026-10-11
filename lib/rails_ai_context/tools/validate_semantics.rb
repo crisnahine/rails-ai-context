@@ -366,30 +366,87 @@ module RailsAiContext
       ASSET_HELPER_PREFIXES = %w[image asset font stylesheet javascript audio video file compute_asset auto_discovery_link favicon].freeze
       DEVISE_HELPER_NAMES = %w[session registration password confirmation unlock omniauth_callback user_session user_registration user_password user_confirmation user_unlock].freeze
 
+      # Rails' own engines name every route they draw `rails_*` (Active
+      # Storage's rails_blob_url, Action Mailbox's rails_conductor_*), and a
+      # static read of the app's route files sees none of them.
+      FRAMEWORK_ROUTE_HELPER = /\A(?:(?:new|edit|update)_)?rails_\w+_(?:path|url)\z/
+
       # Shared by the AST and regex passes: the route names this app defines,
-      # and the helper-shaped columns that are readers rather than routes.
+      # and the helper-shaped names that are methods rather than routes - a
+      # column's reader, or a helper the app writes itself.
       private_class_method def self.route_helper_scope(file, context)
         routes = Payload.section(context, :routes)
         return nil unless routes && routes[:by_controller]
         valid_names = build_route_name_set(RouteCoverage.all_by_controller(routes))
         return nil if valid_names.empty?
 
-        [ valid_names, helper_shaped_columns(file, context) ]
+        [ valid_names.merge(direct_route_names), helper_shaped_columns(file, context) | app_helper_methods ]
       end
 
-      private_class_method def self.route_helper_warning(helper, valid_names, columns)
-        return nil if columns.include?(helper)
+      private_class_method def self.route_helper_warning(helper, valid_names, methods)
+        return nil if methods.include?(helper)
 
         name = helper.sub(/_(path|url)\z/, "")
         return nil if ASSET_HELPER_PREFIXES.any? { |p| name.start_with?(p) }
         return nil if DEVISE_HELPER_NAMES.include?(name)
         return nil if %w[edit new polymorphic].include?(name)
+        return nil if valid_names.include?(name) || url_helper?(helper)
 
-        "#{helper} - route helper not found" unless valid_names.include?(name)
+        "#{helper} - route helper not found"
+      end
+
+      # Booted, the app's url_helpers answer for every helper its routes
+      # define, a `direct` route and the ones Rails' engines draw included;
+      # Rails 8 draws routes on first use, so they are drawn first.
+      private_class_method def self.url_helper?(helper)
+        return helper.match?(FRAMEWORK_ROUTE_HELPER) if RailsAiContext.static_tier?
+
+        app = rails_app
+        return false unless app.respond_to?(:routes)
+
+        app.reload_routes_unless_loaded if app.respond_to?(:reload_routes_unless_loaded)
+        app.routes.url_helpers.method_defined?(helper)
+      rescue StandardError => e
+        RailsAiContext.debug_fail(e, false, label: "url_helper?")
+      end
+
+      # `direct(:docs)` defines docs_url and docs_path and draws no route, so
+      # no row of the route table names it.
+      private_class_method def self.direct_route_names
+        root = rails_app.root.to_s
+        RunCache.fetch([ :direct_route_names, root ]) do
+          app_sources(root, "config/routes.rb", "config/routes/**/*.rb").each_with_object(Set.new) do |source, names|
+            source.scan(/^\s*direct\s*\(?\s*[:"'](\w+)/) { |(name)| names << name }
+          end
+        end
+      end
+
+      # A `*_path` or `*_url` method written in app/helpers, or a controller
+      # method helper_method hands to the views, is a method a view calls
+      # bare, not a route.
+      private_class_method def self.app_helper_methods
+        root = rails_app.root.to_s
+        RunCache.fetch([ :app_helper_methods, root ]) do
+          names = Set.new
+          app_sources(root, "app/helpers/**/*.rb").each { |source| names.merge(local_route_like_method_names(source)) }
+          app_sources(root, "app/controllers/**/*.rb").each do |source|
+            source.scan(/\bhelper_method\b([^\n]*)/) { |(args)| names.merge(args.scan(/:(\w+_(?:path|url))\b/).flatten) }
+          end
+          names
+        end
+      end
+
+      # The sources the globs name under the app root, skipping a file a
+      # symlink carries out of it.
+      private_class_method def self.app_sources(root, *patterns)
+        patterns.flat_map { |pattern| Dir.glob(pattern, base: root) }.uniq.filter_map do |relative|
+          path = File.join(root, relative)
+          RailsAiContext::SafeFile.read(path) unless RailsAiContext::PathResolver.linked_out?(path, root)
+        end
       end
 
       private_class_method def self.check_route_helpers_ast(file, visitor, context)
-        valid_names, columns = route_helper_scope(file, context)
+        valid_names, methods = route_helper_scope(file, context)
         return [] unless valid_names
 
         seen = Set.new
@@ -399,13 +456,13 @@ module RailsAiContext
           seen << helper
           next if visitor.local_route_method_defined?(helper, call[:scope], call[:method_kind])
 
-          route_helper_warning(helper, valid_names, columns)
+          route_helper_warning(helper, valid_names, methods)
         end
       end
 
       # Regex fallback
       private_class_method def self.check_route_helpers_regex(file, content, context)
-        valid_names, columns = route_helper_scope(file, context)
+        valid_names, methods = route_helper_scope(file, context)
         return [] unless valid_names
 
         seen = Set.new
@@ -416,7 +473,7 @@ module RailsAiContext
           seen << helper
           next if local_method_names.include?(helper)
 
-          route_helper_warning(helper, valid_names, columns)
+          route_helper_warning(helper, valid_names, methods)
         end
       end
 
