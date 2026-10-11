@@ -1205,6 +1205,27 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
         expect(File.binread(codex(dir))).to eq(latin1)
       end
     end
+
+    # json read the quoted name out of the bytes as UTF-8 that is not, and
+    # matching it against the gem's names raised, ending init and dropping
+    # doctor's MCP rows.
+    it "reads a server whose quoted name is not UTF-8 as its bytes, and writes the gem's beside it" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, ".codex"))
+        latin1 = "[mcp_servers.\"caf\xE9\"]\ncommand = \"x\"\n".b
+        File.binwrite(codex(dir), latin1)
+
+        result = described_class.new(tools: [ :codex ], output_dir: dir, tool_mode: :mcp, standalone: true).call
+
+        expect(result[:written]).to eq([ codex(dir) ])
+        # Codex refuses a config that is not UTF-8, which the install says.
+        expect(result[:notes][codex(dir)]).to eq("Codex CLI cannot read it: it is not UTF-8, which TOML is")
+        expect(File.binread(codex(dir))).to start_with(latin1 + "\n[mcp_servers.rails-ai-context]\n")
+        expect(described_class.named_entries(codex(dir), :codex).map { |entry| entry[:name] }).to eq(%w[rails-ai-context])
+        described_class.remove(tools: [ :codex ], output_dir: dir)
+        expect(File.binread(codex(dir))).to eq(latin1)
+      end
+    end
   end
 
   describe ".serving_config" do

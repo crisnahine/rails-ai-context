@@ -147,6 +147,10 @@ module RailsAiContext
     # comments and trailing commas a JSONC reader passes over.
     class UnreadableError < StandardError; end
 
+    # Codex reads its config as TOML, which is UTF-8, and refuses one that
+    # is not ("stream did not contain valid UTF-8"), starting no server.
+    TOML_NOT_UTF8 = "Codex CLI cannot read it: it is not UTF-8, which TOML is"
+
     # Codex's config read without a TOML parser, which the gem does not
     # depend on. The file is split into its statements - table headers and
     # key/value pairs, each with the full key path TOML gives it - so a
@@ -413,9 +417,13 @@ module RailsAiContext
         Array(value(text)).grep(String)
       end
 
-      # TOML's basic-string escapes are JSON's, but for \U and \e.
+      # TOML's basic-string escapes are JSON's, but for \U and \e. A file that
+      # is not UTF-8 is read as bytes, and json reads a string out of those as
+      # UTF-8 it is not, which the first pattern matched against it raised on:
+      # such a string stays the bytes it is.
       def unescape(basic)
-        JSON.parse(basic)
+        text = JSON.parse(basic)
+        text.is_a?(String) && text.valid_encoding? ? text : basic[1..-2]
       rescue JSON::ParserError
         basic[1..-2]
       end
@@ -716,6 +724,8 @@ module RailsAiContext
       # one name, and that does not parse.
       kept = named.map(&:last).select { |name| by_name.key?(name) } - ours.map(&:first) + unwritable.map(&:name)
       note_kept(path, kept.uniq)
+      # Written all the same, as it always was: the bytes are the user's.
+      @notes[path] = [ @notes[path], TOML_NOT_UTF8 ].compact.join("; ") if content.encoding == Encoding::BINARY
       by_name = by_name.except(*kept)
       drop = stale_names(ours.to_h)
       starts = named.select { |_, name| by_name.key?(name) || drop.include?(name) }
