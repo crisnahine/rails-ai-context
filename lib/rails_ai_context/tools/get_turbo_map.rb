@@ -65,7 +65,7 @@ module RailsAiContext
             # whole map with no word that the filter matched nothing.
             if model_broadcasts.empty? && rb_broadcasts.empty? && view_subscriptions.empty?
               known = all_streams.any? ? " Streams in this app: #{all_streams.map { |s| "`#{s}`" }.join(', ')}." : ""
-              return empty_response("No broadcast or `turbo_stream_from` matches stream:\"#{stream}\".#{known}")
+              return empty_response("No broadcast or `turbo_stream_from` matches stream:\"#{echo_input(stream)}\".#{known}")
             end
           end
 
@@ -86,7 +86,7 @@ module RailsAiContext
           end
 
           warnings = detect_mismatches(model_broadcasts, rb_broadcasts, view_subscriptions)
-          filter_label = stream ? "stream:\"#{stream}\"" : controller ? "controller:\"#{controller}\"" : nil
+          filter_label = stream ? "stream:\"#{echo_input(stream)}\"" : controller ? "controller:\"#{echo_input(controller)}\"" : nil
 
           found = Found.new(
             model_broadcasts: model_broadcasts, rb_broadcasts: rb_broadcasts,

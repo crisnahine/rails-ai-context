@@ -89,7 +89,7 @@ module RailsAiContext
             else
               " No view directories found (API-only apps typically have none)."
             end
-            return empty_response([ "No views for '#{controller}'.#{hint}#{dirs_note}", static_engine_views_note ].compact.join("\n\n"))
+            return empty_response([ "No views for '#{echo_input(controller)}'.#{hint}#{dirs_note}", static_engine_views_note ].compact.join("\n\n"))
           end
 
           templates = filtered_templates
@@ -330,7 +330,7 @@ module RailsAiContext
           siblings = RailsAiContext::ViewFile.each(rails_app.root.to_s, File.join(dir, "*"))
             .map { |_file, relative| relative }.sort.first(10)
           hint = siblings.any? ? " Files in #{dir}/: #{siblings.join(', ')}" : ""
-          return empty_response([ "View not found: #{path}.#{hint}", static_engine_views_note ].compact.join("\n\n"))
+          return empty_response([ "View not found: #{echo_input(path)}.#{hint}", static_engine_views_note ].compact.join("\n\n"))
         end
         return text_response("Could not read file: #{path}") unless content
 

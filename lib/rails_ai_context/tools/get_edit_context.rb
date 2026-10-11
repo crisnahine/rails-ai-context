@@ -59,9 +59,9 @@ module RailsAiContext
           else
             # An example built from the name the caller gave was that same
             # path back for `app/models/nope.rb`, read as a file to retry.
-            " No file named #{basename} is under app/."
+            " No file named #{echo_input(basename)} is under app/."
           end
-          return empty_response("File not found: #{file}.#{hint}")
+          return empty_response("File not found: #{echo_input(file)}.#{hint}")
         end
         real = located.realpath
 
@@ -75,7 +75,7 @@ module RailsAiContext
         end
 
         if matches.empty?
-          return empty_response("'#{near}' not found in #{file} (#{count_phrase(source_lines.size, "line")}).\n\nAvailable methods:\n#{extract_methods(source_lines)}")
+          return empty_response("'#{echo_input(near)}' not found in #{file} (#{count_phrase(source_lines.size, "line")}).\n\nAvailable methods:\n#{extract_methods(source_lines)}")
         end
 
         # Build context window around first match

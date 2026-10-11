@@ -75,7 +75,7 @@ module RailsAiContext
         level = "all" if level.empty?
         valid_levels = LEVEL_HIERARCHY.keys + [ "ALL" ]
         unless valid_levels.include?(level.upcase)
-          return text_response("Unknown level: '#{level}'. Valid values: #{valid_levels.join(', ')}")
+          return text_response("Unknown level: '#{echo_input(level)}'. Valid values: #{valid_levels.join(', ')}")
         end
         level = level == "ALL" ? "all" : level
 
@@ -91,7 +91,7 @@ module RailsAiContext
         available = available_log_files
         unless path
           msg = if available.any?
-            "Log file '#{file || "#{rails_env_name}.log"}' not found.\nAvailable log files: #{available.join(', ')}"
+            "Log file '#{echo_input(file || "#{rails_env_name}.log")}' not found.\nAvailable log files: #{available.join(', ')}"
           else
             "No log files found in log/. Your app may log to stdout (common in Docker/container environments)."
           end
@@ -117,7 +117,7 @@ module RailsAiContext
         window = searching ? search_window(raw_lines.size, whole_file) : nil
 
         if redacted.empty?
-          return empty_response("# Log: #{File.basename(path)}\nNo entries matching level:#{level}#{" search:\"#{search}\"" if search}#{" #{window}" if window}.\n\n---\nAvailable log files: #{available.join(', ')}")
+          return empty_response("# Log: #{File.basename(path)}\nNo entries matching level:#{level}#{" search:\"#{echo_input(search)}\"" if search}#{" #{window}" if window}.\n\n---\nAvailable log files: #{available.join(', ')}")
         end
 
         # Format output
@@ -130,7 +130,7 @@ module RailsAiContext
           matched = redacted.size
           redacted = redacted.last(lines)
           shown = redacted.size < matched ? "; showing the last #{redacted.size}" : ""
-          output << "Size: #{size_label} | #{count_phrase(matched, "line")} matching \"#{search}\" #{window}#{shown} | Level: #{level_label}"
+          output << "Size: #{size_label} | #{count_phrase(matched, "line")} matching \"#{echo_input(search)}\" #{window}#{shown} | Level: #{level_label}"
         else
           output << "Size: #{size_label} | Showing last #{count_phrase(redacted.size, "line")} | Level: #{level_label}"
         end

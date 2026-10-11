@@ -43,7 +43,7 @@ module RailsAiContext
           return error_response(unknown_mark_message(tool)) unless known
 
           session_record(known, params)
-          return text_response("Marked `#{known}` with params `#{params}` as queried.")
+          return text_response("Marked `#{known}` with params `#{echo_input(params)}` as queried.")
         end
 
         case action
@@ -55,7 +55,7 @@ module RailsAiContext
           current_session_reset!
           text_response("Session cleared. All query records removed.")
         else
-          text_response("Unknown action: #{action}. Use status, summary, or reset.")
+          text_response("Unknown action: #{echo_input(action)}. Use status, summary, or reset.")
         end
       rescue => e
         text_response("Session context error: #{e.message}")
@@ -88,7 +88,7 @@ module RailsAiContext
 
           short_names = RailsAiContext::CLI::ToolRunner.available_tools.map { |t| RailsAiContext::CLI::ToolRunner.short_name(t.tool_name) }
           suggestion = find_closest_match(name, short_names)
-          "Unknown tool '#{name}' in `mark`.#{" Did you mean '#{suggestion}'?" if suggestion} #{usage}"
+          "Unknown tool '#{echo_input(name)}' in `mark`.#{" Did you mean '#{suggestion}'?" if suggestion} #{usage}"
         end
 
         def cli_note
