@@ -168,8 +168,7 @@ module RailsAiContext
             # id: false / id: :uuid / primary_key: ... decide whether the
             # implicit primary-key column exists and what to call it.
             options:  extract_keyword_options(node),
-            default_source: key_default_source(node),
-            default_proc: proc_argument?(key_default_node(node)),
+            **default_fields(node, key: true),
             location: node.location.start_line
           }
         end
@@ -323,8 +322,7 @@ module RailsAiContext
               options:     options,
               # A proc default (`default: -> { "now()" }`) has no literal value,
               # so keep its source for callers that report defaults verbatim.
-              default_source: default_source(node),
-              default_proc: proc_default?(node),
+              **default_fields(node),
               location:    node.location.start_line
             }
             @results.last[:virtual] = true if virtual

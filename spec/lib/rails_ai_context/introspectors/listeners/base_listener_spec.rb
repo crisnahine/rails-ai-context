@@ -42,7 +42,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::BaseListener do
   it "reads every proc spelling as a proc default, and a named callable as not one" do
     listener = Class.new(described_class) do
       def on_call_node_enter(node)
-        @results << proc_default?(node) if node.name == :probe
+        @results << default_fields(node)[:default_proc] if node.name == :probe
       end
     end.new
     source = "probe default: -> { 1 }\nprobe default: lambda { 1 }\nprobe default: proc { 1 }\n" \

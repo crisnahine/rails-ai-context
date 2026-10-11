@@ -16,7 +16,7 @@ module RailsAiContext
           options = entry[:options] || {}
           case entry[:action]
           when :create_table
-            options[:as].is_a?(String) ? create_table_as(tables, table, options[:as]) : seed_table(tables, table, options, pk_type, default: key_default(entry))
+            options[:as].is_a?(String) ? create_table_as(tables, table, options[:as]) : seed_table(tables, table, options, pk_type, default: SchemaConventions.key_default(options, entry))
           when :create_table_sql then tables.merge!(StructureSqlReader.parse(entry[:sql])[:tables])
           when :rename_index
             index = tables[table]&.dig(:indexes)&.find { |idx| idx[:name] == entry[:old_name] }
@@ -108,11 +108,6 @@ module RailsAiContext
           SchemaConventions.implicit_primary_key(options || {}, pk_type, default: default).map do |pk|
             { name: pk[:name], type: pk[:type], null: false, primary_key: true, default: pk[:default], **declared_sizes(pk[:options]) }.compact
           end
-        end
-
-        # A proc's source, never another expression only the running migration knows.
-        def key_default(entry)
-          SchemaConventions.key_default(entry[:options] || {}, (entry[:default_source] if entry[:default_proc]))
         end
 
         # The sizes as declared; the dump writes no adapter default either.

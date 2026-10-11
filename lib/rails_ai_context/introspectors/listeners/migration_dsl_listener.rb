@@ -74,7 +74,7 @@ module RailsAiContext
           if node.name == :rename_table
             result[:new_name] = literal_string(args[1])
           end
-          result.merge!(default_source: key_default_source(node), default_proc: proc_argument?(key_default_node(node))) if action == :create_table
+          result.merge!(default_fields(node, key: true)) if action == :create_table
 
           @results << result
         end
@@ -97,7 +97,7 @@ module RailsAiContext
           when :rename_column
             result[:new_name] = literal_string(args[2])
           when :change_column
-            result.merge!(column_type: literal_string(args[2]), default_source: default_source(node), default_proc: proc_default?(node))
+            result.merge!(column_type: literal_string(args[2]), **default_fields(node))
           when :change_column_null
             # The nullability is the third positional, not a keyword.
             result[:null] = boolean_value(args[2])

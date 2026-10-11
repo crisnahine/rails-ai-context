@@ -100,12 +100,12 @@ module RailsAiContext
           when :rename_column then result.merge!(column: names[0], new_name: names[1])
           when :rename_index then result.merge!(old_name: names[0], new_name: names[1])
           when :change_column
-            result.merge!(column: names[0], column_type: names[1], default_source: default_source(node), default_proc: proc_default?(node))
+            result.merge!(column: names[0], column_type: names[1], **default_fields(node))
           when :change_column_null then result.merge!(column: names[0], null: boolean_value(positional[1]))
           when :change_column_default
             result[:column] = names[0]
             result[:new_default] = extract_value(positional[1]) if positional[1]
-          when :add_timestamps then result.merge!(default_source: default_source(node), default_proc: proc_default?(node))
+          when :add_timestamps then result.merge!(default_fields(node))
           when :add_check_constraint, :remove_check_constraint then result[:expression] = names[0]
           end
           result

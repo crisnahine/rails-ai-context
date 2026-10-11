@@ -198,14 +198,11 @@ module RailsAiContext
           end
         end
 
-        # The source of a call's default: option, for a value no literal carries.
-        def default_source(node)
-          value = default_node(node)
-          value && NodeSource.text(value)
-        end
-
-        def proc_default?(node)
-          proc_argument?(default_node(node))
+        # A call's default: for a value no literal carries: its source, and whether it is a proc.
+        # key: reads create_table's default for its implicit key.
+        def default_fields(node, key: false)
+          value = key ? key_default_node(node) : default_node(node)
+          { default_source: value && NodeSource.text(value), default_proc: proc_argument?(value) }
         end
 
         # `-> {}`, `lambda {}`, `proc {}` or `Proc.new {}`.
@@ -224,11 +221,6 @@ module RailsAiContext
           id = extract_keyword_nodes(node)[:id]
           inner = id.elements.find { |e| e.is_a?(Prism::AssocNode) && extract_key(e.key) == :default } if id.is_a?(Prism::HashNode)
           inner&.value || default_node(node)
-        end
-
-        def key_default_source(node)
-          value = key_default_node(node)
-          value && NodeSource.text(value)
         end
 
         def default_node(node)

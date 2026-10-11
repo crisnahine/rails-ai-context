@@ -486,6 +486,24 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(text).to include(%q(| id | bigint | **NO** | -> { "timestamp_id('statuses'::text)" } |))
     end
 
+    # Only a proc's text is a default the dump writes; another expression is a value the running code makes.
+    it "is no default for an expression other than a proc, in schema.rb and the replay alike" do
+      line = %(create_table "codes", id: :string, default: SecureRandom.hex, force: :cascade)
+      rows = { "db/schema.rb" => "ActiveRecord::Schema[8.1].define(version: 1) do\n  #{line}\nend\n",
+               "db/migrate/20240101000000_create_codes.rb" =>
+                 "class CreateCodes < ActiveRecord::Migration[8.1]\n  def change\n    #{line}\n  end\nend\n" }.map do |file, src|
+        schema = Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, file)))
+          File.write(File.join(dir, file), src)
+          RailsAiContext::Introspectors::SchemaIntrospector.new(RailsAiContext::StaticApp.new(dir)).call
+        end
+        allow(described_class).to receive(:cached_context).and_return({ schema: schema, models: {} })
+        described_class.call(table: "codes", detail: "full").content.first[:text].lines.map(&:chomp).find { |l| l.start_with?("| id ") }
+      end
+
+      expect(rows).to eq([ "| id | string | **NO** |" ] * 2)
+    end
+
     it "is the id's default in the migration replay, given on the line or in the id: hash" do
       replayed = Dir.mktmpdir do |dir|
         File.write(File.join(dir, "20240101000000_create_keys.rb"), <<~RUBY)

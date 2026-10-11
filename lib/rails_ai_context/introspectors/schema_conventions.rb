@@ -13,17 +13,20 @@ module RailsAiContext
     module SchemaConventions
       module_function
 
+      # The implicit key's default, an id: hash's over create_table's own; of an expression
+      # no literal carries, only a proc's text, which is all a dump writes.
+      def key_default(options, event)
+        id = options[:id]
+        value = id.is_a?(Hash) && id.key?(:default) ? id[:default] : options[:default]
+        return event[:default_source] if value == RailsAiContext::Confidence::INFERRED && event[:default_proc]
+
+        format_default(value) unless value == RailsAiContext::Confidence::INFERRED
+      end
+
       # create_table implies an id primary key unless disabled; the runtime
       # tier reports it, so every static source must too. Composite primary
       # keys (primary_key: [...]) dump their columns as explicit t.* lines -
       # synthesizing an id there would invent a column that does not exist.
-      # The implicit key's default, an id: hash's over create_table's own; source is a proc default's text.
-      def key_default(options, source)
-        id = options[:id]
-        value = id.is_a?(Hash) && id.key?(:default) ? id[:default] : options[:default]
-        value == RailsAiContext::Confidence::INFERRED ? source : format_default(value)
-      end
-
       def implicit_primary_key(options, pk_type, default: nil)
         pk_opt = options[:primary_key]
         composite_pk = !pk_opt.nil? && !pk_opt.is_a?(String) && !pk_opt.is_a?(Symbol)
