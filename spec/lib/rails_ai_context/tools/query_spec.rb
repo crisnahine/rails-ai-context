@@ -2127,4 +2127,45 @@ it "still explains a database that does not exist" do
     end
   end
 
+  describe "keywords and INTO inside string literals (item 3)" do
+    it "allows a write keyword that appears only inside a literal" do
+      valid, = described_class.validate_sql("SELECT count(*) FROM orders WHERE notes LIKE '%update%'")
+      expect(valid).to be true
+    end
+
+    it "allows the word INTO inside a literal (not SELECT INTO)" do
+      valid, = described_class.validate_sql("SELECT count(*) FROM orders WHERE notes = 'put into box'")
+      expect(valid).to be true
+    end
+
+    it "allows the replace() string function" do
+      valid, = described_class.validate_sql("SELECT replace(name, 'Product ', 'P-') AS short FROM products")
+      expect(valid).to be true
+    end
+
+    it "still refuses the REPLACE statement (no opening parenthesis)" do
+      valid, error = described_class.validate_sql("REPLACE INTO products VALUES (1)")
+      expect(valid).to be false
+      expect(error).to include("REPLACE")
+    end
+
+    it "still refuses a real DELETE hidden in a CTE" do
+      valid, error = described_class.validate_sql("WITH x AS (DELETE FROM orders RETURNING id) SELECT * FROM x")
+      expect(valid).to be false
+      expect(error).to include("DELETE")
+    end
+
+    it "still refuses a real SELECT INTO" do
+      valid, error = described_class.validate_sql("SELECT * INTO new_orders FROM orders")
+      expect(valid).to be false
+      expect(error).to include("SELECT INTO")
+    end
+
+    it "keeps INTO OUTFILE on the raw (unmasked) text" do
+      valid, error = described_class.validate_sql("SELECT id FROM orders INTO OUTFILE '/tmp/x'", mysql: true)
+      expect(valid).to be false
+      expect(error).to include("OUTFILE")
+    end
+  end
+
 end

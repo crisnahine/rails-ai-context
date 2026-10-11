@@ -50,7 +50,9 @@ module RailsAiContext
       )
 
       # ── Layer 1: SQL validation ─────────────────────────────────────
-      BLOCKED_KEYWORDS = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|SET|COPY|MERGE|REPLACE)\b/i
+      # REPLACE is the MySQL statement; `replace(` is the string function every
+      # database has, so a REPLACE followed by an opening parenthesis is let be.
+      BLOCKED_KEYWORDS = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|SET|COPY|MERGE|REPLACE(?!\s*\())\b/i
       BLOCKED_CLAUSES  = /\bFOR\s+(UPDATE|SHARE|NO\s+KEY\s+UPDATE)\b/i
       BLOCKED_SHOWS    = /\bSHOW\s+(GRANTS|PROCESSLIST|BINLOG|SLAVE|MASTER|REPLICAS)\b/i
       SELECT_INTO      = /\bSELECT\b[^;]*\bINTO\b/i
@@ -497,11 +499,20 @@ module RailsAiContext
         # specific error messages than the generic keyword blocker. The
         # semicolon is read on quote-masked text, so one inside a string literal
         # or a `$$ ... $$` block body is not mistaken for a second statement.
-        return [ false, "Blocked: multiple statements (no semicolons)" ] if mask_quoted(cleaned, mysql: mysql).match?(MULTI_STATEMENT)
+        #
+        # The statement-keyword checks (SELECT INTO, the write keywords) read the
+        # same quote-masked text, so `LIKE '%update%'` or `'put into box'` is
+        # data. That is safe: ALLOWED_PREFIX still requires a read statement, and
+        # the read-only transaction (PostgreSQL, MySQL) or read-only connection
+        # (SQLite) stops any write a mis-masked literal could hide. A disk write
+        # (INTO OUTFILE/DUMPFILE) and the file/network functions stay on the raw
+        # text: no read-only transaction stops a server-side file write.
+        masked = mask_quoted(cleaned, mysql: mysql)
+        return [ false, "Blocked: multiple statements (no semicolons)" ] if masked.match?(MULTI_STATEMENT)
         return [ false, "Blocked: FOR UPDATE/SHARE clause" ] if cleaned.match?(BLOCKED_CLAUSES)
         return [ false, "Blocked: sensitive SHOW command" ] if cleaned.match?(BLOCKED_SHOWS)
         return [ false, "Blocked: SELECT INTO OUTFILE / DUMPFILE writes to disk" ] if cleaned.match?(BLOCKED_OUTPUT)
-        return [ false, "Blocked: SELECT INTO creates a table" ] if cleaned.match?(SELECT_INTO)
+        return [ false, "Blocked: SELECT INTO creates a table" ] if masked.match?(SELECT_INTO)
 
         # Block database functions that give a filesystem/network primitive.
         # pg_read_file, lo_import, dblink, LOAD_FILE, load_extension, etc.
@@ -552,8 +563,9 @@ module RailsAiContext
 
         # Check blocked keywords before the allowed-prefix fallback so that
         # INSERT/UPDATE/DELETE/DROP etc. get a specific "Blocked" error
-        # rather than the generic "Only SELECT... allowed" message.
-        if (m = cleaned.match(BLOCKED_KEYWORDS))
+        # rather than the generic "Only SELECT... allowed" message. Read on the
+        # quote-masked text, so a keyword inside a string literal is data.
+        if (m = masked.match(BLOCKED_KEYWORDS))
           return [ false, "Blocked: contains #{m[0]}" ]
         end
 
