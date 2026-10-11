@@ -1763,6 +1763,32 @@ RSpec.describe RailsAiContext::Doctor do
       expect(check_named("web", "gems")).to have_attributes(status: :pass, message: "../Gemfile.lock found", fix: nil)
     end
 
+    # Booted through another bundle (BUNDLE_GEMFILE), nothing writes it, and
+    # the row named no file: " not found".
+    it "names a shared lockfile that is not there yet" do
+      FileUtils.mkdir_p(File.join(@top, ".git"))
+      write("Gemfile", %(gem "rails"\n))
+      write("web/config/boot.rb", %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../Gemfile", __dir__)\n))
+
+      expect(check_named("web", "gems")).to have_attributes(status: :warn, message: "../Gemfile.lock not found")
+    end
+
+    it "names that lockfile where a config's bundle exec reads a bundle without the gem" do
+      FileUtils.mkdir_p(File.join(@top, ".git"))
+      write("Gemfile", %(gem "rails"\n))
+      write("web/config/boot.rb", %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../Gemfile", __dir__)\n))
+      write("web/.mcp.json", JSON.generate("mcpServers" => { "rails-ai-context" => { "command" => "bundle", "args" => %w[exec rails-ai-context serve] } }))
+      allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
+      allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude])
+      doctor = described_class.new(RailsAiContext::StaticApp.new(File.join(@top, "web")))
+      bin = bin_dir_with("bundle")
+      allow(doctor).to receive(:client_path).and_return(bin)
+
+      expect(doctor.send(:check_mcp_json).message).to end_with("`bundle exec rails-ai-context serve` cannot start - ../Gemfile.lock has no rails-ai-context")
+    ensure
+      FileUtils.rm_rf(bin) if bin
+    end
+
     # Outside a git repository the tools leave that bundle unread, and
     # `bundle install` would not change it.
     it "says why a shared lockfile is not read, without sending the reader to bundle install" do
