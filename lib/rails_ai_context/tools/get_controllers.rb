@@ -307,7 +307,7 @@ module RailsAiContext
           owner: controller_name)
         # An action from a concern or a parent controller has no def in this file.
         source_with_lines ||= RailsAiContext::Introspectors::ActionSource.find(rails_app.root, controller_name,
-          action_name, file: carried)
+          action_name, file: carried, controllers: RailsAiContext::Payload.controllers(cached_context))
         elsewhere = source_with_lines&.dig(:file)
         elsewhere = nil if elsewhere == carried
 
