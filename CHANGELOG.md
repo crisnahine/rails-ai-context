@@ -5,6 +5,115 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A static model answer names the plugin patch modules it did not
+  read.** An app plugin that adds to a core model through its own DSL
+  (OpenProject's `patches %i[WorkPackage]`, which includes
+  `<Plugin>::Patches::WorkPackagePatch` in `to_prepare`) gave a
+  `rails_get_model_details` answer with none of what the patches add and no
+  sign anything was left out. A module named `*::Patches::<Model>Patch` in
+  the app's, its code roots' or its in-repo gems' `lib` is now named in one
+  `[UNAVAILABLE]` line, the way `rails_get_controllers` names an included
+  module it did not read.
+
+### Changed
+
+- **Notable gems are the ones the app names, and a Rails framework only when
+  the app loads it.** Every lockfile entry counted, so `onboard`, the gems
+  tool and the context files listed `activestorage` for an app that leaves
+  `active_storage/engine` commented out (it is in the lock because `rails`
+  pulls it in) and `jwt` for an app that only has it through oauth2 and
+  googleauth. A notable gem now counts when the Gemfile names it, when a
+  gemspec or path gem the Gemfile pulls in depends on it, when it is a Rails
+  engine another gem brings in, or, for a framework `rails` pulls in, when
+  config/application.rb loads it (`rails/all`, its railtie, or a
+  `config.<framework>` line).
+- **Static routes leave out a block from a routing method they cannot read,
+  and say so.** A route drawn inside a method the app defines (a helper
+  that wraps `scope(path: "api/v1", module: "api/v1")`, versionist's
+  `api_version`) was drawn at the top level, so `rails_get_routes` gave a
+  two-route controller seven routes it does not have and gave the namespaced
+  controller none. Such a block is now counted among the constructs not
+  expanded, and a controller with no route says one may come from them.
+  Rails' and Devise's blocks that draw in place (`constraints`, `defaults`,
+  `devise_scope`, `authenticate`, route_translator's `localized`, ...) are
+  drawn as before, and Rails' `nested` block is drawn under its parent's
+  path.
+
+### Fixed
+
+- **A primary key's function default shows.** `id: :uuid, default: -> {
+  "gen_random_uuid()" }` on a `create_table` line gave the `id` row an empty
+  Default in `rails_get_schema` and `rails_get_model_details`, booted and
+  static, which reads as "no default". The booted tier now reads the
+  column's `default_function`, and schema.rb, structure.sql and the
+  migration replay give the key the default its line declares.
+- **Two bare `validates_with` lines are both listed.** The second one was
+  dropped because the two shared a dedup key with no validator class in it.
+- **A `validates_with` class a concern nests is listed once.** The source
+  name `DateValidator` never matched the class Ruby resolves,
+  `DateValidation::DateValidator`, so reflection listed it again and the
+  validation count was one too high.
+- **A model whose table the database lacks is not marked verified.**
+  `rails_get_model_details` printed `[VERIFIED]` and `**Table:** \`tags\``
+  for a model with no `tags` table, and `onboard` named the table too. Both
+  now say the table is not found, as `rails_get_schema` does.
+- **Callbacks on a chain a library defines are listed.** Paperclip's
+  `before_file_validate` and `after_post_process` were missing from
+  `rails_get_model_details` and `rails_get_callbacks`, booted too, because
+  only Active Record's own callback names were read. A call on a chain the
+  booted model really has, or one `define_model_callbacks` in the same file
+  declares, is now listed, and `rails_get_model_details` names each
+  `has_attached_file` attachment under Macros.
+- **A macro inside `translation_class.class_eval` is not the model's own.**
+  It is listed under "Declared on another class", as one in a concern's
+  `translation_class.instance_eval` already was.
+- **The static tier keeps a model whose parent comes from a gem.**
+  `class Tag < ActsAsTaggableOn::Tag` was "Model 'Tag' not found". A class
+  in app/models on a parent the app does not define is now a model when it
+  declares associations or scopes, and its table comes from the parent, as
+  Rails' single table inheritance decides: the one of the parent's names the
+  schema holds (`ahoy_messages` for `EmailMessage < Ahoy::Message`), or a
+  line saying the parent sets it.
+- **Strong params are the methods that permit on params.** Any `def
+  *_params` was listed, so a method that builds associations counted while
+  `article_params_json`, which calls `permit`, did not. A strong-params
+  method now calls `permit`, `permit!` or `expect` on params, whatever its
+  name, outside the controller's own actions; the listing marks `permit!` as
+  the per-action view did; and strong params a parent controller in the app
+  defines are listed with the parent named.
+- **A filtered routes answer names the other paths an engine is mounted
+  at.** An engine mounted three times showed only its first mount and that
+  mount's helpers.
+- **Migration replay applies `change_column`'s options.** `null:`,
+  `default:`, `limit:`, `precision:` and `scale:` given to `change_column`
+  were dropped, so a column relaxed to `null: true` stayed NOT NULL, and the
+  replay now records the sizes a migration declares on every column. A
+  type-only `change_column` keeps null and default on PostgreSQL and MySQL
+  and resets them on SQLite, as each adapter does.
+- **Migration replay keeps a partial index's condition.** A Symbol
+  `where: :schedule_manually` and the `where:` of a `t.references ...,
+  index: { where: ... }` were dropped, so a partial index read as a full one.
+- **A gem installed under the app root is not the app's code.** With the
+  bundle in vendor/bundle, `onboard` listed a gem's ActiveJob class
+  (`Chewy::Strategy::ActiveJob::Worker`) as the app's background job.
+- **The engine eager loads in an app with an `AI` acronym.** With
+  `inflect.acronym "AI"`, Zeitwerk expected
+  `RailsAIContext::McpController` from the gem's controller, so
+  `bin/rails zeitwerk:check` and any eager load failed once the gem was in
+  the Gemfile.
+- **`rails ai:context` runs in an app with its own top-level
+  `print_result`.** The gem's rake helpers were top-level methods guarded by
+  `unless defined?`, so an app's `print_result` in lib/tasks ran instead and
+  the task aborted. They now live in a module.
+- **A byte-size label does not depend on the app's I18n.**
+  `rails_read_logs` threw its whole answer away when an app's I18n backend
+  raised after a failed boot (Discourse's queries the database), and
+  `rails_runtime_info` and `rails_get_test_info` could do the same.
+
 ## [5.33.0] - 2026-10-11
 
 ### Security
