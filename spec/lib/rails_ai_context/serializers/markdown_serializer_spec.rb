@@ -327,6 +327,18 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
       expect(described_class.new(ctx).call).to include("`title`, `body`\n")
     end
 
+    # The full-mode schema read `tags` (string, default []) and `name_length`
+    # (integer), where rails_get_schema says string[] and generated.
+    it "marks an array column and a generated one as rails_get_schema does" do
+      columns = [ { name: "tags", type: "string", array: true, default: "[]" }, { name: "ratings", type: "integer", array: true },
+                  { name: "name_length", type: "integer", generated: "length((name)::text)", stored: true },
+                  { name: "slug", type: "string", generated: "lower(name)" } ]
+      ctx = { app_name: "App", schema: { total_tables: 1, tables: { "products" => { columns: columns } } } }
+
+      expect(described_class.new(ctx).call).to include("`tags` (string[], default []), `ratings` (integer[]), " \
+                                                       "`name_length` (integer, generated, stored), `slug` (string, generated)\n")
+    end
+
     it "includes routes section" do
       expect(output).to include("## Routes")
     end
