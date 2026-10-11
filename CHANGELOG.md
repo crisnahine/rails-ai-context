@@ -725,6 +725,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   repository, which every repository using it shares, a repository that does
   not track the app (a dotfiles repository at `$HOME`), and any other hook
   that runs `rails-ai-context` are left alone with a message.
+- **The pre-commit hook starts a `path:` copy of the gem from a submodule
+  or a linked worktree.** git hands every command a hook runs the
+  committing repository's `GIT_DIR` and `GIT_INDEX_FILE`, and the gemspec's
+  `git ls-files` read that repository: in an app kept as a submodule the
+  gem's file list was the app's, and every commit failed with "can't find
+  executable rails-ai-context". The gemspec now asks git about its own
+  directory alone.
 - **An app with a Gemfile and no lockfile yet is read by what its Gemfile
   names.** It counted as an in-Gemfile install, so a fresh clone that never
   named the gem got `bundle exec` commands that could not start. A Gemfile
