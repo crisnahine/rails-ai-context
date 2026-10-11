@@ -238,6 +238,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MySQL and MariaDB, showing the whole definition, with credentials in it
   redacted.
   `SHOW CREATE USER`, `SHOW CREATE DATABASE` and `SHOW GRANTS` stay refused.
+- **Every command a `doctor` fix gives runs where `doctor` was typed.**
+  Typed in an app's parent folder with `--app-path blog`, as `init`'s
+  folder-of-apps summary suggests, the fixes did nothing or the wrong thing
+  there: `bin/rails db:migrate` was no file, `rails-ai-context init` set up
+  every app in the folder, `git rm --cached` found no repository, and a
+  `.gitignore` line spelled from the parent folder (`blog/.env.local`)
+  ignored nothing in blog's own `.gitignore`. The binary's commands now
+  carry `--app-path blog`, the app's other commands run after `cd blog &&`,
+  git runs as `git -C blog`, and a `.gitignore` line names `blog/.gitignore`
+  with the pattern as that file reads it (`.env.local`).
 - **The install finds a Codex server however its name is spelled, and never
   declares it twice.** A quoted table (`[mcp_servers."rails-ai-context"]`),
   an inline table or dotted keys went unseen: a second table was appended,
@@ -407,8 +417,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   had been removed. Each snapshot's `PATH` now has to reach the command its
   entry runs, in the app's config and in a folder-of-apps config above it,
   and a failure names the directory that is gone and where to rerun
-  `rails-ai-context init`. A saved `GEM_HOME`, and each directory on a
-  saved `GEM_PATH`, has to exist too.
+  `rails-ai-context init`. A saved `GEM_HOME` has to exist too, and so does
+  each directory on a saved `GEM_PATH` that the shell's own `GEM_PATH` does
+  not name: RubyGems passes over a directory that is not there, and `init`
+  saves the shell's `GEM_PATH` again, so a warning about one could never
+  clear.
 - **A context file is out of date when a context run would rewrite it.**
   `doctor` compared file times, so touching a model raised "CLAUDE.md may be
   stale" and `rails ai:context`, which leaves unchanged files alone, could
@@ -839,7 +852,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that install, run as `bin/rails app:ai:doctor` or as
   `bundle exec rails-ai-context doctor` at the engine's root (which now
   checks the dummy app `bin/rails` boots instead of refusing), and its fixes
-  name the commands that run there. It names every path from where it was
+  name the commands that run there (a command of the dummy app's own, in
+  `test/dummy`). It names every path from where it was
   typed: at the engine's root, the dummy app's files as `test/dummy/...` and
   the engine's own as `Gemfile.lock` and `app/views`; typed inside
   `test/dummy`, from `../..`.
