@@ -93,6 +93,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through the same redaction, read as the file they come from, a hunk
   header's line and a removed validation's included, and a file on
   `sensitive_patterns` is listed with its line counts alone.
+- **The gems section names a git source without its credentials.** A
+  Gemfile's `git: "https://user:token@host/..."` went into the gems answer,
+  the `rails://gems` resource and `.ai-context.json` as written. The URL now
+  passes through the redaction a source line does, so its userinfo, or a
+  token format in its place, reads `[FILTERED]`.
 - **The context file names a Procfile's commands with their secrets
   filtered.** Each command went into the DevOps section as written, so
   `redis-server --requirepass ...` or `DB_PASSWORD=... bundle exec sidekiq`

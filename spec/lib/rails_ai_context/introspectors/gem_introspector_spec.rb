@@ -165,6 +165,21 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
         expect(result[:gem_groups]).to eq({ "test" => [ "rspec-rails" ] })
       end
 
+      # The URL went out as the Gemfile has it, and `rails ai:context` writes
+      # it into .ai-context.json, a file it asks the team to commit.
+      it "filters the credentials a git source carries" do
+        token = "Xk2mQ9pLw7Rt#{'Z4ab'}"
+        File.write(File.join(tmpdir, "Gemfile"), <<~RUBY)
+          gem "private_gem", git: "https://deploy:#{token}@git.example.test/acme/private_gem.git"
+          gem "other_gem", git: "https://#{"ghp_#{'a' * 36}"}@github.com/acme/other_gem.git"
+        RUBY
+
+        expect(introspector.call[:local_gems]).to contain_exactly(
+          { name: "private_gem", source: "git", location: "https://[FILTERED]@git.example.test/acme/private_gem.git" },
+          { name: "other_gem", source: "git", location: "https://[FILTERED]@github.com/acme/other_gem.git" }
+        )
+      end
+
       it "returns total gem count" do
         result = introspector.call
         expect(result[:total_gems]).to eq(10)

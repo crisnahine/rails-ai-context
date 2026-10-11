@@ -220,7 +220,8 @@ module RailsAiContext
           if opts[:path]
             { name: entry[:name], source: "path", location: opts[:path].to_s }
           elsif opts[:git]
-            { name: entry[:name], source: "git", location: opts[:git].to_s }
+            # A private repository's URL may carry its credentials (`https://user:token@host/...`).
+            { name: entry[:name], source: "git", location: RailsAiContext::Redaction.redact_source_line(opts[:git].to_s) }
           end
         end
       rescue => e
