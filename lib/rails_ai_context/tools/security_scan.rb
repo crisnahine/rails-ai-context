@@ -2,6 +2,7 @@
 
 require "open3"
 require "json"
+require "rbconfig"
 require "tmpdir"
 
 module RailsAiContext
@@ -200,6 +201,9 @@ module RailsAiContext
       # the tool open forever.
       SCAN_TIMEOUT = 300
 
+      # `--version` loads brakeman and scans nothing: a second is plenty.
+      VERSION_TIMEOUT = 30
+
       # How long a child gets to end on the polite signal before it gets the
       # one it cannot trap: popen3 waits on the process itself when the block
       # returns, so a child that ignores TERM holds the tool open through the
@@ -276,11 +280,11 @@ module RailsAiContext
       end
 
       private_class_method def self.run_brakeman_unbundled(min_confidence, resolved_checks)
-        executable = brakeman_executable or return [ nil, nil ]
+        brakeman = brakeman_command or return [ nil, nil ]
 
         Dir.mktmpdir("rails-ai-context-brakeman") do |dir|
           report_path = File.join(dir, "report.json")
-          command = [ executable, "--format", "json", "--output", report_path, "--quiet",
+          command = [ *brakeman, "--format", "json", "--output", report_path, "--quiet",
                       "--no-exit-on-warn", "--no-exit-on-error",
                       "--confidence-level", (3 - min_confidence).to_s, "--path", rails_app.root.to_s ]
           command += [ "--test", resolved_checks.join(",") ] if resolved_checks&.any?
@@ -295,9 +299,27 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [ nil, e.message ], label: "run_brakeman_unbundled")
       end
 
-      # The gem's own executable, not whatever `brakeman` resolves to on PATH.
-      private_class_method def self.brakeman_executable
-        Gem.path.map { |dir| File.join(dir, "bin", "brakeman") }.find { |path| File.executable?(path) }
+      # The installed gem's own script, run by this Ruby: not whatever
+      # `brakeman` resolves to on PATH, and not the binstub, which RubyGems
+      # writes to its bindir, outside every gem directory. The script puts
+      # its own lib on the load path, so it runs with no bundle at all.
+      private_class_method def self.brakeman_command
+        script = brakeman_spec_on_machine&.bin_file("brakeman")
+        [ RbConfig.ruby, script ] if script && File.file?(script)
+      end
+
+      # Why the brakeman outside the app's bundle would not run, or nil when
+      # it answers `--version` the way the scan runs it. Doctor asks, so it
+      # never says the scan runs a brakeman that this tool cannot start.
+      def self.unbundled_failure
+        command = brakeman_command or return "the installed gem has no bin/brakeman"
+        out, err = with_unbundled_env { capture_with_timeout([ *command, "--version" ], seconds: VERSION_TIMEOUT) }
+        return "`brakeman --version` gave no answer in #{VERSION_TIMEOUT} seconds" if out.nil?
+        return nil if out.match?(/^brakeman \d/)
+
+        portable_error(brakeman_error_line(err) || "`brakeman --version` printed no version")
+      rescue StandardError => e
+        RailsAiContext.debug_fail(e, e.message, label: "unbundled_failure")
       end
 
       # Bundler narrows the environment for child processes as well as for
@@ -313,13 +335,13 @@ module RailsAiContext
       # than waited on.
       #
       # @return [Array(String, String), nil] stdout and stderr, or nil on timeout
-      private_class_method def self.capture_with_timeout(command)
+      private_class_method def self.capture_with_timeout(command, seconds: SCAN_TIMEOUT)
         Open3.popen3(*command) do |stdin, stdout, stderr, wait|
           stdin.close
           out = Thread.new { stdout.read }
           err = Thread.new { stderr.read }
 
-          unless wait.join(SCAN_TIMEOUT)
+          unless wait.join(seconds)
             stop(wait)
             out.kill
             err.kill
@@ -394,20 +416,25 @@ module RailsAiContext
         "Then run `bundle install` and try again."
       end
 
+      private_class_method def self.brakeman_on_machine
+        brakeman_spec_on_machine&.version&.to_s
+      end
+
       # The newest brakeman installed on this machine, read off the gem
       # directories rather than asked of Gem::Specification: under Bundler the
       # spec set is the app's bundle, which is exactly the set that does not
       # have it.
-      private_class_method def self.brakeman_on_machine
+      private_class_method def self.brakeman_spec_on_machine
         # `brakeman-*` also matches brakeman-lib, a different gem: a version
         # starts with a digit.
-        versions = Gem.path.flat_map { |dir|
+        specs = Gem.path.flat_map { |dir|
           Dir.glob(File.join(dir, "specifications", "brakeman-*.gemspec"))
-        }.filter_map { |path| File.basename(path)[/\Abrakeman-(\d[^-]*)\.gemspec\z/, 1] }
+        }.filter_map { |path| (version = File.basename(path)[/\Abrakeman-(\d[^-]*)\.gemspec\z/, 1]) && [ version, path ] }
 
-        versions.max_by { |v| Gem::Version.new(v) rescue Gem::Version.new("0") }
+        newest = specs.max_by { |version, _| Gem::Version.new(version) rescue Gem::Version.new("0") } or return nil
+        Gem::Specification.load(newest.last)
       rescue StandardError => e
-        RailsAiContext.debug_fail(e, nil, label: "brakeman_on_machine")
+        RailsAiContext.debug_fail(e, nil, label: "brakeman_spec_on_machine")
       end
 
       # `checks` is the list of check names that ran, whichever scanner ran

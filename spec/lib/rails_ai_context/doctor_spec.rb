@@ -33,15 +33,28 @@ RSpec.describe RailsAiContext::Doctor do
 
       it "says the scan runs from outside the bundle when that is where brakeman is" do
         allow(RailsAiContext::Tools::SecurityScan).to receive(:brakeman_location).and_return([ :machine, "7.1.0" ])
+        allow(RailsAiContext::Tools::SecurityScan).to receive(:unbundled_failure).and_return(nil)
 
         check = brakeman_check
         expect(check.status).to eq(:pass)
         expect(check.message).to include("7.1.0").and include("outside")
       end
 
+      # It said the scan ran brakeman from there while the scan could not start it.
+      it "warns, naming why, when the scan cannot run the brakeman outside the bundle" do
+        allow(RailsAiContext::Tools::SecurityScan).to receive(:brakeman_location).and_return([ :machine, "8.1.0" ])
+        allow(RailsAiContext::Tools::SecurityScan).to receive(:unbundled_failure).and_return("cannot load such file -- ruby_parser (LoadError)")
+
+        check = brakeman_check
+        expect(check).to have_attributes(status: :warn, fix: "Add: `gem 'brakeman', group: :development` to scan in this process",
+                                         message: "Brakeman 8.1.0 is on this machine, outside the app's bundle, but rails_security_scan " \
+                                                  "cannot run it there: cannot load such file -- ruby_parser (LoadError)")
+      end
+
       # Mastodon locks brakeman; a static run never loads the app's bundle.
       it "does not tell an app whose lockfile carries brakeman to add it" do
         allow(RailsAiContext::Tools::SecurityScan).to receive(:brakeman_location).and_return([ :machine, "8.0.6" ])
+        allow(RailsAiContext::Tools::SecurityScan).to receive(:unbundled_failure).and_return(nil)
         allow(RailsAiContext::GemLock).to receive(:for).and_return(RailsAiContext::GemLock::Spec.new({ "brakeman" => "8.0.6" }))
 
         check = brakeman_check
