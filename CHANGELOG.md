@@ -135,9 +135,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Claude Code, Codex and the other clients that start their server without a
   shell do not run, so no entry the install wrote started there. Each entry
   is now `cmd /c bundle exec rails-ai-context serve` (`cmd /c
-  rails-ai-context serve` standalone) on Windows, the way Claude Code's own
-  documentation starts such a server, and stays as it was on macOS and
-  Linux. A config may be committed, so `doctor` fails a `cmd /c` entry on
+  rails-ai-context serve` standalone) on Windows - `cmd.exe` is a program
+  every client starts, and it runs the batch file - and stays as it was on
+  macOS and Linux. A config may be committed, so `doctor` fails a `cmd /c` entry on
   macOS and Linux, where there is no `cmd`, and on Windows warns about a
   bare entry whose command PATH finds only as a `.bat` or `.cmd`; running
   the install again rewrites either for the machine it runs on. A team on
@@ -164,7 +164,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `C:/...` passed as relative: the context the app commits could carry a
   path under the developer's home directory, an engine or code root outside
   the app was looked for inside it, and a tool handed `C:/Windows/win.ini`
-  did not refuse it as the absolute path it is.
+  did not refuse it as the absolute path it is. A failing tool's `At:` line
+  split its frame at the drive letter's colon and so named the file by its
+  whole path, and `doctor` named an absolute SQLite path from database.yml
+  as though it were relative to the app.
+- **A file whose lines end in CRLF, as a Windows checkout's do, is read and
+  written in them.** `search_code` ends a line before its CRLF, so `end$`
+  finds a line that ends `end` (it matched no line of such a file) and
+  `\s$` no longer matches every one. The initializer's `config.ai_tools`
+  line was not found or inserted in a CRLF initializer; a context file's
+  managed block was written in LF beside CRLF text, leaving a blank line
+  under its END marker on every run; and the CRLF pre-commit hook an
+  earlier version wrote on Windows, which sh cannot run, read as changed by
+  hand, so the install never rewrote it.
+- **On Windows the stdio server keeps its stdout across Bundler's re-exec.**
+  Windows has no `exec`: Ruby starts the new image as a child that inherits
+  the standard handles and no other, so the descriptor the server saved its
+  real stdout on was lost, and a server whose app pins another Bundler
+  answered its client nothing. An exec inside the boot now puts the real
+  stdout back first.
+- **On Windows `security_scan` stops a run that does not end**, where
+  sending it TERM raised `EINVAL`; the run is stopped with KILL alone there.
+  A `search_code` pattern longer than Windows takes on a command line (about
+  32,000 characters) is searched in Ruby, where the error answered with the
+  whole command line, pattern and all.
 - **"No Rails app found in" names an `--app-path` as it was typed**, as the
   hint under it does, where it named the folder through any symlink on the
   way (`/private/var/...` for `/var/...` on macOS). The warning that an app

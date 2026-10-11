@@ -387,7 +387,8 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
 
         expect(File.symlink?(yaml_path)).to be(true)
         expect(File.read(real)).to include("tool_mode: cli")
-        expect(File.stat(real).mode & 0o777).to eq(0o640)
+        # Windows keeps no POSIX mode to carry over.
+        expect(File.stat(real).mode & 0o777).to eq(0o640) unless Gem.win_platform?
       end
     end
 
@@ -711,6 +712,53 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
 
       expect(described_class.write_tool_mode(:cli, root: root)).to eq(:inserted)
       expect(described_class.tool_mode(root: root)).to eq(:cli)
+    end
+
+    # A Windows checkout ends the initializer's lines in CRLF. The block was
+    # not found there, and a line put in or rewritten ended in LF alone.
+    context "in an initializer whose lines end in CRLF" do
+      def initializer_bytes
+        File.binread(File.join(root, "config", "initializers", "rails_ai_context.rb"))
+      end
+
+      def write_crlf(body)
+        FileUtils.mkdir_p(File.join(root, "config", "initializers"))
+        File.binwrite(File.join(root, "config", "initializers", "rails_ai_context.rb"), body.gsub("\n", "\r\n"))
+      end
+
+      it "inserts into a bare configure block, in CRLF" do
+        write_crlf("RailsAiContext.configure do |config|\nend\n")
+
+        expect(described_class.write_tool_mode(:cli, root: root)).to eq(:inserted)
+        expect(initializer_bytes).to eq("RailsAiContext.configure do |config|\r\n  config.tool_mode = :cli    # CLI only (no MCP server needed)\r\nend\r\n")
+      end
+
+      it "inserts beside the selection line, in CRLF" do
+        write_crlf("RailsAiContext.configure do |config|\n  config.ai_tools = %i[claude]\nend\n")
+
+        expect(described_class.write_tool_mode(:mcp, root: root)).to eq(:inserted)
+        expect(initializer_bytes).to eq("RailsAiContext.configure do |config|\r\n  config.ai_tools = %i[claude]\r\n" \
+                                        "  config.tool_mode = :mcp   # MCP primary + CLI fallback\r\nend\r\n")
+      end
+
+      it "rewrites a line, its note and all, keeping its CRLF" do
+        write_crlf("RailsAiContext.configure do |config|\n  config.tool_mode = :mcp   # MCP primary + CLI fallback\nend\n")
+
+        expect(described_class.write_tool_mode(:cli, root: root)).to eq(:updated)
+        expect(initializer_bytes).to eq("RailsAiContext.configure do |config|\r\n  config.tool_mode = :cli    # CLI only (no MCP server needed)\r\nend\r\n")
+        expect(described_class.tool_mode(root: root)).to eq(:cli)
+        expect(described_class.write_tool_mode(:cli, root: root)).to eq(:unchanged)
+      end
+
+      it "writes the selection into the block and reads it back" do
+        write_crlf("RailsAiContext.configure do |config|\n  config.preset = :full\nend\n")
+
+        described_class.write(%i[codex], root: root)
+
+        expect(initializer_bytes).to include("config.ai_tools = %i[codex]\r\n")
+        expect(initializer_bytes.scan("\n").size).to eq(initializer_bytes.scan("\r\n").size)
+        expect(described_class.read(root: root)).to eq([ :codex ])
+      end
     end
 
     it "reports an unchanged line and an absent file honestly" do

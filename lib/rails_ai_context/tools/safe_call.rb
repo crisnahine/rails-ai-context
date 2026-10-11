@@ -123,9 +123,11 @@ module RailsAiContext
           return "(eval at #{portable_origin(eval_frame[1])})#{eval_frame[2]}"
         end
 
-        path, rest = frame.split(":", 2)
+        # FILE:LINE, split at the line number: a Windows path has a colon of
+        # its own after the drive letter (D:/a/app/x.rb:1).
+        path, rest = frame.match(/\A(.+?):(\d+(?::.*)?)\z/m)&.captures || [ frame, nil ]
         # A relative path (`(eval)`, `-e`) names nothing on this machine.
-        return frame unless File.absolute_path?(path.to_s)
+        return frame unless RailsAiContext::SafePath.absolute?(path)
 
         # This runs inside the rescue that answers a tool failure, so a raise
         # here would leave the net and reach the client as a protocol error.
@@ -140,7 +142,7 @@ module RailsAiContext
         rescue StandardError
           path
         end
-        relative = File.basename(relative) if File.absolute_path?(relative)
+        relative = File.basename(relative) if RailsAiContext::SafePath.absolute?(relative)
         [ relative, rest ].compact.join(":")
       end
 

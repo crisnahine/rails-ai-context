@@ -353,10 +353,13 @@ module RailsAiContext
       end
 
       # A child that is already gone raises ESRCH, which is the outcome asked
-      # for either way.
+      # for either way. Windows sends no TERM to another process (EINVAL);
+      # KILL is how it stops one.
       private_class_method def self.stop(wait)
-        Process.kill("TERM", wait.pid)
-        return if wait.join(KILL_GRACE)
+        unless Gem.win_platform?
+          Process.kill("TERM", wait.pid)
+          return if wait.join(KILL_GRACE)
+        end
 
         Process.kill("KILL", wait.pid)
       rescue Errno::ESRCH

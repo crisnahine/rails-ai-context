@@ -87,16 +87,17 @@ RSpec.describe RailsAiContext::OutputGuard do
         require #{File.expand_path("lib/rails_ai_context/output_guard.rb").inspect}
 
         if ENV["RAC_SECOND_IMAGE"]
-          carried = ENV["RAILS_AI_CONTEXT_STDOUT_FD"].to_i
+          # Windows carries no descriptor across: its exec starts a child.
+          carried = ENV["RAILS_AI_CONTEXT_STDOUT_FD"]&.to_i
           RailsAiContext::OutputGuard.quarantine_stdout { $stdout.puts "boot noise" }
           $stdout.puts "jsonrpc response"
           $stdout.puts "pointer=\#{ENV['RAILS_AI_CONTEXT_STDOUT_FD'].inspect}"
-          open = begin
+          open = carried && begin
             IO.new(carried, "w", autoclose: false).stat && true
           rescue StandardError
             false
           end
-          $stdout.puts "carried_fd_open=\#{open}"
+          $stdout.puts "carried_fd_open=\#{open.inspect}"
           $stdout.flush
         else
           RailsAiContext::OutputGuard.quarantine_stdout do
@@ -117,7 +118,34 @@ RSpec.describe RailsAiContext::OutputGuard do
       # close-on-exec cleared, every subprocess the app spawns afterwards
       # inherits a copy of the MCP channel.
       expect(out).to include("pointer=nil")
-      expect(out).to include("carried_fd_open=false")
+      expect(out).to match(/carried_fd_open=(false|nil)/)
+    end
+  end
+
+  # Windows has no exec: Ruby starts the new image as a child that takes the
+  # standard handles as they stand. Run here with the platform answered as
+  # Windows, so the image this exec starts shows which fd 1 it was given.
+  it "puts fd 1 back on the real stdout before an exec, where Windows starts the new image with the handles as they stand" do
+    require "open3"
+
+    Dir.mktmpdir do |dir|
+      script = File.join(dir, "windows_exec.rb")
+      File.write(script, <<~RUBY)
+        require #{File.expand_path("lib/rails_ai_context/output_guard.rb").inspect}
+        def Gem.win_platform? = true
+
+        RailsAiContext::OutputGuard.quarantine_stdout do
+          $stdout.puts "boot noise"
+          STDOUT.flush
+          Kernel.exec(RbConfig.ruby, "-e", "puts %(jsonrpc response); puts ENV.key?(%(RAILS_AI_CONTEXT_STDOUT_FD))")
+        end
+      RUBY
+
+      out, err, status = Open3.capture3(RbConfig.ruby, script)
+
+      expect(status).to be_success
+      expect(out).to eq("jsonrpc response\nfalse\n")
+      expect(err).to include("boot noise")
     end
   end
 end
