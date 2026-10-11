@@ -1741,6 +1741,7 @@ Without the `listen` gem, which a new Rails 8 app does not bundle, answers still
 2. On change (debounced 1.5s), it checks the file fingerprint to avoid false positives
 3. If files truly changed, it:
    - Clears all MCP tool caches
+   - Has the next tool call or resource read reload the app's code before it answers; the watching thread loads none of the app's code itself
    - Sends `notifications/resources/list_changed` to the AI client
    - Logs a summary of what changed (e.g., "Files changed: 2 models, 1 controller.")
 

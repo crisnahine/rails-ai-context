@@ -50,8 +50,8 @@ module RailsAiContext
       private
 
       def answer_call(discarded)
-        # Held across the tool body: a concurrent live reload must not unload
-        # constants while this call is reading them.
+        # Held across the tool body: a reload another call runs must not
+        # unload constants while this call is reading them.
         #
         # The rescue sits INSIDE the block on purpose. `executor.wrap` reports
         # anything that crosses it to the host app's error_reporter as

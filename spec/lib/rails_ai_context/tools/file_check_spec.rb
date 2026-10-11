@@ -81,6 +81,30 @@ RSpec.describe "a server's check of the app's files at each call" do
     end
   end
 
+  # Live reload's watch runs on Listen's thread, which must not load app
+  # code; it leaves the reload to the next call.
+  context "when live reload saw a change" do
+    before { base.reload_at_next_call! }
+
+    it "reloads the app's code at the next call, then drops the caches, once" do
+      expect(RailsAiContext::Fingerprinter).not_to receive(:mark)
+
+      base.refresh_if_files_changed!
+      base.refresh_if_files_changed!
+
+      expect(RailsAiContext::CodeReloader).to have_received(:reload!).once.ordered
+      expect(base).to have_received(:reset_all_caches!).once.ordered
+    end
+
+    it "leaves the reload to the call the client made, not a tool it calls" do
+      RailsAiContext::RunCache.around { base.refresh_if_files_changed! }
+      expect(RailsAiContext::CodeReloader).not_to have_received(:reload!)
+
+      base.refresh_if_files_changed!
+      expect(RailsAiContext::CodeReloader).to have_received(:reload!).once
+    end
+  end
+
   # The path a client's call takes: an answer read before an edit is not
   # served after it.
   it "gives a tool call the context as the files are now" do
