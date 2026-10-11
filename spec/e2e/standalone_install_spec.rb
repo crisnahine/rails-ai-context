@@ -12,11 +12,9 @@ require_relative "e2e_helper"
 # Gemfile (shared apps, short-lived exploration, gem-install-then-try).
 RSpec.describe "E2E: standalone install", type: :e2e do
   before(:all) do
-    @builder = E2E::TestAppBuilder.new(
-      parent_dir: E2E.root,
-      name: "standalone_app",
-      install_path: :standalone
-    ).build!
+    # The shared standalone fixture: the zeitwerk examples below change it
+    # and put back every file they change.
+    @builder = E2E.shared_app(install_path: :standalone)
     @cli = E2E::CliRunner.new(@builder)
   end
 

@@ -19,7 +19,10 @@ module E2E
   #     stubbed out, so it has no Post model / controller / routes.
   #
   # Everything else that reads from an in-Gemfile install can call
-  # `E2E.shared_app(install_path: :in_gemfile)`.
+  # `E2E.shared_app(install_path: :in_gemfile)`, and a standalone one
+  # `E2E.shared_app(install_path: :standalone)`. A spec that needs to change
+  # an app takes a copy of a shared one (TestAppBuilder#copy_to), which costs
+  # a second, rather than building its own.
   def self.shared_app(install_path:, scaffold: true)
     @shared_apps ||= {}
     key = [ install_path, scaffold ]

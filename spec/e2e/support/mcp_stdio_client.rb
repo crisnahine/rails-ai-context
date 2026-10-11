@@ -50,12 +50,14 @@ module E2E
     end
 
     # Send a JSON-RPC request and return the parsed response hash.
-    # Raises McpStdioClient::Error on protocol / framing errors or on timeout.
-    def request(method, params = {})
+    # Raises McpStdioClient::Error on protocol / framing errors or on timeout,
+    # and on a JSON-RPC error response unless `raise_on_error: false`, which
+    # returns it for the caller to read its code and data.
+    def request(method, params = {}, raise_on_error: true)
       @id += 1
       payload = { jsonrpc: "2.0", id: @id, method: method, params: params }
       write_message(payload)
-      read_message_matching(@id)
+      read_message_matching(@id, raise_on_error: raise_on_error)
     end
 
     # Send a JSON-RPC notification (no id, no response expected).
@@ -128,7 +130,7 @@ module E2E
       false
     end
 
-    def read_message_matching(expected_id)
+    def read_message_matching(expected_id, raise_on_error: true)
       deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + @timeout
       loop do
         remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -148,7 +150,7 @@ module E2E
         # Skip server-initiated notifications we didn't ask for
         next unless msg.is_a?(Hash) && msg["id"] == expected_id
 
-        if msg["error"]
+        if msg["error"] && raise_on_error
           raise Error, "JSON-RPC error for id=#{expected_id}: #{msg['error'].inspect}"
         end
         return msg

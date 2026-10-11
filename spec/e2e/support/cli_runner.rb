@@ -30,13 +30,13 @@ module E2E
     # Honors the isolated GEM_HOME in standalone/zero_config paths.
     # For in-Gemfile path, uses `bundle exec` because Bundler does not
     # auto-generate `bin/rails-ai-context` binstubs.
-    def cli_tool(tool_name, args = [], timeout: 60, extra_env: {})
-      run(cli_prefix + [ "tool", tool_name, *args ], timeout: timeout, extra_env: extra_env)
+    def cli_tool(tool_name, args = [], timeout: 60, extra_env: {}, chdir: @app.app_path)
+      run(cli_prefix + [ "tool", tool_name, *args ], timeout: timeout, extra_env: extra_env, chdir: chdir)
     end
 
     # Run `rails-ai-context <subcommand>` (init, doctor, context, version, ...)
-    def cli(*args, extra_env: {})
-      run(cli_prefix + args, extra_env: extra_env)
+    def cli(*args, extra_env: {}, chdir: @app.app_path, stdin_input: nil)
+      run(cli_prefix + args, extra_env: extra_env, chdir: chdir, stdin_input: stdin_input)
     end
 
     private
@@ -47,15 +47,17 @@ module E2E
 
     public
 
-    # Run a raw command inside the app with the merged env.
-    # Pass `stdin_input:` to feed data to the subprocess's stdin. A bin/
-    # script runs through this Ruby (TestAppBuilder.script_command).
-    def run(cmd, extra_env: {}, timeout: 60, stdin_input: nil)
-      env = @app.env.merge(extra_env.compact)
+    # Run a raw command with the merged env, inside the app unless `chdir:`
+    # names another directory (a subdirectory of it, the folder above it).
+    # A nil in `extra_env` unsets that variable. Pass `stdin_input:` to feed
+    # data to the subprocess's stdin. A bin/ script runs through this Ruby
+    # (TestAppBuilder.script_command).
+    def run(cmd, extra_env: {}, timeout: 60, stdin_input: nil, chdir: @app.app_path)
+      env = @app.env.merge(extra_env)
       stdout = ""
       stderr = ""
       status = nil
-      Open3.popen3(env, *TestAppBuilder.script_command(cmd), chdir: @app.app_path) do |stdin_io, stdout_io, stderr_io, wait_thr|
+      Open3.popen3(env, *TestAppBuilder.script_command(cmd), chdir: chdir) do |stdin_io, stdout_io, stderr_io, wait_thr|
         begin
           if stdin_input
             stdin_io.write(stdin_input)

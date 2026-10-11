@@ -12,6 +12,7 @@ require "tmpdir"
 require "timeout"
 require "socket"
 
+require_relative "support/platform"
 require_relative "support/test_app_builder"
 require_relative "support/cli_runner"
 require_relative "support/mcp_stdio_client"
