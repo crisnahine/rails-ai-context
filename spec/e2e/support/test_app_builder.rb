@@ -116,7 +116,7 @@ module E2E
         "BUNDLER_SETUP" => nil,
         "RUBYOPT" => nil,
         "RUBYLIB" => nil
-      }
+      }.merge(self.class.bundler_originals)
       return base unless isolated_gem_home?
       # For standalone + zero_config: also make the isolated CLI binary
       # resolvable. PATH prepend puts gem_home/bin ahead of system bin;
@@ -364,7 +364,17 @@ module E2E
         "BUNDLER_VERSION"  => nil,
         "RUBYOPT"          => nil,
         "RUBYLIB"          => nil
-      }
+      }.merge(self.class.bundler_originals)
+    end
+
+    # The outer `bundle exec` saves the environment it changed as
+    # BUNDLER_ORIG_* variables, and a Bundler in the child reads its
+    # original environment back from them: there `Bundler.original_env`
+    # was the outer shell's, without the PATH and GEM_PATH this harness
+    # gives the child, so doctor found no `rails-ai-context` on the PATH a
+    # client would start it with. A person's shell has none of them.
+    def self.bundler_originals
+      ENV.keys.grep(/\ABUNDLER_ORIG_/).to_h { |key| [ key, nil ] }
     end
 
     # Execute a command inside the app directory with merged env.
