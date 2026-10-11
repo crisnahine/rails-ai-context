@@ -153,17 +153,19 @@ module RailsAiContext
       # varchar(255)) carries digits, and a record-returning function's list
       # (json_to_recordset(...) AS t(a int, b text)) carries types, so neither
       # matches; a single-column alias (generate_series(...) AS g(n)) is not a
-      # rename of several columns and is left alone.
+      # rename of several columns and is left alone. A list on a VALUES body
+      # (`(VALUES (1,'a')) AS v(id, name)`, `WITH v(id, name) AS (VALUES ...)`)
+      # renames no table column - VALUES has none - so it is left alone too;
+      # see renaming_alias_list?.
       ALIAS_IDENT     = /[A-Za-z_]\w*/
       ALIAS_IDENT_LIST = /#{ALIAS_IDENT}(?:\s*,\s*#{ALIAS_IDENT})+/
-      COLUMN_ALIAS_LIST = Regexp.union(
-        # CTE column list: name(a, b, ...) AS (
-        /#{ALIAS_IDENT}\s*\(\s*#{ALIAS_IDENT_LIST}\s*\)\s*AS\s*\(/i,
-        # Derived-table / explicit alias: ... AS alias(a, b, ...)
-        /\bAS\s+#{ALIAS_IDENT}\s*\(\s*#{ALIAS_IDENT_LIST}\s*\)/i,
-        # Table alias without AS: FROM/JOIN table alias(a, b, ...)
-        /\b(?:FROM|JOIN)\s+#{ALIAS_IDENT}(?:\.#{ALIAS_IDENT})?\s+#{ALIAS_IDENT}\s*\(\s*#{ALIAS_IDENT_LIST}\s*\)/i
-      )
+      # CTE column list: name(a, b, ...) AS (
+      CTE_ALIAS_LIST = /#{ALIAS_IDENT}\s*\(\s*#{ALIAS_IDENT_LIST}\s*\)\s*AS\s*\(/i
+      # Derived-table / explicit alias: ... AS alias(a, b, ...)
+      DERIVED_ALIAS_LIST = /\bAS\s+#{ALIAS_IDENT}\s*\(\s*#{ALIAS_IDENT_LIST}\s*\)/i
+      # Table alias without AS: FROM/JOIN table alias(a, b, ...)
+      TABLE_ALIAS_LIST = /\b(?:FROM|JOIN)\s+#{ALIAS_IDENT}(?:\.#{ALIAS_IDENT})?\s+#{ALIAS_IDENT}\s*\(\s*#{ALIAS_IDENT_LIST}\s*\)/i
+      COLUMN_ALIAS_LIST = Regexp.union(CTE_ALIAS_LIST, DERIVED_ALIAS_LIST, TABLE_ALIAS_LIST)
 
       # Defense against the column-aliasing redaction bypass:
       #
@@ -422,6 +424,48 @@ module RailsAiContext
         out
       end
 
+      # Whether the SQL carries a column-alias list that renames a table's
+      # columns. A list on a VALUES body renames nothing a table holds, so it is
+      # left alone; a sensitive name inside the VALUES rows is still refused by
+      # the textual check. The lists are matched on the text as written, as
+      # before; parentheses are balanced on quote-masked text (same length, same
+      # positions), so one inside a literal does not move a body's bounds.
+      private_class_method def self.renaming_alias_list?(cleaned, mysql: false)
+        return true if cleaned.match?(TABLE_ALIAS_LIST)
+
+        masked = mask_quoted(cleaned, mysql: mysql)
+        # A CTE's list: the pattern ends on the "(" that opens its body.
+        cleaned.scan(CTE_ALIAS_LIST) do
+          return true unless values_body_at?(masked, Regexp.last_match.end(0))
+        end
+        # A derived table's list: its body is the parenthesis before AS.
+        cleaned.scan(DERIVED_ALIAS_LIST) do
+          open = derived_table_open(masked, Regexp.last_match.begin(0))
+          return true unless open && values_body_at?(masked, open + 1)
+        end
+        false
+      end
+
+      private_class_method def self.values_body_at?(masked, position)
+        masked[position..].to_s.match?(/\A\s*VALUES\b/i)
+      end
+
+      # The index of the "(" that opens the parenthesised FROM item ending just
+      # before `as_position`, or nil when no ")" stands there.
+      private_class_method def self.derived_table_open(masked, as_position)
+        close = as_position - 1
+        close -= 1 while close >= 0 && masked[close].match?(/\s/)
+        return nil unless close >= 0 && masked[close] == ")"
+
+        depth = 0
+        close.downto(0) do |i|
+          depth += 1 if masked[i] == ")"
+          depth -= 1 if masked[i] == "("
+          return i if depth.zero?
+        end
+        nil
+      end
+
       private_class_method def self.mysql_dialect?
         ActiveRecord::Base.connection_db_config.adapter.to_s.match?(MYSQL_ADAPTER)
       rescue ActiveRecord::ActiveRecordError
@@ -484,8 +528,9 @@ module RailsAiContext
         end
 
         # A CTE or FROM-item column-alias list renames a wildcard's columns,
-        # which would carry the sensitive values out under harmless names.
-        if cleaned.match?(COLUMN_ALIAS_LIST)
+        # which would carry the sensitive values out under harmless names. One
+        # on a VALUES body renames no table column and is left alone.
+        if renaming_alias_list?(cleaned, mysql: mysql)
           return [ false,
             "Blocked: a column-alias list (e.g. `t(a, b, c)`) renames the columns a " \
             "wildcard returns, so sensitive columns would leave under harmless names. " \
