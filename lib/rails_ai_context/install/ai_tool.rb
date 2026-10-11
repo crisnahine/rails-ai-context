@@ -20,6 +20,13 @@ module RailsAiContext
     # mcp_config[:folder_variable] is how the tool's config names the folder it sits in, where
     # it has a name for it: a workspace entry's app path starts from that name. The others get
     # a bare relative path, which they resolve against the folder they were started in.
+    #
+    # mcp_config[:client] is the program that reads the config, and [:jsonc] whether it reads
+    # JSONC - comments and trailing commas - or refuses them, as JSON does. VS Code reads
+    # .vscode/mcp.json as a standalone configuration file, with its JSONC parser and trailing
+    # commas allowed; OpenCode reads opencode.json with jsonc-parser, trailing commas allowed.
+    # Claude Code reads .mcp.json with JSON.parse. Cursor's is held to JSON as well, the form
+    # every reader takes: nothing shows its reader takes JSONC.
     AiTool = Struct.new(:number, :key, :name, :files, :context_paths, :rules_dir, :rule_files, :mcp_config,
                         :legacy_paths, :owned_dir, keyword_init: true)
 
@@ -31,7 +38,7 @@ module RailsAiContext
           context_paths: %w[CLAUDE.md .claude/rules],
           rules_dir: ".claude/rules",
           rule_files: %w[rails-context.md rails-schema.md rails-models.md rails-mcp-tools.md rails-components.md],
-          mcp_config: { path: ".mcp.json", root_key: "mcpServers", format: :mcp_json },
+          mcp_config: { path: ".mcp.json", root_key: "mcpServers", format: :mcp_json, client: "Claude Code", jsonc: false },
           legacy_paths: [ ".claude/rules/rails-ui-patterns.md", ".claude/rules/rails-accessibility.md" ],
           owned_dir: ".claude"
         ),
@@ -42,7 +49,7 @@ module RailsAiContext
           rules_dir: ".cursor/rules",
           rule_files: %w[rails-project.mdc rails-models.mdc rails-controllers.mdc rails-mcp-tools.mdc],
           mcp_config: { path: ".cursor/mcp.json", root_key: "mcpServers", format: :mcp_json,
-                        folder_variable: "${workspaceFolder}" },
+                        folder_variable: "${workspaceFolder}", client: "Cursor", jsonc: false },
           legacy_paths: [ ".cursor/rules/rails-ui-patterns.mdc" ],
           owned_dir: ".cursor"
         ),
@@ -56,21 +63,21 @@ module RailsAiContext
             rails-controllers.instructions.md rails-mcp-tools.instructions.md
           ],
           mcp_config: { path: ".vscode/mcp.json", root_key: "servers", format: :vscode_json,
-                        folder_variable: "${workspaceFolder}" },
+                        folder_variable: "${workspaceFolder}", client: "VS Code", jsonc: true },
           legacy_paths: [ ".github/instructions/rails-ui-patterns.instructions.md" ]
         ),
         new(
           number: "4", key: :opencode, name: "OpenCode",
           files: "AGENTS.md",
           context_paths: %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md],
-          mcp_config: { path: "opencode.json", root_key: "mcp", format: :opencode_json },
+          mcp_config: { path: "opencode.json", root_key: "mcp", format: :opencode_json, client: "OpenCode", jsonc: true },
           legacy_paths: []
         ),
         new(
           number: "5", key: :codex, name: "Codex CLI",
           files: "AGENTS.md + .codex/config.toml",
           context_paths: %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md],
-          mcp_config: { path: ".codex/config.toml", root_key: nil, format: :codex_toml },
+          mcp_config: { path: ".codex/config.toml", root_key: nil, format: :codex_toml, client: "Codex CLI" },
           legacy_paths: [],
           owned_dir: ".codex"
         )

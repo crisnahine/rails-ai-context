@@ -712,15 +712,18 @@ module RailsAiContext
     end
 
     # Why the install would leave a JSON config as it is, in the words the
-    # install uses: it does not parse (or holds comments), or it holds no
-    # object to merge into, at the top or under the tool's servers key.
+    # install uses: its client cannot read it (Claude Code's JSON refuses
+    # the comments and trailing commas VS Code's JSONC takes), it does not
+    # parse (or holds comments), or it holds no object to merge into, at the
+    # top or under the tool's servers key.
     def json_config_problem(text, tool)
-      data = McpConfigGenerator.parse_json_text(text)
-      root_key = McpConfigGenerator::TOOL_CONFIGS.fetch(tool)[:root_key]
+      config = McpConfigGenerator::TOOL_CONFIGS.fetch(tool)
+      data = McpConfigGenerator.parse_json_text(text, config)
+      root_key = config[:root_key]
       if !data.is_a?(Hash) then "it is JSON but not an object"
       elsif !data[root_key].nil? && !data[root_key].is_a?(Hash) then %("#{root_key}" is not an object)
       end
-    rescue JSON::ParserError => e
+    rescue JSON::ParserError, McpConfigGenerator::UnreadableError => e
       McpConfigGenerator.parse_problem(e, text)
     end
 

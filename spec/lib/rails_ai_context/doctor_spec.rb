@@ -986,10 +986,26 @@ RSpec.describe RailsAiContext::Doctor do
       # The install refuses a file holding comments whichever json version
       # reads it, and doctor names the same problem.
       it "names comments as the problem, as the install does" do
-        write(".mcp.json", %({\n  // the gem's\n  "mcpServers": {"rails-ai-context": {"command": "bundle"} "other": {}}\n}))
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[copilot])
+        write(".vscode/mcp.json", %({\n  // the gem's\n  "servers": {"rails-ai-context": {"command": "bundle"} "other": {}}\n}))
 
-        expect(check.message).to eq("1 of 1 MCP config needs attention: .mcp.json (Claude Code): " \
+        expect(check.message).to eq("1 of 1 MCP config needs attention: .vscode/mcp.json (GitHub Copilot): " \
                                     "#{RailsAiContext::McpConfigGenerator::COMMENTS_PROBLEM}")
+      end
+
+      # Claude Code reads .mcp.json with JSON.parse, so a trailing comma or a
+      # comment there leaves it no server, whatever a JSONC reader makes of
+      # the file; doctor passed one whose entry was current.
+      it "fails a config its client reads as JSON when it holds a trailing comma or comments" do
+        entry = %("rails-ai-context": {"command": "rails-ai-context", "args": ["serve"]})
+        write(".mcp.json", %({\n  "mcpServers": {\n    #{entry},\n  },\n}\n))
+
+        expect(check.status).to eq(:fail)
+        expect(check.message).to end_with(".mcp.json (Claude Code): Claude Code cannot read it: it holds a trailing comma, " \
+                                          "which JSON does not allow")
+
+        write(".mcp.json", %({\n  // the gem's\n  "mcpServers": {#{entry}}\n}\n))
+        expect(app_doctor.send(:check_mcp_json).message).to end_with("Claude Code cannot read it: it holds comments, which JSON does not allow")
       end
 
       # Install leaves a file it cannot parse as it is, so running it alone

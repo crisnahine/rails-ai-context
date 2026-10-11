@@ -37,35 +37,37 @@ RSpec.describe RailsAiContext::Install::AiTool do
         name: "Claude Code",
         files: "CLAUDE.md + .claude/rules/",
         context_paths: %w[CLAUDE.md .claude/rules],
-        mcp_config: { path: ".mcp.json", root_key: "mcpServers", format: :mcp_json },
+        mcp_config: { path: ".mcp.json", root_key: "mcpServers", format: :mcp_json, client: "Claude Code", jsonc: false },
         legacy_paths: [ ".claude/rules/rails-ui-patterns.md", ".claude/rules/rails-accessibility.md" ]
       },
       cursor: {
         name: "Cursor",
         files: ".cursor/rules/ + .cursorrules (legacy fallback)",
         context_paths: %w[.cursor/rules .cursorrules],
-        mcp_config: { path: ".cursor/mcp.json", root_key: "mcpServers", format: :mcp_json, folder_variable: "${workspaceFolder}" },
+        mcp_config: { path: ".cursor/mcp.json", root_key: "mcpServers", format: :mcp_json, folder_variable: "${workspaceFolder}",
+                      client: "Cursor", jsonc: false },
         legacy_paths: [ ".cursor/rules/rails-ui-patterns.mdc" ]
       },
       copilot: {
         name: "GitHub Copilot",
         files: ".github/copilot-instructions.md + .github/instructions/",
         context_paths: %w[.github/copilot-instructions.md .github/instructions],
-        mcp_config: { path: ".vscode/mcp.json", root_key: "servers", format: :vscode_json, folder_variable: "${workspaceFolder}" },
+        mcp_config: { path: ".vscode/mcp.json", root_key: "servers", format: :vscode_json, folder_variable: "${workspaceFolder}",
+                      client: "VS Code", jsonc: true },
         legacy_paths: [ ".github/instructions/rails-ui-patterns.instructions.md" ]
       },
       opencode: {
         name: "OpenCode",
         files: "AGENTS.md",
         context_paths: %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md],
-        mcp_config: { path: "opencode.json", root_key: "mcp", format: :opencode_json },
+        mcp_config: { path: "opencode.json", root_key: "mcp", format: :opencode_json, client: "OpenCode", jsonc: true },
         legacy_paths: []
       },
       codex: {
         name: "Codex CLI",
         files: "AGENTS.md + .codex/config.toml",
         context_paths: %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md],
-        mcp_config: { path: ".codex/config.toml", root_key: nil, format: :codex_toml },
+        mcp_config: { path: ".codex/config.toml", root_key: nil, format: :codex_toml, client: "Codex CLI" },
         legacy_paths: []
       }
     }.freeze

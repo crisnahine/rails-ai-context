@@ -296,7 +296,7 @@ RSpec.describe RailsAiContext::Install::Program do
         described_class.cleanup_removed_tools(surface, previous: %i[claude cursor], selected: %i[claude], root: root,
                                                        app_roots: [ File.join(root, "a") ])
 
-        expect(surface.lines).to include([ :warn, a_string_including("Could not update a/.cursor/mcp.json: it holds comments") ])
+        expect(surface.lines).to include([ :warn, a_string_including("Could not update a/.cursor/mcp.json: Cursor cannot read it: it holds comments") ])
         expect(surface.text).not_to include("Cursor files removed")
       end
     end
