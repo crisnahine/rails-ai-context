@@ -213,6 +213,85 @@ RSpec.describe RailsAiContext::Tools::ReviewChanges do
       end
     end
 
+    # The diff was printed as git gave it, so a secret a change adds or takes
+    # out reached the caller whole, as every other tool's source does not, and
+    # a file on sensitive_patterns had its lines shown too.
+    describe "a diff that holds secrets" do
+      let(:token) { "Xk2mQ9pLw7Rt#{'Z4ab'}" }
+      let(:live_key) { "sk_live_#{'b' * 24}" }
+
+      def git(*args)
+        out, status = Open3.capture2e("git", "-c", "user.name=t", "-c", "user.email=t@t.t", "-c", "commit.gpgsign=false",
+                                      *args, chdir: @dir)
+        raise out unless status.success?
+
+        out
+      end
+
+      def write(relative, body)
+        FileUtils.mkdir_p(File.dirname(File.join(@dir, relative)))
+        File.write(File.join(@dir, relative), body)
+      end
+
+      around do |example|
+        Dir.mktmpdir do |dir|
+          @dir = dir
+          git("init", "-q")
+          write("config/initializers/billing.rb", %(API_TOKEN = "#{token}"\n) + "  a = 1\n" * 8)
+          git("add", "-A")
+          git("commit", "-q", "-m", "init")
+          example.run
+        end
+      end
+
+      before { allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(@dir))) }
+
+      def add_secrets
+        write("config/initializers/billing.rb", %(API_TOKEN = "#{token}"\n) + "  a = 1\n" * 7 + "  a = 2\n" +
+                                               %(STRIPE_KEY = "#{live_key}"\nSEED = { password: "hunter2xy" }.freeze\n))
+        write("config/settings.yml", "production:\n  api_token: #{token}\n")
+        write("Procfile.dev", "redis: redis-server --requirepass #{token}\n")
+        write("config/database.yml", "production:\n  password: #{token}\n")
+        write(".env", "PLAIN_SETTING=#{token}\n")
+      end
+
+      it "filters the secrets a committed change adds, a hunk header's line among them, and shows no line of a sensitive file" do
+        add_secrets
+        git("add", "-A")
+        git("commit", "-q", "-m", "secrets")
+
+        text = described_class.call(ref: "HEAD~1").content.first[:text]
+
+        expect(text).not_to include(token)
+        expect(text).not_to include(live_key)
+        expect(text).not_to include("hunter2xy")
+        expect(text).to include(%(+STRIPE_KEY = "[FILTERED]"), %(+SEED = { password: "[FILTERED]" }.freeze))
+        expect(text).to include(%(@@ API_TOKEN = "[FILTERED]"), "+  api_token: [FILTERED]", "+redis: redis-server --requirepass [FILTERED]")
+        expect(text).to include("### config/database.yml (config)", "### .env (other)")
+        expect(text.scan("_diff not shown: the file is on `sensitive_patterns`_").size).to eq(2)
+      end
+
+      it "filters them in uncommitted changes as well" do
+        add_secrets
+        git("add", "config/settings.yml")
+
+        text = described_class.call(ref: "HEAD").content.first[:text]
+
+        expect(text).not_to include(token)
+        expect(text).not_to include(live_key)
+        expect(text).to include("+  api_token: [FILTERED]", %(+STRIPE_KEY = "[FILTERED]"))
+      end
+
+      it "filters a secret a change takes out, and leaves the line that replaced it as git gave it" do
+        write("config/initializers/billing.rb", %(API_TOKEN = ENV.fetch("API_TOKEN")\n) + "  a = 1\n" * 8)
+
+        text = described_class.call(ref: "HEAD").content.first[:text]
+
+        expect(text).to include(%(-API_TOKEN = "[FILTERED]"), %(+API_TOKEN = ENV.fetch("API_TOKEN")))
+        expect(text).not_to include(token)
+      end
+    end
+
     # Only `create_table :sym` and `add_column :sym, ...` were read, so a
     # migration naming its table as a string or in parentheses said nothing.
     it "reads a migration's table however the call is written" do

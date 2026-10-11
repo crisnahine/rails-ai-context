@@ -85,6 +85,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has to name a commit, and git sees that commit's SHA. A ref that starts
   with a dash is refused, and one that names no commit says so, where it
   answered "No changes found".
+- **`rails_review_changes` filters the secrets in the diffs it shows, and
+  shows no line of a sensitive file.** Each file's diff was printed as git
+  gave it, so a key, token or password a change added or took out reached
+  the caller whole, as no other tool's source did, and so did every line of
+  a changed `config/database.yml`, `.env` or key file. A diff's lines now go
+  through the same redaction, read as the file they come from, a hunk
+  header's line and a removed validation's included, and a file on
+  `sensitive_patterns` is listed with its line counts alone.
 - **`rails_query` never serialises a whole row.** On PostgreSQL,
   `row_to_json(users.*)`, `to_json(u)`, `u::text`, `array_agg(u)`,
   `json_agg(u)`, `hstore(u)`, `ROW(u.*)`, `format('%s', u)` and a bare

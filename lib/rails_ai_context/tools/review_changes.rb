@@ -242,8 +242,15 @@ module RailsAiContext
             removed = diff_lines.count { |l| l.start_with?("-") && !l.start_with?("---") }
             lines << "+#{added} / -#{removed} lines"
 
-            # Show truncated diff
+            # Show truncated diff. A file the tools may not read shows that it
+            # changed, and none of its lines.
             content_lines = diff_lines.reject { |l| l.start_with?("diff ", "index ", "--- ", "+++ ") }
+            if sensitive_file?(file)
+              lines << "_diff not shown: the file is on `sensitive_patterns`_"
+              content_lines = []
+            else
+              content_lines = redacted_diff(content_lines.map(&:chomp), file)
+            end
             if content_lines.size > MAX_DIFF_LINES_PER_FILE
               lines << "```diff"
               lines.concat(content_lines.first(MAX_DIFF_LINES_PER_FILE).map(&:rstrip))
@@ -365,6 +372,22 @@ module RailsAiContext
           option.value.unescaped if option.value.is_a?(Prism::SymbolNode) || option.value.is_a?(Prism::StringNode)
         end
 
+        # A diff line is a mark (` `, `+` or `-`) and a line of the file, so the
+        # lines go through the redaction every tool's source does, read as the
+        # file they come from (a YAML file's plain scalar is a literal there),
+        # and get their marks back. A hunk header carries a line of the file
+        # too, after its second @@.
+        def redacted_diff(diff_lines, file)
+          body = diff_lines.each_index.select { |i| diff_lines[i].match?(/\A[ +-]/) }
+          texts = RailsAiContext::Redaction.redact_source_lines(body.map { |i| diff_lines[i][1..] }, path: file)
+          redacted = diff_lines.dup
+          body.zip(texts) { |i, text| redacted[i] = diff_lines[i][0] + text }
+          redacted.map do |line|
+            hunk = line.match(/\A(@@ [^@]*@@)(.*)\z/m) or next line
+            hunk[1] + RailsAiContext::Redaction.redact_source_line(hunk[2], path: file)
+          end
+        end
+
         # The same two commits the file list came from, so a file's diff is
         # the change that put it on the list.
         def get_file_diff(file, root, base)
@@ -413,7 +436,7 @@ module RailsAiContext
             diff = get_file_diff(entry[:file], root, ref)
             next unless diff
             removed_validations(diff).each do |line|
-              warnings << "**Removed validation**: `#{entry[:file]}` - `#{line}`"
+              warnings << "**Removed validation**: `#{entry[:file]}` - `#{RailsAiContext::Redaction.redact_source_line(line, path: entry[:file])}`"
             end
           end
 

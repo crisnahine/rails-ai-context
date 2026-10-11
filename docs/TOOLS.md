@@ -758,6 +758,8 @@ A changed migration lists the tables it affects: the table each schema method ta
 
 An app in a subfolder of its repository (a monorepo's `backend/`) is reviewed on its own: its changed files, named from the app root as `rails_validate` takes them, and the commits that touched it.
 
+Each diff passes through the redaction every tool's source does, read as the file it comes from, so a secret a change adds or takes out reads `[FILTERED]`, in a hunk header's line too. A changed file on `sensitive_patterns` (`config/database.yml`, `.env`, a key) is listed with its line counts and none of its lines.
+
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `ref` | string | `HEAD` | Git ref to diff against: a branch, a tag, `HEAD~3` or a commit SHA. `HEAD` reviews uncommitted changes. Any other ref reviews the commits since HEAD left it, as a pull request does: the file list and each file's diff run from the commit the two last shared to HEAD. A ref that names no commit is refused |
