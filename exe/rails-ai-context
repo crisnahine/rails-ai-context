@@ -447,7 +447,7 @@ class RailsAiContextCLI < Thor
       bundled = bundled_copy_for_context if context_files
       boot_rails!(command: "init", allow_static: true) if context_files && !bundled
 
-      program.remove_tools(program_surface, dropped, selected: ai_tools, root: Dir.pwd)
+      program.remove_tools(program_surface, dropped, selected: ai_tools, previous: previous_tools, root: Dir.pwd)
       program.remove_mcp_entries(program_surface, unwired, root: Dir.pwd)
       record_selection(ai_tools, tool_mode, context_files)
       write_mcp_configs(ai_tools, tool_mode)

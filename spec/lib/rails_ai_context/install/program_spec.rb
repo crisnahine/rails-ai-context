@@ -269,6 +269,23 @@ RSpec.describe RailsAiContext::Install::Program do
       end
     end
 
+    # Both dropped, and only OpenCode's files asked to go: Codex CLI's stay,
+    # AGENTS.md among them, which went with OpenCode's.
+    it "keeps a shared file for a dropped tool whose files the answer kept" do
+      Dir.mktmpdir do |root|
+        File.write(File.join(root, "AGENTS.md"), "<!-- BEGIN rails-ai-context -->\nx\n<!-- END rails-ai-context -->\n")
+        File.write(File.join(root, "opencode.json"),
+                   JSON.generate("mcp" => { "rails-ai-context" => { "type" => "local", "command" => %w[rails-ai-context serve] } }))
+
+        surface = surface_class.new("1")
+        described_class.cleanup_removed_tools(surface, previous: %i[claude opencode codex], selected: %i[claude], root: root)
+
+        expect(File.exist?(File.join(root, "AGENTS.md"))).to be(true)
+        expect(File.exist?(File.join(root, "opencode.json"))).to be(false)
+        expect(surface.text).to include("Kept AGENTS.md - Codex CLI uses it too")
+      end
+    end
+
     it "says which config it left as it is, named from where it was run" do
       Dir.mktmpdir do |root|
         FileUtils.mkdir_p(File.join(root, "a/.cursor"))
