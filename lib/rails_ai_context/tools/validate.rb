@@ -77,12 +77,17 @@ module RailsAiContext
           located = RailsAiContext::SafePath.locate(file, under: rails_app.root.to_s)
           case located.refusal
           when :sensitive then results << "\u2717 #{file} - access denied (sensitive file)"
-          when :traversal, :outside then results << "\u2717 #{file} - path not allowed (outside Rails root)"
+          when :traversal then results << "\u2717 #{file} - path not allowed (#{traversal_reason(file)})"
+          when :outside then results << "\u2717 #{file} - path not allowed (it resolves outside the Rails root)"
           when :too_large then results << "\u2717 #{file} - file too large"
           when :missing
-            suggestion = find_file_suggestion(file)
-            hint = suggestion ? " Did you mean '#{suggestion}'?" : ""
-            results << "\u2717 #{file} - file not found.#{hint}"
+            if File.directory?(rails_app.root.join(file))
+              results << "\u2717 #{file} - a directory, not a file. Name the files in it to check."
+            else
+              suggestion = find_file_suggestion(file)
+              hint = suggestion ? " Did you mean '#{suggestion}'?" : ""
+              results << "\u2717 #{file} - file not found.#{hint}"
+            end
           end
 
           total += 1
@@ -141,20 +146,32 @@ module RailsAiContext
 
       # ── Ruby validation ──────────────────────────────────────────────
 
-      # Search common Rails directories for a file by basename and suggest the full path
+      # SafePath refuses these by how they are written, before looking at the
+      # disk, so `app/models/../models/x.rb` is refused though it lands inside
+      # the root, and saying "outside Rails root" sent the caller looking for
+      # the wrong mistake.
+      private_class_method def self.traversal_reason(file)
+        if file.include?("\0") then "it contains a NUL byte"
+        elsif file.start_with?("/") then "an absolute path; name it relative to the Rails root"
+        else "it contains '..'; name it relative to the Rails root without '..'"
+        end
+      end
+
+      # Search common Rails directories for a file by basename and suggest the
+      # full path. Only a file is suggested, and never the path asked about: a
+      # directory named `app/models` matched itself and was offered back.
       private_class_method def self.find_file_suggestion(file)
         basename = File.basename(file)
-        %w[app/models app/controllers app/views app/helpers app/jobs app/mailers
-           app/services app/channels lib config].each do |dir|
-          candidate = File.join(dir, basename)
-          return candidate if File.exist?(rails_app.root.join(candidate))
-        end
+        root = rails_app.root.to_s
+        candidates = %w[app/models app/controllers app/views app/helpers app/jobs app/mailers
+                        app/services app/channels lib config].map { |dir| File.join(dir, basename) }
+        found = candidates.find { |candidate| candidate != file && File.file?(File.join(root, candidate)) }
+        return found if found
 
         # Broader recursive search
-        matches = Dir.glob(File.join(rails_app.root, "app", "**", basename)).first(1)
-        return matches.first.sub("#{rails_app.root}/", "") if matches.any?
-
-        nil
+        Dir.glob(File.join(root, "app", "**", basename))
+          .map { |match| match.delete_prefix("#{root}/") }
+          .find { |match| match != file && File.file?(File.join(root, match)) }
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "find_file_suggestion")
       end

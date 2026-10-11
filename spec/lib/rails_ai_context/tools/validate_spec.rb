@@ -126,6 +126,36 @@ RSpec.describe RailsAiContext::Tools::Validate do
       expect(text).to match(/not found|not allowed/)
     end
 
+    # The refusal is about how the path is written: this one lands inside the
+    # root, and "outside Rails root" sent the caller after the wrong mistake.
+    it "says a path with '..' is refused for the '..', not for where it leads" do
+      text = described_class.call(files: [ "app/models/../models/post.rb" ]).content.first[:text]
+
+      expect(text).to include("app/models/../models/post.rb - path not allowed (it contains '..'")
+      expect(text).not_to include("outside Rails root")
+    end
+
+    it "says an absolute path is refused as absolute" do
+      text = described_class.call(files: [ Rails.root.join("app/models/post.rb").to_s ]).content.first[:text]
+
+      expect(text).to include("path not allowed (an absolute path")
+    end
+
+    # A directory matched itself in the suggestion search and was offered back.
+    it "says a directory is a directory, and offers no directory as the file meant" do
+      text = described_class.call(files: [ "app/models", "lib/models" ]).content.first[:text]
+
+      expect(text).to include("app/models - a directory, not a file")
+      expect(text).to include("lib/models - file not found.")
+      expect(text).not_to include("Did you mean")
+    end
+
+    it "still suggests the file a bare name was likely meant as" do
+      text = described_class.call(files: [ "post.rb" ]).content.first[:text]
+
+      expect(text).to include("post.rb - file not found. Did you mean 'app/models/post.rb'?")
+    end
+
     it "enforces MAX_FILES limit" do
       files = 55.times.map { |i| "app/models/fake#{i}.rb" }
       result = described_class.call(files: files)
