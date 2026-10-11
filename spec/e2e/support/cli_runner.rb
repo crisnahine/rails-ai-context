@@ -73,7 +73,7 @@ module E2E
             status = wait_thr.value
           end
         rescue Timeout::Error
-          Process.kill("KILL", wait_thr.pid) rescue nil
+          E2E::Platform.kill_tree(wait_thr.pid)
           status = wait_thr.value
           stderr += "\n[E2E: process killed after #{timeout}s timeout]"
         end

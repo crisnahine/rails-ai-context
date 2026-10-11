@@ -36,11 +36,11 @@ module E2E
 
     def stop!
       return unless @wait_thr
-      Process.kill("TERM", @wait_thr.pid) rescue nil
+      E2E::Platform.terminate(@wait_thr.pid)
       begin
         Timeout.timeout(5) { @wait_thr.value }
       rescue Timeout::Error
-        Process.kill("KILL", @wait_thr.pid) rescue nil
+        E2E::Platform.kill_tree(@wait_thr.pid)
       end
       [ @stdin, @stdout, @stderr ].each { |io| io&.close rescue nil }
     end

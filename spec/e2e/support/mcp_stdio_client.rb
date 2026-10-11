@@ -43,8 +43,8 @@ module E2E
       return unless @wait_thr
       @stdin.close rescue nil
       unless exited_within?(5)
-        Process.kill("TERM", @wait_thr.pid) rescue nil
-        Process.kill("KILL", @wait_thr.pid) rescue nil unless exited_within?(3)
+        E2E::Platform.terminate(@wait_thr.pid)
+        E2E::Platform.kill_tree(@wait_thr.pid) unless exited_within?(3)
       end
       [ @stdin, @stdout, @stderr ].each { |io| io&.close rescue nil }
     end
