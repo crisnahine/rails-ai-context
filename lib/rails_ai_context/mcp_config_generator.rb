@@ -143,99 +143,270 @@ module RailsAiContext
     # under its servers key: replacing it would drop what it holds.
     class ShapeError < StandardError; end
 
-    # Codex's config read by lines rather than by a TOML parser, which the
-    # gem does not depend on: only the server sections it writes are ever
-    # located, and everything else in the file is copied through untouched.
+    # Codex's config read without a TOML parser, which the gem does not
+    # depend on. The file is split into its statements - table headers and
+    # key/value pairs, each with the full key path TOML gives it - so a
+    # server is found however its name is spelled, quoted or not, whether as
+    # a table, an inline table or dotted keys; everything else in the file is
+    # copied through untouched.
     module Toml
-      # A table header, and the one shape of it that names a server.
-      TABLE = /\A[ \t]*\[/
-      SERVER_HEADER = /\A[ \t]*\[[ \t]*mcp_servers\.([A-Za-z0-9_-]+)[ \t]*\][ \t]*(?:#.*)?\r?\n?\z/
-      KEY_LINE = /\A[ \t]*([A-Za-z0-9_-]+)[ \t]*=[ \t]*/
+      # One statement: a :table or :array_table header, or a :pair. path is
+      # the full key path - a pair's is its table's and its own dotted key -
+      # nil for a header this cannot read and for every pair after it. first
+      # and last are the lines it spans; a pair's value is its text.
+      Statement = Struct.new(:kind, :path, :first, :last, :value)
 
-      module_function
+      # Everything the file says about one server: its [mcp_servers.<name>]
+      # tables, as line ranges; every other statement that defines part of
+      # it - an inline table, dotted keys from outside its table, a sub-table
+      # away from it, mcp_servers itself as an inline table; and its command
+      # line and env, read from all of them.
+      Server = Struct.new(:name, :sections, :elsewhere, :argv, :env, :twice) do
+        # Its one table, or none, is all there is of it: the merge can
+        # replace it where it stands, or add it.
+        def rewritable?
+          elsewhere.empty?
+        end
 
-      # The sections of the servers `keep` accepts, as [line range, name]. A
-      # section runs to the next table header that is not one of its own
-      # sub-tables; blank and comment lines just above that header stay out
-      # of it, since a comment over a header belongs to the header.
-      def sections(lines, &keep)
-        lines.each_with_index.filter_map do |line, start|
-          name = line[SERVER_HEADER, 1]
-          next unless name && keep.call(name)
-
-          finish = start + 1
-          finish += 1 while finish < lines.size && !(lines[finish].match?(TABLE) && !sub_table?(lines[finish], name))
-          finish -= 1 while finish > start + 1 && trivia?(lines[finish - 1])
-          [ start...finish, name ]
+        # Defined twice over, which Codex refuses to read: a second table, or
+        # an inline table or dotted keys beside its table.
+        def twice?
+          twice
         end
       end
 
-      # The sections of the gem's own servers, by the rule own_entry? keeps:
+      SERVERS = "mcp_servers"
+      BARE_KEY = /[A-Za-z0-9_-]+/
+      BASIC = /"(?:[^"\\\n]|\\.)*"/
+      LITERAL = /'[^'\n]*'/
+      MULTILINE_BASIC = /"""(?:[^"\\]|\\.|"(?!""))*"""(?:""?)?/m
+      MULTILINE_LITERAL = /'''(?:[^']|'(?!''))*'''(?:''?)?/m
+
+      module_function
+
+      # The file's statements, in order.
+      def statements(lines)
+        text = lines.join
+        # Where each line starts, in bytes, as StringScanner counts.
+        starts = lines.each_with_object([ 0 ]) { |line, offsets| offsets << offsets.last + line.bytesize }
+        line_at = ->(pos) { (starts.bsearch_index { |offset| offset > pos } || lines.size) - 1 }
+        scanner = StringScanner.new(text)
+        table = []
+        found = []
+        until scanner.eos?
+          next if scanner.skip(/[ \t\r\n]+|#[^\n]*/)
+
+          start = scanner.pos
+          if scanner.skip(/\[\[/) || scanner.skip(/\[/)
+            kind = text.byteslice(start, 2) == "[[" ? :array_table : :table
+            path = key_path(scanner)
+            path = nil unless path && scanner.skip(kind == :table ? /[ \t]*\]/ : /[ \t]*\]\]/)
+            table = path
+            found << Statement.new(kind, path, line_at.call(start), line_at.call(start), nil)
+          elsif (key = key_path(scanner)) && scanner.skip(/[ \t]*=[ \t]*/)
+            from = scanner.pos
+            skip_value(scanner)
+            found << Statement.new(:pair, table && table + key, line_at.call(start), line_at.call([ scanner.pos - 1, start ].max),
+                                   text.byteslice(from...scanner.pos))
+          end
+          # The rest of the line: a comment, or what could not be read.
+          scanner.skip(/[^\n]*/)
+        end
+        found
+      end
+
+      # A dotted key, its parts bare or quoted: nil where there is none.
+      def key_path(scanner)
+        path = []
+        loop do
+          scanner.skip(/[ \t]*/)
+          part = if (bare = scanner.scan(BARE_KEY)) then bare
+          elsif (basic = scanner.scan(BASIC)) then unescape(basic)
+          elsif (literal = scanner.scan(LITERAL)) then literal[1..-2]
+          end
+          return nil unless part
+
+          path << part
+          scanner.skip(/[ \t]*/)
+          return path unless scanner.skip(/\./)
+        end
+      end
+
+      # Past one value, however many lines its strings, arrays and inline
+      # tables span; to the end of its line, not over it.
+      def skip_value(scanner)
+        depth = 0
+        until scanner.eos?
+          if scanner.skip(MULTILINE_BASIC) || scanner.skip(MULTILINE_LITERAL) || scanner.skip(BASIC) || scanner.skip(LITERAL)
+            next
+          elsif scanner.skip(/[\[{]/)
+            depth += 1
+          elsif scanner.skip(/[\]}]/)
+            depth -= 1
+          elsif scanner.skip(/#[^\n]*/)
+            next
+          elsif scanner.check(/\r?\n/)
+            break if depth <= 0
+
+            scanner.skip(/\r?\n/)
+          elsif !scanner.skip(/[^"'\[\]{}#\r\n]+/)
+            scanner.getch
+          end
+        end
+      end
+
+      # A value as data, as far as a server's entry needs one: a string, an
+      # array, an inline table; nil for any other scalar.
+      def value(text)
+        parse_value(StringScanner.new(text))
+      end
+
+      def parse_value(scanner)
+        scanner.skip(/(?:[ \t\r\n]+|#[^\n]*)*/)
+        if scanner.skip(/\{/)
+          items(scanner, "}", {}) do |table|
+            path = key_path(scanner) or next
+            next unless scanner.skip(/[ \t]*=/)
+
+            *outer, last = path
+            holder = outer.inject(table) { |hash, key| hash[key].is_a?(Hash) ? hash[key] : (hash[key] = {}) }
+            holder[last] = parse_value(scanner)
+          end
+        elsif scanner.skip(/\[/)
+          items(scanner, "]", []) { |array| array << parse_value(scanner) }
+        elsif (text = scanner.scan(MULTILINE_BASIC) || scanner.scan(MULTILINE_LITERAL))
+          # Escapes and line-ending backslashes left as they are: no entry
+          # the gem reads spans lines.
+          text[3..-4].sub(/\A\r?\n/, "")
+        elsif (text = scanner.scan(BASIC))
+          unescape(text)
+        elsif (text = scanner.scan(LITERAL))
+          text[1..-2]
+        else
+          scanner.skip(/[^,\]}\s#]*/)
+          nil
+        end
+      end
+
+      # The items of an array or inline table, each read by the block, up to
+      # its closing bracket. One that cannot be read ends it.
+      def items(scanner, close, into)
+        loop do
+          scanner.skip(/(?:[ \t\r\n,]+|#[^\n]*)*/)
+          break if scanner.eos? || scanner.skip(/#{Regexp.escape(close)}/)
+
+          at = scanner.pos
+          yield into
+          break if scanner.pos == at
+        end
+        into
+      end
+
+      # The tables of the servers `keep` accepts, by name, as [line range,
+      # name]. A table runs to the next header that is not one of its own
+      # sub-tables; blank and comment lines just above that header stay out
+      # of it, since a comment over a header belongs to the header.
+      def sections(lines, found = statements(lines), &keep)
+        headers = found.reject { |statement| statement.kind == :pair }
+        headers.each_with_index.filter_map do |header, at|
+          next unless header.kind == :table && server_path?(header.path) && keep.call(header.path[1])
+
+          after = headers[(at + 1)..].find { |other| !under?(other.path, header.path) }
+          finish = after ? after.first : lines.size
+          finish -= 1 while finish > header.first + 1 && trivia?(lines[finish - 1])
+          [ header.first...finish, header.path[1] ]
+        end
+      end
+
+      # The tables of the gem's own servers, by the rule own_entry? keeps:
       # [line range, name] each.
-      def own_sections(lines)
-        sections(lines) { |name| name.match?(OWN_SERVER_NAME) }.select do |range, name|
-          McpConfigGenerator.own_entry?(name, argv(lines, range))
+      def own_sections(lines, found = statements(lines))
+        sections(lines, found) { |name| name.match?(OWN_SERVER_NAME) }.select do |range, name|
+          McpConfigGenerator.own_entry?(name, argv(lines, range, found))
+        end
+      end
+
+      # Each server `keep` accepts, by name, as the whole file defines it.
+      def servers(lines, found = statements(lines), &keep)
+        tables = sections(lines, found, &keep)
+        whole = found.find { |statement| statement.kind == :pair && statement.path == [ SERVERS ] }
+        whole_value = whole && value(whole.value)
+        names = found.filter_map { |statement| statement.path[1] if statement.path&.size.to_i >= 2 && statement.path[0] == SERVERS }
+        names = (names + (whole_value.is_a?(Hash) ? whole_value.keys : [])).uniq
+
+        names.select(&keep).map do |name|
+          ranges = tables.filter_map { |range, table_name| range if table_name == name }
+          defining = found.select { |statement| statement.path && statement.path.size >= 2 && statement.path.first(2) == [ SERVERS, name ] }
+          elsewhere = defining.reject { |statement| ranges.any? { |range| range.cover?(statement.first) } }
+          elsewhere << whole if whole_value.is_a?(Hash) && whole_value.key?(name)
+
+          data = entry_data(defining)
+          data = whole_value[name].merge(data) if whole_value.is_a?(Hash) && whole_value[name].is_a?(Hash)
+          env = data["env"].is_a?(Hash) ? data["env"].filter_map { |key, item| [ key, item ] if item.is_a?(String) }.to_h : {}
+          Server.new(name, ranges, elsewhere, [ *data["command"], *data["args"] ].grep(String), env, twice?(ranges, elsewhere))
+        end
+      end
+
+      # A second table, a second inline table, or a table beside an inline
+      # table or dotted keys from outside it: what no TOML reader accepts.
+      def twice?(ranges, elsewhere)
+        inline = elsewhere.count { |statement| statement.kind == :pair && statement.path.size <= 2 }
+        dotted = elsewhere.any? { |statement| statement.kind == :pair && statement.path.size > 2 }
+        detached = elsewhere.any? { |statement| statement.kind != :pair }
+        ranges.size + inline + (dotted ? 1 : 0) > 1 || (inline.positive? && (dotted || detached))
+      end
+
+      # Why no [mcp_servers.<name>] table can be added to the file: when
+      # mcp_servers itself is an inline table or an array of tables. nil
+      # when one can.
+      def closed(found)
+        return unless found.any? { |statement| statement.path == [ SERVERS ] && statement.kind != :table }
+
+        "its #{SERVERS} is an inline table or an array of tables, beside which no [#{SERVERS}.<name>] table can go"
+      end
+
+      # One server's keys as data, from the pairs that define them.
+      def entry_data(defining)
+        defining.select { |statement| statement.kind == :pair }.each_with_object({}) do |statement, data|
+          keys = statement.path.drop(2)
+          item = value(statement.value)
+          next data.merge!(item) { |_, mine, theirs| mine || theirs } if keys.empty? && item.is_a?(Hash)
+          next if keys.empty?
+
+          *outer, last = keys
+          holder = outer.inject(data) { |hash, key| hash[key].is_a?(Hash) ? hash[key] : (hash[key] = {}) }
+          holder[last] = item unless holder.key?(last)
         end
       end
 
       # One section's command line, its `command` and `args`, read from the
       # table itself and not its sub-tables.
-      def argv(lines, range)
-        values = table(lines[range].drop(1).take_while { |line| !line.match?(TABLE) })
-        [ *values["command"], *values["args"] ]
+      def argv(lines, range, found = statements(lines))
+        data = section_data(lines, range, found)
+        [ *data["command"], *data["args"] ].grep(String)
       end
 
-      # One sub-table of a section, `[mcp_servers.<name>.<key>]`, as each
-      # key's string value.
-      def sub_table(lines, range, name, key)
-        header = /\A[ \t]*\[[ \t]*mcp_servers\.#{Regexp.escape(name)}\.#{Regexp.escape(key)}[ \t]*\][ \t]*(?:#.*)?\r?\n?\z/
-        start = range.find { |index| lines[index].match?(header) } or return {}
-        body = lines[(start + 1)...range.end].take_while { |line| !line.match?(TABLE) }
-        table(body).filter_map { |item, values| [ item, values.first ] if values.first }.to_h
+      # One sub-table of a section, `[mcp_servers.<name>.<key>]` or the
+      # section's own `<key>.<item> = ...`, as each item's string value.
+      def sub_table(lines, range, _name, key, found = statements(lines))
+        table = section_data(lines, range, found)[key]
+        return {} unless table.is_a?(Hash)
+
+        table.filter_map { |item, values| [ item, Array(values).grep(String).first ] if Array(values).grep(String).any? }.to_h
       end
 
-      # The string values of one table's keys, from its lines: key => the
-      # strings it holds, one for a string and each element's for an array.
-      def table(lines)
-        text = lines.join
-        values = {}
-        offset = 0
-        lines.each do |line|
-          key = line[KEY_LINE, 1]
-          values[key] = strings(text[(offset + line[KEY_LINE].size)..]) if key && !values.key?(key)
-          offset += line.size
-        end
-        values
+      def section_data(lines, range, found)
+        header = found.find { |statement| statement.kind == :table && statement.first == range.begin && server_path?(statement.path) }
+        return {} unless header
+
+        entry_data(found.select { |statement| range.cover?(statement.first) && under?(statement.path, header.path) })
       end
 
       # The strings at the start of a value: a basic ("...") or literal
       # ('...') string, or an array of them however a formatter wrapped it,
       # with comments and a trailing comma.
       def strings(text)
-        scanner = StringScanner.new(text)
-        found = []
-        depth = 0
-        until scanner.eos?
-          if scanner.scan(/[ \t\r,]+|#[^\n]*/)
-            next
-          elsif scanner.scan(/\n/)
-            break if depth.zero?
-          elsif scanner.scan(/\[/)
-            depth += 1
-          elsif scanner.scan(/\]/)
-            depth -= 1
-            break if depth <= 0
-          elsif (basic = scanner.scan(/"(?:[^"\\\n]|\\.)*"/))
-            found << unescape(basic)
-            break if depth.zero?
-          elsif (literal = scanner.scan(/'[^'\n]*'/))
-            found << literal[1..-2]
-            break if depth.zero?
-          else
-            break
-          end
-        end
-        found
+        Array(value(text)).grep(String)
       end
 
       # TOML's basic-string escapes are JSON's, but for \U and \e.
@@ -245,8 +416,13 @@ module RailsAiContext
         basic[1..-2]
       end
 
-      def sub_table?(line, name)
-        line.sub(/\A[ \t]*\[\[?[ \t]*/, "").start_with?("mcp_servers.#{name}.")
+      def server_path?(path)
+        path&.size == 2 && path[0] == SERVERS
+      end
+
+      # Whether path is a key or table inside the table at `table`.
+      def under?(path, table)
+        !path.nil? && path.size > table.size && path.first(table.size) == table
       end
 
       def trivia?(line)
@@ -352,6 +528,22 @@ module RailsAiContext
     # rewrite would drop. Strings are matched whole, so a URL's // is none.
     def self.json_comments?(text)
       text.scan(%r{"(?:[^"\\]|\\.)*"|//|/\*}).any? { |token| !token.start_with?('"') }
+    end
+
+    # A Codex config's servers under the gem's names, read the way the merge
+    # reads them, and why no server table can be added to it (nil when one
+    # can).
+    #
+    # @return [Array(Array<Toml::Server>, String)]
+    def self.toml_servers(path)
+      lines = split_bom(RailsAiContext::SafeFile.read_text(path)).first.lines
+      found = Toml.statements(lines)
+      [ Toml.servers(lines, found) { |name| name.match?(OWN_SERVER_NAME) }, Toml.closed(found) ]
+    end
+
+    # Why the gem's entries in a Codex config stay as they are.
+    def self.unwritable_toml(names)
+      "it sets #{names.join(', ')} as an inline table or with dotted keys, which the install does not rewrite"
     end
 
     private
@@ -475,14 +667,21 @@ module RailsAiContext
         [ server.name, content.encoding == Encoding::BINARY ? section.b : section ]
       end
 
-      named = Toml.sections(lines) { |name| name.match?(OWN_SERVER_NAME) }
-      ours = Toml.own_sections(lines).map do |range, name|
-        [ name, self.class.entry_app_root(Toml.argv(lines, range), nil, @output_dir) ]
+      found = Toml.statements(lines)
+      own_name = ->(name) { name.match?(OWN_SERVER_NAME) }
+      named = Toml.sections(lines, found, &own_name)
+      ours = Toml.own_sections(lines, found).map do |range, name|
+        [ name, self.class.entry_app_root(Toml.argv(lines, range, found), nil, @output_dir) ]
       end
-      # A section under one of this write's names that is not the gem's is
-      # kept in place of the gem's, which would be a second table of one
-      # name, and that does not parse.
-      kept = named.map(&:last).select { |name| by_name.key?(name) } - ours.map(&:first)
+      # A server of this write's spelled any way but one table - an inline
+      # table, dotted keys - is never written beside: a table next to it
+      # declares the server twice, which Codex refuses to read.
+      unwritable = Toml.servers(lines, found, &own_name).select { |server| by_name.key?(server.name) && !server.rewritable? }
+      check_toml_shape(found, unwritable)
+      # A section or entry under one of this write's names that is not the
+      # gem's is kept in place of the gem's, which would be a second table of
+      # one name, and that does not parse.
+      kept = named.map(&:last).select { |name| by_name.key?(name) } - ours.map(&:first) + unwritable.map(&:name)
       note_kept(path, kept.uniq)
       by_name = by_name.except(*kept)
       drop = stale_names(ours.to_h)
@@ -530,6 +729,32 @@ module RailsAiContext
 
       RailsAiContext::SafeFile.atomic_write(path, bom + new_content)
       :written
+    end
+
+    # A Codex config the merge would leave unreadable, or could not keep
+    # current, is left as it is: one where mcp_servers is a single inline
+    # table, one that already declares a server of this write twice, and one
+    # that sets the gem's entry in a form the merge does not rewrite. What
+    # is left after that - someone else's entry under the gem's name - is
+    # kept in its place.
+    def check_toml_shape(found, unwritable)
+      if (closed = Toml.closed(found))
+        raise ShapeError, "#{closed}, so it is left as it is. Write it as [mcp_servers.<name>] tables by hand"
+      end
+
+      twice = unwritable.select(&:twice?)
+      if twice.any?
+        raise ShapeError, "it declares #{twice.map(&:name).join(', ')} twice, which Codex refuses to read, " \
+                          "so it is left as it is. Delete all but one by hand"
+      end
+
+      own = unwritable.select { |server| self.class.own_entry?(server.name, server.argv) }
+      return if own.empty?
+
+      it = own.one? ? "it" : "them"
+      tables = own.one? ? "a [mcp_servers.#{own.first.name}] table" : "[mcp_servers.<name>] tables"
+      raise ShapeError, "#{self.class.unwritable_toml(own.map(&:name))}, so it is left as it is. Write #{it} as " \
+                        "#{tables} by hand, or delete #{it}, and the next run keeps #{it} current"
     end
 
     def toml_section(server)
@@ -630,10 +855,8 @@ module RailsAiContext
     def self.named_entries(path, tool)
       config = TOOL_CONFIGS.fetch(tool.to_sym)
       if config[:format] == :codex_toml
-        lines = split_bom(RailsAiContext::SafeFile.read_text(path)).first.lines
-        return Toml.sections(lines) { |name| name.match?(OWN_SERVER_NAME) }.map do |range, name|
-          argv = Toml.argv(lines, range)
-          { name: name, argv: argv, env: Toml.sub_table(lines, range, name, "env"), own: own_entry?(name, argv) }
+        return toml_servers(path).first.map do |server|
+          { name: server.name, argv: server.argv, env: server.env, own: own_entry?(server.name, server.argv) }
         end
       end
 
@@ -683,10 +906,9 @@ module RailsAiContext
         next unless File.exist?(path)
 
         begin
-          if config[:format] == :codex_toml
-            cleaned << path if remove_toml_entry(path)
-          elsif (left = remove_json_entry(path, config[:root_key]))
-            left == true ? cleaned << path : warn.call(path, left)
+          left = config[:format] == :codex_toml ? remove_toml_entry(path) : remove_json_entry(path, config[:root_key])
+          if left == true then cleaned << path
+          elsif left then warn.call(path, left)
           end
         rescue SystemCallError, IOError => e
           warn.call(path, e.message)
@@ -730,11 +952,19 @@ module RailsAiContext
       true
     end
 
+    # @return [true, String, nil] as remove_json_entry
     def self.remove_toml_entry(path)
       content, bom = split_bom(RailsAiContext::SafeFile.read_text(path))
       lines = content.lines
-      sections = Toml.own_sections(lines)
-      return false if sections.empty?
+      found = Toml.statements(lines)
+      # Taking its table out would leave the rest of an entry spelled
+      # another way, which is no entry Codex can start.
+      held = Toml.servers(lines, found) { |name| name.match?(OWN_SERVER_NAME) }
+        .select { |server| !server.rewritable? && own_entry?(server.name, server.argv) }
+      return "#{unwritable_toml(held.map(&:name))}, so it is left as it is. Remove #{held.one? ? 'it' : 'them'} by hand" if held.any?
+
+      sections = Toml.own_sections(lines, found)
+      return nil if sections.empty?
 
       # A comment above a section stays: it may be a key of the table before,
       # set aside by hand.

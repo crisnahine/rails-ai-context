@@ -987,6 +987,124 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
         expect(codex(dir)).to include(%(GEM_HOME = "/x/\#{y}/\\"q\\"/\\u001b"))
       end
     end
+
+    def codex_path(dir) = File.join(dir, ".codex/config.toml")
+
+    def write_server(dir)
+      described_class.new(tools: [ :codex ], output_dir: dir, tool_mode: :mcp, standalone: true).call
+    end
+
+    # TOML lets a key be quoted, and [mcp_servers."rails-ai-context"] is
+    # [mcp_servers.rails-ai-context] to Codex: the table written beside it
+    # declared the server twice, which Codex refuses to read.
+    it "replaces a table whose name is quoted where it stands" do
+      Dir.mktmpdir do |dir|
+        write_codex(dir, %(model = "o3"\n\n[mcp_servers."rails-ai-context"]\ncommand = "old"\n\n) +
+                         %([ mcp_servers . 'rails-ai-context' . env ]\nX = "1"\n\n[profiles.fast]\nmodel = "o4"\n))
+
+        expect(write_server(dir)[:written]).to eq([ codex_path(dir) ])
+
+        expect(codex(dir)).to start_with(%(model = "o3"\n\n[mcp_servers.rails-ai-context]\ncommand = "rails-ai-context"\n))
+        expect(codex(dir)).to end_with(%(\n\n[profiles.fast]\nmodel = "o4"\n))
+        expect(codex(dir)).not_to include(%("rails-ai-context"]), "'rails-ai-context'", %(command = "old"), %(X = "1"))
+        expect(write_server(dir)[:skipped]).to eq([ codex_path(dir) ])
+      end
+    end
+
+    it "merges two tables of the gem's server, one name quoted, into one" do
+      Dir.mktmpdir do |dir|
+        write_codex(dir, %([mcp_servers."rails-ai-context"]\ncommand = "old"\n\n[mcp_servers.rails-ai-context]\ncommand = "older"\n))
+
+        write_server(dir)
+
+        expect(codex(dir).scan("[mcp_servers.").size).to eq(2) # the server and its env
+        expect(codex(dir)).to start_with(%([mcp_servers.rails-ai-context]\ncommand = "rails-ai-context"\n))
+      end
+    end
+
+    # A table added beside an entry spelled any other way declares the
+    # server twice; the entry cannot be rewritten in its own form either.
+    it "leaves the gem's entry set as an inline table or with dotted keys as it is, and says why" do
+      {
+        "inline" => %([mcp_servers]\nrails-ai-context = { command = "rails-ai-context", args = ["serve"] }\n),
+        "dotted" => %([mcp_servers]\nrails-ai-context.command = "rails-ai-context"\nrails-ai-context.args = ["serve"]\n),
+        "root dotted" => %(model = "o3"\nmcp_servers.rails-ai-context.command = "rails-ai-context"\n),
+        "inline mcp_servers" => %(mcp_servers = { rails-ai-context = { command = "rails-ai-context" } }\n),
+        "a detached env table" => %([mcp_servers.rails-ai-context.env]\nX = "1"\n\n[mcp_servers]\nrails-ai-context.command = "x"\n)
+      }.each do |form, content|
+        Dir.mktmpdir do |dir|
+          write_codex(dir, content)
+
+          result = write_server(dir)
+
+          expect(codex(dir)).to eq(content), form
+          expect(result[:failed]).to eq([ codex_path(dir) ]), form
+          expect(result[:reasons][codex_path(dir)]).to match(/inline table|dotted keys/), form
+        end
+      end
+    end
+
+    it "keeps someone else's inline entry under the gem's name in place of the gem's" do
+      Dir.mktmpdir do |dir|
+        content = %([mcp_servers]\nrails-ai-context = { url = "http://localhost:6029/mcp" }\n)
+        write_codex(dir, content)
+
+        result = write_server(dir)
+
+        expect(codex(dir)).to eq(content)
+        expect(result[:skipped]).to eq([ codex_path(dir) ])
+        expect(result[:notes][codex_path(dir)]).to start_with("kept rails-ai-context")
+      end
+    end
+
+    it "leaves a config that declares the gem's server twice as it is, and says so" do
+      Dir.mktmpdir do |dir|
+        content = %([mcp_servers]\nrails-ai-context = { command = "rails-ai-context" }\n\n[mcp_servers.rails-ai-context]\ncommand = "x"\n)
+        write_codex(dir, content)
+
+        result = write_server(dir)
+
+        expect(codex(dir)).to eq(content)
+        expect(result[:reasons][codex_path(dir)]).to start_with("it declares rails-ai-context twice, which Codex refuses to read")
+      end
+    end
+
+    it "adds no table to a config whose mcp_servers is one inline table" do
+      Dir.mktmpdir do |dir|
+        content = %(mcp_servers = { github = { command = "gh-mcp" } }\n)
+        write_codex(dir, content)
+
+        result = write_server(dir)
+
+        expect(codex(dir)).to eq(content)
+        expect(result[:reasons][codex_path(dir)]).to start_with("its mcp_servers is an inline table")
+      end
+    end
+
+    it "reads a header inside a multi-line string as the string's text" do
+      Dir.mktmpdir do |dir|
+        write_codex(dir, %(notes = """\n[mcp_servers.rails-ai-context]\ncommand = "old"\n"""\n))
+
+        write_server(dir)
+
+        expect(codex(dir)).to start_with(%(notes = """\n[mcp_servers.rails-ai-context]\ncommand = "old"\n"""\n\n[mcp_servers.rails-ai-context]\n))
+      end
+    end
+
+    it "leaves the gem's inline entry in place on removal, and says why" do
+      Dir.mktmpdir do |dir|
+        content = %([mcp_servers]\nrails-ai-context = { command = "rails-ai-context", args = ["serve"] }\n)
+        write_codex(dir, content)
+        reasons = []
+
+        cleaned = described_class.remove(tools: [ :codex ], output_dir: dir, warn: ->(_path, reason) { reasons << reason })
+
+        expect(cleaned).to eq([])
+        expect(codex(dir)).to eq(content)
+        expect(reasons).to eq([ "it sets rails-ai-context as an inline table or with dotted keys, which the install does not " \
+                                "rewrite, so it is left as it is. Remove it by hand" ])
+      end
+    end
   end
 
   describe "a config that is not ASCII" do

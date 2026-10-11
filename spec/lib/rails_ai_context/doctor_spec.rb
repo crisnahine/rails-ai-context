@@ -828,6 +828,46 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
 
+    # The install wrote its table beside an entry it did not read, and the
+    # check passed a config Codex refuses to read.
+    context "when the Codex config declares the gem's server twice" do
+      before do
+        allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[codex])
+      end
+
+      it "fails one spelled two ways, with deleting all but one as the fix" do
+        write(".codex/config.toml", %([mcp_servers]\nrails-ai-context = { command = "rails-ai-context", args = ["serve"] }\n\n) +
+                                    %([mcp_servers.rails-ai-context]\ncommand = "rails-ai-context"\nargs = ["serve"]\n))
+
+        expect(check.status).to eq(:fail)
+        expect(check.message).to end_with(".codex/config.toml (Codex CLI): it declares rails-ai-context twice, which Codex refuses to read")
+        expect(check.fix).to eq("Delete all but one by hand")
+      end
+
+      it "fails two tables, one name quoted, with the install as the fix, which merges them" do
+        write(".codex/config.toml", %([mcp_servers."rails-ai-context"]\ncommand = "rails-ai-context"\n\n) +
+                                    %([mcp_servers.rails-ai-context]\ncommand = "rails-ai-context"\n))
+
+        expect(check.status).to eq(:fail)
+        expect(check.fix).to eq("Run `#{RailsAiContext::InstallMode.command(:install)}` to fix")
+      end
+    end
+
+    context "when the Codex config sets the gem's server as an inline table" do
+      before do
+        allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[codex])
+        write(".codex/config.toml", %([mcp_servers]\nrails-ai-context = { command = "rails-ai-context", args = ["serve"] }\n))
+      end
+
+      it "reads the entry and warns that the install leaves it as it is" do
+        expect(check.status).to eq(:warn)
+        expect(check.message).to end_with("it sets rails-ai-context as an inline table or with dotted keys, which the install does not rewrite")
+        expect(check.fix).to start_with("Write it as a [mcp_servers.rails-ai-context] table by hand")
+      end
+    end
+
     # After `bundle remove rails-ai-context` every config still runs bundle
     # exec, which Bundler refuses: the gem is not in the bundle.
     context "when an entry runs bundle exec and the app's bundle has no rails-ai-context" do
