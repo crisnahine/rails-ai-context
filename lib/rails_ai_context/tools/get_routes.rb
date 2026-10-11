@@ -121,8 +121,12 @@ module RailsAiContext
         elsif group[:mount_computed] then " at a path the routes compute"
         else " (not mounted by the app's routes)"
         end
-        at += " (also #{group[:also_mounted_at].map { |path| "`#{path}`" }.join(', ')})" if group[:also_mounted_at]
+        at += " (also #{also_mounted_at(group)})" if group[:also_mounted_at]
         at
+      end
+
+      private_class_method def self.also_mounted_at(group)
+        group[:also_mounted_at].map { |path| "`#{path}`" }.join(", ")
       end
 
       # The routes a controller filter matches in the engines' tables, one
@@ -131,6 +135,7 @@ module RailsAiContext
         Array(engine_routes).each_with_object({}) do |group, found|
           matches = Array(group[:routes]).select { |r| needles.any? { |n| path_segments_match?(r[:controller].to_s, n, tail: true) } }
           where = group[:mount] || group[:mount_computed] ? "" : ", not mounted by the app's routes"
+          where += ", also mounted at #{also_mounted_at(group)}" if group[:also_mounted_at]
           matches.group_by { |r| r[:controller] }.each do |ctrl, rows|
             found["#{ctrl} (in #{group[:engine]}'s table#{where})"] = rows
           end

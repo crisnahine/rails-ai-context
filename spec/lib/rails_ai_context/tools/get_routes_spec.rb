@@ -124,6 +124,17 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
       expect(described_class.call.content.first[:text]).to include("**Spree::Core::Engine** at `/shop` (also `/shop2`): 1 route")
     end
 
+    it "names the other paths an engine is mounted at in a filtered answer" do
+      groups = engine_routes.map { |g| g.merge(also_mounted_at: [ "/shop2" ]) }
+      allow(described_class).to receive(:cached_context).and_return({
+        routes: { total_routes: 9, by_controller: by_controller, api_namespaces: [], engine_routes: groups }
+      })
+
+      text = described_class.call(controller: "spree/admin/orders").content.first[:text]
+
+      expect(text).to include("## spree/admin/orders (in Spree::Core::Engine's table, also mounted at `/shop2`)")
+    end
+
     it "says how many constructs an engine group did not expand" do
       groups = engine_routes.map { |g| g.merge(dynamic_routes: 2) }
       allow(described_class).to receive(:cached_context).and_return({
