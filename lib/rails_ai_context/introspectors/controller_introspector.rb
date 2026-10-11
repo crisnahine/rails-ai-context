@@ -729,7 +729,6 @@ module RailsAiContext
         result.merge(parse_expect_args_ast(expect_call)) if expect_call
       end
 
-      # The first call by that name made on params.
       def find_call_in_tree(node, method_name)
         return nil unless node.respond_to?(:child_nodes)
         if node.is_a?(Prism::CallNode) && node.name == method_name && call_on_params?(node)
