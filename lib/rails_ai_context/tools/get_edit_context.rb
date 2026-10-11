@@ -51,10 +51,15 @@ module RailsAiContext
         when :sensitive then return error_response("Access denied: #{file} is a sensitive file (secrets/keys/credentials).")
         when :too_large then return text_response("File too large: #{file}")
         when :missing
+          root = rails_app.root.to_s
           basename = File.basename(file)
-          candidates = Dir.glob(File.join(rails_app.root, "app", "**", basename)).first(5)
+          asked = File.expand_path(file, root)
+          # Files of that name the tool would read, never the path asked for:
+          # a link that resolves nowhere is not a file to retry.
+          candidates = RailsAiContext::FileWalk.each_file(File.join(root, "app"), root: root)
+            .select { |path| File.basename(path) == basename && path != asked }.sort.first(5)
           hint = if candidates.any?
-            suggestions = candidates.map { |c| c.sub("#{rails_app.root}/", "") }
+            suggestions = candidates.map { |c| c.delete_prefix("#{root}/") }
             " Did you mean: #{suggestions.join(', ')}? Use the full path relative to Rails root."
           else
             # An example built from the name the caller gave was that same

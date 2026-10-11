@@ -25,6 +25,25 @@ RSpec.describe RailsAiContext::Tools::GetEditContext do
   end
   before { described_class.reset_cache! }
 
+  # A link that resolves nowhere was offered back as the file to try.
+  describe "a file that is a link to nothing" do
+    it "is not found, and suggests only files the tool can read" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/models/archive"))
+        File.symlink("missing.rb", File.join(root, "app/models/ghost.rb"))
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+
+        text = described_class.call(file: "app/models/ghost.rb", near: "x").content.first[:text]
+        expect(text).to eq("File not found: app/models/ghost.rb. No file named ghost.rb is under app/.")
+
+        File.write(File.join(root, "app/models/archive/ghost.rb"), "class Archive::Ghost; end\n")
+        text = described_class.call(file: "app/models/ghost.rb", near: "x").content.first[:text]
+        expect(text).to include("Did you mean: app/models/archive/ghost.rb?")
+        expect(text).not_to include("Did you mean: app/models/ghost.rb")
+      end
+    end
+  end
+
   describe ".call" do
     it "returns context around a matching method" do
       result = described_class.call(file: "app/models/user.rb", near: "has_many")

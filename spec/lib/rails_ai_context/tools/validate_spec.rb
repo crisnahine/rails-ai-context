@@ -629,6 +629,29 @@ RSpec.describe RailsAiContext::Tools::Validate do
       expect(text).to include("user_id in posts - foreign key without index (slow queries)")
     end
   end
+  # A link that resolves nowhere was offered back as the file to try.
+  describe "a file that is a link to nothing" do
+    it "is not found, and suggests only a file the tool can read" do
+      previous_root = RailsAiContext.configuration.app_root
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "archive"))
+        File.symlink("missing.rb", File.join(dir, "app", "models", "ghost.rb"))
+        RailsAiContext.configuration.app_root = dir
+
+        text = described_class.call(files: [ "app/models/ghost.rb" ]).content.first[:text]
+        expect(text).to include("\u2717 app/models/ghost.rb - file not found.\n")
+
+        File.write(File.join(dir, "app", "models", "archive", "ghost.rb"), "class Archive::Ghost; end\n")
+        text = described_class.call(files: [ "app/models/ghost.rb" ]).content.first[:text]
+        expect(text).to include("file not found. Did you mean 'app/models/archive/ghost.rb'?")
+      end
+    ensure
+      RailsAiContext.configuration.app_root = previous_root
+    end
+  end
+
   # Mastodon declares 40-odd associations inside one `with_options
   # dependent: :destroy` block, and every one of them was reported.
   describe "has_many inside a with_options block" do
