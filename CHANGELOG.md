@@ -141,6 +141,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code and resets the caches. That costs a few milliseconds per call on a
   typical app and about 100 ms at 10,000 files, where calls close together
   share one check.
+- **An action a concern or a parent controller defines shows its source.**
+  `rails_get_controllers(controller:, action:)` read only the controller's
+  own file, so an action from an included concern (namespaced ones too) or
+  from a base controller answered "Could not extract source code" with an
+  absolute path. It now follows Ruby's lookup through the app's modules and
+  parent controllers and names the file the source came from, in both
+  tiers. The `rails-ai-context://controllers/{name}/{action}` resource,
+  described as the action's source and metadata, never carried the source;
+  it now has `file`, `lines` and `source`.
+- **A Rails 8 controller's concerns no longer list the route helpers Rails
+  mixes in.** `Rails::Engine::LazyRouteSet::MountedHelpers` appeared as a
+  concern of every controller in the booted `controllers` payload (the
+  `rails://controllers` resource and `.ai-context.json`), and not in the
+  static tier's.
 - **`tool --json` and `JSON=1 rails 'ai:tool[...]'` print the envelope and
   nothing else.** Sidekiq's "connecting to Redis" line, and on the rake task
   an initializer's `puts`, landed on stdout ahead of it. What the app prints
@@ -331,11 +345,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `bundle exec rails-ai-context` would, from where it was typed, and says
   so on stderr: that is the copy the app's MCP configs start. Only a run
   that boots the app does so, since the boot runs the app's bundle anyway:
-  `--no-boot` and `init --mcp-only` stay on the installed copy, as bundle
-  exec would evaluate the app's Gemfile and start whatever copy the app
-  names, code nobody has read on a repo just cloned. A bundle not
-  installed yet is left alone too (`bundle check` says so), so its failed
-  boot still serves the static tier.
+  `--no-boot` stays on the installed copy, as bundle exec would evaluate
+  the app's Gemfile and start whatever copy the app names, code nobody has
+  read on a repo just cloned. `init` asks its questions on the installed
+  copy and has the app's copy write only the context files, so an
+  MCP-only setup, by flag or at the prompt, runs nothing of the app's. A
+  bundle not installed yet is left alone too (`bundle check` says so), so
+  its failed boot still serves the static tier. The bundle is the one a
+  `BUNDLE_GEMFILE` you set names (a dual boot's `Gemfile.next`), and a
+  command typed in a subdirectory, or in a folder holding the one app,
+  runs from the app root, where a released copy, which does not look for
+  the root, finds the app. Hints that name another command (`doctor`,
+  `facts`' pointer to `inspect`) name it as typed: no `bundle exec` the
+  user did not type, the `--app-path` they did.
 - **The binary loads no gem the app pins before the app boots.** Run from a
   subdirectory of an app (#427) or a folder holding one, it asked of every
   directory it passed whether a non-Rails framework lived there, which
