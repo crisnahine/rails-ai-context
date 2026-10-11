@@ -164,7 +164,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   follows such a link as the readers do: only into the app's repository,
   never back up over the tree it walks, each linked directory once, so a
   link that leads round in a circle ends. Where a link leads is asked at
-  every check, so one whose directory appears later is followed too.
+  every check, so one whose directory appears later is followed too. The
+  fuller check that runs once `cache_ttl` is out follows a linked directory
+  whatever its name, where it asked only a name with no extension
+  (`billing.v2` was passed over).
 - **The pre-commit hook no longer stops a commit for JavaScript the app's
   own toolchain compiles.** `rails_validate` failed a Flow file
   (`Typed.js:3:21: SyntaxError: Unexpected token ':'`), a MobX store's

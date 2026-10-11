@@ -150,7 +150,7 @@ module RailsAiContext
       # One walk with an extension filter: a brace glob walks the tree once per extension.
       # The glob lists a directory link and enters none, so a directory linked in
       # from the app's repository, which the readers walk (FileWalk), is globbed
-      # on its own; only a name with no extension is asked whether it is one.
+      # on its own, whatever its name (`shared.v2` too, as the readers take it).
       def watched_files(dir, root, seen = Set.new)
         real_dir = File.realpath(dir)
         return [] unless seen.add?(real_dir)
@@ -161,7 +161,7 @@ module RailsAiContext
           extname = File.extname(path)
           if WATCHED_EXTNAMES.include?(extname)
             files << path unless path.include?(BUILD_OUTPUT)
-          elsif extname.empty? && File.symlink?(path) && File.directory?(path)
+          elsif File.symlink?(path) && File.directory?(path)
             target = File.realpath(path)
             # A link into the tree globbed here leads where the glob went already.
             linked << path if !SafePath.contained?(target, real_dir) && PathResolver.enter_link?(target, real_dir, root)

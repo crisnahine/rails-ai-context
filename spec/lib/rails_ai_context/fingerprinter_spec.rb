@@ -101,6 +101,23 @@ RSpec.describe RailsAiContext::Fingerprinter do
       end
     end
 
+    # Only a link with no extension in its name was asked whether it leads to
+    # a directory, where the readers enter any.
+    it "detects a change inside a linked directory whose name has an extension" do
+      Dir.mktmpdir do |repo|
+        root = File.join(repo, "apps/web")
+        FileUtils.mkdir_p([ File.join(repo, ".git"), File.join(repo, "shared/billing"), File.join(root, "app/models") ])
+        File.write(File.join(repo, "shared/billing/invoice.rb"), "class Billing::Invoice; end\n")
+        File.symlink("../../../../shared/billing", File.join(root, "app/models/billing.v2"))
+        linked_app = RailsAiContext::StaticApp.new(root)
+
+        before = described_class.compute(linked_app)
+        File.utime(Time.now + 5, Time.now + 5, File.join(repo, "shared/billing/invoice.rb"))
+
+        expect(described_class.compute(linked_app)).not_to eq(before)
+      end
+    end
+
     it "ignores a bundler's build output under app/assets/builds, which no reader reads" do
       root = app.root.to_s
       build = File.join(root, "app/assets/builds/application.js")
