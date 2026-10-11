@@ -118,6 +118,11 @@ module RailsAiContext
         [ MODEL_TEMPLATE, CONTROLLER_TEMPLATE, CONTROLLER_ACTION_TEMPLATE, VIEW_TEMPLATE, ROUTES_TEMPLATE ]
       end
 
+      # What a read can name: each static resource, then each template.
+      def served_uris
+        STATIC_RESOURCES.keys + resource_templates.map { |template| template.to_h[:uriTemplate] }
+      end
+
       def register(server)
         require "json"
 
@@ -205,7 +210,7 @@ module RailsAiContext
           content = JsonBudget.for_resource(context[key] || {})
           [ { uri: uri, mimeType: "application/json", text: content } ]
         else
-          raise RailsAiContext::Error, "Unknown resource: #{uri}"
+          raise ResourceUnavailable.new("Resource not found: #{Tools::BaseTool.echo_input(uri)}", available: served_uris)
         end
       end
     end

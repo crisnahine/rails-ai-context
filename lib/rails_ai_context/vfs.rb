@@ -30,7 +30,7 @@ module RailsAiContext
           return send(entry[:handler], uri, *match.captures)
         end
 
-        raise RailsAiContext::Error, "Unknown VFS URI: #{echo(uri)}"
+        raise ResourceUnavailable.new("Resource not found: #{echo(uri)}", available: Resources.served_uris)
       end
 
       private
@@ -38,6 +38,15 @@ module RailsAiContext
       # The caller's name as an answer repeats it, shortened as a tool's is.
       def echo(value)
         Tools::BaseTool.echo_input(value)
+      end
+
+      # The views in a missing one's directory, or the app's first ones when
+      # that directory holds none, by the name a read takes.
+      def views_near(root, path)
+        names = RailsAiContext::ViewFile.each(root).map(&:last).sort
+        dir = File.dirname(path.to_s.delete_prefix("app/views/"))
+        near = dir == "." ? [] : names.select { |name| name.start_with?("#{dir}/") }
+        (near.any? ? near : names).first(20)
       end
 
       def resolve_model(uri, name)
@@ -118,8 +127,8 @@ module RailsAiContext
         when :sensitive then raise RailsAiContext::Error, "Path not allowed: #{echo(path)} (sensitive file)"
         when :too_large then raise ResourceUnavailable, "File too large: #{echo(path)}"
         when :missing
-          raise ResourceUnavailable, "View not found: #{echo(path)}. Paths are relative to app/views; the extension is " \
-            "optional (posts/index and posts/index.html.erb both resolve)."
+          raise ResourceUnavailable.new("View not found: #{echo(path)}. Paths are relative to app/views; the extension is " \
+            "optional (posts/index and posts/index.html.erb both resolve).", available: views_near(root, path))
         end
 
         # A template is the app's source too: each secret in it filtered.

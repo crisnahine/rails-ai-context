@@ -113,6 +113,24 @@ module RailsAiContext
         "(.rails-ai-context.yml or config/initializers/rails_ai_context.rb). Take it out of skip_tools to use it."
     end
 
+    # The SDK's "Tool not found" named only the guess. The nearest tools
+    # follow it, or every tool when none is near.
+    def self.unknown_tool_message(tool_name, names)
+      near = Tools::BaseTool.find_closest_matches(tool_name.to_s, names) - [ tool_name.to_s ]
+      head = "Tool not found: #{Tools::BaseTool.echo_input(tool_name)}."
+      near.any? ? "#{head} Did you mean #{near.first(3).join(', ')}?" : "#{head} The tools are: #{names.sort.join(', ')}."
+    end
+
+    # Where the SDK carries a code and data on a handler's error, the
+    # message stays the error's own (not "Invalid params") and the data
+    # lists every tool, as a resource read lists the names it has.
+    def self.unknown_tool_data(names)
+      parameters = MCP::Server::RequestHandlerError.instance_method(:initialize).parameters
+      return {} unless parameters.any? { |_, name| name == :error_data }
+
+      { error_code: -32602, error_data: { available: names.sort } }
+    end
+
     # What tools/list answers with: the built-ins skip_tools leaves, then
     # each custom tool whose name no tool before it claims. The generated
     # context files count and list this set, so they name no tool the
@@ -282,9 +300,12 @@ module RailsAiContext
 
       def call_tool(request, ...)
         name = request[:name]
-        return super unless @skipped_tools.include?(name) && !tools.key?(name)
+        return super if tools.key?(name)
+        return MCP::Tool::Response.new([ { type: "text", text: Server.skipped_tool_message(name) } ], error: true).to_h if @skipped_tools.include?(name)
 
-        MCP::Tool::Response.new([ { type: "text", text: Server.skipped_tool_message(name) } ], error: true).to_h
+        add_instrumentation_data(tool_name: name, error: :tool_not_found) if respond_to?(:add_instrumentation_data, true)
+        raise MCP::Server::RequestHandlerError.new(Server.unknown_tool_message(name, tools.keys), request,
+                                                   error_type: :invalid_params, **Server.unknown_tool_data(tools.keys))
       end
     end
 
