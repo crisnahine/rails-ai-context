@@ -743,6 +743,8 @@ PR/commit review with per-file context and warnings.
 
 A removed validation is a `validates` line the diff takes out when no line it adds validates the same attribute; an edited `validates` line is not one.
 
+An app in a subfolder of its repository (a monorepo's `backend/`) is reviewed on its own: its changed files, named from the app root as `rails_validate` takes them, and the commits that touched it.
+
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `ref` | string | `HEAD` | Git ref to diff against: a branch, a tag, `HEAD~3` or a commit SHA. `HEAD` reviews uncommitted changes. Any other ref reviews the commits since HEAD left it, as a pull request does: the file list and each file's diff run from the commit the two last shared to HEAD. A ref that names no commit is refused |

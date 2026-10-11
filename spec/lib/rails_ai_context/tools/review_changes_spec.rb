@@ -149,6 +149,60 @@ RSpec.describe RailsAiContext::Tools::ReviewChanges do
       end
     end
 
+    # `git diff --name-only` names paths from the top of the repository and
+    # `ls-files` from where it runs, so in an app at backend/ a changed model
+    # was "backend/app/models/widget.rb", classified as other, with no diff,
+    # and a ref's review listed the frontend's files.
+    describe "an app in a subfolder of its repository" do
+      def git(*args)
+        out, status = Open3.capture2e("git", "-c", "user.name=t", "-c", "user.email=t@t.t", "-c", "commit.gpgsign=false",
+                                      *args, chdir: @repo)
+        raise out unless status.success?
+
+        out
+      end
+
+      def write(relative, body)
+        FileUtils.mkdir_p(File.dirname(File.join(@repo, relative)))
+        File.write(File.join(@repo, relative), body)
+      end
+
+      around do |example|
+        Dir.mktmpdir do |repo|
+          @repo = repo
+          git("init", "-q")
+          write("backend/app/models/widget.rb", "class Widget < ApplicationRecord\nend\n")
+          write("frontend/app.js", "console.log(1)\n")
+          git("add", "-A")
+          git("commit", "-q", "-m", "init")
+          write("frontend/app.js", "console.log(2)\n")
+          git("commit", "-q", "-am", "frontend")
+          write("backend/app/models/widget.rb", "class Widget < ApplicationRecord\n  validates :name, presence: true\nend\n")
+          write("backend/db/migrate/20260101000000_add_color_to_widgets.rb", "class AddColorToWidgets < ActiveRecord::Migration[8.0]\nend\n")
+          example.run
+        end
+      end
+
+      before { allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(File.join(@repo, "backend")))) }
+
+      it "names the app's changed files from the app root, with their diffs" do
+        text = described_class.call(ref: "HEAD").content.first[:text]
+
+        expect(text).to include("### app/models/widget.rb (model)")
+        expect(text).to include("+  validates :name, presence: true")
+        expect(text).to include("### db/migrate/20260101000000_add_color_to_widgets.rb (migration)")
+        expect(text).to include("rails_validate(files:[\"app/models/widget.rb\", \"db/migrate/20260101000000_add_color_to_widgets.rb\"]")
+        expect(text).not_to include("backend/")
+      end
+
+      it "leaves another app's commits out of a ref's review" do
+        text = described_class.call(ref: "HEAD~1").content.first[:text]
+
+        expect(text).to include("No changes found for ref 'HEAD~1'")
+        expect(text).not_to include("frontend")
+      end
+    end
+
     it "handles missing git gracefully" do
       allow(Open3).to receive(:capture2).and_return([ "", double(success?: false) ])
       result = described_class.call(ref: "HEAD")
