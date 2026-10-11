@@ -85,6 +85,11 @@ module RailsAiContext
           when :alias_attribute then extract_virtual_attributes(node, only: 1)
           when :store_accessor then extract_virtual_attributes(node, skip: 1)
           when :store then extract_store_accessors(node)
+          # An attachment and rich text are records of their own, reached by
+          # the name; no column of the model carries it.
+          when :has_one_attached, :has_many_attached, :has_rich_text
+            extract_virtual_attributes(node, only: 1)
+          when :has_secure_password then extract_secure_password(node)
           else
             if node.name.to_s.end_with?("_path", "_url") && node.receiver.nil?
               @route_helper_calls << {
@@ -185,6 +190,17 @@ module RailsAiContext
           (only ? args.first(only) : args).each do |arg|
             @virtual_attributes << arg.unescaped if arg.is_a?(Prism::SymbolNode)
           end
+        end
+
+        # `has_secure_password :recovery_password` keeps only a
+        # `recovery_password_digest` column and defines the attribute, its
+        # confirmation and its challenge; the name defaults to `password`.
+        def extract_secure_password(node)
+          return unless node.receiver.nil?
+
+          first = node.arguments&.arguments&.first
+          name = first.is_a?(Prism::SymbolNode) || first.is_a?(Prism::StringNode) ? first.unescaped : "password"
+          @virtual_attributes.merge([ name, "#{name}_confirmation", "#{name}_challenge" ])
         end
 
         # `store :settings, accessors: [:color, :size]`
@@ -541,6 +557,7 @@ module RailsAiContext
           table_data[:columns]&.each { |c| valid << c[:name] }
           model_data[:associations]&.each { |a| valid << a[:name]; valid.merge(Array(a[:foreign_key])) }
           valid.merge(%w[id _destroy created_at updated_at])
+          valid.merge(model_declared_attributes(model_name, context))
 
           # When JSONB columns exist, plain-word params may be keys inside JSONB columns.
           # Only flag _id params (FKs must be real columns) when JSONB is present.
@@ -556,6 +573,15 @@ module RailsAiContext
           end
         end
         warnings
+      end
+
+      # What the model's own source declares with no column of the name
+      # (attr_accessor, has_secure_password's password and confirmation, an
+      # attachment), which a form permits like any column.
+      private_class_method def self.model_declared_attributes(model_name, context)
+        file = RailsAiContext::Payload.model_file(context, model_name)
+        source = RailsAiContext::SafeFile.read(rails_app.root.join(file)) or return Set.new
+        parse_and_visit(file, source)&.virtual_attributes || Set.new
       end
 
       # ── CHECK 5: Callback method existence (AST) ─────────────────────

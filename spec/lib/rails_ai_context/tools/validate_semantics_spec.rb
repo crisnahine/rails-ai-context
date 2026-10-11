@@ -345,6 +345,32 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
         end
       end
 
+      # has_secure_password keeps a digest column, and an attachment or rich
+      # text lives in records of its own, so each suggested migration was a
+      # column nobody wants.
+      it "says nothing about what has_secure_password, an attachment or rich text declares" do
+        source = <<~RUBY
+          class Subscription < ApplicationRecord
+            has_secure_password
+            has_secure_password :recovery_password, validations: false
+            has_one_attached :avatar
+            has_many_attached :documents, dependent: :purge_later
+            has_rich_text :bio
+            validates :password, length: { minimum: 8 }, allow_nil: true
+            validates :password_confirmation, :password_challenge, presence: true
+            validates :recovery_password, :recovery_password_confirmation, presence: true
+            validates :avatar, :documents, :bio, presence: true
+            validates :nickname, presence: true
+          end
+        RUBY
+
+        with_app_file("app/models/subscription.rb", source) do |file, path|
+          warnings = described_class.check_rails_semantics(file, path).join("\n")
+          %w[password recovery_password avatar documents bio].each { |name| expect(warnings).not_to include("validates :#{name}") }
+          expect(warnings).to include("validates :nickname - column \"nickname\" not found")
+        end
+      end
+
       # OpenProject's `has_details_table do` class_evals its block on a detail
       # class, so a validation there reads that class's table.
       it "says nothing about a validation inside a block run on another class" do
@@ -433,6 +459,41 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
         with_app_file("app/models/subscription.rb", source) do |file, path|
           expect(described_class.check_rails_semantics(file, path).join).to include("nickname")
         end
+      end
+    end
+
+    # A sign-up form permits the password and the avatar, which the model
+    # declares and no column holds.
+    it "says nothing about a permitted attribute the model declares without a column" do
+      Dir.mktmpdir do |root|
+        files = {
+          "app/models/user.rb" => "class User < ApplicationRecord\n  has_secure_password\n  has_one_attached :avatar\n  attr_accessor :invite_code\nend\n",
+          "app/controllers/users_controller.rb" => <<~RUBY
+            class UsersController < ApplicationController
+              private
+
+              def user_params
+                params.require(:user).permit(:email, :password, :password_confirmation, :avatar, :invite_code, :nickname)
+              end
+            end
+          RUBY
+        }
+        files.each do |relative, body|
+          FileUtils.mkdir_p(File.dirname(File.join(root, relative)))
+          File.write(File.join(root, relative), body)
+        end
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({
+          routes: { by_controller: {} },
+          schema: { tables: { "users" => { columns: [ { name: "id" }, { name: "email" }, { name: "password_digest" } ] } } },
+          models: { "User" => { table_name: "users", file: "app/models/user.rb", associations: [] } }
+        })
+
+        file = "app/controllers/users_controller.rb"
+        warnings = described_class.check_rails_semantics(file, File.join(root, file)).join("\n")
+
+        %w[password password_confirmation avatar invite_code].each { |name| expect(warnings).not_to include("permits :#{name} ") }
+        expect(warnings).to include("permits :nickname - not a column in users table")
       end
     end
 
