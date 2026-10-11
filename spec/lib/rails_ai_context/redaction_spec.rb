@@ -1008,13 +1008,15 @@ RSpec.describe RailsAiContext::Redaction do
     # A header name is read as a whole run of words and dashes; a pattern that
     # tried each dash as the run's start, or its secret word's, took minutes.
     # A filtered value's offset was counted from the line's start, once per match.
-    it "takes a fraction of a second over a 1 MB run of dashed words or header keys, in a log and in source" do
+    # The bound is what a backtracking pattern could never meet, with room for a
+    # slow CI runner (a macOS one took 2.1 seconds where Linux takes under one).
+    it "reads a 1 MB run of dashed words or header keys in seconds, not minutes, in a log and in source" do
       [ "a-" * 500_000, "#{'token-' * 170_000}x", %("#{'token-' * 170_000}token" => "x"),
         %("Authorization"=>"x", ) * 50_000 ].each do |line|
         started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         described_class.redact_log_line(line)
         described_class.redact_source_line(line, path: "app/models/x.rb")
-        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 2
+        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 15
       end
     end
 

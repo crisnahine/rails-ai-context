@@ -180,6 +180,10 @@ RSpec.describe RailsAiContext::Fingerprinter::Snapshot do
     # A link that names a directory not there yet sits in a listing that
     # nothing restamps when the directory appears.
     it "enters a link once the directory it names appears" do
+      # Windows fixes a link's kind when the link is made: one to a path not
+      # there yet is a file link, which no listing enters as a directory.
+      skip "Windows makes a link to a path not there yet a file link" if Gem.win_platform?
+
       File.symlink("../../../../shared/later", File.join(root, "app/models/later"))
       age("app/models")
       snapshot.changed?
