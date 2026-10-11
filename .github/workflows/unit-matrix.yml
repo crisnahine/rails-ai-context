@@ -89,3 +89,60 @@ jobs:
       - name: Run RuboCop
         if: ${{ inputs.release_gate && matrix.ruby == '3.3' && matrix.rails == '8.0' }}
         run: bundle exec rubocop --parallel
+
+  # The gem runs where its users work: macOS and Windows as well as Linux.
+  # One leg each on the newest Ruby and Rails, and the oldest pairing on
+  # macOS; the Linux matrix above covers the versions in between.
+  os:
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            ruby: "3.4"
+            rails: "8.1"
+          - os: macos-latest
+            ruby: "3.1"
+            rails: "7.0"
+          - os: windows-latest
+            ruby: "3.4"
+            rails: "8.1"
+
+    name: ${{ matrix.os }} / Ruby ${{ matrix.ruby }} / Rails ${{ matrix.rails }}
+
+    env:
+      RAILS_VERSION: ${{ matrix.rails }}
+
+    steps:
+      # A Windows runner checks out with CRLF by default, which rewrites the
+      # fixtures the specs compare byte for byte.
+      - name: Keep line endings as committed
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v7
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+
+      - name: Ensure ripgrep (macOS)
+        if: runner.os == 'macOS'
+        run: command -v rg || brew install ripgrep
+
+      - name: Ensure ripgrep (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ripgrep -y --no-progress
+
+      - name: Run specs
+        if: ${{ !inputs.release_gate }}
+        run: bundle exec rspec
+
+      - name: Run specs (fixed seed)
+        if: ${{ inputs.release_gate }}
+        run: bundle exec rspec --seed 27377
