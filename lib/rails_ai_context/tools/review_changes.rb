@@ -158,25 +158,37 @@ module RailsAiContext
           sha if status.success? && sha.match?(/\A\h{40,64}\z/)
         end
 
+        # An app in a subfolder of its repository (a monorepo's backend/)
+        # sees its own files only, named from the app root: `git diff` names
+        # paths from the top of the repository unless told `--relative`,
+        # while `ls-files` already answers from where it runs.
+        #
         # @param base [String] "HEAD" for the uncommitted changes, else the
         #   commit the committed ones are taken from
         def get_changed_files(base, root)
           if base == "HEAD"
-            staged, _ = Open3.capture2("git", "diff", "--cached", "--name-only", chdir: root, err: File::NULL)
-            unstaged, _ = Open3.capture2("git", "diff", "--name-only", chdir: root, err: File::NULL)
+            staged, _ = Open3.capture2("git", "diff", "--cached", "--name-only", "--relative", chdir: root, err: File::NULL)
+            unstaged, _ = Open3.capture2("git", "diff", "--name-only", "--relative", chdir: root, err: File::NULL)
             untracked, _ = Open3.capture2("git", "ls-files", "--others", "--exclude-standard", chdir: root, err: File::NULL)
             (staged.lines + unstaged.lines + untracked.lines).map(&:strip).reject(&:empty?).uniq
           else
-            output, _ = Open3.capture2("git", "diff", "--name-only", base, "HEAD", chdir: root, err: File::NULL)
+            output, _ = Open3.capture2("git", "diff", "--name-only", "--relative", base, "HEAD", chdir: root, err: File::NULL)
             output.lines.map(&:strip).reject(&:empty?).uniq
           end
         end
 
+        # In a subfolder app, only the commits that touched the app.
         def get_commit_log(ref, root)
           return nil if ref == "HEAD"
-          output, status = Open3.capture2("git", "log", "--oneline", "-10", "#{ref}..HEAD", chdir: root, err: File::NULL)
+          within = subfolder_app?(root) ? [ "--", "." ] : []
+          output, status = Open3.capture2("git", "log", "--oneline", "-10", "#{ref}..HEAD", *within, chdir: root, err: File::NULL)
           return nil unless status.success? && !output.strip.empty?
           output.strip
+        end
+
+        def subfolder_app?(root)
+          prefix, status = Open3.capture2("git", "rev-parse", "--show-prefix", chdir: root, err: File::NULL)
+          status.success? && !prefix.strip.empty?
         end
 
         def classify_file(path)
@@ -294,12 +306,12 @@ module RailsAiContext
         # the change that put it on the list.
         def get_file_diff(file, root, base)
           if base == "HEAD"
-            output, status = Open3.capture2("git", "diff", "--", file, chdir: root, err: File::NULL)
+            output, status = Open3.capture2("git", "diff", "--relative", "--", file, chdir: root, err: File::NULL)
             if !status.success? || output.strip.empty?
-              output, status = Open3.capture2("git", "diff", "--cached", "--", file, chdir: root, err: File::NULL)
+              output, status = Open3.capture2("git", "diff", "--cached", "--relative", "--", file, chdir: root, err: File::NULL)
             end
           else
-            output, status = Open3.capture2("git", "diff", base, "HEAD", "--", file, chdir: root, err: File::NULL)
+            output, status = Open3.capture2("git", "diff", "--relative", base, "HEAD", "--", file, chdir: root, err: File::NULL)
           end
           status.success? && !output.strip.empty? ? output : nil
         end
