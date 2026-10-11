@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, fix/issues-424-429-app-root-and-workspace-init]
+    branches: [main]
   pull_request:
     branches: [main]
   schedule:
