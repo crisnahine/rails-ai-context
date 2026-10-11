@@ -530,6 +530,40 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       expect(sites_and_locals("posts/form")).to eq([ %w[app/views/posts/new.html.erb:1], %w[post] ])
       expect(sites_and_locals("comments/form").first).to eq(%w[app/views/posts/show.html.erb:1])
     end
+
+    # Every site in Ruby read as html, so `formats: [:json]` in a controller
+    # was listed under the html partial and left off the json one it renders.
+    it "reads a controller's render by the format it names, its respond_to block or the request" do
+      FileUtils.mkdir_p(File.join(@root, "app/controllers"))
+      File.write(File.join(@root, "app/controllers/cards_controller.rb"), <<~RUBY)
+        class CardsController < ApplicationController
+          def json_card
+            render partial: "posts/post", locals: { post: Post.first }, formats: [ :json ]
+          end
+
+          def either_card
+            respond_to do |wants|
+              wants.html { render partial: "posts/post", locals: { post: Post.first } }
+              wants.json { render partial: "posts/post", locals: { post: Post.first } }
+            end
+          end
+
+          def bare_card
+            render partial: "posts/post", locals: { post: Post.first }
+          end
+
+          def stream_card
+            render turbo_stream: turbo_stream.replace("card", partial: "posts/post", locals: { post: Post.first })
+          end
+        end
+      RUBY
+
+      html = sites_and_locals("posts/post").first.grep(/cards_controller/)
+      json = sites_and_locals("posts/_post.json.jbuilder").first.grep(/cards_controller/)
+
+      expect(html).to eq(%w[app/controllers/cards_controller.rb:8 app/controllers/cards_controller.rb:14 app/controllers/cards_controller.rb:18])
+      expect(json).to eq(%w[app/controllers/cards_controller.rb:3 app/controllers/cards_controller.rb:9 app/controllers/cards_controller.rb:14])
+    end
   end
 
   describe "the standard and full renderings" do
