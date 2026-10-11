@@ -29,6 +29,7 @@ RSpec.describe RailsAiContext::ConcernMembership do
       expect(described_class.payload?("ActiveSupport::Callbacks")).to be(false)
       expect(described_class.payload?("ActionController::MimeResponds")).to be(false)
       expect(described_class.payload?("AbstractController::Rendering")).to be(false)
+      expect(described_class.payload?("Rails::Engine::LazyRouteSet::MountedHelpers")).to be(false)
     end
 
     it "drops the modules Rails generates inside the class" do

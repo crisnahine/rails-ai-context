@@ -18,9 +18,11 @@ module RailsAiContext
     SINGLETON_MACROS = %i[extend singleton_include singleton_prepend].freeze
     # The block ActiveSupport::Concern runs for each.
     CONCERN_BLOCKS = { include: :included, prepend: :prepended }.freeze
+    # Rails:: covers the route helpers Rails 8 mixes into every controller
+    # (Rails::Engine::LazyRouteSet::MountedHelpers).
     FRAMEWORK_PREFIXES = %w[
       ActiveModel:: ActiveRecord:: ActiveSupport::
-      ActionController:: ActionDispatch:: AbstractController::
+      ActionController:: ActionDispatch:: AbstractController:: Rails::
     ].freeze
     # Rails defines these inside the model class itself, so no namespace rule
     # catches them.
