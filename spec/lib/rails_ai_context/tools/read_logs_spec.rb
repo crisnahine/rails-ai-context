@@ -43,6 +43,16 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
       end
     end
 
+    it "reports the log size when the app's I18n backend raises" do
+      File.binwrite(File.join(log_dir, "test.log"), "I, [2026-03-29T10:00:00 #1] INFO -- : x\n" * 315)
+      allow(I18n).to receive(:translate).and_raise(StandardError, "We could not find your database")
+
+      response = described_class.call(lines: 20)
+
+      expect(response.error?).to be(false)
+      expect(response.content.first[:text]).to include("Size: 12.3 KB | Showing last 20 lines")
+    end
+
     it "reports the log size in the same units as the rest of the gem" do
       File.write(File.join(log_dir, "test.log"), "I, [2026-03-29T10:00:00 #1] INFO -- : x\n" * 60_000)
 

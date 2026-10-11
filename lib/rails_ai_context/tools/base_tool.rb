@@ -1189,11 +1189,18 @@ module RailsAiContext
           Array(RailsAiContext::Payload.section(cached_context, :i18n)&.dig(:available_locales)).map(&:to_s)
         end
 
-        # English units whatever the locale, unless the app offers no English at all.
+        STORAGE_UNITS = %w[Bytes KB MB GB TB PB EB ZB].freeze
+
+        # number_to_human_size's English output, without I18n: an app's backend can raise after a failed boot.
         def human_size(bytes)
-          ActiveSupport::NumberHelper.number_to_human_size(bytes.to_i, locale: :en)
-        rescue I18n::InvalidLocale
-          ActiveSupport::NumberHelper.number_to_human_size(bytes.to_i)
+          bytes = bytes.to_i
+          return "#{bytes} #{bytes == 1 ? "Byte" : "Bytes"}" if bytes < 1024
+
+          exponent = [ (Math.log(bytes) / Math.log(1024)).to_i, STORAGE_UNITS.size - 1 ].min
+          value = bytes.to_f / (1024**exponent)
+          places = 3 - (Math.log10(value) + 1).floor
+          rounded = format("%.#{[ places, 0 ].max}f", BigDecimal(value.to_s).round(places, :half_up))
+          "#{rounded.sub(/(\.\d*?)0+\z/, '\1').delete_suffix(".")} #{STORAGE_UNITS[exponent]}"
         end
 
         # Every answered call is recorded so session_context(action:"status")
