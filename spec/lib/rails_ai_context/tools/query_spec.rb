@@ -2059,4 +2059,45 @@ it "still explains a database that does not exist" do
     end
   end
 
+  describe "VALUES column-alias list (item 2)" do
+    it "allows a derived-table list whose body is VALUES" do
+      valid, = described_class.validate_sql("SELECT * FROM (VALUES (1,'a'),(2,'b')) AS v(id, name)")
+      expect(valid).to be true
+    end
+
+    it "allows a CTE list whose body is VALUES" do
+      valid, = described_class.validate_sql("WITH v(id, name) AS (VALUES (1,'a'),(2,'b')) SELECT * FROM v")
+      expect(valid).to be true
+    end
+
+    it "still refuses a derived-table list over a real sub-SELECT" do
+      valid, error = described_class.validate_sql("SELECT * FROM (SELECT * FROM users) AS t(a, b, c)")
+      expect(valid).to be false
+      expect(error).to include("column-alias list")
+    end
+
+    it "still refuses a FROM-item table-alias list (never a VALUES body)" do
+      valid, error = described_class.validate_sql("SELECT * FROM orders o(a, b, c)")
+      expect(valid).to be false
+      expect(error).to include("column-alias list")
+    end
+
+    it "still refuses a CTE list over a real SELECT of a table" do
+      valid, error = described_class.validate_sql("WITH t(a, b) AS (SELECT id, email FROM users) SELECT * FROM t")
+      expect(valid).to be false
+      expect(error).to include("column-alias list")
+    end
+
+    it "balances parentheses on quote-masked text, so one inside a literal does not move the body" do
+      valid, = described_class.validate_sql("SELECT * FROM (VALUES ('x)y', 1),('z', 2)) AS v(a, b)")
+      expect(valid).to be true
+    end
+
+    it "still catches a sensitive name inside the VALUES body" do
+      valid, error = described_class.validate_sql("SELECT * FROM (VALUES (password_digest)) AS v(a, b)")
+      expect(valid).to be false
+      expect(error).to include("sensitive column `password_digest`")
+    end
+  end
+
 end
