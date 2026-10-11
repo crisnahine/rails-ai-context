@@ -354,7 +354,7 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
         dir(path).tap { |copy| File.write(File.join(copy, "rails-ai-context.gemspec"), "") }
       end
 
-      before { stub_const("ENV", ENV.to_h.except("BUNDLE_BIN_PATH", described_class::HANDOFF_ENV)) }
+      before { stub_const("ENV", ENV.to_h.except("BUNDLE_BIN_PATH", "BUNDLE_GEMFILE", described_class::HANDOFF_ENV)) }
 
       # Two copies in one process: this one's files load before the boot,
       # the bundle's over them.
@@ -368,6 +368,23 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
         expect(handoff.version).to eq("5.0.0")
         expect(handoff.env).to eq("BUNDLE_GEMFILE" => File.join(root, "Gemfile"), described_class::HANDOFF_ENV => "1")
         expect(File.directory?(copy)).to be true
+      end
+
+      # A dual boot's Gemfile.next is named by BUNDLE_GEMFILE, as for bundle exec.
+      it "reads the bundle a BUNDLE_GEMFILE someone set names, and keeps it" do
+        root = app("shop")
+        path_copy("vendor/rails-ai-context")
+        locked_from(root, "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails-ai-context (0.0.1)\n")
+        File.write(File.join(root, "Gemfile.next"), %(gem "rails-ai-context", path: "../vendor/rails-ai-context"\n))
+        File.write(File.join(root, "Gemfile.next.lock"),
+                   "PATH\n  remote: ../vendor/rails-ai-context\n  specs:\n    rails-ai-context (5.0.0)\n\nPLATFORMS\n  ruby\n\n" \
+                   "DEPENDENCIES\n  rails-ai-context!\n")
+        stub_const("ENV", ENV.to_h.merge("BUNDLE_GEMFILE" => File.join(root, "Gemfile.next")))
+
+        handoff = described_class.bundled_handoff(root)
+
+        expect(handoff.version).to eq("5.0.0")
+        expect(handoff.env["BUNDLE_GEMFILE"]).to eq(File.join(root, "Gemfile.next"))
       end
 
       it "runs on when the bundle's copy is this one, or this run is already the bundle's" do

@@ -26,6 +26,7 @@ RSpec.describe RailsAiContext::FactsFormatter do
     binary = File.read(File.expand_path("../../../exe/rails-ai-context", __dir__))
 
     expect(rake).to include("Run `rails ai:context:json` for the full introspection as JSON, in .ai-context.json.")
-    expect(binary).to include("Run `rails-ai-context inspect` for the full introspection as JSON.")
+    # Named as the run was typed: bundle exec, --app-path.
+    expect(binary).to include("Run `\#{own_command('inspect')}` for the full introspection as JSON.")
   end
 end

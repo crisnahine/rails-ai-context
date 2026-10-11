@@ -160,6 +160,18 @@ module RailsAiContext
       end
     end
 
+    # The lock of a Gemfile named outright, as BUNDLE_GEMFILE names a dual
+    # boot's Gemfile.next. Nil with no lockfile beside it.
+    def for_gemfile(gemfile, root)
+      gemfile = File.expand_path(gemfile.to_s)
+      dir = File.dirname(gemfile)
+      lockfile = File.basename(gemfile) == "gems.rb" ? File.join(dir, "gems.locked") : "#{gemfile}.lock"
+      return nil unless File.file?(lockfile)
+
+      parse(Bundle.new(lockfile: lockfile, gemfile: gemfile, lock_label: File.basename(lockfile), gemfile_label: File.basename(gemfile),
+                       dir: dir, trusted: dir, outside: nil, no_repo: false), root.to_s)
+    end
+
     # The app's own Gemfile and lockfile, or, with no lockfile of its own, the
     # bundle config/boot.rb points Bundler at (an engine's test/dummy).
     def bundle(root)

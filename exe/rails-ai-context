@@ -396,7 +396,7 @@ class RailsAiContextCLI < Thor
     option :mcp_only, type: :boolean, default: false,
       desc: "Write the MCP config and nothing else: no CLAUDE.md, AGENTS.md, rules files or .ai-context.json"
     def init
-      resolution = resolve_app_root!(workspace: true)
+      resolution = resolve_app_root!(workspace: true, hand_off: false)
       return init_workspace(resolution.base, resolution.below) if resolution.workspace?
 
       refuse_no_app! unless entry_boot.app_present?(Dir.pwd, allow_source_only: true)
@@ -422,8 +422,10 @@ class RailsAiContextCLI < Thor
       # boot that fails falls back to the static tier rather than abandoning
       # the setup, since setup is exactly what you run on a repo you have
       # just cloned. An MCP-only setup needs nothing from the app, so it boots
-      # nothing.
-      boot_rails!(command: "init", allow_static: true) if context_files
+      # nothing; nor does a run whose app bundles its own copy of the gem,
+      # which writes the context files in a child of its own.
+      bundled = bundled_copy_for_context if context_files
+      boot_rails!(command: "init", allow_static: true) if context_files && !bundled
 
       program.remove_tools(program_surface, dropped, selected: ai_tools, root: Dir.pwd)
       program.remove_mcp_entries(program_surface, unwired, root: Dir.pwd)
@@ -431,7 +433,9 @@ class RailsAiContextCLI < Thor
       write_mcp_configs(ai_tools, tool_mode)
       add_to_gitignore(context_files)
 
-      if context_files
+      if bundled
+        generate_bundled_context(bundled)
+      elsif context_files
         configure_answers!(ai_tools, tool_mode, context_files)
         $stderr.puts ""
         $stderr.puts "Generating AI context files..."
@@ -463,7 +467,7 @@ class RailsAiContextCLI < Thor
 
       context = ::RailsAiContext.introspect
       puts ::RailsAiContext::FactsFormatter.render(
-        context, full_json: "Run `rails-ai-context inspect` for the full introspection as JSON."
+        context, full_json: "Run `#{own_command('inspect')}` for the full introspection as JSON."
       )
     end
 
@@ -949,7 +953,8 @@ class RailsAiContextCLI < Thor
     # no single app, for the one command that answers without one.
     # `workspace: true` is init's: a folder of apps is set up as a whole, so
     # that answer comes back with the process left where it stands.
-    def resolve_app_root!(required: true, workspace: false)
+    # `hand_off: false` is init's too: it asks its questions in this copy.
+    def resolve_app_root!(required: true, workspace: false, hand_off: true)
       return @app_root_result if defined?(@app_root_result)
 
       cwd = Dir.pwd
@@ -986,7 +991,7 @@ class RailsAiContextCLI < Thor
       $stderr.puts app_root.notice(result, cwd) if result.walked
       warning = app_root.bundle_warning(result.root, cwd)
       $stderr.puts warning if warning
-      hand_off_to_bundle!(result.root, cwd)
+      hand_off_to_bundle!(result.root, cwd) if hand_off
       result
     end
 
@@ -997,11 +1002,15 @@ class RailsAiContextCLI < Thor
     #
     # Only a run that boots the app hands off, since booting runs the app's
     # bundle anyway. One that promises to run nothing of the app's -
-    # --no-boot, init --mcp-only - keeps to this copy: bundle exec would
+    # --no-boot, an MCP-only init - keeps to this copy: bundle exec would
     # evaluate the app's Gemfile and start whatever copy of the gem the app
     # names, on a repo just cloned code nobody has read. Nor does a bundle
     # not installed yet, where bundle exec would only fail and this copy
     # answers from source.
+    #
+    # A root found by walking from where the command was typed is where the
+    # command runs from: this copy reads every relative argument from there,
+    # and a released copy does not walk at all.
     def hand_off_to_bundle!(root, cwd)
       return if options[:no_boot] || @no_boot || options[:mcp_only]
 
@@ -1011,19 +1020,51 @@ class RailsAiContextCLI < Thor
       bundle = Gem.bin_path("bundler", "bundle")
       $stderr.puts "[rails-ai-context] This app's bundle has rails-ai-context #{handoff.version}; " \
                    "running that copy, as bundle exec does."
-      exec(handoff.env, RbConfig.ruby, bundle, "exec", "rails-ai-context", *ORIGINAL_ARGV, chdir: cwd)
+      exec(handoff.env, RbConfig.ruby, bundle, "exec", "rails-ai-context", *ORIGINAL_ARGV,
+           chdir: @app_root_result&.walked ? root : cwd)
     rescue Gem::Exception, SystemCallError
       nil
     end
 
-    # The doctor run for this app as the command was typed: from where it was
+    # init asks its questions in this copy and hands only the context files
+    # to the app's bundled copy, once they are asked for: an MCP-only setup
+    # then runs nothing of the app's, flag or answer.
+    def bundled_copy_for_context
+      return nil if options[:no_boot]
+
+      handoff = app_root.bundled_handoff(Dir.pwd) or return nil
+      app_root.bundle_ready?(handoff.env, Dir.pwd) ? handoff : nil
+    end
+
+    def generate_bundled_context(handoff)
+      $stderr.puts ""
+      $stderr.puts "This app's bundle has rails-ai-context #{handoff.version}; generating the context files with that copy, " \
+                   "as bundle exec does..."
+      bundle = Gem.bin_path("bundler", "bundle")
+      flags = options[:environment] ? [ "--environment", options[:environment] ] : []
+      ok = system(handoff.env, RbConfig.ruby, bundle, "exec", "rails-ai-context", "context", *flags, chdir: Dir.pwd)
+      return if ok
+
+      $stderr.puts "Error: the bundled copy could not write the context files - see the output above. " \
+                   "Retry with `#{own_command('context')}`."
+      exit 1
+    end
+
+    # Another command for this app as this one was typed: from where it was
     # typed, with the --app-path it named, under bundle exec when it ran so.
-    def doctor_command
+    # A run the binary handed to the app's bundle was typed without it, and
+    # typed again it is handed over again.
+    def own_command(*args)
       result = @app_root_result
       typed = @app_path_override || options[:app_path]
-      words = ENV["BUNDLE_BIN_PATH"] ? %w[bundle exec rails-ai-context] : %w[rails-ai-context]
+      typed_bundled = ENV["BUNDLE_BIN_PATH"] && !ENV[app_root::HANDOFF_ENV]
+      words = typed_bundled ? %w[bundle exec rails-ai-context] : %w[rails-ai-context]
       words += [ "--app-path", app_root.option_path(typed) ] if result&.explicit && typed && result.root != result.cwd
-      app_root.command_line([ *words, "doctor" ])
+      app_root.command_line([ *words, *args ])
+    end
+
+    def doctor_command
+      own_command("doctor")
     end
 
     def refuse_no_app!
