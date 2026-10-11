@@ -305,6 +305,11 @@ module RailsAiContext
         # Extract source code with line numbers
         source_with_lines = source && extract_method_with_lines(source_path, action_name, source: source,
           owner: controller_name)
+        # An action from a concern or a parent controller has no def in this file.
+        source_with_lines ||= RailsAiContext::Introspectors::ActionSource.find(rails_app.root, controller_name,
+          action_name, file: carried)
+        elsewhere = source_with_lines&.dig(:file)
+        elsewhere = nil if elsewhere == carried
 
         lines = [ "# #{controller_name}##{action_name}", "" ]
         lines << "**File:** `#{carried}`" if carried
@@ -316,7 +321,8 @@ module RailsAiContext
         end
 
         if source_with_lines
-          lines << "" << "## Source (lines #{source_with_lines[:start_line]}-#{source_with_lines[:end_line]})"
+          span = "lines #{source_with_lines[:start_line]}-#{source_with_lines[:end_line]}"
+          lines << "" << "## Source (#{elsewhere ? "`#{elsewhere}`, #{span}" : span})"
           lines << "```ruby" << source_with_lines[:code] << "```"
 
           ivars = RailsAiContext::Introspectors::ActionResolver.assigned_ivars(source_with_lines[:code])
@@ -345,7 +351,7 @@ module RailsAiContext
             render_map[:side_effects].each { |s| lines << "- #{s}" }
           end
         else
-          lines << "" << "_Could not extract source code. File: #{source_path || "not recorded for #{controller_name}"}_"
+          lines << "" << "_Could not extract source code. File: #{carried || "not recorded for #{controller_name}"}_"
         end
 
         # One action's answer used to carry every strong-params method in the
