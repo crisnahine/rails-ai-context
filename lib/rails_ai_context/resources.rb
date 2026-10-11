@@ -206,9 +206,7 @@ module RailsAiContext
         context = RailsAiContext.introspect
 
         if STATIC_RESOURCES.key?(uri)
-          key = STATIC_RESOURCES[uri][:key]
-          content = JsonBudget.for_resource(context[key] || {})
-          [ { uri: uri, mimeType: "application/json", text: content } ]
+          [ VFS.json_content(uri, context[STATIC_RESOURCES[uri][:key]] || {}) ]
         else
           raise ResourceUnavailable.new("Resource not found: #{Tools::BaseTool.echo_input(uri)}", available: served_uris)
         end

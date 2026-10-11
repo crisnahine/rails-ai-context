@@ -393,8 +393,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A server that cannot reload code says so once the code changed.** Under
   `RAILS_ENV=test`, or production with eager loading, every answer ends with
   a note naming the changed files, since what reflection reads (associations,
-  enums) is as of boot. The server instructions no longer promise that
-  reflection follows edits there.
+  enums) is as of boot, and a JSON answer or resource body carries it under
+  `_stale_code`. The server instructions no longer promise that reflection
+  follows edits there.
+- **A resource read from the static tier says so**, under `_static_tier` in
+  its JSON body, as a tool's JSON answer does.
 - **`rails_query` runs a read-only query that names a write keyword only
   inside a string.** `WHERE title LIKE '%update%'`, `= 'put into box'` and
   the `replace()` string function were refused as writes; a keyword or

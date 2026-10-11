@@ -196,6 +196,21 @@ RSpec.describe "a server's check of the app's files at each call" do
       expect(JSON.parse(base.json_response({ "rows" => [] }).content.first[:text])).to include("_stale_code" => note)
     end
 
+    # A resource read answered from the same boot-time reflection with
+    # nothing said: a model's body read `"dependent": "destroy"` while the
+    # file said `:nullify`.
+    it "carries it under the same key in a resource's JSON body" do
+      allow(RailsAiContext).to receive(:introspect).and_return(
+        models: { "Post" => { table_name: "posts", associations: [ { type: "has_many", name: "comments", dependent: "destroy" } ] } },
+        conventions: { patterns: [] }
+      )
+      server = RailsAiContext::Server.new(Rails.application, transport: :stdio).build
+      read = ->(uri) { server.handle({ jsonrpc: "2.0", id: 1, method: "resources/read", params: { uri: uri } }).dig(:result, :contents, 0, :text) }
+
+      expect(JSON.parse(read.call("rails-ai-context://models/Post"))).to include("_stale_code" => note)
+      expect(JSON.parse(read.call("rails://conventions"))).to include("_stale_code" => note)
+    end
+
     it "leaves it out of a sub-tool's text that a composing tool quotes" do
       base.refresh_if_files_changed!
 
@@ -206,6 +221,7 @@ RSpec.describe "a server's check of the app's files at each call" do
       allow(RailsAiContext::CodeReloader).to receive(:changed_code).and_return([])
 
       expect(RailsAiContext::Tools::GetConventions.call.content.first[:text]).not_to include("App code changed")
+      expect(RailsAiContext::VFS.json_content("rails://schema", { "tables" => [] })[:text]).not_to include("_stale_code")
     end
   end
 end

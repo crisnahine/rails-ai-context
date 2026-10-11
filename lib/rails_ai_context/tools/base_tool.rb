@@ -1124,18 +1124,23 @@ module RailsAiContext
         STATIC_TIER_KEY = "_static_tier"
         STALE_CODE_KEY = "_stale_code"
 
-        # A JSON body has to parse, so it cannot take the markdown banner and
+        # A JSON body has to parse, so it cannot take the markdown banners and
         # cannot be sliced at the response cap: JsonBudget drops whole
-        # elements instead, and the tier note rides under a reserved key.
+        # elements instead, and the notes ride under reserved keys.
         def json_response(data)
-          note = static_tier_note
-          data = data.merge(STATIC_TIER_KEY => note) if note && data.is_a?(Hash)
-          stale = stale_code_note
-          data = data.merge(STALE_CODE_KEY => stale) if stale && data.is_a?(Hash)
-
-          text = JsonBudget.generate(data, RailsAiContext.configuration.max_tool_response_chars)
+          text = JsonBudget.generate(json_notes(data), RailsAiContext.configuration.max_tool_response_chars)
           record_call(text)
           MCP::Tool::Response.new([ { type: "text", text: text } ])
+        end
+
+        # The notes a text answer ends with, under their keys: that the answer
+        # is static analysis, and that what reflection read is not the code
+        # the files hold now. A tool's JSON answer and a resource's body both
+        # carry them, so neither reads as current when it is not.
+        def json_notes(data)
+          return data unless data.is_a?(Hash)
+
+          data.merge({ STATIC_TIER_KEY => static_tier_note, STALE_CODE_KEY => stale_code_note }.compact)
         end
 
         # Helper: wrap text in an MCP::Tool::Response flagged as an error

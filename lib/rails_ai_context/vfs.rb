@@ -33,6 +33,14 @@ module RailsAiContext
         raise ResourceUnavailable.new("Resource not found: #{echo(uri)}", available: Resources.served_uris)
       end
 
+      # A JSON resource's content: capped as a tool's answer is, and carrying
+      # the notes a tool's JSON answer does. A server that cannot reload
+      # reads a model's associations as of boot, and once the app's code
+      # changed the body says so, as every tool answer does.
+      def json_content(uri, data)
+        { uri: uri, mimeType: "application/json", text: JsonBudget.for_resource(Tools::BaseTool.json_notes(data)) }
+      end
+
       private
 
       # The caller's name as an answer repeats it, shortened as a tool's is.
@@ -63,7 +71,7 @@ module RailsAiContext
         schema = Payload.model_table(context[:schema], data) if table_name
         enriched = data.merge(schema: schema).compact
 
-        [ { uri: uri, mimeType: "application/json", text: JsonBudget.for_resource(enriched) } ]
+        [ json_content(uri, enriched) ]
       end
 
       def resolve_controller(uri, name)
@@ -73,7 +81,7 @@ module RailsAiContext
 
         raise ResourceUnavailable.new("Controller '#{echo(name)}' not found", available: controllers.keys.sort.first(20)) unless key
 
-        [ { uri: uri, mimeType: "application/json", text: JsonBudget.for_resource(controllers[key]) } ]
+        [ json_content(uri, controllers[key]) ]
       end
 
       def resolve_controller_action(uri, controller_name, action_name)
@@ -133,7 +141,7 @@ module RailsAiContext
           strong_params_scope: info[:strong_params] ? "controller" : nil
         }.compact
 
-        [ { uri: uri, mimeType: "application/json", text: JsonBudget.for_resource(action_data) } ]
+        [ json_content(uri, action_data) ]
       end
 
       def resolve_view(uri, path)
@@ -196,7 +204,7 @@ module RailsAiContext
           data[:note] = "#{key} resolved, and the route set has no routes for it."
         end
 
-        [ { uri: uri, mimeType: "application/json", text: JsonBudget.for_resource(data) } ]
+        [ json_content(uri, data) ]
       end
     end
   end
