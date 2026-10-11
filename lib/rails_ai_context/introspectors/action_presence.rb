@@ -15,8 +15,9 @@ module RailsAiContext
       # `defs` are the def nodes of the controller and its ancestors, nearest
       # first; `names` every public method and `define_method` name the chain
       # and its modules give; `unread_parent` the ancestor class the walk
-      # stopped at short of Rails' base (a gem's Devise::SessionsController).
-      Chain = Data.define(:defs, :names, :prefixes, :unread, :unread_parent) do
+      # stopped at short of Rails' base (a gem's Devise::SessionsController);
+      # `sources` the source of each class and included module read.
+      Chain = Data.define(:defs, :names, :prefixes, :unread, :unread_parent, :sources) do
         def defines?(action)
           names.include?(action.to_s)
         end
@@ -33,14 +34,16 @@ module RailsAiContext
         prefixes = [ prefix ]
         unread = []
         unread_parent = nil
+        sources = []
         name = class_name
         SuperclassChain::MAX_DEPTH.times do
           declaration = source && DeclaredConstant.declarations(source, path_name: name).find { |d| d.name == name }
           # A file the walk cannot match to the class leaves the class unread.
           break unread << name unless declaration
 
+          sources << source
           read_class(source, name, defs, names)
-          read_modules(source, name, root, names, unread, 0)
+          read_modules(source, name, root, names, unread, 0, sources)
           parent = declaration.superclass
           break if parent.nil? || BASES.include?(parent)
 
@@ -53,7 +56,8 @@ module RailsAiContext
           name, source = found
           prefixes << name.delete_suffix("Controller").underscore
         end
-        Chain.new(defs: defs, names: names, prefixes: prefixes.uniq, unread: unread.uniq, unread_parent: unread_parent)
+        Chain.new(defs: defs, names: names, prefixes: prefixes.uniq, unread: unread.uniq, unread_parent: unread_parent,
+                  sources: sources.uniq)
       end
 
       # The controller listing's file for a name it holds, else the file the
@@ -83,7 +87,7 @@ module RailsAiContext
       # Included modules give their public methods; an extended one gives
       # the actions its class macros build with define_method, and an unread
       # one only hides class methods.
-      def read_modules(source, owner, root, names, unread, depth)
+      def read_modules(source, owner, root, names, unread, depth, sources)
         mixins = ConcernMembership.owned_by(
           SourceIntrospector.walk_source(source, { mixins: Listeners::MixinsListener })[:mixins], owner, root: root
         )
@@ -98,9 +102,10 @@ module RailsAiContext
           end
           next unread << mod unless mod_source
 
+          sources << mod_source
           names.merge(public_names(mod_source, nil))
           names.merge(built_names(mod_source))
-          read_modules(mod_source, mod, root, names, unread, depth + 1) if depth < MODULE_DEPTH
+          read_modules(mod_source, mod, root, names, unread, depth + 1, sources) if depth < MODULE_DEPTH
         end
       end
 

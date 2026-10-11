@@ -604,6 +604,41 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
       it "still flags an ivar the template really reads" do
         expect(warnings_for("<%= @real %>\n")).to include("@real used in view but not set in WidgetsController")
       end
+
+      # A before_action in ApplicationController, or in a concern it
+      # includes, sets the ivar for every action below it.
+      it "says nothing about an ivar an ancestor or an included concern sets" do
+        FileUtils.mkdir_p(File.join(@root, "app/controllers/concerns"))
+        File.write(File.join(@root, "app/controllers/application_controller.rb"), <<~RUBY)
+          class ApplicationController < ActionController::Base
+            include CurrentCart
+            before_action :set_announcement
+
+            private
+
+            def set_announcement
+              @announcement = "Sale today"
+            end
+          end
+        RUBY
+        File.write(File.join(@root, "app/controllers/concerns/current_cart.rb"), <<~RUBY)
+          module CurrentCart
+            extend ActiveSupport::Concern
+
+            included { before_action :set_cart }
+
+            def set_cart
+              @cart = []
+            end
+          end
+        RUBY
+
+        text = warnings_for("<%= @announcement %> <%= @cart.size %> <%= @ghost %>\n")
+
+        expect(text).not_to include("@announcement")
+        expect(text).not_to include("@cart")
+        expect(text).to include("@ghost used in view but not set in WidgetsController, its ancestors or the modules they include")
+      end
     end
 
     # The payload lists thirty instance methods, so a callback naming one the
