@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "active_support/number_helper"
 
 RSpec.describe RailsAiContext::Tools::RuntimeInfo do
   before { described_class.reset_cache! }
@@ -284,6 +285,20 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
       expect(described_class.send(:human_size, 0)).to eq("0 Bytes")
       expect(described_class.send(:human_size, 1_048_576)).to eq("1 MB")
       expect(described_class.send(:human_size, 1_500_000)).to eq("1.43 MB")
+    end
+
+    # human_size reimplements this without I18n, so the two must not drift.
+    [
+      0, 1, 2, 1023, 1024, 1025, 1536, 10_239, 12_600,
+      1_048_575, 1_048_576, 1_500_000,
+      1024**3 - 1, 1024**3, 5 * 1024**3 + 123_456_789,
+      1024**4 - 1, 1024**4, 7 * 1024**4,
+      1024**7, 3 * 1024**8 + 12_345, 1024**9 * 3
+    ].each do |bytes|
+      it "labels #{bytes} bytes as number_to_human_size does" do
+        expect(described_class.send(:human_size, bytes))
+          .to eq(ActiveSupport::NumberHelper.number_to_human_size(bytes, locale: :en))
+      end
     end
   end
 end
