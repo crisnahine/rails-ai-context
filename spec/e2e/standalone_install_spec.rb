@@ -133,9 +133,8 @@ RSpec.describe "E2E: standalone install", type: :e2e do
       File.write(File.join(dir, "config", "application.rb"), "")
       File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
 
-      bin = File.join(@builder.gem_home, "bin", "rails-ai-context")
       env = @builder.env.merge("BUNDLE_GEMFILE" => nil)
-      out, status = Open3.capture2e(env, bin, "init", chdir: dir, stdin_data: "a\n1\nn\n")
+      out, status = Open3.capture2e(env, *@builder.cli_command, "init", chdir: dir, stdin_data: "a\n1\nn\n")
 
       expect(status.exitstatus).to eq(0), out
       expect(File.exist?(File.join(dir, "CLAUDE.md"))).to be(true), out

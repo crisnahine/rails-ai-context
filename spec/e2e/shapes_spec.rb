@@ -131,7 +131,7 @@ RSpec.describe "E2E: app shapes", type: :e2e do
       RUBY
       begin
         stdout, stderr, status = Open3.capture3(
-          @builder.env, "bin/rails", "middleware", chdir: @builder.app_path
+          @builder.env, *E2E::TestAppBuilder.script_command([ "bin/rails", "middleware" ]), chdir: @builder.app_path
         )
         expect(status.exitstatus).to eq(0), stderr
         expect(stdout).to include("RailsAiContext::Middleware")

@@ -27,12 +27,7 @@ module E2E
       cmd = if @command
         @command.map { |c| c.gsub("%PORT%", @port.to_s) }
       else
-        prefix = if @app.isolated_gem_home?
-          [ File.join(@app.gem_home, "bin", "rails-ai-context") ]
-        else
-          [ "bundle", "exec", "rails-ai-context" ]
-        end
-        prefix + [ "serve", "--transport", "http", "--port", @port.to_s ]
+        @app.cli_command + [ "serve", "--transport", "http", "--port", @port.to_s ]
       end
       @stdin, @stdout, @stderr, @wait_thr = Open3.popen3(@app.env, *cmd, chdir: @app.app_path)
       wait_for_ready!

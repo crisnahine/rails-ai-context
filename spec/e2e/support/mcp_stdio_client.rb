@@ -21,12 +21,7 @@ module E2E
       env, command, chdir = if @launch
         @launch.values_at(:env, :command, :chdir)
       else
-        prefix = if @app.isolated_gem_home?
-          [ File.join(@app.gem_home, "bin", "rails-ai-context") ]
-        else
-          [ "bundle", "exec", "rails-ai-context" ]
-        end
-        [ @app.env, [ *prefix, "serve" ], @app.app_path ]
+        [ @app.env, [ *@app.cli_command, "serve" ], @app.app_path ]
       end
       @stdin, @stdout, @stderr, @wait_thr = Open3.popen3(env, *command, chdir: chdir)
       # Server may emit a line of banner text before the JSON-RPC stream.
@@ -40,13 +35,16 @@ module E2E
       self
     end
 
+    # A client ends a stdio server by closing its stdin, as MCP clients do,
+    # and that reaches the server on every platform: on Windows a signal
+    # stops only the cmd.exe a batch-file binstub runs in, not the Ruby under
+    # it. TERM, then KILL, only for a server that does not stop.
     def stop!
       return unless @wait_thr
-      Process.kill("TERM", @wait_thr.pid) rescue nil
-      begin
-        Timeout.timeout(3) { @wait_thr.value }
-      rescue Timeout::Error
-        Process.kill("KILL", @wait_thr.pid) rescue nil
+      @stdin.close rescue nil
+      unless exited_within?(5)
+        Process.kill("TERM", @wait_thr.pid) rescue nil
+        Process.kill("KILL", @wait_thr.pid) rescue nil unless exited_within?(3)
       end
       [ @stdin, @stdout, @stderr ].each { |io| io&.close rescue nil }
     end
@@ -121,6 +119,13 @@ module E2E
       @stdin.flush
     rescue Errno::EPIPE => e
       raise Error, "server closed stdin: #{e.message}"
+    end
+
+    def exited_within?(seconds)
+      Timeout.timeout(seconds) { @wait_thr.value }
+      true
+    rescue Timeout::Error
+      false
     end
 
     def read_message_matching(expected_id)

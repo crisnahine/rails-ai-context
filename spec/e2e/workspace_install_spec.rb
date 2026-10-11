@@ -39,7 +39,7 @@ RSpec.describe "E2E: workspace of apps", type: :e2e do
     RUBY
 
     @init_out, @init_err, @init_status = Open3.capture3(
-      shell_env, File.join(@shop.gem_home, "bin", "rails-ai-context"), "init",
+      shell_env, *@shop.cli_command, "init",
       chdir: @workspace, stdin_data: "a\n1\n"
     )
   end
