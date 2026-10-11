@@ -25,7 +25,7 @@ module RailsAiContext
         dir = File.join(root, "app/mailboxes")
         return [ [], [] ] unless Dir.exist?(dir)
 
-        paths = Dir.glob(File.join(dir, "**/*.rb")).sort_by { |path| [ path == File.join(dir, BASE_FILE) ? 0 : 1, path ] }
+        paths = FileWalk.glob(dir, "**/*.rb", root: root).sort_by { |path| [ path == File.join(dir, BASE_FILE) ? 0 : 1, path ] }
         mailboxes = []
         routes = []
         paths.each do |path|

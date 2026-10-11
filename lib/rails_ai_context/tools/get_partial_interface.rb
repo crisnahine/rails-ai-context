@@ -453,7 +453,7 @@ module RailsAiContext
 
       private_class_method def self.code_render_sites(root, canonical)
         CODE_DIRS.flat_map { |kind| RailsAiContext::PathResolver.dirs_for(root, kind) }.uniq.flat_map do |dir|
-          Dir.glob(File.join(dir, "**", "*.rb")).sort.flat_map do |path|
+          RailsAiContext::FileWalk.glob(dir, "**/*.rb", root: root).flat_map do |path|
             content = safe_read(path)
             next [] unless content&.include?(canonical)
 

@@ -52,9 +52,9 @@ module RailsAiContext
     end
     private_class_method :discover
 
-    # The Ruby files under one directory, sorted, less those a symlink carries out of the app.
+    # The Ruby files under one directory, sorted, walked as Zeitwerk reads it (FileWalk.glob).
     def files(dir, root)
-      Dir.glob(File.join(dir, "**", "*.rb")).sort.reject { |path| PathResolver.linked_out?(path, root) }
+      FileWalk.glob(dir, "**/*.rb", root: root)
     end
 
     # A concern outside every concerns directory, and the autoload root it is named from.

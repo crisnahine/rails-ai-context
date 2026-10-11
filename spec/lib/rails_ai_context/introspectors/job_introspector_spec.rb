@@ -2321,29 +2321,44 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       end
     end
 
-    it "is the path the app spells when the pack is a symlink out of the root" do
-      Dir.mktmpdir do |outside|
-        FileUtils.mkdir_p(File.join(outside, "billing", "app", "jobs"))
-        File.write(File.join(outside, "billing", "app", "jobs", "symlinked_pack_job.rb"),
-                   "class SymlinkedPackJob < ActiveJob::Base\n  def perform(id); end\nend\n")
-        link = File.join(Rails.root, "packs")
-        # Only ever remove the link this example makes. A committed packs
-        # fixture would otherwise be deleted by a run of this spec.
-        skip "a real packs directory is checked in" if File.exist?(link) && !File.symlink?(link)
+    # The pack is linked in from elsewhere in the repository that holds the
+    # app; one linked from outside it is the app's job, read by reflection only.
+    def symlinked_pack_job(outside)
+      FileUtils.mkdir_p(File.join(outside, "billing", "app", "jobs"))
+      File.write(File.join(outside, "billing", "app", "jobs", "symlinked_pack_job.rb"),
+                 "class SymlinkedPackJob < ActiveJob::Base\n  def perform(id); end\nend\n")
+      link = File.join(Rails.root, "packs")
+      # Only ever remove the link this example makes. A committed packs
+      # fixture would otherwise be deleted by a run of this spec.
+      skip "a real packs directory is checked in" if File.exist?(link) && !File.symlink?(link)
 
+      FileUtils.rm_f(link) if File.symlink?(link)
+      File.symlink(outside, link)
+
+      begin
+        load File.join(link, "billing", "app", "jobs", "symlinked_pack_job.rb")
+        described_class.new(Rails.application).call[:jobs].find { |job| job[:name] == "SymlinkedPackJob" }
+      ensure
         FileUtils.rm_f(link) if File.symlink?(link)
-        File.symlink(outside, link)
+        Object.send(:remove_const, :SymlinkedPackJob) if Object.const_defined?(:SymlinkedPackJob)
+      end
+    end
 
-        begin
-          load File.join(link, "billing", "app", "jobs", "symlinked_pack_job.rb")
-          jobs = described_class.new(Rails.application).call[:jobs]
-          expect(jobs).to include(
-            a_hash_including(name: "SymlinkedPackJob", file: "packs/billing/app/jobs/symlinked_pack_job.rb")
-          )
-        ensure
-          FileUtils.rm_f(link) if File.symlink?(link)
-          Object.send(:remove_const, :SymlinkedPackJob) if Object.const_defined?(:SymlinkedPackJob)
-        end
+    it "is the path the app spells when the pack is a symlink out of the root into its repository" do
+      repo = RailsAiContext::SafePath.git_root(File.realpath(Rails.root.to_s))
+      skip "the app is in no git repository" unless repo && repo != File.realpath(Rails.root.to_s)
+
+      Dir.mktmpdir("linked-pack", File.dirname(File.realpath(Rails.root.to_s))) do |inside|
+        expect(symlinked_pack_job(inside)).to include(file: "packs/billing/app/jobs/symlinked_pack_job.rb")
+      end
+    end
+
+    it "has no file when the pack links out of the repository" do
+      Dir.mktmpdir do |outside|
+        job = symlinked_pack_job(outside)
+
+        expect(job).to include(name: "SymlinkedPackJob", queue: "default")
+        expect(job).not_to have_key(:file)
       end
     end
 

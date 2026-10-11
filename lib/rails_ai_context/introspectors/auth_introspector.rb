@@ -175,7 +175,7 @@ module RailsAiContext
           # and demodulizing it collided with the top-level policy of the same
           # base name, so one name was listed twice and the other class could
           # not be reached from the context at all.
-          policies = Dir.glob(File.join(policies_dir, "**/*.rb")).map do |f|
+          policies = FileWalk.glob(policies_dir, "**/*.rb", root: root).map do |f|
             f.sub("#{policies_dir}/", "").delete_suffix(".rb").camelize
           end.sort
           key = if gem_present?("pundit") then :pundit
@@ -325,9 +325,7 @@ module RailsAiContext
         # Also check model files for devise omniauth_providers option
         models_dir = File.join(app.root, "app", "models")
         if Dir.exist?(models_dir)
-          Dir.glob(File.join(models_dir, "**", "*.rb")).each do |path|
-            next if PathResolver.linked_out?(path, app.root)
-
+          FileWalk.glob(models_dir, "**/*.rb", root: app.root.to_s).each do |path|
             ast = SourceIntrospector.walk(path, { devise: -> { Listeners::GenericMacroListener.new(:devise) } })
             ast[:devise].each do |hit|
               op_val = hit[:options][:omniauth_providers]

@@ -138,12 +138,12 @@ module RailsAiContext
         end
       end
 
-      # Sorted, since Dir.glob order is filesystem-dependent. No cap: the hint prefilter
+      # Sorted, as FileWalk.glob answers. No cap: the hint prefilter
       # keeps a file nobody subscribes from to one read.
       def source_paths
         paths = %w[lib app].flat_map do |rel|
           dir = File.join(root, rel)
-          Dir.exist?(dir) ? Dir.glob(File.join(dir, "**/*.rb")).sort.reject { |path| PathResolver.linked_out?(path, root) } : []
+          FileWalk.glob(dir, "**/*.rb", root: root)
         end
         paths + PathResolver.initializer_paths(root)
       end

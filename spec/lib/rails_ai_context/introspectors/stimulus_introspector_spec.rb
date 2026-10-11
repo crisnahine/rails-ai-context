@@ -288,6 +288,25 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
       end
     end
 
+    # The bundler follows app/javascript/controllers linked to a shared
+    # package, so every controller under it is the app's.
+    it "finds the controllers of a directory linked in from the app's repository, and no link to nothing" do
+      Dir.mktmpdir do |repo|
+        root = File.join(repo, "apps/web")
+        shared = File.join(repo, "packages/js/controllers")
+        FileUtils.mkdir_p([ File.join(repo, ".git"), File.join(root, "app/javascript"), shared ])
+        File.write(File.join(shared, "hello_controller.js"),
+                   %(import { Controller } from "@hotwired/stimulus";\nexport default class extends Controller { connect() {} }\n))
+        File.symlink("missing.js", File.join(shared, "ghost_controller.js"))
+        File.symlink("../../../../packages/js/controllers", File.join(root, "app/javascript/controllers"))
+
+        controllers = introspect(root)[:controllers]
+
+        expect(controllers.map { |c| c[:name] }).to eq([ "hello" ])
+        expect(controllers.first[:file]).to eq("app/javascript/controllers/hello_controller.js")
+      end
+    end
+
     it "never walks into node_modules" do
       Dir.mktmpdir do |root|
         FileUtils.mkdir_p(File.join(root, "frontend/node_modules/pkg/controllers"))

@@ -145,19 +145,35 @@ RSpec.describe RailsAiContext::PathResolver do
       expect(described_class.linked_out?(link, @root)).to be(false)
     end
 
-    it "keeps the files of a directory the app links in from elsewhere, but not a link out of it" do
+    it "keeps the files of a directory the app links in from its repository, but not a link out of it" do
+      Dir.mktmpdir do |repo|
+        root = File.join(repo, "apps/web")
+        FileUtils.mkdir_p([ File.join(repo, ".git"), File.join(root, "packs"), File.join(repo, "packages/billing/app/models") ])
+        File.write(File.join(repo, "packages/billing/app/models/invoice.rb"), "x\n")
+        Dir.mktmpdir do |elsewhere|
+          File.write(File.join(elsewhere, "secret.rb"), "x\n")
+          File.symlink(File.join(elsewhere, "secret.rb"), File.join(repo, "packages/billing/app/models/secret.rb"))
+          File.symlink("../../../packages/billing", File.join(root, "packs/billing"))
+
+          expect(described_class.linked_out?(File.join(root, "packs/billing/app/models/invoice.rb"), root)).to be(false)
+          expect(described_class.linked_out?(File.join(root, "packs/billing/app/models/secret.rb"), root)).to be(true)
+        end
+      end
+    end
+
+    # A repository can carry a link to anywhere, an absolute one to a home directory included.
+    it "is every file under a directory linked in from outside the app's repository, or from anywhere outside a repository" do
       Dir.mktmpdir do |outside|
         FileUtils.mkdir_p(File.join(outside, "billing/app/models"))
         File.write(File.join(outside, "billing/app/models/invoice.rb"), "x\n")
-        Dir.mktmpdir do |elsewhere|
-          File.write(File.join(elsewhere, "secret.rb"), "x\n")
-          File.symlink(File.join(elsewhere, "secret.rb"), File.join(outside, "billing/app/models/secret.rb"))
-          mkdirs("packs")
-          File.symlink(File.join(outside, "billing"), File.join(@root, "packs/billing"))
+        mkdirs("packs")
+        File.symlink(File.join(outside, "billing"), File.join(@root, "packs/billing"))
 
-          expect(described_class.linked_out?(File.join(@root, "packs/billing/app/models/invoice.rb"), @root)).to be(false)
-          expect(described_class.linked_out?(File.join(@root, "packs/billing/app/models/secret.rb"), @root)).to be(true)
-        end
+        expect(described_class.linked_out?(File.join(@root, "packs/billing/app/models/invoice.rb"), @root)).to be(true)
+        expect(described_class.linked_out?(File.join(@root, "packs/billing"), @root)).to be(true)
+
+        FileUtils.mkdir_p(File.join(@root, ".git"))
+        expect(described_class.linked_out?(File.join(@root, "packs/billing/app/models/invoice.rb"), @root)).to be(true)
       end
     end
 
@@ -182,6 +198,23 @@ RSpec.describe RailsAiContext::PathResolver do
         File.symlink(File.join(outside, "dir"), File.join(@root, "link"))
 
         expect(described_class.linked_out?(File.join(@root, "link/../secret.rb"), @root)).to be(true)
+      end
+    end
+  end
+
+  describe ".enter_link?" do
+    it "enters a directory inside the app's repository or the app, never one over the walked directory or outside the repository" do
+      Dir.mktmpdir do |repo|
+        root = File.realpath(repo).then { |real| File.join(real, "apps/web") }
+        start = File.join(root, "app/javascript")
+        FileUtils.mkdir_p([ File.join(repo, ".git"), start, File.join(repo, "packages/js"), File.join(root, "lib/js") ])
+        real_repo = File.realpath(repo)
+
+        expect(described_class.enter_link?(File.join(real_repo, "packages/js"), start, root)).to be(true)
+        expect(described_class.enter_link?(File.join(root, "lib/js"), start, root)).to be(true)
+        expect(described_class.enter_link?(root, start, root)).to be(false)
+        expect(described_class.enter_link?(real_repo, start, root)).to be(false)
+        Dir.mktmpdir { |outside| expect(described_class.enter_link?(File.realpath(outside), start, root)).to be(false) }
       end
     end
   end

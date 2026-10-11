@@ -125,9 +125,7 @@ module RailsAiContext
         dir = File.join(root, "app/helpers")
         return [] unless Dir.exist?(dir)
 
-        Dir.glob(File.join(dir, "**/*.rb")).filter_map do |path|
-          next if PathResolver.linked_out?(path, root)
-
+        FileWalk.glob(dir, "**/*.rb", root: root).filter_map do |path|
           source = RailsAiContext::SafeFile.read(path)
           next if source && !HelperNames.view_helper?(source, path, dir)
 
@@ -148,9 +146,9 @@ module RailsAiContext
         dir = File.join(root, "app/components")
         return [] unless Dir.exist?(dir)
 
-        Dir.glob(File.join(dir, "**/*.rb")).filter_map do |path|
+        FileWalk.glob(dir, "**/*.rb", root: root).map do |path|
           path.sub("#{dir}/", "").sub(/\.rb\z/, "")
-        end.sort
+        end
       end
 
       def detect_template_engines

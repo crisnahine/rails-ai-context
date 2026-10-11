@@ -39,24 +39,20 @@ module RailsAiContext
     # unshifts wins over app/views even when it is nested inside it.
     def view_dirs(root)
       prepended, appended = declared(root)[:views].partition { |direction, _dir| direction == :prepend }
-      spelled = ->(list) { list.map { |_direction, dir| File.join(root.to_s, dir) } }
+      spelled = ->(list) { list.map { |_direction, dir| File.join(root.to_s, dir) }.reject { |dir| linked_out?(dir, root) } }
       engines = RunCache.fetch([ :engine_view_dirs, root.to_s ]) do
         enclosing_engine_roots(root).map { |engine| File.join(engine, "app/views") }.select { |dir| Dir.exist?(dir) }
       end
       (spelled.(prepended) + dirs_for(root, "app/views") + spelled.(appended) + engines).uniq.freeze
     end
 
-    # Every initializer Rails loads: railties globs config/initializers with **/*.rb, in path order.
-    # A symlink that resolves outside the app root, or nowhere, is left out.
+    # Every initializer Rails loads: railties globs config/initializers with **/*.rb, in path order,
+    # a glob that enters no linked directory below it. A symlink out of the app (linked_out?), or
+    # to nothing, is left out.
     def initializer_paths(root)
-      real_root = File.realpath(root.to_s)
       Dir.glob(File.join(root.to_s, "config", "initializers", "**", "*.rb")).sort.select do |path|
-        SafePath.contained?(File.realpath(path), real_root)
-      rescue SystemCallError
-        false
+        File.file?(path) && !linked_out?(path, root)
       end
-    rescue SystemCallError
-      []
     end
 
     # The initializers an app spells for `name`, however it spells them: a
@@ -309,13 +305,15 @@ module RailsAiContext
       false
     end
 
-    # A file the app spells inside the project that a symlink carries out of
-    # it: the file is a link, or sits under one, to a place neither the app
-    # root nor the engine its test/dummy runs in holds. A directory the app
-    # links in from elsewhere, such as a pack, keeps its own files, as
-    # Zeitwerk follows it; a file linked from there to anywhere else does not.
-    # A path spelled outside the project, such as a gem's, is not one, nor is
-    # one that resolves nowhere: nothing can be read through it.
+    # A path the app spells inside the project that a symlink carries out of
+    # it: to a place neither the app root, the engine its test/dummy runs in,
+    # nor a directory linked in from the app's repository holds
+    # (SafePath.linked_in). A pack linked into packs/ from elsewhere in the
+    # repository keeps its files, as Zeitwerk follows it; a link to anywhere
+    # outside the repository, or a file linked out of the app and of the
+    # linked-in directory it sits in, does not. A path spelled outside the
+    # project, such as a gem's, is not one, nor is one that resolves nowhere:
+    # nothing can be read through it.
     def linked_out?(path, root)
       # Resolved as given: a spelled `..` after a link climbs from where the link leads.
       real = SafePath.real_file(path.to_s)
@@ -326,13 +324,18 @@ module RailsAiContext
         .find { |dir| spelled.start_with?(SafePath.dir_prefix(dir)) }
       return false unless base
 
-      segments = File.dirname(spelled).delete_prefix(base).split(File::SEPARATOR).reject(&:empty?)
-      segments.each_index.none? do |depth|
-        dir = File.join(base, *segments.first(depth + 1))
-        File.symlink?(dir) && SafePath.contained?(real, File.realpath(dir))
-      end
+      SafePath.linked_in(path, real, base, root).nil?
     rescue SystemCallError
       false
+    end
+
+    # Whether a directory link that leads to `real` is one a walk enters: one
+    # inside the app's repository or the project, never one back up over
+    # `start`, the directory being walked, which would only walk it again.
+    def enter_link?(real, start, root)
+      return false if SafePath.contained?(start, real)
+
+      SafePath.contained?(real, SafePath.link_bound(root)) || project_dirs(root).any? { |dir| SafePath.contained?(real, dir) }
     end
 
     def project_dirs(root)
@@ -353,7 +356,7 @@ module RailsAiContext
 
     def resolve_dirs(root, kind)
       places(root, kind).flat_map { |_shown, path, glob| glob ? Dir.glob(path).sort : [ path ] }
-        .uniq.select { |dir| Dir.exist?(dir) }.freeze
+        .uniq.select { |dir| Dir.exist?(dir) && !linked_out?(dir, root) }.freeze
     end
     private_class_method :resolve_dirs
 

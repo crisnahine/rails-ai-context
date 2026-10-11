@@ -61,6 +61,27 @@ RSpec.describe RailsAiContext::ViewFile do
         )
       end
     end
+
+    it "lists no link that resolves nowhere" do
+      File.symlink("missing.html.erb", File.join(@root, "app/views/posts/_dangling.html.erb"))
+
+      expect(described_class.each(@root).map(&:last)).not_to include("posts/_dangling.html.erb")
+    end
+  end
+
+  # The view resolver renders a directory linked into app/views from
+  # elsewhere in the repository.
+  describe ".each with a directory linked in from the app's repository" do
+    it "lists its templates under the name the app gives them" do
+      FileUtils.mkdir_p(File.join(@root, ".git"))
+      Dir.mktmpdir("shared-views", @root) do |shared|
+        FileUtils.mkdir_p(File.join(shared, "invoices"))
+        File.write(File.join(shared, "invoices/_invoice.html.erb"), "<%= invoice.id %>\n")
+        File.symlink(File.join(shared, "invoices"), File.join(@root, "app/views/invoices"))
+
+        expect(described_class.each(@root).map(&:last)).to include("invoices/_invoice.html.erb")
+      end
+    end
   end
 
   describe ".fence" do

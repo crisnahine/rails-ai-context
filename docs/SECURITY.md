@@ -205,22 +205,39 @@ root = File.realpath(Rails.root.to_s)
 raise unless real_path == root || real_path.start_with?(root + File::SEPARATOR)
 ```
 
-The VFS (`rails-ai-context://views/{path}`) applies the same protection for view template reads.
+The VFS
+(`rails-ai-context://views/{path}`) applies the same protection for view template reads.
 
-### Links out of the app
+### Links in and out of the app
 
-A file the gem finds on its own, by walking the app or by asking Ruby where a loaded class
-came from, is read only when its real path is inside the app root, or inside a directory the
-app links in from elsewhere, such as a pack symlinked into `packs/`. A symlink from inside the
-app to anywhere else is not followed: the file is neither listed nor read. A tool asked for it
-by name answers as if it were not there; one handed its path refuses it, as described under
-"How a refusal is reported" below. This covers templates and layouts, Stimulus controllers and
-other JavaScript, locale files, environment files, seeds, and the Ruby source of models,
-controllers, jobs, mailers, channels, helpers, components and concerns.
+A symlink inside the app is followed when it leads into the app root, or into the engine its
+`test/dummy` runs in, and a directory link is also followed when it leads anywhere inside the
+git work tree that holds the app. A monorepo's shared package linked into `packs/` or
+`app/javascript/controllers` is read as the app's own, under the path the app gives it
+(`packs/billing/app/models/invoice.rb`). A file reached through such a directory is read only
+when its real path stays inside the app or inside that directory. Outside a git repository
+nothing marks where the project ends, so only links that stay inside the app root are
+followed. A link to anywhere else, a home directory included, is not followed: the file is
+neither listed nor read. A link that resolves nowhere is not listed either.
 
-Booted, a class Rails loaded through such a link is still described from what reflection
-answers, such as a job's queue name; only its file goes unread. `rails_security_scan` hands
-the app to Brakeman, which reads it by its own rules.
+The walks over app code follow a linked-in directory where Rails does: the trees Zeitwerk
+autoloads (models, controllers, jobs, mailers, channels, helpers, components, concerns,
+policies and the rest of `app/`, packs and in-repo engines included), the view resolver's
+templates and layouts, and the JavaScript roots a bundler reads. A file Rails finds with a
+glob of its own is found the way that glob finds it, entering no linked directory below where
+it starts: initializers, locale and environment files, migrations, seeds, rake tasks, test
+files and mailer previews. Among those, a linked file is read only when it stays inside the
+app.
+
+A tool handed a path that leads out of the app refuses it, and so does a tool that resolves a
+name to one file - a log, a partial, a concern - when that file leads out; see "How a refusal
+is reported" below. A tool that answers from what the walks found, such as
+`rails_get_stimulus`, never lists a file a link carries out, and asked for that controller by
+name answers that it is not there.
+
+Booted, a class Rails loaded through a link out of the app is still described from what
+reflection answers, such as a job's queue name; only its file goes unread.
+`rails_security_scan` hands the app to Brakeman, which reads it by its own rules.
 
 ### Frontend roots outside the app
 

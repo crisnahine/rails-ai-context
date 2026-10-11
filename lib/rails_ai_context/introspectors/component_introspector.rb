@@ -40,7 +40,7 @@ module RailsAiContext
         namespaced = PathResolver.namespaced_roots(root).map(&:first).reject do |dir|
           views.any? { |view| view == dir || view.start_with?("#{dir}/") }
         end - dirs.map { |dir| File.expand_path(dir) }
-        paths = (dirs + namespaced).flat_map { |dir| Dir.glob(File.join(dir, "**/*.rb")) }.reject { |path| PathResolver.linked_out?(path, root) }
+        paths = (dirs + namespaced).flat_map { |dir| FileWalk.glob(dir, "**/*.rb", root: root) }
 
         components = paths.filter_map do |path|
           next if path.end_with?("_preview.rb")

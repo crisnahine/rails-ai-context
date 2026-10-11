@@ -146,7 +146,7 @@ module RailsAiContext
       CODER_METHODS = %w[dump load].freeze
 
       def serializer_files(relative)
-        Dir.glob(File.join(root, relative, "**", "*.rb")).reject { |path| attribute_coder?(path) }
+        FileWalk.glob(File.join(root, relative), "**/*.rb", root: root).reject { |path| attribute_coder?(path) }
       end
 
       def attribute_coder?(path)
@@ -165,7 +165,7 @@ module RailsAiContext
         result = { types: concrete_graphql_files(graphql_dir, "types"),
                    mutations: concrete_graphql_files(graphql_dir, "mutations") }
         result[:queries] = concrete_graphql_files(graphql_dir, "queries") if Dir.exist?(File.join(graphql_dir, "queries"))
-        query_type = Dir.glob(File.join(graphql_dir, "**", "query_type.rb")).min
+        query_type = FileWalk.glob(graphql_dir, "**/query_type.rb", root: root).min
         query_root = query_type && query_root_fields(query_type)
         result[:query_root] = query_root if query_root
         result
@@ -174,7 +174,7 @@ module RailsAiContext
       # A class that names itself in the schema is part of it; any other inherited class
       # named like a base, or subclassing graphql-ruby itself, is the app's base.
       def concrete_graphql_files(graphql_dir, kind)
-        declared = Dir.glob(File.join(graphql_dir, kind, "**", "*.rb")).to_h do |path|
+        declared = FileWalk.glob(File.join(graphql_dir, kind), "**/*.rb", root: root).to_h do |path|
           declarations = DeclaredConstant.declarations(RailsAiContext::SafeFile.read(path).to_s)
           [ path, DeclaredConstant.declaration_for(declarations, File.basename(path, ".rb").camelize) ]
         end
