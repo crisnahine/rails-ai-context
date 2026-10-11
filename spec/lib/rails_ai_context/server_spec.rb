@@ -72,6 +72,31 @@ RSpec.describe RailsAiContext::Server do
     end
   end
 
+  # "Answers follow edits" was false for an app that does not reload code:
+  # an edited association went unseen until a restart.
+  describe ".instructions" do
+    it "says answers follow edits where the app reloads its code" do
+      allow(RailsAiContext::CodeReloader).to receive(:reloadable?).and_return(true)
+
+      expect(described_class.instructions).to end_with("Answers follow edits to the app's files.")
+    end
+
+    it "says what does not follow an edit where it cannot" do
+      allow(RailsAiContext::CodeReloader).to receive(:reloadable?).and_return(false)
+
+      expect(described_class.instructions).to end_with(
+        "Answers follow edits to the app's files, except what reflection reads, such as associations: " \
+        "RAILS_ENV=test does not reload code, so that stays as of boot, and every answer says when app code changed since."
+      )
+    end
+
+    it "is what a client is handed" do
+      allow(RailsAiContext::CodeReloader).to receive(:reloadable?).and_return(false)
+
+      expect(server.build.instructions).to eq(described_class.instructions)
+    end
+  end
+
   describe "#build" do
     it "returns an MCP::Server instance" do
       mcp_server = server.build

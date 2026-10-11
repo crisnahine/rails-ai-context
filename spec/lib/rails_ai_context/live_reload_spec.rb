@@ -70,9 +70,16 @@ RSpec.describe RailsAiContext::LiveReload do
         live_reload.handle_change(changed_paths)
       end
 
-      it "stays quiet about reloading when the app cannot reload" do
+      # The client was told the caches were invalidated and nothing else, as
+      # if the next answer would show the edit.
+      it "says the code stays as of boot when the app cannot reload" do
         allow(RailsAiContext::CodeReloader).to receive(:reloadable?).and_return(false)
-        expect($stderr).to receive(:puts).with(a_string_matching(/Tool caches invalidated\.\z/))
+        expect(mcp_server).to receive(:notify_log_message).with(
+          data: "Files changed: 1 model, 1 controller. Tool caches invalidated; RAILS_ENV=test does not reload code, " \
+                "so what reflection reads stays as of boot.",
+          level: "info",
+          logger: "rails-ai-context"
+        )
         live_reload.handle_change(changed_paths)
       end
 
@@ -81,6 +88,7 @@ RSpec.describe RailsAiContext::LiveReload do
       # reload the server keeps answering about the app as it was at boot.
       it "reloads the app's code on the thread of the next call, not Listen's" do
         reloaded_on = []
+        allow(RailsAiContext::CodeReloader).to receive(:reloadable?).and_return(true)
         allow(RailsAiContext::CodeReloader).to receive(:reload!) { reloaded_on << Thread.current }
         allow(RailsAiContext).to receive(:introspect).and_return({ app_name: "App" })
 

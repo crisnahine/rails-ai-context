@@ -9,7 +9,9 @@ RSpec.describe "a server's check of the app's files at each call" do
   let(:base) { RailsAiContext::Tools::BaseTool }
   let(:mark) { ->(digest) { RailsAiContext::Fingerprinter::Mark.new(digest: digest) } }
 
+  # An app that reloads, as in development; this suite's own does not.
   before do
+    allow(RailsAiContext::CodeReloader).to receive(:reloadable?).and_return(true)
     allow(RailsAiContext::CodeReloader).to receive(:reload!).and_return(true)
     allow(base).to receive(:reset_all_caches!).and_call_original
   end
@@ -117,5 +119,49 @@ RSpec.describe "a server's check of the app's files at each call" do
     RailsAiContext::Tools::GetConventions.call
 
     expect([ first, RailsAiContext::Tools::GetConventions.send(:cached_context)[:app_name] ]).to eq(%w[Before After])
+  end
+
+  # RAILS_ENV=test, or production with eager loading: Rails keeps the code it
+  # booted with, so an edited model was answered from boot-time reflection,
+  # labelled verified, with no word that the file had changed.
+  context "when the app cannot reload its code" do
+    let(:note) do
+      "App code changed since this server booted (app/models/post.rb); RAILS_ENV=test does not reload code, " \
+        "so what reflection reads, such as associations and enums, is as of boot. Restart the server to see the edit."
+    end
+
+    before do
+      allow(RailsAiContext::CodeReloader).to receive(:reloadable?).and_return(false)
+      allow(RailsAiContext::CodeReloader).to receive(:changed_code).and_return([ "app/models/post.rb" ])
+      allow(RailsAiContext::Fingerprinter).to receive(:mark).and_return(mark.call("a"))
+      base.check_files_per_call!(base.rails_app)
+      allow(RailsAiContext::Fingerprinter).to receive(:mark).and_return(mark.call("b"))
+    end
+
+    it "ends every answer with the files changed since they loaded" do
+      text = RailsAiContext::Tools::GetConventions.call.content.first[:text]
+
+      expect(text).to end_with("\n\n---\n_#{note}_")
+      expect(RailsAiContext::CodeReloader).not_to have_received(:reload!)
+    end
+
+    it "ends an error with it too, and carries it under a key in a JSON answer" do
+      base.refresh_if_files_changed!
+
+      expect(base.error_response("No such model.").content.first[:text]).to end_with("_#{note}_")
+      expect(JSON.parse(base.json_response({ "rows" => [] }).content.first[:text])).to include("_stale_code" => note)
+    end
+
+    it "leaves it out of a sub-tool's text that a composing tool quotes" do
+      base.refresh_if_files_changed!
+
+      expect(base.response_text(base.text_response("inner answer"))).to eq("inner answer")
+    end
+
+    it "says nothing while no app code changed" do
+      allow(RailsAiContext::CodeReloader).to receive(:changed_code).and_return([])
+
+      expect(RailsAiContext::Tools::GetConventions.call.content.first[:text]).not_to include("App code changed")
+    end
   end
 end

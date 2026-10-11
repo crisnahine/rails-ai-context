@@ -92,8 +92,12 @@ module RailsAiContext
       Tools::BaseTool.reload_at_next_call!
       Tools::BaseTool.reset_all_caches!
 
-      message = "#{format_change_message(categorize_changes(paths))} Tool caches invalidated" \
-                "#{CodeReloader.reloadable? ? "; app code reloads at the next call" : ""}."
+      code = if CodeReloader.reloadable?
+        "app code reloads at the next call"
+      else
+        "RAILS_ENV=#{RailsAiContext.environment_name} does not reload code, so what reflection reads stays as of boot"
+      end
+      message = "#{format_change_message(categorize_changes(paths))} Tool caches invalidated; #{code}."
 
       mcp_server.notify_resources_list_changed
       mcp_server.notify_log_message(data: message, level: "info", logger: "rails-ai-context")

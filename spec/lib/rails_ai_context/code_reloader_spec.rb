@@ -129,4 +129,60 @@ RSpec.describe RailsAiContext::CodeReloader do
       expect(runs).to eq(1)
     end
   end
+
+  # Under RAILS_ENV=test, or production with eager loading, an edit never
+  # reaches reflection, and the answers said nothing of it.
+  describe ".changed_code" do
+    let(:models) { Rails.root.join("app", "models") }
+    let(:loaded) { models.join("zz_loaded_thing.rb").to_s }
+    let(:later) { models.join("zz_later_thing.rb").to_s }
+    let(:added) { models.join("zz_added_thing.rb").to_s }
+
+    before do
+      allow(described_class).to receive(:reloadable?).and_return(false)
+      File.write(loaded, "class ZzLoadedThing\nend\n")
+      File.write(later, "class ZzLaterThing\nend\n")
+      require loaded
+    end
+
+    after do
+      [ loaded, later, added ].each { |file| FileUtils.rm_f(file) }
+      $LOADED_FEATURES.delete(loaded)
+      $LOADED_FEATURES.delete(later)
+      %i[ZzLoadedThing ZzLaterThing].each { |name| Object.send(:remove_const, name) if Object.const_defined?(name, false) }
+    end
+
+    it "is nothing before a server tracks the code it loaded" do
+      File.write(loaded, "class ZzLoadedThing\n  def x = 1\nend\n")
+
+      expect(described_class.changed_code).to eq([])
+    end
+
+    it "names a file edited after it loaded, and one added since" do
+      described_class.track_loaded_code!
+      File.write(loaded, "class ZzLoadedThing\n  def x = 1\nend\n")
+      File.write(added, "class ZzAddedThing\nend\n")
+
+      expect(described_class.changed_code).to eq(%w[app/models/zz_added_thing.rb app/models/zz_loaded_thing.rb])
+    end
+
+    # Zeitwerk loads what the walk asks for after the server started; that
+    # is the code it holds, edits made before it included.
+    it "leaves out a file edited before it loaded" do
+      described_class.track_loaded_code!
+      File.write(later, "class ZzLaterThing\n  def x = 1\nend\n")
+      require later
+      described_class.send(:code_loaded, later)
+
+      expect(described_class.changed_code).to eq([])
+    end
+
+    it "tracks nothing in a process that reloads" do
+      allow(described_class).to receive(:reloadable?).and_return(true)
+      described_class.track_loaded_code!
+      File.write(loaded, "class ZzLoadedThing\n  def x = 1\nend\n")
+
+      expect(described_class.changed_code).to eq([])
+    end
+  end
 end

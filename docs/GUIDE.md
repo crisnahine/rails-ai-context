@@ -1735,6 +1735,8 @@ When running the MCP server via `rails ai:serve`, **live reload** automatically 
 
 Without the `listen` gem, which a new Rails 8 app does not bundle, answers still follow edits: each tool call first checks the watched files (a few milliseconds on a typical app, about 100 ms at 10,000 files, where calls close together share one check) and, when one changed, reloads the app's code and drops the caches. What `listen` adds is the notification to the client, and no per-call check.
 
+A server whose app cannot reload code - `RAILS_ENV=test`, or production with eager loading, where `config.enable_reloading` is off - keeps the code it booted with. What reflection reads, such as associations and enums, then stays as of boot (validations and callbacks are read off the source, so they still follow the edit), and once a file under the app's autoload paths changes, every answer ends with a note naming it: restart the server to see the edit.
+
 ### How it works
 
 1. A background thread watches `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/` and `spec/` (plus the app directories of packs, in-repo engines and `extra_app_paths`) for changes
