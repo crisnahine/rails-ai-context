@@ -414,15 +414,13 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(expect_call).to eq(name: "t_params", requires: "t", nested: { "prefs" => { "theme" => [] } })
     end
 
-    it "returns name only when method has no permit call" do
+    it "leaves out a method named like strong params that permits nothing" do
       source = <<~RUBY
         def post_params
           params[:post]
         end
       RUBY
-      result = introspector.send(:extract_strong_params, source).find { |h| h[:name] == "post_params" }
-      expect(result[:name]).to eq("post_params")
-      expect(result).not_to have_key(:permits)
+      expect(introspector.send(:extract_strong_params, source)).to eq([])
     end
 
     it "handles hash rocket nested syntax" do

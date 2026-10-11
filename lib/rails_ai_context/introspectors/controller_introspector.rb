@@ -211,13 +211,27 @@ module RailsAiContext
           end
           formats = lineage.each_with_object(Set.new) { |(_, declared), set| fold_formats(set, declared[:formats]) }
           limits = lineage.flat_map { |link, declared| link == name ? declared[:rate_limits] : declared[:rate_limits].map { |limit| limit.merge(from: link) } }
-          [ name, (formats.to_a | own[name][:block_formats]).sort, limits ]
+          [ name, (formats.to_a | own[name][:block_formats]).sort, limits, inherited_strong_params(result, links) ]
         end
-        folded.each do |name, formats, limits|
+        folded.each do |name, formats, limits, params|
           result[name][:respond_to_formats] = formats
           limits.any? ? result[name][:rate_limits] = limits : result[name].delete(:rate_limits)
+          result[name][:strong_params] = params if params.any?
         end
         result
+      end
+
+      # A private method is inherited like any other, so a parent's strong-params
+      # method is the child's too unless a nearer class defines that name.
+      def inherited_strong_params(result, links)
+        links.each_with_object({}) do |(link, entry, source), by_name|
+          params = entry ? Array(entry[:strong_params]) : base_class_declarations(source)[:strong_params]
+          params.each do |sp|
+            next unless sp.is_a?(Hash)
+
+            by_name[sp[:name]] ||= link == links.first.first ? sp : sp.merge(from: link)
+          end
+        end.values
       end
 
       # `clear_respond_to` empties the class attribute; each `respond_to` adds to it.
@@ -234,7 +248,10 @@ module RailsAiContext
 
       # A base the listing leaves out is read once per run however many controllers inherit it.
       def base_class_declarations(source)
-        (@base_class_declarations ||= {})[source] ||= class_declarations(source, class_body_walk(source))
+        (@base_class_declarations ||= {})[source] ||= begin
+          walked = class_body_walk(source)
+          class_declarations(source, walked).merge(strong_params: extract_strong_params(source, walked))
+        end
       end
 
       # { formats: [[format...] per respond_to, nil per clear_respond_to], rate_limits: [...] }
@@ -681,10 +698,11 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "extract_strong_params AST")
       end
 
+      # A strong-params method is one that filters params, whatever it is named.
       def find_param_methods(node, results)
         return unless node.respond_to?(:child_nodes)
-        if node.is_a?(Prism::DefNode) && node.name.to_s.end_with?("_params")
-          results << extract_permit_from_def(node).merge(offset: node.location.start_offset)
+        if node.is_a?(Prism::DefNode) && (entry = extract_permit_from_def(node))
+          results << entry.merge(offset: node.location.start_offset)
         end
         node.child_nodes.compact.each { |child| find_param_methods(child, results) }
       end
@@ -692,11 +710,7 @@ module RailsAiContext
       def extract_permit_from_def(def_node)
         result = { name: def_node.name.to_s }
 
-        permit_bang = find_call_in_tree(def_node.body, :permit!)
-        if permit_bang && call_on_params?(permit_bang)
-          result[:unrestricted] = true
-          return result
-        end
+        return result.merge(unrestricted: true) if find_call_in_tree(def_node.body, :permit!)
 
         permit_call = find_call_in_tree(def_node.body, :permit)
         if permit_call
@@ -710,14 +724,13 @@ module RailsAiContext
         end
 
         expect_call = find_call_in_tree(def_node.body, :expect)
-        return result unless expect_call && call_on_params?(expect_call)
-
-        result.merge(parse_expect_args_ast(expect_call))
+        result.merge(parse_expect_args_ast(expect_call)) if expect_call
       end
 
+      # The first call by that name made on params.
       def find_call_in_tree(node, method_name)
         return nil unless node.respond_to?(:child_nodes)
-        if node.is_a?(Prism::CallNode) && node.name == method_name
+        if node.is_a?(Prism::CallNode) && node.name == method_name && call_on_params?(node)
           return node
         end
         node.child_nodes.compact.each do |child|

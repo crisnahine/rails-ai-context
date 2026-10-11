@@ -1278,4 +1278,79 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(answer).not_to include("not found")
     end
   end
+
+  describe "strong params, read statically" do
+    before { described_class.reset_cache! }
+
+    def answer_for(files, **args)
+      Dir.mktmpdir do |root|
+        files.each do |path, source|
+          FileUtils.mkdir_p(File.dirname(File.join(root, path)))
+          File.write(File.join(root, path), source)
+        end
+        app = RailsAiContext::StaticApp.new(root)
+        allow(described_class).to receive(:rails_app).and_return(app)
+        allow(described_class).to receive(:cached_context).and_return(
+          controllers: RailsAiContext::Introspectors::ControllerIntrospector.new(app).send(:static_call)
+        )
+        described_class.call(**args).content.first[:text]
+      end
+    end
+
+    it "lists a method that permits on params, whatever its name, and marks permit!" do
+      text = answer_for({ "app/controllers/apps_controller.rb" => <<~RUBY }, controller: "AppsController", detail: "full")
+        class AppsController < ApplicationController
+          def plug_params(app)
+            app.watchers.build if app.watchers.none?
+          end
+
+          def manage_published_at_params
+            params[:published_at] = Time.current
+          end
+
+          private
+
+          def app_params
+            params.require(:app).permit!
+          end
+
+          def article_params_json
+            params.require(:article).permit(:title)
+          end
+        end
+      RUBY
+      section = text[/## Strong Params\n(?:- .*\n?)*/]
+
+      expect(section).to include("- `app_params` **WARNING:** `params.permit!` - all parameters allowed")
+      expect(section).to include("- `article_params_json` (requires: :article) permits: :title")
+      expect(section).not_to include("plug_params")
+      expect(section).not_to include("manage_published_at_params")
+    end
+
+    it "lists the strong params a controller inherits from its parent, with the parent named" do
+      files = {
+        "app/controllers/admin/editions_controller.rb" => <<~RUBY,
+          class Admin::EditionsController < ApplicationController
+            private
+
+            def edition_params
+              params.fetch(:edition, {}).permit(*permitted_edition_attributes)
+            end
+          end
+        RUBY
+        "app/controllers/admin/publications_controller.rb" => <<~RUBY
+          class Admin::PublicationsController < Admin::EditionsController
+            private
+
+            def permitted_edition_attributes
+              super << :statistics_announcement_id
+            end
+          end
+        RUBY
+      }
+      text = answer_for(files, controller: "Admin::PublicationsController")
+
+      expect(text).to include("## Strong Params\n- `edition_params` _(from Admin::EditionsController)_")
+    end
+  end
 end

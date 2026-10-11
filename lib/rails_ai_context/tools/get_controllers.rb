@@ -377,9 +377,9 @@ module RailsAiContext
           lines << "" << "## Strong Params"
           action_params.each do |sp|
             if sp.is_a?(Hash)
-              lines << "### #{sp[:name]}"
+              lines << "### #{sp[:name]}#{params_origin(sp)}"
               if sp[:unrestricted]
-                lines << "- **WARNING:** `params.permit!` - all parameters allowed"
+                lines << "- #{UNRESTRICTED}"
               else
                 lines << "- requires: `:#{sp[:requires]}`" if sp[:requires]
                 lines << "- permits: #{sp[:permits].map { |p| "`:#{p}`" }.join(', ')}" if sp[:permits]&.any?
@@ -454,6 +454,12 @@ module RailsAiContext
           name = sp.is_a?(Hash) ? sp[:name].to_s : sp.to_s
           name.empty? || reachable.match?(/(?<![\w:])#{Regexp.escape(name)}(?![\w])/)
         end
+      end
+
+      UNRESTRICTED = "**WARNING:** `params.permit!` - all parameters allowed"
+
+      private_class_method def self.params_origin(entry)
+        " _(from #{entry[:from]})_" if entry[:from]
       end
 
       # One field of a permit list as Ruby spells it: `:name`, `[...]`, `key: [...]`, `key: {}` or `key: { ... }`, braced inside a list.
@@ -611,7 +617,12 @@ module RailsAiContext
                                  Array(sp[:nested]).map { |key, fields| permit_field_text({ key => fields }) } +
                                  Array(sp[:arrays]).map { |key| "#{key}: []" } +
                                  Array(sp[:hashes]).map { |key| "#{key}: {}" }).join(", ")
-              lines << "- `#{sp[:name]}`#{sp[:requires] ? " (requires: :#{sp[:requires]})" : ""}#{permits_summary.empty? ? "" : " permits: #{permits_summary}"}"
+              shape = if sp[:unrestricted]
+                " #{UNRESTRICTED}"
+              else
+                "#{sp[:requires] ? " (requires: :#{sp[:requires]})" : ""}#{permits_summary.empty? ? "" : " permits: #{permits_summary}"}"
+              end
+              lines << "- `#{sp[:name]}`#{params_origin(sp)}#{shape}"
             else
               lines << "- `#{sp}`"
             end
