@@ -782,6 +782,22 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
 
+    # VS Code keeps its mcp.json as JSONC, and doctor failed one with
+    # trailing commas whose entry was there and current.
+    context "when a config has trailing commas, as VS Code writes them" do
+      before do
+        skip "json #{JSON::VERSION} reads no trailing commas" if Gem::Version.new(JSON::VERSION) < Gem::Version.new("2.9")
+        allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[copilot])
+        write(".vscode/mcp.json", %({\n  "servers": {\n    "rails-ai-context": { "command": "bundle", ) +
+                                  %("args": ["exec", "rails-ai-context", "serve",], },\n  },\n}\n))
+      end
+
+      it "reads it as VS Code does, and passes it" do
+        expect(check.status).to eq(:pass)
+      end
+    end
+
     context "when no tools configured (defaults to all)" do
       before do
         allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
@@ -970,7 +986,7 @@ RSpec.describe RailsAiContext::Doctor do
       # The install refuses a file holding comments whichever json version
       # reads it, and doctor names the same problem.
       it "names comments as the problem, as the install does" do
-        write(".mcp.json", %({\n  // the gem's\n  "mcpServers": {"rails-ai-context": {"command": "bundle"},}\n}))
+        write(".mcp.json", %({\n  // the gem's\n  "mcpServers": {"rails-ai-context": {"command": "bundle"} "other": {}}\n}))
 
         expect(check.message).to eq("1 of 1 MCP config needs attention: .mcp.json (Claude Code): " \
                                     "#{RailsAiContext::McpConfigGenerator::COMMENTS_PROBLEM}")
@@ -1150,7 +1166,7 @@ RSpec.describe RailsAiContext::Doctor do
     # one a client opened at the folder reads.
     it "names a config of the gem's above it that does not parse" do
       allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[copilot])
-      write(".vscode/mcp.json", %({"servers": {"rails-ai-context-a": {"command": "rails-ai-context"},}}))
+      write(".vscode/mcp.json", %({"servers": {"rails-ai-context-a": {"command": "rails-ai-context"}))
 
       check = workspace_doctor.send(:check_mcp_json)
 
@@ -1162,7 +1178,7 @@ RSpec.describe RailsAiContext::Doctor do
 
     it "passes over a config above it that names no server of the gem's" do
       allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[copilot])
-      write(".vscode/mcp.json", %({"servers": {"github": {"url": "x"},}}))
+      write(".vscode/mcp.json", %({"servers": {"github": {"url": "x"}))
 
       check = workspace_doctor.send(:check_mcp_json)
 

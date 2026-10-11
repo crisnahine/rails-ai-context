@@ -244,23 +244,43 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
         end
       end
 
-      # VS Code's and OpenCode's configs take trailing commas: a fresh file
-      # in its place would drop every server somebody wrote there.
+      # A fresh file in its place would drop every server somebody wrote there.
       it "leaves an app's own config that does not parse as JSON as it is, and names the entry to add" do
         Dir.mktmpdir do |dir|
           FileUtils.mkdir_p(File.join(dir, ".vscode"))
-          jsonc = %({\n  "servers": { "github": { "url": "https://api.example/mcp" }, },\n  "inputs": [],\n}\n)
+          broken = %({\n  "servers": { "github": { "url": "https://api.example/mcp" } }\n  "inputs": []\n}\n)
           path = File.join(dir, ".vscode/mcp.json")
-          File.write(path, jsonc)
+          File.write(path, broken)
 
           result = described_class.new(tools: [ :copilot ], output_dir: dir, tool_mode: :mcp, standalone: true).call
 
           expect(result[:failed]).to eq([ path ])
-          expect(File.read(path)).to eq(jsonc)
+          expect(File.read(path)).to eq(broken)
           expect(result[:reasons][path]).to include(
             "does not parse as JSON", "so it is left as it is",
             %(Add {"servers":{"rails-ai-context":{"command":"rails-ai-context","args":["serve"]}}} to it by hand)
           )
+        end
+      end
+
+      # VS Code keeps its mcp.json as JSONC, trailing commas and all: every
+      # run left such a config as it is and said to add the entry by hand,
+      # and kept saying it once the entry was there.
+      it "reads trailing commas as VS Code does, merging into the config and skipping it once current" do
+        skip "json #{JSON::VERSION} reads no trailing commas" if Gem::Version.new(JSON::VERSION) < Gem::Version.new("2.9")
+
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, ".vscode"))
+          path = File.join(dir, ".vscode/mcp.json")
+          File.write(path, %({\n  "servers": {\n    "github": { "command": "gh-mcp", "args": ["--stdio",], },\n  },\n}\n))
+          write = -> { described_class.new(tools: [ :copilot ], output_dir: dir, tool_mode: :mcp, standalone: true).call }
+
+          expect(write.call[:written]).to eq([ path ])
+          expect(JSON.parse(File.read(path))["servers"].keys).to eq(%w[github rails-ai-context])
+
+          File.write(path, %({\n  "servers": {\n    "github": { "command": "gh-mcp", },\n    ) +
+                           %("rails-ai-context": { "command": "rails-ai-context", "args": ["serve",], },\n  },\n}\n))
+          expect(write.call[:skipped]).to eq([ path ])
         end
       end
 
@@ -359,12 +379,22 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
 
       it "says where a config stopped parsing, when the parser says" do
         Dir.mktmpdir do |dir|
-          File.write(File.join(dir, ".mcp.json"), %({"mcpServers": {"a": {},}}\n))
+          File.write(File.join(dir, ".mcp.json"), %({"mcpServers": {"a": {} "b": {}}}\n))
 
           result = described_class.new(tools: %i[claude], output_dir: dir, tool_mode: :mcp, standalone: true).call
 
-          expect(result[:reasons].values.first).to match(/\Ait does not parse as JSON( at line \d+,? column \d+)? \(a trailing comma\?\)/)
+          expect(result[:reasons].values.first).to match(/\Ait does not parse as JSON( at line \d+,? column \d+)?, so it is left/)
         end
+      end
+
+      # A json before 2.9 stops at a trailing comma; a later one reads it, so
+      # the comma is named only where the file has one.
+      it "names a trailing comma as the likely stop only where the file has one" do
+        error = JSON::ParserError.new("unexpected character at line 1 column 9")
+
+        expect(described_class.parse_problem(error, %({"a": 1,}))).to eq("it does not parse as JSON at line 1 column 9 (a trailing comma?)")
+        expect(described_class.parse_problem(error, %({"a": 1 "b"}))).to eq("it does not parse as JSON at line 1 column 9")
+        expect(described_class.parse_problem(error, %({"a": ",}"}))).to eq("it does not parse as JSON at line 1 column 9")
       end
 
       it "reads a // inside a string as no comment" do
@@ -842,8 +872,9 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
     end
 
     # VS Code's mcp.json reads comments and trailing commas; a folder's is
-    # the likelier to be kept by hand, so a workspace write leaves it be.
-    it "leaves a config that does not parse as JSON alone" do
+    # the likelier to be kept by hand, so a workspace write leaves one it
+    # cannot write back whole be.
+    it "leaves a config with comments, or one that does not parse as JSON, alone" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, ".vscode"))
         jsonc = %({\n  // mine\n  "servers": { "github": { "url": "https://api.example/mcp" }, },\n}\n)
@@ -856,7 +887,7 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
         # json 3 refuses the comment json 2 passed over: named for it either way.
         expect(result[:reasons][File.join(dir, ".vscode/mcp.json")]).to include("it holds comments")
 
-        File.write(File.join(dir, ".vscode/mcp.json"), jsonc.sub("  // mine\n", ""))
+        File.write(File.join(dir, ".vscode/mcp.json"), %({\n  "servers": { "github": { "url": "https://api.example/mcp" } }\n  "inputs": []\n}\n))
         result = generate(dir, tools: [ :copilot ])
         expect(result[:reasons][File.join(dir, ".vscode/mcp.json")]).to include("does not parse as JSON")
       end
@@ -1322,8 +1353,8 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
     it "says why it leaves a config that does not parse, and only when it names the gem" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, ".vscode"))
-        File.write(File.join(dir, ".vscode/mcp.json"), %({"servers": {"rails-ai-context": {"command": "rails-ai-context"},}}))
-        File.write(File.join(dir, ".mcp.json"), %({"mcpServers": {"other": {},}}))
+        File.write(File.join(dir, ".vscode/mcp.json"), %({"servers": {"rails-ai-context": {"command": "rails-ai-context"}))
+        File.write(File.join(dir, ".mcp.json"), %({"mcpServers": {"other": {}))
         said = []
 
         cleaned = described_class.remove(tools: %i[copilot claude], output_dir: dir, warn: ->(path, reason) { said << [ path, reason ] })

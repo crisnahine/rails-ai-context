@@ -85,7 +85,7 @@ ls -la .mcp.json .cursor/ .vscode/ .github/
 
 ### "Could not write .vscode/mcp.json - that tool will not auto-discover the MCP server"
 
-The install never replaces a config it cannot write back faithfully: one that does not parse as JSON (VS Code and OpenCode accept trailing commas, which JSON does not), one holding comments that writing it back would drop, or one that is not UTF-8. The line after the warning says which, and ends with the exact entry to add, as `Add {"servers":{...}} to it by hand`. Add that entry yourself, or remove the trailing commas and comments and run the install again. `doctor` reports one that does not parse, or holds no object to merge into, a workspace's above the app included. Dropping an AI tool leaves such a file alone the same way and names the entries to remove.
+The install never replaces a config it cannot write back faithfully: one that does not parse as JSON, one holding comments that writing it back would drop, or one that is not UTF-8. Trailing commas, which VS Code and OpenCode accept, are read the way they read them under json 2.9 or later; an older json refuses them, as JSON does. The line after the warning says which, and ends with the exact entry to add, as `Add {"servers":{...}} to it by hand`. Add that entry yourself, or remove the comments (and, under an older json, the trailing commas) and run the install again. `doctor` reports one that does not parse, or holds no object to merge into, a workspace's above the app included. Dropping an AI tool leaves such a file alone the same way and names the entries to remove.
 
 ### "MCP server fails to start"
 

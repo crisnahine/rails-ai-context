@@ -503,25 +503,34 @@ module RailsAiContext
       parse_json_text(text)
     end
 
-    # A config's JSON, its comments passed over. json 2 did that unasked
-    # (2.10 on with a deprecation warning); json 3 refuses a comment unless
-    # told, so without saying so the same file read differently by which
-    # json the process had.
+    # A config's JSON read as the editors that keep it read it (VS Code's and
+    # OpenCode's take JSONC): comments and trailing commas passed over.
+    # json 2 passed over comments unasked (2.10 on with a deprecation
+    # warning); json 3 refuses one unless told, so without saying so the same
+    # file read differently by which json the process had. A json before 2.9
+    # knows no trailing commas and ignores the option, refusing them still.
     def self.parse_json_text(text)
-      JSON.parse(text, allow_comments: true)
+      JSON.parse(text, allow_comments: true, allow_trailing_comma: true)
     end
 
     COMMENTS_PROBLEM = "it holds comments, which writing it back as JSON would drop"
 
-    # Where a JSON parser stopped, when it says (json 2.10 on), and what
-    # usually stops it in a config an editor keeps; its own words can run to
-    # the whole file. json 3 refuses the comments json 2 passed over, so a
-    # file holding them is named for them whichever parser read it.
+    # Where a JSON parser stopped, when it says (json 2.10 on), and the
+    # trailing comma a json before 2.9 stops at, when the file has one; the
+    # parser's own words can run to the whole file. json 3 refuses the
+    # comments json 2 passed over, so a file holding them is named for them
+    # whichever parser read it.
     def self.parse_problem(error, text = nil)
       return COMMENTS_PROBLEM if text && json_comments?(text)
 
       where = error.message[/line \d+,? column \d+/]
-      "it does not parse as JSON#{" at #{where}" if where} (a trailing comma?)"
+      "it does not parse as JSON#{" at #{where}" if where}#{' (a trailing comma?)' if text && json_trailing_comma?(text)}"
+    end
+
+    # Whether JSON text closes an array or object right after a comma.
+    # Strings are matched whole, as for comments.
+    def self.json_trailing_comma?(text)
+      text.scan(/"(?:[^"\\]|\\.)*"|,\s*[\]}]/).any? { |token| !token.start_with?('"') }
     end
 
     # Whether JSON text holds a comment, which JSON.parse passes over and a
@@ -635,9 +644,8 @@ module RailsAiContext
       raise ShapeError, "#{e.message}, so it is left as it is. Add #{JSON.generate(config[:root_key] => entries)} to it by hand"
     end
 
-    # A file JSON cannot parse is never replaced: VS Code's and OpenCode's
-    # configs take trailing commas, and a fresh file would drop everything
-    # somebody wrote there.
+    # A file JSON cannot parse is never replaced: a fresh file would drop
+    # everything somebody wrote there.
     def parse_json(text)
       self.class.parse_json_text(text)
     rescue JSON::ParserError => e
