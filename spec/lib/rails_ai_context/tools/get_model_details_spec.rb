@@ -1016,6 +1016,30 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  describe "two bare validates_with lines" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Status" => {
+            table_name: "statuses",
+            validations: [
+              { kind: "validates_with", attributes: [], validator: "StatusLengthValidator", options: {} },
+              { kind: "validates_with", attributes: [], validator: "DisallowedHashtagsValidator", options: {} }
+            ]
+          }
+        }
+      )
+    end
+
+    it "lists both validators" do
+      text = described_class.call(model: "Status").content.first[:text]
+
+      expect(text).to include("- `validates_with` StatusLengthValidator")
+      expect(text).to include("- `validates_with` DisallowedHashtagsValidator")
+    end
+  end
+
   describe "an inclusion list of mixed types" do
     before do
       described_class.reset_cache!

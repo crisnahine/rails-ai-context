@@ -287,7 +287,7 @@ module RailsAiContext
           data[:validations].each do |v|
             next if v[:implicit] && (v[:attributes] & written).any?
 
-            dedup_key = [ v[:kind].to_s, v[:attributes].sort, v[:options] ]
+            dedup_key = [ v[:kind].to_s, v[:validator], v[:attributes].sort, v[:options] ]
             next if seen_validations.include?(dedup_key)
             seen_validations << dedup_key
             attrs = v[:attributes].join(", ")
