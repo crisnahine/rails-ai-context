@@ -165,6 +165,39 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
     end
   end
 
+  # The view resolver renders a pack linked into packs/ from elsewhere in the
+  # monorepo; its partials are named the way the app spells them.
+  describe "a partial in a pack linked in from the app's repository" do
+    around do |example|
+      Dir.mktmpdir("linked-pack") do |repo|
+        @repo = File.realpath(repo)
+        @root = File.join(@repo, "apps/web")
+        views = File.join(@repo, "packages/billing-pack/app/views/invoices")
+        FileUtils.mkdir_p([ File.join(@repo, ".git"), views, File.join(@root, "packs"), File.join(@root, "app/views/home") ])
+        File.write(File.join(views, "_invoice.html.erb"), "<%= invoice.number %>\n")
+        File.write(File.join(views, "index.html.erb"), "<%= render \"invoices/invoice\", invoice: @invoice %>\n")
+        File.write(File.join(@root, "app/views/home/index.html.erb"), "<h1>Home</h1>\n")
+        File.symlink("../../../packages/billing-pack", File.join(@root, "packs/billing"))
+        example.run
+      end
+    end
+
+    before do
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    it "names the partial, its file and its render sites as the app spells them" do
+      text = described_class.call(partial: "invoices/invoice").content.first[:text]
+
+      expect(text).to start_with("# Partial: invoices/_invoice.html.erb\n")
+      expect(text).to include("**File:** `packs/billing/app/views/invoices/_invoice.html.erb`")
+      expect(text).to include("- `packs/billing/app/views/invoices/index.html.erb:1` - locals: invoice")
+      expect(text).to include(%(rails_get_view(path:"invoices/_invoice.html.erb")))
+      expect(text).not_to include(@repo)
+    end
+  end
+
   describe "a strict locals comment in each form Rails accepts" do
     around do |example|
       Dir.mktmpdir("strict-locals") do |dir|
