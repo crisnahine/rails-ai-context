@@ -209,6 +209,40 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
     end
   end
 
+  # get_model_details pointed at rails_get_schema and rails_analyze_feature
+  # in an app whose skip_tools turned both off.
+  describe "a _Next hint in an app that turns tools off" do
+    around do |example|
+      saved = RailsAiContext.configuration.skip_tools
+      RailsAiContext.configuration.skip_tools = %w[rails_get_schema rails_get_view rails_analyze_feature]
+      example.run
+    ensure
+      RailsAiContext.configuration.skip_tools = saved
+    end
+
+    def answer(text)
+      described_class.text_response(text).content.first[:text]
+    end
+
+    it "keeps only the pointers to tools the server serves, on one line or several" do
+      expect(answer("# Post\n\n_Next: `rails_get_schema(table:\"posts\")` for columns | " \
+                    "`rails_get_routes(controller:\"posts\")` for routes_")).to eq("# Post\n\n_Next: `rails_get_routes(controller:\"posts\")` for routes_")
+      expect(answer("# Posts\n\n_Next: `rails_get_routes(controller:\"posts\")` for routes\n" \
+                    " | `rails_get_view(controller:\"posts\")` for views_")).to eq("# Posts\n\n_Next: `rails_get_routes(controller:\"posts\")` for routes_")
+    end
+
+    it "drops a hint left with no pointer, and the blank line before it" do
+      expect(answer("# Partial\n\n_Next: `rails_get_view(path:\"posts/_post.html.erb\")` for full file content_")).to eq("# Partial")
+      expect(answer("No callbacks.\n\n_Next: `rails_get_schema(table:\"x\")` for columns._\n\nMore.")).to eq("No callbacks.\n\nMore.")
+    end
+
+    it "leaves a model's hints naming only what is served" do
+      text = RailsAiContext::Tools::GetModelDetails.call(model: "Post").content.first[:text]
+
+      expect(text[/^_Next: .*/]).to eq("_Next: `rails_get_controllers(controller:\"PostsController\")` for actions_")
+    end
+  end
+
   # A 100 KB name came back whole in "not found", a 100,321-character reply,
   # after seconds of spell-checking it against every candidate.
   describe "a name no app has, 100 KB long" do
