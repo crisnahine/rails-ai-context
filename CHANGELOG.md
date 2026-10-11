@@ -157,6 +157,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bundle.** It runs the gem's own `bin/brakeman` with the app's Ruby, where
   the scan produced no report while `doctor` passed it. `doctor` runs that
   script's `--version` the same way and warns when it does not answer.
+- **A file saved mid-edit no longer crashes the server.** With web-console
+  in the bundle, saving two files that did not compile made the next
+  `rails_get_model_details` segfault in about half the runs: Ruby crashed
+  compiling them under web-console's raise hook. A file Prism finds a
+  syntax error in is no longer required while introspecting, nor is one
+  whose class body names its constant (a subclass of a broken
+  `ApplicationRecord`). The answer gives the error, and the log names each
+  file once.
+- **Live reload loads no app code on the watching thread.** Listen's
+  callback only marks a reload as pending; the next tool call reloads on its
+  own thread. `watch` reloads and regenerates on its main thread and keeps
+  going past an error from the app's code.
+- **A server that cannot reload code says so once the code changed.** Under
+  `RAILS_ENV=test`, or production with eager loading, every answer ends with
+  a note naming the changed files, since what reflection reads (associations,
+  enums) is as of boot. The server instructions no longer promise that
+  reflection follows edits there.
 - **`rails_query` runs a read-only query that names a write keyword only
   inside a string.** `WHERE title LIKE '%update%'`, `= 'put into box'` and
   the `replace()` string function were refused as writes; a keyword or
