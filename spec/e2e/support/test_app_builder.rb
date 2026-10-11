@@ -21,10 +21,12 @@ module E2E
 
     attr_reader :app_path, :install_path, :gem_home, :database
 
-    def initialize(parent_dir:, name:, install_path:, database: :sqlite3, generator_flags: [])
+    # `gem_home:` is for a copy (copy_to), which runs the binary its
+    # original installed.
+    def initialize(parent_dir:, name:, install_path:, database: :sqlite3, generator_flags: [], gem_home: nil)
       @app_path     = File.join(parent_dir, name)
       @install_path = install_path
-      @gem_home     = File.join(parent_dir, "gemhome-#{name}")
+      @gem_home     = gem_home || File.join(parent_dir, "gemhome-#{name}")
       @database     = database
       @generator_flags = Array(generator_flags)
     end
@@ -65,6 +67,30 @@ module E2E
       end
 
       self
+    end
+
+    # A copy of this built app at parent_dir/name, for a spec that changes
+    # an app: copying takes a second where a build takes most of a minute,
+    # and the original stays as every spec sharing it reads it. The copy
+    # runs on the same bundle - its Gemfile.lock names the gem by absolute
+    # path, and BUNDLE_PATH is shared - and a standalone copy on the same
+    # GEM_HOME. A PostgreSQL app's database is the server's, which a copy
+    # would share, so it is never copied.
+    def copy_to(parent_dir:, name:)
+      raise ArgumentError, "a PostgreSQL app shares its database with every copy: build one instead" if database == :postgresql
+
+      copy = self.class.new(parent_dir: parent_dir, name: name, install_path: install_path, database: database,
+                            gem_home: gem_home)
+      FileUtils.mkdir_p(copy.app_path)
+      Dir.children(app_path).each do |entry|
+        # tmp/ holds bootsnap's cache, keyed by absolute path, and pid files;
+        # log/ only grows.
+        next if %w[tmp log].include?(entry)
+
+        FileUtils.cp_r(File.join(app_path, entry), copy.app_path)
+      end
+      %w[tmp log].each { |dir| FileUtils.mkdir_p(File.join(copy.app_path, dir)) }
+      copy
     end
 
     # Environment for subprocess calls that need Bundler (bundle install,
@@ -172,11 +198,44 @@ module E2E
       unless status.success?
         raise "rails new failed:\n  STDOUT:\n#{stdout}\n  STDERR:\n#{stderr}"
       end
+      write_gitignore!
       # Postgres `rails new` writes a database.yml that points at unix-socket
       # localhost:5432 and a default db name of `<app>_development`. CI's
       # postgres service exposes credentials via env vars; rewrite the
       # database.yml to honor PGHOST/PGUSER/PGPASSWORD when provided.
       configure_postgres_yml! if database == :postgresql
+    end
+
+    # --skip-git keeps the app out of git (an app in a repository is asked
+    # about the pre-commit hook, and every tool reads git's state), but it
+    # also skips the .gitignore every real app has, and doctor's secrets
+    # check reads that file. These are the lines `rails new` writes, Rails
+    # 7.0's and 8.1's together, with the master key line its credentials
+    # step adds.
+    GITIGNORE = <<~IGNORE
+      /.bundle
+      /.env*
+      /db/*.sqlite3
+      /db/*.sqlite3-*
+      /log/*
+      /tmp/*
+      !/log/.keep
+      !/tmp/.keep
+      /tmp/pids/*
+      !/tmp/pids/
+      !/tmp/pids/.keep
+      /storage/*
+      !/storage/.keep
+      /tmp/storage/*
+      !/tmp/storage/
+      !/tmp/storage/.keep
+      /public/assets
+      /config/master.key
+    IGNORE
+
+    def write_gitignore!
+      path = File.join(app_path, ".gitignore")
+      File.write(path, GITIGNORE) unless File.exist?(path)
     end
 
     # Rails quotes a database name containing a dot as `"schema"."table"`, so
