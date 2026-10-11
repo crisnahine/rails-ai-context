@@ -1778,6 +1778,26 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
         .not_to include("GemIndexingWorker")
     end
 
+    # `bundle config set path vendor/bundle` installs every gem under the app root.
+    it "drops a job from a gem installed under the app root" do
+      Dir.mktmpdir do |dir|
+        gem_home = File.join(dir, "vendor", "bundle", "ruby", "4.0.0")
+        worker = File.join(gem_home, "gems", "chewy-8.0.0", "lib", "chewy", "strategy", "active_job.rb")
+        FileUtils.mkdir_p(File.dirname(worker))
+        File.write(worker, "")
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(dir))
+        allow(Gem).to receive(:path).and_return([ gem_home, *Gem.path ])
+        allow(ActiveJob::Base).to receive(:descendants)
+          .and_return([ job("Chewy::Strategy::ActiveJob::Worker", defined_in: worker) ])
+        jobs = described_class.new(Rails.application).call
+        allow(RailsAiContext::Tools::GetJobPattern).to receive(:cached_context).and_return({ jobs: jobs })
+        RailsAiContext::Tools::GetJobPattern.reset_cache!
+
+        expect(RailsAiContext::Tools::GetJobPattern.call(detail: "summary").content.first[:text])
+          .not_to include("Chewy::Strategy::ActiveJob::Worker")
+      end
+    end
+
     it "keeps a job defined inside the app" do
       expect(names_reported_for(job("RuntimeProbeJob", defined_in: app_job_file)))
         .to include("RuntimeProbeJob")

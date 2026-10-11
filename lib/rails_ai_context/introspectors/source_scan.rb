@@ -233,10 +233,33 @@ module RailsAiContext
       # Either spelling may land inside the root (only one does for a symlinked
       # pack), but a spelled ".." can climb out through a symlink, so it needs the real one.
       def under_root?(path, real, root, real_root)
+        return false if installed_gem?(real, real_root)
         return true if SafePath.contained?(real, real_root)
 
         !path.split(File::SEPARATOR).include?("..") && File.expand_path(path).start_with?(SafePath.dir_prefix(root))
       end
+
+      # A bundle installed under the app root (`bundle config set path vendor/bundle`) holds gems, not the app's code.
+      def installed_gem?(real, real_root)
+        gem_dirs.any? { |dir| SafePath.contained?(real, dir) && !SafePath.contained?(real_root, dir) }
+      end
+
+      def gem_dirs
+        dirs = Gem.path.dup
+        dirs << bundle_path if defined?(Bundler)
+        dirs.compact.filter_map do |dir|
+          File.realpath(dir)
+        rescue SystemCallError
+          nil
+        end
+      end
+
+      def bundle_path
+        Bundler.bundle_path.to_s
+      rescue StandardError
+        nil
+      end
+      private_class_method :installed_gem?, :gem_dirs, :bundle_path
     end
   end
 end
