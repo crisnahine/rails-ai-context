@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Redaction filters a secret passed as a flag, set under a dashed header
+  name, or sent after an auth scheme.** Every tool that shows the app's
+  source returned `mysql --password=...`, `-- --token=...` and
+  `redis-server --requirepass=...` with the value in place, since a dash
+  before the name hid it; `{ "X-Api-Key" => "..." }`,
+  `req["X-Api-Key"] = "..."` and `"x-auth-token": "..."`, since the dashes
+  hid the secret word; and `conn.headers["Authorization"] = "Bearer ..."`
+  and `{ "Authorization" => "Basic ..." }`, since "Authorization" is no
+  secret word. A flag's value is now filtered as any `NAME=value` is, with
+  Redis's `requirepass` and `masterauth` among the password names and a
+  regex that names the flag (`/--password=.+/`) left as code; a quoted name
+  joined by dashes reads as the name it spells with underscores, so
+  `"Content-Type"` and `"X-Request-Id"` stay; and the credential after
+  `Bearer`, `Basic` or `Token` goes, the scheme kept, when it is 16 or more
+  letters and digits, both, read past a UUID's dashes and base64's `+`,
+  `/` and `=`, so `Bearer #{token}`, `Bearer YOUR_TOKEN` and
+  `Basic realm=...` stay. `rails_read_logs` kept a `Basic` credential after
+  `Authorization: `, the whole header when it was quoted, a hash or JSON
+  key or `HTTP_AUTHORIZATION`, and a dashed header key's value in a logged
+  hash (`{"X-Api-Key"=>"..."}`); each is filtered now. A Stimulus target,
+  action, controller, outlet or class is read as a descriptor, so
+  `data: { password_visibility_target: "input" }` keeps its value.
 - **`rails_get_view` filters the secrets in a controller's full listing.**
   `controller:"posts", detail:"full"` printed each template and partial as
   written, `<% api_key = "..." %>` and a `render` call's `token: "..."`
