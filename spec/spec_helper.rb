@@ -65,6 +65,14 @@ RSpec.configure do |config|
   # (mcp_config_generator_windows_spec.rb), which turn this back on.
   config.before(:each) { allow(RailsAiContext::McpConfigGenerator).to receive(:windows_shell?).and_return(false) }
 
+  # CI's macOS and Windows legs set this, so an example left waiting on a
+  # process the platform starts differently fails under its own name rather
+  # than holding the whole run until the job's limit.
+  if (limit = ENV["RSPEC_EXAMPLE_TIMEOUT"])
+    require "timeout"
+    config.around(:each) { |example| Timeout.timeout(Float(limit)) { example.run } }
+  end
+
   # Skip e2e specs unless explicitly requested via E2E=1.
   # E2E specs spawn fresh Rails apps per install path and take minutes
   # per run; they belong on a dedicated CI pipeline, not every push.
