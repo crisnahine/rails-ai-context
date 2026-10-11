@@ -128,3 +128,68 @@ jobs:
           name: e2e-report-ruby${{ matrix.ruby }}-rails${{ matrix.rails }}
           path: tmp/e2e-report.json
           retention-days: 14
+
+  # The same harness on the other platforms the gem's users work on. GitHub
+  # runs service containers on Linux runners only, so these legs leave
+  # PostgreSQL out: postgres_install_spec skips without TEST_POSTGRES, and
+  # every other spec builds SQLite apps as on Linux.
+  e2e-os:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            ruby: "3.4"
+            rails: "8.1"
+          - os: windows-latest
+            ruby: "3.4"
+            rails: "8.1"
+
+    name: E2E - ${{ matrix.os }} / Ruby ${{ matrix.ruby }} / Rails ${{ matrix.rails }}
+
+    env:
+      E2E: "1"
+      RAILS_VERSION: ${{ matrix.rails }}
+      BUNDLE_PATH: ${{ github.workspace }}/.e2e-bundle
+
+    steps:
+      # A Windows runner checks out with CRLF by default; the apps the harness
+      # builds are written by `rails new`, and the gem's own files stay as
+      # committed.
+      - name: Keep line endings as committed
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v7
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+
+      - name: Cache shared e2e bundle directory
+        uses: actions/cache@v6
+        with:
+          path: .e2e-bundle
+          key: e2e-bundle-${{ matrix.os }}-ruby${{ matrix.ruby }}-rails${{ matrix.rails }}-v1
+          restore-keys: |
+            e2e-bundle-${{ matrix.os }}-ruby${{ matrix.ruby }}-rails${{ matrix.rails }}-
+
+      - name: Install Rails globally (for `rails new`)
+        run: gem install rails -v "~> ${{ matrix.rails }}.0" --no-document
+
+      - name: Run E2E harness
+        run: bundle exec rspec spec/e2e --format documentation --format json --out tmp/e2e-report.json
+        timeout-minutes: 40
+
+      - name: Upload E2E report on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-report-${{ matrix.os }}-ruby${{ matrix.ruby }}-rails${{ matrix.rails }}
+          path: tmp/e2e-report.json
+          retention-days: 14
