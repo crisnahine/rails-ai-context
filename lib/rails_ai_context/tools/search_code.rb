@@ -183,14 +183,14 @@ module RailsAiContext
         # on the realpath below.
         unless File.exist?(search_path)
           top_dirs = Dir.glob(File.join(root, "*")).select { |f| File.directory?(f) }.map { |f| File.basename(f) }.sort
-          return text_response("Path not found: #{path}. Top-level directories: #{top_dirs.first(15).join(', ')}")
+          return text_response("Path not found: #{echo_input(path)}. Top-level directories: #{top_dirs.first(15).join(', ')}")
         end
 
         begin
           real_root = File.realpath(root)
           real_search = File.realpath(search_path)
         rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP, Errno::ENAMETOOLONG
-          return text_response("Path not found: #{path}")
+          return text_response("Path not found: #{echo_input(path)}")
         end
         return error_response("Path not allowed: #{path}") unless RailsAiContext::SafePath.contained?(real_search, real_root)
         # A file named as the path is read whatever it is linked to.
@@ -219,7 +219,7 @@ module RailsAiContext
         if all_results.empty?
           # The lines past a cut were never read, so they may still match.
           unread = truncated ? " in the first #{count_phrase(line_cap, 'line')} scanned (max_search_results); more lines remain" : ""
-          return empty_response("No results found for '#{original_pattern}' in #{path || 'app'}#{unread}.")
+          return empty_response("No results found for '#{echo_input(original_pattern)}' in #{path ? echo_input(path) : 'app'}#{unread}.")
         end
 
         # A non-empty row list whose flags all went missing still found

@@ -227,6 +227,30 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
       expect(described_class.find_closest_matches(huge, %w[User Post])).to eq([])
       expect(RailsAiContext::Payload.fuzzy_find_key(%w[User Post], huge)).to be_nil
     end
+
+    # Each of these answered a 100 KB argument with itself, one of them six
+    # times over.
+    it "is echoed shortened by every answer that names what matched nothing" do
+      tools = RailsAiContext::Tools
+      calls = {
+        "routes controller" => -> { tools::GetRoutes.call(controller: huge) },
+        "edit_context file" => -> { tools::GetEditContext.call(file: huge, near: "x") },
+        "edit_context near" => -> { tools::GetEditContext.call(file: "app/models/post.rb", near: huge) },
+        "turbo_map stream" => -> { tools::GetTurboMap.call(stream: huge) },
+        "test_info model" => -> { tools::GetTestInfo.call(model: huge) },
+        "search_code pattern" => -> { tools::SearchCode.call(pattern: huge) },
+        "search_code path" => -> { tools::SearchCode.call(pattern: "x", path: huge) },
+        "view controller" => -> { tools::GetView.call(controller: huge) },
+        "view path" => -> { tools::GetView.call(path: huge) },
+        "read_logs file" => -> { tools::ReadLogs.call(file: huge) },
+        "session_context mark" => -> { tools::SessionContext.call(mark: huge) }
+      }
+
+      replies = calls.transform_values { |call| call.call.content.first[:text] }
+
+      expect(replies.transform_values(&:length)).to all(satisfy { |_, length| length < 2_000 })
+      expect(replies.reject { |_, text| text.include?("#{"a" * 80}... (100000 characters)") }.keys).to eq([])
+    end
   end
 
   describe ".empty_response and .empty?" do

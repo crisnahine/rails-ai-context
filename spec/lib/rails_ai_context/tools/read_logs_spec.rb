@@ -120,6 +120,14 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
       expect(text).not_to include("Cache miss")
     end
 
+    # A 100 KB search came back whole in the answer that found nothing.
+    it "echoes a search that matches nothing shortened, with its length" do
+      text = described_class.call(search: "a" * 100_000).content.first[:text]
+
+      expect(text).to include("No entries matching level:all search:\"#{"a" * 80}... (100000 characters)\"")
+      expect(text.length).to be < 1_000
+    end
+
     it "does not let the search term match text that redaction hides" do
       File.write(File.join(log_dir, "test.log"), "INFO Bearer sk_live_abcdef0123456789abcdef used\nINFO done\n")
       hit = described_class.call(search: "sk_live_abcdef").content.first[:text]

@@ -230,6 +230,10 @@ module RailsAiContext
         refused = refuse_unsafe_paths([ name ])
         return refused if refused
 
+        # Longer than any file name, so no test file carries it, and each
+        # searched path it was put in echoed it whole: a 600 KB answer.
+        return empty_response("No test file found for #{echo_input(name)}.") if name_too_long?(name)
+
         candidates = RailsAiContext::TestFramework.candidates(suite_root, type, snake, cached_context)
         exercising = type == :controller ? exercising_tests(snake, candidates) : []
 
