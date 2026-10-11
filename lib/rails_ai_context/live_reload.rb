@@ -2,11 +2,11 @@
 
 module RailsAiContext
   # Keeps a long-lived MCP server truthful: when the app changes, drop the
-  # tool caches and tell connected clients to re-query. The loop - watch
-  # list, fingerprint gate, code reload - is ChangeWatch's; this supplies
-  # the non-blocking background behavior, the debounce, and the
-  # cache-and-notify reaction. A missing `listen` gem raises out of start;
-  # Server#maybe_start_live_reload owns that policy.
+  # tool caches, have the next call reload the app's code, and tell
+  # connected clients to re-query. The loop - watch list, fingerprint gate -
+  # is ChangeWatch's; this supplies the non-blocking background behavior,
+  # the debounce, and the cache-and-notify reaction. A missing `listen` gem
+  # raises out of start; Server#maybe_start_live_reload owns that policy.
   class LiveReload
     include CountPhrase
 
@@ -27,7 +27,7 @@ module RailsAiContext
       end
 
       debounce = RailsAiContext.configuration.live_reload_debounce
-      listener = @watch.start(debounce: debounce) { |paths, reloaded| react(paths, reloaded) }
+      listener = @watch.start(debounce: debounce) { |paths| react(paths) }
       return unless listener
 
       # After the listener, not before: these lines are only true once a
@@ -46,7 +46,7 @@ module RailsAiContext
     # Run a batch of changed paths through the shared gate. Public for
     # testability - specs drive this instead of a real Listen thread.
     def handle_change(changed_paths = [])
-      @watch.gate(changed_paths) { |paths, reloaded| react(paths, reloaded) }
+      @watch.gate(changed_paths) { |paths| react(paths) }
     end
 
     # Group changed file paths by category (model, controller, etc.)
@@ -83,22 +83,22 @@ module RailsAiContext
 
     private
 
-    # The gate already reloaded the app's code; dropping the caches after
-    # that order is what keeps the server from answering with constants
-    # Rails autoloaded at boot.
-    def react(paths, reloaded)
+    # On Listen's thread, so it loads no app code (see ChangeWatch#gate):
+    # the next call reloads it on its own thread before it reads anything
+    # (BaseTool.refresh_if_files_changed!). Asked for before the caches
+    # drop, so a call that rebuilds them in between is followed by one that
+    # reloads.
+    def react(paths)
+      Tools::BaseTool.reload_at_next_call!
       Tools::BaseTool.reset_all_caches!
 
-      message = format_change_message(categorize_changes(paths))
+      message = "#{format_change_message(categorize_changes(paths))} Tool caches invalidated" \
+                "#{CodeReloader.reloadable? ? "; app code reloads at the next call" : ""}."
 
       mcp_server.notify_resources_list_changed
-      mcp_server.notify_log_message(
-        data: "#{message} Tool caches invalidated#{reloaded ? " and app code reloaded" : ""}.",
-        level: "info",
-        logger: "rails-ai-context"
-      )
+      mcp_server.notify_log_message(data: message, level: "info", logger: "rails-ai-context")
 
-      $stderr.puts "[rails-ai-context] #{message} Tool caches invalidated#{reloaded ? " and app code reloaded" : ""}."
+      $stderr.puts "[rails-ai-context] #{message}"
     rescue => e
       $stderr.puts "[rails-ai-context] Live reload error: #{e.message}"
     end

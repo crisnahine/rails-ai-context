@@ -55,24 +55,42 @@ RSpec.describe RailsAiContext::LiveReload do
         live_reload.handle_change(changed_paths)
       end
 
-      # Dropping the caches only rebuilds them from the constants Rails already
-      # had. Zeitwerk will not re-scan a directory it eager loaded, so without a
-      # reload the server keeps answering about the app as it was at boot.
-      it "reloads the app's code before rebuilding the caches" do
-        expect(RailsAiContext::CodeReloader).to receive(:reload!).and_return(true)
+      # Listen calls this on its own thread, which loads no app code: the
+      # reaction only asks the next call to reload.
+      it "loads no app code itself, and has the next call reload it" do
+        expect(RailsAiContext::CodeReloader).not_to receive(:reload!)
         live_reload.handle_change(changed_paths)
+
+        expect(RailsAiContext::Tools::BaseTool::FILE_CHECK[:reload]).to be(true)
       end
 
-      it "says so when a reload actually ran" do
-        allow(RailsAiContext::CodeReloader).to receive(:reload!).and_return(true)
-        expect($stderr).to receive(:puts).with(a_string_matching(/app code reloaded/))
+      it "says the next call reloads the code" do
+        allow(RailsAiContext::CodeReloader).to receive(:reloadable?).and_return(true)
+        expect($stderr).to receive(:puts).with(a_string_matching(/Tool caches invalidated; app code reloads at the next call\.\z/))
         live_reload.handle_change(changed_paths)
       end
 
       it "stays quiet about reloading when the app cannot reload" do
-        allow(RailsAiContext::CodeReloader).to receive(:reload!).and_return(false)
+        allow(RailsAiContext::CodeReloader).to receive(:reloadable?).and_return(false)
         expect($stderr).to receive(:puts).with(a_string_matching(/Tool caches invalidated\.\z/))
         live_reload.handle_change(changed_paths)
+      end
+
+      # Dropping the caches only rebuilds them from the constants Rails already
+      # had. Zeitwerk will not re-scan a directory it eager loaded, so without a
+      # reload the server keeps answering about the app as it was at boot.
+      it "reloads the app's code on the thread of the next call, not Listen's" do
+        reloaded_on = []
+        allow(RailsAiContext::CodeReloader).to receive(:reload!) { reloaded_on << Thread.current }
+        allow(RailsAiContext).to receive(:introspect).and_return({ app_name: "App" })
+
+        Thread.new { live_reload.handle_change(changed_paths) }.join
+        expect(reloaded_on).to be_empty
+
+        RailsAiContext::Tools::GetConventions.call
+        RailsAiContext::Tools::GetConventions.call
+
+        expect(reloaded_on).to eq([ Thread.current ])
       end
     end
 

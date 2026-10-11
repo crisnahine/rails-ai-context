@@ -172,8 +172,9 @@ module RailsAiContext
         # which only a code reload brings up to date after an edit.
         Tools::BaseTool.refresh_if_files_changed!
         # Resource reads introspect just like tool calls do, and they bypassed
-        # SafeCall entirely - so a live reload could unload constants while one
-        # was reading them and hand back a short list with nothing raised.
+        # SafeCall entirely - so a reload on another thread could unload
+        # constants while one was reading them and hand back a short list
+        # with nothing raised.
         RailsAiContext::CodeReloader.with_app_code { read_resource(params) }
       end
 

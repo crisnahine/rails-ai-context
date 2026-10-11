@@ -2,10 +2,10 @@
 
 module RailsAiContext
   # Notices that the app actually changed: the watch list, the Listen
-  # wiring, the fingerprint gate and the code reload, stated once. Watcher
-  # and LiveReload were two implementations of this loop that differed only
-  # in their reaction, and the copies had grown apart where nobody chose -
-  # different watch lists, and a fingerprint gate maintained twice.
+  # wiring and the fingerprint gate, stated once. Watcher and LiveReload
+  # were two implementations of this loop that differed only in their
+  # reaction, and the copies had grown apart where nobody chose - different
+  # watch lists, and a fingerprint gate maintained twice.
   #
   # The caller supplies the reaction (regenerate files, or refresh caches
   # and notify clients) and its own policy for a missing `listen` gem -
@@ -47,14 +47,17 @@ module RailsAiContext
     end
 
     # The part both reactions share: nothing happened unless the fingerprint
-    # moved, and the reaction sees fresh code - without the reload, a
-    # reaction describes the app as it was when the watch started.
+    # moved.
+    #
+    # It runs on Listen's thread, so neither it nor a reaction loads app
+    # code: the reaction asks for a reload, and the thread that answers the
+    # next call, or the watch's main thread, runs it - as a server without
+    # Listen always did.
     def gate(paths, &reaction)
       return unless Fingerprinter.stale?(@app, @mark)
 
       @mark = Fingerprinter.mark(@app)
-      reloaded = CodeReloader.reload!
-      reaction.call(paths, reloaded)
+      reaction.call(paths)
     rescue => e
       $stderr.puts "[rails-ai-context] Change watch error: #{e.message}"
     end

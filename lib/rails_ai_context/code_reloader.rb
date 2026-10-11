@@ -35,7 +35,7 @@ module RailsAiContext
     # `Reloader#class_unload!` takes the unload lock through
     # ActiveSupport::Dependencies.interlock, but that only blocks threads
     # holding the sharing lock - which is acquired inside `executor.wrap`.
-    # Nothing here wrapped anything, so the Listen thread could clear
+    # Nothing here wrapped anything, so a reload on another thread could clear
     # DescendantsTracker while a tool call was midway through reading
     # `ActiveRecord::Base.descendants`, returning a short list with no
     # exception for the per-section rescue to notice.

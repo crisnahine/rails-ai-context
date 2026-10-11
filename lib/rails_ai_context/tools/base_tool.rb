@@ -73,8 +73,10 @@ module RailsAiContext
       # What a server with no live reload watching last saw of its app's
       # files, as a fingerprint mark, and when and for how long it looked.
       # The mark is nil until such a server starts, so a process that is no
-      # server (the CLI, rake) never walks the tree.
-      FILE_CHECK = { mutex: Mutex.new, app: nil, mark: nil, started: nil, took: 0.0 }
+      # server (the CLI, rake) never walks the tree. `reload` is live
+      # reload's half: its watch saw the files change and left the code
+      # reload to the next call.
+      FILE_CHECK = { mutex: Mutex.new, app: nil, mark: nil, started: nil, took: 0.0, reload: false }
 
       # A call this many walks' durations after the last check began shares
       # that check, so on a busy server the walk takes about a tenth of the
@@ -228,10 +230,20 @@ module RailsAiContext
           RailsAiContext.debug_fail(e, nil, label: "check_files_per_call!")
         end
 
-        # Live reload drops the caches and reloads the app's code the moment
-        # a file changes. Without it nothing did: inside cache_ttl every
-        # answer described the app as it was before the edit, and what the
-        # booted tier reads by reflection, such as an association, stayed
+        # Live reload's watch saw the files change. It runs on Listen's
+        # thread, which loads no app code (ChangeWatch#gate), so the reload
+        # waits for the next call.
+        def reload_at_next_call!
+          FILE_CHECK[:mutex].synchronize { FILE_CHECK[:reload] = true }
+        end
+
+        # Before a call reads anything: once live reload saw a change
+        # (reload_at_next_call!) or this call's own check finds one, reload
+        # the app's code on the calling thread, then drop the caches.
+        #
+        # Without live reload nothing dropped the caches: inside cache_ttl
+        # every answer described the app as it was before the edit, and what
+        # the booted tier reads by reflection, such as an association, stayed
         # that way until a restart. So a call first asks whether the files
         # moved, a stat of each watched file: a few milliseconds on a typical
         # app, about 100 at 10,000 files. A call close behind the last check
@@ -245,6 +257,18 @@ module RailsAiContext
         def refresh_if_files_changed!
           return if RunCache.active?
 
+          requested = FILE_CHECK[:mutex].synchronize { FILE_CHECK[:reload].tap { FILE_CHECK[:reload] = false } }
+          return unless requested || files_moved?
+
+          # A request the app serves already ran Rails' own reloader.
+          CodeReloader.reload! unless CodeReloader.inside_app_executor?
+          reset_all_caches!
+        rescue StandardError => e
+          RailsAiContext.debug_fail(e, nil, label: "refresh_if_files_changed!")
+        end
+
+        # The check a server with no live reload watching makes per call.
+        private def files_moved?
           started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
           app = FILE_CHECK[:mutex].synchronize do
             shared = [ FILE_CHECK[:took] * FILE_CHECK_SHARED_WALKS, FILE_CHECK_SHARED_MAX ].min
@@ -253,22 +277,15 @@ module RailsAiContext
             FILE_CHECK[:started] = started
             FILE_CHECK[:app]
           end
-          return unless app
+          return false unless app
 
           current = Fingerprinter.mark(app)
-          moved = FILE_CHECK[:mutex].synchronize do
+          FILE_CHECK[:mutex].synchronize do
             FILE_CHECK[:took] = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
             changed = FILE_CHECK[:mark].digest != current.digest
             FILE_CHECK[:mark] = current
             changed
           end
-          return unless moved
-
-          # A request the app serves already ran Rails' own reloader.
-          CodeReloader.reload! unless CodeReloader.inside_app_executor?
-          reset_all_caches!
-        rescue StandardError => e
-          RailsAiContext.debug_fail(e, nil, label: "refresh_if_files_changed!")
         end
 
         # ── Session context helpers ──────────────────────────────────────

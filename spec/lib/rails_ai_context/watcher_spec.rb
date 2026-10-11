@@ -153,6 +153,15 @@ RSpec.describe RailsAiContext::Watcher do
         expect($stderr).to receive(:puts).with("[rails-ai-context] Error regenerating: write failure")
         expect { watcher.send(:handle_change) }.not_to raise_error
       end
+
+      # Regeneration runs on the main thread, where a file mid-edit that does
+      # not compile would end the watch.
+      it "keeps watching past a file that does not compile" do
+        allow(RailsAiContext).to receive(:generate_context).and_raise(SyntaxError, "app/models/post.rb:4: syntax error")
+
+        expect($stderr).to receive(:puts).with("[rails-ai-context] Error regenerating: app/models/post.rb:4: syntax error")
+        expect { watcher.send(:handle_change) }.not_to raise_error
+      end
     end
   end
   # The whole point of watch mode is that the generated files track the app.
@@ -168,6 +177,51 @@ RSpec.describe RailsAiContext::Watcher do
 
       expect(RailsAiContext::CodeReloader).to receive(:reload!)
       watcher.send(:handle_change)
+    end
+  end
+
+  # Listen calls back on its own thread, which loads no app code: the main
+  # thread reloads and regenerates.
+  describe "the watch loop" do
+    let(:listener) { instance_double("Listen::Listener", start: nil, stop: nil) }
+    let(:listen_mod) do
+      mod = Module.new
+      mod.define_singleton_method(:to) { |*_args, **_kwargs, &_block| }
+      mod
+    end
+
+    it "reloads and regenerates on the main thread, not Listen's" do
+      on_change = nil
+      stub_const("Listen", listen_mod)
+      allow(listen_mod).to receive(:to) do |*_args, **_kwargs, &block|
+        on_change = block
+        listener
+      end
+      allow(watcher.instance_variable_get(:@watch)).to receive(:require).with("listen").and_return(true)
+      allow(RailsAiContext::LegacyCleanup).to receive(:prompt_legacy_files)
+      allow(RailsAiContext::Fingerprinter).to receive(:stale?).and_return(true)
+      allow($stderr).to receive(:puts)
+
+      ran_on = []
+      allow(RailsAiContext::CodeReloader).to receive(:reload!) { ran_on << [ :reload, Thread.current ] }
+      allow(RailsAiContext).to receive(:generate_context) do
+        ran_on << [ :regenerate, Thread.current ]
+        { written: [], skipped: [] }
+      end
+
+      # The first pause is when Listen reports an edit; the second, Ctrl-C.
+      pauses = 0
+      allow(watcher).to receive(:sleep) do
+        pauses += 1
+        raise Interrupt if pauses > 1
+
+        Thread.new { on_change.call([ "#{Rails.root}/app/models/post.rb" ], [], []) }.join
+      end
+
+      watcher.start
+
+      expect(ran_on).to eq([ [ :reload, Thread.current ], [ :regenerate, Thread.current ] ])
+      expect(listener).to have_received(:stop)
     end
   end
 end
