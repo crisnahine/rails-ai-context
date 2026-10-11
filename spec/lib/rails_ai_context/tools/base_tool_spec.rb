@@ -449,4 +449,38 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
       end
     end
   end
+
+  # Every path a tool refuses is refused in the same words, and a 100 KB
+  # path came back whole in them.
+  describe "a refused path, 100 KB long" do
+    let(:huge) { "../#{"a" * 100_000}" }
+    let(:shortened) { "../#{"a" * 77}... (100003 characters)" }
+
+    it "is refused as Path not allowed, echoed shortened, by every tool that takes a path" do
+      tools = RailsAiContext::Tools
+      calls = {
+        "view path" => -> { tools::GetView.call(path: huge) },
+        "edit_context file" => -> { tools::GetEditContext.call(file: huge, near: "x") },
+        "search_code path" => -> { tools::SearchCode.call(pattern: "x", path: huge) },
+        "search_code trace path" => -> { tools::SearchCode.call(pattern: "x", match_type: "trace", path: huge) },
+        "partial_interface partial" => -> { tools::GetPartialInterface.call(partial: huge) },
+        "concern name" => -> { tools::GetConcern.call(name: huge) },
+        "read_logs file" => -> { tools::ReadLogs.call(file: huge) },
+        "generate_test file" => -> { tools::GenerateTest.call(file: huge) }
+      }
+
+      replies = calls.transform_values(&:call)
+
+      expect(replies.reject { |_, reply| reply.error? }.keys).to eq([])
+      expect(replies.reject { |_, reply| reply.content.first[:text].start_with?("Path not allowed: #{shortened}") }.keys).to eq([])
+    end
+
+    it "is refused on its own line by validate, and by the view resource" do
+      text = RailsAiContext::Tools::Validate.call(files: [ huge ]).content.first[:text]
+      expect(text).to start_with("\u2717 #{shortened} - Path not allowed (it contains '..'")
+
+      expect { RailsAiContext::VFS.resolve("rails-ai-context://views/#{huge}") }
+        .to raise_error(RailsAiContext::Error, "Path not allowed: #{shortened}")
+    end
+  end
 end

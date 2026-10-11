@@ -1224,8 +1224,8 @@ module RailsAiContext
         # @return [String, nil] the refusal for a path the caller may not read
         def unsafe_path_message(path)
           case RailsAiContext::SafePath.locate(path.to_s, under: rails_app.root.to_s).refusal
-          when :traversal, :outside then "Path not allowed: #{path}"
-          when :sensitive then "Path not allowed: #{path} (sensitive file)"
+          when :traversal, :outside then "Path not allowed: #{echo_input(path)}"
+          when :sensitive then "Path not allowed: #{echo_input(path)} (sensitive file)"
           end
         end
 

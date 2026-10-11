@@ -46,8 +46,8 @@ module RailsAiContext
         # decides whether the partial exists.
         guard = RailsAiContext::SafePath.locate(partial, under: views_dir, root: root)
         case guard.refusal
-        when :traversal then return error_response("Path not allowed: #{partial}")
-        when :sensitive then return error_response("Path not allowed: #{partial} (sensitive file)")
+        when :traversal then return error_response("Path not allowed: #{echo_input(partial)}")
+        when :sensitive then return error_response("Path not allowed: #{echo_input(partial)} (sensitive file)")
         end
 
         if view_dirs.empty?
@@ -72,8 +72,8 @@ module RailsAiContext
 
         # The file the name resolves to, refused on policy: a link out of the app.
         case located&.refusal
-        when :traversal, :outside then return error_response("Path not allowed: #{partial}")
-        when :sensitive then return error_response("Path not allowed: #{partial} (sensitive file)")
+        when :traversal, :outside then return error_response("Path not allowed: #{echo_input(partial)}")
+        when :sensitive then return error_response("Path not allowed: #{echo_input(partial)} (sensitive file)")
         end
 
         unless located

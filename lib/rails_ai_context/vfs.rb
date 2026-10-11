@@ -30,10 +30,15 @@ module RailsAiContext
           return send(entry[:handler], uri, *match.captures)
         end
 
-        raise RailsAiContext::Error, "Unknown VFS URI: #{uri}"
+        raise RailsAiContext::Error, "Unknown VFS URI: #{echo(uri)}"
       end
 
       private
+
+      # The caller's name as an answer repeats it, shortened as a tool's is.
+      def echo(value)
+        Tools::BaseTool.echo_input(value)
+      end
 
       def resolve_model(uri, name)
         context = RailsAiContext.introspect
@@ -42,7 +47,7 @@ module RailsAiContext
         key = Payload.fuzzy_find_key(models.keys, name) || name
         data = models[key]
 
-        raise ResourceUnavailable.new("Model '#{name}' not found", available: models.keys.sort.first(20)) unless data
+        raise ResourceUnavailable.new("Model '#{echo(name)}' not found", available: models.keys.sort.first(20)) unless data
 
         # Enrich with schema columns if available
         table_name = data[:table_name]
@@ -57,7 +62,7 @@ module RailsAiContext
         controllers = context.dig(:controllers, :controllers) || {}
         key = Payload.find_controller(context, name)
 
-        raise ResourceUnavailable.new("Controller '#{name}' not found", available: controllers.keys.sort.first(20)) unless key
+        raise ResourceUnavailable.new("Controller '#{echo(name)}' not found", available: controllers.keys.sort.first(20)) unless key
 
         [ { uri: uri, mimeType: "application/json", text: JsonBudget.for_resource(controllers[key]) } ]
       end
@@ -73,12 +78,12 @@ module RailsAiContext
         prefix_action = key && (controllers.dig(key, :actions) || []).any? { |a| a.to_s.casecmp?(action_name) }
         return resolve_controller(uri, "#{controller_name}/#{action_name}") if whole && !prefix_action
 
-        raise ResourceUnavailable.new("Controller '#{controller_name}' not found", available: controllers.keys.sort.first(20)) unless key
+        raise ResourceUnavailable.new("Controller '#{echo(controller_name)}' not found", available: controllers.keys.sort.first(20)) unless key
 
         info = controllers[key]
         actions = info[:actions] || []
         action = actions.find { |a| a.to_s.casecmp?(action_name) }
-        raise ResourceUnavailable.new("Action '#{action_name}' not found in #{key}", available: actions.map(&:to_s)) unless action
+        raise ResourceUnavailable.new("Action '#{echo(action_name)}' not found in #{key}", available: actions.map(&:to_s)) unless action
 
         # Build action-specific data
         applicable = ActionFilters.for(context, key, action)
@@ -109,11 +114,11 @@ module RailsAiContext
         root = RailsAiContext.default_app.root.to_s
         content, result = RailsAiContext::ViewFile.read(root, path)
         case result.refusal
-        when :traversal, :outside then raise RailsAiContext::Error, "Path not allowed: #{path}"
-        when :sensitive then raise RailsAiContext::Error, "Path not allowed: #{path} (sensitive file)"
-        when :too_large then raise ResourceUnavailable, "File too large: #{path}"
+        when :traversal, :outside then raise RailsAiContext::Error, "Path not allowed: #{echo(path)}"
+        when :sensitive then raise RailsAiContext::Error, "Path not allowed: #{echo(path)} (sensitive file)"
+        when :too_large then raise ResourceUnavailable, "File too large: #{echo(path)}"
         when :missing
-          raise ResourceUnavailable, "View not found: #{path}. Paths are relative to app/views; the extension is " \
+          raise ResourceUnavailable, "View not found: #{echo(path)}. Paths are relative to app/views; the extension is " \
             "optional (posts/index and posts/index.html.erb both resolve)."
         end
 
@@ -149,7 +154,7 @@ module RailsAiContext
         # A name that resolved to no controller and matched no route key is
         # not a controller with no routes, and a zero-route success document
         # cannot say which of the two it is.
-        raise ResourceUnavailable.new("Controller '#{controller}' not found", available: names.sort) if selected.empty? && key.nil?
+        raise ResourceUnavailable.new("Controller '#{echo(controller)}' not found", available: names.sort) if selected.empty? && key.nil?
 
         routes = by_controller.flat_map { |name, entries|
           next [] unless selected.include?(name.to_s)

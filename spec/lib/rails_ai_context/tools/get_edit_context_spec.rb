@@ -90,8 +90,8 @@ RSpec.describe RailsAiContext::Tools::GetEditContext do
 
     it "blocks access to sensitive files" do
       result = described_class.call(file: ".env", near: "SECRET")
-      text = result.content.first[:text]
-      expect(text).to include("Access denied")
+      expect(result.error?).to be(true)
+      expect(result.content.first[:text]).to eq("Path not allowed: .env (sensitive file)")
     end
 
     it "prevents path traversal" do

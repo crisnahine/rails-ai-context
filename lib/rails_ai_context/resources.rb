@@ -146,16 +146,19 @@ module RailsAiContext
       # fails with its own reason and the names the client can use instead,
       # where it used to succeed with an `{"error": ...}` body a client could
       # not tell from data.
+      # The URI is echoed shortened, as a tool echoes an argument: a 100 KB
+      # one came back whole, in the message and again in the data.
       def read_error(params, error)
+        uri = Tools::BaseTool.echo_input(params[:uri])
         if error.is_a?(RailsAiContext::ResourceUnavailable) && handler_error_data?
           return MCP::Server::RequestHandlerError.new(
             error.message, params,
-            error_type: :invalid_params, error_code: INVALID_PARAMS, error_data: { uri: params[:uri] }.merge(error.data)
+            error_type: :invalid_params, error_code: INVALID_PARAMS, error_data: { uri: uri }.merge(error.data)
           )
         end
         return error unless defined?(MCP::Server::ResourceNotFoundError)
 
-        MCP::Server::ResourceNotFoundError.new(params[:uri])
+        MCP::Server::ResourceNotFoundError.new(uri)
       end
 
       # error_code and error_data arrived together with ResourceNotFoundError,

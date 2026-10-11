@@ -76,17 +76,17 @@ module RailsAiContext
 
           located = RailsAiContext::SafePath.locate(file, under: rails_app.root.to_s)
           case located.refusal
-          when :sensitive then results << "\u2717 #{file} - access denied (sensitive file)"
-          when :traversal then results << "\u2717 #{file} - path not allowed (#{traversal_reason(file)})"
-          when :outside then results << "\u2717 #{file} - path not allowed (it resolves outside the Rails root)"
-          when :too_large then results << "\u2717 #{file} - file too large"
+          when :sensitive then results << "\u2717 #{echo_input(file)} - Path not allowed (sensitive file)"
+          when :traversal then results << "\u2717 #{echo_input(file)} - Path not allowed (#{traversal_reason(file)})"
+          when :outside then results << "\u2717 #{echo_input(file)} - Path not allowed (it resolves outside the Rails root)"
+          when :too_large then results << "\u2717 #{echo_input(file)} - file too large"
           when :missing
             if File.directory?(rails_app.root.join(file))
-              results << "\u2717 #{file} - a directory, not a file. Name the files in it to check."
+              results << "\u2717 #{echo_input(file)} - a directory, not a file. Name the files in it to check."
             else
               suggestion = find_file_suggestion(file)
               hint = suggestion ? " Did you mean '#{suggestion}'?" : ""
-              results << "\u2717 #{file} - file not found.#{hint}"
+              results << "\u2717 #{echo_input(file)} - file not found.#{hint}"
             end
           end
 

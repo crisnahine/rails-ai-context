@@ -122,8 +122,8 @@ RSpec.describe RailsAiContext::Tools::Validate do
 
     it "rejects path traversal attempts" do
       result = described_class.call(files: [ "../../etc/passwd" ])
-      text = result.content.first[:text]
-      expect(text).to match(/not found|not allowed/)
+      expect(result.error?).to be(true)
+      expect(result.content.first[:text]).to include("\u2717 ../../etc/passwd - Path not allowed (it contains '..'")
     end
 
     # The refusal is about how the path is written: this one lands inside the
@@ -131,14 +131,14 @@ RSpec.describe RailsAiContext::Tools::Validate do
     it "says a path with '..' is refused for the '..', not for where it leads" do
       text = described_class.call(files: [ "app/models/../models/post.rb" ]).content.first[:text]
 
-      expect(text).to include("app/models/../models/post.rb - path not allowed (it contains '..'")
+      expect(text).to include("app/models/../models/post.rb - Path not allowed (it contains '..'")
       expect(text).not_to include("outside Rails root")
     end
 
     it "says an absolute path is refused as absolute" do
       text = described_class.call(files: [ Rails.root.join("app/models/post.rb").to_s ]).content.first[:text]
 
-      expect(text).to include("path not allowed (an absolute path")
+      expect(text).to include("Path not allowed (an absolute path")
     end
 
     # A directory matched itself in the suggestion search and was offered back.
@@ -180,8 +180,7 @@ RSpec.describe RailsAiContext::Tools::Validate do
       # error messages.
       result = described_class.call(files: [ "config/database.yml" ])
       text = result.content.first[:text]
-      expect(text).to include("access denied")
-      expect(text).to include("sensitive file")
+      expect(text).to include("\u2717 config/database.yml - Path not allowed (sensitive file)")
     end
 
     it "returns empty message for no files" do
