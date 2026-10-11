@@ -349,7 +349,7 @@ What gets redacted:
 - Passwords, tokens, secrets and API keys, wherever they are named
 - The same in the app's own source a tool or resource shows: a method body, a template, a test file, a scan's code line
 - Credentials embedded in URIs (`redis://user:pass@host`)
-- Email addresses in log lines
+- Email addresses in log lines, in any script (`jürgen@example.com`, `anna@münchen.de`)
 - Values assigned to secret-named settings in initializers
 
 ### Markers

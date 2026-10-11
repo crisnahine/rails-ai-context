@@ -838,6 +838,40 @@ RSpec.describe RailsAiContext::Redaction do
         .to eq("Sent to [EMAIL]")
     end
 
+    # SECURITY.md promises the address goes, and an ASCII-only pattern left
+    # every address with a letter outside ASCII in the log.
+    it "redacts an address in any script" do
+      lines = {
+        %(Parameters: {"email"=>"jürgen@example.com"}) => %(Parameters: {"email"=>"[EMAIL]"}),
+        "User josé.garcía@example.com signed in." => "User [EMAIL] signed in.",
+        "Sent to <anna@münchen.de>" => "Sent to <[EMAIL]>",
+        "Sent to 用户@例子.广告" => "Sent to [EMAIL]",
+        "Sent to e\u0301mile@example.fr" => "Sent to [EMAIL]"
+      }
+
+      expect(lines.keys.map { |line| described_class.redact_log_line(line) }).to eq(lines.values)
+    end
+
+    it "leaves what is not an address" do
+      [ "rails@7.1 booted", "user@localhost", "at 10.0.0.1@5432" ].each do |line|
+        expect(described_class.redact_log_line(line)).to eq(line)
+      end
+    end
+
+    it "reads a line in another encoding with the ASCII pattern rather than raising" do
+      expect(described_class.redact_log_line("to ada@example.com \xFF".b)).to eq("to [EMAIL] \xFF".b)
+    end
+
+    it "takes a fraction of a second over a 1 MB line built to make a pattern backtrack" do
+      lines = [ ((("a" * 64) + "@") * 16_000), "a@#{"a." * 500_000}", "#{"a." * 500_000}@x", "a@b.#{"c" * 1_000_000}" ]
+
+      lines.each do |line|
+        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        described_class.redact_log_line(line)
+        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 2
+      end
+    end
+
     it "uses the filtered marker for everything else" do
       expect(described_class.redact_log_line('{"password":"hunter2"}'))
         .to include("[FILTERED]")
