@@ -329,7 +329,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a file its class body needs (its parent controller), was listed with the
   actions and filters its source read as, with no word that Rails cannot
   load it. Its entry now gives the error, in every listing and in its own
-  answer, as `rails_get_model_details` does for a model.
+  answer, as `rails_get_model_details` does for a model, and so do the
+  `controllers/{name}` and `controllers/{name}/{action}` resources, where
+  an action read built its answer from the broken source.
 - **A tool call that raises a `SyntaxError` or a `LoadError` answers with an
   error and leaves the server running.** The rescue that turns a tool's
   failure into an error result caught `StandardError` only, so a

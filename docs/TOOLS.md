@@ -803,7 +803,7 @@ In addition to tools, AI clients can read structured data through **resource tem
 
 The legacy `rails://models/{name}` form is still accepted.
 
-`controllers/{name}/{action}` also reads an action that a concern or a parent controller gives and no route names, as the `rails_get_controllers` `action` lookup does. `inherited_from` names the parent controller an action comes from. `note` says why the controller's `actions` leave out one that no route names.
+`controllers/{name}/{action}` also reads an action that a concern or a parent controller gives and no route names, as the `rails_get_controllers` `action` lookup does. `inherited_from` names the parent controller an action comes from. `note` says why the controller's `actions` leave out one that no route names. For a controller that cannot load - its file, or one its class body needs, does not compile - both reads give its `error` and `file` and nothing read from its source.
 
 A read for a name the app does not have - a model, a controller, an action, a view - fails with a JSON-RPC `-32602` error whose message gives the reason and whose `data.available` lists the names there are: for a view, the ones in its directory, else the app's first twenty. So does a view over the size cap, and a URI the server does not serve, whose `data.available` lists the resources and templates it does. A path refused on policy fails as `Resource not found`, without saying why.
 

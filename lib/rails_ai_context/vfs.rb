@@ -90,6 +90,14 @@ module RailsAiContext
         raise ResourceUnavailable.new("Controller '#{echo(controller_name)}' not found", available: controllers.keys.sort.first(20)) unless key
 
         info = controllers[key]
+        # A controller that cannot load (its file does not compile, say) has
+        # no action Rails would run, and its source is not what Rails runs:
+        # the answer is why, as the controller's own entry gives it.
+        if info[:error]
+          answer = { controller: key, action: action_name, error: info[:error], file: info[:file] }.compact
+          return [ { uri: uri, mimeType: "application/json", text: JsonBudget.for_resource(answer) } ]
+        end
+
         actions = info[:actions] || []
         action = actions.find { |a| a.to_s.casecmp?(action_name) }
         root = RailsAiContext.default_app.root.to_s

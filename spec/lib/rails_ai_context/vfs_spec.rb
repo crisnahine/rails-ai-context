@@ -191,6 +191,20 @@ RSpec.describe RailsAiContext::VFS do
           }
       end
 
+      # A controller whose file does not compile has no action Rails would
+      # run, and the read built one from the broken source, as an action a
+      # parent controller gives.
+      it "answers why for an action of a controller that cannot load" do
+        error = "app/controllers/reports_controller.rb:6: syntax error, unexpected 'end'"
+        context[:controllers][:controllers]["ReportsController"] = { error: error, file: "app/controllers/reports_controller.rb" }
+
+        result = described_class.resolve("rails-ai-context://controllers/reports/index")
+
+        expect(JSON.parse(result.first[:text])).to eq(
+          "controller" => "ReportsController", "action" => "index", "error" => error, "file" => "app/controllers/reports_controller.rb"
+        )
+      end
+
       it "includes applicable filters" do
         result = described_class.resolve("rails-ai-context://controllers/posts/index")
         data = JSON.parse(result.first[:text])
