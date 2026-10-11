@@ -347,6 +347,10 @@ RSpec.describe RailsAiContext::Doctor do
       File.binwrite(File.join(@root, ".codex/config.toml"), content)
     end
 
+    # A PATH or GEM_PATH as the platform joins one: `;` on Windows, where
+    # `:` is in every absolute path.
+    def path_list(*dirs) = dirs.join(File::PATH_SEPARATOR)
+
     context "when codex is not in ai_tools" do
       before do
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude cursor])
@@ -402,14 +406,14 @@ RSpec.describe RailsAiContext::Doctor do
         end
 
         it "passes while that PATH reaches the command" do
-          write_snapshot("/nonexistent/ruby/9.9.9/bin:#{bin}")
+          write_snapshot(path_list("/nonexistent/ruby/9.9.9/bin", bin))
 
           expect(check.status).to eq(:pass)
           expect(check.message).to eq("Codex env snapshot in .codex/config.toml is current: its PATH reaches `rails-ai-context`")
         end
 
         it "fails when it no longer does, naming the directory that is gone" do
-          write_snapshot("/nonexistent/ruby/9.9.9/bin:#{bin_dir_with}")
+          write_snapshot(path_list("/nonexistent/ruby/9.9.9/bin", bin_dir_with))
 
           expect(check.status).to eq(:fail)
           expect(check.message).to eq("Codex MCP env snapshot in .codex/config.toml is stale - the PATH saved for rails-ai-context " \
@@ -506,7 +510,7 @@ RSpec.describe RailsAiContext::Doctor do
 
         it "warns when a directory on it no longer exists" do
           shell_gem_path(gems)
-          write_gem_path("/nonexistent/ruby/3.3.5/gems:#{gems}")
+          write_gem_path(path_list("/nonexistent/ruby/3.3.5/gems", gems))
 
           expect(check).to have_attributes(status: :warn,
                                            message: "Codex MCP env snapshot is stale - GEM_PATH names /nonexistent/ruby/3.3.5/gems, which no longer exists")
@@ -516,8 +520,8 @@ RSpec.describe RailsAiContext::Doctor do
         # saves this shell's GEM_PATH again: a warning on it was one the fix
         # could never clear.
         it "passes over a missing directory this shell's GEM_PATH names too" do
-          shell_gem_path("/nonexistent/.gem/ruby/3.3.0:#{gems}")
-          write_gem_path("/nonexistent/.gem/ruby/3.3.0:#{gems}")
+          shell_gem_path(path_list("/nonexistent/.gem/ruby/3.3.0", gems))
+          write_gem_path(path_list("/nonexistent/.gem/ruby/3.3.0", gems))
 
           expect(check).to have_attributes(status: :pass,
                                            message: "Codex env snapshot in .codex/config.toml is current: its PATH reaches `rails-ai-context`")
@@ -525,7 +529,7 @@ RSpec.describe RailsAiContext::Doctor do
 
         it "still warns about a missing directory this shell no longer names" do
           shell_gem_path(nil)
-          write_gem_path("/nonexistent/.gem/ruby/3.3.0:#{gems}")
+          write_gem_path(path_list("/nonexistent/.gem/ruby/3.3.0", gems))
 
           expect(check).to have_attributes(status: :warn,
                                            message: "Codex MCP env snapshot is stale - GEM_PATH names /nonexistent/.gem/ruby/3.3.0, which no longer exists")

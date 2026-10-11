@@ -242,22 +242,28 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
     # command's name. A folder named in another encoding is escaped byte by
     # byte, not refused, and a path that starts with a dash is spelled from
     # here, where it would read as an option.
+    #
+    # Windows names files in UTF-16, so no folder there is named in bytes
+    # that are not UTF-8: the bytes below would come back as a valid name.
+    # There the other three apps are written all the same.
     it "writes each command the way a shell reads it" do
       app("work/a b")
       app("work/\u0448\u043e\u043f")
       app("work/-api")
-      latin1_app("work/caf\xE9".b)
+      latin1 = latin1_app("work/caf\xE9".b) unless Gem.win_platform?
       cwd = File.join(tmp, "work")
       lines = described_class.several_apps(described_class.resolve(cwd: cwd), cwd, %w[tool search_code pattern=x$y])
 
       expect(lines).to include("  rails-ai-context --app-path ./-api tool search_code 'pattern=x$y'")
       expect(lines).to include("  rails-ai-context --app-path 'a b' tool search_code 'pattern=x$y'")
       expect(lines).to include("  rails-ai-context --app-path \u0448\u043e\u043f tool search_code 'pattern=x$y'")
-      expect(lines.map(&:b)).to include("  rails-ai-context --app-path caf\\\xE9 tool search_code pattern=x\\$y".b)
+      expect(lines.map(&:b)).to include("  rails-ai-context --app-path caf\\\xE9 tool search_code pattern=x\\$y".b) if latin1
     end
 
     # Names that are no UTF-8 are directories all the same.
     it "walks up from, and down to, a folder whose name is not UTF-8" do
+      skip "Windows names files in UTF-16, so no folder name on disk is bytes that are not UTF-8" if Gem.win_platform?
+
       root = latin1_app("caf\xE9".b)
       nested = File.join(root, "app/models")
 

@@ -366,8 +366,10 @@ RSpec.describe RailsAiContext::Server do
         expect { s.send(:start_http, instance_double(MCP::Server)) }.not_to raise_error
       end
 
+      # ABRT because every platform has it and it is no stop signal: Ruby on
+      # Windows knows no HUP, USR1 or QUIT, and raises ArgumentError for one.
       it "lets any other signal through" do
-        allow(handler).to receive(:run).and_raise(SignalException, "HUP")
+        allow(handler).to receive(:run).and_raise(SignalException, "ABRT")
 
         expect { s.send(:start_http, instance_double(MCP::Server)) }.to raise_error(SignalException)
       end

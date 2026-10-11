@@ -192,6 +192,13 @@ RSpec.describe RailsAiContext::PathResolver do
     end
 
     it "sees through a spelled .. that climbs out through a directory link" do
+      # POSIX takes the .. from where the link leads. Win32 drops `link/..`
+      # from the spelling before it opens anything, so on Windows this path
+      # never climbs out: it names the app's own secret.rb.
+      if Gem.win_platform?
+        skip "Windows resolves link/.. by the spelling, not through the link, so the path never leaves the app"
+      end
+
       Dir.mktmpdir do |outside|
         FileUtils.mkdir_p(File.join(outside, "dir"))
         File.write(File.join(outside, "secret.rb"), "x\n")

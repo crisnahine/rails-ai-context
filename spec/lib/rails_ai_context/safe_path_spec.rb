@@ -22,6 +22,9 @@ RSpec.describe RailsAiContext::SafePath do
   end
 
   let(:views) { File.join(@root, "app/views") }
+  # The root of the filesystem `views` is on: `/`, or on Windows its drive's,
+  # such as `D:/`.
+  let(:filesystem_root) { File.expand_path("/", views) }
 
   def locate(path, **opts)
     described_class.locate(path, under: views, root: @root, **opts)
@@ -88,8 +91,8 @@ RSpec.describe RailsAiContext::SafePath do
     end
 
     it "treats the filesystem root as containing every path under it" do
-      expect(described_class.contained?(views, File::SEPARATOR)).to be true
-      expect(described_class.contained?(File::SEPARATOR, File::SEPARATOR)).to be true
+      expect(described_class.contained?(views, filesystem_root)).to be true
+      expect(described_class.contained?(filesystem_root, filesystem_root)).to be true
     end
 
     it "names a file under a directory outside the root relative to the root, as an engine's view from its test/dummy" do
@@ -101,9 +104,9 @@ RSpec.describe RailsAiContext::SafePath do
     end
 
     it "names a file relative to a filesystem-root root without a leading separator" do
-      result = described_class.locate("posts/index.html.erb", under: views, root: File::SEPARATOR)
+      result = described_class.locate("posts/index.html.erb", under: views, root: filesystem_root)
 
-      expect(result.relative).to eq(File.join(@root, "app/views/posts/index.html.erb").delete_prefix(File::SEPARATOR))
+      expect(result.relative).to eq(File.join(@root, "app/views/posts/index.html.erb").delete_prefix(filesystem_root))
     end
   end
 
