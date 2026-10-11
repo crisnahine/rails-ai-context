@@ -3148,6 +3148,44 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(static.map { |v| v[:added_by] }.uniq).to eq([ "devise :validatable" ])
       end
     end
+
+    # The concern names `DateValidator`; Ruby resolves it in the module first,
+    # so the one validator is `SpecDateValidation::DateValidator`.
+    it "matches a validates_with class the concern nests by the name Ruby resolves" do
+      stub_const("SpecDateValidation", Module.new do
+        extend ActiveSupport::Concern
+        included { validates_with SpecDateValidation::DateValidator }
+      end)
+      stub_const("SpecDateValidation::DateValidator", Class.new(ActiveModel::Validator) { def validate(_); end })
+      stub_const("DateValidator", Class.new(ActiveModel::Validator) { def validate(_); end })
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        File.write(File.join(dir, "app", "models", "concerns", "spec_date_validation.rb"), <<~RUBY)
+          module SpecDateValidation
+            extend ActiveSupport::Concern
+
+            included do
+              validates_with DateValidator
+            end
+
+            class DateValidator < ActiveModel::Validator
+              def validate(record); end
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "edition.rb"),
+                   "class Edition < ApplicationRecord\n  include SpecDateValidation\nend\n")
+        model = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          include SpecDateValidation
+        end
+        model.define_singleton_method(:name) { "Edition" }
+
+        booted = described_class.new(RailsAiContext::StaticApp.new(dir)).send(:extract_model_details, model)[:validations]
+
+        expect(booted.map { |v| [ v[:kind], v[:validator], v[:reflection_only] ] }).to eq([ [ "validates_with", "DateValidator", nil ] ])
+      end
+    end
   end
 
   # A booted count carried PaperTrail::Version, which static never sees.

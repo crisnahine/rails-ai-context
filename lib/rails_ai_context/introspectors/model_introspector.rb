@@ -696,7 +696,7 @@ module RailsAiContext
         undeclared = model.validators.reject do |validator|
           attributes = validator.respond_to?(:attributes) ? validator.attributes.map(&:to_s) : []
           (required_presence?(validator) && attributes.one? && belongs_to.include?(attributes.first)) ||
-            declared.any? { |v| declares?(v, validator, attributes) }
+            declared.any? { |v| declares?(v, validator, attributes, model.name) }
         end
         declared = declared.flat_map { |v| with_computed_attributes(v, undeclared, added) }
         implicit_presence(implicit) + declared + reflected_validations(undeclared, added)
@@ -722,11 +722,19 @@ module RailsAiContext
       # A validator is the declaration's when kind and attribute agree, when
       # validates_with names its class, or when a gem's own macro
       # (`validates_date`) covers the attribute under its own name.
-      def declares?(declaration, validator, attributes)
-        return declaration[:validator].to_s == validator.class.name if declaration[:kind] == "validates_with"
+      def declares?(declaration, validator, attributes, owner)
+        return validator_class_name(declaration, owner) == validator.class.name if declaration[:kind] == "validates_with"
 
         overlap = (Array(declaration[:attributes]) & attributes).any?
         overlap && (declaration[:kind] == validator.kind.to_s || declaration[:kind].start_with?("validates_"))
+      end
+
+      # The constant Ruby finds for the written name, looked up from the module or class whose body wrote it.
+      def validator_class_name(declaration, owner)
+        written = declaration[:validator].to_s
+        scope = declaration[:from_concern] || owner
+        nesting = scope ? [ scope, *SuperclassChain.nesting_of(scope) ] : []
+        SuperclassChain.resolve_in_scope(nil, written, nesting: nesting) { |c| (found = c.safe_constantize).is_a?(Module) && found.name } || written
       end
 
       def reflected_validations(validators, added)
