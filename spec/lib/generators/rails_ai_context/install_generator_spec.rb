@@ -493,7 +493,7 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       end
 
       def commit(repo, bin)
-        env = { "PATH" => "#{bin}:#{ENV.fetch('PATH')}", "GIT_AUTHOR_NAME" => "t", "GIT_AUTHOR_EMAIL" => "t@t",
+        env = { "PATH" => [ bin, ENV.fetch("PATH") ].join(File::PATH_SEPARATOR), "GIT_AUTHOR_NAME" => "t", "GIT_AUTHOR_EMAIL" => "t@t",
                 "GIT_COMMITTER_NAME" => "t", "GIT_COMMITTER_EMAIL" => "t@t" }
         Open3.capture2e(env, "git", "-C", repo, "commit", "-q", "-m", "x")
       end
@@ -591,7 +591,7 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
           File.chmod(0o755, File.join(bin, "bundle"))
           File.write(File.join(mono, "apps/web/app/models/post.rb"), "class Post; end\n")
           git("-C", mono, "add", "-A")
-          env = { "PATH" => "#{bin}:#{ENV.fetch('PATH')}", "CDPATH" => File.join(bin, "elsewhere"),
+          env = { "PATH" => [ bin, ENV.fetch("PATH") ].join(File::PATH_SEPARATOR), "CDPATH" => File.join(bin, "elsewhere"),
                   "GIT_AUTHOR_NAME" => "t", "GIT_AUTHOR_EMAIL" => "t@t", "GIT_COMMITTER_NAME" => "t", "GIT_COMMITTER_EMAIL" => "t@t" }
 
           out, status = Open3.capture2e(env, "git", "-C", mono, "commit", "-q", "-m", "x")
@@ -673,7 +673,7 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
         # A validator that fails on a file that is not there, as the real one does.
         File.write(File.join(bin, "rails-ai-context"), %(#!/bin/sh\nfor f in $(echo "$4" | tr ',' ' '); do [ -f "$f" ] || exit 1; done\n))
         File.chmod(0o755, File.join(bin, "rails-ai-context"))
-        env = { "PATH" => "#{bin}:#{ENV.fetch('PATH')}", "GIT_AUTHOR_NAME" => "t", "GIT_AUTHOR_EMAIL" => "t@t",
+        env = { "PATH" => [ bin, ENV.fetch("PATH") ].join(File::PATH_SEPARATOR), "GIT_AUTHOR_NAME" => "t", "GIT_AUTHOR_EMAIL" => "t@t",
                 "GIT_COMMITTER_NAME" => "t", "GIT_COMMITTER_EMAIL" => "t@t" }
         git("-C", tmpdir, "rm", "-q", "app/models/old.rb")
         blocked, = Open3.capture2e(env, hook_path, chdir: tmpdir)
@@ -750,7 +750,7 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
         FileUtils.mkdir_p(File.join(tmpdir, "app/models"))
         File.write(File.join(tmpdir, "app/models/post.rb"), "class Post; end\n")
         git("-C", tmpdir, "add", "-A")
-        env = { "PATH" => "#{bin}:#{ENV.fetch('PATH')}", "GIT_AUTHOR_NAME" => "t", "GIT_AUTHOR_EMAIL" => "t@t",
+        env = { "PATH" => [ bin, ENV.fetch("PATH") ].join(File::PATH_SEPARATOR), "GIT_AUTHOR_NAME" => "t", "GIT_AUTHOR_EMAIL" => "t@t",
                 "GIT_COMMITTER_NAME" => "t", "GIT_COMMITTER_EMAIL" => "t@t" }
 
         out, status = Open3.capture2e(env, "git", "-C", tmpdir, "commit", "-q", "-m", "x")
