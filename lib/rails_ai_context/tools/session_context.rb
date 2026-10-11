@@ -116,9 +116,19 @@ module RailsAiContext
           end
 
           lines << ""
+          lines.concat(dropped_lines)
           lines << "_Use `action:\"reset\"` to clear, or `action:\"summary\"` for a compressed recap._"
           lines << cli_note
           text_response(lines.join("\n"))
+        end
+
+        # The record keeps a session's latest queries only; the older ones it
+        # let go are counted rather than listed.
+        def dropped_lines
+          dropped = session_dropped
+          return [] if dropped.zero?
+
+          [ "_#{count_phrase(dropped, "older query")} dropped: the record keeps the latest #{BaseTool::MAX_SESSION_QUERIES}._", "" ]
         end
 
         def render_summary
@@ -150,6 +160,7 @@ module RailsAiContext
           end
 
           lines << ""
+          lines.concat(dropped_lines)
           lines << "_Avoid re-querying these. Use `action:\"status\"` for timestamps._"
           text_response(lines.join("\n"))
         end

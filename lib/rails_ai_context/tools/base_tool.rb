@@ -92,8 +92,9 @@ module RailsAiContext
       # Mcp-Session-Id gets its own bucket and one client's history stays out
       # of another's.
       # A plain Hash, not one with a default block: a default block writes on
-      # lookup, so merely reading a session's history created it.
-      SESSION_CONTEXT = { mutex: Mutex.new, queries: {} }
+      # lookup, so merely reading a session's history created it. `dropped`
+      # counts, per session, the queries its record no longer keeps.
+      SESSION_CONTEXT = { mutex: Mutex.new, queries: {}, dropped: {} }
 
       DEFAULT_SESSION = :default
 
@@ -103,6 +104,10 @@ module RailsAiContext
       # MAX_SESSIONS is the one least likely to ask about its own history.
       MAX_SESSIONS = 100
       MAX_SESSION_ID_LENGTH = 200
+      # What one session's record holds is capped the same way: its latest
+      # queries, each param kept as an answer echoes it. A client sending a
+      # 100 KB argument on every call otherwise grew the record without end.
+      MAX_SESSION_QUERIES = 200
 
       # One row of the generated tool guide, declared beside the tool's own
       # description so adding a tool touches one file. `order` fixes where the
@@ -299,15 +304,19 @@ module RailsAiContext
         end
 
         def session_record(tool_name, params, summary = nil)
+          params = recorded_params(params)
           SESSION_CONTEXT[:mutex].synchronize do
             bucket = touch_session
             evict_oldest_sessions
             key = session_key(tool_name, params)
-            existing = bucket[key]
+            # Taken out and put back, so the bucket runs least recently used
+            # first and the cap below drops the query asked longest ago.
+            existing = bucket.delete(key)
             if existing
               existing[:call_count] = (existing[:call_count] || 1) + 1
               existing[:last_timestamp] = Time.now.iso8601
               existing[:summary] = summary if summary
+              bucket[key] = existing
             else
               bucket[key] = {
                 tool: tool_name.to_s,
@@ -316,9 +325,36 @@ module RailsAiContext
                 timestamp: Time.now.iso8601,
                 summary: summary
               }
+              drop_oldest_queries(bucket)
             end
           end
         end
+
+        # How many queries the calling session's record has dropped to stay
+        # within MAX_SESSION_QUERIES.
+        def session_dropped
+          SESSION_CONTEXT[:mutex].synchronize { SESSION_CONTEXT[:dropped].fetch(current_session, 0) }
+        end
+
+        # Each param as an answer would echo it, so the record keeps no more
+        # of a 100 KB argument than a reply does.
+        def recorded_params(params)
+          return echo_input(params) if params.is_a?(String)
+          return params unless params.is_a?(Hash)
+
+          params.transform_values { |value| value.to_s.length > ECHO_LENGTH ? echo_input(value) : value }
+        end
+        private :recorded_params
+
+        # Called with the mutex held.
+        def drop_oldest_queries(bucket)
+          dropped = SESSION_CONTEXT[:dropped]
+          while bucket.size > MAX_SESSION_QUERIES
+            bucket.shift
+            dropped[current_session] = dropped.fetch(current_session, 0) + 1
+          end
+        end
+        private :drop_oldest_queries
 
         # Deep copies: the entries stay live inside the record and keep being
         # mutated by later calls, so handing the originals out would let a
@@ -334,6 +370,7 @@ module RailsAiContext
         def session_reset!
           SESSION_CONTEXT[:mutex].synchronize do
             SESSION_CONTEXT[:queries].clear
+            SESSION_CONTEXT[:dropped].clear
           end
         end
 
@@ -343,6 +380,7 @@ module RailsAiContext
         def current_session_reset!
           SESSION_CONTEXT[:mutex].synchronize do
             SESSION_CONTEXT[:queries].delete(current_session)
+            SESSION_CONTEXT[:dropped].delete(current_session)
           end
         end
 
@@ -361,7 +399,7 @@ module RailsAiContext
         # Called with the mutex held.
         def evict_oldest_sessions
           queries = SESSION_CONTEXT[:queries]
-          queries.shift while queries.size > MAX_SESSIONS
+          SESSION_CONTEXT[:dropped].delete(queries.shift.first) while queries.size > MAX_SESSIONS
         end
         private :evict_oldest_sessions
 
