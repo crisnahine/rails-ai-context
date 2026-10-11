@@ -191,6 +191,21 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  describe "a static model an app plugin patches" do
+    it "says the patch modules were not read" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      allow(described_class).to receive(:cached_context).and_return({
+        models: { "WorkPackage" => { confidence: "[STATIC]", table_name: "work_packages",
+                                     patches_unread: [ "OpenProject::Backlogs::Patches::WorkPackagePatch" ] } }
+      })
+
+      text = described_class.call(model: "WorkPackage").content.first[:text]
+
+      expect(text).to include("[UNAVAILABLE] 1 patch module not read, so what it adds to WorkPackage is missing here: " \
+                              "OpenProject::Backlogs::Patches::WorkPackagePatch")
+    end
+  end
+
   describe "a model on a secondary database" do
     it "lists the columns its database's dump declares" do
       allow(described_class).to receive(:cached_context).and_return({

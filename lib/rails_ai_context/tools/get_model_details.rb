@@ -179,6 +179,10 @@ module RailsAiContext
         # all, so this stands outside that section.
         bases_unread = data[:bases_unread]
         lines << unread_bases_line(bases_unread) if bases_unread&.any?
+        if (patches = data[:patches_unread])&.any?
+          lines << "#{Confidence::UNAVAILABLE} #{count_phrase(patches.size, "patch module")} not read, so what " \
+                   "#{patches.one? ? "it adds" : "they add"} to #{name} is missing here: #{patches.join(', ')}"
+        end
 
         # File structure - compact one-line format
         structure = extract_model_structure(name)

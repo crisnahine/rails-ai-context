@@ -3188,6 +3188,47 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  # OpenProject's engines include `<Plugin>::Patches::<Model>Patch` into the model in to_prepare.
+  describe "a patch module the static reader does not follow" do
+    it "names it on the model it patches, and on no other" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "work_package.rb"), "class WorkPackage < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app", "models", "project.rb"), "class Project < ApplicationRecord\nend\n")
+        patches = File.join(dir, "modules", "backlogs", "lib", "open_project", "backlogs", "patches")
+        FileUtils.mkdir_p(patches)
+        File.write(File.join(patches, "work_package_patch.rb"), <<~RUBY)
+          module OpenProject::Backlogs::Patches::WorkPackagePatch
+            extend ActiveSupport::Concern
+
+            included do
+              belongs_to :sprint
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "modules", "backlogs", "openproject-backlogs.gemspec"), "")
+        File.write(File.join(dir, "Gemfile"), "gem 'openproject-backlogs', path: 'modules/backlogs'\n")
+        File.write(File.join(dir, "Gemfile.lock"), <<~LOCK)
+          PATH
+            remote: modules/backlogs
+            specs:
+              openproject-backlogs (1.0.0)
+
+          GEM
+            specs:
+
+          DEPENDENCIES
+            openproject-backlogs!
+        LOCK
+
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(static["WorkPackage"][:patches_unread]).to eq([ "OpenProject::Backlogs::Patches::WorkPackagePatch" ])
+        expect(static["Project"]).not_to have_key(:patches_unread)
+      end
+    end
+  end
+
   # Paperclip's has_attached_file defines its chains with define_model_callbacks.
   describe "callbacks on chains a library defines" do
     def write_model(dir)

@@ -1644,6 +1644,28 @@ module RailsAiContext
         value.to_s
       end
 
+      # `<Plugin>::Patches::<Model>Patch` modules under the app's and its in-repo gems' lib/: an engine
+      # includes them in to_prepare (OpenProject's `patches`), which no line the static walk follows says.
+      def unread_patches(class_name, mixins)
+        included = Array(mixins).map { |m| m[:name].to_s.delete_prefix("::") }
+        patch_index.fetch(class_name, []) - included
+      end
+
+      def patch_index
+        @patch_index ||= begin
+          root = app.root.to_s
+          libs = [ File.join(root, "lib"), *PathResolver.code_roots(root).map { |r| File.join(r, "lib") }, *PathResolver.path_gem_libs(root) ]
+          libs.uniq.flat_map { |lib| FileWalk.glob(lib, "**/patches/**/*_patch.rb", root: root) }.uniq
+              .each_with_object(Hash.new { |h, k| h[k] = [] }) do |path, index|
+                source = SafeFile.read(path) or next
+                DeclaredConstant.module_nodes(AstCache.parse_string(source).value).each_key do |name|
+                  model = name[/::Patches::(.+)Patch\z/, 1]
+                  index[model] << name if model
+                end
+              end
+        end
+      end
+
       def static_model_details(path, class_name, file: relative_to_root(path), table_name: nil, inherited_from: [],
                                sti: nil, parent_model: nil, primary_key: nil)
         own = own_body(@source_cache[path] ||= source_walk(path), class_name)
@@ -1685,6 +1707,7 @@ module RailsAiContext
           concern_callbacks: concern_callbacks(data[:callbacks]),
           concerns_unread: (unread if unread.any?),
           bases_unread: (bases_unread if bases_unread.any?),
+          patches_unread: unread_patches(class_name, data[:mixins]).presence,
           commit_order_unread: commit_order_unread(data[:callbacks]),
           conditional_declarations: declarations(data[:conditional]),
           foreign_declarations: declarations(data[:foreign]),
