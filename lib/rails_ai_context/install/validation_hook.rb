@@ -94,6 +94,56 @@ module RailsAiContext
         HOOK
       }.freeze
 
+      # The form for several apps written before the hook validated through
+      # the gem's CLI, kept byte for byte with its apps and install form left
+      # as placeholders. An in-Gemfile install's ran the rake task, which has
+      # to boot the app, and threw stderr away, so an app that could not boot
+      # (an initializer needing a variable the shell lacks) failed every
+      # commit with no reason given.
+      EARLIER_SCRIPT = <<~'HOOK'
+        #!/bin/bash
+        # rails-ai-context: check the staged Ruby and ERB files before a commit.
+        # A commit whose staged .rb or .erb files do not parse is stopped.
+        # Remove this file or the rails-ai-context section to disable.
+        # rails-ai-context apps: %<listed>s
+
+        status=0
+        for app in %<listed>s; do
+          [ -d "$app" ] || continue
+          relative=()
+          [ "$app" = "." ] || relative=(--relative="$app/")
+          files=""
+          while IFS= read -r -d '' name; do
+            case "$name" in
+              *.rb|*.erb) ;;
+              *) continue ;;
+            esac
+            case "$name" in
+              *,*) echo "rails-ai-context: $name is not checked: validate cannot take a comma in a file name" ;;
+              *) files="${files:+$files,}$name" ;;
+            esac
+          done < <(git diff --cached --name-only -z --diff-filter=d "${relative[@]}")
+          if [ -z "$files" ]; then
+            continue
+          fi
+
+          if command -v %<binary>s &> /dev/null; then%<heading>s
+            (cd "./$app" && %<validate>s 2>/dev/null)
+            exit_code=$?
+            if [ $exit_code -ne 0 ]; then
+              status=$exit_code
+            fi
+          fi
+        done
+
+        if [ $status -ne 0 ]; then
+          echo ""
+          echo "rails-ai-context validation found issues."
+          echo "Fix them or skip with: git commit --no-verify"
+          exit $status
+        fi
+      HOOK
+
       # What a hook this gem wrote, and nobody changed since, covers: its
       # apps, the install form it validates with, and whether an earlier
       # version wrote it.
@@ -114,17 +164,22 @@ module RailsAiContext
       # test matched, so the file went unchecked. validate takes its list
       # comma-separated, so a name holding a comma is named and left out.
       #
+      # The files go to the gem's CLI, which boots the app and, when the app
+      # cannot boot, checks them from source instead and says why on stderr;
+      # a syntax check needs no booted app. stderr is shown, so a check that
+      # cannot run at all (a bundle that does not resolve) says so.
+      #
       # @param apps [Array<String>] app paths from the top of the work tree,
       #   "." for the top itself
-      # @param standalone [Boolean] validate with the gem's binary rather
-      #   than the rake task, which a standalone install does not have
+      # @param standalone [Boolean] validate with the gem's binary on the
+      #   PATH rather than the one the app's bundle holds
       def script(apps, standalone:)
         if standalone
           hook_binary = "rails-ai-context"
           validate_command = %(rails-ai-context tool validate --files "$files")
         else
-          hook_binary = "rails"
-          validate_command = %(rails 'ai:tool[validate]' files="$files")
+          hook_binary = "bundle"
+          validate_command = %(bundle exec rails-ai-context tool validate --files "$files")
         end
         listed = apps.shelljoin
         # With several apps, each one's lines are headed by its name.
@@ -158,7 +213,7 @@ module RailsAiContext
             fi
 
             if command -v #{hook_binary} &> /dev/null; then#{heading}
-              (cd "./$app" && #{validate_command} 2>/dev/null)
+              (cd "./$app" && #{validate_command})
               exit_code=$?
               if [ $exit_code -ne 0 ]; then
                 status=$exit_code
@@ -195,7 +250,19 @@ module RailsAiContext
 
         apps = listed(content) or return nil
         standalone = [ false, true ].find { |mode| content == script(apps, standalone: mode) }
-        standalone.nil? ? nil : Coverage.new(apps: apps, standalone: standalone, legacy: false)
+        return Coverage.new(apps: apps, standalone: standalone, legacy: false) unless standalone.nil?
+
+        standalone = [ false, true ].find { |mode| content == earlier_script(apps, standalone: mode) }
+        standalone.nil? ? nil : Coverage.new(apps: apps, standalone: standalone, legacy: true)
+      end
+
+      # EARLIER_SCRIPT as it was written for these apps in this install form.
+      def earlier_script(apps, standalone:)
+        format(EARLIER_SCRIPT,
+               listed: apps.shelljoin,
+               binary: standalone ? "rails-ai-context" : "rails",
+               validate: standalone ? %(rails-ai-context tool validate --files "$files") : %(rails 'ai:tool[validate]' files="$files"),
+               heading: apps.size > 1 ? %(\n    echo "rails-ai-context: $app") : "")
       end
 
       # The hook as UTF-8 whatever the locale: it names app paths, which may

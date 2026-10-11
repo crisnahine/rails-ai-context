@@ -11,8 +11,21 @@ RSpec.describe RailsAiContext::Install::ValidationHook do
 
       expect(script).to include("# rails-ai-context apps: apps/web my\\ app\n")
       expect(script).to include("for app in apps/web my\\ app; do\n")
-      expect(script).to include(%((cd "./$app" && rails 'ai:tool[validate]' files="$files" 2>/dev/null)))
+      expect(script).to include(%((cd "./$app" && bundle exec rails-ai-context tool validate --files "$files")\n))
       expect(script).to include("--diff-filter=d")
+    end
+
+    # The rake task has to boot the app, and its errors went to /dev/null:
+    # an app whose initializer needs a variable the shell lacks failed every
+    # commit, and the hook said only that validation found issues. The CLI
+    # checks the files from source when the app cannot boot, and says why.
+    it "validates through the app's bundle's CLI in an in-Gemfile install, and lets its errors through" do
+      script = described_class.script([ "." ], standalone: false)
+
+      expect(script).to include("if command -v bundle &> /dev/null")
+      expect(script).to include(%(bundle exec rails-ai-context tool validate --files "$files"))
+      expect(script).not_to include("ai:tool")
+      expect(script).not_to include("2>/dev/null")
     end
 
     it "validates with the binary in a standalone install, which has no rake tasks" do
@@ -21,6 +34,7 @@ RSpec.describe RailsAiContext::Install::ValidationHook do
       expect(script).to include("if command -v rails-ai-context &> /dev/null")
       expect(script).to include(%(rails-ai-context tool validate --files "$files"))
       expect(script).not_to include("ai:tool")
+      expect(script).not_to include("2>/dev/null")
     end
 
     it "is a script bash reads, whatever the app paths hold" do
@@ -50,6 +64,20 @@ RSpec.describe RailsAiContext::Install::ValidationHook do
       described_class::LEGACY.each do |legacy, standalone|
         expect(described_class.coverage(legacy).to_h).to eq(apps: [ "." ], standalone: standalone, legacy: true)
         expect(described_class.coverage(legacy.b).to_h).to eq(apps: [ "." ], standalone: standalone, legacy: true)
+      end
+    end
+
+    # The form for several apps that ran the rake task with its errors thrown
+    # away, written for any apps, in either install form.
+    it "knows the earlier form for several apps as an earlier version's, with its apps and form" do
+      expect(described_class.earlier_script([ "." ], standalone: false))
+        .to include(%((cd "./$app" && rails 'ai:tool[validate]' files="$files" 2>/dev/null)))
+      [ true, false ].each do |standalone|
+        [ [ "." ], %w[apps/web apps/admin] ].each do |apps|
+          coverage = described_class.coverage(described_class.earlier_script(apps, standalone: standalone))
+
+          expect(coverage.to_h).to eq(apps: apps, standalone: standalone, legacy: true)
+        end
       end
     end
 
