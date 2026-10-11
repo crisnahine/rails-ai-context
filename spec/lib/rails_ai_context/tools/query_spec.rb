@@ -222,9 +222,11 @@ RSpec.describe RailsAiContext::Tools::Query do
   end
 
   describe ".apply_row_limit" do
-    it "caps an existing LIMIT above the effective limit" do
+    # The text asks for one row past the cap, so a result the cap cut can be
+    # told from one that fit; cap_rows drops the extra row.
+    it "caps an existing LIMIT above the effective limit, one row past it" do
       result = described_class.send(:apply_row_limit, "SELECT * FROM users LIMIT 5000", 100)
-      expect(result).to include("LIMIT 100")
+      expect(result).to include("LIMIT 101")
       expect(result).not_to include("5000")
     end
 
@@ -233,26 +235,31 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(result).to include("LIMIT 10")
     end
 
-    it "appends LIMIT when none exists" do
+    it "keeps an existing LIMIT equal to the effective limit" do
+      result = described_class.send(:apply_row_limit, "SELECT * FROM users LIMIT 100", 100)
+      expect(result).to include("LIMIT 100")
+    end
+
+    it "appends a LIMIT one row past the cap when none exists" do
       result = described_class.send(:apply_row_limit, "SELECT * FROM users", 100)
-      expect(result).to end_with("LIMIT 100")
+      expect(result).to end_with("LIMIT 101")
     end
 
     it "strips trailing semicolons when appending LIMIT" do
       result = described_class.send(:apply_row_limit, "SELECT * FROM users;", 100)
-      expect(result).to end_with("LIMIT 100")
+      expect(result).to end_with("LIMIT 101")
       expect(result).not_to include(";")
     end
 
     it "caps FETCH FIRST above the effective limit" do
       result = described_class.send(:apply_row_limit, "SELECT * FROM users FETCH FIRST 5000 ROWS ONLY", 100)
-      expect(result).to include("FETCH FIRST 100")
+      expect(result).to include("FETCH FIRST 101")
     end
 
     it "enforces hard cap of 1000" do
       result = described_class.send(:apply_row_limit, "SELECT * FROM users LIMIT 9999", 2000)
-      # The cap is [limit, HARD_ROW_CAP].min, so 1000 here
-      expect(result).to include("LIMIT 1000")
+      # The cap is [limit, HARD_ROW_CAP].min, so 1000 here, fetched one past
+      expect(result).to include("LIMIT 1001")
     end
 
     # SHOW/DESCRIBE/EXPLAIN are inherently bounded and don't accept a LIMIT
@@ -999,16 +1006,16 @@ it "still explains a database that does not exist" do
     end
 
     it "sends the database the text without its comments, the limit on a line of its own" do
-      expect(sent_to_the_database("SELECT 7 AS n /* a */ -- why")).to eq("SELECT 7 AS n\nLIMIT 100")
+      expect(sent_to_the_database("SELECT 7 AS n /* a */ -- why")).to eq("SELECT 7 AS n\nLIMIT 101")
     end
 
     it "reads a hash comment on a MySQL connection and nowhere else" do
       sql = "SELECT 7 AS n # why"
 
-      expect(sent_to_the_database(sql)).to eq("SELECT 7 AS n # why\nLIMIT 100")
+      expect(sent_to_the_database(sql)).to eq("SELECT 7 AS n # why\nLIMIT 101")
 
       allow(ActiveRecord::Base).to receive(:connection_db_config).and_return(double(adapter: "trilogy"))
-      expect(sent_to_the_database(sql)).to eq("SELECT 7 AS n\nLIMIT 100")
+      expect(sent_to_the_database(sql)).to eq("SELECT 7 AS n\nLIMIT 101")
     end
 
     # A comment marker inside quotes is data. Taking it out changed the answer
@@ -1132,17 +1139,17 @@ it "still explains a database that does not exist" do
       sql = described_class.send(:apply_row_limit, "SELECT * FROM (SELECT id FROM t LIMIT 500) q", 100)
 
       expect(sql).to include("LIMIT 500")
-      expect(sql).to end_with("LIMIT 100")
+      expect(sql).to end_with("LIMIT 101")
     end
 
     it "caps the count of a MySQL offset-and-count LIMIT, not the offset" do
-      expect(described_class.send(:apply_row_limit, "SELECT * FROM t LIMIT 10, 5000", 100)).to end_with("LIMIT 10, 100")
+      expect(described_class.send(:apply_row_limit, "SELECT * FROM t LIMIT 10, 5000", 100)).to end_with("LIMIT 10, 101")
     end
 
     it "caps FETCH NEXT as it does FETCH FIRST" do
       sql = "SELECT * FROM t OFFSET 5 ROWS FETCH NEXT 5000 ROWS ONLY"
 
-      expect(described_class.send(:apply_row_limit, sql, 100)).to end_with("FETCH NEXT 100 ROWS ONLY")
+      expect(described_class.send(:apply_row_limit, sql, 100)).to end_with("FETCH NEXT 101 ROWS ONLY")
     end
 
     # A second LIMIT would be a syntax error on a query that ran before.
@@ -1157,7 +1164,7 @@ it "still explains a database that does not exist" do
     end
 
     it "caps a LIMIT that an OFFSET follows" do
-      expect(described_class.send(:apply_row_limit, "SELECT * FROM t LIMIT 5000 OFFSET 20", 100)).to end_with("LIMIT 100 OFFSET 20")
+      expect(described_class.send(:apply_row_limit, "SELECT * FROM t LIMIT 5000 OFFSET 20", 100)).to end_with("LIMIT 101 OFFSET 20")
     end
 
     # Whatever the text says, the answer never carries more rows than asked for.
@@ -1948,18 +1955,19 @@ it "still explains a database that does not exist" do
 
     it "says rows were held back in the table format" do
       text = answer("SELECT n FROM big", limit: 100)
-      expect(text).to include("100 rows shown; the query returned at least this many")
+      expect(text).to include("100 rows shown; the query returned more")
       expect(text).to include("pass limit: up to 1000")
     end
 
     it "says so in the CSV format, after a blank line outside the block" do
       text = answer("SELECT n FROM big", limit: 100, format: "csv")
-      expect(text).to match(/\n\n100 rows shown; the query returned at least this many/)
+      expect(text).to match(/\n\n100 rows shown; the query returned more/)
     end
 
     it "names the hard cap when the cap is 1000" do
+      # The text fetches one row past the cap; 1001 back means the cap cut it.
       allow(described_class).to receive(:run_guarded)
-        .and_return(ActiveRecord::Result.new(%w[n], (1..1000).map { |i| [ i ] }))
+        .and_return(ActiveRecord::Result.new(%w[n], (1..1001).map { |i| [ i ] }))
       expect(answer("SELECT n FROM big", limit: 5000)).to include("the 1000-row hard cap")
     end
 
@@ -1967,6 +1975,25 @@ it "still explains a database that does not exist" do
       allow(described_class).to receive(:run_guarded)
         .and_return(ActiveRecord::Result.new(%w[n], [ [ 1 ], [ 2 ] ]))
       expect(answer("SELECT n FROM big", limit: 100)).not_to include("rows shown; the query returned")
+    end
+
+    # R5: `SELECT DISTINCT city ...` with limit 7 returned all 7 cities plus a
+    # note that rows were held back. Exactly the cap is everything; only a row
+    # past it means the cap cut the answer.
+    it "does not add the note when exactly the cap came back" do
+      allow(described_class).to receive(:run_guarded)
+        .and_return(ActiveRecord::Result.new(%w[n], (1..7).map { |i| [ i ] }))
+      text = answer("SELECT DISTINCT n FROM big", limit: 7)
+      expect(text).to include("7 rows returned")
+      expect(text).not_to include("rows shown; the query returned")
+    end
+
+    it "adds the note and drops the extra row when one past the cap came back" do
+      allow(described_class).to receive(:run_guarded)
+        .and_return(ActiveRecord::Result.new(%w[n], (1..8).map { |i| [ i ] }))
+      text = answer("SELECT n FROM big", limit: 7)
+      expect(text).to include("7 rows returned")
+      expect(text).to include("7 rows shown; the query returned more")
     end
   end
 
