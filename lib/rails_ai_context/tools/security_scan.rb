@@ -74,6 +74,15 @@ module RailsAiContext
         refused = refuse_unsafe_paths(files)
         return refused if refused
 
+        # Before the scan, which takes minutes on a large app: a path that
+        # names nothing is answered at once.
+        if files&.any?
+          missing = files.select { |f| !File.exist?(rails_app.root.join(f)) }
+          if missing.size == files.size
+            return text_response("File(s) not found: #{missing.map { |f| echo_input(f) }.join(', ')}. Provide paths relative to Rails root.")
+          end
+        end
+
         min_confidence = CONFIDENCE_MAP[confidence] || 2
         resolved_checks = checks&.any? ? checks.map { |c| CHECK_ALIASES[c] || c } : nil
 
@@ -93,12 +102,6 @@ module RailsAiContext
         source_note = scan[:note]
 
         if files&.any?
-          # Check if specified files exist
-          missing = files.select { |f| !File.exist?(rails_app.root.join(f)) }
-          if missing.any? && missing.size == files.size
-            return text_response("File(s) not found: #{missing.map { |f| echo_input(f) }.join(', ')}. Provide paths relative to Rails root.")
-          end
-
           warnings = warnings.select do |w|
             path = w.file.relative
             files.any? { |f| path == f || path.start_with?(f) }

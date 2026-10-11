@@ -153,7 +153,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first 80 characters and its length. A check name brakeman does not know
   is answered the same from either scan - "Brakeman scan failed: Could not
   find specified check" - where the scan outside the bundle told the caller
-  to add brakeman to the Gemfile.
+  to add brakeman to the Gemfile - and a `files` path that names nothing is
+  answered before the scan, which on a large app takes minutes, not after it.
 - **On Windows the MCP configs start the server through `cmd /c`, and
   `doctor` reads a config for the platform it runs on.** A gem's executables
   on Windows are batch files (`bundle.bat`, `rails-ai-context.bat`), which

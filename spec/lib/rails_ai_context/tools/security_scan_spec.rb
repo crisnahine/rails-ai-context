@@ -517,6 +517,16 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         expect(text).to eq("File(s) not found: #{shortened}. Provide paths relative to Rails root.")
       end
 
+      # A scan takes minutes on a large app, and a mistyped path waited it out.
+      it "answers a path that names nothing before it scans" do
+        scan_outside
+
+        text = described_class.call(files: [ "app/models/not_there.rb" ]).content.first[:text]
+
+        expect(text).to eq("File(s) not found: app/models/not_there.rb. Provide paths relative to Rails root.")
+        expect(described_class).not_to have_received(:run_brakeman_unbundled)
+      end
+
       it "shortens a file it names in a clean answer" do
         scan_outside
         text = described_class.call(files: [ "app/models/user.rb", long ]).content.first[:text]
