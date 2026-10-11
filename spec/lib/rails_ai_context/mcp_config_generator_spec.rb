@@ -370,6 +370,8 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
 
           expect(result[:failed]).to eq([ path ])
           expect(result[:reasons][path]).to include("not UTF-8")
+          # An entry added by hand would leave a file JSON still cannot read.
+          expect(result[:reasons][path]).to end_with("Save it as UTF-8, and the next run merges into it")
           expect(File.binread(path)).to eq(%({"mcpServers": {"x": {"command": "caf\xE9"}}}\n).b)
         end
       end

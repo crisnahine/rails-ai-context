@@ -160,6 +160,10 @@ module RailsAiContext
     # comments and trailing commas a JSONC reader passes over.
     class UnreadableError < StandardError; end
 
+    # A JSON config in another encoding: JSON is UTF-8, so the fix is the
+    # file's encoding, not an entry added to it.
+    class NotUtf8Error < StandardError; end
+
     # Codex reads its config as TOML, which is UTF-8, and refuses one that
     # is not ("stream did not contain valid UTF-8"), starting no server.
     TOML_NOT_UTF8 = "Codex CLI cannot read it: it is not UTF-8, which TOML is"
@@ -672,7 +676,7 @@ module RailsAiContext
       FileUtils.mkdir_p(File.dirname(path))
 
       text, bom, problem = File.exist?(path) ? self.class.json_text(path) : [ nil, "", nil ]
-      raise ShapeError, problem if problem
+      raise NotUtf8Error, problem if problem
 
       # An empty file holds nothing to lose.
       data = text.nil? || text.strip.empty? ? {} : parse_json(text, config)
@@ -702,6 +706,9 @@ module RailsAiContext
       servers.merge!(entries)
       RailsAiContext::SafeFile.atomic_write(path, bom + JSON.pretty_generate(data) + "\n")
       :written
+    rescue NotUtf8Error => e
+      # The entry added by hand would sit in a file JSON still cannot read.
+      raise ShapeError, "#{e.message}, so it is left as it is. Save it as UTF-8, and the next run merges into it"
     rescue UnreadableError => e
       # Adding the entry by hand would leave a file its client still cannot read.
       raise ShapeError, "#{e.message}, so it is left as it is. Make it plain JSON by hand, and the next run merges into it"

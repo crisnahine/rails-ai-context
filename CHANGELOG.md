@@ -197,7 +197,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inline table or with dotted keys, a stale env snapshot in one included,
   it names the table to write by hand, where an entry the install had to
   rewrite sent the reader back to the install too; and it asks for a JSON
-  config that is not UTF-8 to be saved as UTF-8 before the install runs.
+  config that is not UTF-8 to be saved as UTF-8 before the install runs,
+  as the install now does too, where it said to add the entry by hand to a
+  file JSON still could not read.
 - **On Windows the MCP configs start the server through `cmd /c`, and
   `doctor` reads a config for the platform it runs on.** A gem's executables
   on Windows are batch files (`bundle.bat`, `rails-ai-context.bat`), which
