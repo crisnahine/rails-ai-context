@@ -215,6 +215,15 @@ module RailsAiContext
         outside_key_bodies(lines) { |line| redact_source_line(line, path: path) }
       end
 
+      # A slice of the app's source - a method body, a template - as a tool
+      # prints it: the same lines, each secret filtered.
+      def redact_source(text, path: nil)
+        return text unless text.is_a?(String)
+
+        trailing = text.end_with?("\n") ? "\n" : ""
+        redact_source_lines(text.lines.map(&:chomp), path: path).join("\n") + trailing
+      end
+
       # A config value arrives without its context, so the setting's name is
       # what says whether it holds a secret. Values are walked rather than
       # type-checked: an evaluated value is often a hash or an array, and the

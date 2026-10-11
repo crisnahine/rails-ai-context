@@ -266,7 +266,7 @@ module RailsAiContext
           visibility = m[:visibility] == :protected ? " (protected)" : ""
           body = full && Introspectors::ActionResolver.body_of(source, m)
           if body
-            lines << "### #{signature}#{visibility}" << "```ruby" << body[:code] << "```" << ""
+            lines << "### #{signature}#{visibility}" << "```ruby" << RailsAiContext::Redaction.redact_source(body[:code]) << "```" << ""
           else
             lines << "- `#{signature}`#{visibility}"
           end

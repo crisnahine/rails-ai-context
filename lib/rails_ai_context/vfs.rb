@@ -94,7 +94,7 @@ module RailsAiContext
           action: action.to_s,
           file: body ? body[:file] : file,
           lines: body && "#{body[:start_line]}-#{body[:end_line]}",
-          source: body && body[:code],
+          source: body && Redaction.redact_source(body[:code], path: body[:file]),
           filters: applicable[:chain],
           # Every params method the controller declares, not only the ones
           # this action reaches, so the scope is stated rather than implied.
@@ -117,7 +117,9 @@ module RailsAiContext
             "optional (posts/index and posts/index.html.erb both resolve)."
         end
 
-        [ { uri: uri, mimeType: RailsAiContext::ViewFile.mime_type(result.relative), text: content.to_s } ]
+        # A template is the app's source too: each secret in it filtered.
+        text = Redaction.redact_source(content.to_s, path: result.relative)
+        [ { uri: uri, mimeType: RailsAiContext::ViewFile.mime_type(result.relative), text: text } ]
       end
 
       def resolve_routes(uri, controller)

@@ -417,6 +417,20 @@ RSpec.describe RailsAiContext::Redaction do
     end
   end
 
+  # A tool shows a method body or a template as one string.
+  describe ".redact_source" do
+    it "filters each line and keeps the text's shape" do
+      text = "def charge\n  stripe_api_key = \"sk_live_#{'b' * 24}\"\n  head :ok\nend\n"
+
+      redacted = described_class.redact_source(text)
+
+      expect(redacted).to eq("def charge\n  stripe_api_key = \"[FILTERED]\"\n  head :ok\nend\n")
+      expect(described_class.redact_source("<%= link_to \"x\", \"https://admin:s3cret@example.com\" %>"))
+        .to eq("<%= link_to \"x\", \"https://[FILTERED]@example.com\" %>")
+      expect(described_class.redact_source(nil)).to be_nil
+    end
+  end
+
   # A PEM key written across lines is only a key between its markers, which a
   # single line cannot see.
   describe ".redact_source_lines" do

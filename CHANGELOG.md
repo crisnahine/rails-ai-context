@@ -279,6 +279,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   long param shortened, and says how many it dropped.** One client could
   grow the server's memory without limit, and an answer echoed a 100 KB
   argument back in full.
+- **Source a tool shows has its secrets filtered, as search results did.**
+  `rails_search_code` and `rails_get_edit_context` filtered a literal key
+  from the lines they showed, while an action's source in
+  `rails_get_controllers` (and the methods and params methods it calls), a
+  concern's methods, a callback's body, a template in `rails_get_view` and
+  `rails_get_partial_interface`, a test file in `rails_get_test_info`, a
+  job's guard clauses, a `rails_security_scan` code line and the
+  `controllers/{name}/{action}` and `views/{path}` resources showed the same
+  line as written.
 - **An action a concern or a parent controller defines shows its source.**
   `rails_get_controllers(controller:, action:)` read only the controller's
   own file, so an action from an included concern (namespaced ones too) or

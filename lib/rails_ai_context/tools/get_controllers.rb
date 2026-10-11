@@ -323,7 +323,7 @@ module RailsAiContext
         if source_with_lines
           span = "lines #{source_with_lines[:start_line]}-#{source_with_lines[:end_line]}"
           lines << "" << "## Source (#{elsewhere ? "`#{elsewhere}`, #{span}" : span})"
-          lines << "```ruby" << source_with_lines[:code] << "```"
+          lines << "```ruby" << redacted(source_with_lines[:code], elsewhere || carried) << "```"
 
           ivars = RailsAiContext::Introspectors::ActionResolver.assigned_ivars(source_with_lines[:code])
           lines << "" << "## Instance Variables" << ivars.map { |v| "- `@#{v}`" }.join("\n") if ivars.any?
@@ -335,7 +335,7 @@ module RailsAiContext
             lines << "" << "## Private Methods Called"
             called_methods.each do |pm|
               lines << "### #{pm[:name]} (lines #{pm[:start_line]}-#{pm[:end_line]})"
-              lines << "```ruby" << pm[:code] << "```"
+              lines << "```ruby" << redacted(pm[:code], carried) << "```"
             end
           end
 
@@ -343,8 +343,8 @@ module RailsAiContext
           render_map = extract_render_map(source_with_lines[:code])
           if render_map[:redirects].any? || render_map[:renders].any?
             lines << "" << "## Render Map"
-            render_map[:redirects].each { |r| lines << "- **Redirect:** #{r}" }
-            render_map[:renders].each { |r| lines << "- **Render:** #{r}" }
+            render_map[:redirects].each { |r| lines << "- **Redirect:** #{redacted(r, carried)}" }
+            render_map[:renders].each { |r| lines << "- **Render:** #{redacted(r, carried)}" }
           end
           if render_map[:side_effects].any?
             lines << "" << "## Side Effects"
@@ -378,11 +378,11 @@ module RailsAiContext
                 sp[:hashes]&.each { |h| lines << "- hash: `#{h}: {}`" }
               end
               body = extract_method_with_lines(source_path, sp[:name], source: source, owner: controller_name)
-              lines << "```ruby" << body[:code] << "```" if body
+              lines << "```ruby" << redacted(body[:code], carried) << "```" if body
             else
               body = extract_method_with_lines(source_path, sp, source: source, owner: controller_name)
               if body
-                lines << "```ruby" << body[:code] << "```"
+                lines << "```ruby" << redacted(body[:code], carried) << "```"
               else
                 lines << "- `#{sp}`"
               end
@@ -542,6 +542,12 @@ module RailsAiContext
           "#{key}: #{pair.value.slice.squish}" if %w[notice alert].include?(key)
         end
         "redirect_to #{target.map { |arg| arg.slice.squish }.join(", ")}#{" (#{flash.join(', ')})" if flash.any?}"
+      end
+
+      # Source as it is shown: every secret in it filtered, as search_code and
+      # get_edit_context show the same lines.
+      private_class_method def self.redacted(code, path)
+        RailsAiContext::Redaction.redact_source(code, path: path)
       end
 
       private_class_method def self.extract_method_with_lines(file_path, method_name, source: nil, owner: nil)

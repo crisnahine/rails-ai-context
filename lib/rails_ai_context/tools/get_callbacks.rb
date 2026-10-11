@@ -276,7 +276,7 @@ module RailsAiContext
       end
 
       private_class_method def self.source_block(source)
-        block = [ "```ruby", source[:code], "```" ]
+        block = [ "```ruby", RailsAiContext::Redaction.redact_source(source[:code]), "```" ]
         block << "_turbo-rails runs `#{source[:runs]}` on this event._" if source[:runs]
         block
       end

@@ -250,7 +250,7 @@ module RailsAiContext
             listed = examples(content)
             "# #{shown(rel)} (#{count_phrase(listed.size, "test")})\n\n#{listed.join("\n")}"
           else
-            "# #{shown(rel)}\n\n```ruby\n#{content}\n```"
+            "# #{shown(rel)}\n\n```ruby\n#{RailsAiContext::Redaction.redact_source(content, path: rel)}\n```"
           end
           return text_response(answer + exercising_section(exercising, "## Also exercised by"))
         end
