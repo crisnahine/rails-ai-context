@@ -93,6 +93,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through the same redaction, read as the file they come from, a hunk
   header's line and a removed validation's included, and a file on
   `sensitive_patterns` is listed with its line counts alone.
+- **`rails_get_edit_context` names an endless method without its body, and
+  looks for `near` in what it shows.** The line above the code quoted the
+  enclosing method's line as written, and an endless method's line is its
+  whole body: `def headers = { "Authorization" => "Bearer ..." }` printed
+  the credential the code under it had filtered. And `near` was looked for
+  in the file as written, so a guess at a secret's start brought back the
+  window where a wrong guess said "not found". The label is now built from
+  the filtered lines, an endless method named alone, and `near` is matched
+  against the lines as they are returned.
 - **`rails_query` never serialises a whole row.** On PostgreSQL,
   `row_to_json(users.*)`, `to_json(u)`, `u::text`, `array_agg(u)`,
   `json_agg(u)`, `hstore(u)`, `ROW(u.*)`, `format('%s', u)` and a bare

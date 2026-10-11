@@ -73,9 +73,15 @@ module RailsAiContext
         source_lines = (RailsAiContext::SafeFile.read(real) || "").lines
         context_lines = [ context_lines.to_i, 0 ].max
 
+        # Source leaving the app passes through Redaction, the whole file at once, so a window
+        # opening inside a PEM key still knows it is inside one. `near` is looked for in the lines
+        # as the caller sees them: found in the file as written, a guess at a filtered value's
+        # start brought back a window where a wrong guess brought "not found".
+        redacted = RailsAiContext::Redaction.redact_source_lines(source_lines.map(&:rstrip), path: file)
+
         # Find all matching lines
         matches = []
-        source_lines.each_with_index do |line, idx|
+        redacted.each_with_index do |line, idx|
           matches << idx if line.include?(near)
         end
 
@@ -101,9 +107,6 @@ module RailsAiContext
           end_idx = [ end_idx, method_end ].max
         end
 
-        # Source leaving the app passes through Redaction, the whole file at once, so a window
-        # opening inside a PEM key still knows it is inside one.
-        redacted = RailsAiContext::Redaction.redact_source_lines(source_lines.map(&:rstrip), path: file)
         context_code = redacted[start_idx..end_idx].map.with_index do |line, i|
           "#{(start_idx + i + 1).to_s.rjust(4)}  #{line}"
         end.join("\n")
@@ -116,9 +119,12 @@ module RailsAiContext
         else ""
         end
 
-        # Detect enclosing class and method for context
-        class_name = source_lines[0..match_idx].reverse.find { |l| l.match?(/\A\s*(class|module)\s/) }&.strip&.sub(/\s*<.*/, "")
-        method_name = method_start ? source_lines[method_start].strip.sub(/\s*\(.*/, "").sub(/\Adef\s+/, "def ") : nil
+        # Detect enclosing class and method for context, named from the redacted lines: an endless
+        # method's line is its whole body (`def headers = { "Authorization" => "Bearer ..." }`), and
+        # the label keeps its name alone.
+        class_idx = match_idx.downto(0).find { |i| source_lines[i].match?(/\A\s*(class|module)\s/) }
+        class_name = class_idx && redacted[class_idx].strip.sub(/\s*<.*/, "")
+        method_name = method_start ? redacted[method_start].strip.sub(/\s*\(.*/, "").sub(/\s+=\s.*/, "").sub(/\Adef\s+/, "def ") : nil
         context_label = [ class_name, method_name ].compact.join(" > ")
 
         output = [ "# #{file} (lines #{start_idx + 1}-#{end_idx + 1} of #{source_lines.size})", "" ]

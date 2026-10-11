@@ -43,6 +43,43 @@ RSpec.describe RailsAiContext::Tools::GetEditContext do
         expect(text).not_to include(v)
       end
     end
+
+    # The label above the window quoted the method's line as written, and an
+    # endless method's line is its whole body.
+    it "names an endless method's scope without its body" do
+      v = "Xk2mQ9pLw7Rt#{'Z4ab'}"
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/services"))
+        File.write(File.join(root, "app/services/zz_service.rb"),
+                   %(class ZzService\n  def headers = { "Authorization" => "Bearer #{v}" }\n  def call = headers\nend\n))
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+
+        text = described_class.call(file: "app/services/zz_service.rb", near: "headers").content.first[:text]
+
+        expect(text).to include("**Context:** `class ZzService > def headers`")
+        expect(text).to include(%(def headers = { "Authorization" => "Bearer [FILTERED]" }))
+        expect(text).not_to include(v)
+      end
+    end
+
+    # `near` was looked for in the file as written, so a guess at a secret's
+    # start brought back a window and a wrong guess "not found".
+    it "looks for near in the lines the caller is shown, so a guess at a filtered value finds nothing" do
+      v = "Xk2mQ9pLw7Rt#{'Z4ab'}"
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "config/initializers"))
+        File.write(File.join(root, "config/initializers/billing.rb"), %(BILLING_API_TOKEN = "#{v}"\n))
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+
+        right = described_class.call(file: "config/initializers/billing.rb", near: v[0, 6]).content.first[:text]
+        wrong = described_class.call(file: "config/initializers/billing.rb", near: "Qq9zZz").content.first[:text]
+        named = described_class.call(file: "config/initializers/billing.rb", near: "BILLING_API_TOKEN").content.first[:text]
+
+        expect(right).to eq(wrong.sub("Qq9zZz", v[0, 6]))
+        expect(right).to include("not found")
+        expect(named).to include(%(BILLING_API_TOKEN = "[FILTERED]"))
+      end
+    end
   end
   before { described_class.reset_cache! }
 

@@ -99,7 +99,7 @@ Redaction treats a value under a secret-named key as a secret unless it is clear
 
 ### `rails_get_edit_context`
 
-Method-aware code extraction with surrounding class context. Every line returned passes through redaction, so in a file no pattern names a string literal under a secret-named key (8+ characters, unless it is clearly not a credential: a message, URL, path, placeholder, version, date, header, env or parameter name, or a translation) or in a known credential format (vendor tokens, JWTs, a PEM or PGP private key) reads as `[FILTERED]`; code, ENV lookups, ERB and placeholders are never rewritten, so the text stays usable as the text to replace.
+Method-aware code extraction with surrounding class context. Every line returned passes through redaction, so in a file no pattern names a string literal under a secret-named key (8+ characters, unless it is clearly not a credential: a message, URL, path, placeholder, version, date, header, env or parameter name, or a translation) or in a known credential format (vendor tokens, JWTs, a PEM or PGP private key) reads as `[FILTERED]`; code, ENV lookups, ERB and placeholders are never rewritten, so the text stays usable as the text to replace. `near` is looked for in the lines as they are returned, so text only a filtered value holds is not found, and the context line names the enclosing class and method from those lines too.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
