@@ -157,21 +157,24 @@ module RailsAiContext
         end
       end
 
-      # Search common Rails directories for a file by basename and suggest the
-      # full path. Only a file is suggested, and never the path asked about: a
-      # directory named `app/models` matched itself and was offered back.
+      # A file of the same name in a common Rails directory, then anywhere under
+      # app/, that the tool would validate: never the path asked for, a
+      # directory, or a link that resolves nowhere.
       private_class_method def self.find_file_suggestion(file)
-        basename = File.basename(file)
         root = rails_app.root.to_s
-        candidates = %w[app/models app/controllers app/views app/helpers app/jobs app/mailers
-                        app/services app/channels lib config].map { |dir| File.join(dir, basename) }
-        found = candidates.find { |candidate| candidate != file && File.file?(File.join(root, candidate)) }
-        return found if found
+        basename = File.basename(file)
+        asked = File.expand_path(file, root)
+        %w[app/models app/controllers app/views app/helpers app/jobs app/mailers
+           app/services app/channels lib config].each do |dir|
+          candidate = File.join(dir, basename)
+          next if File.join(root, candidate) == asked
 
-        # Broader recursive search
-        Dir.glob(File.join(root, "app", "**", basename))
-          .map { |match| match.delete_prefix("#{root}/") }
-          .find { |match| match != file && File.file?(File.join(root, match)) }
+          located = RailsAiContext::SafePath.locate(candidate, under: root)
+          return candidate if located.ok? || located.refusal == :too_large
+        end
+
+        RailsAiContext::FileWalk.each_file(File.join(root, "app"), root: root)
+          .select { |path| File.basename(path) == basename && path != asked }.min&.delete_prefix("#{root}/")
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "find_file_suggestion")
       end
