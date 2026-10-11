@@ -683,9 +683,9 @@ module RailsAiContext
 
         where = app == "." ? "" : " in #{repo[:toplevel]}"
         question = if apps.one?
-          "Install a pre-commit hook#{where} that checks staged Ruby and ERB files for syntax errors? (y/N)"
+          "Install a pre-commit hook#{where} that checks staged Ruby, ERB and JavaScript files for syntax errors? (y/N)"
         else
-          "Add #{app} to the pre-commit hook#{where} that checks staged Ruby and ERB files for syntax errors? (y/N)"
+          "Add #{app} to the pre-commit hook#{where} that checks staged Ruby, ERB and JavaScript files for syntax errors? (y/N)"
         end
         answer = ask_safe(question).strip.downcase
         return unless answer == "y"

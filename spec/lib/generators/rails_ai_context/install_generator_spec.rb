@@ -519,6 +519,25 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
         end
       end
 
+      it "hands validation the app's staged JavaScript, and asks about it" do
+        install_for("apps/web")
+        Dir.mktmpdir do |bin|
+          log = File.join(bin, "calls.log")
+          fake_bundle(bin, log)
+          FileUtils.mkdir_p(File.join(mono, "apps/web/app/javascript/controllers"))
+          File.write(File.join(mono, "apps/web/app/javascript/controllers/cart_controller.js"), "export default class {}\n")
+          File.write(File.join(mono, "apps/web/app/javascript/legacy.cjs"), "module.exports = {}\n")
+          git("-C", mono, "add", "-A")
+
+          out, status = commit(mono, bin)
+
+          expect(status.success?).to be(true), out
+          expect(File.read(log).lines).to eq([ "web exec rails-ai-context tool validate --files " \
+                                               "app/javascript/controllers/cart_controller.js,app/javascript/legacy.cjs\n" ])
+        end
+        expect(generator).to have_received(:ask).with(a_string_including("checks staged Ruby, ERB and JavaScript files"))
+      end
+
       # git exports GIT_DIR to a hook in a linked worktree, where a diff run
       # from inside an app would list paths from the top of the work tree.
       it "lists an app's files by paths relative to it from a linked worktree too" do
