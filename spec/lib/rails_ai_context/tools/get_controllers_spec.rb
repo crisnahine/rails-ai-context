@@ -1036,6 +1036,51 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
     end
   end
 
+  # Rails counts a public method of an ApplicationController concern among
+  # the actions of every controller below it. The listing takes one only
+  # where a route names it, and a lookup of an unrouted one by name answered
+  # "not found".
+  describe "an action a parent's concern defines" do
+    def lookup(listed, *actions)
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/controllers/concerns"))
+        File.write(File.join(root, "app/controllers/application_controller.rb"),
+                   "class ApplicationController < ActionController::Base\n  include Pageable\nend\n")
+        File.write(File.join(root, "app/controllers/concerns/pageable.rb"),
+                   "module Pageable\n  def page_info\n    head :ok\n  end\n\n  def paged?\n    true\n  end\nend\n")
+        File.write(File.join(root, "app/controllers/posts_controller.rb"),
+                   "class PostsController < ApplicationController\n  def index; end\nend\n")
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+        allow(described_class).to receive(:cached_context).and_return(
+          controllers: { controllers: {
+            "ApplicationController" => { actions: [], filters: [], file: "app/controllers/application_controller.rb" },
+            "PostsController" => { actions: listed, filters: [], parent_class: "ApplicationController",
+                                   file: "app/controllers/posts_controller.rb" }
+          } }
+        )
+        actions.map { |action| described_class.call(controller: "PostsController", action: action).content.first[:text] }
+      end
+    end
+
+    it "is found by name, read from the concern, and says it is inherited and why it is not listed" do
+      found, predicate = lookup(%w[index], "page_info", "paged?")
+
+      expect(found).to include("# PostsController#page_info")
+      expect(found).to include("**Inherited:** from ApplicationController, defined in `app/controllers/concerns/pageable.rb`.\n" \
+                               "**Not listed:** The action list takes a method a concern or a parent controller gives only " \
+                               "where a route names it for this controller. Rails counts it among this controller's actions all the same.")
+      expect(found).to include("## Source (`app/controllers/concerns/pageable.rb`, lines 2-4)\n```ruby\n  def page_info\n    head :ok")
+      expect(predicate).to include("Action 'paged?' not found in PostsController")
+    end
+
+    it "names the parent of a listed one too, without the note about the list" do
+      found = lookup(%w[index page_info], "page_info").first
+
+      expect(found).to include("**Inherited:** from ApplicationController, defined in `app/controllers/concerns/pageable.rb`.\n")
+      expect(found).not_to include("**Not listed:**")
+    end
+  end
+
   # Every read of the shared cache is a deep copy of the whole payload, so a
   # listing that reads it once per controller pays for the app twice over.
   describe "shared context reads in the full listing" do

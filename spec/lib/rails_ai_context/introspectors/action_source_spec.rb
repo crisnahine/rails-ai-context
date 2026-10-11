@@ -97,4 +97,82 @@ RSpec.describe RailsAiContext::Introspectors::ActionSource do
     files = app_base.merge("app/controllers/posts_controller.rb" => "class PostsController < ApplicationController\nend\n")
     find_in(files, "PostsController", "show") { |found| expect(found).to be_nil }
   end
+
+  # Rails counts a public method of an ApplicationController concern among
+  # the actions of every controller below it; a lookup of
+  # PostsController#page_info answered "not found".
+  describe ".unlisted_action" do
+    let(:files) do
+      {
+        "app/controllers/application_controller.rb" => "class ApplicationController < ActionController::Base\n  include Pageable\nend\n",
+        "app/controllers/concerns/pageable.rb" => <<~RUBY,
+          module Pageable
+            extend ActiveSupport::Concern
+
+            def page_info
+              head :ok
+            end
+
+            def paged?
+              true
+            end
+
+            def page_for(scope)
+              scope
+            end
+
+            def load_page
+              @page = 1
+            end
+
+            def page_size
+              25
+            end
+          end
+        RUBY
+        "app/controllers/posts_controller.rb" => <<~RUBY
+          class PostsController < ApplicationController
+            def index; end
+
+            private
+
+            def page_size
+              10
+            end
+          end
+        RUBY
+      }
+    end
+
+    # The callback is recorded on the parent alone, as a statically read listing has it.
+    def unlisted(action)
+      listing = {
+        "ApplicationController" => { file: "app/controllers/application_controller.rb", filters: [ { name: "load_page", kind: "before" } ] },
+        "PostsController" => { file: "app/controllers/posts_controller.rb", parent_class: "ApplicationController", filters: [] }
+      }
+      Dir.mktmpdir do |root|
+        files.each do |relative, body|
+          FileUtils.mkdir_p(File.dirname(File.join(root, relative)))
+          File.write(File.join(root, relative), body)
+        end
+        allow(RailsAiContext::PathResolver).to receive(:project_dirs).and_return([ File.realpath(root) ])
+        described_class.unlisted_action(File.realpath(root), "PostsController", action,
+                                        file: "app/controllers/posts_controller.rb", controllers: listing)
+      end
+    end
+
+    it "finds a public method a parent's concern defines, and names the parent" do
+      expect(unlisted("Page_Info")).to include(file: "app/controllers/concerns/pageable.rb", start_line: 4, end_line: 6,
+                                               name: "page_info", owner: "ApplicationController")
+    end
+
+    it "leaves out what the listing would: a predicate, a method that takes an argument, a parent's callback" do
+      expect(%w[paged? page_for load_page].map { |action| unlisted(action) }).to eq([ nil, nil, nil ])
+    end
+
+    # Ruby's lookup reaches the controller's private def first, so Rails does not count it.
+    it "leaves out a public method the controller makes private again" do
+      expect(unlisted("page_size")).to be_nil
+    end
+  end
 end
