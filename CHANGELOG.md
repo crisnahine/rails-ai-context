@@ -37,23 +37,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   underscores, a secret word only in snake case, and a flag's value only
   after `=`, so `PGPASSWORD: ...` in a compose file, `PGPASSWORD=... psql`
   in a script, `ENV["PGPASSWORD"] = "..."`, `MYSQL_PWD` and
-  `REDISCLI_AUTH`, `const accessToken = "..."`, `{"clientSecret": "..."}`
-  and `redis-server --requirepass ...` in a Procfile kept their values. A
-  long password word now reads with a name joined on before it
-  (`PGPASSWORD`, `dbpassword`, `userPassword`), the two client variables as
-  password names, a camel-cased name ending in `Secret` or `Token` as a
-  secret's, as `apiKey` already was a key's, and the word after a
-  secret-named flag as its value when that word has a digit, so
-  `the --password option`, `--token TOKEN` and `--password $DB_PASSWORD`
-  stay as written.
+  `REDISCLI_AUTH`, `const accessToken = "..."`, `{"clientSecret": "..."}`,
+  `secretAccessKey: "..."` and `redis-server --requirepass ...` in a
+  Procfile kept their values, in source and in a log line alike. A long
+  password word that ends a name now reads with a name joined on before it
+  (`PGPASSWORD`, `dbpassword`, `userPassword`; not `ONEPASSWORD_VAULT`),
+  the two client variables as password names, a camel-cased name with
+  `Secret` or `Token` among its words as a secret's (`accessToken`,
+  `jwtSecretKey`), as `apiKey` already was a key's, and the word after a
+  secret-named flag, bare or quoted, as its value when it has a digit. So
+  `the --password option`, `--token TOKEN`, `--password $DB_PASSWORD`, a
+  `--no-password` switch, a path (`--private-key ~/.ssh/id_ed25519`), a
+  file or an id (`--token-file`, `--secret-id`) and BuildKit's
+  `--secret id=...,env=...` stay as written, as do a switch's value
+  (`showPassword=false`) and a value that is its key's own name
+  (`currentPassword: "current_password"`).
 - **Redaction reads a long word in time that grows with its length, not its
   square.** A call's receiver was tried from every character of a run of
   letters, digits and dots, so filtering a line holding a 16 KB hex string
-  took 2 seconds on Ruby 3.1 and an 80 KB one a minute; on Ruby 3.2 and
-  later a 1 MB one took 2.5 seconds, past the one second a Rails 8 app
-  gives a regular expression, and the tool answered with that error. The
-  receiver is now read from where its run starts, and the same lines take
-  a fraction of a second.
+  took 1.5 to 2 seconds on Ruby 3.1 and 3.2 and a 64 KB one over 20; on
+  Ruby 3.3 and later a 1 MB one took 2.5 seconds, past the one second a
+  Rails 8 app gives a regular expression, and the tool answered with that
+  error. A name was split at every underscore of a long word holding a
+  secret word in many of its parts, and a path check retried from every
+  slash. The receiver is now read from where its run starts, a name is taken
+  whole, and a path's first segment at once: each of those lines takes a
+  fraction of a second.
 - **`rails_get_view` filters the secrets in a controller's full listing.**
   `controller:"posts", detail:"full"` printed each template and partial as
   written, `<% api_key = "..." %>` and a `render` call's `token: "..."`

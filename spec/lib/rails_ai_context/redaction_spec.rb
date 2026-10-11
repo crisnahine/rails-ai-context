@@ -221,6 +221,39 @@ RSpec.describe RailsAiContext::Redaction do
       }.each { |line, want| expect(redact(line, path: "config/x.yml")).to eq(want) }
     end
 
+    # The secret's word need not end a camel-cased name, as it need not end a snake-cased one.
+    it "filters a literal under a camel-cased name with a secret's word inside it" do
+      aws = "wJalr#{'XUtnFEMI/K7MDENG'}/bPxRfiCY#{'EXAMPLEKEY'}"
+      expect(redact(%(  secretAccessKey: "#{aws}",))).to eq(%(  secretAccessKey: "[FILTERED]",))
+      expect(redact(%(const jwtSecretKey = "my-super-secret-jwt-key-2024"))).to eq(%(const jwtSecretKey = "[FILTERED]"))
+    end
+
+    it "filters a secret flag's quoted value as it does a bare one" do
+      v = "Xk2mQ9pLw7Rt#{'Z4ab'}"
+      {
+        "mongosh --password '#{v}'" => "mongosh --password '[FILTERED]'",
+        %(docker login --password "#{v}" ghcr.io) => %(docker login --password "[FILTERED]" ghcr.io),
+        %(    command: redis-server --requirepass "#{v}") => %(    command: redis-server --requirepass "[FILTERED]")
+      }.each { |line, want| expect(redact(line, path: "bin/setup")).to eq(want) }
+    end
+
+    # A switch that takes no value, a path, a file's or an id's name, a list of
+    # settings, a switch's value and a key's own name say where a secret is, or
+    # nothing about one.
+    it "leaves what a flag or a name points at, rather than holds, byte for byte" do
+      [
+        "psql --no-password app_test2",
+        "ssh-add --private-key ~/.ssh/id_ed25519 && deploy --private-key ./keys/deploy2.pem --private-key keys/deploy2.pem",
+        "x --token-file tmp/token1.txt --secret-file config/secrets2.env",
+        "aws secretsmanager get-secret-value --secret-id arn:aws:secretsmanager:us-east-1:123456789012:secret:prod/db-AbCdEf",
+        "docker buildx build --secret id=github_token2,env=GITHUB_TOKEN .",
+        %(fetch("/settings?showPassword=false")),
+        "ONEPASSWORD_VAULT=Production ONEPASSWORD_ACCOUNT=myteam.1password.com",
+        %({ currentPassword: "current_password", newPassword: "new_password" }),
+        %(tokenType: "bearer_token_value")
+      ].each { |line| expect(redact(line, path: "bin/setup")).to eq(line) }
+    end
+
     it "leaves a camel-cased name that holds no secret, or a word that only ends in one, byte for byte" do
       [
         %(tokenizer = "whitespace_v2"),
@@ -799,6 +832,20 @@ RSpec.describe RailsAiContext::Redaction do
       end
     end
 
+    # A log writes a hash or JSON, so a camel-cased or joined name comes in
+    # every shape a secret-named one does.
+    it "filters a camel-cased or joined name's value in each shape a log writes" do
+      v = "Xk2mQ9pLw7Rt#{'Z4ab'}"
+      {
+        %({"accessToken":"#{v}"}) => %({"accessToken":"[FILTERED]"}),
+        %({"clientSecret": "#{v}"}) => %({"clientSecret": "[FILTERED]"}),
+        %(args: [{"webhookSecret"=>"#{v}"}]) => %(args: [{"webhookSecret"=>"[FILTERED]"}]),
+        "PGPASSWORD: #{v}" => "PGPASSWORD: [FILTERED]",
+        %({"currentPassword"=>"hunter22X"}) => %({"currentPassword"=>"[FILTERED]"}),
+        %(exec redis-server --requirepass "#{v}") => %(exec redis-server --requirepass "[FILTERED]")
+      }.each { |line, want| expect(described_class.redact_log_line(line)).to eq(want) }
+    end
+
     it "filters a secret-named flag in a log line" do
       v = "Xk2mQ9pLw7Rt#{'Z4ab'}"
       expect(described_class.redact_log_line("exec redis-server --requirepass=#{v} --port 6380"))
@@ -1187,8 +1234,8 @@ RSpec.describe RailsAiContext::Redaction do
     end
 
     # A call's receiver was tried from each character of a run of letters, digits and dots:
-    # on Ruby 3.1 an 80 KB one took a minute, and on 3.2 and later a 1 MB one took 2.5
-    # seconds in one match, past the second a Rails 8 app sets as Regexp.timeout.
+    # on Ruby 3.1 and 3.2 a 64 KB one took over 20 seconds, and on 3.3 and later a 1 MB one
+    # took 2.5 seconds in one match, past the second a Rails 8 app sets as Regexp.timeout.
     it "reads a 1 MB word or dotted run in source, each match well inside a Rails 8 Regexp.timeout" do
       [ %(blob = "#{'0123456789abcdef' * 62_500}"), "a." * 500_000, "f" * 1_000_000 ].each do |line|
         started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -1198,6 +1245,26 @@ RSpec.describe RailsAiContext::Redaction do
         started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         line.gsub(described_class::CALL_KEYED) { |match| match }
         expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 1
+      end
+    end
+
+    # A name was split at every underscore when what followed it failed, so a
+    # long word with a secret's word in many of its parts cost its square; and
+    # the path check retried from every slash of a value ending in `=`.
+    it "reads a 1 MB word with a secret's word in many of its parts, each match well inside a Rails 8 Regexp.timeout" do
+      lines = [ "#{'dbpassword_' * 90_000}x = 1", "fetch(:#{'apassword_' * 100_000}x", "#{'userPassword_' * 75_000}x: 1",
+                "#{'token_' * 160_000}x =", "#{'aSecretB' * 120_000}x = 1", "--token #{'/a1' * 300_000}/=" ]
+      lines.each do |line|
+        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        described_class.redact_source_line(line, path: "app/models/x.rb")
+        described_class.redact_log_line(line)
+        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 15
+
+        [ described_class::KEYED_LITERAL, described_class::ENV_ASSIGNMENT, described_class::LOG_SECRET_ASSIGNMENT ].each do |pattern|
+          started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          line.gsub(pattern) { |match| match }
+          expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 1
+        end
       end
     end
 

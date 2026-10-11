@@ -32,7 +32,10 @@ module RailsAiContext
 
     # The secret word has to be a whole underscore-delimited part of the name,
     # so `secret_key` and `api_key` match while `passwordless_login` does not.
-    SECRET_NAME = /(?<!\w)(?:\w+_)?(?:#{SECRET_WORD})(?:_\w+)?(?!\w)/i
+    # A name is a whole word, so it is taken atomically: when what follows it
+    # fails, trying the word split another way cannot help, and doing so cost
+    # the square of a long word with the secret word in many of its parts.
+    SECRET_NAME = /(?<!\w)(?>(?:\w+_)?(?:#{SECRET_WORD})(?:_\w+)?(?!\w))/i
 
     # A name ending in `_KEY`/`Key`/`key` is as often a cache or i18n key as a credential,
     # so under it only a credential-looking value is filtered (see key_credential?).
@@ -77,21 +80,6 @@ module RailsAiContext
     # A log value: quoted whole, or bare up to a space, a quote or a separator,
     # so the quotes and the comma around it survive its redaction.
     LOG_VALUE = /(?!["']?\[FILTERED\])(?:"[^"]*"|'[^']*'|[^\s"',;)\]}]+)/
-
-    # A log line spells an assignment four ways: `key=value`, `key: value`,
-    # `"key"=>"value"` and `"key":"value"`. One pattern over SECRET_NAME
-    # covers every secret-ish name in all four; a per-name lookbehind list
-    # covered four names in two shapes and shipped the rest verbatim.
-    # Lookbehind is unavailable here because SECRET_NAME is variable width,
-    # so the key and the assignment are captured and written back. A header
-    # name comes whole (`"X-Api-Key"=>`), its dashes read as underscores (see
-    # key_name): a run of words and dashes with a secret-ish part, taken from
-    # its start in one pass, as DASHED_KEY_NAME takes one in source.
-    LOG_SECRET_ASSIGNMENT = /
-      (["']?)((?<![\w-])(?=[\w-]*?(?:#{SECRET_NAME}|#{KEYISH_NAME}))[\w-]++)\1
-      (\s*(?:=>|:|=(?!>))\s*)
-      (?!["']?\[FILTERED\])(?:"([^"]*)"|'([^']*)'|([^\s,;&)\]}]+))
-    /xi
 
     # Formats that are a credential wherever they appear: nothing else in
     # code or config is written this way. A JWT's signature may be empty.
@@ -151,18 +139,37 @@ module RailsAiContext
     # `requirepass` and `masterauth` are Redis's two password settings, and `MYSQL_PWD` and
     # `REDISCLI_AUTH` the variables the mysql and redis-cli clients read theirs from.
     PASSWORD_WORD = /passphrase|password|passwd|pass|pin|requirepass|masterauth|mysql_pwd|rediscli_auth/i
-    # A long password word may have a name joined on before it: Postgres's `PGPASSWORD`,
-    # `dbpassword`, a camel-cased `userPassword`. The short words may not (`bypass`, `spin`).
-    PASSWORD_NAME = /(?<!\w)(?:\w+_)?(?:[a-z\d]+(?=pass(?:word|wd|phrase)))?(?:#{PASSWORD_WORD})(?:_\w+)?(?!\w)/i
-    # JSON and JavaScript write a key's words in camel case (`accessToken`, `clientSecret`), as
-    # KEYISH_NAME reads `apiKey`.
-    CAMEL_SECRET_NAME = /(?<!\w)[a-z][A-Za-z\d]*(?:Secret|Token)(?!\w)/
-    KEY_NAME = /#{SECRET_NAME}|#{PASSWORD_NAME}|#{KEYISH_NAME}|#{CAMEL_SECRET_NAME}/
+    # A long password word that ends a name may have another joined on before it: Postgres's
+    # `PGPASSWORD`, `dbpassword`, a camel-cased `userPassword`. A short word may not (`bypass`,
+    # `spin`), nor may one with more after it (`ONEPASSWORD_VAULT` names 1Password's vault).
+    PASSWORD_NAME = /(?<!\w)(?>(?:\w+_)?(?:(?:#{PASSWORD_WORD})(?:_\w+)?|[a-z\d]+(?:passphrase|password|passwd))(?!\w))/i
+    # JSON and JavaScript write a key's words in camel case: one of them is the secret's
+    # (`accessToken`, `clientSecret`, `secretAccessKey`, `jwtSecretKey`), as one between
+    # underscores is in SECRET_NAME. `tokenizer` and `secretary` have none.
+    CAMEL_SECRET_NAME = /(?<!\w)(?>(?:secret|token|[a-z][a-z\d]*(?:[A-Z][a-z\d]*)*?(?:Secret|Token))(?:[A-Z][a-z\d]*)*(?!\w))/
+    # Each of these takes a whole word, and when two of them can, they take the same one.
+    KEY_NAME = /(?>#{SECRET_NAME}|#{PASSWORD_NAME}|#{KEYISH_NAME}|#{CAMEL_SECRET_NAME})/
     # A header or an attribute joins its words with dashes (`"X-Api-Key"`, `"x-auth-token"`). Quoted,
     # one with a part a key name reads is taken whole and read with its dashes as underscores (see
     # key_name); one with none (`"Content-Type"`) is not matched, so its literal stays in reach of
     # every pattern. The run is taken in one pass, never given back, so a long one costs no more.
     DASHED_KEY_NAME = /(?=[\w-]*?(?:#{KEY_NAME}))[\w-]++/
+
+    # A log line spells an assignment four ways: `key=value`, `key: value`,
+    # `"key"=>"value"` and `"key":"value"`. One pattern over KEY_NAME covers
+    # every secret-ish name in all four, a camel-cased or joined one included
+    # (`{"accessToken"=>...}`, `PGPASSWORD: ...`); a per-name lookbehind list
+    # covered four names in two shapes and shipped the rest verbatim.
+    # Lookbehind is unavailable here because KEY_NAME is variable width,
+    # so the key and the assignment are captured and written back. A header
+    # name comes whole (`"X-Api-Key"=>`), its dashes read as underscores (see
+    # key_name): a run of words and dashes with a secret-ish part, taken from
+    # its start in one pass, as DASHED_KEY_NAME takes one in source.
+    LOG_SECRET_ASSIGNMENT = /
+      (["']?)((?<![\w-])(?=[\w-]*?(?:#{KEY_NAME}))[\w-]++)\1
+      (\s*(?:=>|:|=(?!>))\s*)
+      (?!["']?\[FILTERED\])(?:"([^"]*)"|'([^']*)'|([^\s,;&)\]}]+))
+    /xi
     # A quoted key may close an index (`ENV["API_TOKEN"] =`); the assignment may be `||=` or another op-assign.
     SECRET_KEY = /"(?<name>#{DASHED_KEY_NAME})"\]?|'(?<name>#{DASHED_KEY_NAME})'\]?|(?<![\w"'\/\\-])(?<name>#{KEY_NAME})/
     KEYED_LITERAL = /(?:#{SECRET_KEY})(?<assign>\s*(?::|=>|(?:\|\||&&|[-+*\/|&])?=(?![=~>]))\s*)(?<literal>#{STRING_LITERAL})/
@@ -195,11 +202,16 @@ module RailsAiContext
     # lookbehind and a regex's wildcard (`/--password=.+/`) are not assignments.
     ENV_ASSIGNMENT = /(?<![\w.:=!])(?<name>#{KEY_NAME})=(?!\#\{|\.[*+?])(?<value>[^\s"'`$<>\\()\[\]{},;&]+)/
 
-    # A flag may take its value as the next word (`redis-server --requirepass ...`,
-    # `--token ...`), its name read as a dashed name is (key_name). Prose names a flag that way
-    # too (`the --password option`), so there only a value with a digit is a secret (flag_secret?).
-    # A value that is another flag, a variable, ERB, a placeholder or quoted is no literal.
-    FLAG_ARGUMENT = /(?<![\w-])--(?<name>[A-Za-z][\w-]*+)[ \t]++(?<value>[^\s"'`$<>\\()\[\]{},;&|#%=-][^\s"'`$<>\\()\[\]{},;&|]*+)/
+    # A flag may take its value as the next word, bare or quoted (`redis-server --requirepass ...`,
+    # `docker login --password "..."`), its name read as a dashed name is (key_name). Prose names a
+    # flag that way too (`the --password option`), so there only a value with a digit is a secret
+    # (flag_secret?). A `--no-...` switch takes no value; a value that is another flag, a variable,
+    # ERB, a placeholder or a path (`~/`, `./`, `/`) is no literal.
+    FLAG_ARGUMENT = /
+      (?<![\w-])--(?!no-)(?<name>[A-Za-z][\w-]*+)[ \t]++
+      (?:(?<quote>["'])(?<value>[^\s"'`$<>\\#%{~.\/][^"'`$\\]*?)\k<quote>
+        |(?<value>[^\s"'`$<>\\()\[\]{},;&|#%=~.\/-][^\s"'`$<>\\()\[\]{},;&|]*+))
+    /x
 
     # An HTTP auth scheme says the word after it is a credential (`Bearer <token>`, `Basic <base64>`,
     # `Token <token>`), under an Authorization key, in a curl line or a cassette alike. "Authorization"
@@ -414,7 +426,8 @@ module RailsAiContext
       WHOLE_SECRET_NAME = /\A#{SECRET_NAME}\z/
       WHOLE_PASSWORD_NAME = /\A#{PASSWORD_NAME}\z/
       WHOLE_KEYISH_NAME = /\A(?:#{KEYISH_NAME})\z/
-      WHOLE_SECRET_OR_PASSWORD_NAME = /\A(?:#{SECRET_NAME}|#{PASSWORD_NAME})\z/
+      # A name with a secret word in it, in any spelling: a `_KEY` name with one is no mere key.
+      WHOLE_SECRET_OR_PASSWORD_NAME = /\A(?:#{SECRET_NAME}|#{PASSWORD_NAME}|#{CAMEL_SECRET_NAME})\z/
       WHOLE_SECRET_WORD = /\A(?:#{SECRET_WORD})\z/
 
       # The name a matched key reads as. A dashed one reads with underscores, so `X-Api-Key` is
@@ -461,14 +474,20 @@ module RailsAiContext
       # A matched flag and the word after it, with the word filtered when it is the flag's secret.
       def filter_flag(text, match, example)
         name = key_name(match[:name])
-        return text unless name && flag_secret?(name, match[:value], example)
+        value = match[:value]
+        return text unless name && flag_secret?(name, value, example)
 
-        text.delete_suffix(match[:value]) + FILTERED
+        quote = match[:quote].to_s
+        text.delete_suffix("#{quote}#{value}#{quote}") + "#{quote}#{FILTERED}#{quote}"
       end
 
       # A word after a flag is as often prose as the flag's value, so it needs a digit as well as
       # what keyed_secret? asks of a value: a word is no secret, and a generated one has digits.
+      # A `name=value` list (BuildKit's `--secret id=...,env=...`) and a relative path
+      # (`keys/deploy.pem`) name where a secret is, not what it is.
       def flag_secret?(name, value, example)
+        return false if value.match?(/\A[A-Za-z][\w-]*=[^=]/) || object_path?(value)
+
         value.match?(/\d/) && keyed_secret?(name, value, example)
       end
 
@@ -540,18 +559,23 @@ module RailsAiContext
       # `DEAD_TOKEN_ERROR`, `token_url`, besides the config descriptors. A
       # Stimulus target, action, controller, outlet or class names an element
       # or a method (`"password-visibility-target": "input"`); a value may be a token.
+      # A name for a file, a directory or an identifier says where a secret is or which one
+      # (`token_file`, `secret_id`, AWS's `--secret-id`), not what it is.
       SOURCE_DESCRIPTOR = /_(?:use|scope|kind|label|prefix|suffix|errors?|message|url|uri|endpoint|path|header|
-                             target|action|controller|outlet|class(?:es)?)\z/xi
+                             target|action|controller|outlet|class(?:es)?|files?|filename|dir|directory|ids?)\z/xi
 
+      # A camel-cased name is read with its words joined by underscores (`tokenType` is `token_type`).
       def descriptor_name?(name)
-        name.match?(DESCRIPTOR_SUFFIX) || name.match?(SOURCE_DESCRIPTOR)
+        snake = name.gsub(/([a-z\d])([A-Z])/, '\1_\2')
+        snake.match?(DESCRIPTOR_SUFFIX) || snake.match?(SOURCE_DESCRIPTOR)
       end
 
       # Under a secret-named key a value is a secret unless it is clearly not
       # one (docs/TOOLS.md lists the shapes): a leak costs more than a hidden line.
       NOT_A_SECRET = [
-        # A path has two slashes and no base64 padding or `+`.
-        %r{\A(?:[a-z][a-z0-9+.-]*://|/[^+=]*/[^+=]*\z)}i,
+        # A path has two slashes and no base64 padding or `+`. Its first segment is taken whole, so
+        # a slash-filled value ending in `=` is one pass, not a retry from every slash.
+        %r{\A(?:[a-z][a-z0-9+.-]*://|/[^+=/]*+/[^+=]*+\z)}i,
         /\A[?&][\w-]+=/,
         /\A(?:[vV]\d+(?:[.-]\d+)*|\d+(?:\.\d+){1,3})\z/,
         /\A\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?)?\z/,
@@ -564,10 +588,15 @@ module RailsAiContext
       # `HTTP_` or naming a secret word (`_DISCOURSE_API`, `HTTP_API_KEY`).
       ENV_NAME = /\A_?[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\z/
 
+      # A switch's value (`showPassword=false`), not a credential, under any name.
+      NOT_A_SECRET_WORD = /\A(?:true|false|yes|no|on|off|null|nil|none|undefined)\z/i
+
       def secret_literal?(value, key)
         password = key.match?(WHOLE_PASSWORD_NAME)
         return false if value.length < (password ? 4 : 8) || !value.ascii_only? || placeholder?(value)
-        return false if value.downcase.tr("-", "_") == key.downcase.tr("-", "_")
+        return false if value.match?(NOT_A_SECRET_WORD)
+        # The key's own name, in any case (`currentPassword: "current_password"`, an enum's `password: 'password'`).
+        return false if snake_name(value) == snake_name(key)
         # Whitespace makes a message, except in a passphrase.
         return false if value.match?(/\s/) && !key.match?(/passphrase/i)
         # Under a password key a word-joined value is the password itself.
@@ -576,6 +605,10 @@ module RailsAiContext
 
         # A password may be spelled like a header name, an address or a hostname (`P4ss-W0rd`).
         (password ? NOT_A_SECRET - [ HEADER_NAME, ADDRESS, HOSTNAME ] : NOT_A_SECRET).none? { |shape| value.match?(shape) }
+      end
+
+      def snake_name(name)
+        name.gsub(/([a-z\d])([A-Z])/, '\1_\2').downcase.tr("-", "_")
       end
 
       # Letter-only words, one a secret word, spell a name (`user_api_key`).
