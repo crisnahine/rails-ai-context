@@ -74,6 +74,13 @@ ORIGINAL_ARGV = ARGV.dup.freeze
 # the app's bundle in it.
 STARTING_ENV = ENV.to_h.freeze
 
+# How the person who ran init in a folder of apps names the app a child
+# `context` of it runs in. The child runs at the app's root, and the files
+# it reports - the rm line for legacy files among them - are named from
+# where init was run, so a line pasted there does what it says. A variable
+# rather than a flag: an app whose bundle pins an older gem ignores it.
+PLACE_ENV = "RAILS_AI_CONTEXT_PLACE"
+
 # After one of these tools' names `--environment` is its filter, never RAILS_ENV: this is
 # decided before boot, when no tool schema can load. cli_smoke_spec holds it to the schemas.
 ENVIRONMENT_PARAM_TOOLS = %w[env_config].freeze
@@ -520,10 +527,18 @@ class RailsAiContextCLI < Thor
       result = @app_root_result or return nil
       root = @workspace_dir || result.root || result.base
       cwd = result.cwd
-      return nil if root.nil? || cwd.nil? || cwd == root || cwd.start_with?("#{root}/")
+      return nil if root.nil? || cwd.nil? || cwd.start_with?("#{root}/")
+      return inherited_place if cwd == root
 
       typed = @app_path_override || options[:app_path]
       result.explicit && typed ? typed.delete_suffix("/") : app_root.display(root, cwd)
+    end
+
+    # The place a folder's init gave this run, a child it started at one of
+    # its apps; nil for any other.
+    def inherited_place
+      place = ENV[PLACE_ENV]
+      place unless place.nil? || place.empty? || @workspace_dir
     end
 
     # How the person who typed the command names a root this run writes
@@ -714,7 +729,8 @@ class RailsAiContextCLI < Thor
     # One process boots one app, so each app's context files come from a
     # child running the install that app's server runs: its bundle's copy of
     # the gem for an in-Gemfile app, this copy for a standalone one. The
-    # child prompts for its own legacy files, so this process does not.
+    # child prompts for its own legacy files, so this process does not, and
+    # names them, as every file it reports, from where this one was run.
     def generate_app_context(app)
       $stderr.puts ""
       $stderr.puts "Generating AI context files for #{app.path}/..."
@@ -729,6 +745,7 @@ class RailsAiContextCLI < Thor
         env = { "BUNDLE_GEMFILE" => app.gemfile }
         command = [ "bundle", "exec", "rails-ai-context", "context", *flags ]
       end
+      env = env.merge(PLACE_ENV => app_root.display(app.root, Dir.pwd))
 
       # Otherwise a parent run under bundle exec hands the child the
       # environment it was started with, the user's own Bundler settings
