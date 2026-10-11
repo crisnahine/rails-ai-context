@@ -901,12 +901,24 @@ module RailsAiContext
         ctrl_source = RailsAiContext::SafeFile.read(source_path)
         return warnings unless ctrl_source
 
+        # A before_action in ApplicationController or in a concern sets an
+        # ivar for this view as surely as the action does, so the controller,
+        # its ancestors and the modules they include are all read.
+        root = rails_app.root.to_s
+        chain = Introspectors::ActionPresence.read(
+          root, ctrl_class, ctrl_source, prefix: ctrl_dir,
+          lookup: Introspectors::ActionPresence.lookup(root, Payload.section(context, :controllers)&.dig(:controllers))
+        )
+        sources = chain.sources.any? ? chain.sources : [ ctrl_source ]
+
         # Detect ivars from controller - handles @a, @b = multi-assignment
         set_ivars = []
-        ctrl_source.each_line do |line|
-          next unless line.include?("@")
-          if line.include?("=")
-            line.split("=", 2).first.scan(/@(\w+)/).each { |m| set_ivars << m[0] }
+        sources.each do |source|
+          source.each_line do |line|
+            next unless line.include?("@")
+            if line.include?("=")
+              line.split("=", 2).first.scan(/@(\w+)/).each { |m| set_ivars << m[0] }
+            end
           end
         end
         set_ivars.uniq!
@@ -917,7 +929,8 @@ module RailsAiContext
           next if set_ivars.include?(ivar)
           next if ivar.start_with?("_") # framework internal
           next if %w[output_buffer virtual_path].include?(ivar)
-          warnings << "@#{ivar} used in view but not set in #{ctrl_class}. Fix: add `@#{ivar} = ...` to action"
+          warnings << "@#{ivar} used in view but not set in #{ctrl_class}, its ancestors or the modules they include. " \
+                      "Fix: add `@#{ivar} = ...` to action"
         end
         warnings
       rescue => e
