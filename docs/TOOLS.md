@@ -680,6 +680,11 @@ adapter knows. For `remove_column`, `rename_column` and `change_type` it lists
 the lines in `app/`, `lib/` and `config/` that name the column, the code the
 change breaks.
 
+It refuses a `table`, `type` or `new_name` longer than 256 characters, a
+`column` that long outside `create_table`, and `options` longer than 1,024
+characters: no migration takes one, and the code it writes would carry it
+whole.
+
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `action` | enum | *required* | `add_column`, `remove_column`, `rename_column`, `add_index`, `add_association`, `change_type`, `create_table` |
