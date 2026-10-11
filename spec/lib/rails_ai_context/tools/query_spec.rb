@@ -2005,4 +2005,58 @@ it "still explains a database that does not exist" do
       expect(masked).to include(";")
     end
   end
+
+  # ── R5 reviewer items ─────────────────────────────────────────────
+  # Each block below fails on the pre-R5 code; the live-database proof for
+  # all of them (PostgreSQL 16, SQLite, MariaDB) is in the F2a report.
+
+  describe "read-only VOLATILE functions (item 1)" do
+    # pg_proc marks a function VOLATILE when its answer may change within one
+    # statement, which is as true of a reader of live state as of a writer, so
+    # the size / lock / recovery / WAL readers are allowlisted by name and the
+    # pg_proc lookup is skipped for them.
+    it "allowlists the side-effect-free inspection functions" do
+      %w[
+        pg_total_relation_size pg_relation_size pg_table_size pg_indexes_size
+        pg_database_size pg_lock_status pg_is_in_recovery pg_current_wal_lsn
+        pg_last_wal_replay_lsn
+      ].each do |fn|
+        expect(described_class::PG_VOLATILE_ALLOWLIST).to include(fn)
+      end
+    end
+
+    it "skips the pg_proc lookup when every function named is allowlisted" do
+      conn = ActiveRecord::Base.connection
+      allow(conn).to receive(:select_values).and_return([])
+      exprs = {
+        all: [ "pg_total_relation_size('orders')", "pg_relation_size('o')",
+               "pg_database_size('app')", "pg_is_in_recovery()" ],
+        outputs: [], conds: []
+      }
+      expect(described_class.send(:volatile_function_in_plan, exprs)).to be_nil
+      expect(conn).not_to have_received(:select_values)
+    end
+
+    it "still looks up a function that is not allowlisted" do
+      conn = ActiveRecord::Base.connection
+      allow(conn).to receive(:select_values).and_return([ "nextval" ])
+      exprs = { all: [ "nextval('s')" ], outputs: [], conds: [] }
+      expect(described_class.send(:volatile_function_in_plan, exprs)).to eq("nextval")
+      expect(conn).to have_received(:select_values)
+    end
+
+    it "refuses an unlisted VOLATILE function as VOLATILE, not as a state change" do
+      allow(described_class).to receive(:postgres_adapter?).and_return(true)
+      allow(described_class).to receive(:pg_plan).and_return("Node Type" => "Result")
+      allow(described_class).to receive(:whole_row_leak).and_return(nil)
+      allow(described_class).to receive(:sensitive_column_in_plan).and_return(nil)
+      allow(described_class).to receive(:laundered_sensitive_column).and_return(nil)
+      allow(described_class).to receive(:volatile_function_in_plan).and_return("nextval")
+
+      refusal = described_class.send(:postgresql_plan_refusal, "SELECT nextval('s')", 5)
+      expect(refusal).to include("function nextval is VOLATILE (pg_proc.provolatile = 'v')")
+      expect(refusal).to include("not on rails_query's list of read-only VOLATILE functions")
+    end
+  end
+
 end
