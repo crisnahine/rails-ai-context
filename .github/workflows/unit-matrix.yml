@@ -118,6 +118,9 @@ jobs:
 
     env:
       RAILS_VERSION: ${{ matrix.rails }}
+      # An example that hangs fails by name (spec_helper.rb) instead of
+      # stalling the job, and the documentation format shows where it was.
+      RSPEC_EXAMPLE_TIMEOUT: "180"
 
     steps:
       # A Windows runner checks out with CRLF by default, which rewrites the
@@ -144,8 +147,8 @@ jobs:
 
       - name: Run specs
         if: ${{ !inputs.release_gate }}
-        run: bundle exec rspec
+        run: bundle exec rspec --format documentation
 
       - name: Run specs (fixed seed)
         if: ${{ inputs.release_gate }}
-        run: bundle exec rspec --seed 27377
+        run: bundle exec rspec --seed 27377 --format documentation
