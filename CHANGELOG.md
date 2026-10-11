@@ -300,7 +300,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`rails_review_changes` reads a migration's table however the call is
   written.** `change_table "orders"` and
   `add_column("orders", :coupon_id, :integer)` now get the "Affects tables"
-  line and the missing-index warning.
+  line and the missing-index warning. The line reads every schema method
+  that takes a table, through Rails 8.1: `remove_columns :users, :name`
+  names users, as do `rename_index`, the comment, constraint and index
+  methods; `drop_table` names each table it drops, `rename_table` the new
+  name too, and `create_join_table :users, :roles` the join table it makes,
+  roles_users, and both tables. A call on a `change_table` block's table
+  (`t.remove_index :number`) or a commented-out line names no table.
 - **The pre-commit hook no longer blocks every commit when the app cannot
   boot, and shows why validation failed.** It validates through
   `bundle exec rails-ai-context tool validate`, which checks from source

@@ -754,6 +754,8 @@ PR/commit review with per-file context and warnings.
 
 A removed validation is a `validates` line the diff takes out when no line it adds validates the same attribute; an edited `validates` line is not one.
 
+A changed migration lists the tables it affects: the table each schema method takes first (`add_column`, `remove_columns`, `rename_index`, `add_foreign_key`, ...), every table `drop_table` drops, a renamed table's new name, and for `create_join_table` and `drop_join_table` the join table, named as Rails names it, and the two tables it joins. The first two are shown with the columns the schema has now.
+
 An app in a subfolder of its repository (a monorepo's `backend/`) is reviewed on its own: its changed files, named from the app root as `rails_validate` takes them, and the commits that touched it.
 
 | Parameter | Type | Default | Description |

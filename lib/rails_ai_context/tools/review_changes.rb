@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "open3"
+require "prism"
 
 module RailsAiContext
   module Tools
@@ -36,14 +37,24 @@ module RailsAiContext
 
       MAX_DIFF_LINES_PER_FILE = 30
       VALIDATION_LINE = /\bvalidates?[\s(]/
-      # A schema method whose first argument is the table, however the call
-      # is written: `create_table :orders`, `change_table "orders" do`,
+      # Each schema method a migration names a table with - ActiveRecord's
+      # SchemaStatements and its adapters', through Rails 8.1 - and how many
+      # of its leading arguments are tables: the first, a rename's two, and
+      # every one drop_table drops. However the call is written:
+      # `create_table :orders`, `change_table "orders" do`,
       # `add_column("orders", :coupon_id, :integer)`.
-      MIGRATION_TABLE = /\b(?:create_table|change_table|drop_table|rename_table|add_column|remove_column|rename_column|
-                          change_column|change_column_default|change_column_null|add_index|remove_index|
-                          add_reference|remove_reference|add_belongs_to|remove_belongs_to|add_timestamps|remove_timestamps|
-                          add_foreign_key|remove_foreign_key|add_check_constraint|remove_check_constraint)
-                          \b\(?\s*[:"'](\w+)/x
+      MIGRATION_TABLE_ARGUMENTS = %i[
+        create_table change_table add_column remove_column remove_columns rename_column
+        change_column change_column_default change_column_null change_column_comment change_table_comment
+        add_index remove_index rename_index enable_index disable_index
+        add_reference remove_reference add_belongs_to remove_belongs_to add_timestamps remove_timestamps
+        add_foreign_key remove_foreign_key validate_foreign_key
+        add_check_constraint remove_check_constraint validate_check_constraint validate_constraint
+        add_exclusion_constraint remove_exclusion_constraint add_unique_constraint remove_unique_constraint
+        create_virtual_table drop_virtual_table
+      ].to_h { |name| [ name, 1 ] }.merge(rename_table: 2, create_join_table: 2, drop_join_table: 2, drop_table: nil).freeze
+      # A join table is the one these make or drop from the two they name.
+      JOIN_TABLE_METHODS = %i[create_join_table drop_join_table].freeze
 
       def self.call(ref: "HEAD", files: nil, server_context: nil)
         refused = refuse_unsafe_paths(files)
@@ -280,7 +291,7 @@ module RailsAiContext
             if File.exist?(full_path) && !RailsAiContext::PathResolver.linked_out?(full_path, root)
               source = RailsAiContext::SafeFile.read(full_path)
               if source
-                tables = source.scan(MIGRATION_TABLE).flatten.uniq
+                tables = migration_tables(source)
                 if tables.any?
                   lines << "" << "**Affects tables:** #{tables.join(', ')}"
                   # The table as the schema has it now: its columns, or none
@@ -308,6 +319,45 @@ module RailsAiContext
 
           lines << ""
           lines
+        end
+
+        # The tables a migration's statements name, in the order it names
+        # them; a join table's own name comes before the two it joins. A
+        # call on a block's table (`t.remove_index :number`) names no table
+        # of its own, and a commented-out line is no statement.
+        def migration_tables(source)
+          tables = []
+          visit = lambda do |node|
+            if node.is_a?(Prism::CallNode) && node.receiver.nil? && MIGRATION_TABLE_ARGUMENTS.key?(node.name)
+              args = node.arguments&.arguments || []
+              names = args.take_while { |arg| arg.is_a?(Prism::SymbolNode) || arg.is_a?(Prism::StringNode) }.map(&:unescaped)
+              names = names.first(MIGRATION_TABLE_ARGUMENTS[node.name]) if MIGRATION_TABLE_ARGUMENTS[node.name]
+              if JOIN_TABLE_METHODS.include?(node.name) && names.size == 2
+                joined = join_table_name(names, args)
+                tables << joined if joined
+              end
+              tables.concat(names)
+            end
+            node.compact_child_nodes.each(&visit)
+          end
+          visit.call(RailsAiContext::AstCache.parse_string(source).value)
+          tables.uniq
+        rescue => e
+          RailsAiContext.debug_fail(e, [], label: "migration_tables")
+        end
+
+        # The join table as Rails names it: `table_name:` when the call gives
+        # one (nil when that is no literal), else the two tables sorted, with
+        # a prefix they share written once - ActiveRecord::ModelSchema
+        # .derive_join_table_name, so `:admin_users, :admin_roles` make
+        # admin_roles_users.
+        def join_table_name(tables, args)
+          option = args.grep(Prism::KeywordHashNode).flat_map(&:elements).find do |assoc|
+            assoc.is_a?(Prism::AssocNode) && assoc.key.is_a?(Prism::SymbolNode) && assoc.key.unescaped == "table_name"
+          end
+          return tables.sort.join("\0").gsub(/^(.*[_.])(.+)\0\1(.+)/, '\1\2_\3').tr("\0", "_") unless option
+
+          option.value.unescaped if option.value.is_a?(Prism::SymbolNode) || option.value.is_a?(Prism::StringNode)
         end
 
         # The same two commits the file list came from, so a file's diff is

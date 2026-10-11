@@ -230,6 +230,42 @@ RSpec.describe RailsAiContext::Tools::ReviewChanges do
       end
     end
 
+    # remove_columns, rename_index and the join table methods were not on
+    # the list, so `remove_columns :users, :name` named no table. A join
+    # table is named from its two tables as Rails names it, unless
+    # `table_name:` names it; drop_table drops each table it is given.
+    it "reads every table a migration's schema methods name" do
+      Dir.mktmpdir do |dir|
+        system("git", "init", "-q", dir, exception: true)
+        system("git", "-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.t", "-c", "commit.gpgsign=false",
+               "commit", "-q", "--allow-empty", "-m", "init", exception: true)
+        FileUtils.mkdir_p(File.join(dir, "db/migrate"))
+        File.write(File.join(dir, "db/migrate/20260101000000_reshape_accounts.rb"), <<~RUBY)
+          class ReshapeAccounts < ActiveRecord::Migration[8.0]
+            def change
+              remove_columns :users, :name, :email, type: :string
+              create_join_table :users, :roles
+              drop_join_table :admin_users, :admin_roles
+              create_join_table "posts", "tags", table_name: :taggings
+              rename_index :accounts, "index_accounts_on_name", "index_accounts_on_title"
+              rename_table(:orders, :purchases)
+              drop_table :legacy_events, :legacy_logs, if_exists: true
+              change_table :invoices do |t|
+                t.remove_index :number
+              end
+              # remove_column :ghosts, :name
+            end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+
+        text = described_class.call(ref: "HEAD").content.first[:text]
+
+        expect(text).to include("**Affects tables:** users, roles_users, roles, admin_roles_users, admin_users, admin_roles, " \
+                                "taggings, posts, tags, accounts, orders, purchases, legacy_events, legacy_logs, invoices\n")
+      end
+    end
+
     it "handles missing git gracefully" do
       allow(Open3).to receive(:capture2).and_return([ "", double(success?: false) ])
       result = described_class.call(ref: "HEAD")
