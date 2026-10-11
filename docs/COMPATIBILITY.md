@@ -274,6 +274,15 @@ Proof sources:
    limit; the installer's cleanup on a small Rails 8.1 app holding hand-written
    rule files; and the unit suite on Ruby 3.1 with Rails 7.0 through Ruby 4.0
    with Rails 8.1.
+   In the v5.33.0 release QA: the release gem in a fresh app on Ruby 3.1 with
+   Rails 7.0 and 7.1, Ruby 3.2 with Rails 8.0, and Rails 8.1 on Ruby 3.3, 3.4
+   and 4.0, each through the standalone and in-Gemfile installs, the rake
+   tasks and all 45 tools over MCP stdio; a Rails 8.1 app reached through a
+   symlinked path, as macOS spells its temporary folders; a Rails 8.1 and a
+   Rails 7.0 app mounting the engine, six clients calling while a model
+   changed every 0.3 seconds; the pre-commit hook installed and run by real
+   commits in an app's own repository, a monorepo's folder and a submodule;
+   and the unit suite and the E2E harness on Linux, macOS and Windows.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified
