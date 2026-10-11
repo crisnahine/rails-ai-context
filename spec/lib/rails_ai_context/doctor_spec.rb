@@ -1722,6 +1722,82 @@ RSpec.describe RailsAiContext::Doctor do
 
         expect(doctor.send(:check_pending_migrations).fix).to eq("Run `RAILS_ENV=#{Rails.env} bin/rails db:migrate` in the engine at ../..")
       end
+
+      # The installer run at an engine's root puts every file there, where its
+      # rake tasks are app:ai:* and `rails ai:context` is no command; doctor
+      # read the dummy app, sent the reader to commands that fail there, and
+      # following them wrote a second install into the dummy app.
+      context "with the install at the engine's root" do
+        let(:doctor) { described_class.new(RailsAiContext::StaticApp.new(dummy)) }
+
+        before do
+          write("Gemfile.lock", lockfile("rails", "rails-ai-context"))
+          write(".rails-ai-context.yml", "ai_tools:\n- claude\ntool_mode: mcp\ncontext_files: true\n")
+        end
+
+        it "reads the selection and the MCP configs there, and names the install that runs there" do
+          check = doctor.send(:check_mcp_json)
+
+          expect(check).to have_attributes(status: :warn, message: "1 of 1 MCP config needs attention: .mcp.json (Claude Code)",
+                                           fix: "Run `rails generate rails_ai_context:install` at the engine's root to fix")
+        end
+
+        it "passes the config there that serves the engine" do
+          write(".mcp.json", JSON.generate("mcpServers" => { "rails-ai-context" => { "command" => "bundle", "args" => %w[exec rails-ai-context serve] } }))
+          allow(doctor).to receive(:client_path).and_return(bin_dir_with("bundle"))
+
+          expect(doctor.send(:check_mcp_json)).to have_attributes(status: :pass, message: "1 of 1 MCP config valid")
+        end
+
+        it "looks for the context files there, and names the command that writes them there" do
+          expect(doctor.send(:check_context_freshness)).to have_attributes(
+            status: :warn, message: "No context files generated at the engine's root",
+            fix: "Run `bundle exec rails-ai-context context` at the engine's root"
+          )
+        end
+
+        # The context there is the binary's, reading the engine's source with
+        # no app booted, so that command itself runs, into a copy.
+        describe "the context run there" do
+          def context_command(script)
+            path = File.join(@top, "context_command.rb")
+            File.write(path, script)
+            allow(RailsAiContext::InstallMode).to receive(:command).and_call_original
+            allow(RailsAiContext::InstallMode).to receive(:command).with(:context, form: :bundled).and_return("#{RbConfig.ruby} #{path}")
+          end
+
+          before { write("CLAUDE.md", "# blorgh\n") }
+
+          it "passes the files it would leave as they are, and changes none of them" do
+            context_command(%(dir = ARGV[ARGV.index("--output-dir") + 1]\nFile.write(File.join(dir, "CLAUDE.md"), "# blorgh\\n")\n))
+
+            expect(doctor.send(:check_context_freshness)).to have_attributes(status: :pass, message: "CLAUDE.md at the engine's root is up to date")
+          end
+
+          it "names a file it would rewrite, and leaves it as it is" do
+            context_command(%(dir = ARGV[ARGV.index("--output-dir") + 1]\nFile.write(File.join(dir, "CLAUDE.md"), "# blorgh, changed\\n")\n))
+
+            check = doctor.send(:check_context_freshness)
+            expect(check.message).to start_with("CLAUDE.md at the engine's root is out of date")
+            expect(File.read(File.join(@top, "CLAUDE.md"))).to eq("# blorgh\n")
+          end
+
+          it "says what stopped a run that failed, without claiming the files are up to date" do
+            context_command(%($stderr.puts "Error: something broke"\nexit 1\n))
+
+            check = doctor.send(:check_context_freshness)
+            expect(check.status).to eq(:warn)
+            expect(check.message).to end_with("so whether it is up to date is not known (Error: something broke)")
+          end
+        end
+
+        it "keeps a dummy app's own install when the engine's root has none" do
+          File.delete(File.join(@top, ".rails-ai-context.yml"))
+          write("test/dummy/.rails-ai-context.yml", "ai_tools:\n- claude\n")
+
+          expect(doctor.send(:check_mcp_json).fix).to eq("Run `#{RailsAiContext::InstallMode.command(:install)}` to fix")
+        end
+      end
     end
   end
 

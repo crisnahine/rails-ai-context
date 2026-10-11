@@ -144,6 +144,28 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
     end
   end
 
+  # doctor runs the context command at an engine's root into a copy of the
+  # files, to see which a run would rewrite; the run there must write
+  # nothing else.
+  it "writes the context into --output-dir and nothing into the app" do
+    exe = File.expand_path("../exe/rails-ai-context", __dir__)
+    lib = File.expand_path("../lib", __dir__)
+
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+      File.write(File.join(dir, ".rails-ai-context.yml"), "ai_tools:\n- claude\ntool_mode: mcp\ncontext_files: true\n")
+      out_dir = File.join(dir, "copy")
+      FileUtils.mkdir_p(out_dir)
+
+      out = `cd #{dir} && ruby -I #{lib} #{exe} context --no-mcp-refresh --output-dir #{out_dir} 2>&1`
+
+      expect($?.exitstatus).to eq(0), out
+      expect(File).to exist(File.join(out_dir, "CLAUDE.md"))
+      expect(Dir.children(dir).sort).to eq(%w[.rails-ai-context.yml app copy])
+    end
+  end
+
   # Every command names itself when it enters the gem, so the refusal quotes
   # back the word the user typed and no command reaches the boot path without
   # one.

@@ -201,6 +201,8 @@ rails ai:doctor STRICT=1           # rake equivalent
 
 Checks include: schema existence, pending migrations in every database (and a database that does not exist or does not answer), model files, routes, whether the command each MCP config holds can start, the Codex env snapshot, whether a context run would rewrite the context files, introspector health, ripgrep availability, the Prism and mcp gems, Brakeman gem, listen gem, secret files and .gitignore, auto_mount security, schema size, view count, and more. The [Guide](GUIDE.md#diagnostics) lists every check.
 
+At a mountable engine's root, which boots no app of its own, `bundle exec rails-ai-context doctor` (or `rails-ai-context doctor` for a standalone install) diagnoses the dummy app the engine's `bin/rails` boots - `test/dummy` or `spec/dummy` - and reads the install at the engine's root: its `.rails-ai-context.yml`, MCP configs and context files, the ones an editor opened there uses. `bin/rails app:ai:doctor` reads them there too. Its fixes name the commands that run at the engine's root, such as `bundle exec rails-ai-context context`, and its context check runs that command into a copy of the files to see which it would rewrite.
+
 ### `watch`
 
 Watch for file changes and auto-regenerate context files.
