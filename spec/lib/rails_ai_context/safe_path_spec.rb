@@ -130,6 +130,12 @@ RSpec.describe RailsAiContext::SafePath do
       expect(result.relative).to eq("packs/billing/app/models/invoice.rb")
     end
 
+    it "names a file under the pack's own views root the way the app spells it" do
+      result = described_class.locate("invoices/_invoice.html.erb", under: File.join(@app, "packs/billing/app/views"), root: @app)
+
+      expect(result.relative).to eq("packs/billing/app/views/invoices/_invoice.html.erb")
+    end
+
     it "refuses a file the pack holds under a sensitive name of its own" do
       expect(described_class.locate("packs/billing/config/database.yml", under: @app).refusal).to eq(:sensitive)
     end

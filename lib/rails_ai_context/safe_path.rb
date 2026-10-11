@@ -36,6 +36,9 @@ module RailsAiContext
       return refuse(:outside) unless linked || contained?(real, real_under)
 
       real_root = real_base(root)
+      # `under` can itself be a linked-in directory, a pack's app/views, so the
+      # root's spelling of the path is asked for the link too.
+      linked ||= links && !contained?(real, real_root) ? linked_in(path, real, root, root) : nil
       root_relative = if real == real_root then ""
       elsif contained?(real, real_root) then real.delete_prefix(dir_prefix(real_root))
       # Named the way the app spells it: packs/billing/app/models/invoice.rb.
