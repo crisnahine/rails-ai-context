@@ -353,6 +353,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   job's guard clauses, a `rails_security_scan` code line and the
   `controllers/{name}/{action}` and `views/{path}` resources showed the same
   line as written.
+- **`rails_get_controllers` and the `controllers/{name}/{action}` resource
+  find an action a concern or a parent controller gives.** Rails counts
+  every public method of an `ApplicationController` concern among each
+  controller's actions; the action list takes one only where a route names
+  it, so a lookup by name of an unrouted one answered "not found". The
+  answer now reads it from the file that defines it and names the parent
+  controller (`inherited_from` in the resource). A callback, a predicate, a
+  method that takes an argument, or one a private def lower down hides is
+  still not an action. Under `--no-boot` the action list also takes a routed
+  method of a parent's concern, as the booted list did.
 - **An action a concern or a parent controller defines shows its source.**
   `rails_get_controllers(controller:, action:)` read only the controller's
   own file, so an action from an included concern (namespaced ones too) or
@@ -908,8 +918,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   controller with no strong params, and writes a real system test for
   `type: "system"`.
 - **`rails_get_partial_interface` finds Turbo Stream, broadcast and
-  jbuilder render sites** and jbuilder locals, and lists no helper as a
-  local; `rails_get_view` lists those partials.
+  jbuilder render sites** and jbuilder locals, lists a partial's render
+  sites by the format each one looks up, and lists no helper as a local;
+  `rails_get_view` lists those partials.
 - **Render maps and frame sources keep their closing brackets.**
 - **`rails_get_turbo_map` wires a stream by the records and names it is
   built from**, says "can't tell" for what it cannot resolve, and says when
@@ -922,7 +933,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ApplicationController, counts template formats, and lists the implicit
   `format.turbo_stream` render.
 - **A 100 KB argument is answered at once and echoed shortened**, where
-  `rails_analyze_feature` took 14 seconds and echoed it whole.
+  `rails_analyze_feature` took 14 seconds and echoed it whole. v5.32.2
+  repeated such an argument whole in 62 answers across 29 tools, among them
+  the not-found and invalid-value answers of `rails_search_docs`,
+  `rails_get_component_catalog`, `rails_get_concern`,
+  `rails_review_changes`, `rails_generate_test`, `rails_get_controllers` and
+  `rails_get_context`; each now shows its first 80 characters and its
+  length. `rails_migration_advisor`, which wrote the argument into the
+  migration twice over, refuses a name longer than 256 characters and
+  options longer than 1,024.
 - **`rails_onboard` counts every database the app declares**, naming the
   framework's own databases in one line; it and
   `rails_get_frontend_stack` count every broadcast, and onboard includes
