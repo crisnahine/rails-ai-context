@@ -176,6 +176,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   repository - is skipped with node's error named beside it, since that may
   be the toolchain's syntax or the file's own mistake. Type annotations in a
   `.js` file nothing compiles, and a plain syntax error, still fail.
+- **A `doctor` fix typed in a folder inside the app runs there too.** From
+  `blog/app/models` the fixes were the ones for the app's root:
+  `bin/rails db:prepare` was no file there, and `git rm --cached .env`
+  matched nothing. A command now goes to the root first - `cd ../.. &&
+  bin/rails db:prepare`, `git -C ../.. rm --cached .env`, `rails-ai-context
+  --app-path ../.. init` - and a `.gitignore` to edit, a config to make
+  valid and the engine a task runs in are named from where `doctor` was
+  typed; the report still names the app's files from its root. The binary
+  tells the bundle's copy it hands the run to where it was typed, and
+  `rails ai:doctor` reads it from the shell's `PWD`, since Rails' `rails`
+  command and rake move up to the root before the task runs.
 - **On Windows the MCP configs start the server through `cmd /c`, and
   `doctor` reads a config for the platform it runs on.** A gem's executables
   on Windows are batch files (`bundle.bat`, `rails-ai-context.bat`), which

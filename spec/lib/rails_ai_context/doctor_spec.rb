@@ -196,6 +196,39 @@ RSpec.describe RailsAiContext::Doctor do
         expect(doctor.send(:check_pending_migrations).fix).to eq("Run `cd #{app_dir} && RAILS_ENV=#{Rails.env} bin/rails db:migrate`")
       end
     end
+
+    # Typed in app/models, the fixes were the ones for the app's root:
+    # `bin/rails` is no file there, and git reads a path from there.
+    context "typed in a folder inside the app" do
+      let(:inside) { File.join(Rails.application.root.to_s, "app/models") }
+
+      def fixes_from_inside(standalone:)
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(standalone)
+        described_class.new(Rails.application, from: inside).run[:checks].filter_map(&:fix)
+      end
+
+      it "gives the binary the app with --app-path" do
+        expect(fixes_from_inside(standalone: true)).to include("Run `rails-ai-context --app-path ../.. context`",
+                                                               "Run `rails-ai-context --app-path ../.. init` to fix")
+      end
+
+      it "runs the app's other commands at its root" do
+        expect(fixes_from_inside(standalone: false)).to include("Run `cd ../.. && rails ai:context`",
+                                                                "Run `cd ../.. && rails generate rails_ai_context:install` to fix")
+      end
+
+      it "runs a database task at the app's root, and names the files it reports from there" do
+        doctor = described_class.new(Rails.application, from: inside)
+        config = ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, "primary", { adapter: "sqlite3", database: "storage/x.sqlite3" })
+        allow(doctor).to receive(:database_states).and_return([ { name: "primary", config: config, error: ActiveRecord::NoDatabaseError.new("no") } ])
+
+        expect(doctor.send(:check_pending_migrations)).to have_attributes(
+          message: "the #{Rails.env} database storage/x.sqlite3 does not exist",
+          fix: "Run `cd ../.. && RAILS_ENV=#{Rails.env} bin/rails db:prepare`"
+        )
+        expect(doctor.send(:check_routes).message).to eq("config/routes.rb found")
+      end
+    end
   end
 
   describe ".report_lines" do
@@ -1586,6 +1619,28 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
 
+    # Typed in blog/app/models, `git rm --cached .env` stopped at "pathspec
+    # '.env' did not match any files", and a .gitignore made there ignores
+    # nothing at the root. The report still names the files from the root.
+    context "typed in a folder inside the app" do
+      it "runs git in the app's root and names its .gitignore from there" do
+        Dir.mktmpdir do |dir|
+          blog = File.join(File.realpath(dir), "blog")
+          FileUtils.mkdir_p(File.join(blog, "app/models"))
+          File.write(File.join(blog, ".env"), "A=1\n")
+          File.write(File.join(blog, ".gitignore"), "log/\n")
+          system("git", "-C", blog, "init", "-q", out: File::NULL, err: File::NULL) or raise "git init failed"
+          system("git", "-C", blog, "add", ".env", out: File::NULL, err: File::NULL) or raise "git add failed"
+
+          check = described_class.new(RailsAiContext::StaticApp.new(blog), from: File.join(blog, "app/models")).send(:check_security_gitignore)
+          expect(check).to have_attributes(
+            message: ".env is committed",
+            fix: "Run `git -C ../.. rm --cached .env`, add `.env` to ../../.gitignore, and rotate it: the history still holds it"
+          )
+        end
+      end
+    end
+
     # Git answers what a commit takes: every ignore rule it reads, and the
     # files it tracks already, which no rule takes back out.
     context "inside a git repository" do
@@ -2040,6 +2095,25 @@ RSpec.describe RailsAiContext::Doctor do
         allow(doctor).to receive(:database_states).and_return([ { name: "primary", config: nil, pending: [ { version: "1", name: "X" } ] } ])
 
         expect(doctor.send(:check_pending_migrations).fix).to eq("Run `RAILS_ENV=#{Rails.env} bin/rails db:migrate` in the engine at ../..")
+      end
+
+      # The report names the engine's files from the dummy app's root; the
+      # engine a command runs in is further up from a folder inside it.
+      it "names the engine as a command reaches it from a folder inside the dummy app" do
+        doctor = described_class.new(RailsAiContext::StaticApp.new(dummy), from: File.join(dummy, "app/models"))
+        allow(doctor).to receive(:database_states).and_return([ { name: "primary", config: nil, pending: [ { version: "1", name: "X" } ] } ])
+
+        expect(doctor.send(:check_pending_migrations).fix).to eq("Run `RAILS_ENV=#{Rails.env} bin/rails db:migrate` in the engine at ../../../..")
+        expect(doctor.send(:check_gems).message).to eq("../../Gemfile.lock found")
+      end
+
+      it "names the engine's files from its root when typed in a folder of the engine's own" do
+        doctor = described_class.new(RailsAiContext::StaticApp.new(dummy), from: File.join(engine, "app/models"))
+        allow(doctor).to receive(:database_states).and_return([ { name: "primary", config: nil, pending: [ { version: "1", name: "X" } ] } ])
+
+        expect(doctor.send(:check_pending_migrations).fix).to eq("Run `RAILS_ENV=#{Rails.env} bin/rails db:migrate` at the engine's root")
+        expect(doctor.send(:check_gems).message).to eq("Gemfile.lock found")
+        expect(doctor.send(:check_models).message).to eq("2 model files found (1 in the engine)")
       end
 
       # Typed at the engine's root, where `bin/rails app:ai:doctor` and the

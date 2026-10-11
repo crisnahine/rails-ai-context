@@ -81,6 +81,12 @@ STARTING_ENV = ENV.to_h.freeze
 # rather than a flag: an app whose bundle pins an older gem ignores it.
 PLACE_ENV = "RAILS_AI_CONTEXT_PLACE"
 
+# Where a command handed to the app's bundle was typed. The handoff starts
+# that copy at the app's root when it walked there from a folder inside the
+# app or above it, and doctor writes each fix's command to run where it was
+# typed. A variable for the same reason as PLACE_ENV.
+TYPED_IN_ENV = "RAILS_AI_CONTEXT_TYPED_IN"
+
 # The first release whose `context` takes --no-mcp-refresh. An older copy
 # refuses a switch it does not know, and it writes no MCP config in
 # `context` either.
@@ -394,19 +400,22 @@ class RailsAiContextCLI < Thor
       # An engine's root boots no app of its own, so doctor diagnoses the
       # dummy app its bin/rails boots, and reads the install at the root.
       resolution = resolve_app_root!
-      # The report names its paths from where this was typed, or from the
-      # root found when that was inside it.
-      from = resolution.cwd
-      from = resolution.root if resolution.root && (from == resolution.root || from.start_with?("#{resolution.root}/"))
+      # Where this was typed, a folder inside the app included, where each
+      # command a fix gives runs. A run handed to the app's bundle started at
+      # the app's root, and is told.
+      typed = STARTING_ENV[TYPED_IN_ENV] || resolution.cwd
       if (dummy = app_root.dummy_app(Dir.pwd))
-        $stderr.puts "[rails-ai-context] an engine's root boots no app: diagnosing its dummy app at #{app_root.display(dummy, from)}/"
+        # Named from the root found, when that was typed inside it.
+        root = resolution.root
+        shown_from = root && (typed == root || typed.start_with?("#{root}/")) ? root : typed
+        $stderr.puts "[rails-ai-context] an engine's root boots no app: diagnosing its dummy app at #{app_root.display(dummy, shown_from)}/"
         Dir.chdir(dummy)
       end
       # Diagnosing a boot failure needs the app, so doctor never serves the
       # static tier; it does read a source-only tree, to name what is missing.
       boot_rails!(command: "doctor", allow_source_only: true,
                   boot_failure_hint: "  doctor needs a bootable app; fix the boot error above first.")
-      result = ::RailsAiContext::Doctor.new(from: from).run
+      result = ::RailsAiContext::Doctor.new(from: typed).run
       # The report is the command's product - it belongs on stdout so
       # `doctor > report.txt` captures it. stderr stays for errors only.
       puts ::RailsAiContext::Doctor.report_lines(result)
@@ -1073,7 +1082,7 @@ class RailsAiContextCLI < Thor
       bundle = Gem.bin_path("bundler", "bundle")
       $stderr.puts "[rails-ai-context] This app's bundle has rails-ai-context #{handoff.version}; " \
                    "running that copy, as bundle exec does."
-      exec(handoff.env, RbConfig.ruby, bundle, "exec", "rails-ai-context", *ORIGINAL_ARGV,
+      exec(handoff.env.merge(TYPED_IN_ENV => cwd), RbConfig.ruby, bundle, "exec", "rails-ai-context", *ORIGINAL_ARGV,
            chdir: @app_root_result&.walked ? root : cwd)
     rescue Gem::Exception, SystemCallError
       nil

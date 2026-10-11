@@ -495,8 +495,12 @@ namespace :ai do
 
     # Rake runs from the directory its Rakefile is in, which at an engine's
     # root is the engine's while Rails.root is test/dummy: the report names
-    # its paths from there.
-    result = RailsAiContext::Doctor.new(from: Dir.pwd).run
+    # its paths from there. Typed in a folder below it, Rails' `rails`
+    # command and rake each move up there first, and the shell's PWD still
+    # names that folder, where each command a fix gives is written to run.
+    here = RailsAiContext::SafePath.canonical(Dir.pwd)
+    typed = RailsAiContext::SafePath.canonical(ENV["PWD"]) unless ENV["PWD"].to_s.empty?
+    result = RailsAiContext::Doctor.new(from: typed && RailsAiContext::SafePath.contained?(typed, here) ? typed : Dir.pwd).run
 
     puts RailsAiContext::Doctor.report_lines(result, icons: RailsAiContext::Doctor::EMOJI_ICONS)
 

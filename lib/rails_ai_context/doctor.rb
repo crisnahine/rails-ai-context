@@ -61,10 +61,12 @@ module RailsAiContext
 
     attr_reader :app
 
-    # `from` is the directory the command was typed in, which every path the
-    # report names is named from: an engine's root, above its test/dummy,
-    # names the dummy app's views test/dummy/app/views and the engine's
-    # lockfile Gemfile.lock. Unsaid, or inside the app, it is the app's root.
+    # `from` is the directory the command was typed in, where every command
+    # a fix gives runs, and which every path the report names is named
+    # from: an engine's root, above its test/dummy, names the dummy app's
+    # views test/dummy/app/views and the engine's lockfile Gemfile.lock.
+    # Inside the app, or inside the engine its test/dummy runs in, paths are
+    # named from that root instead. Unsaid, it is the app's root.
     def initialize(app = nil, from: nil)
       @app = app || Rails.application
       @from = from
@@ -93,29 +95,48 @@ module RailsAiContext
       in_app(InstallMode.command(job, standalone: standalone?))
     end
 
-    # The app as named where doctor was typed outside it (`blog` from its
-    # parent folder, `test/dummy` from an engine's root), ready for a shell;
-    # nil typed inside it.
+    # The app as a command typed where doctor was reaches it (`blog` from its
+    # parent folder, `test/dummy` from an engine's root, `../..` from its
+    # app/models), ready for a shell; nil typed at its root.
     def typed_app
       return @typed_app if defined?(@typed_app)
 
-      @typed_app = display_base == app.root.to_s ? nil : shell_path(app.root)
+      @typed_app = typed_at?(app.root) ? nil : shell_path(app.root)
     end
 
-    # A directory as typed where doctor was, ready for a shell.
+    # Where the command was typed, which every command a fix gives runs from.
+    def typed_dir
+      @from&.to_s || app.root.to_s
+    end
+
+    def typed_at?(dir)
+      SafePath.canonical(dir.to_s) == SafePath.canonical(typed_dir)
+    end
+
+    # A place a fix sends the reader - a folder a command runs in, a file to
+    # edit - named from where doctor was typed, where the reader acts on it.
+    # Inside the app that is not the app's root, which the rest of the
+    # report names its files from.
+    def fix_path(path)
+      Install::Program.relative_to(path.to_s, typed_dir)
+    end
+
+    # A directory as a command typed where doctor was reaches it, ready for a shell.
     def shell_path(dir)
-      CLI::AppRoot.command_line([ CLI::AppRoot.option_path(typed_path(dir)) ])
+      CLI::AppRoot.command_line([ CLI::AppRoot.option_path(fix_path(dir)) ])
     end
 
-    # One of the app's own commands, as typed where doctor was. Typed outside
-    # the folder it runs in - the app's root, or `dir` - it goes there first:
-    # the binary with --app-path, anything else after a cd. Bare, it ran in
-    # the wrong folder, or in none.
+    # One of the app's own commands, as typed where doctor was. Typed
+    # anywhere but the folder it runs in - the app's root, or `dir` - it goes
+    # there first: the binary with --app-path, anything else after a cd. A
+    # folder inside the app is no exception: `bin/rails` is no file there,
+    # and git reads a path from it. Bare, it ran in the wrong folder, or in
+    # none.
     def in_app(command, dir: app.root.to_s)
       if command.start_with?("rails-ai-context ")
         return typed_app ? command.sub("rails-ai-context ", "rails-ai-context --app-path #{typed_app} ") : command
       end
-      return command if SafePath.canonical(dir.to_s) == SafePath.canonical(display_base)
+      return command if typed_at?(dir)
 
       "cd #{shell_path(dir)} && #{command}"
     end
@@ -143,13 +164,14 @@ module RailsAiContext
     end
 
     # Where the report's paths are named from: where the command was typed,
-    # unless that is the app's root or a directory inside it, where a reader
-    # names the app's files from its root.
+    # unless that is the app's root or a directory inside it, or the root of
+    # the engine its test/dummy runs in or a directory inside that, where a
+    # reader names those files from that root.
     def display_base
       @display_base ||= begin
-        root = app.root.to_s
-        typed = @from&.to_s
-        typed && !SafePath.contained?(SafePath.canonical(typed), SafePath.canonical(root)) ? typed : root
+        typed = SafePath.canonical(typed_dir)
+        [ app.root.to_s, *PathResolver.enclosing_engine_roots(app.root.to_s) ]
+          .find { |root| SafePath.contained?(typed, SafePath.canonical(root)) } || typed_dir
       end
     end
 
@@ -159,13 +181,15 @@ module RailsAiContext
     end
 
     # Where the engine an engine's test/dummy runs in is, as a place a
-    # command runs: " at the engine's root" typed there, " in the engine at
-    # ../.." typed in the dummy app.
+    # command runs: " at the engine's root" typed there or in a folder of
+    # the engine's own, " in the engine at ../.." typed in the dummy app,
+    # and as far up as it is from a folder inside the dummy app.
     def at_engine
-      at = engine_roots_shown
-      return "" if at.empty?
+      engines = PathResolver.enclosing_engine_roots(app.root.to_s)
+      return "" if engines.empty?
+      return " at the engine's root" if engines.include?(display_base)
 
-      at == [ "." ] ? " at the engine's root" : " in the engine at #{at.join(', ')}"
+      " in the engine at #{engines.map { |engine| fix_path(engine) }.join(', ')}"
     end
 
     # Where the install this app is served by lives: the app's root, or for
@@ -293,7 +317,7 @@ module RailsAiContext
 
       fixes = []
       fixes << "Run `#{database_task("db:prepare")}`#{where_tasks_run}" if missing.any? || pending.any?
-      fixes << "Start the database server, or fix its settings in #{typed_path(File.join(app.root.to_s, "config/database.yml"))}" if failing.any?
+      fixes << "Start the database server, or fix its settings in #{fix_path(File.join(app.root.to_s, "config/database.yml"))}" if failing.any?
       Check.new(name: "Database", status: :fail, message: said.join("; "), fix: fixes.join("; "))
     end
 
@@ -978,7 +1002,7 @@ module RailsAiContext
     # A workspace's config above the app is written by `init` run in the
     # workspace, never by this app's install.
     def install_command(config_path)
-      workspace_config?(config_path) ? "`rails-ai-context init` in the folder that holds #{typed_path(config_path)}" : install_job(:install)
+      workspace_config?(config_path) ? "`rails-ai-context init` in the folder that holds #{fix_path(config_path)}" : install_job(:install)
     end
 
     # A config above the install's root: a workspace's.
@@ -995,7 +1019,7 @@ module RailsAiContext
       else
         install_job(:install)
       end
-      "Make #{paths.map { |path| typed_path(path) }.join(', ')} valid JSON holding an object (the install leaves a file it cannot merge into as it is), " \
+      "Make #{paths.map { |path| fix_path(path) }.join(', ')} valid JSON holding an object (the install leaves a file it cannot merge into as it is), " \
         "then run #{run}"
     end
 
@@ -1394,7 +1418,7 @@ module RailsAiContext
     # The app's own .gitignore, as named where doctor was typed, which its
     # patterns, spelled from the app's root, are read from.
     def ignore_file
-      typed_path(File.join(app.root.to_s, ".gitignore"))
+      fix_path(File.join(app.root.to_s, ".gitignore"))
     end
 
     # [tracked, covered by an ignore rule] among files (relative to the app
