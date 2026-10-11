@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "open3"
 
 RSpec.describe RailsAiContext::Engine do
   describe "class hierarchy" do
@@ -58,6 +59,31 @@ RSpec.describe RailsAiContext::Engine do
       expect(stack.middlewares.map(&:klass)).to eq([
         ActionDispatch::Executor, ActionDispatch::Callbacks, RailsAiContext::Middleware, pending_check, ActionDispatch::Cookies
       ])
+    end
+  end
+
+  describe "eager loading" do
+    # The app's main loader camelizes the engine's app/ directories with the
+    # app's inflections, so an "AI" acronym named the namespace RailsAIContext.
+    it "eager loads in an app whose inflections make AI an acronym" do
+      skip "eager_load_dir needs zeitwerk 2.6" unless Zeitwerk::Loader.method_defined?(:eager_load_dir)
+
+      script = <<~'RUBY'
+        require "combustion"
+        ActiveSupport::Inflector.inflections(:en) { |inflect| inflect.acronym "AI" }
+        Combustion.initialize! :active_record, :action_controller, :action_mailer do
+          config.eager_load = false
+        end
+        Rails.autoloaders.main.eager_load_dir(RailsAiContext::Engine.root.join("app/controllers").to_s)
+        puts RailsAiContext::McpController.name
+        puts "rails_ai_context".camelize
+      RUBY
+
+      out, err, status = Open3.capture3(RbConfig.ruby, "-e", script, chdir: File.expand_path("../../..", __dir__))
+
+      expect(err).not_to include("to define constant")
+      expect(status).to be_success
+      expect(out.lines.map(&:chomp)).to eq([ "RailsAiContext::McpController", "RailsAIContext" ])
     end
   end
 

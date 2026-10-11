@@ -2,6 +2,12 @@
 
 module RailsAiContext
   class Engine < ::Rails::Engine
+    # The app's loader camelizes app/controllers/rails_ai_context with the
+    # app's inflections, and an "AI" acronym would expect RailsAIContext.
+    initializer "rails_ai_context.inflection" do
+      Rails.autoloaders.main.inflector.inflect("rails_ai_context" => "RailsAiContext")
+    end
+
     # The YAML is the base a configure block overrides key by key, so it has
     # to be in place before config/initializers runs.
     initializer "rails_ai_context.config_file", before: :load_config_initializers do |_app|
