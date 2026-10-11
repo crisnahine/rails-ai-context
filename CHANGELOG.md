@@ -130,17 +130,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RAILS_AI_CONTEXT_BOOT_TIMEOUT` says otherwise; `rails ai:serve`, which
   has no static tier, exits with the boot's error while the client still
   listens. Other commands keep 60.
-- **A server without live reload answers for the app as it is after an
-  edit.** Inside `cache_ttl` the cache was served without asking whether
-  files had moved, relying on live reload, which needs the `listen` gem a
-  new Rails 8 app does not bundle: answers came from before a migration or a
-  model edit for up to a minute, and an association added to a model never
-  appeared until a restart. A server with no live reload running, the
-  endpoints mounted in the app included, now checks the app's fingerprint
-  at each tool call and resource read and, when it moved, reloads the app's
-  code and resets the caches. That costs a few milliseconds per call on a
-  typical app and about 100 ms at 10,000 files, where calls close together
-  share one check.
+- **A call sees every edit made before it, with live reload or without.**
+  Inside `cache_ttl` the cache was served without asking whether files had
+  moved, relying on live reload - which needs the `listen` gem a new Rails 8
+  app does not bundle, and even then delivers an edit only after its
+  1.5-second debounce. An agent that edited a model and asked about it at
+  once was answered from before the edit: a new association missing, a
+  syntax error unreported; without live reload an association added to a
+  model never appeared until a restart. Every server, the endpoints mounted
+  in the app included, now checks the app's files at the start of each tool
+  call and resource read and, when they moved, reloads the app's code and
+  resets the caches. A call shares only a check that began after it arrived,
+  so calls one after another each see an edit made between them. The check
+  costs about a millisecond on a small app and about 30 ms at 10,000 files.
+  Live reload now only tells clients that files changed.
 - **Reading pending migrations writes nothing to the database.** The pending
   list came from `MigrationContext#open`, which creates `schema_migrations`
   and `ar_internal_metadata` in a database that lacks them. Pending is now
