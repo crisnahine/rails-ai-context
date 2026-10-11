@@ -110,8 +110,9 @@ module RailsAiContext
           # than calling again: a second raise from the same call would escape
           # the rescue meant to contain the first.
           table = resolve_table_name(class_name, candidates)
+          table_set_by = outside_parent(class_name, candidates) unless table
           result[class_name] = static_model_details(candidate[:path], class_name, file: candidate[:file],
-                                                    table_name: table,
+                                                    table_name: table, table_set_by: table_set_by,
                                                     primary_key: resolve_primary_key(class_name, candidates),
                                                     inherited_from: declaring_bases(class_name, candidates),
                                                     sti: static_sti_info(class_name, sti_parents),
@@ -341,10 +342,31 @@ module RailsAiContext
         inherited = parent && resolve_table_name(parent, candidates, seen + [ class_name ])
         return inherited unless inherited.nil? || inherited.empty?
 
-        [ namespace_affix(class_name, candidates, :table_name_prefix),
-          contained_prefix(class_name, candidates, seen),
-          TableName.stem(candidate[:path], pluralize_tables?(class_name, candidates)),
-          namespace_affix(class_name, candidates, :table_name_suffix) ].join
+        own = [ namespace_affix(class_name, candidates, :table_name_prefix),
+                contained_prefix(class_name, candidates, seen),
+                TableName.stem(candidate[:path], pluralize_tables?(class_name, candidates)),
+                namespace_affix(class_name, candidates, :table_name_suffix) ].join
+        found = outside_parent_tables(class_name, candidates, own)
+        return own unless found
+
+        found.first if found.one?
+      end
+
+      # A concrete parent the app does not define sets the table, unread here; the
+      # schema picks among its names, plus the class's own for a parent that is abstract.
+      def outside_parent_tables(class_name, candidates, own)
+        parent = outside_parent(class_name, candidates) or return nil
+        names = [ TableName.derive(parent), parent.underscore.tr("/", "_").pluralize ]
+        names = names.map(&:singularize) unless pluralize_tables?(class_name, candidates)
+        reader = SchemaReader.for(app.root)
+        [ *names, own ].uniq.select { |table| reader.table?(table) }
+      end
+
+      def outside_parent(class_name, candidates)
+        parent = candidates.dig(class_name, :superclass)
+        return nil if parent.nil? || model_base?(parent) || resolve_superclass(parent, class_name, candidates)
+
+        parent.delete_prefix("::")
       end
 
       # A key the class does not assign is read through a new connection, which an
@@ -1667,7 +1689,7 @@ module RailsAiContext
       end
 
       def static_model_details(path, class_name, file: relative_to_root(path), table_name: nil, inherited_from: [],
-                               sti: nil, parent_model: nil, primary_key: nil)
+                               sti: nil, parent_model: nil, primary_key: nil, table_set_by: nil)
         own = own_body(@source_cache[path] ||= source_walk(path), class_name)
         calls = singleton_lookup([ [ class_name, path ], *Array(inherited_from) ])
         data, unread, bases_unread, hidden = merge_class_and_bases(own, class_name, calls, inherited_from, file: path,
@@ -1679,7 +1701,8 @@ module RailsAiContext
                                           .map { |m| m[:name].to_s }.reject { |name| scope_names.include?(name) }
         details = {
           confidence: Confidence::STATIC,
-          table_name: table_name || TableName.stem(path),
+          table_name: table_name || (TableName.stem(path) unless table_set_by),
+          table_set_by: table_set_by,
           primary_key: primary_key,
           associations: with_join_tables(reject_excluded_associations(data[:associations]), path, class_name),
           validations: static_validations(data, [ path, *Array(inherited_from).map(&:last) ]),

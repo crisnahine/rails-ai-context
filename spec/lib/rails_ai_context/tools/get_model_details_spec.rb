@@ -1257,6 +1257,14 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
   it "answers for a model whose parent class comes from a gem, and not for a plain class there" do
     Dir.mktmpdir do |dir|
       FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      FileUtils.mkdir_p(File.join(dir, "db"))
+      File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+        ActiveRecord::Schema[8.0].define(version: 1) do
+          create_table "tags" do |t|
+            t.string "name"
+          end
+        end
+      RUBY
       File.write(File.join(dir, "app", "models", "tag.rb"), <<~RUBY)
         class Tag < ActsAsTaggableOn::Tag
           belongs_to :badge, optional: true
@@ -1279,6 +1287,41 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(tag).to include("belongs_to")
       expect(tag).to include("badge")
       expect(plain).to include("Model 'DecoratedTag' not found")
+    end
+  end
+
+  # Forem's EmailMessage < Ahoy::Message lives in ahoy_messages, the table its gem parent sets.
+  describe "a model whose parent class comes from a gem" do
+    def email_message_text(tables)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "app", "models", "email_message.rb"), <<~RUBY)
+          class EmailMessage < Ahoy::Message
+            belongs_to :email, optional: true
+          end
+        RUBY
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.0].define(version: 1) do
+          #{tables.map { |t| "  create_table \"#{t}\" do |t|\n    t.string \"to\"\n  end" }.join("\n")}
+          end
+        RUBY
+        models = RailsAiContext::Introspectors::ModelIntrospector.new(RailsAiContext::StaticApp.new(dir)).static_call
+        described_class.reset_cache!
+        allow(described_class).to receive(:cached_context).and_return(models: models)
+        described_class.call(model: "EmailMessage").content.first[:text]
+      end
+    end
+
+    it "takes the one table of its parent's names the schema holds" do
+      expect(email_message_text(%w[ahoy_messages users])).to include("**Table:** `ahoy_messages`")
+    end
+
+    it "names the parent as setting the table when the schema holds more than one candidate" do
+      text = email_message_text(%w[ahoy_messages messages])
+
+      expect(text).to include("**Table:** set by `Ahoy::Message`, which the static tier did not read")
+      expect(text).not_to include("**Table:** `")
     end
   end
 
