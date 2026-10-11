@@ -105,6 +105,27 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  describe "a Paperclip attachment" do
+    it "names the macro and the attachment, not its options" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "media_attachment.rb"), <<~RUBY)
+          class MediaAttachment < ApplicationRecord
+            has_attached_file :file, styles: ->(f) { file_styles(f) }, processors: ->(f) { file_processors(f) }
+            has_attached_file :thumbnail
+          end
+        RUBY
+        models = RailsAiContext::Introspectors::ModelIntrospector.new(RailsAiContext::StaticApp.new(dir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(models: models)
+
+        text = described_class.call(model: "MediaAttachment").content.first[:text]
+
+        expect(text).to include("## Macros\n- `has_attached_file :file`\n- `has_attached_file :thumbnail`")
+        expect(text).not_to include("file_styles")
+      end
+    end
+  end
+
   describe "an app that does not load Active Record" do
     it "says there is no such model without claiming the class exists" do
       Dir.mktmpdir do |dir|

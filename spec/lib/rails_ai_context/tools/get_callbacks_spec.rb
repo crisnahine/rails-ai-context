@@ -50,6 +50,40 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
     end
   end
 
+  # Paperclip's has_attached_file defines file_validate and post_process with define_model_callbacks.
+  describe "callbacks on a library's chains" do
+    it "lists them with the model's own" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "media_attachment.rb"), <<~RUBY)
+          class MediaAttachment < ApplicationRecord
+            has_attached_file :file
+            before_file_validate :set_type_and_extension
+            before_file_validate :check_video_dimensions
+            has_attached_file :thumbnail
+            after_post_process :set_meta
+            before_create :set_processing
+          end
+        RUBY
+        model = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          define_model_callbacks :file_validate, only: :before
+          define_model_callbacks :post_process, only: :after
+        end
+        model.define_singleton_method(:name) { "MediaAttachment" }
+        details = RailsAiContext::Introspectors::ModelIntrospector.new(RailsAiContext::StaticApp.new(dir)).send(:extract_model_details, model)
+        described_class.reset_cache!
+        allow(described_class).to receive(:cached_context).and_return(models: { "MediaAttachment" => details })
+
+        text = described_class.call(model: "MediaAttachment").content.first[:text]
+
+        expect(text).to include("- **before_create** → `:set_processing`",
+                                "- **before_file_validate** → `:set_type_and_extension`, `:check_video_dimensions`",
+                                "- **after_post_process** → `:set_meta`")
+      end
+    end
+  end
+
   describe "a conditional callback" do
     before do
       described_class.reset_cache!

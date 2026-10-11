@@ -42,8 +42,11 @@ module RailsAiContext
           pg_search_scope multisearchable searchkick
           acts_as_list acts_as_tenant multi_tenant acts_as_taggable acts_as_taggable_on
           has_ancestry acts_as_nested_set has_closure_tree acts_as_tree
-          state_machine workflow
+          state_machine workflow has_attached_file
         ].to_set.freeze
+
+        # Listed by the macro and its first argument: the options are lambdas that read as noise on one line.
+        NAMED_ONLY_MACROS = %i[has_attached_file].to_set.freeze
 
         def initialize
           super
@@ -162,8 +165,12 @@ module RailsAiContext
         end
 
         def record_gem_macro(node)
-          text = one_line_source(node, upto: node.block&.location&.start_offset)
-          text = text.gsub(/\s+/, " ").strip
+          first = node.arguments&.arguments&.first
+          text = if NAMED_ONLY_MACROS.include?(node.name) && first
+            "#{node.name} #{first.slice}"
+          else
+            one_line_source(node, upto: node.block&.location&.start_offset).gsub(/\s+/, " ").strip
+          end
           adds = monetized_names(node) if node.name == :monetize
           @results << { macro: :gem_macro, name: node.name, text: text, adds: adds.presence,
                         location: node.location.start_line, confidence: confidence_for(node) }.compact
