@@ -361,6 +361,36 @@ RSpec.describe RailsAiContext::Tools::GetGems do
       end
     end
 
+    # Bundler resolves a gemspec's runtime dependencies as the Gemfile's own.
+    it "keeps what a gemspec the Gemfile pulls in depends on" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile.lock"), <<~LOCK)
+          PATH
+            remote: .
+            specs:
+              my_engine (0.1.0)
+                devise (>= 4)
+
+          GEM
+            remote: https://rubygems.org/
+            specs:
+              devise (4.9.4)
+                warden (~> 1.2.3)
+              jwt (3.2.0)
+              warden (1.2.9)
+
+          DEPENDENCIES
+            my_engine!
+        LOCK
+        context = { gems: RailsAiContext::Introspectors::GemIntrospector.new(RailsAiContext::StaticApp.new(dir)).call }
+        allow(described_class).to receive(:cached_context).and_return(context)
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("## Auth\n- **devise** `4.9.4`")
+        expect(text).not_to include("**jwt**")
+      end
+    end
+
     it "keeps a framework the app loads through rails/all" do
       Dir.mktmpdir do |dir|
         expect(gems_text(dir, "require \"rails/all\"\n")).to include("**activestorage** `8.1.3`")

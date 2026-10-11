@@ -17,6 +17,7 @@ module RailsAiContext
   module GemLock
     MAX_SIZE = 5 * 1024 * 1024
     SPEC_LINE = /\A {4}(\S+) \(([^)]+)\)\s*\z/
+    SPEC_DEPENDENCY_LINE = /\A {6}(\S+)/
     DEPENDENCY_LINE = /\A {2}(\S+?)!?(?: \(.*\))?\s*\z/
     # Bundler writes a non-CRuby engine after the version: "ruby 3.1.4p0 (jruby 9.4.8.0)".
     RUBY_LINE = /\A\s+ruby (\S+)(?: \((\S+) ([^)]+)\))?/
@@ -297,6 +298,8 @@ module RailsAiContext
       in_path = false
       in_git = false
       path_remotes = []
+      path_dependencies = {}
+      spec_name = nil
       sources = {}
       specs_section = false
       content.each_line do |line|
@@ -317,7 +320,10 @@ module RailsAiContext
           # per platform. The text before the first hyphen is the version; a
           # prerelease tag ("1.70.0-beta1") is dropped along with the platform.
           versions[match[1]] ||= match[2].split("-", 2).first
+          spec_name = match[1]
           sources[match[1]] ||= if in_path then [ :path, path_remotes.last ] elsif in_git then [ :git ] else [ :gem ] end
+        elsif in_specs && in_path && spec_name && (match = line.match(SPEC_DEPENDENCY_LINE))
+          (path_dependencies[spec_name] ||= []) << match[1]
         elsif (match = line.match(RUBY_LINE)) && match[1].match?(PLAIN_VERSION)
           ruby_version = [ match[1], engine_name(match[2], match[3]) ]
         end
@@ -327,6 +333,8 @@ module RailsAiContext
       # and answering it as an app with no gems denies every gem it holds.
       return Spec.new({}, reason: "#{File.basename(path)} has no specs section") unless specs_section
 
+      # A gemspec or `path:` gem the Gemfile names brings its runtime dependencies in as the Gemfile's own, as Bundler resolves them.
+      path_dependencies.each { |name, deps| direct.merge(deps) if direct.include?(name) }
       facts = gemfile(bundle)
       Spec.new(versions, **declared_ruby(ruby_version, root, bundle, facts), direct: direct, path_remotes: path_remotes,
                sources: sources)
