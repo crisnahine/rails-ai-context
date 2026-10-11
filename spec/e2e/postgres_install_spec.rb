@@ -149,4 +149,39 @@ RSpec.describe "E2E: Postgres adapter", type: :e2e do
         "expected DROP TABLE to be rejected, got: #{result}"
     end
   end
+
+  # The round trip an agent makes, over the protocol: on PostgreSQL a query
+  # is planned in a read-only transaction before it runs.
+  describe "rails_query over MCP stdio" do
+    before(:all) do
+      seed = File.join(@builder.app_path, "tmp", "e2e_query_seed.rb")
+      File.write(seed, %(Post.create!(title: "E2E PostgreSQL probe", body: "seeded", published: true)\n))
+      result = @cli.run([ "bin/rails", "runner", seed ])
+      raise result.to_s unless result.success?
+
+      @mcp = E2E::McpStdioClient.new(@builder, timeout: 90).start!
+      @mcp.initialize!
+    end
+
+    after(:all) { @mcp&.stop! }
+
+    def text(response) = response.dig("result", "content", 0, "text").to_s
+
+    it "answers a SELECT" do
+      response = @mcp.call_tool("rails_query", { sql: "SELECT title FROM posts WHERE published" })
+
+      expect(response.dig("result", "isError")).not_to eq(true), text(response)
+      expect(text(response)).to include("E2E PostgreSQL probe")
+    end
+
+    it "refuses an UPDATE, and the row stays as it was" do
+      response = @mcp.call_tool("rails_query", { sql: "UPDATE posts SET title = 'changed by e2e'" })
+
+      expect(response.dig("result", "isError")).to eq(true), text(response)
+      expect(text(response)).to include("UPDATE")
+      after = text(@mcp.call_tool("rails_query", { sql: "SELECT title FROM posts" }))
+      expect(after).to include("E2E PostgreSQL probe")
+      expect(after).not_to include("changed by e2e")
+    end
+  end
 end
