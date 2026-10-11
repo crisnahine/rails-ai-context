@@ -140,6 +140,50 @@ RSpec.describe "a server's check of the app's files at each call" do
       end
     end
 
+    # Bootsnap's compile cache knows a file by its size and the second of its
+    # mtime: a model saved twice in one second at the same size was reloaded
+    # as the first save, and the answer said nothing of it.
+    context "with Bootsnap's compile cache loading the app's code" do
+      let(:note) do
+        "App code was saved twice within one second at the same size (app/models/post.rb); Bootsnap's compile cache " \
+          "knows a file by its size and the second it was saved, so what reflection reads, such as associations and " \
+          "enums, may be from the earlier save. Save the file again a second later, or start the server with " \
+          "DISABLE_BOOTSNAP_COMPILE_CACHE=1."
+      end
+      let(:second) { Time.now.to_i }
+
+      def save(content, millisecond, second: self.second)
+        File.write(model, content)
+        time = Time.at(second, millisecond, :millisecond)
+        File.utime(time, time, model)
+      end
+
+      def answer
+        RailsAiContext::Tools::GetConventions.call.content.first[:text]
+      end
+
+      before do
+        allow(RailsAiContext::CodeReloader).to receive(:compile_cached) { |files| files.map { |file| file.delete_prefix("#{File.realpath(root)}/").delete_prefix("#{root}/") } }
+        save("class Post\n  has_many :aaaa\nend\n", 100)
+        base.check_files_per_call!(RailsAiContext::StaticApp.new(root))
+      end
+
+      it "names a file saved again in that second at that size in every answer, until it is saved in another" do
+        save("class Post\n  has_many :bbbb\nend\n", 600)
+        expect(answer).to end_with("\n\n---\n_#{note}_")
+        expect(answer).to end_with("\n\n---\n_#{note}_")
+
+        save("class Post\n  has_many :cccc\nend\n", 0, second: second + 1)
+        expect(answer).not_to include("Bootsnap")
+      end
+
+      it "says nothing of a save that changed the size" do
+        save("class Post\n  has_many :bbbbbb\nend\n", 600)
+
+        expect(answer).not_to include("Bootsnap")
+      end
+    end
+
     it "checks again at the call after a check that failed" do
       snapshot = base::FILE_CHECK[:snapshot]
       outcomes = [ -> { raise Errno::EACCES, "app/models" }, -> { true } ]

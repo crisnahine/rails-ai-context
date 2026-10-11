@@ -213,6 +213,65 @@ RSpec.describe RailsAiContext::Fingerprinter::Snapshot do
     end
   end
 
+  # Bootsnap's compile cache knows a file by its size and the second of its
+  # mtime, so a save in the second of the one before that keeps the size
+  # gets the earlier save's code back from it.
+  describe "#same_stat_rewrites" do
+    let(:second) { Time.now.to_i }
+    let(:path) { File.join(root, "app/models/post.rb") }
+
+    def save(content, millisecond, second: self.second)
+      File.write(path, content)
+      time = Time.at(second, millisecond, :millisecond)
+      File.utime(time, time, path)
+    end
+
+    before do
+      save("class Post\n  has_many :aaaa\nend\n", 100)
+      snapshot.changed?
+    end
+
+    it "names a file saved again in that second at that size, until it is saved in another" do
+      save("class Post\n  has_many :bbbb\nend\n", 600)
+      expect(snapshot.changed?).to be(true)
+      expect(snapshot.same_stat_rewrites).to eq([ path ])
+
+      expect(snapshot.changed?).to be(false)
+      expect(snapshot.same_stat_rewrites).to eq([ path ])
+
+      save("class Post\n  has_many :cccc\nend\n", 0, second: second + 1)
+      expect(snapshot.changed?).to be(true)
+      expect(snapshot.same_stat_rewrites).to be_empty
+    end
+
+    it "names no save that changed the size, or left the content as it was" do
+      save("class Post\n  has_many :bbbbb\nend\n", 600)
+      snapshot.changed?
+      expect(snapshot.same_stat_rewrites).to be_empty
+
+      save("class Post\n  has_many :bbbbb\nend\n", 800)
+      snapshot.changed?
+      expect(snapshot.same_stat_rewrites).to be_empty
+    end
+
+    it "names one the next look comes to only after the file settled" do
+      save("class Post\n  has_many :bbbb\nend\n", 600)
+      allow(Time).to receive(:now).and_return(Time.at(second + 30))
+
+      expect(snapshot.changed?).to be(true)
+      expect(snapshot.same_stat_rewrites).to eq([ path ])
+    end
+
+    it "lets a removed file go" do
+      save("class Post\n  has_many :bbbb\nend\n", 600)
+      snapshot.changed?
+      File.delete(path)
+
+      snapshot.changed?
+      expect(snapshot.same_stat_rewrites).to be_empty
+    end
+  end
+
   # Whatever a look reports, compute agrees whether anything moved.
   it "agrees with compute about the same edits" do
     app = RailsAiContext::StaticApp.new(root)

@@ -20,6 +20,11 @@ module RailsAiContext
     # so a file younger than AstCache::RACY_WINDOW at one look has its
     # content compared at the next, and a directory that young is listed
     # again.
+    #
+    # A stat to the whole second, which is what Bootsnap's compile cache
+    # keys a file on with its size, cannot show a rewrite within the second
+    # of the write before that keeps the size. Such files are named
+    # (same_stat_rewrites) until their stat moves on.
     class Snapshot
       # What a look keeps of one directory: its stat, whether that stat was
       # old enough to trust, its listing - the directory links in it apart -
@@ -31,6 +36,7 @@ module RailsAiContext
         @prefix = SafePath.dir_prefix(@root)
         @dirs = nil
         @manifests = {}
+        @rewrites = {}
       end
 
       # Whether anything changed since the previous look; the first one only
@@ -59,7 +65,16 @@ module RailsAiContext
         # A directory the walk no longer reaches took its files with it.
         @changed = true if @dirs&.any? { |path, dir| !dirs.key?(path) && (dir.files.any? || dir.cassettes.any?) }
         @dirs = dirs
+        @rewrites.delete_if { |file, _| !File.exist?(file) } unless @rewrites.empty?
         !@first && @changed
+      end
+
+      # The files whose content changed while their size and the second of
+      # their mtime stayed as they were, so far as the looks saw: each was
+      # written again within the second of the write before, and has not
+      # been written in another second since.
+      def same_stat_rewrites
+        @rewrites.keys
       end
 
       private
@@ -182,15 +197,33 @@ module RailsAiContext
         [ [], [], [], [] ]
       end
 
-      # [mtime, digest]: the digest only while the file is young. What was
-      # seen at the last look, if anything, decides whether this is a change;
-      # a file new to a listing was counted there.
+      # [mtime, digest, size]: the digest and size only while the file is
+      # young. What was seen at the last look, if anything, decides whether
+      # this is a change; a file new to a listing was counted there.
       def look_at(file, seen, horizon, mtime = File.mtime(file))
         return seen if seen && seen[0] == mtime && !seen[1]
 
-        digest = content(file) if seen && seen[0] == mtime
-        @changed = true if seen && (seen[0] != mtime || digest != seen[1])
-        [ mtime, (digest || content(file) if mtime >= horizon) ]
+        # Seen young, and stamped in the same second since: its content is
+        # compared however long ago that was, as a whole-second stat cannot.
+        same_second = seen && seen[1] && seen[0].to_i == mtime.to_i
+        young = mtime >= horizon
+        digest = content(file) if young || same_second
+        size = File.size(file) if young || same_second
+        if seen && (seen[0] != mtime || digest != seen[1])
+          @changed = true
+          note_rewrite(file, seen, digest, size, same_second)
+        end
+        [ mtime, (digest if young), (size if young) ]
+      end
+
+      # A file stays named while its size and the second of its mtime are the
+      # ones it had when its content changed under them.
+      def note_rewrite(file, seen, digest, size, same_second)
+        if same_second && size == seen[2]
+          @rewrites[file] = true if digest != seen[1]
+        else
+          @rewrites.delete(file)
+        end
       end
 
       def content(file)

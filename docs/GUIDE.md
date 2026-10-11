@@ -1742,6 +1742,8 @@ Answers never wait on it. Every tool call and resource read first checks the wat
 
 A server whose app cannot reload code - `RAILS_ENV=test`, or production with eager loading, where `config.enable_reloading` is off - keeps the code it booted with. What reflection reads, such as associations and enums, then stays as of boot (validations and callbacks are read off the source, so they still follow the edit), and once a file under the app's autoload paths changes, every answer ends with a note naming it: restart the server to see the edit.
 
+One save a reload can miss: Bootsnap's compile cache knows a Ruby file by its size and the second of its mtime, so a file saved twice within one second at the same size can reload as the first save. Every answer then names the file until it is saved again a second later ([Known limits](COMPATIBILITY.md#known-limits)).
+
 ### How it works
 
 1. A background thread watches `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/` and `spec/` (plus the app directories of packs, in-repo engines and `extra_app_paths`) for changes

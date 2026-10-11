@@ -131,6 +131,36 @@ module RailsAiContext
       RailsAiContext.debug_fail(e, [], label: "changed_code")
     end
 
+    # Bootsnap's compile cache knows a file by its size and the second of its
+    # mtime, so a file written again within that second at the same size has
+    # its code served as it was before the write: on the reload the write
+    # set off, and on every boot after, until the file is written in another
+    # second. Bootsnap has no way to drop one entry, and nothing here moves
+    # the app's own files' stat, so each answer names them instead
+    # (BaseTool.stale_code_note). Of the files a look found rewritten so
+    # (Fingerprinter::Snapshot#same_stat_rewrites), the ones this process
+    # loads code from: its autoload paths and routes files. Relative to the
+    # app's root, sorted; empty where Bootsnap's compile cache is off.
+    def compile_cached(files)
+      return [] if files.empty? || !bootsnap_compile_cache?
+
+      root = Rails.root.to_s
+      dirs = code_dirs(root)
+      routes = Rails.application.routes_reloader.paths.map(&:to_s)
+      files.select { |file| file.end_with?(".rb") && (routes.include?(file) || dirs.any? { |dir| file.start_with?("#{dir}/") }) }
+        .map { |file| file.delete_prefix("#{root}/") }.sort
+    rescue StandardError => e
+      RailsAiContext.debug_fail(e, [], label: "compile_cached")
+    end
+
+    # Bootsnap answers Ruby's load_iseq hook, which every require and load
+    # asks, once its compile cache is set up; DISABLE_BOOTSNAP_COMPILE_CACHE
+    # leaves the hook unset.
+    def bootsnap_compile_cache?
+      defined?(Bootsnap::CompileCache::ISeq) && defined?(RubyVM::InstructionSequence) &&
+        RubyVM::InstructionSequence.respond_to?(:load_iseq) ? true : false
+    end
+
     # Zeitwerk calls this inside the require, so it only records.
     def code_loaded(abspath)
       root = LOADED_CODE[:root]
@@ -142,11 +172,14 @@ module RailsAiContext
       nil
     end
 
-    # The app's own autoload paths, not an engine's in a gem.
     def code_files(root)
+      code_dirs(root).flat_map { |dir| Dir.glob(File.join(dir, "**", "*.rb")) }.uniq
+    end
+
+    # The app's own autoload paths, not an engine's in a gem.
+    def code_dirs(root)
       dirs = ActiveSupport::Dependencies.autoload_paths + ActiveSupport::Dependencies.autoload_once_paths
       dirs.map(&:to_s).select { |dir| dir.start_with?("#{root}/") }.uniq
-        .flat_map { |dir| Dir.glob(File.join(dir, "**", "*.rb")) }.uniq
     end
 
     def code_stat(file)
@@ -155,6 +188,6 @@ module RailsAiContext
     rescue SystemCallError
       nil
     end
-    private_class_method :code_loaded, :code_files, :code_stat
+    private_class_method :code_loaded, :code_files, :code_dirs, :code_stat
   end
 end

@@ -55,7 +55,7 @@ RSpec.configure do |config|
   # a file one example writes cannot drop the caches, or put a stale-code
   # note, under the next.
   config.before(:each) do
-    RailsAiContext::Tools::BaseTool::FILE_CHECK.merge!(snapshot: nil, running: nil, finished: nil, stale_code: nil)
+    RailsAiContext::Tools::BaseTool::FILE_CHECK.merge!(snapshot: nil, running: nil, finished: nil, stale_code: nil, compile_cached: nil)
     RailsAiContext::CodeReloader::LOADED_CODE[:mutex].synchronize { RailsAiContext::CodeReloader::LOADED_CODE[:files] = nil }
   end
 

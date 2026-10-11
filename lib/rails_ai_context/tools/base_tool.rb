@@ -75,8 +75,10 @@ module RailsAiContext
       # did. The snapshot is nil until a server starts, so a process that is
       # no server (the CLI, rake) never walks the tree. `stale_code` is what a
       # server that cannot reload found changed since it loaded it
-      # (CodeReloader.changed_code).
-      FILE_CHECK = { mutex: Mutex.new, done: ConditionVariable.new, snapshot: nil, running: nil, finished: nil, stale_code: nil }
+      # (CodeReloader.changed_code), and `compile_cached` what a server that
+      # can found rewritten where Bootsnap's compile cache cannot see it
+      # (CodeReloader.compile_cached).
+      FILE_CHECK = { mutex: Mutex.new, done: ConditionVariable.new, snapshot: nil, running: nil, finished: nil, stale_code: nil, compile_cached: nil }
 
       # Session-level context tracking. Lets AI avoid redundant queries
       # by recording what tools have been called with what params.
@@ -243,7 +245,9 @@ module RailsAiContext
         #
         # An app that cannot reload keeps what reflection read at boot, so
         # instead the call notes which of its files changed since they were
-        # loaded, for every answer to name (stale_code_note).
+        # loaded, for every answer to name (stale_code_note). One that can
+        # notes the files whose reload Bootsnap answers with their code from
+        # before the last write.
         def refresh_if_files_changed!
           return if RunCache.active?
 
@@ -252,7 +256,7 @@ module RailsAiContext
 
           begin
             changed = snapshot.changed?
-            react_to_change if changed
+            react_to_change(snapshot) if changed
             done = true
           ensure
             FILE_CHECK[:mutex].synchronize do
@@ -284,10 +288,12 @@ module RailsAiContext
           end
         end
 
-        private def react_to_change
+        private def react_to_change(snapshot)
           if CodeReloader.reloadable?
             # A request the app serves already ran Rails' own reloader.
             CodeReloader.reload! unless CodeReloader.inside_app_executor?
+            cached = CodeReloader.compile_cached(snapshot.same_stat_rewrites)
+            FILE_CHECK[:mutex].synchronize { FILE_CHECK[:compile_cached] = cached }
           else
             changed = CodeReloader.changed_code
             FILE_CHECK[:mutex].synchronize { FILE_CHECK[:stale_code] = changed }
@@ -624,21 +630,31 @@ module RailsAiContext
         # The same, once app code changed under a server that cannot reload:
         # what reflection read is the code as it booted, whatever the file
         # says now. Validations and callbacks are read off the source, so
-        # they follow the edit; associations and enums do not.
+        # they follow the edit; associations and enums do not. A server that
+        # reloads says the same of a file whose reload Bootsnap answered with
+        # the code from before its last save (CodeReloader.compile_cached).
         def stale_code_banner
           note = stale_code_note
           note && "\n\n---\n_#{note}_"
         end
 
         def stale_code_note
-          files = FILE_CHECK[:stale_code]
-          return nil if files.nil? || files.empty?
-
-          named = files.size > 3 ? "#{files.first(3).join(", ")} and #{files.size - 3} more" : files.join(", ")
-          "App code changed since this server booted (#{named}); RAILS_ENV=#{RailsAiContext.environment_name} " \
-            "does not reload code, so what reflection reads, such as associations and enums, is as of boot. " \
-            "Restart the server to see the #{files.size == 1 ? "edit" : "edits"}."
+          if (files = FILE_CHECK[:stale_code])&.any?
+            "App code changed since this server booted (#{named_files(files)}); RAILS_ENV=#{RailsAiContext.environment_name} " \
+              "does not reload code, so what reflection reads, such as associations and enums, is as of boot. " \
+              "Restart the server to see the #{files.size == 1 ? "edit" : "edits"}."
+          elsif (files = FILE_CHECK[:compile_cached])&.any?
+            "App code was saved twice within one second at the same size (#{named_files(files)}); Bootsnap's " \
+              "compile cache knows a file by its size and the second it was saved, so what reflection reads, such as " \
+              "associations and enums, may be from the earlier save. Save the #{files.size == 1 ? "file" : "files"} " \
+              "again a second later, or start the server with DISABLE_BOOTSNAP_COMPILE_CACHE=1."
+          end
         end
+
+        def named_files(files)
+          files.size > 3 ? "#{files.first(3).join(", ")} and #{files.size - 3} more" : files.join(", ")
+        end
+        private :named_files
 
         # The banner without its markdown wrapper, so a JSON body can carry
         # the same sentence under a key instead of a footer that would stop it

@@ -443,6 +443,21 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   `bundle exec` entry may not start; `init` warns when it sees one.
   `spec/e2e/workspace_install_spec.rb` starts each entry the way its tool does,
   on a standalone and an in-Gemfile app. ADR-0005 records the per-tool facts.
+- **A file saved twice within one second at the same size can reload as the
+  first save.** Bootsnap's compile cache, which `config/boot.rb` sets up in a
+  new Rails app, knows a Ruby file by its size and the second of its mtime.
+  A file written again within that second at the same size gets the code
+  compiled from the earlier write back from it: on the reload the write sets
+  off, and in every process that loads the file after, the app's own server
+  and tests included, until the file is written in another second. Bootsnap
+  has no way to drop one entry, and the server does not touch the app's files
+  to move their stat, so a server that reloads code names such a file at the
+  end of every answer (under `_stale_code` in a JSON body), from the call
+  that sees the save until the file is saved again. What reflection reads,
+  such as associations and enums, may be the earlier save's meanwhile.
+  Saving the file again a second later puts the edit through, and
+  `DISABLE_BOOTSNAP_COMPILE_CACHE=1` in the server's environment turns the
+  compile cache off for that process.
 
 <br>
 

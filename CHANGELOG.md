@@ -398,6 +398,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   follows edits there.
 - **A resource read from the static tier says so**, under `_static_tier` in
   its JSON body, as a tool's JSON answer does.
+- **A Ruby file saved twice within one second at the same size is named in
+  every answer.** Bootsnap's compile cache knows a file by its size and the
+  second of its mtime, so the reload such a save sets off got the code of
+  the earlier save, and an answer showing the earlier save's associations
+  read as current. Bootsnap has no way to drop one entry, so a server that
+  reloads now ends every answer with a note naming the file until it is
+  saved in another second, and COMPATIBILITY.md lists the limit and
+  `DISABLE_BOOTSNAP_COMPILE_CACHE=1`.
 - **`rails_query` runs a read-only query that names a write keyword only
   inside a string.** `WHERE title LIKE '%update%'`, `= 'put into box'` and
   the `replace()` string function were refused as writes; a keyword or

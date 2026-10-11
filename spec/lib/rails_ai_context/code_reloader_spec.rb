@@ -185,4 +185,44 @@ RSpec.describe RailsAiContext::CodeReloader do
       expect(described_class.changed_code).to eq([])
     end
   end
+
+  # Bootsnap's compile cache answers a reload with the code a file had
+  # before a save that kept its size and the second of its mtime.
+  describe ".compile_cached" do
+    let(:files) do
+      %w[app/models/post.rb config/routes.rb spec/models/post_spec.rb config/locales/en.yml].map { |path| Rails.root.join(path).to_s }
+    end
+
+    it "names the app code and the routes among the files, which this process loads" do
+      allow(described_class).to receive(:bootsnap_compile_cache?).and_return(true)
+
+      expect(described_class.compile_cached(files)).to eq(%w[app/models/post.rb config/routes.rb])
+    end
+
+    it "names nothing where Bootsnap's compile cache is off" do
+      allow(described_class).to receive(:bootsnap_compile_cache?).and_return(false)
+
+      expect(described_class.compile_cached(files)).to eq([])
+    end
+  end
+
+  describe ".bootsnap_compile_cache?" do
+    let(:hook) { RubyVM::InstructionSequence.singleton_class }
+
+    after { hook.send(:remove_method, :load_iseq) if hook.method_defined?(:load_iseq, false) }
+
+    it "is true once Bootsnap answers Ruby's load_iseq hook" do
+      stub_const("Bootsnap::CompileCache::ISeq", Module.new)
+      hook.define_method(:load_iseq) { |_path| nil }
+
+      expect(described_class.bootsnap_compile_cache?).to be(true)
+    end
+
+    # DISABLE_BOOTSNAP_COMPILE_CACHE: Bootsnap is there, the hook is not.
+    it "is false while nothing answers the hook" do
+      stub_const("Bootsnap::CompileCache::ISeq", Module.new)
+
+      expect(described_class.bootsnap_compile_cache?).to be(false)
+    end
+  end
 end
