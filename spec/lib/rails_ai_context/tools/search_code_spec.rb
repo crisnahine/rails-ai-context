@@ -420,6 +420,73 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
     end
   end
 
+  # Zeitwerk loads a pack linked into packs/ from elsewhere in the monorepo,
+  # so the app's search reads it too, under the name the app gives it.
+  describe "a pack linked in from the app's repository" do
+    before { allow(RailsAiContext).to receive(:tier).and_return(:static) }
+
+    def with_monorepo
+      previous_root = RailsAiContext.configuration.app_root
+      Dir.mktmpdir do |repo|
+        repo = File.realpath(repo)
+        app = File.join(repo, "apps/web")
+        {
+          "apps/web/app/models/user.rb" => "class User\n  def unpaid?; end\nend\n",
+          "packages/billing/app/models/invoice.rb" => "class Invoice\n  scope :unpaid, -> { where(paid: false) }\nend\n",
+          "packages/billing/config/database.yml" => "password: unpaid\n"
+        }.each do |rel, body|
+          FileUtils.mkdir_p(File.join(repo, File.dirname(rel)))
+          File.write(File.join(repo, rel), body)
+        end
+        FileUtils.mkdir_p([ File.join(repo, ".git"), File.join(app, "packs") ])
+        File.symlink("../../../packages/billing", File.join(app, "packs/billing"))
+        Dir.mktmpdir do |elsewhere|
+          File.write(File.join(elsewhere, "secret.rb"), "unpaid = :secret\n")
+          File.symlink(elsewhere, File.join(app, "packs/home"))
+          RailsAiContext.configuration.app_root = app
+          yield app
+        end
+      end
+    ensure
+      RailsAiContext.configuration.app_root = previous_root
+    end
+
+    let(:lines) { ->(rows) { rows.map { |r| "#{r[:file]}:#{r[:line_number]}" }.sort } }
+
+    it "is searched by both backends alike, from the root and as the path" do
+      skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
+
+      with_monorepo do |app|
+        pack = File.join(app, "packs/billing")
+        [ app, pack ].each do |search_path|
+          rg = lines.call(described_class.send(:search_with_ripgrep, "unpaid", search_path, nil, 1000, app, 0).first)
+          ruby = lines.call(described_class.send(:search_with_ruby, "unpaid", search_path, nil, 1000, app).first)
+
+          expect(rg).to include("packs/billing/app/models/invoice.rb:2")
+          expect(rg).not_to include(a_string_including("database.yml"))
+          expect(rg).not_to include(a_string_including("secret.rb"))
+          expect(ruby).to eq(rg)
+        end
+      end
+    end
+
+    it "takes a path through the pack, and still refuses one out of the repository" do
+      with_monorepo do
+        text = described_class.call(pattern: "unpaid", path: "packs/billing", context_lines: 0).content.first[:text]
+        expect(text).to include("packs/billing/app/models/invoice.rb:2")
+
+        file = described_class.call(pattern: "unpaid", path: "packs/billing/app/models/invoice.rb", context_lines: 0)
+        expect(file.content.first[:text]).to include("packs/billing/app/models/invoice.rb:2")
+
+        refused = described_class.call(pattern: "unpaid", path: "packs/home")
+        expect(refused.error?).to be(true)
+        expect(refused.content.first[:text]).to start_with("Path not allowed")
+        expect(described_class.call(pattern: "unpaid", path: "packs/billing/config/database.yml").content.first[:text])
+          .to start_with("Path not allowed")
+      end
+    end
+  end
+
   # A composer must be able to ask whether the trace found a `def` without
   # reading the sentence this tool renders.
   describe "the route hint on a traced controller caller" do

@@ -101,7 +101,7 @@ module RailsAiContext
     # it is missing, sensitive or a symlink out of that directory. A lockfile
     # past max_file_size still exists.
     def outside_file(dir, name)
-      found = SafePath.locate(name, under: dir)
+      found = SafePath.locate(name, under: dir, links: false)
       found.realpath if found.ok? || found.refusal == :too_large
     end
 

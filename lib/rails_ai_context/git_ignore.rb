@@ -101,6 +101,28 @@ module RailsAiContext
         nil
       end
 
+      # The directory links ripgrep would meet under `start`, in its order, past
+      # the same ignore files and `skip`; it enters none of them.
+      def dir_links(start = @root, skip: nil)
+        Dir.children(start).sort.flat_map do |name|
+          next [] if name.start_with?(".")
+
+          path = File.join(start, name)
+          stat = File.lstat(path)
+          next [] unless stat.symlink? || stat.directory?
+
+          relative = path.delete_prefix("#{@root}/")
+          next [] if skip&.call(relative, true) || verdict(path, true) == :ignore
+          next dir_links(path, skip: skip) unless stat.symlink?
+
+          File.directory?(path) ? [ path ] : []
+        rescue SystemCallError
+          []
+        end
+      rescue SystemCallError
+        []
+      end
+
       private
 
       def dir_ignored?(path)

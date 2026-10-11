@@ -22,7 +22,9 @@ module RailsAiContext
     # relative: the caller's path, relative to `under`. root: the directory
     # the sensitive patterns are matched against (the app root for most tools).
     # listed: the path came from a listing of `under`, so it is spelled as on disk.
-    def locate(relative, under:, root: under, max_size: nil, listed: false)
+    # links: a path through a directory linked in from the repository holding
+    # `root` (linked_in) is one of `under`'s; off, only `under` itself holds.
+    def locate(relative, under:, root: under, max_size: nil, listed: false, links: true)
       relative = relative.to_s
       return refuse(:traversal) if traversal?(relative)
       return refuse(:sensitive) if sensitive?(relative)
@@ -30,15 +32,20 @@ module RailsAiContext
       path = File.join(under.to_s, relative)
       real = listed ? real_file(path) : File.realpath(path)
       real_under = real_base(under)
-      return refuse(:outside) unless contained?(real, real_under)
+      linked = links && !contained?(real, real_under) ? linked_in(path, real, under, root) : nil
+      return refuse(:outside) unless linked || contained?(real, real_under)
 
       real_root = real_base(root)
       root_relative = if real == real_root then ""
       elsif contained?(real, real_root) then real.delete_prefix(dir_prefix(real_root))
+      # Named the way the app spells it: packs/billing/app/models/invoice.rb.
+      elsif linked then spelled_relative(path, root)
       # A directory the caller trusts outside the root, such as the engine around a test/dummy.
       else Pathname.new(real).relative_path_from(Pathname.new(real_root)).to_s
       end
       return refuse(:sensitive) if sensitive?(root_relative)
+      # Read where the file is too: a name inside the linked directory.
+      return refuse(:sensitive) if linked && sensitive?(real.delete_prefix(dir_prefix(linked)))
       return refuse(:missing) unless File.file?(real)
 
       limit = max_size || RailsAiContext.configuration.max_file_size
