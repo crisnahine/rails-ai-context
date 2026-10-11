@@ -103,7 +103,7 @@ module RailsAiContext
         # `_post.html.erb` and `_post.json.jbuilder` share a name but not their
         # callers: each renders only where its format is the one looked up.
         partial_format = template_format(file_path)
-        render_sites = render_sites.select { |site| renders_format?(site[:file], partial_format) }
+        render_sites = render_sites.select { |site| renders_format?(site, partial_format) }
         method_calls = {}
 
         # Primary: locals from render call sites (ground truth)
@@ -358,18 +358,71 @@ module RailsAiContext
       # Every template a render site can sit in, jbuilder's Ruby included.
       SITE_GLOB = "**/*.{erb,haml,slim,jbuilder}"
 
-      # Whether a site looks a partial of this format up. A template looks in
-      # its own format: a json.jbuilder in json, an html.erb in html, and one
-      # whose name gives none in any. A turbo_stream template looks in html
-      # too (Turbo's request accepts html), as a js one does (Rails' html
-      # fallback for js). Ruby code renders html: a broadcast, or
-      # ApplicationController.render outside a request.
-      private_class_method def self.renders_format?(site_file, format)
+      # Whether a site looks a partial of this format up: in the formats the
+      # call names, else those its place gives it (nil for any).
+      private_class_method def self.renders_format?(site, format)
         return true unless format
-        return format == "html" if site_file.end_with?(".rb")
 
-        site_format = template_format(site_file)
-        site_format.nil? || site_format == format || (format == "html" && %w[turbo_stream js].include?(site_format))
+        formats = site.key?(:formats) ? site[:formats] : template_lookup(site[:file])
+        formats.nil? || formats.include?(format)
+      end
+
+      # A template looks in its own format: a json.jbuilder in json, an
+      # html.erb in html, and one whose name gives none in any. A
+      # turbo_stream template looks in html too (Turbo's request accepts
+      # html), as a js one does (Rails' html fallback for js).
+      private_class_method def self.template_lookup(file)
+        own = template_format(file) or return nil
+        %w[turbo_stream js].include?(own) ? [ own, "html" ] : [ own ]
+      end
+
+      # `render partial: "posts/post", formats: [:json]`: the formats a call
+      # names, which Rails looks the partial up in whatever the request asked.
+      FORMATS_OPTION = /\bformats?:\s*(\[[^\]]*\]|:\w+|["']\w+["'])/
+
+      private_class_method def self.named_formats(call)
+        call[FORMATS_OPTION, 1]&.scan(/\w+/)
+      end
+
+      # The formats a call in Ruby renders its partial in. A Turbo Stream
+      # builder renders html, and so do a broadcast and
+      # ApplicationController.render outside a request. In a controller or a
+      # helper the request decides, html or json alike, unless the call sits
+      # in a `format.json { }` block of a respond_to.
+      private_class_method def self.code_site_formats(call, relative, line, format_blocks)
+        named = named_formats(call)
+        return named if named
+        return [ "html" ] if call.match?(/\bturbo_stream\.\w+/)
+
+        block = format_blocks.select { |from, to, _| from <= line && line <= to }.max_by(&:first)
+        return (block.last == "any" ? nil : [ block.last ]) if block
+        return nil if relative.match?(%r{(?:\A|/)app/(?:controllers|helpers)/})
+
+        [ "html" ]
+      end
+
+      # [first line, last line, format] of each `format.json { }` block a
+      # respond_to holds, whatever its block names the collector.
+      private_class_method def self.format_blocks(content)
+        blocks = []
+        visit = lambda do |node|
+          if node.is_a?(Prism::CallNode) && node.name == :respond_to && node.block.is_a?(Prism::BlockNode)
+            param = node.block.parameters&.parameters&.requireds&.first
+            collector = param.respond_to?(:name) ? param.name : nil
+            collect = lambda do |inner|
+              if inner.is_a?(Prism::CallNode) && inner.block && inner.receiver.is_a?(Prism::LocalVariableReadNode) && inner.receiver.name == collector
+                blocks << [ inner.block.location.start_line, inner.block.location.end_line, inner.name.to_s ]
+              end
+              inner.compact_child_nodes.each(&collect)
+            end
+            collect.call(node.block)
+          end
+          node.compact_child_nodes.each(&visit)
+        end
+        visit.call(RailsAiContext::AstCache.parse_string(content).value)
+        blocks
+      rescue => e
+        RailsAiContext.debug_fail(e, [], label: "format_blocks")
       end
 
       # A template's format as its name gives it; jbuilder's handler writes
@@ -416,9 +469,10 @@ module RailsAiContext
       # The keywords Turbo and jbuilder take beside a partial, which are not its locals.
       PARTIAL_CALL_KEYWORDS = %w[target targets action attributes method html content renderable request_id as].freeze
 
-      private_class_method def self.partial_arg_sites(content, relative, names, skip_spans: [])
+      private_class_method def self.partial_arg_sites(content, relative, names, skip_spans: [], code: false)
         lines = content.lines
         sites = []
+        blocks = nil
         content.to_enum(:scan, Introspectors::ViewTemplateIntrospector::PARTIAL_ARG).each do
           match = Regexp.last_match
           at = match.begin(0)
@@ -429,7 +483,13 @@ module RailsAiContext
           start = content[0...at].count("\n")
           start -= 1 while start.positive? && lines[start - 1].rstrip.end_with?(",")
           call = call_lines(lines, start)
-          sites << { file: relative, line: start + 1, locals: partial_call_locals(call), snippet: call.squish }
+          site = { file: relative, line: start + 1, locals: partial_call_locals(call), snippet: call.squish }
+          if code
+            site[:formats] = code_site_formats(call, relative, start + 1, blocks ||= format_blocks(content))
+          elsif (named = named_formats(call))
+            site[:formats] = named
+          end
+          sites << site
         end
         sites
       end
@@ -457,7 +517,7 @@ module RailsAiContext
             content = safe_read(path)
             next [] unless content&.include?(canonical)
 
-            partial_arg_sites(content, RailsAiContext::PortablePath.relativize(path, root), [ canonical ])
+            partial_arg_sites(content, RailsAiContext::PortablePath.relativize(path, root), [ canonical ], code: true)
           end
         end
       rescue => e
@@ -528,12 +588,10 @@ module RailsAiContext
 
               locals_passed = extract_locals_from_render(line)
 
-              sites << {
-                file: relative,
-                line: line_num,
-                locals: locals_passed,
-                snippet: snippet
-              }
+              site = { file: relative, line: line_num, locals: locals_passed, snippet: snippet }
+              named = named_formats(line)
+              site[:formats] = named if named
+              sites << site
               matched_line = true
               break # one match per call is enough
             end
