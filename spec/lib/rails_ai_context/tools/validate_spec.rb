@@ -322,6 +322,38 @@ RSpec.describe RailsAiContext::Tools::Validate do
       expect(open_if).to include("0/1 files passed")
       expect(extra_end).to include("0/1 files passed")
     end
+
+    # ERB's source opens with a `#coding:` line the count left out, so an
+    # error was reported a line below where it is.
+    it "names the template line an error is on" do
+      text = validate_erb("paren.html.erb", "<h1>T</h1>\n<p>a</p>\n<p>b</p>\n<%= link_to \"x\", ) %>\n<p>c</p>\n")
+
+      expect(text).to include("paren.html.erb - line 4: unexpected ')'")
+      expect(text).not_to include("line 5")
+    end
+
+    it "counts the line a frozen_string_literal comment adds to ERB's source" do
+      text = validate_erb("magic.html.erb", "<%# frozen_string_literal: true %>\n<p>a</p>\n<p>b</p>\n<%= link_to \"x\", ) %>\n")
+
+      expect(text).to include("magic.html.erb - line 4: unexpected ')'")
+    end
+
+    # Prism pairs an unmatched keyword with the wrapper's own `end` and blamed
+    # that, a line past the template's last.
+    it "names the line of an if left open and of an end with nothing to close" do
+      open_if = validate_erb("open_if.html.erb", "<div>\n<%- if @product -%>\n  <%= @product.name -%>\n</div>\n")
+      extra_end = validate_erb("extra_end.html.erb", "<div>\n  <%= @product.name -%>\n<%- end -%>\n</div>\n")
+
+      expect(open_if).to include("open_if.html.erb - line 2: expected an `end` to close the conditional clause")
+      expect(extra_end).to include("extra_end.html.erb - line 3: unexpected 'end'")
+      expect(open_if + extra_end).not_to match(/line [5-9]/)
+    end
+
+    it "says a bracket left open is open at the end of the template" do
+      text = validate_erb("open_paren.html.erb", "<p>a</p>\n<%\n  total = (\n%>\n<p>b</p>\n")
+
+      expect(text).to include("open_paren.html.erb - end of template: expected a matching `)`")
+    end
   end
 
   # Every Stimulus controller is an ES module in a package that declares no

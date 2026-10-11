@@ -214,24 +214,59 @@ module RailsAiContext
 
       # ── ERB validation ───────────────────────────────────────────────
 
+      # Rails compiles a template into a method body, so `yield` parses and a
+      # top-level `break` does not; the verdict comes from the same shape.
+      ERB_METHOD = [ "# encoding: utf-8\ndef __erb_syntax_check\n", "\nend" ].freeze
+      # The same with the template inside a brace block too. A keyword the
+      # template leaves unpaired then fails on its own line, where in the
+      # method alone it pairs with the wrapper's `end` and Prism blames that.
+      ERB_BLOCK = [ "# encoding: utf-8\ndef __erb_syntax_check\nproc {\n", "\n}\nend" ].freeze
+
       private_class_method def self.validate_erb(full_path)
         return [ false, "file too large", [] ] if File.size(full_path) > RailsAiContext.configuration.max_file_size
 
         content = File.binread(full_path).force_encoding("UTF-8")
         erb_src = RailsAiContext::ErbSource.compiled(content)
-        compiled = "# encoding: utf-8\ndef __erb_syntax_check\n#{erb_src}\nend"
 
-        result = AstCache.parse_string(compiled, ruby: app_ruby_version)
-        if result.success?
-          [ true, nil, [] ]
-        else
-          error = result.errors.first(5).map do |e|
-            "line #{[ e.location.start_line - 2, 1 ].max}: #{e.message}"
-          end.join("\n")
-          [ false, error + grammar_note, [] ]
-        end
+        result = parse_erb(erb_src, ERB_METHOD)
+        return [ true, nil, [] ] if result.success?
+
+        [ false, erb_errors(erb_src, content.lines.size, result).join("\n") + grammar_note, [] ]
       rescue => e
         [ false, "ERB check error: #{e.message}", [] ]
+      end
+
+      private_class_method def self.parse_erb(erb_src, wrapper)
+        AstCache.parse_string("#{wrapper[0]}#{erb_src}#{wrapper[1]}", ruby: app_ruby_version)
+      end
+
+      # Each error on the template line it names. One outside the template is
+      # the wrapper's, so the brace-block parse is asked where the unpaired
+      # keyword sits; when neither parse places the error inside, it is where
+      # the template ends, still waiting for a closing `)`, `}` or `end`.
+      private_class_method def self.erb_errors(erb_src, template_lines, result)
+        header = RailsAiContext::ErbSource.compiled_header_lines(erb_src)
+        found = erb_errors_within(result, ERB_METHOD, header, template_lines)
+        return found.first(5) if found.any?
+
+        nested = parse_erb(erb_src, ERB_BLOCK)
+        found = erb_errors_within(nested, ERB_BLOCK, header, template_lines)
+        return found.first(5) if found.any?
+
+        # What both wrappers report is the template's; the rest names a wrapper.
+        messages = result.errors.map(&:message).uniq
+        shared = messages & nested.errors.map(&:message)
+        (shared.any? ? shared : messages).first(5).map { |message| "end of template: #{message}" }
+      end
+
+      # ERB writes its magic comments above the template's first line, and the
+      # wrapper's opening lines come before those.
+      private_class_method def self.erb_errors_within(result, wrapper, header, template_lines)
+        offset = wrapper[0].count("\n") + header
+        result.errors.filter_map do |e|
+          line = e.location.start_line - offset
+          "line #{line}: #{e.message}" if line.between?(1, [ template_lines, 1 ].max)
+        end.uniq
       end
 
       # ── JavaScript validation ────────────────────────────────────────
