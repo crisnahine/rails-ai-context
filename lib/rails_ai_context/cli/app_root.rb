@@ -309,10 +309,15 @@ module RailsAiContext
         return nil if ENV["BUNDLE_BIN_PATH"] || ENV[HANDOFF_ENV]
 
         require_relative "../gem_lock"
-        lock = GemLock.for(root)
-        version = lock.version("rails-ai-context") or return nil
-        gemfile = GemLock.bundle(root).gemfile
+        # A BUNDLE_GEMFILE someone set (a dual boot's Gemfile.next) picks the
+        # bundle, as it does for bundle exec; resolve_app_root! has already
+        # made it absolute.
+        named = ENV["BUNDLE_GEMFILE"].to_s
+        gemfile = named.empty? ? GemLock.bundle(root).gemfile : named
         return nil unless gemfile && File.file?(gemfile)
+
+        lock = named.empty? ? GemLock.for(root) : GemLock.for_gemfile(gemfile, root)
+        version = lock&.version("rails-ai-context") or return nil
 
         copy = bundled_copy(lock.source("rails-ai-context"), version, gemfile)
         return nil if copy.nil? || real(copy).b == real(OWN_COPY).b
