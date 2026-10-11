@@ -510,15 +510,42 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
   end
 
   describe "a table rebuilt from migrations" do
-    def replayed_table(table, *migrations)
-      replayed = Dir.mktmpdir do |dir|
-        migrations.each_with_index { |src, i| File.write(File.join(dir, "2024010100000#{i}_step#{i}.rb"), src) }
-        RailsAiContext::Introspectors::MigrationReplay.tables(dir, pk_type: "bigint")
+    def replayed_table(table, *migrations, adapter: "postgresql")
+      schema = Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db/migrate"))
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config/database.yml"), "development:\n  adapter: #{adapter}\n  database: app\n")
+        migrations.each_with_index { |src, i| File.write(File.join(dir, "db/migrate/2024010100000#{i}_step#{i}.rb"), src) }
+        RailsAiContext::Introspectors::SchemaIntrospector.new(RailsAiContext::StaticApp.new(dir)).call
       end
-      allow(described_class).to receive(:cached_context).and_return({
-        schema: { adapter: "static_parse", tables: replayed, total_tables: replayed.size }, models: {}
-      })
+      allow(described_class).to receive(:cached_context).and_return({ schema: schema, models: {} })
       described_class.call(table: table, detail: "full").content.first[:text]
+    end
+
+    let(:relaxed_widgets) do
+      [ <<~CREATE, <<~RELAX ]
+        class CreateWidgets < ActiveRecord::Migration[8.1]
+          def change
+            create_table :widgets do |t|
+              t.string :token, null: false
+              t.string :name
+              t.string :slug, default: "x", null: false
+              t.datetime :seen_at
+              t.datetime :touched_at
+            end
+          end
+        end
+      CREATE
+        class RelaxWidgets < ActiveRecord::Migration[8.1]
+          def up
+            change_column :widgets, :token, :string, null: true
+            change_column :widgets, :name, :string, default: "unnamed"
+            change_column :widgets, :slug, :text
+            change_column :widgets, :seen_at, :datetime, default: -> { "CURRENT_TIMESTAMP" }
+            change_table(:widgets) { |t| t.change :touched_at, :datetime, default: -> { "CURRENT_TIMESTAMP" } }
+          end
+        end
+      RELAX
     end
 
     it "keeps a Symbol where: on an index as the column it names" do
@@ -566,34 +593,24 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(text).to include("| slug | string | yes |")
     end
 
-    it "applies change_column's null: and default: with its type" do
-      text = replayed_table("widgets", <<~CREATE, <<~RELAX)
-        class CreateWidgets < ActiveRecord::Migration[8.1]
-          def change
-            create_table :widgets do |t|
-              t.string :token, null: false
-              t.string :name
-              t.string :slug, default: "x", null: false
-              t.datetime :seen_at
-              t.datetime :touched_at
-            end
-          end
-        end
-      CREATE
-        class RelaxWidgets < ActiveRecord::Migration[8.1]
-          def up
-            change_column :widgets, :token, :string, null: true
-            change_column :widgets, :name, :string, default: "unnamed"
-            change_column :widgets, :slug, :text
-            change_column :widgets, :seen_at, :datetime, default: -> { "CURRENT_TIMESTAMP" }
-            change_table(:widgets) { |t| t.change :touched_at, :datetime, default: -> { "CURRENT_TIMESTAMP" } }
-          end
-        end
-      RELAX
+    # PostgreSQL alters only what change_column names; MySQL carries the old null and default over.
+    it "applies change_column's null: and default: with its type, keeping the rest, on PostgreSQL" do
+      text = replayed_table("widgets", *relaxed_widgets, adapter: "postgresql")
 
       expect(text).to include("| token | string | yes |  |")
       expect(text).to include("| name | string | yes | unnamed |")
       expect(text).to include("| slug | text | **NO** | x |")
+      expect(text).to include(%q(| seen_at | datetime | yes | -> { "CURRENT_TIMESTAMP" } |))
+      expect(text).to include(%q(| touched_at | datetime | yes | -> { "CURRENT_TIMESTAMP" } |))
+    end
+
+    # SQLite rebuilds the column from the options given, so a type-only change drops NOT NULL and the default.
+    it "rebuilds a change_column from the options given, on SQLite" do
+      text = replayed_table("widgets", *relaxed_widgets, adapter: "sqlite3")
+
+      expect(text).to include("| token | string | yes |  |")
+      expect(text).to include("| name | string | yes | unnamed |")
+      expect(text).to include("| slug | text | yes |  |")
       expect(text).to include(%q(| seen_at | datetime | yes | -> { "CURRENT_TIMESTAMP" } |))
       expect(text).to include(%q(| touched_at | datetime | yes | -> { "CURRENT_TIMESTAMP" } |))
     end

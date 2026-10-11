@@ -633,7 +633,8 @@ module RailsAiContext
 
           dirs = MigrationReplay.configured_dirs(app.root.to_s, entry) or next
           pk_type = SchemaConventions.implicit_pk_type(app.root.to_s, database: name)
-          tables = MigrationReplay.tables(dirs, pk_type: pk_type, root: app.root.to_s)
+          tables = MigrationReplay.tables(dirs, pk_type: pk_type, root: app.root.to_s,
+                                                adapter: SchemaConventions.database_adapter_for(app.root.to_s, name))
           next if tables.empty?
 
           tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
@@ -883,7 +884,8 @@ module RailsAiContext
       # add_foreign_key, add_timestamps.
       def parse_migrations
         pk_type = SchemaConventions.implicit_pk_type(app.root.to_s)
-        replayed = MigrationReplay.replayed(migrations_dirs, pk_type: pk_type, root: app.root.to_s)
+        replayed = MigrationReplay.replayed(migrations_dirs, pk_type: pk_type, root: app.root.to_s,
+                                            adapter: SchemaConventions.database_adapter_for(app.root.to_s, "primary"))
         tables = replayed.tables
         tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
 

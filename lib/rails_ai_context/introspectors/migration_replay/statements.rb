@@ -11,7 +11,7 @@ module RailsAiContext
         # A change_column_default that names no new value leaves the default.
         NOT_GIVEN = Object.new.freeze
 
-        def apply(entry, tables, pk_type)
+        def apply(entry, tables, pk_type, adapter: nil)
           table = entry[:table]
           options = entry[:options] || {}
           case entry[:action]
@@ -35,7 +35,7 @@ module RailsAiContext
           when :remove_columns then remove_columns_from(tables[table], entry[:columns])
           when :remove_reference, :remove_belongs_to then remove_reference_from(tables[table], entry[:ref], options)
           when :rename_column then rename_column_in(tables, table, entry[:column], entry[:new_name])
-          when :change_column then change_column(column_in(tables, entry), entry)
+          when :change_column then change_column(column_in(tables, entry), entry, adapter)
           when :change_column_default then change_column_default(column_in(tables, entry), entry)
           when :change_column_null then change_column_null(column_in(tables, entry), entry[:null])
           when :add_index then apply_schema_index(entry, table, tables)
@@ -159,10 +159,12 @@ module RailsAiContext
           col[:default] = SchemaConventions.format_default(new_default)
         end
 
-        # change_column builds the type from its own sizes on every adapter, and sets the
-        # default and null only when given (PostgreSQL and MySQL, 7.0 to 8.1).
-        def change_column(col, entry)
+        # change_column builds the type from its own sizes on every adapter. PostgreSQL and MySQL
+        # set the default and null only when given; SQLite rebuilds the column from the options alone (7.0 to 8.1).
+        def change_column(col, entry, adapter = nil)
           return unless col
+
+          return col.replace(column_entry(col[:name], entry[:column_type] || col[:type], entry).merge(col.slice(:primary_key))) if adapter.to_s.start_with?("sqlite")
 
           opts = entry[:options] || {}
           col[:type] = entry[:column_type] if entry[:column_type]

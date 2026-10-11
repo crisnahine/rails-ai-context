@@ -8,7 +8,7 @@ module RailsAiContext
     module MigrationReplay
       Counts = Struct.new(:unnamed, :unnamed_columns, :helper_calls, :failed_files)
       Result = Struct.new(:tables, :counts)
-      Run = Struct.new(:pk_type, :root, :real_root, :db_dirs, :read, :helpers, :counts, keyword_init: true)
+      Run = Struct.new(:pk_type, :adapter, :root, :real_root, :db_dirs, :read, :helpers, :counts, keyword_init: true)
 
       module_function
 
@@ -17,14 +17,15 @@ module RailsAiContext
 
       # @param migrations_dir [String, Array<String>] one or more migrations paths
       # @return [Hash] table name => { columns:, indexes:, foreign_keys: }
-      def tables(migrations_dir, pk_type:, root: nil)
-        replayed(migrations_dir, pk_type: pk_type, root: root).tables
+      def tables(migrations_dir, pk_type:, root: nil, adapter: nil)
+        replayed(migrations_dir, pk_type: pk_type, root: root, adapter: adapter).tables
       end
 
       # @return [Result] the tables, and the Counts the schema note reports
-      def replayed(migrations_dir, pk_type:, root: nil)
+      # adapter is database.yml's for the database, where Rails' statements differ by adapter.
+      def replayed(migrations_dir, pk_type:, root: nil, adapter: nil)
         dirs = Array(migrations_dir)
-        run = new_run(dirs, pk_type: pk_type, root: root)
+        run = new_run(dirs, pk_type: pk_type, root: root, adapter: adapter)
         tables = {}
         # Rails orders every migrations path by version, not one directory at a time.
         migration_files(dirs, root: run.real_root).each { |path| replay_file(path, tables, run) }
@@ -34,9 +35,9 @@ module RailsAiContext
         Result.new(tables, run.counts)
       end
 
-      def new_run(dirs, pk_type:, root: nil)
+      def new_run(dirs, pk_type:, root: nil, adapter: nil)
         root = File.expand_path((root || File.join(dirs.first.to_s, "..", "..")).to_s)
-        Run.new(pk_type: pk_type, root: root, real_root: real_root(root), db_dirs: db_dirs(root, dirs), read: [], helpers: Set.new,
+        Run.new(pk_type: pk_type, adapter: adapter, root: root, real_root: real_root(root), db_dirs: db_dirs(root, dirs), read: [], helpers: Set.new,
                 counts: Counts.new(0, 0, 0, 0))
       end
 
@@ -217,14 +218,14 @@ module RailsAiContext
         entries.each { |entry| entry[:migration_version] = version }
 
         # Migration[5.0] and older run Compatibility::V5_0, which keys a table and its references with integer.
-        dispatch(entries, tables, version && (version <=> [ 5, 0 ]) <= 0 ? "integer" : run.pk_type)
+        dispatch(entries, tables, version && (version <=> [ 5, 0 ]) <= 0 ? "integer" : run.pk_type, run.adapter)
         mark_inferred(tables, inferred, inferred_existed) if used_inferred
         count(entries, run.counts)
       end
 
       # Each statement on the table it names, a block's on the table its block
       # opened; only a table definition (create_table's block) indexes timestamps.
-      def dispatch(entries, tables, pk_type)
+      def dispatch(entries, tables, pk_type, adapter = nil)
         current_table = nil
         creating = false
         entries.each do |entry|
@@ -242,7 +243,7 @@ module RailsAiContext
               creating = entry[:action] == :create_table
             when :drop_table, :rename_table then current_table = nil
             end
-            made = Statements.apply(entry, tables, pk_type)
+            made = Statements.apply(entry, tables, pk_type, adapter: adapter)
             current_table, creating = made, true if entry[:action] == :create_join_table
           elsif entry[:type] == :create_table
             current_table = entry[:table]

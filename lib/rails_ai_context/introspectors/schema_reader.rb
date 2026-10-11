@@ -53,7 +53,8 @@ module RailsAiContext
         migrate_dirs = MigrationReplay.migration_dirs(root)
         if MigrationReplay.migration_files(migrate_dirs, root: root).any?
           pk_type = SchemaConventions.implicit_pk_type(root)
-          return from_tables(MigrationReplay.tables(migrate_dirs, pk_type: pk_type, root: root),
+          return from_tables(MigrationReplay.tables(migrate_dirs, pk_type: pk_type, root: root,
+                                                        adapter: SchemaConventions.database_adapter_for(root, "primary")),
                              source: :migrations, path: migrate_dirs.first)
         end
 
