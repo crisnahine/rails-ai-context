@@ -167,6 +167,35 @@ RSpec.describe RailsAiContext::Doctor do
       expect(fixes.join("\n")).not_to match(/rails-ai-context (context|init)/)
       expect(fixes).to include("Run `rails ai:context`", "Run `rails generate rails_ai_context:install` to fix")
     end
+
+    # Typed with --app-path from the folder above, a bare command ran there:
+    # `init` set up every app in the folder, and `bin/rails` was no file.
+    context "typed in the folder above the app" do
+      let(:above) { File.dirname(Rails.application.root.to_s) }
+      let(:app_dir) { File.basename(Rails.application.root.to_s) }
+
+      def fixes_from_above(standalone:)
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(standalone)
+        described_class.new(Rails.application, from: above).run[:checks].filter_map(&:fix)
+      end
+
+      it "gives the binary the app with --app-path" do
+        expect(fixes_from_above(standalone: true)).to include("Run `rails-ai-context --app-path #{app_dir} context`",
+                                                              "Run `rails-ai-context --app-path #{app_dir} init` to fix")
+      end
+
+      it "runs the app's other commands in the app" do
+        expect(fixes_from_above(standalone: false)).to include("Run `cd #{app_dir} && rails ai:context`",
+                                                               "Run `cd #{app_dir} && rails generate rails_ai_context:install` to fix")
+      end
+
+      it "runs a database task in the app" do
+        doctor = described_class.new(Rails.application, from: above)
+        allow(doctor).to receive(:database_states).and_return([ { name: "primary", config: nil, pending: [ { version: "1", name: "X" } ] } ])
+
+        expect(doctor.send(:check_pending_migrations).fix).to eq("Run `cd #{app_dir} && RAILS_ENV=#{Rails.env} bin/rails db:migrate`")
+      end
+    end
   end
 
   describe ".report_lines" do
@@ -1405,6 +1434,41 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
 
+    # A .gitignore pattern is read from the .gitignore it is in, and git runs
+    # in a repository: typed from the folder above the app, a fix spelled from
+    # there ignored nothing, and `git rm --cached` found no repository.
+    context "typed in the folder above the app" do
+      def check_from_above(dir)
+        described_class.new(RailsAiContext::StaticApp.new(File.join(dir, "blog")), from: dir).send(:check_security_gitignore)
+      end
+
+      it "names the app's own .gitignore, and the pattern as it reads it" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "blog"))
+          File.write(File.join(dir, "blog", ".env.local"), "A=1\n")
+          File.write(File.join(dir, "blog", ".gitignore"), "log/\n")
+
+          expect(check_from_above(dir)).to have_attributes(message: "blog/.env.local not in .gitignore",
+                                                           fix: "Add to blog/.gitignore: `.env.local`")
+        end
+      end
+
+      it "runs git in the app's repository" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "blog", "config"))
+          File.write(File.join(dir, "blog", "config", "master.key"), "x\n")
+          File.write(File.join(dir, "blog", ".gitignore"), "/config/*.key\n")
+          system("git", "-C", File.join(dir, "blog"), "init", "-q", out: File::NULL, err: File::NULL) or raise "git init failed"
+          system("git", "-C", File.join(dir, "blog"), "add", "-f", "config/master.key", out: File::NULL, err: File::NULL) or raise "git add failed"
+
+          expect(check_from_above(dir)).to have_attributes(
+            message: "blog/config/master.key is committed",
+            fix: "Run `git -C blog rm --cached config/master.key` and rotate it: the history still holds it"
+          )
+        end
+      end
+    end
+
     # Git answers what a commit takes: every ignore rule it reads, and the
     # files it tracks already, which no rule takes back out.
     context "inside a git repository" do
@@ -1801,6 +1865,29 @@ RSpec.describe RailsAiContext::Doctor do
       expect(check.fix).to be_nil
     end
 
+    # `bundle install` runs where the Gemfile is: typed in the folder above
+    # an app it found none there.
+    context "typed in the folder above the app" do
+      def gems_from(app, typed)
+        described_class.new(RailsAiContext::StaticApp.new(File.join(@top, app)), from: typed).send(:check_gems)
+      end
+
+      it "runs bundle install in the app that has its own Gemfile" do
+        write("web/Gemfile", %(gem "rails"\n))
+
+        expect(gems_from("web", @top)).to have_attributes(message: "web/Gemfile.lock not found", fix: "Run `cd web && bundle install`")
+      end
+
+      it "runs it where a monorepo's shared Gemfile is" do
+        FileUtils.mkdir_p(File.join(@top, ".git"))
+        write("Gemfile", %(gem "rails"\n))
+        write("web/config/boot.rb", %(ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../../Gemfile", __dir__)\n))
+
+        expect(gems_from("web", @top)).to have_attributes(message: "Gemfile.lock not found", fix: "Run `bundle install`")
+        expect(gems_from("web", File.join(@top, "web"))).to have_attributes(message: "../Gemfile.lock not found", fix: "Run `cd .. && bundle install`")
+      end
+    end
+
     context "in an engine's test/dummy" do
       let(:engine) { @top }
       let(:dummy) { File.join(@top, "test/dummy") }
@@ -1867,6 +1954,20 @@ RSpec.describe RailsAiContext::Doctor do
           expect(doctor.send(:check_pending_migrations).fix).to eq("Run `RAILS_ENV=#{Rails.env} bin/rails db:migrate` at the engine's root")
         end
 
+        # The engine's bundle and suite are where it was typed; the dummy
+        # app's own commands run in test/dummy.
+        it "runs each command where it belongs" do
+          File.delete(File.join(@top, "Gemfile.lock"), File.join(@top, "test/test_helper.rb"), File.join(@top, "test/models/article_test.rb"),
+                      File.join(@top, "test/dummy/db/schema.rb"))
+
+          expect(doctor.send(:check_gems)).to have_attributes(message: "Gemfile.lock not found", fix: "Run `bundle install`")
+          expect(doctor.send(:check_tests).fix).to eq("Run `rails generate rspec:install` or use default Minitest")
+          expect(doctor.send(:check_schema).fix).to eq("Run `cd test/dummy && rails db:schema:dump`")
+          # From the dummy app, the engine's suite is two folders up.
+          expect(described_class.new(RailsAiContext::StaticApp.new(dummy)).send(:check_tests).fix)
+            .to eq("Run `cd ../.. && rails generate rspec:install` or use default Minitest")
+        end
+
         it "names a SQLite database the dummy app reads from its root under test/dummy" do
           config = ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, "primary", { adapter: "sqlite3", database: "storage/development.sqlite3" })
           allow(doctor).to receive(:database_states).and_return([ { name: "primary", config: config, error: ActiveRecord::NoDatabaseError.new("no") } ])
@@ -1885,7 +1986,7 @@ RSpec.describe RailsAiContext::Doctor do
 
           expect(doctor.send(:check_security_gitignore)).to have_attributes(
             message: "test/dummy/config/master.key is committed",
-            fix: "Run `git rm --cached test/dummy/config/master.key`, add `test/dummy/config/master.key` to .gitignore, " \
+            fix: "Run `git -C test/dummy rm --cached config/master.key`, add `config/master.key` to test/dummy/.gitignore, " \
                  "and rotate it: the history still holds it"
           )
         end
@@ -1973,7 +2074,8 @@ RSpec.describe RailsAiContext::Doctor do
           File.delete(File.join(@top, ".rails-ai-context.yml"))
           write("test/dummy/.rails-ai-context.yml", "ai_tools:\n- claude\n")
 
-          expect(doctor.send(:check_mcp_json).fix).to eq("Run `#{RailsAiContext::InstallMode.command(:install)}` to fix")
+          # Typed at the engine's root, the dummy app's install runs in the dummy app.
+          expect(doctor.send(:check_mcp_json).fix).to eq("Run `cd test/dummy && #{RailsAiContext::InstallMode.command(:install)}` to fix")
         end
       end
     end
@@ -2061,6 +2163,22 @@ RSpec.describe RailsAiContext::Doctor do
       expect(check.message).to eq(%(the #{Rails.env} database shop_development cannot be reached: connection to server at "127.0.0.1", ) +
                                   "port 5432 failed: Connection refused")
       expect(check.fix).to eq("Start the database server, or fix its settings in config/database.yml")
+    end
+
+    # Typed in the folder above the app, `bin/rails` there was no file, and
+    # config/database.yml none of the app's.
+    it "runs the task in the app, and names its settings from where it was typed" do
+      above = described_class.new(RailsAiContext::StaticApp.new(@root), from: File.dirname(@root))
+      allow(above).to receive(:database_states).and_return([
+        { name: "primary", config: database_named("primary", "shop_development"), error: ActiveRecord::NoDatabaseError.new("no") },
+        { name: "queue", config: database_named("queue", "shop_queue"), error: ActiveRecord::ConnectionNotEstablished.new("refused") }
+      ])
+      app_dir = File.basename(@root)
+
+      expect(above.send(:check_pending_migrations).fix).to eq(
+        "Run `cd #{app_dir} && RAILS_ENV=#{Rails.env} bin/rails db:prepare`; " \
+        "Start the database server, or fix its settings in #{app_dir}/config/database.yml"
+      )
     end
   end
 end
