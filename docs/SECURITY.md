@@ -104,9 +104,9 @@ lock in WAL mode does not block it.
 
 - Default: 100 rows
 - Configurable: `config.query_row_limit` (hard cap: 1000)
-- Applied as a `LIMIT` clause appended to the query. A `LIMIT` or `FETCH FIRST` that ends the query is lowered to the cap, and one inside a subquery is left as written
-- The rows that come back are cut to the cap too, so the answer holds it whatever the database made of the text
-- When the cap holds rows back, the answer says so in every format - a note such as `100 rows shown; the query returned at least this many (the row limit of 100; pass limit: up to 1000 to see more)`, so a partial result is never mistaken for the whole one. In CSV output the note sits after a blank line, outside the comma block, so a parser still reads clean rows
+- Applied as a `LIMIT` clause appended to the query, which fetches **one row past the cap** (`cap + 1`): a `LIMIT` or `FETCH FIRST` that ends the query is rewritten to `min(n, cap + 1)`, and one inside a subquery is left as written
+- The rows that come back are cut to the cap, so the answer holds it whatever the database made of the text
+- The note that rows were held back is added **only when more than the cap came back** - the extra row proves the cap actually cut the answer - then the extra row is dropped. A result that exactly fills the cap (every row fit) gets no note, which fixes the old "N rows shown; the query returned at least this many" appearing when nothing was held back. The note reads `100 rows shown; the query returned more (the row limit of 100; pass limit: up to 1000 to see more)` and rides every format; in CSV it sits after a blank line, outside the comma block, so a parser still reads clean rows
 
 ### Layer 4 - Sensitive column rejection
 

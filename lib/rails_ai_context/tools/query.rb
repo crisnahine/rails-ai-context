@@ -926,7 +926,7 @@ module RailsAiContext
         else
           "the row limit of #{cap}; pass limit: up to 1000 to see more"
         end
-        note = "#{cap} rows shown; the query returned at least this many (#{detail})."
+        note = "#{cap} rows shown; the query returned more (#{detail})."
         format == "csv" ? "\n\n#{note}" : "\n\n_#{note}_"
       end
 
@@ -1469,22 +1469,25 @@ module RailsAiContext
       TRAILING_LIMIT = /\bLIMIT\s+(?:(\d+)\s*,\s*)?(\d+)(\s+OFFSET\s+\d+)?\s*;?\s*\z/i
       TRAILING_FETCH = /\bFETCH\s+(FIRST|NEXT)\s+(\d+)(\s+ROWS?\s+ONLY)\s*;?\s*\z/i
 
+      # The text asks for one row past the cap, so the answer can tell a result
+      # that fit from one the cap cut (cap_rows drops the extra row). A query's
+      # own smaller LIMIT is left as written: then nothing was held back.
       private_class_method def self.apply_row_limit(sql, limit)
         return sql if sql.match?(SCHEMA_METADATA_PREFIX)
 
-        cap = [ limit, HARD_ROW_CAP ].min
+        fetch = [ limit, HARD_ROW_CAP ].min + 1
 
         if sql.match?(TRAILING_LIMIT)
-          sql.sub(TRAILING_LIMIT) { "LIMIT #{"#{$1}, " if $1}#{[ $2.to_i, cap ].min}#{$3}" }
+          sql.sub(TRAILING_LIMIT) { "LIMIT #{"#{$1}, " if $1}#{[ $2.to_i, fetch ].min}#{$3}" }
         elsif sql.match?(TRAILING_FETCH)
-          sql.sub(TRAILING_FETCH) { "FETCH #{$1} #{[ $2.to_i, cap ].min}#{$3}" }
+          sql.sub(TRAILING_FETCH) { "FETCH #{$1} #{[ $2.to_i, fetch ].min}#{$3}" }
         elsif own_limit?(sql)
           # A limit in a spelling this does not rewrite (`LIMIT 1+1`, `WITH TIES`).
           # A second one would be a syntax error, so it runs as written and cap_rows holds the cap.
           sql
         else
           # On its own line, so nothing the database reads as a line comment takes it.
-          "#{sql.sub(/;\s*\z/, "")}\nLIMIT #{cap}"
+          "#{sql.sub(/;\s*\z/, "")}\nLIMIT #{fetch}"
         end
       end
 
@@ -1502,11 +1505,12 @@ module RailsAiContext
       end
 
       # The text carries the limit. This holds it whatever the database made of
-      # that text, and marks the result truncated when it reached the cap, so
-      # the answer can say rows were held back instead of cutting them silently.
+      # that text, and marks the result truncated only when more than the cap
+      # came back - the text fetched one row past it - so the answer says rows
+      # were held back exactly when they were, and drops the extra row.
       private_class_method def self.cap_rows(result, sql, limit)
         cap = [ limit, HARD_ROW_CAP ].min
-        return result if sql.match?(SCHEMA_METADATA_PREFIX) || result.rows.size < cap
+        return result if sql.match?(SCHEMA_METADATA_PREFIX) || result.rows.size <= cap
 
         unbounded = result.respond_to?(:unbounded) && result.unbounded
         ResultProxy.new(result.columns, result.rows.first(cap), unbounded, true)
