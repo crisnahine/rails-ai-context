@@ -206,7 +206,7 @@ module RailsAiContext
 
           links, = ControllerSettings.lineage(result, name, app.root.to_s)
           lineage = links.reverse.filter_map do |link, entry, source|
-            declared = entry ? own[link] : base_class_declarations(source)
+            declared = entry ? own[link] : base_class_declarations(source, link)
             [ link, declared ] if declared
           end
           formats = lineage.each_with_object(Set.new) { |(_, declared), set| fold_formats(set, declared[:formats]) }
@@ -225,7 +225,7 @@ module RailsAiContext
       # method is the child's too unless a nearer class defines that name.
       def inherited_strong_params(result, links)
         links.each_with_object({}) do |(link, entry, source), by_name|
-          params = entry ? Array(entry[:strong_params]) : base_class_declarations(source)[:strong_params]
+          params = entry ? Array(entry[:strong_params]) : base_class_declarations(source, link)[:strong_params]
           params.each do |sp|
             next unless sp.is_a?(Hash)
 
@@ -247,10 +247,11 @@ module RailsAiContext
       end
 
       # A base the listing leaves out is read once per run however many controllers inherit it.
-      def base_class_declarations(source)
+      def base_class_declarations(source, name)
         (@base_class_declarations ||= {})[source] ||= begin
           walked = class_body_walk(source)
-          class_declarations(source, walked).merge(strong_params: extract_strong_params(source, walked))
+          actions = ActionResolver.actions_from_source(source, class_name: name)
+          class_declarations(source, walked).merge(strong_params: extract_strong_params(source, walked, actions))
         end
       end
 
@@ -333,7 +334,7 @@ module RailsAiContext
           filters: filters,
           concerns: concerns,
           concerns_unread: unread.presence,
-          strong_params: extract_strong_params(source, walked),
+          strong_params: extract_strong_params(source, walked, own),
           respond_to_formats: declared[:respond_to_formats],
           rescue_from: extract_rescue_from(source, walked),
           rate_limits: declared[:rate_limits].presence,
@@ -370,7 +371,7 @@ module RailsAiContext
           inherited_actions: (actions - own).presence,
           filters: filters,
           concerns: concerns,
-          strong_params: extract_strong_params(source, walked),
+          strong_params: extract_strong_params(source, walked, own),
           respond_to_formats: declared[:respond_to_formats],
           rescue_from: extract_rescue_from(source, walked),
           rate_limits: declared[:rate_limits].presence,
@@ -683,7 +684,8 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "extract_concerns_from_source AST")
       end
 
-      def extract_strong_params(source, walked = class_body_walk(source))
+      # An action that permits inline is still an action, not a strong-params helper.
+      def extract_strong_params(source, walked = class_body_walk(source), actions = [])
         return [] if source.nil?
 
         parse_result = AstCache.parse_string(source)
@@ -692,7 +694,7 @@ module RailsAiContext
         nested = nested_ranges(walked)
         param_methods.reject do |entry|
           offset = entry.delete(:offset)
-          nested.any? { |range| range.cover?(offset) }
+          nested.any? { |range| range.cover?(offset) } || actions.include?(entry[:name])
         end
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "extract_strong_params AST")

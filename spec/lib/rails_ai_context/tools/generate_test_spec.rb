@@ -2532,6 +2532,30 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       end
     end
 
+    it "takes no action's inline permit as the create params" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/controllers"))
+        File.write(File.join(root, "app/controllers/orders_controller.rb"), <<~RUBY)
+          class OrdersController < ApplicationController
+            def index
+              @orders = Order.where(params.permit(:number))
+            end
+
+            def create; end
+          end
+        RUBY
+        orders_test(root)
+        controllers = RailsAiContext::Introspectors::ControllerIntrospector.new(RailsAiContext::StaticApp.new(root)).send(:static_call)
+        context = described_class.cached_context.merge(controllers: controllers)
+        allow(described_class).to receive(:cached_context).and_return(context)
+
+        text = described_class.call(controller: "OrdersController").content.first[:text]
+
+        expect(text).to include("OrdersController declares no strong params, so the action reads no order params")
+        expect(text).not_to include("params: { order:")
+      end
+    end
+
     it "posts no params a controller with no strong params never reads" do
       Dir.mktmpdir do |root|
         text = orders_test(root)
