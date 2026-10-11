@@ -43,6 +43,8 @@ Tool name resolution is flexible - all of these work:
 | `get_schema` | `rails_get_schema` |
 | `rails_get_schema` | `rails_get_schema` |
 
+Over MCP the name is exact. A name the server has no tool for fails with a JSON-RPC `-32602` error, `Tool not found: <name>`, that names the nearest tools, or every tool when none is near; `data.available` lists them all.
+
 Most lookup tools accept a **`detail`** parameter: `summary` (compact), `standard` (default), or `full` (everything). Start with summary, drill down as needed. Composite tools (`rails_get_context`, `rails_analyze_feature`) do not accept `detail`.
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
@@ -792,7 +794,7 @@ In addition to tools, AI clients can read structured data through **resource tem
 
 The legacy `rails://models/{name}` form is still accepted.
 
-A read for a name the app does not have - a model, a controller, an action, a view - fails with a JSON-RPC `-32602` error whose message gives the reason and whose `data.available` lists the names there are. So does a view over the size cap. A path refused on policy fails as `Resource not found`, without saying why.
+A read for a name the app does not have - a model, a controller, an action, a view - fails with a JSON-RPC `-32602` error whose message gives the reason and whose `data.available` lists the names there are: for a view, the ones in its directory, else the app's first twenty. So does a view over the size cap, and a URI the server does not serve, whose `data.available` lists the resources and templates it does. A path refused on policy fails as `Resource not found`, without saying why.
 
 Plus 9 static resources (schema, routes, conventions, gems, controllers, config, tests, migrations, engines).
 

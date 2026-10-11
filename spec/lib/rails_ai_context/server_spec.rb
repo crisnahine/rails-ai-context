@@ -281,12 +281,17 @@ RSpec.describe RailsAiContext::Server do
         RailsAiContext.configuration.skip_tools = []
       end
 
-      it "still answers a name no tool has as the SDK does" do
-        response = server.build.handle(
-          { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rails_no_such_tool", arguments: {} } }
-        )
+      # The SDK named only the guess.
+      it "answers a name no tool has with the nearest tools, or with every tool" do
+        call = ->(name) { server.build.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: name, arguments: {} } }) }
 
-        expect(response[:error][:message]).to match(/not found|Invalid params/i)
+        near = call.call("rails_get_schemaa")[:error]
+        expect(near[:code]).to eq(-32602)
+        expect(near[:message]).to start_with("Tool not found: rails_get_schemaa. Did you mean rails_get_schema")
+        expect(near[:data][:available]).to include("rails_get_schema", "rails_get_view")
+
+        far = call.call("zzz_no_such_tool")[:error]
+        expect(far[:message]).to start_with("Tool not found: zzz_no_such_tool. The tools are: rails_analyze_feature,")
       end
     end
   end

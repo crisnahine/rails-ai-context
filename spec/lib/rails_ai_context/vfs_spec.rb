@@ -328,7 +328,7 @@ RSpec.describe RailsAiContext::VFS do
 
       it "raises for bare routes URI without controller" do
         expect { described_class.resolve("rails-ai-context://routes") }
-          .to raise_error(RailsAiContext::Error, /Unknown VFS URI/)
+          .to raise_error(RailsAiContext::ResourceUnavailable, "Resource not found: rails-ai-context://routes")
       end
 
       it "truncates payloads beyond max_tool_response_chars" do
@@ -419,17 +419,34 @@ RSpec.describe RailsAiContext::VFS do
         end
       end
 
-      it "fails the read for a missing view" do
+      it "fails the read for a missing view, naming the views there are" do
         expect { described_class.resolve("rails-ai-context://views/vfs_nonexistent_#{Process.pid}/file.erb") }
-          .to raise_error(RailsAiContext::ResourceUnavailable, /View not found/)
+          .to raise_error(RailsAiContext::ResourceUnavailable, /View not found/) { |error|
+            expect(error.data[:available]).not_to be_empty
+            expect(error.data[:available]).to all(satisfy { |name| !name.start_with?("/") })
+          }
+      end
+
+      # TOOLS.md promised `data.available` for a view as for a model, and a
+      # view read listed nothing.
+      it "names the views beside a missing one first" do
+        posts = RailsAiContext::ViewFile.each(Rails.root.to_s).map(&:last).grep(%r{\Aposts/})
+        skip "the fixture app has no posts views" if posts.empty?
+
+        expect { described_class.resolve("rails-ai-context://views/posts/nope") }
+          .to raise_error(RailsAiContext::ResourceUnavailable) { |error|
+            expect(error.data[:available]).to eq(posts.sort.first(20))
+          }
       end
     end
 
     context "unknown URI" do
-      it "raises for unrecognized URI" do
+      it "fails the read, naming the resources and templates there are" do
         expect {
           described_class.resolve("rails-ai-context://unknown/path")
-        }.to raise_error(RailsAiContext::Error, /Unknown VFS URI/)
+        }.to raise_error(RailsAiContext::ResourceUnavailable, "Resource not found: rails-ai-context://unknown/path") { |error|
+          expect(error.data[:available]).to include("rails://schema", "rails-ai-context://models/{name}", "rails-ai-context://views/{path}")
+        }
       end
     end
 
