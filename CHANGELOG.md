@@ -141,6 +141,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code and resets the caches. That costs a few milliseconds per call on a
   typical app and about 100 ms at 10,000 files, where calls close together
   share one check.
+- **Reading pending migrations writes nothing to the database.** The pending
+  list came from `MigrationContext#open`, which creates `schema_migrations`
+  and `ar_internal_metadata` in a database that lacks them. Pending is now
+  the migration files minus the versions `schema_migrations` holds. A SQLite
+  database whose file is not there is reported missing without connecting,
+  since connecting created an empty file that `db:prepare` then migrated
+  from nothing instead of loading the schema and seeds.
+- **`doctor`'s secrets check asks git.** Inside a git repository every
+  ignore rule counts: any `.gitignore` up to the repository root,
+  `.git/info/exclude` and the global excludes. A tracked secret fails as
+  committed, with `git rm --cached` and rotating it as the fix. Outside git,
+  the app's `.gitignore` is read as before.
+- **`rails_security_scan` runs a brakeman installed outside the app's
+  bundle.** It runs the gem's own `bin/brakeman` with the app's Ruby, where
+  the scan produced no report while `doctor` passed it. `doctor` runs that
+  script's `--version` the same way and warns when it does not answer.
 - **An action a concern or a parent controller defines shows its source.**
   `rails_get_controllers(controller:, action:)` read only the controller's
   own file, so an action from an included concern (namespaced ones too) or
@@ -205,7 +221,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   had been removed. Each snapshot's `PATH` now has to reach the command its
   entry runs, in the app's config and in a folder-of-apps config above it,
   and a failure names the directory that is gone and where to rerun
-  `rails-ai-context init`.
+  `rails-ai-context init`. A saved `GEM_HOME`, and each directory on a
+  saved `GEM_PATH`, has to exist too.
 - **A context file is out of date when a context run would rewrite it.**
   `doctor` compared file times, so touching a model raised "CLAUDE.md may be
   stale" and `rails ai:context`, which leaves unchanged files alone, could
@@ -217,8 +234,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`doctor` reads pending migrations in every database.** Only the primary
   was asked, so a pending migration for a second database passed. Each
   database the environment configures is asked through its own connection,
-  as `db:migrate:status` does, the message names the database, and the
-  Migrations row counts every database's files.
+  as `db:migrate:status` does, without writing to it, the message names the
+  database, and the Migrations row counts every database's files.
 - **A development database that does not exist fails `doctor`.** It scored
   93 and `--strict` exited 0. A Database row now fails, naming a database
   that does not exist (fix: `bin/rails db:prepare`) or one that does not
@@ -629,7 +646,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   files under `test/dummy`, and no hook calling a task the engine lacks,
   and it reports its MCP config once. The context files and the tools'
   hints there name `bundle exec rails-ai-context`, since `rails ai:serve`
-  and `rails 'ai:tool[...]'` exist only in the dummy app.
+  and `rails 'ai:tool[...]'` exist only in the dummy app. `doctor` reads
+  that install, run as `bin/rails app:ai:doctor` or as
+  `bundle exec rails-ai-context doctor` at the engine's root (which now
+  checks the dummy app `bin/rails` boots instead of refusing), and its fixes
+  name the commands that run there.
 - **The standalone binary uses a `listen` installed beside it** for
   `watch` and for `serve`'s live reload, behind a `listen` the app's bundle
   locks, and `doctor` checks the same one. Where there is none, a
