@@ -453,6 +453,34 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     end
   end
 
+  describe "a table rebuilt from migrations" do
+    def replayed_table(table, *migrations)
+      replayed = Dir.mktmpdir do |dir|
+        migrations.each_with_index { |src, i| File.write(File.join(dir, "2024010100000#{i}_step#{i}.rb"), src) }
+        RailsAiContext::Introspectors::MigrationReplay.tables(dir, pk_type: "bigint")
+      end
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "static_parse", tables: replayed, total_tables: replayed.size }, models: {}
+      })
+      described_class.call(table: table, detail: "full").content.first[:text]
+    end
+
+    it "keeps a Symbol where: on an index as the column it names" do
+      text = replayed_table("work_packages", <<~RUBY)
+        class CreateWorkPackages < ActiveRecord::Migration[8.1]
+          def change
+            create_table :work_packages do |t|
+              t.boolean :schedule_manually, default: true, null: false
+              t.index :schedule_manually, where: :schedule_manually
+            end
+          end
+        end
+      RUBY
+
+      expect(text).to include("`index_work_packages_on_schedule_manually` on (schedule_manually) where schedule_manually")
+    end
+  end
+
   describe ".call with no params" do
     it "reads a junk detail as standard" do
       text = described_class.call(detail: "verbose").content.first[:text]

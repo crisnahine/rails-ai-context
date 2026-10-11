@@ -347,12 +347,10 @@ module RailsAiContext
           return unless tables[current_table]
           cols = entry[:columns]&.map(&:to_s) || []
           opts = entry[:options] || {}
-          unique = opts[:unique] == true
           return if cols.empty?
 
           idx_name = opts[:name]&.to_s || SchemaConventions.default_index_name(current_table, entry[:string_key] ? cols.first : cols)
-          where = opts[:where] if opts[:where].is_a?(String)
-          tables[current_table][:indexes] << { name: idx_name, columns: cols, unique: unique, where: where }.compact
+          tables[current_table][:indexes] << SchemaConventions.index_entry(idx_name, cols, opts)
         end
       end
     end

@@ -117,6 +117,13 @@ module RailsAiContext
         columns.size > 1 ? "(#{columns.join(", ")})" : columns.first.to_s
       end
 
+      # An index a migration declares; a Symbol where: is SQL naming a column (add_index_options, 7.0 to 8.1).
+      def index_entry(name, columns, options)
+        where = options[:where]
+        where = where.to_s if where.is_a?(Symbol)
+        { name: name, columns: columns, unique: options[:unique] == true, where: (where if where.is_a?(String)) }.compact
+      end
+
       # A partial index's condition as the dump wrote it, for the end of a line.
       def where_clause(where)
         where ? " where #{where}" : ""
