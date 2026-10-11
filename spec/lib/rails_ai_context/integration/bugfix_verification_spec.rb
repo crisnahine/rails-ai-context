@@ -59,7 +59,7 @@ RSpec.describe "Bugfix verification" do
   # Fix: Added .first(max_results) after parse_rg_output.
   describe "Bug 2: ripgrep --max-count is per-file - results must be capped" do
     before do
-      skip "ripgrep not installed" unless system("which rg > /dev/null 2>&1")
+      skip "ripgrep not installed" unless RailsAiContext::Executable.on_path?("rg")
     end
 
     let(:search_root) { File.expand_path("../../../..", __dir__) }

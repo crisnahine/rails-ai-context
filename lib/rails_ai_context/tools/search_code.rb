@@ -327,7 +327,7 @@ module RailsAiContext
 
       private_class_method def self.ripgrep_available?
         return @rg_available unless @rg_available.nil?
-        @rg_available = system("which rg > /dev/null 2>&1")
+        @rg_available = Executable.on_path?("rg")
       end
 
       private_class_method def self.search_with_ripgrep(pattern, search_path, file_type, max_results, root, ctx_lines = 0, exclude_tests: false)
