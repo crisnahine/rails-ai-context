@@ -65,6 +65,23 @@ RSpec.describe RailsAiContext::Tools::Onboard do
     end
   end
 
+  describe "a model whose gem parent sets its table" do
+    it "names the parent as setting it, as model_details does" do
+      Dir.mktmpdir do |dir|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+        allow(described_class).to receive(:cached_context).and_return({
+          app_name: "Blog",
+          models: { "EmailMessage" => { table_set_by: "Ahoy::Message", associations: [ { type: "belongs_to", name: "email" } ] } },
+          schema: { adapter: "sqlite3", total_tables: 2, tables: { "ahoy_messages" => { columns: [] }, "messages" => { columns: [] } } }
+        })
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("**EmailMessage** (table set by `Ahoy::Message`, which the static tier did not read)")
+      end
+    end
+  end
+
   describe "an app with no tables yet" do
     it "names the adapter database.yml declares" do
       Dir.mktmpdir do |dir|

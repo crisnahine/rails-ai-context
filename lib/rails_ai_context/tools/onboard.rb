@@ -217,6 +217,8 @@ module RailsAiContext
               desc += " (table `#{data[:table_name]}` not found)"
             elsif data[:table_name]
               desc += " (table: `#{data[:table_name]}`)"
+            elsif data[:table_set_by]
+              desc += " (table set by `#{data[:table_set_by]}`, which the static tier did not read)"
             end
             desc += " - #{assocs.first(4).join(', ')}" if assocs.any?
             desc += ", +#{assocs.size - 4} more" if assocs.size > 4
