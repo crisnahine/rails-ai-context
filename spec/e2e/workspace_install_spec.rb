@@ -91,13 +91,19 @@ RSpec.describe "E2E: workspace of apps", type: :e2e do
       expect(File.read(workspace_file(".codex/config.toml"))).to include("[mcp_servers.rails-ai-context-shop]")
     end
 
+    # On Windows each entry starts its command through `cmd /c`, which runs
+    # the batch file a gem's executable is there.
+    def entry_argv(entry)
+      argv = [ entry["command"], *entry["args"] ]
+      Gem.win_platform? ? argv.drop(2).tap { expect(argv.first(2)).to eq(%w[cmd /c]) } : argv
+    end
+
     it "gives each app the command form of its own install" do
       servers = json_servers(".mcp.json", "mcpServers")
-      expect(servers["rails-ai-context-shop"]["command"]).to eq("rails-ai-context")
-      expect(servers["rails-ai-context-admin"]).to include(
-        "command" => "bundle",
-        "env" => { "BUNDLE_GEMFILE" => "admin/Gemfile", "RAILS_AI_CONTEXT_SERVER_NAME" => "admin-rails-ai-context" }
-      )
+      expect(entry_argv(servers["rails-ai-context-shop"]).first).to eq("rails-ai-context")
+      expect(entry_argv(servers["rails-ai-context-admin"]).first(3)).to eq(%w[bundle exec rails-ai-context])
+      expect(servers["rails-ai-context-admin"]["env"])
+        .to eq("BUNDLE_GEMFILE" => "admin/Gemfile", "RAILS_AI_CONTEXT_SERVER_NAME" => "admin-rails-ai-context")
     end
 
     it "writes each app's config and context files in the app, and none in the folder" do
