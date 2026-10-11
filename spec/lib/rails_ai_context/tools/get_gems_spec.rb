@@ -346,6 +346,32 @@ RSpec.describe RailsAiContext::Tools::GetGems do
       described_class.call.content.first[:text]
     end
 
+    it "keeps a gem the Gemfile names from another source, whose lock line ends in a bang" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "application.rb"), "require \"rails\"\n")
+        File.write(File.join(dir, "Gemfile.lock"), <<~LOCK)
+          GEM
+            remote: https://gems.contribsys.com/
+            specs:
+              sidekiq-pro (8.0.3)
+                sidekiq (>= 8.0.0)
+
+          GEM
+            remote: https://rubygems.org/
+            specs:
+              sidekiq (8.0.9)
+
+          DEPENDENCIES
+            sidekiq-pro (= 8.0.3)!
+        LOCK
+        context = { gems: RailsAiContext::Introspectors::GemIntrospector.new(RailsAiContext::StaticApp.new(dir)).call }
+        allow(described_class).to receive(:cached_context).and_return(context)
+
+        expect(described_class.call.content.first[:text]).to include("**sidekiq-pro** `8.0.3`")
+      end
+    end
+
     it "leaves out a transitive gem and a framework the app does not load" do
       Dir.mktmpdir do |dir|
         text = gems_text(dir, <<~RUBY)

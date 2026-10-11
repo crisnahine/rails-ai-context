@@ -18,7 +18,8 @@ module RailsAiContext
     MAX_SIZE = 5 * 1024 * 1024
     SPEC_LINE = /\A {4}(\S+) \(([^)]+)\)\s*\z/
     SPEC_DEPENDENCY_LINE = /\A {6}(\S+)/
-    DEPENDENCY_LINE = /\A {2}(\S+?)!?(?: \(.*\))?\s*\z/
+    # Bundler puts the "!" of a gem from its own source after the requirement: "sidekiq-pro (= 8.0.3)!".
+    DEPENDENCY_LINE = /\A {2}(\S+?)!?(?: \(.*\))?!?\s*\z/
     # Bundler writes a non-CRuby engine after the version: "ruby 3.1.4p0 (jruby 9.4.8.0)".
     RUBY_LINE = /\A\s+ruby (\S+)(?: \((\S+) ([^)]+)\))?/
     REMOTE_LINE = /\A {2}remote: (.+?)\s*\z/
