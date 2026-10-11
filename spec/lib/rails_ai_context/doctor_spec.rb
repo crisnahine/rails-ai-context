@@ -450,6 +450,42 @@ RSpec.describe RailsAiContext::Doctor do
         end
       end
 
+      # The generator saves GEM_PATH beside GEM_HOME, and a directory on it
+      # goes stale the same way.
+      context "with a GEM_PATH saved" do
+        let(:gems) { Dir.mktmpdir("gem_path_test") }
+        let(:bin) { bin_dir_with("rails-ai-context") }
+
+        after { FileUtils.rm_rf([ gems, bin ]) }
+
+        def write_gem_path(value)
+          write_toml(<<~TOML)
+            [mcp_servers.rails-ai-context]
+            command = "rails-ai-context"
+            args = ["serve"]
+
+            [mcp_servers.rails-ai-context.env]
+            PATH = "#{bin}"
+            GEM_PATH = "#{value}"
+          TOML
+        end
+
+        it "warns when a directory on it no longer exists" do
+          write_gem_path("/nonexistent/ruby/3.3.5/gems:#{gems}")
+
+          expect(check).to have_attributes(status: :warn,
+                                           message: "Codex MCP env snapshot is stale - GEM_PATH names /nonexistent/ruby/3.3.5/gems, which no longer exists")
+        end
+
+        it "passes when every directory on it exists" do
+          write_gem_path(gems)
+
+          expect(check).to have_attributes(status: :pass,
+                                           message: "Codex env snapshot in .codex/config.toml is current: its PATH reaches `rails-ai-context`, " \
+                                                    "and every directory on its GEM_PATH exists")
+        end
+      end
+
       context "when env section is followed by another TOML section" do
         let(:gem_home) { Dir.mktmpdir("gem_home_boundary") }
 
