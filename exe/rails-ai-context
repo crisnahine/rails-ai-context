@@ -81,6 +81,11 @@ STARTING_ENV = ENV.to_h.freeze
 # rather than a flag: an app whose bundle pins an older gem ignores it.
 PLACE_ENV = "RAILS_AI_CONTEXT_PLACE"
 
+# The first release whose `context` takes --no-mcp-refresh. An older copy
+# refuses a switch it does not know, and it writes no MCP config in
+# `context` either.
+MCP_REFRESH_FLAG_SINCE = "5.33.0"
+
 # After one of these tools' names `--environment` is its filter, never RAILS_ENV: this is
 # decided before boot, when no tool schema can load. cli_smoke_spec holds it to the schemas.
 ENVIRONMENT_PARAM_TOOLS = %w[env_config].freeze
@@ -1085,12 +1090,24 @@ class RailsAiContextCLI < Thor
                    "as bundle exec does..."
       bundle = Gem.bin_path("bundler", "bundle")
       flags = options[:environment] ? [ "--environment", options[:environment] ] : []
-      ok = system(handoff.env, RbConfig.ruby, bundle, "exec", "rails-ai-context", "context", *flags, chdir: Dir.pwd)
+      # This run has just written the MCP configs, Codex's from the
+      # environment the binary was started in; a `context` that refreshed
+      # them would write that one again from the bundle's.
+      flags << "--no-mcp-refresh" if refresh_flag_known?(handoff.version)
+      # The child names its files as display_place does here: X/CLAUDE.md for `init --app-path X`.
+      env = display_place ? handoff.env.merge(PLACE_ENV => display_place) : handoff.env
+      ok = system(env, RbConfig.ruby, bundle, "exec", "rails-ai-context", "context", *flags, chdir: Dir.pwd)
       return if ok
 
       $stderr.puts "Error: the bundled copy could not write the context files - see the output above. " \
                    "Retry with `#{own_command('context')}`."
       exit 1
+    end
+
+    def refresh_flag_known?(version)
+      Gem::Version.new(version.to_s) >= Gem::Version.new(MCP_REFRESH_FLAG_SINCE)
+    rescue ArgumentError
+      false
     end
 
     # Another command for this app as this one was typed: from where it was
