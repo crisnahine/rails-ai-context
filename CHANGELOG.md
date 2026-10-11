@@ -157,6 +157,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bundle.** It runs the gem's own `bin/brakeman` with the app's Ruby, where
   the scan produced no report while `doctor` passed it. `doctor` runs that
   script's `--version` the same way and warns when it does not answer.
+- **The install finds a Codex server however its name is spelled, and never
+  declares it twice.** A quoted table (`[mcp_servers."rails-ai-context"]`),
+  an inline table or dotted keys went unseen: a second table was appended,
+  and Codex refused the whole file ("duplicate key") while re-runs said
+  "(unchanged)" and `doctor` passed it. A quoted table is now replaced where
+  it stands, and two tables become one. An entry of the gem's in another
+  form is left as it is, with what to do by hand. `doctor` fails a server
+  declared twice and warns about an entry the install does not rewrite.
+- **An MCP config with trailing commas is read as VS Code reads it** (json
+  2.9 or later). Every run left `.vscode/mcp.json` as it was, kept asking
+  for the entry by hand after it had been added, and `doctor` failed the
+  file.
+- **`init` in a folder holding one app names the folder's files as the
+  folder's.** It printed `backend/.mcp.json` for the folder's `.mcp.json`.
+  Each app's `.gitignore` is now named by its app, and an app's legacy-file
+  `rm -f` line works when pasted where `init` ran.
+- **Removing one of two dropped tools keeps the file the other still
+  uses.** Removing OpenCode's files while also dropping, but keeping, Codex
+  CLI's deleted `AGENTS.md`.
 - **A generated length test sets a value the validation rejects.** A length
   validation with no maximum was tested with `""`, so
   `length: { minimum: 10 }, allow_blank: true` got the one value it allows
@@ -397,7 +416,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the app's Gemfile and start whatever copy the app names, code nobody has
   read on a repo just cloned. `init` asks its questions on the installed
   copy and has the app's copy write only the context files, so an
-  MCP-only setup, by flag or at the prompt, runs nothing of the app's. A
+  MCP-only setup, by flag or at the prompt, runs nothing of the app's, and
+  the MCP configs it writes are not written again from the bundle's
+  environment. A
   bundle not installed yet is left alone too (`bundle check` says so), so
   its failed boot still serves the static tier. The bundle is the one a
   `BUNDLE_GEMFILE` you set names (a dual boot's `Gemfile.next`), and a
@@ -681,7 +702,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that install, run as `bin/rails app:ai:doctor` or as
   `bundle exec rails-ai-context doctor` at the engine's root (which now
   checks the dummy app `bin/rails` boots instead of refusing), and its fixes
-  name the commands that run there.
+  name the commands that run there. It names every path from where it was
+  typed: at the engine's root, the dummy app's files as `test/dummy/...` and
+  the engine's own as `Gemfile.lock` and `app/views`; typed inside
+  `test/dummy`, from `../..`.
 - **The standalone binary uses a `listen` installed beside it** for
   `watch` and for `serve`'s live reload, behind a `listen` the app's bundle
   locks, and `doctor` checks the same one. Where there is none, a
