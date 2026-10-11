@@ -634,7 +634,13 @@ module RailsAiContext
 
       # ../.mcp.json for a workspace's.
       shown = Install::Program.relative_to(full_path, install_root)
-      unless cfg[:path].end_with?(".toml")
+      shape = nil
+      if cfg[:path].end_with?(".toml")
+        shape = toml_config_trouble(full_path, shown)
+        if shape&.first == :fail
+          return ConfigVerdict.new(label: label, status: :fail, problem: shape[1], fix: shape[2], unparseable: nil)
+        end
+      else
         text, _, problem = McpConfigGenerator.json_text(full_path)
         # An empty file is one install fills.
         if problem.nil? && text.strip.empty?
@@ -647,14 +653,14 @@ module RailsAiContext
 
       entries = serving_entries(tool, full_path)
       if entries.empty?
-        return ConfigVerdict.new(label: label, status: :warn, problem: "holds no rails-ai-context server", fix: install_fix,
-                                 unparseable: nil)
+        return ConfigVerdict.new(label: label, status: :warn, problem: shape&.[](1) || "holds no rails-ai-context server",
+                                 fix: shape&.[](2) || install_fix, unparseable: nil)
       end
 
       # An entry under the gem's name that runs something else (an HTTP one)
       # is its owner's to judge.
-      status, problem, fix = entries.select { |entry| entry[:own] }.filter_map { |entry| entry_trouble(entry, tool, full_path, shown) }
-                                    .min_by { |trouble| trouble.first == :fail ? 0 : 1 }
+      troubles = entries.select { |entry| entry[:own] }.filter_map { |entry| entry_trouble(entry, tool, full_path, shown) }
+      status, problem, fix = [ *troubles, shape ].compact.min_by { |trouble| trouble.first == :fail ? 0 : 1 }
       ConfigVerdict.new(label: label, status: status || :pass, problem: problem, fix: fix, unparseable: nil)
     rescue SystemCallError, IOError => e
       ConfigVerdict.new(label: label, status: :warn, problem: "cannot be read: #{e.message}", fix: install_fix, unparseable: nil)
@@ -671,6 +677,32 @@ module RailsAiContext
       end
     rescue JSON::ParserError => e
       McpConfigGenerator.parse_problem(e, text)
+    end
+
+    # What the install makes of a Codex config, read the way it reads one:
+    # [status, problem, fix], nil when it writes it. A server declared twice
+    # fails, since Codex refuses to read the file at all; an entry the
+    # install does not rewrite works, but stays as it is.
+    def toml_config_trouble(path, shown)
+      servers, closed = McpConfigGenerator.toml_servers(path)
+      if closed && servers.any? { |server| server.sections.any? }
+        return [ :fail, "#{closed}, yet it holds one, which Codex refuses to read", "Delete one of them by hand" ]
+      end
+
+      twice = servers.select(&:twice?)
+      if twice.any?
+        # Two tables and nothing else is what the install merges into one.
+        fix = twice.all?(&:rewritable?) ? "Run #{install_command(shown)} to fix" : "Delete all but one by hand"
+        return [ :fail, "it declares #{twice.map(&:name).join(', ')} twice, which Codex refuses to read", fix ]
+      end
+      return [ :warn, closed, "Write it as [mcp_servers.<name>] tables by hand" ] if closed
+
+      held = servers.select { |server| !server.rewritable? && McpConfigGenerator.own_entry?(server.name, server.argv) }
+      return nil if held.empty?
+
+      [ :warn, McpConfigGenerator.unwritable_toml(held.map(&:name)),
+        "Write #{held.one? ? "it as a [mcp_servers.#{held.first.name}] table" : 'them as [mcp_servers.<name>] tables'} by hand, " \
+        "or delete #{held.one? ? 'it' : 'them'} and run #{install_command(shown)}" ]
     end
 
     def mcp_config_path(tool)
