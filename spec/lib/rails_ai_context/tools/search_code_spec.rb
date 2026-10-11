@@ -405,6 +405,19 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       expect(text).not_to include("`>` = match line")
       expect(text).to match(%r{^app/models/post\.rb:\d+: class Post})
     end
+
+    # Trace mode joined the path to the root and searched it unchecked.
+    it "refuses a path outside the app in trace mode as in every other mode" do
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "secret.rb"), "def qzv_trace; end\n")
+        root = File.realpath(described_class.send(:rails_app).root.to_s)
+        path = Pathname.new(File.realpath(outside)).relative_path_from(Pathname.new(root)).to_s
+
+        result = described_class.call(pattern: "qzv_trace", match_type: "trace", path: path)
+        expect(result.error?).to be(true)
+        expect(result.content.first[:text]).to start_with("Path not allowed")
+      end
+    end
   end
 
   # A composer must be able to ask whether the trace found a `def` without

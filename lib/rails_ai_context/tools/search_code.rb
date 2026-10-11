@@ -124,7 +124,8 @@ module RailsAiContext
 
         # Trace mode: definition + source + callers + internal calls in one response
         if match_type == "trace"
-          return trace_method(pattern.strip, root, path, exclude_tests)
+          search_path, answer = resolve_search_path(path, root)
+          return answer || trace_method(pattern.strip, root, search_path, exclude_tests)
         end
 
         # Validate match_type
@@ -172,29 +173,8 @@ module RailsAiContext
         context_lines = [ [ context_lines.to_i, 0 ].max, 5 ].min
         offset = [ offset.to_i, 0 ].max
 
-        # Before the join, which would turn an absolute path into a subpath of
-        # the root and leave it looking merely absent.
-        return error_response("Path not allowed: #{path}") if path && RailsAiContext::SafePath.traversal?(path)
-
-        search_path = path ? File.join(root, path) : root
-        return error_response("Path not allowed: #{path}") if path && sensitive_file?(path)
-
-        # A symlink under the root can still resolve outside it; that check is
-        # on the realpath below.
-        unless File.exist?(search_path)
-          top_dirs = Dir.glob(File.join(root, "*")).select { |f| File.directory?(f) }.map { |f| File.basename(f) }.sort
-          return text_response("Path not found: #{echo_input(path)}. Top-level directories: #{top_dirs.first(15).join(', ')}")
-        end
-
-        begin
-          real_root = File.realpath(root)
-          real_search = File.realpath(search_path)
-        rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP, Errno::ENAMETOOLONG
-          return text_response("Path not found: #{echo_input(path)}")
-        end
-        return error_response("Path not allowed: #{path}") unless RailsAiContext::SafePath.contained?(real_search, real_root)
-        # A file named as the path is read whatever it is linked to.
-        return error_response("Path not allowed: #{path}") if File.file?(real_search) && sensitive_file?(real_search.delete_prefix("#{real_root}/"))
+        search_path, answer = resolve_search_path(path, root)
+        return answer if answer
 
         # The cap counts context lines too, so one below the first match's
         # leading context cut the match itself and the answer read "No results
@@ -456,6 +436,35 @@ module RailsAiContext
         [ results, search_error ]
       end
 
+      # Where a search runs: the root, or `path` under it when that resolves
+      # inside the root. [search_path, nil], or [nil, the answer that refuses
+      # the path or does not find it]. Trace mode asks it as every mode does.
+      private_class_method def self.resolve_search_path(path, root)
+        return [ root, nil ] unless path
+
+        # Before the join, which would turn an absolute path into a subpath of
+        # the root and leave it looking merely absent.
+        return [ nil, error_response("Path not allowed: #{path}") ] if RailsAiContext::SafePath.traversal?(path) || sensitive_file?(path)
+
+        search_path = File.join(root, path)
+        # A symlink under the root can still resolve outside it; that check is
+        # on the realpath below.
+        unless File.exist?(search_path)
+          top_dirs = Dir.glob(File.join(root, "*")).select { |f| File.directory?(f) }.map { |f| File.basename(f) }.sort
+          return [ nil, text_response("Path not found: #{echo_input(path)}. Top-level directories: #{top_dirs.first(15).join(', ')}") ]
+        end
+
+        real_root = File.realpath(root)
+        real_search = File.realpath(search_path)
+        return [ nil, error_response("Path not allowed: #{path}") ] unless RailsAiContext::SafePath.contained?(real_search, real_root)
+        # A file named as the path is read whatever it is linked to.
+        return [ nil, error_response("Path not allowed: #{path}") ] if File.file?(real_search) && sensitive_file?(real_search.delete_prefix("#{real_root}/"))
+
+        [ search_path, nil ]
+      rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP, Errno::ENAMETOOLONG
+        [ nil, text_response("Path not found: #{echo_input(path)}") ]
+      end
+
       # One file's rows, as ripgrep's -C and --max-count give them: at most
       # max_results matches, each with its context, overlapping context once.
       # A binary file (ripgrep's test, on the first block) gives none. True
@@ -607,12 +616,11 @@ module RailsAiContext
       # ── Trace Mode ─────────────────────────────────────────────────
       # Shows definition + source + callers + internal calls in one response
 
-      private_class_method def self.trace_method(method_name, root, path, exclude_tests)
+      private_class_method def self.trace_method(method_name, root, search_path, exclude_tests)
         # Clean input: strip "def ", "self.", parens
         cleaned = method_name.sub(/\A\s*def\s+/, "").sub(/\Aself\./, "").sub(/\(.*/, "").strip
         return text_response("Provide a method name to trace.") if cleaned.empty?
 
-        search_path = path ? File.join(root, path) : root
         lines = [ "# Trace: `#{cleaned}`", "" ]
 
         # 1. Find the definition: a `def`, else the `scope :name` that
