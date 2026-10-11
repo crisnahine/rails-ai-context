@@ -11,14 +11,22 @@ module RailsAiContext
     module ActionSource
       module_function
 
+      # The walk starts at the file the controller listing recorded and never
+      # at one guessed from the name, as every other answer about the
+      # controller does; a parent is found the way ActionPresence finds it,
+      # through the listing first.
+      #
       # @param file [String, nil] the controller's own file, relative to root
+      # @param controllers [Hash] the controller listing, name => details
       # @return [Hash, nil] the body from ActionResolver.method_body, plus
       #   :file, the file it was read from, relative to root
-      def find(root, controller_name, action, file: nil)
+      def find(root, controller_name, action, file:, controllers: {})
+        return nil unless file
+
         root = root.to_s
         name = controller_name.to_s
-        path = file && File.expand_path(file, root)
-        path = PathResolver.file_for_constant(root, name) unless path && File.file?(path)
+        path = File.expand_path(file, root)
+        lookup = ->(candidate) { listed_path(root, candidate, controllers) || PathResolver.file_for_constant(root, candidate) }
         SuperclassChain::MAX_DEPTH.times do
           source = path && PathResolver.project_file?(path, root) && SafeFile.read(path)
           break unless source
@@ -33,13 +41,20 @@ module RailsAiContext
           break if parent.nil? || ActionPresence::BASES.include?(parent)
 
           name, path = SuperclassChain.resolve_in_scope(name, parent, nesting: declaration.nesting) do |candidate|
-            (candidate_path = PathResolver.file_for_constant(root, candidate)) && [ candidate, candidate_path ]
+            (candidate_path = lookup.call(candidate)) && [ candidate, candidate_path ]
           end
           break unless name
         end
         nil
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "ActionSource.find")
+      end
+
+      def listed_path(root, name, controllers)
+        entry = controllers.is_a?(Hash) ? controllers[name] : nil
+        recorded = entry.is_a?(Hash) ? entry[:file] : nil
+        path = recorded && File.expand_path(recorded, root)
+        path if path && File.file?(path)
       end
 
       def in_class(root, path, source, name, action)

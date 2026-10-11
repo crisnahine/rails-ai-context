@@ -88,7 +88,7 @@ module RailsAiContext
         file = Payload.controller_file(context, key)
         source = file && SafeFile.read(File.join(root, file))
         body = source && Introspectors::ActionResolver.method_body(source, action.to_s, owner: key)&.merge(file: file)
-        body ||= Introspectors::ActionSource.find(root, key, action.to_s, file: file)
+        body ||= Introspectors::ActionSource.find(root, key, action.to_s, file: file, controllers: controllers)
         action_data = {
           controller: key,
           action: action.to_s,
