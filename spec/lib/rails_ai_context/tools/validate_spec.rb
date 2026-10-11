@@ -373,7 +373,13 @@ RSpec.describe RailsAiContext::Tools::Validate do
       open_if = validate_erb("open_if.html.erb", "<div>\n<%- if @product -%>\n  <%= @product.name -%>\n</div>\n")
       extra_end = validate_erb("extra_end.html.erb", "<div>\n  <%= @product.name -%>\n<%- end -%>\n</div>\n")
 
-      expect(open_if).to include("open_if.html.erb - line 2: expected an `end` to close the conditional clause")
+      # Prism 1.4 places an `if` left open at the brace that closes the block,
+      # past the template, so there the template ends with it open.
+      on_its_line = Prism.parse("proc {\nif x\n}\n").errors
+                         .find { |e| e.message.include?("conditional clause") }&.location&.start_line == 2
+      opened = on_its_line ? "line 2" : "end of template"
+      expect(open_if).to include("open_if.html.erb - #{opened}: expected an `end` to close the conditional clause")
+      expect(open_if).not_to include("`def`")
       expect(extra_end).to include("extra_end.html.erb - line 3: unexpected 'end'")
       expect(open_if + extra_end).not_to match(/line [5-9]/)
     end
