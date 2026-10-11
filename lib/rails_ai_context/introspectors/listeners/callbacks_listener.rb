@@ -159,7 +159,6 @@ module RailsAiContext
           @defined_here ||= Set.new
         end
 
-        # ActiveModel::Callbacks' kinds, `only:` narrowing them.
         def record_defined(node)
           only = Array(extract_keyword_options(node)[:only]).map(&:to_s)
           kinds = only.empty? ? KINDS : KINDS & only
