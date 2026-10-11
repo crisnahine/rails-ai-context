@@ -93,7 +93,7 @@ module RailsAiContext
       # development, so the next call in each session answered 404 "Session
       # not found", and the old transport's session reaper ran on.
       def engine_transport
-        ENGINE_TRANSPORT_LOCK.synchronize { @engine_transport ||= build_transport }
+        ENGINE_TRANSPORT_LOCK.synchronize { @engine_transport ||= build_transport(answered_whole: true) }
       end
 
       # Drops the engine's transport and closes it, which ends its sessions
@@ -110,9 +110,12 @@ module RailsAiContext
       #
       # The middleware and the engine never start live reload; their tool
       # calls check the app's files themselves, as every server's do.
-      def build_transport(app = nil)
+      def build_transport(app = nil, answered_whole: false)
         app ||= Rails.application
-        transport = MCP::Server::Transports::StreamableHTTPTransport.new(Server.new(app, transport: :http).build, **host_check_options)
+        options = host_check_options
+        options = options.merge(answered_whole_options) if answered_whole
+        transport = MCP::Server::Transports::StreamableHTTPTransport.new(Server.new(app, transport: :http).build, **options)
+        transport.extend(AnsweredWhole) if answered_whole
         CodeReloader.track_loaded_code!
         Tools::BaseTool.check_files_per_call!(app)
         transport
@@ -126,8 +129,17 @@ module RailsAiContext
       def host_check_options
         return {} unless defined?(ActionDispatch::HostAuthorization)
 
-        parameters = MCP::Server::Transports::StreamableHTTPTransport.instance_method(:initialize).parameters
-        parameters.any? { |_, name| name == :dns_rebinding_protection } ? { dns_rebinding_protection: false } : {}
+        transport_option?(:dns_rebinding_protection) ? { dns_rebinding_protection: false } : {}
+      end
+
+      # The engine answers each request whole (McpController), so it cannot
+      # keep open the stream `subscriptions/listen` delivers notifications
+      # on: the answer would be the acknowledgement alone, and the client,
+      # told it was subscribed, would hear nothing more. Told not to serve
+      # it, the SDK answers the method as one it does not have; an SDK older
+      # than the method has nothing to turn off.
+      def answered_whole_options
+        transport_option?(:serve_subscriptions_listen) ? { serve_subscriptions_listen: false } : {}
       end
 
       # The Host and Origin checks the SDK made, made by the app's rules: the
@@ -173,6 +185,28 @@ module RailsAiContext
 
         @production_refusal_logged = true
         RailsAiContext.log_warn "[rails-ai-context] Refused an MCP request. #{production_refusal_message(env)}"
+      end
+
+      # Whether the installed SDK's transport takes this keyword: the gemspec
+      # allows SDKs from before it took several of them.
+      def transport_option?(name)
+        MCP::Server::Transports::StreamableHTTPTransport.instance_method(:initialize).parameters.any? { |_, param| param == name }
+      end
+    end
+
+    # The engine's transport, which answers each request whole: what a tool
+    # sends during a call reaches the client with the answer. A request a
+    # tool makes of the client mid-call (sampling, elicitation, roots, ping)
+    # would get there only once nothing waited for its reply, so the tool
+    # would wait out the SDK's timeout - 600 seconds on mcp 1.7, without end
+    # on 0.13 - holding a server thread, and in development every code reload
+    # and every request after an edit behind it. It fails at once instead,
+    # saying why.
+    module AnsweredWhole
+      def send_request(method, *_params, **_routing)
+        raise "#{method} needs the client to answer during the call, and the mounted engine answers each request " \
+              "whole: nothing it sends reaches the client before the call is over. Serve a tool that asks the " \
+              "client over stdio or the standalone HTTP server (rails-ai-context serve --transport http)."
       end
     end
 

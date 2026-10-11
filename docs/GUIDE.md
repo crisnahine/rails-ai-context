@@ -1276,6 +1276,8 @@ The `if` keeps the routes file loading wherever the gem is not: in production, w
 
 This provides a native Rails controller (`RailsAiContext::McpController`) that delegates to the Streamable HTTP transport. Outside development and test (production, staging) it refuses every request with a 403, as `auto_mount` does, unless you set `config.allow_http_in_production = true`; see [Security](SECURITY.md#mcp-http-transport).
 
+The controller runs each call on the request's own thread and sends the answer whole, which keeps calls answering while the app reloads code in development. A custom tool's progress or log notifications therefore arrive together with its answer, and a request a tool makes of the client mid-call (sampling, elicitation, roots) fails at once; stdio and the standalone HTTP server deliver both as they are sent ([Setup](SETUP.md#http-transport-alternative)).
+
 ---
 
 ## Configuration - All Options

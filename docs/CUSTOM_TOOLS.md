@@ -216,6 +216,7 @@ end
 - Keep tools read-only when possible. MCP tools annotated as non-destructive build more trust with AI clients.
 - Return `MCP::Tool::Response` objects with `type: "text"` content blocks.
 - A response you build with `MCP::Tool::Response.new` is sent as written. The `config.max_tool_response_chars` cap (default: 200,000) is applied by the built-in tools' `text_response`, so keep a custom tool's output short yourself.
+- Through the mounted engine a call's answer is sent whole when the call is over. Progress and log notifications a tool sends (`server_context.report_progress`, `server_context.notify_log_message`) arrive together with its answer, and a request it makes of the client (sampling, elicitation, roots) fails at once, saying why. stdio and the standalone HTTP server deliver both as they are sent.
 
 ---
 

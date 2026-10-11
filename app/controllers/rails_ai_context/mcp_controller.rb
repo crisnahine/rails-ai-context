@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require "delegate"
-
 module RailsAiContext
   # Rails controller for serving MCP over Streamable HTTP.
   # Alternative to the Rack middleware - integrates with Rails routing,
@@ -10,22 +8,70 @@ module RailsAiContext
   # Mount in routes, guarded so the routes file still loads where the gem is
   # not (production, with the gem in the development group, or after it is
   # removed): mount RailsAiContext::Engine, at: "/mcp" if defined?(RailsAiContext::Engine)
+  #
+  # Every request is answered whole, on the thread Rails runs it on. The SDK
+  # answers a request inside a session with a body that writes an SSE stream;
+  # this controller runs that body into a buffer and sends the text once the
+  # call is done, as a plain string, which every middleware in the app's
+  # stack passes through (Rails 7's Rack::ETag 500'd on the callable itself).
+  #
+  # It used to stream through ActionController::Live, which runs the action
+  # on a thread of its own, and that deadlocked a development server. The
+  # request's thread holds a share of the code-loading interlock and waits
+  # for the Live thread to answer; the Live thread needs a share of its own
+  # to start; once another request has queued a code reload after an edit,
+  # no new share is granted until the reload runs, and the reload waits for
+  # the request's thread to let go of its share. With several clients
+  # calling while an agent edited, every request hung within seconds, and
+  # SIGTERM waited on them. Live's thread also kept the database connection
+  # a call used, and from Rails 8.0 that thread lives on in a pool, so each
+  # call after an edit waited ten seconds for the reload to give up on it.
+  # On the request's own thread the call needs no second share, the reload
+  # waits for it to finish, and Rails returns its connection when the
+  # request completes.
+  #
+  # The cost: what a tool sends during a call reaches the client with the
+  # answer, not as it is sent. A custom tool's progress or log notifications
+  # arrive together at the end, and a request a tool makes of the client
+  # mid-call (sampling, elicitation, roots) fails at once, since no answer
+  # could reach it before the call is over (McpEdge::AnsweredWhole). This
+  # gem's own tools send neither, and the engine opens no stream of its own
+  # (refuse_server_push).
   class McpController < ActionController::API
-    # Live: the transport answers SSE-mode requests with a Rack 3 streaming
-    # body (a Proc that writes to a stream). Handing that Proc to a plain
-    # controller works only where the response body passes through untouched;
-    # Rails 7.x's response buffer feeds it through Rack::ETag, which 500s on
-    # the callable. Live's stream is exactly the interface the Proc expects
-    # (write/close) and keeps every middleware away from the body on all
-    # supported Rails versions.
-    include ActionController::Live
+    # What the SDK's SSE writer needs of a stream - write, flush, close,
+    # closed? - held in memory until the call is done. A write after close
+    # raises IOError, as a closed socket's does, so the SDK drops a stream
+    # the answer has already left on.
+    class BufferedStream
+      def initialize
+        @chunks = []
+        @closed = false
+      end
 
-    # The MCP SDK's SSE writer calls stream.flush after every event, but
-    # Live's buffer writes straight through to the client and defines no
-    # flush - the NoMethodError would 500 the request after the payload was
-    # already delivered.
-    class FlushableStream < SimpleDelegator
-      def flush; end
+      def write(chunk)
+        raise IOError, "closed stream" if @closed
+
+        text = chunk.to_s
+        @chunks << text
+        text.bytesize
+      end
+
+      def flush
+        self
+      end
+
+      def close
+        @closed = true
+        nil
+      end
+
+      def closed?
+        @closed
+      end
+
+      def string
+        @chunks.join
+      end
     end
 
     def handle
@@ -38,19 +84,10 @@ module RailsAiContext
         serve_transport
       end
     rescue => e
-      # Once the response is committed the status and headers are already on
-      # the wire, so a JSON-RPC frame written here cannot reach the client.
-      # Worse, assigning a body swaps the stream out from under the thread
-      # still draining the old one, turning a truncated SSE stream into a
-      # garbled one. The streaming branch's ensure always closes the stream,
-      # and closing commits, so every streaming failure lands here committed.
-      # Hand those to Live, which logs them with a backtrace and tears the
-      # connection down.
-      raise if response.committed?
-
       # A transport failure must still answer in JSON-RPC shape. Without this
       # the exception escapes into a generic Rails 500 (HTML), breaking the
-      # client's JSON-RPC loop.
+      # client's JSON-RPC loop. Nothing has been sent yet, whatever the body
+      # had written, so the frame replaces it whole.
       RailsAiContext.log_warn "[rails-ai-context] MCP request failed: #{e.class}: #{e.message}"
       self.status = 500
       response.headers["Content-Type"] = "application/json"
@@ -59,54 +96,39 @@ module RailsAiContext
 
     private
 
+    # The body is read before the status and headers are set, so a body
+    # that fails leaves nothing of the SDK's answer on the error frame.
     def serve_transport
       status_code, rack_headers, body = McpEdge.engine_transport.handle_request(request)
+      text = read_body(body)
       self.status = status_code
       apply_transport_headers(rack_headers)
+      self.response_body = text
+    end
+
+    # The SDK's answer as one string: a plain body (initialize, an error, a
+    # notification's 202) joined, and a streaming one - the SSE stream a
+    # request inside a session gets - run here into a buffer. The tool runs
+    # inside it, on this thread, inside this request's session scope. The
+    # buffer is closed once the body returns, as the answer leaves with it.
+    def read_body(body)
       if body.respond_to?(:each)
-        # Plain enumerable body (initialize, errors, JSON mode): join to a
-        # string so Content-Length/ETag semantics stay conventional.
         chunks = []
         body.each { |chunk| chunks << chunk }
-        body.close if body.respond_to?(:close)
-        self.response_body = chunks.join
+        chunks.join
       elsif body.respond_to?(:call)
-        stream = response.stream
-        stream = FlushableStream.new(stream) unless stream.respond_to?(:flush)
+        stream = BufferedStream.new
         begin
           body.call(stream)
         ensure
-          begin
-            response.stream.close
-          rescue StandardError
-            nil
-          end
+          stream.close
         end
+        stream.string
       else
-        self.response_body = body
+        body
       end
     ensure
-      release_connections
-    end
-
-    # Live runs this action on a thread of its own, and a tool's queries
-    # check a database connection out to that thread. Rails hands a
-    # request's connections back as the request completes, on the request's
-    # thread, so this one kept its own, and from Rails 8.0 the thread is a
-    # pooled one that lives on. A code reload waits for every connection to
-    # come back before it unloads anything, so in development each call
-    # after an edit first sat out the ten seconds that reload waits before
-    # it takes the connections anyway.
-    def release_connections
-      return unless defined?(ActiveRecord::Base)
-
-      handler = ActiveRecord::Base.connection_handler
-      # Every role's pools. Rails 7.1 names them :all; 7.0 reads :all as a
-      # role of that name and releases nothing, and with no argument releases
-      # the current role's, the one the tools query in.
-      handler.respond_to?(:each_connection_pool) ? handler.clear_active_connections!(:all) : handler.clear_active_connections!
-    rescue StandardError => e
-      RailsAiContext.debug_fail(e, nil, label: "release_connections")
+      body.close if body.respond_to?(:close)
     end
 
     # Rack 3 transports name their headers in lowercase, and the MCP SDK

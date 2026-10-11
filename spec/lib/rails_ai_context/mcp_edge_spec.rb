@@ -208,6 +208,34 @@ RSpec.describe RailsAiContext::McpEdge do
     it "builds a fresh transport per call, leaving memoization to the caller" do
       expect(described_class.build_transport).not_to equal(described_class.build_transport)
     end
+
+    context "for the engine, which answers each request whole" do
+      let(:engine) { described_class.build_transport(answered_whole: true) }
+      let(:streaming) { described_class.build_transport }
+
+      after { [ engine, streaming ].each { |transport| transport.close if transport.respond_to?(:close) } }
+
+      # Answered whole, the stream `subscriptions/listen` delivers
+      # notifications on cannot stay open: the client would be told it was
+      # subscribed and hear nothing more.
+      it "does not serve subscriptions/listen, where the SDK can be told so" do
+        skip "mcp #{MCP::VERSION} has no subscriptions/listen" unless streaming.respond_to?(:serves_subscriptions_listen?)
+
+        expect(engine.serves_subscriptions_listen?).to be(false)
+        expect(streaming.serves_subscriptions_listen?).to be(true)
+      end
+
+      # Sent into an answer that leaves only when the call is over, a request
+      # to the client mid-call could only wait out the SDK's timeout - 600
+      # seconds on mcp 1.7, without end on 0.13 - with a server thread, and
+      # in development every code reload, waiting behind it.
+      it "fails a request to the client at once, saying why, and leaves the other transports the SDK's own" do
+        expect { engine.send_request("sampling/createMessage", {}, session_id: "s", related_request_id: 1) }
+          .to raise_error(RuntimeError, %r{sampling/createMessage needs the client to answer during the call.*answers each request whole})
+        expect { streaming.send_request("sampling/createMessage", {}, session_id: "s", related_request_id: 1) }
+          .to raise_error(RuntimeError, /Session not found/)
+      end
+    end
   end
 end
 

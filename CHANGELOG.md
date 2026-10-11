@@ -500,13 +500,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The mounted engine keeps its MCP sessions across a code reload.** Every
   edit in development dropped them (404 "Session not found") and left one
   more session-reaper thread running.
-- **A call to the mounted engine after an edit no longer waits ten
-  seconds.** The engine answers on the thread `ActionController::Live`
-  starts, which kept the database connection the call had used, and a code
-  reload waits for every connection to come back before it unloads anything.
-  From Rails 8.0 that thread lives on in a pool, so in development each call
-  after an edit sat out the reload's ten-second wait: 10.3 seconds a call,
-  where it now takes 0.4. The connection goes back as the call ends.
+- **The mounted engine (`mount RailsAiContext::Engine`) no longer deadlocks
+  when clients call it while app code reloads in development.** Since 5.16.1
+  it answered on a thread `ActionController::Live` starts, which needs a
+  share of the lock Rails reloads code under. Once an edit had a reload
+  waiting, no new share was granted, and the reload waited for the request,
+  which waited for its Live thread: with six clients calling while a file
+  changed every 0.3 seconds, every call hung and `rails server` ignored
+  SIGTERM, in every run on Rails 8.1 and in three of four longer runs on
+  7.0. The Live thread also kept the database connection a call had used, so
+  from Rails 8.0 each call after an edit sat out the reload's ten-second
+  wait for it: 10.3 seconds a call, where it now takes 0.4. The engine now
+  runs each call on the request's own thread and sends the answer whole; the
+  same runs answer every call and stop on SIGTERM. The cost is streaming:
+  what a custom tool sends during a call, such as progress or log
+  notifications, arrives with its answer, and a request a tool makes of the
+  client mid-call (sampling, elicitation, roots) fails at once, saying why,
+  where it could only have waited out its timeout. `subscriptions/listen`,
+  whose notification stream an answer sent whole cannot keep open, is
+  answered as a method the engine does not have. stdio and the standalone
+  HTTP server still stream.
 - **The engine and `auto_mount` answer the hosts the app's `config.hosts`
   allows.** The MCP SDK answered only loopback names, so
   `allow_http_in_production` could not serve an app by its own name, and
