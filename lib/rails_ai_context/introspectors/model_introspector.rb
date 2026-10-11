@@ -301,9 +301,16 @@ module RailsAiContext
         return true if model_base?(parent)
 
         resolved = resolve_superclass(parent, class_name, candidates)
-        return false unless resolved
+        return model_class?(resolved, candidates, seen + [ class_name ]) if resolved
 
-        model_class?(resolved, candidates, seen + [ class_name ])
+        outside_model_base?(candidates[class_name])
+      end
+
+      # A parent the app does not define (a gem's `ActsAsTaggableOn::Tag`) is
+      # an ActiveRecord base when the class declares associations or scopes on it.
+      def outside_model_base?(candidate)
+        data = candidate[:path] && sti_base_source(candidate[:path])
+        !!data && (Array(data[:associations]).any? || Array(data[:scopes]).any?)
       end
 
       # ApplicationRecord, or the namespaced base a large app declares -
@@ -1631,7 +1638,7 @@ module RailsAiContext
 
       def static_model_details(path, class_name, file: relative_to_root(path), table_name: nil, inherited_from: [],
                                sti: nil, parent_model: nil, primary_key: nil)
-        own = own_body(source_walk(path), class_name)
+        own = own_body(@source_cache[path] ||= source_walk(path), class_name)
         calls = singleton_lookup([ [ class_name, path ], *Array(inherited_from) ])
         data, unread, bases_unread, hidden = merge_class_and_bases(own, class_name, calls, inherited_from, file: path,
                                                                    commits_in_order: static_commits_in_order)

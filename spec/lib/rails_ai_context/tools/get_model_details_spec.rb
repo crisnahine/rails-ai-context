@@ -1200,6 +1200,35 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  # Forem's Tag < ActsAsTaggableOn::Tag: the gem's class is an ActiveRecord model the app does not define.
+  it "answers for a model whose parent class comes from a gem, and not for a plain class there" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      File.write(File.join(dir, "app", "models", "tag.rb"), <<~RUBY)
+        class Tag < ActsAsTaggableOn::Tag
+          belongs_to :badge, optional: true
+          has_many :articles, through: :taggings, source: :taggable, source_type: "Article"
+        end
+      RUBY
+      File.write(File.join(dir, "app", "models", "decorated_tag.rb"), <<~RUBY)
+        class DecoratedTag < SimpleDelegator
+          def label = name.upcase
+        end
+      RUBY
+      models = RailsAiContext::Introspectors::ModelIntrospector.new(RailsAiContext::StaticApp.new(dir)).static_call
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(models: models)
+
+      tag = described_class.call(model: "Tag").content.first[:text]
+      plain = described_class.call(model: "DecoratedTag").content.first[:text]
+
+      expect(tag).to include("**Table:** `tags`")
+      expect(tag).to include("belongs_to")
+      expect(tag).to include("badge")
+      expect(plain).to include("Model 'DecoratedTag' not found")
+    end
+  end
+
   it "names a declaration a condition holds back, apart from the counted ones" do
     described_class.reset_cache!
     allow(described_class).to receive(:cached_context).and_return(

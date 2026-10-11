@@ -5395,9 +5395,8 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         booted = introspector.send(:extract_model_details, model)
 
         expect(booted[:scopes].map { |s| s[:name] }).to eq([ "from_the_app" ])
-        # And the static tier says nothing about this model at all, rather than
-        # guessing: nothing under the model directories says GemmyBase is one.
-        expect(introspector.static_call).not_to have_key("Widget")
+        # The static tier keeps it as a model on the scope it declares, and reads the same one.
+        expect(introspector.static_call["Widget"][:scopes].map { |s| s[:name] }).to eq([ "from_the_app" ])
       ensure
         Object.send(:remove_const, :GemmyBase) if defined?(GemmyBase)
         File.delete(gem_base) if gem_base && File.exist?(gem_base)
