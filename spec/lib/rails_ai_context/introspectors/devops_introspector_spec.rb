@@ -132,6 +132,33 @@ RSpec.describe RailsAiContext::Introspectors::DevOpsIntrospector do
       end
     end
 
+    # A command was kept as written, and `rails ai:context` writes the entries
+    # into .ai-context.json, a file it asks the team to commit.
+    context "with a secret on a Procfile line" do
+      let(:procfile) { File.join(Rails.root, "Procfile.dev") }
+      let(:secret) { "Xk2mQ9pLw7Rt#{'Z4ab'}" }
+
+      before do
+        File.write(procfile, <<~PROCFILE)
+          redis: redis-server --requirepass #{secret} --port 6380
+          worker: DB_PASSWORD=#{secret} bundle exec sidekiq
+          web: bin/rails server -p 3000
+        PROCFILE
+      end
+
+      after { FileUtils.rm_f(procfile) }
+
+      it "filters the secret and keeps the rest of the command" do
+        entries = result[:procfile].find { |p| p[:file] == "Procfile.dev" }[:entries]
+
+        expect(entries).to eq([
+          { name: "redis", command: "redis-server --requirepass [FILTERED] --port 6380" },
+          { name: "worker", command: "DB_PASSWORD=[FILTERED] bundle exec sidekiq" },
+          { name: "web", command: "bin/rails server -p 3000" }
+        ])
+      end
+    end
+
     context "with a Dockerfile" do
       let(:dockerfile) { File.join(Rails.root, "Dockerfile") }
 

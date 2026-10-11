@@ -93,6 +93,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through the same redaction, read as the file they come from, a hunk
   header's line and a removed validation's included, and a file on
   `sensitive_patterns` is listed with its line counts alone.
+- **The context file names a Procfile's commands with their secrets
+  filtered.** Each command went into the DevOps section as written, so
+  `redis-server --requirepass ...` or `DB_PASSWORD=... bundle exec sidekiq`
+  reached `.ai-context.json`, which `rails ai:context` asks the team to
+  commit. A command now passes through the redaction a Procfile line read by
+  any tool does.
 - **`rails_get_edit_context` names an endless method without its body, and
   looks for `near` in what it shows.** The line above the code quoted the
   enclosing method's line as written, and an endless method's line is its

@@ -72,11 +72,13 @@ module RailsAiContext
           path = File.join(root, filename)
           next unless File.exist?(path)
 
+          # A command leaves the app as source does, through Redaction: `rails ai:context` writes
+          # it into .ai-context.json, which is committed (`--requirepass ...`, `DB_PASSWORD=...`).
           entries = (RailsAiContext::SafeFile.read(path) || "").lines.filter_map do |line|
             line.strip!
             next if line.empty? || line.start_with?("#")
             parts = line.split(":", 2)
-            { name: parts[0].strip, command: parts[1]&.strip } if parts.size == 2
+            { name: parts[0].strip, command: RailsAiContext::Redaction.redact_source_line(parts[1].strip, path: filename) } if parts.size == 2
           end
 
           { file: filename, entries: entries } if entries.any?
