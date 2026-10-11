@@ -46,6 +46,13 @@ module RailsAiContext
         # (Paperclip's has_attached_file), only the booted model's chains say it is one.
         MODEL_CALLBACK = /\A(?:before|after|around)_(\w+)\z/
 
+        # `library_chains: true` also keeps a callback on a chain the file does not define, under
+        # `library_chain`, for a caller that checks the model holds that chain.
+        def initialize(library_chains: false)
+          super()
+          @library_chains = library_chains
+        end
+
         def on_call_node_enter(node)
           return record_skip(node) if node.name == :skip_callback && in_scope?(node)
           return record_broadcasts(node) if BROADCASTS.key?(node.name) && in_scope?(node)
@@ -54,12 +61,14 @@ module RailsAiContext
           chain = MODEL_CALLBACK.match(node.name.to_s)&.[](1) unless CALLBACK_METHODS.include?(node.name)
           return unless (CALLBACK_METHODS.include?(node.name) || chain) && in_scope?(node)
 
+          library_chain = chain unless defined_here.include?(node.name)
+          return if library_chain && !@library_chains
+
           # Sources, not literals: a lambda condition reads as the line the
           # file holds rather than as a marker.
           hash = options_hash(node)
           options = scope_options(receiver_name(node)).merge(extract_keyword_sources(node)).merge(hash_sources(hash))
-          needs_chain = chain unless defined_here.include?(node.name)
-          emit(node, resolve_callback_types(node.name, options), callback_targets(node, hash), options, needs_chain: needs_chain)
+          emit(node, resolve_callback_types(node.name, options), callback_targets(node, hash), options, library_chain: library_chain)
         end
 
         ON_EVENT = "after_commit_on_"
@@ -157,7 +166,7 @@ module RailsAiContext
           extract_symbol_args(node).each { |event| kinds.each { |kind| defined_here << :"#{kind}_#{event}" } }
         end
 
-        def emit(node, callback_types, targets, options, needs_chain: nil)
+        def emit(node, callback_types, targets, options, library_chain: nil)
           targets.each do |method_name, confidence|
             callback_types.each do |callback_type|
               record = {
@@ -173,7 +182,7 @@ module RailsAiContext
               }
               # A block has no method whose body could be read; its declaration is its source.
               record.merge!(declaration(node)) if method_name == INLINE_BLOCK
-              record[:needs_chain] = needs_chain if needs_chain
+              record[:library_chain] = library_chain if library_chain
               @results << record
             end
           end

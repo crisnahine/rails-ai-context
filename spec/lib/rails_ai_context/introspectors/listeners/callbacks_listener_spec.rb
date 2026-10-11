@@ -3,6 +3,21 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Introspectors::Listeners::CallbacksListener do
+  # Paperclip's has_attached_file defines `file_validate` with define_model_callbacks; nothing in the file says so.
+  describe "a callback on a chain the file does not define" do
+    let(:source) { "has_attached_file :file\nbefore_file_validate :set_type\ndefine_model_callbacks :publish, only: :after\nafter_publish :notify\n" }
+
+    it "is left out of the default result" do
+      expect(parse_and_dispatch(source).map { |r| r[:type] }).to eq([ "after_publish" ])
+    end
+
+    it "is kept, naming its chain, for a caller that asks and checks the chain" do
+      results = parse_and_dispatch(source, library_chains: true)
+
+      expect(results.map { |r| [ r[:type], r[:library_chain] ] }).to eq([ [ "before_file_validate", "file_validate" ], [ "after_publish", nil ] ])
+    end
+  end
+
   it "detects before_save callback" do
     results = parse_and_dispatch("before_save :normalize_email")
     expect(results.size).to eq(1)

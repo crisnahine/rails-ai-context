@@ -1283,7 +1283,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         # by what it declares.
         allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source).and_call_original
         allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source)
-          .with(a_string_including("class Post")).and_raise(Errno::EACCES, "post.rb")
+          .with(a_string_including("class Post"), anything).and_raise(Errno::EACCES, "post.rb")
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
@@ -6239,7 +6239,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
         allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source).and_call_original
         expect(RailsAiContext::Introspectors::SourceIntrospector)
-          .to receive(:walk_source).with(a_string_including("scope :published")).once.and_call_original
+          .to receive(:walk_source).with(a_string_including("scope :published"), anything).once.and_call_original
         children.each { |child| introspector.send(:extract_model_details, child) }
       end
     end

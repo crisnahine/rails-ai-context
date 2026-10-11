@@ -1769,6 +1769,9 @@ module RailsAiContext
       # condition the call cannot decide.
       WALKED_KEYS = [ *MERGED_CONCERN_KEYS, :conditional, :foreign ].freeze
 
+      # The model walks keep callbacks on a library's chains; merge_class_and_bases checks each against the model.
+      LISTENERS = SourceIntrospector::LISTENER_MAP.merge(callbacks: -> { Listeners::CallbacksListener.new(library_chains: true) }).freeze
+
       # Reflection answers these whether or not the concern's file was read,
       # so on the booted tier an unread concern costs the other keys only.
       REFLECTED_CONCERN_KEYS = %i[associations validations enums].freeze
@@ -1782,7 +1785,7 @@ module RailsAiContext
         found = ConcernMacros.collect(
           app.root.to_s, own[:mixins] || [],
           keys: [ *WALKED_KEYS, :expanded ], prefer: "model", within: class_name,
-          cache: @source_cache, calls: calls, extra: extra, file: file
+          cache: @source_cache, calls: calls, extra: extra, file: file, listeners: LISTENERS
         )
         placement = found.placement
         included_at = included_at(own, placement)
@@ -1884,9 +1887,9 @@ module RailsAiContext
 
       def on_known_chains(callbacks, chains)
         Array(callbacks).filter_map do |cb|
-          next cb unless cb.is_a?(Hash) && cb[:needs_chain]
+          next cb unless cb.is_a?(Hash) && cb[:library_chain]
 
-          cb.except(:needs_chain) if chains&.include?(cb[:needs_chain])
+          cb.except(:library_chain) if chains&.include?(cb[:library_chain])
         end
       end
 
@@ -1900,7 +1903,7 @@ module RailsAiContext
           next unless node.is_a?(Prism::DefNode)
 
           sites = Array(calls.sites_by_name[definition.name]).compact
-          expansion, = ConcernMacros.expand_calls(node, sites, [ *WALKED_KEYS, :expanded ], SourceIntrospector::LISTENER_MAP) do |entry, site|
+          expansion, = ConcernMacros.expand_calls(node, sites, [ *WALKED_KEYS, :expanded ], LISTENERS) do |entry, site|
             calls.placed(entry, definition.key, [ entry[:location] ], site)
           end
           expansion.each do |key, entries|
@@ -2248,7 +2251,7 @@ module RailsAiContext
 
       def source_walk(path)
         source = model_source(path)
-        walked = source ? SourceIntrospector.walk_source(source) : SourceIntrospector.call(path)
+        walked = source ? SourceIntrospector.walk_source(source, LISTENERS) : SourceIntrospector.walk(path, LISTENERS)
         # The walk's own parse, cached.
         CallSiteExpansion.class_body_foreign((source ? AstCache.parse_string(source) : AstCache.parse(path)).value, walked)
       end
@@ -2322,7 +2325,7 @@ module RailsAiContext
         # A parent's callbacks join the chain as a base's do, one rank above the subclass's.
         settled = Array(inherited&.dig(:settled_callbacks)).map { |cb| cb.merge(rank: cb[:rank].to_i + 1) } + settled
         # Mongoid sets after_commit without prepend, as Rails 7.0 does, so it runs last declared first.
-        callbacks = chain_order(on_known_chains(settled, nil), false)
+        callbacks = chain_order(settled, false)
         declared = macros.select { |m| m[:macro] == :field }.map { |m| mongoid_field(m) }
         mixins = ConcernMembership.owned_by(data[:mixins], class_name, root: app.root)
         details = {
