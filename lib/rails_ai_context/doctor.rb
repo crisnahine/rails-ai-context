@@ -328,8 +328,14 @@ module RailsAiContext
       elsif bundle.outside
         Check.new(name: "Gems", status: :warn, message: GemLock.for(app.root).reason, fix: nil)
       else
-        Check.new(name: "Gems", status: :warn, message: "#{typed_path(bundle.lockfile)} not found", fix: "Run `bundle install`")
+        Check.new(name: "Gems", status: :warn, message: "#{typed_path(lockfile_path(bundle))} not found", fix: "Run `bundle install`")
       end
+    end
+
+    # A bundle's lockfile, or where it goes: a shared Gemfile's that is not
+    # there yet has no path of its own.
+    def lockfile_path(bundle)
+      bundle.lockfile || File.join(bundle.dir, File.basename(bundle.lock_label))
     end
 
     def check_controllers
@@ -867,7 +873,7 @@ module RailsAiContext
         folder
       end
       bundle = GemLock.bundle(dir)
-      [ GemLock.for(dir), bundle.gemfile, typed_path(bundle.lockfile) ]
+      [ GemLock.for(dir), bundle.gemfile, typed_path(lockfile_path(bundle)) ]
     end
 
     # Known to lack the gem: a lockfile without it, or with none yet, a
