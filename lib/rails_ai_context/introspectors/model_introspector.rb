@@ -2249,11 +2249,13 @@ module RailsAiContext
                    scopes: ConcernMembership.owned_by(data[:scopes], class_name).map { |scope| scope.except(:owner) })
       end
 
+      # The source listeners, plus the class body's blocks evaluated on another receiver.
+      MODEL_LISTENERS = LISTENERS.merge(foreign_evals: Listeners::ForeignEvalsListener).freeze
+
       def source_walk(path)
         source = model_source(path)
-        walked = source ? SourceIntrospector.walk_source(source, LISTENERS) : SourceIntrospector.walk(path, LISTENERS)
-        # The walk's own parse, cached.
-        CallSiteExpansion.class_body_foreign((source ? AstCache.parse_string(source) : AstCache.parse(path)).value, walked)
+        walked = source ? SourceIntrospector.walk_source(source, MODEL_LISTENERS) : SourceIntrospector.walk(path, MODEL_LISTENERS)
+        CallSiteExpansion.class_body_foreign(Array(walked[:foreign_evals]), walked.except(:foreign_evals))
       end
 
       # The class files' side of the lookup, read only when a concern asks: their class-body
