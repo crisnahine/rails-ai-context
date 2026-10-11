@@ -393,12 +393,12 @@ module RailsAiContext
                 when "numericality"
                   lines << "    @#{setup_var}.#{attr} = \"not_a_number\""
                 when "length"
-                  max = v.dig(:options, :maximum)
-                  if max
-                    lines << "    @#{setup_var}.#{attr} = \"a\" * #{max.to_i + 1}"
-                  else
-                    lines << "    @#{setup_var}.#{attr} = \"\""
+                  value = length_breaking_value(v[:options] || {})
+                  unless value
+                    lines.push("    skip \"set #{attr} to a length the validation rejects\"", "  end", "")
+                    next
                   end
+                  lines << "    @#{setup_var}.#{attr} = #{value}"
                 when "format"
                   lines << "    @#{setup_var}.#{attr} = \"invalid-format\""
                 when "absence"
@@ -1819,6 +1819,26 @@ module RailsAiContext
 
         def conditional_validation_skip(condition, indent)
           "#{indent}skip \"TODO: this validation runs only #{condition.tr('"', "'")}\""
+        end
+
+        # A string the length validation rejects: one past the maximum, else
+        # one short of the minimum. An empty string is short only where
+        # blanks are not allowed, so `length: { minimum: 10 }, allow_blank:
+        # true` takes nine characters, and a minimum of 1 that allows blanks
+        # has no value that fails, so nil.
+        def length_breaking_value(options)
+          count = ->(value) { value.is_a?(Integer) ? value : (value.to_i if value.to_s.match?(/\A\d+\z/)) }
+          range = options[:in] || options[:within]
+          bounds = if range.is_a?(Range) then [ range.min, range.max ]
+          elsif (m = range.to_s.match(/\A(\d+)\.\.(\.?)(\d+)\z/)) then [ m[1].to_i, m[3].to_i - (m[2].empty? ? 0 : 1) ]
+          end
+          max = count.call(options[:maximum] || options[:is] || bounds&.last)
+          min = count.call(options[:minimum] || options[:is] || bounds&.first)
+          return "\"a\" * #{max + 1}" if max
+          return "\"a\" * #{min - 1}" if min.to_i > 1
+          return "\"\"" if min == 1 && !options[:allow_blank]
+
+          nil
         end
 
         def plain_validation_example(validation, attr)

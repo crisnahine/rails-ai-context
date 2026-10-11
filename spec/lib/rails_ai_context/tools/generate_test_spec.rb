@@ -96,6 +96,29 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       MD
     end
 
+    # The blog's `length: { minimum: 10 }, allow_blank: true` got `body = ""`,
+    # a value it allows, and the test failed on a valid record.
+    it "breaks a length validation with a value it rejects" do
+      validations = [
+        { kind: "length", attributes: %w[body], options: { minimum: 10, allow_blank: true } },
+        { kind: "length", attributes: %w[title], options: { maximum: 120 } },
+        { kind: "length", attributes: %w[code], options: { is: 6 } },
+        { kind: "length", attributes: %w[handle], options: { in: "3..20" } },
+        { kind: "length", attributes: %w[name], options: { minimum: 1 } },
+        { kind: "length", attributes: %w[nickname], options: { minimum: 1, allow_blank: true } }
+      ]
+      allow(described_class).to receive(:cached_context).and_return({
+        tests: { framework: "minitest", fixtures: {}, factory_names: {} },
+        models: { "User" => { table_name: "users", associations: [], validations: validations, scopes: [], enums: {}, callbacks: {} } }
+      })
+
+      text = described_class.call(model: "User").content.first[:text]
+
+      expect(text).to include("@user.body = \"a\" * 9\n", "@user.title = \"a\" * 121\n", "@user.code = \"a\" * 7\n",
+                              "@user.handle = \"a\" * 21\n", "@user.name = \"\"\n")
+      expect(text).to include("  test \"validates length of nickname\" do\n    skip \"set nickname to a length the validation rejects\"\n  end")
+    end
+
     # Whitehall keeps model tests in test/unit/app/models and controller tests
     # in test/functional. A generated file headed test/models/... lands where
     # the app does not look.
