@@ -93,8 +93,14 @@ module RailsAiContext
         lines.join("\n\n")
       end
 
+      # An array column reads `string[]` and a generated one says so, as
+      # rails_get_schema writes them: the database computes a generated
+      # column, so a migration or a write that sets it fails.
       def column_text(column)
-        details = [ column[:type], ("default #{column[:default] == "" ? '""' : column[:default]}" unless column[:default].nil?) ].compact
+        type = column[:type] && column[:array] ? "#{column[:type]}[]" : column[:type]
+        generated = (column[:stored] ? "generated, stored" : "generated") if column.key?(:generated)
+        default = "default #{column[:default] == "" ? '""' : column[:default]}" unless column[:default].nil?
+        details = [ type, generated, default ].compact
         details.any? ? "`#{column[:name]}` (#{details.join(', ')})" : "`#{column[:name]}`"
       end
 
