@@ -954,7 +954,7 @@ module RailsAiContext
         return warnings unless Dir.exist?(views_dir)
 
         subscriptions = Set.new
-        Dir.glob(File.join(views_dir, "**", "*.{erb,html.erb}")).each do |path|
+        RailsAiContext::FileWalk.glob(views_dir.to_s, "**/*.{erb,html.erb}", root: rails_app.root.to_s).each do |path|
           view_content = RailsAiContext::SafeFile.read(path) or next
           view_content.scan(/turbo_stream_from\s+["']([^"']+)["']/).each do |match|
             subscriptions << match[0]

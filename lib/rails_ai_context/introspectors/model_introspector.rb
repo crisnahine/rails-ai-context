@@ -2116,9 +2116,9 @@ module RailsAiContext
 
       def mongoid_candidates
         RailsAiContext::PathResolver.model_dirs(app.root).each_with_object({}) do |models_dir, found|
-          Dir.glob(File.join(models_dir, "**", "*.rb")).sort.each do |path|
+          RailsAiContext::FileWalk.glob(models_dir, "**/*.rb", root: app.root.to_s).each do |path|
             relative = path.sub("#{models_dir}/", "").sub(/\.rb\z/, "")
-            next if relative == "application_record" || RailsAiContext::PathResolver.linked_out?(path, app.root)
+            next if relative == "application_record"
 
             begin
               next if File.size(path) > RailsAiContext.configuration.max_file_size

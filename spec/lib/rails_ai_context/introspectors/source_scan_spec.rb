@@ -55,15 +55,29 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
     end
   end
 
-  it "relativizes a file under a pack directory that is a symlink out of the root" do
-    Dir.mktmpdir do |root|
-      Dir.mktmpdir do |elsewhere|
-        FileUtils.mkdir_p(File.join(elsewhere, "app", "models"))
-        File.write(File.join(elsewhere, "app", "models", "invoice.rb"), "class Invoice; end\n")
-        FileUtils.mkdir_p(File.join(root, "packs"))
-        File.symlink(elsewhere, File.join(root, "packs", "billing"))
+  it "relativizes a file under a pack directory linked in from elsewhere in the app's repository" do
+    Dir.mktmpdir do |repo|
+      root = File.join(repo, "apps", "web")
+      FileUtils.mkdir_p([ File.join(repo, ".git"), File.join(repo, "packages", "billing", "app", "models"), File.join(root, "packs") ])
+      File.write(File.join(repo, "packages", "billing", "app", "models", "invoice.rb"), "class Invoice; end\n")
+      File.symlink("../../../packages/billing", File.join(root, "packs", "billing"))
 
-        expect(described_class.each(root, kind: "app/models").map(&:file)).to eq([ "packs/billing/app/models/invoice.rb" ])
+      expect(described_class.each(root, kind: "app/models").map(&:file)).to eq([ "packs/billing/app/models/invoice.rb" ])
+    end
+  end
+
+  it "walks a directory linked in from the app's repository below a walked one, but not one linked from outside it" do
+    Dir.mktmpdir do |repo|
+      root = File.join(repo, "apps", "web")
+      FileUtils.mkdir_p([ File.join(repo, ".git"), File.join(repo, "shared", "billing"), File.join(root, "app", "models") ])
+      File.write(File.join(repo, "shared", "billing", "invoice.rb"), "class Billing::Invoice; end\n")
+      File.write(File.join(root, "app", "models", "user.rb"), "class User; end\n")
+      File.symlink("../../../../shared/billing", File.join(root, "app", "models", "billing"))
+      Dir.mktmpdir do |outside|
+        File.write(File.join(outside, "secret.rb"), "class Secret; end\n")
+        File.symlink(outside, File.join(root, "app", "models", "home"))
+
+        expect(described_class.each(root, kind: "app/models").map(&:file)).to eq([ "app/models/billing/invoice.rb", "app/models/user.rb" ])
       end
     end
   end

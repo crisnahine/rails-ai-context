@@ -38,11 +38,14 @@ module RailsAiContext
       end
 
       def scan_dir(dir, root, real_root, skip_concerns)
+        return if PathResolver.linked_out?(dir, root)
+
         real_dir = File.realpath(dir)
-        ruby_files(dir, real_dir, [ real_dir, real_root ], Set.new).sort_by(&:first).each do |path, real|
+        ruby_files(dir, real_dir, root, Set.new).sort_by(&:first).each do |path, real|
           relative_to_dir = path.delete_prefix(dir + File::SEPARATOR)
           next if skip_concerns && relative_to_dir.start_with?("concerns/")
-          next unless within?(real, real_dir, real_root)
+          # Outside the walked directory and the root, a file is the app's only through a linked-in directory.
+          next unless within?(real, real_dir, real_root) || !PathResolver.linked_out?(path, root)
 
           path_name = relative_to_dir.sub(/\.rb\z/, "").split("/").map(&:camelize).join("::")
           yield Record.new(path: real, file: relative_file(path, real, root, real_root), path_name: path_name, source: nil)
@@ -51,20 +54,21 @@ module RailsAiContext
         nil
       end
 
-      # Zeitwerk follows symlinks, so the walk does too, as far as the app's
-      # own tree; a directory reached twice (a link back up) is walked once.
+      # Zeitwerk follows symlinks, so the walk does too, into a directory linked
+      # in from the app's repository (PathResolver.enter_link?) but never back
+      # up over the walked directory; a directory reached twice is walked once.
       # Linked directories wait until the real tree is done, so a directory
       # both spell is named by its real path whatever order the disk lists.
       # Each entry is [path as spelled, real path].
-      def ruby_files(dir, real_dir, bounds, visited)
+      def ruby_files(dir, real_dir, root, visited)
         pending = [ [ dir, real_dir ] ]
         found = []
-        found.concat(walk_dir(*pending.shift, bounds, visited, pending)) while pending.any?
+        found.concat(walk_dir(*pending.shift, real_dir, root, visited, pending)) while pending.any?
         found
       end
 
       # One lstat per entry: below a real directory only a link needs a realpath.
-      def walk_dir(dir, real_dir, bounds, visited, links)
+      def walk_dir(dir, real_dir, start, root, visited, links)
         return [] unless visited.add?(real_dir)
 
         Dir.children(dir).sort.flat_map do |name|
@@ -77,11 +81,11 @@ module RailsAiContext
             if !File.directory?(real)
               name.end_with?(".rb") ? [ [ path, real ] ] : []
             else
-              links << [ path, real ] if within?(real, *bounds)
+              links << [ path, real ] if PathResolver.enter_link?(real, start, root)
               []
             end
           elsif stat.directory?
-            walk_dir(path, File.join(real_dir, name), bounds, visited, links)
+            walk_dir(path, File.join(real_dir, name), start, root, visited, links)
           else
             name.end_with?(".rb") ? [ [ path, File.join(real_dir, name) ] ] : []
           end

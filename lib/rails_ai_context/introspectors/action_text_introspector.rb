@@ -21,10 +21,7 @@ module RailsAiContext
         customs = []
         js_dirs = [ File.join(app.root, "app", "javascript"), File.join(app.root, "app", "assets", "javascripts") ]
         js_dirs.each do |dir|
-          next unless Dir.exist?(dir)
-          Dir.glob(File.join(dir, "**", "*.{js,ts}")).each do |path|
-            next if PathResolver.linked_out?(path, app.root)
-
+          FileWalk.glob(dir, "**/*.{js,ts}", root: app.root.to_s).each do |path|
             content = RailsAiContext::SafeFile.read(path) or next
             customs << "custom_toolbar" if content.match?(/Trix\.config\.toolbar/)
             customs << "custom_attachment" if content.match?(/trix-attachment|Trix\.Attachment/)

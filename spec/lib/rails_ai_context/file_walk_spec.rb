@@ -38,7 +38,7 @@ RSpec.describe RailsAiContext::FileWalk do
     expect(walked).to eq(%w[kept.rb])
   end
 
-  it "does not follow a symlinked directory" do
+  it "does not enter a directory linked from outside a repository" do
     Dir.mktmpdir do |outside|
       File.write(File.join(outside, "secret.rb"), "")
       File.symlink(outside, File.join(@root, "linked"))
@@ -64,5 +64,62 @@ RSpec.describe RailsAiContext::FileWalk do
 
   it "answers an enumerator without a block, and nothing for a missing directory" do
     expect(described_class.each_file(File.join(@root, "missing")).to_a).to eq([])
+  end
+
+  context "in a repository that holds the app" do
+    around do |example|
+      Dir.mktmpdir do |repo|
+        @repo = File.realpath(repo)
+        @root = File.join(@repo, "apps/web")
+        FileUtils.mkdir_p([ File.join(@repo, ".git"), @root ])
+        example.run
+      end
+    end
+
+    it "enters a directory linked in from the repository after the real tree, under the name the app gives it" do
+      FileUtils.mkdir_p(File.join(@repo, "packages/js/controllers"))
+      File.write(File.join(@repo, "packages/js/controllers/hello_controller.js"), "")
+      touch("app/javascript/application.js")
+      File.symlink("../../../../packages/js/controllers", File.join(@root, "app/javascript/controllers"))
+
+      expect(described_class.each_file(File.join(@root, "app/javascript"), root: @root).map { |path| path.delete_prefix("#{@root}/") })
+        .to eq(%w[app/javascript/application.js app/javascript/controllers/hello_controller.js])
+    end
+
+    it "walks a directory once whatever links spell it, and never a link back up over the walk" do
+      touch("app/javascript/controllers/a_controller.js")
+      File.symlink("controllers", File.join(@root, "app/javascript/alias"))
+      File.symlink("..", File.join(@root, "app/javascript/controllers/up"))
+      File.symlink(@repo, File.join(@root, "app/javascript/repo"))
+
+      expect(walked).to eq(%w[app/javascript/controllers/a_controller.js])
+    end
+
+    it "skips a link to nowhere, and a file a linked-in directory links out of it" do
+      FileUtils.mkdir_p(File.join(@repo, "packages/js"))
+      File.write(File.join(@repo, "packages/js/kept.js"), "")
+      File.write(File.join(@repo, "packages/elsewhere.js"), "")
+      File.symlink("missing.js", File.join(@repo, "packages/js/ghost_controller.js"))
+      File.symlink("../elsewhere.js", File.join(@repo, "packages/js/out.js"))
+      touch("app/models/user.rb")
+      File.symlink("missing.rb", File.join(@root, "app/models/ghost.rb"))
+      File.symlink("../../../packages/js", File.join(@root, "app/js"))
+
+      expect(walked).to eq(%w[app/js/kept.js app/models/user.rb])
+    end
+  end
+
+  describe ".glob" do
+    it "matches what Dir.glob matches in a tree with no links" do
+      touch("app/views/posts/index.html.erb")
+      touch("app/views/posts/show.json.jbuilder")
+      touch("app/views/posts/_form.html.haml")
+      touch("app/views/README")
+      dir = File.join(@root, "app/views")
+
+      %w[**/*.{erb,haml} **/_* posts/*.jbuilder * **/*].each do |pattern|
+        expect(described_class.glob(dir, pattern, root: @root)).to eq(Dir.glob(File.join(dir, pattern)).select { |path| File.file?(path) }.sort)
+      end
+    end
   end
 end

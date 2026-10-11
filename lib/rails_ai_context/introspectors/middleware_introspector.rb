@@ -86,7 +86,7 @@ module RailsAiContext
       def middleware_files(middleware_dir)
         return [] unless Dir.exist?(middleware_dir)
 
-        Dir.glob(File.join(middleware_dir, "**/*.rb")).sort.filter_map { |path| describe_middleware(path) }
+        FileWalk.glob(middleware_dir, "**/*.rb", root: root).filter_map { |path| describe_middleware(path) }
       end
 
       # The name comes from the declaration: a class under lib/middleware may

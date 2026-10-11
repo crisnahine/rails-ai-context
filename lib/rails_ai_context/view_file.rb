@@ -63,14 +63,14 @@ module RailsAiContext
       seen.map { |relative, path| [ path, relative ] }
     end
 
-    # The paths under one views root, less those of a root declared inside it
+    # The files under one views root, less those of a root declared inside it
     # (app/views/custom/posts/show is posts/show when app/views/custom is a
-    # root) and those a symlink carries out of the app.
+    # root). Walked as the view resolver reads the tree: through a directory
+    # linked in from the app's repository, never through a link out of the
+    # app (FileWalk.glob).
     def glob(root, dir, pattern)
       nested = PathResolver.view_dirs(root).select { |other| other.start_with?("#{dir}/") }
-      Dir.glob(File.join(dir, pattern)).sort.reject do |path|
-        nested.any? { |other| path.start_with?("#{other}/") } || PathResolver.linked_out?(path, root)
-      end
+      FileWalk.glob(dir, pattern, root: root).reject { |path| nested.any? { |other| path.start_with?("#{other}/") } }
     end
 
     # The innermost views root holding path: app/views/themes/posts/x renders as

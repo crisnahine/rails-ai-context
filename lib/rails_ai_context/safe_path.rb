@@ -63,6 +63,55 @@ module RailsAiContext
       File.join(real_base(File.dirname(path)), File.basename(path))
     end
 
+    # Where a directory link inside the app may lead and still be the app's:
+    # the git work tree holding `root`, so a monorepo's shared package counts
+    # and a home directory does not. Outside any repository nothing marks
+    # where the project ends, so only `root` itself.
+    def link_bound(root)
+      RunCache.fetch([ :safe_path_link_bound, root.to_s ]) do
+        real_root = real_base(root)
+        repo = git_root(real_root)
+        repo ? File.realpath(repo) : real_root
+      end
+    end
+
+    # The real path of the linked-in directory that holds `real`: a directory
+    # link on `path`'s spelling below `base` that leads inside link_bound(root).
+    # Nil when no such link leads to it, as for a file linked out on its own.
+    # A spelled `..` is read lexically, so it cannot climb out through a link.
+    def linked_in(path, real, base, root)
+      spelled = File.expand_path(path.to_s)
+      prefix = dir_prefix(File.expand_path(base.to_s))
+      return nil unless spelled.start_with?(prefix)
+
+      bound = link_bound(root)
+      segments = spelled.delete_prefix(prefix).split(File::SEPARATOR)
+      segments.size.downto(1) do |depth|
+        linked = linked_dir(File.join(prefix, *segments.first(depth)), bound)
+        return linked if linked && contained?(real, linked)
+      end
+      nil
+    end
+
+    # A directory link's real path when it leads inside `bound`, else nil.
+    def linked_dir(dir, bound)
+      RunCache.fetch([ :safe_path_linked_dir, dir, bound ]) do
+        real = File.symlink?(dir) && File.directory?(dir) && File.realpath(dir)
+        real if real && contained?(real, bound)
+      end
+    rescue SystemCallError
+      nil
+    end
+
+    # `path` relative to `root` as both are spelled.
+    def spelled_relative(path, root)
+      spelled = File.expand_path(path.to_s)
+      spelled_root = File.expand_path(root.to_s)
+      return spelled.delete_prefix(dir_prefix(spelled_root)) if spelled.start_with?(dir_prefix(spelled_root))
+
+      Pathname.new(spelled).relative_path_from(Pathname.new(spelled_root)).to_s
+    end
+
     def read(relative, under:, root: under, max_size: nil)
       resolution = locate(relative, under: under, root: root, max_size: max_size)
       return [ nil, resolution ] unless resolution.ok?

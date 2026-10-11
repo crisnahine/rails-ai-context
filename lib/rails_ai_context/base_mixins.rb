@@ -58,18 +58,17 @@ module RailsAiContext
     private_class_method :marked
 
     # Everywhere the app configures itself but app/models: a model file's includes are
-    # its own, and the model walk reads that file already.
+    # its own, and the model walk reads that file already. Code is walked as Zeitwerk
+    # reads it (FileWalk.glob); config as Rails globs it, entering no linked directory.
     def scanned_files(root)
       app_dirs = PathResolver.dirs_for(root, "app").flat_map do |tree|
         Dir.glob(File.join(tree, "*")).select { |dir| File.directory?(dir) && File.basename(dir) != "models" }
       end
-      trees = [ File.join(root, "config"), File.join(root, "lib"), *PathResolver.declared_roots(root), *app_dirs ]
-      code = PathResolver.code_roots(root).flat_map do |code_root|
-        [ File.join(code_root, "config"), File.join(code_root, "lib") ].map { |dir| File.join(dir, "**", "*.rb") } +
-          [ File.join(code_root, "*.rb") ]
-      end
-      (trees.map { |dir| File.join(dir, "**", "*.rb") } + code).flat_map { |glob| Dir.glob(glob) }.uniq.sort
-        .reject { |path| PathResolver.linked_out?(path, root) }
+      code_roots = PathResolver.code_roots(root)
+      trees = [ File.join(root, "lib"), *PathResolver.declared_roots(root), *app_dirs, *code_roots.map { |dir| File.join(dir, "lib") } ]
+      globs = [ root, *code_roots ].map { |dir| File.join(dir, "config", "**", "*.rb") } + code_roots.map { |dir| File.join(dir, "*.rb") }
+      configs = globs.flat_map { |glob| Dir.glob(glob) }.reject { |path| PathResolver.linked_out?(path, root) }
+      (trees.flat_map { |dir| FileWalk.glob(dir, "**/*.rb", root: root) } + configs).uniq.sort
     end
     private_class_method :scanned_files
 

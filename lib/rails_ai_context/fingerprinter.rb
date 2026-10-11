@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "digest"
+require "set"
 
 module RailsAiContext
   # Computes a SHA256 fingerprint of key application files to detect changes.
@@ -94,11 +95,14 @@ module RailsAiContext
         end
 
         prefix = SafePath.dir_prefix(root)
-        watched_dirs(root).each do |full_dir|
-          watched_files(full_dir).sort.each do |path|
-            digest.update(cassette?(path, prefix) ? path : File.mtime(path).to_f.to_s)
-          rescue Errno::ENOENT
-            # File deleted between glob and mtime read - skip
+        # One run, so the resolvers and the link checks answer once per fingerprint.
+        RunCache.around do
+          watched_dirs(root).each do |full_dir|
+            watched_files(full_dir, root).sort.each do |path|
+              digest.update(cassette?(path, prefix) ? path : File.mtime(path).to_f.to_s)
+            rescue Errno::ENOENT
+              # File deleted between glob and mtime read - skip
+            end
           end
         end
 
@@ -132,18 +136,42 @@ module RailsAiContext
       # the narrowest scope dir that holds it, the way an app author would write it.
       def changed_since(root, time)
         base = File.expand_path(root.to_s)
-        named = scope_dirs(base)
-        prefix = SafePath.dir_prefix(base)
-        watched_dirs(base).flat_map { |dir| watched_files(dir).select { |path| !cassette?(path, prefix) && newer?(path, time) } }
-                          .map { |path| named.select { |dir| path.start_with?("#{dir}/") }.max_by(&:size) }
-                          .uniq.map { |dir| dir.delete_prefix(prefix) }
+        RunCache.around do
+          named = scope_dirs(base)
+          prefix = SafePath.dir_prefix(base)
+          watched_dirs(base).flat_map { |dir| watched_files(dir, base).select { |path| !cassette?(path, prefix) && newer?(path, time) } }
+                            .map { |path| named.select { |dir| path.start_with?("#{dir}/") }.max_by(&:size) }
+                            .uniq.map { |dir| dir.delete_prefix(prefix) }
+        end
       end
 
       private
 
       # One walk with an extension filter: a brace glob walks the tree once per extension.
-      def watched_files(dir)
-        Dir.glob(File.join(dir, "**/*")).select { |path| WATCHED_EXTNAMES.include?(File.extname(path)) && !path.include?(BUILD_OUTPUT) }
+      # The glob lists a directory link and enters none, so a directory linked in
+      # from the app's repository, which the readers walk (FileWalk), is globbed
+      # on its own; only a name with no extension is asked whether it is one.
+      def watched_files(dir, root, seen = Set.new)
+        real_dir = File.realpath(dir)
+        return [] unless seen.add?(real_dir)
+
+        files = []
+        linked = []
+        Dir.glob(File.join(dir, "**/*")).each do |path|
+          extname = File.extname(path)
+          if WATCHED_EXTNAMES.include?(extname)
+            files << path unless path.include?(BUILD_OUTPUT)
+          elsif extname.empty? && File.symlink?(path) && File.directory?(path)
+            target = File.realpath(path)
+            # A link into the tree globbed here leads where the glob went already.
+            linked << path if !SafePath.contained?(target, real_dir) && PathResolver.enter_link?(target, real_dir, root)
+          end
+        rescue SystemCallError
+          next
+        end
+        files + linked.flat_map { |path| watched_files(path, root, seen) }
+      rescue SystemCallError
+        []
       end
 
       def cassette?(path, prefix)

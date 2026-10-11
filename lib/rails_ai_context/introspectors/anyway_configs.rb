@@ -14,7 +14,7 @@ module RailsAiContext
       # @return [Array<Hash>] { name:, file:, attributes: [{ name:, env:, required: }] }
       def scan(root)
         root = root.to_s
-        DIRS.flat_map { |dir| Dir.glob(File.join(root, dir, "**", "*.rb")).sort }.flat_map do |path|
+        DIRS.flat_map { |dir| FileWalk.glob(File.join(root, dir), "**/*.rb", root: root) }.flat_map do |path|
           file = path.delete_prefix("#{root}/")
           source = SafePath.read(file, under: root).first
           source ? classes(source, file) : []

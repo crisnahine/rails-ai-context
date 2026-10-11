@@ -42,9 +42,13 @@ Not an exception to the **safe path** rule, the other side of it: a caller-suppl
 
 ## Linked out
 
-A file the app spells inside its root, or inside the engine its test/dummy runs in, that a symlink takes somewhere neither of those holds: the file is a link, or sits under one. `PathResolver.linked_out?` answers it. A walk that reads what it finds drops such a file before listing it (`FileWalk`, `ViewFile.glob` and the introspectors' own globs), and so does a read of the file Ruby says a loaded class came from, so a **carried path** is never one. A directory the app links in from elsewhere, a pack symlinked into `packs/`, is not linked out and neither are its files, because Zeitwerk follows it; a link from inside it to anywhere else is. `SourceScan` keeps the same line its own way: a file inside the walked directory or the root.
+A file the app spells inside its root, or inside the engine its test/dummy runs in, that a symlink takes somewhere neither of those holds nor a **linked-in** directory does: the file is a link, or sits under one. `PathResolver.linked_out?` answers it. A walk that reads what it finds drops such a file before listing it (`FileWalk`, `SourceScan`, `ViewFile.glob` and the introspectors' own globs), and so does a read of the file Ruby says a loaded class came from, so a **carried path** is never one. A link that resolves nowhere is not linked out, since nothing can be read through it, and a walk drops it as no file.
 
 Not the **safe path** check, which refuses a path a caller supplied: this one decides which of the files the gem found itself are the app's. Booted, a class Rails loaded through such a link is still described by reflection; only its file goes unread.
+
+## Linked-in directory
+
+A directory link inside the app that leads somewhere in the git work tree holding the app (`SafePath.link_bound`): a monorepo package linked into `packs/` or `app/javascript/controllers`. Its files are the app's, named the way the app spells them (`packs/billing/app/models/invoice.rb`), because Zeitwerk, the view resolver and the bundlers follow it; a file under it that links further out, past the app and the directory, is **linked out**. Outside any repository the bound is the app root, so nothing outside it is linked in. `SafePath.linked_in` finds the directory on a path's spelling, and `PathResolver.enter_link?` decides whether a walk enters one: never one back up over the directory being walked. The walks that stand for Rails' own globs - initializers, locales, migrations, seeds, rake tasks, test files - enter no linked directory, as those globs do not.
 
 ## Source scan
 
