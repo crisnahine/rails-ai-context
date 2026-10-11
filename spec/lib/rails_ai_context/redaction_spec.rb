@@ -113,6 +113,34 @@ RSpec.describe RailsAiContext::Redaction do
         .to eq(%Q('Crypto-Key' => 'salt=[FILTERED];p256ecdsa=abc',))
     end
 
+    # A flag is the same `NAME=value` after a dash, and so is a name joined to
+    # the word before it by one.
+    it "filters the value of a secret-named flag" do
+      v = "Xk2mQ9pLw7Rt#{'Z4ab'}"
+      {
+        "mysql -u root --password=#{v}" => "mysql -u root --password=[FILTERED]",
+        %(bin/rails runner "x" -- --token=#{v}) => %(bin/rails runner "x" -- --token=[FILTERED]),
+        "redis-server --requirepass=#{v} --port 6380" => "redis-server --requirepass=[FILTERED] --port 6380",
+        "export REDIS_MASTERAUTH=#{v}" => "export REDIS_MASTERAUTH=[FILTERED]",
+        %(sql = "FAKE-SQLI-LINE-api_key=#{v}") => %(sql = "FAKE-SQLI-LINE-api_key=[FILTERED]"),
+        "curl https://api.example.com/v1?x-api-key=#{v}" => "curl https://api.example.com/v1?x-api-key=[FILTERED]"
+      }.each { |line, want| expect(redact(line, path: "bin/setup")).to eq(want) }
+    end
+
+    # A flag's own placeholder, an attribute and a regex that names the flag
+    # (ActiveRecord's own filter_sensitive_args) are not a flag's value.
+    it "leaves a flag placeholder, an attribute or a regex that names a flag byte for byte" do
+      [
+        %(opts.on("--token=TOKEN")),
+        %(opts.on("-p", "--password=PASSWORD", "Database password")),
+        "bin/deploy --api-key=KEY --password=$DB_PASSWORD --token=<token>",
+        %(<div data-token=csrf-token data-pin=<%= pin %>>),
+        %(args.map { |arg| arg.to_s.sub(/\\A--password=.+/m, filtered) }),
+        %(line.sub(/password=.+/m, "password=[x]").gsub(/token=.*?&/, "")),
+        %(cmd = "pg_dump --password=\#{password}")
+      ].each { |line| expect(redact(line, path: "bin/setup")).to eq(line) }
+    end
+
     it "leaves a query value, setter, lookbehind or interpolation that is not a secret byte for byte" do
       [
         %q~assert_equal "/government/foo?token=123&utm_source=heading", Edition.new.append_url_options("/government/foo", token: "123")~,
@@ -539,6 +567,12 @@ RSpec.describe RailsAiContext::Redaction do
         "export GITHUB_TOKEN=Xk2mQ9pLw7Rt" => "export GITHUB_TOKEN=[FILTERED]",
         "MONKEY=banana private_mode=true TOKEN_TTL=3600" => "MONKEY=banana private_mode=true TOKEN_TTL=3600"
       }.each { |line, expected| expect(described_class.redact_log_line(line)).to eq(expected) }
+    end
+
+    it "filters a secret-named flag in a log line" do
+      v = "Xk2mQ9pLw7Rt#{'Z4ab'}"
+      expect(described_class.redact_log_line("exec redis-server --requirepass=#{v} --port 6380"))
+        .to eq("exec redis-server --requirepass=[FILTERED] --port 6380")
     end
 
     # Under /i Unicode case folding gives `s` a two-byte form, so a

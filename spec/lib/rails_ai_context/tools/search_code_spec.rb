@@ -737,6 +737,19 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
           end
         end
 
+        # A flag is `NAME=value` after a dash; the dash hid it from the rule.
+        it "filters the value of a secret-named flag in a script it returns" do
+          v = "Xk2mQ9pLw7Rt#{'Z4ab'}"
+          source = "#!/bin/sh\nmysql -u root --password=#{v} app < db/seed.sql\nredis-server --requirepass=#{v} --daemonize yes\n"
+          with_search_app("bin/setup" => source) do
+            text = text_for(pattern: "password=|requirepass=")
+
+            expect(text).to include("bin/setup:2: mysql -u root --password=[FILTERED] app < db/seed.sql",
+                                    "bin/setup:3: redis-server --requirepass=[FILTERED] --daemonize yes")
+            expect(text).not_to include(v)
+          end
+        end
+
         it "answers a right and a wrong guess at a secret's prefix the same way with context on" do
           source = "class Thing\n  # foo_marker\n  API_TOKEN = \"Zx9Yq7Wk3Lp5Vn8Rt2Mb\"\n  BAR = 2\nend\n"
           with_search_app("app/models/thing.rb" => source) do

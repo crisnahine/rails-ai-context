@@ -139,7 +139,8 @@ module RailsAiContext
 
     # A key is a name, bare or quoted whole (`'api/verify_token'` is a route path). Password
     # words hold short literals (a PIN), so they stay out of SECRET_WORD, which logs share.
-    PASSWORD_WORD = /passphrase|password|passwd|pass|pin/i
+    # `requirepass` and `masterauth` are Redis's two password settings.
+    PASSWORD_WORD = /passphrase|password|passwd|pass|pin|requirepass|masterauth/i
     PASSWORD_NAME = /(?<!\w)(?:\w+_)?(?:#{PASSWORD_WORD})(?:_\w+)?(?!\w)/i
     KEY_NAME = /#{SECRET_NAME}|#{PASSWORD_NAME}|#{KEYISH_NAME}/
     # A quoted key may close an index (`ENV["API_TOKEN"] =`); the assignment may be `||=` or another op-assign.
@@ -164,10 +165,11 @@ module RailsAiContext
 
     # Shell, Dockerfile, compose, env files and log lines: `NAME=value`, no space
     # around the `=` (Ruby never writes that), the value unquoted and not `$VAR`/ERB.
-    # The same shape sits in a URL query or a quoted env entry, so the value
-    # stops where a quote, bracket or separator starts; a `:name=` setter
-    # symbol and a `(?<=name=` lookbehind are not assignments.
-    ENV_ASSIGNMENT = /(?<![\w.:=!-])(?<name>#{KEY_NAME})=(?!\#\{)(?<value>[^\s"'`$<>\\()\[\]{},;&]+)/
+    # The same shape sits in a URL query, a quoted env entry or a flag
+    # (`--password=...`, `x-api-key=...`), so the value stops where a quote,
+    # bracket or separator starts; a `:name=` setter symbol, a `(?<=name=`
+    # lookbehind and a regex's wildcard (`/--password=.+/`) are not assignments.
+    ENV_ASSIGNMENT = /(?<![\w.:=!])(?<name>#{KEY_NAME})=(?!\#\{|\.[*+?])(?<value>[^\s"'`$<>\\()\[\]{},;&]+)/
 
     # YAML writes a string unquoted, so there a secret-named key's plain
     # scalar is a literal too.
