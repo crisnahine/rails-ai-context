@@ -4,7 +4,7 @@ require "did_you_mean"
 
 require "mcp"
 require "active_support"
-require "active_support/number_helper"
+require "bigdecimal"
 
 module RailsAiContext
   module Tools
