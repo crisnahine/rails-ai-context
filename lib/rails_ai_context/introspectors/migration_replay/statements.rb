@@ -106,9 +106,13 @@ module RailsAiContext
 
         def implicit_pk_columns(options, pk_type)
           SchemaConventions.implicit_primary_key(options || {}, pk_type).map do |pk|
-            sizes = pk[:options].slice(:limit, :precision, :scale).select { |_, value| value.is_a?(Integer) }
-            { name: pk[:name], type: pk[:type], null: false, primary_key: true, **sizes }
+            { name: pk[:name], type: pk[:type], null: false, primary_key: true, **declared_sizes(pk[:options]) }
           end
+        end
+
+        # The sizes as declared; the dump writes no adapter default either.
+        def declared_sizes(options)
+          options.slice(:limit, :precision, :scale).select { |_, value| value.is_a?(Integer) }
         end
 
         # A computed column name is counted in the note instead: a nil name trips every reader.
@@ -125,7 +129,7 @@ module RailsAiContext
           virtual = entry[:virtual] || type == "virtual"
           # A generated column takes its own type from type: (each adapter's virtual, 7.0 to 8.1).
           type = opts[:type].to_s if type == "virtual" && (opts[:type].is_a?(Symbol) || opts[:type].is_a?(String))
-          col = { name: name, type: type }
+          col = { name: name, type: type, **declared_sizes(opts) }
           col[:null] = false if opts[:null] == false
           default = declared_default(opts, entry)
           col[:default] = SchemaConventions.format_default(default) if opts.key?(:default) && default != RailsAiContext::Confidence::INFERRED
@@ -150,12 +154,14 @@ module RailsAiContext
           col[:default] = SchemaConventions.format_default(new_default)
         end
 
-        # change_column sets the type, and the default and null only when given (7.0 to 8.1).
+        # change_column builds the type from its own sizes on every adapter, and sets the
+        # default and null only when given (PostgreSQL and MySQL, 7.0 to 8.1).
         def change_column(col, entry)
           return unless col
 
           opts = entry[:options] || {}
           col[:type] = entry[:column_type] if entry[:column_type]
+          col.except!(:limit, :precision, :scale).merge!(declared_sizes(opts))
           change_column_null(col, opts[:null]) if opts.key?(:null)
           change_column_default(col, { options: { to: declared_default(opts, entry) } }) if opts.key?(:default)
         end

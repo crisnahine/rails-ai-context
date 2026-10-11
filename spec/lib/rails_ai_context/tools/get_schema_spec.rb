@@ -514,6 +514,36 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(text).to include("`index_work_packages_on_schedule_manually` on (schedule_manually) where schedule_manually")
     end
 
+    # change_column builds a new type from its own options on PostgreSQL, MySQL and SQLite alike.
+    it "keeps the limit, precision and scale a migration declares" do
+      text = replayed_table("widgets", <<~CREATE, <<~CHANGE)
+        class CreateWidgets < ActiveRecord::Migration[8.1]
+          def change
+            create_table :widgets do |t|
+              t.string :code, limit: 2
+              t.decimal :price, precision: 10, scale: 2
+              t.string :name
+              t.string :slug, limit: 20
+            end
+            add_column :widgets, :sku, :string, limit: 12
+          end
+        end
+      CREATE
+        class ChangeWidgets < ActiveRecord::Migration[8.1]
+          def up
+            change_column :widgets, :name, :string, limit: 50, default: "unnamed"
+            change_column :widgets, :slug, :string
+          end
+        end
+      CHANGE
+
+      expect(text).to include("| code | string, limit: 2 | yes |")
+      expect(text).to include("| price | decimal(10,2) | yes |")
+      expect(text).to include("| sku | string, limit: 12 | yes |")
+      expect(text).to include("| name | string, limit: 50 | yes | unnamed |")
+      expect(text).to include("| slug | string | yes |")
+    end
+
     it "applies change_column's null: and default: with its type" do
       text = replayed_table("widgets", <<~CREATE, <<~RELAX)
         class CreateWidgets < ActiveRecord::Migration[8.1]
