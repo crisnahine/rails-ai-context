@@ -24,12 +24,12 @@ module RailsAiContext::RakeTasks
     ([ header, divider ] + rows)
       .map { |name, files, command| "  #{name.ljust(name_width)}  #{files.ljust(file_width)}  #{command}".rstrip }
       .join("\n") + "\n"
-  end unless defined?(ASSISTANT_TABLE)
+  end unless const_defined?(:ASSISTANT_TABLE, false)
 
   def print_result(result)
     style = RailsAiContext::ContextFileReport.style(:emoji)
     RailsAiContext::ContextFileReport.each_line(result, style, root: Rails.root) { |_bucket, text| puts "  #{text}" }
-  end unless defined?(print_result)
+  end unless method_defined?(:print_result, false)
 
   def abort_boot_failure(result, timeout)
     $stderr.puts "Error: Rails app failed to boot: #{result.failure_summary(full: true)}"
@@ -38,7 +38,7 @@ module RailsAiContext::RakeTasks
     end
     result.configure_hint.each { |line| $stderr.puts "  #{line}" }
     exit 1
-  end unless defined?(abort_boot_failure)
+  end unless method_defined?(:abort_boot_failure, false)
 
   # Boots through Rake's environment task so app hooks run, with boot output kept off
   # stdout (the JSON-RPC stream, or a JSON=1 envelope); the guard adds the timeout
@@ -50,7 +50,7 @@ module RailsAiContext::RakeTasks
     end
     abort_boot_failure(result, timeout) unless result.booted?
     require "rails_ai_context"
-  end unless defined?(boot_quietly)
+  end unless method_defined?(:boot_quietly, false)
 
   # A stdio client gives up on `initialize` after about 30 seconds, so a hung
   # boot has to fail before that for the client to see why (STDIO_TIMEOUT).
@@ -58,7 +58,7 @@ module RailsAiContext::RakeTasks
     RailsAiContext::BootManager.default_timeout = RailsAiContext::BootManager::STDIO_TIMEOUT if transport == :stdio
     boot_quietly
     RailsAiContext.start_mcp_server(transport: transport)
-  end unless defined?(boot_and_serve)
+  end unless method_defined?(:boot_and_serve, false)
 
   # Called before the task does any work, so an unknown mode stops it with the
   # valid ones named rather than writing files nobody asked for.
@@ -72,7 +72,7 @@ module RailsAiContext::RakeTasks
     $stderr.puts "Error: CONTEXT_MODE=#{ENV['CONTEXT_MODE']} is not a context mode. " \
                  "Valid: #{RailsAiContext::Configuration::CONTEXT_MODES.join(', ')}"
     exit 1
-  end unless defined?(apply_context_mode_override)
+  end unless method_defined?(:apply_context_mode_override, false)
 
   # The install program's voice on this entry: plain puts, an emoji on the
   # outcomes the task has always marked.
@@ -87,20 +87,20 @@ module RailsAiContext::RakeTasks
         $stdin.gets&.strip
       }
     )
-  end unless defined?(install_surface)
+  end unless method_defined?(:install_surface, false)
 
   def prompt_ai_tools
     RailsAiContext::Install::Program.select_ai_tools(install_surface)
-  end unless defined?(prompt_ai_tools)
+  end unless method_defined?(:prompt_ai_tools, false)
 
   def prompt_setup
     RailsAiContext::Install::Program.select_setup(install_surface)
-  end unless defined?(prompt_setup)
+  end unless method_defined?(:prompt_setup, false)
 
   def say_conflict(key, status)
     _level, text = RailsAiContext::Install::SelectionRecord.conflict_message(key, status)
     puts "⚠️  #{text}" if text
-  end unless defined?(say_conflict)
+  end unless method_defined?(:say_conflict, false)
 
   # Each returns the line's write status (:updated, :inserted, :unchanged,
   # :conflict, :absent), so the run can name the initializer when it moved.
@@ -110,7 +110,7 @@ module RailsAiContext::RakeTasks
     status
   rescue => e
     RailsAiContext.debug_fail(e, nil, label: "save_tool_mode_to_initializer")
-  end unless defined?(save_tool_mode_to_initializer)
+  end unless method_defined?(:save_tool_mode_to_initializer, false)
 
   def save_context_files_to_initializer(value)
     status = RailsAiContext::Install::SelectionRecord.write_context_files(value, root: Rails.root)
@@ -118,7 +118,7 @@ module RailsAiContext::RakeTasks
     status
   rescue => e
     RailsAiContext.debug_fail(e, nil, label: "save_context_files_to_initializer")
-  end unless defined?(save_context_files_to_initializer)
+  end unless method_defined?(:save_context_files_to_initializer, false)
 
   def ensure_mcp_configs(ai_tools = nil)
     tools = ai_tools || RailsAiContext.configuration.ai_tools || RailsAiContext::McpConfigGenerator::TOOL_CONFIGS.keys
@@ -131,13 +131,13 @@ module RailsAiContext::RakeTasks
     )
   rescue => e
     puts "⚠️  Could not create MCP config files: #{e.message}"
-  end unless defined?(ensure_mcp_configs)
+  end unless method_defined?(:ensure_mcp_configs, false)
 
   def tool_mode_configured?
     RailsAiContext::Install::SelectionRecord.tool_mode_set?(root: Rails.root)
   rescue => e
     RailsAiContext.debug_fail(e, false, label: "tool_mode_configured?")
-  end unless defined?(tool_mode_configured?)
+  end unless method_defined?(:tool_mode_configured?, false)
 
   # `record_initializer:` is false on an ordinary `ai:context` run. The YAML is
   # this gem's own file and is refreshed every time, but the initializer is the
@@ -161,7 +161,7 @@ module RailsAiContext::RakeTasks
     end
   rescue => e
     RailsAiContext.debug_fail(e, nil, label: "save_selection")
-  end unless defined?(save_selection)
+  end unless method_defined?(:save_selection, false)
 
 
   # Where the selection a user would edit lives: the initializer's line when it
@@ -175,23 +175,23 @@ module RailsAiContext::RakeTasks
     else
       "#{record::YAML_FILE} (ai_tools)"
     end
-  end unless defined?(ai_tools_record_hint)
+  end unless method_defined?(:ai_tools_record_hint, false)
 
   def read_previous_ai_tools_from_config
     RailsAiContext::Install::SelectionRecord.read(root: Rails.root)
-  end unless defined?(read_previous_ai_tools_from_config)
+  end unless method_defined?(:read_previous_ai_tools_from_config, false)
 
   def cleanup_removed_ai_tools(previous, current)
     RailsAiContext::Install::Program.cleanup_removed_tools(
       install_surface, previous: previous, selected: current, root: Rails.root
     )
-  end unless defined?(cleanup_removed_ai_tools)
+  end unless method_defined?(:cleanup_removed_ai_tools, false)
 
   def add_ai_context_to_gitignore
     RailsAiContext::Install::Program.mark_gitignore(
       install_surface, root: Rails.root, context_files: RailsAiContext.configuration.context_files
     )
-  end unless defined?(add_ai_context_to_gitignore)
+  end unless method_defined?(:add_ai_context_to_gitignore, false)
 
   # Writing only the initializer here was the last hand-rolled record left: it
   # left the YAML behind, and the initializer wins on read, so a per-tool
@@ -204,7 +204,7 @@ module RailsAiContext::RakeTasks
     end
   rescue => e
     RailsAiContext.debug_fail(e, nil, label: "add_ai_tool_to_initializer")
-  end unless defined?(add_ai_tool_to_initializer)
+  end unless method_defined?(:add_ai_tool_to_initializer, false)
 
   namespace :ai do
     desc "Run an MCP tool from the CLI: rails 'ai:tool[schema]' table=users detail=full"
